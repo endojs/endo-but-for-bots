@@ -99,7 +99,7 @@
 //!   instances (`ArrayBuffers`, Serialized): each rides its buffer's
 //!   `ABUF` row as a flag bit and restores into the satellite set.
 //! - `deleted_fn_meta` — per-function deleted-`length`/-`name` marks
-//!   (`Functions`, Pending).
+//!   (`Functions`, Serialized in `FUNC`).
 //! - `from_async` — `Array.fromAsync` accumulation state (`Combinators`,
 //!   Pending).
 //! - `regexp_last_names` — the last-match named-group scratch (a global
@@ -333,16 +333,9 @@ pub enum SideTable {
     /// bound function ITSELF degrades, exactly as every held guest
     /// function does today.
     IntlBoundFunctions,
-    /// `code_segments` + `func_segments` — the dynamic-code segment buffer
-    /// (the `eval`/dynamic-`Function` source bridge) and the function→
-    /// segment index. No atom carries crank or segment bytecode, so a heap
-    /// holding a live segment-backed function cannot round-trip; the store
-    /// gates refuse it by name (`StoreError::DynamicSegmentsUnsupported`
-    /// at `begin_store_session` and `checkpoint_to_store` — see
-    /// `tests/dynamic_segments.rs`). The row is the ledger's name for that
-    /// refusal: flipping it to a coverage means building crank-code
-    /// retention, which also unlocks the cross-crank-function half of
-    /// `Functions`.
+    /// `code_segments` + `func_segments` — retained defining-crank and
+    /// eval/dynamic-Function bytecode plus each guest function's segment
+    /// index. Carried atomically with function metadata in `FUNC`.
     Segments,
     /// `ctor_prototype` — each constructor instance's `.prototype` object.
     /// The `.prototype` *object* is an arena slot, but the constructor→proto
@@ -463,16 +456,9 @@ impl SideTable {
             // resume. Regression: `restore_side_tables.rs`
             // (`runtime_global_survives_suspend_resume`).
             SideTable::GlobalProps => ("global_props", RebuiltAtRestore),
-            // `ctor_prototype` is a HashMap-only link (a constructor's default
-            // `.prototype` is NOT installed as an arena property slot — see
-            // `new_function`), and reaching it *also* needs the `functions`
-            // table (below, Pending) to know a slot is a constructor at all.
-            // Neither is arena-recoverable, so this stays honestly Pending
-            // until an atom carries it. A truthful cross-crank `new f()` test
-            // is unreachable today regardless of restore (the uninterrupted
-            // machine already aborts cross-crank construction), which is the
-            // deciding evidence the row cannot be claimed covered.
-            SideTable::CtorPrototype => ("ctor_prototype", Pending),
+            // Guest constructor→prototype links travel atomically with
+            // retained function metadata in `FUNC`.
+            SideTable::CtorPrototype => ("ctor_prototype", Serialized),
             // Only the forward `symbol_names` is serialized (the `NAME`
             // atom); the inverse `symbol_ids` map is *derived* from it and
             // never persisted (`link_intrinsics` computes it at boot).
@@ -508,10 +494,10 @@ impl SideTable {
             // outside BOTH tables, which maps to nothing and can only be
             // crafted or torn bytes.
             SideTable::SymbolKeyIds => ("symbol_key_ids/next_symbol_key_id", Serialized),
-            // The rich per-instance/per-activation tables still to be wired
-            // into dedicated atoms (child-3-adjacent; the honest remainder).
-            SideTable::Functions => ("functions", Pending),
-            SideTable::BoundFunctions => ("bound_functions", Pending),
+            // Guest and bound function metadata travel atomically with
+            // retained defining-crank bytecode in `FUNC`.
+            SideTable::Functions => ("functions", Serialized),
+            SideTable::BoundFunctions => ("bound_functions", Serialized),
             SideTable::Proxies => ("proxies/proxy_revokers", Pending),
             SideTable::CallStack => ("call_stack", EmptyAtBoundary),
             SideTable::Jumps => ("jumps", EmptyAtBoundary),
@@ -574,11 +560,9 @@ impl SideTable {
             SideTable::IntlBoundFunctions => {
                 ("collator_compare_functions/number_format_bound_functions", Pending)
             }
-            // Pending here is load-bearing beyond the missing atom: the
-            // store gates REFUSE a heap holding a live segment-backed
-            // function (`DynamicSegmentsUnsupported`), fail-closed instead
-            // of resuming a callable whose body is gone.
-            SideTable::Segments => ("code_segments/func_segments", Pending),
+            // Defining-crank and eval segments travel in the same atomic
+            // cluster as their function metadata.
+            SideTable::Segments => ("code_segments/func_segments", Serialized),
             SideTable::Modules => ("module::ModuleGraph", Pending),
             // Wave-6 W6-25: the ledger UNDERSTATED this coverage — the
             // engine keeps hardened-ness purely as slot FLAGS
@@ -776,18 +760,19 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 17, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 13, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
-        assert!(pending.contains(&SideTable::Functions));
+        assert!(!pending.contains(&SideTable::Functions));
+        assert!(!pending.contains(&SideTable::BoundFunctions));
         assert!(pending.contains(&SideTable::Generators));
         // `ctor_prototype` is a HashMap-only constructor→prototype link (no
         // arena property slot) and needs the `functions` table to interpret,
         // so it is honestly Pending — not the false `InArena` it once claimed.
-        assert!(pending.contains(&SideTable::CtorPrototype));
+        assert!(!pending.contains(&SideTable::CtorPrototype));
         // The language-completion sweep's tables joined the ledger Pending,
         // and the segments row names the store gates' standing refusal.
         assert!(pending.contains(&SideTable::AsyncGenerators));
-        assert!(pending.contains(&SideTable::Segments));
+        assert!(!pending.contains(&SideTable::Segments));
         // The restore-time-rebuilt rows are not pending: their data round-trips
         // and restore re-derives the consulting index/counter.
         assert!(!pending.contains(&SideTable::GlobalProps));

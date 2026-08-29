@@ -39,8 +39,9 @@ pub use compartment::{
 pub use gc::{GcStats, Heap};
 pub use interp::{
     dtf_component_key_static, error_name_static, ArraySnapshot, CollatorData, CollectionSnapshot,
-    CompiledSource, DateTimeFormatData, Halt, Interp, IntlTables, ListFormatData, LocaleData,
-    IteratorRow, Native, NumberFormatData, PluralRulesData, RelinkError, RunOutcome,
+    BoundFunctionRow, CompiledSource, DateTimeFormatData, FunctionRow, FunctionStateSnapshot, Halt,
+    Interp, IntlTables, IteratorRow, ListFormatData, LocaleData, Native, NumberFormatData,
+    PluralRulesData, RelinkError, RunOutcome,
     SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };

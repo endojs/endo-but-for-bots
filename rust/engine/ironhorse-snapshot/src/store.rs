@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 14;
+pub const STORE_SCHEMA_VERSION: u32 = 15;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -99,15 +99,6 @@ pub const STORE_SCHEMA_MIN_SUPPORTED: u32 = 5;
 /// reader uses.
 #[derive(Debug, PartialEq, Eq)]
 pub enum StoreError {
-    /// The machine holds a live function whose body lives in a dynamic
-    /// (`eval` / dynamic-`Function`) code segment. Segment buffers are
-    /// realm session state that no snapshot carries — the ledger's
-    /// segments row does not exist yet — so persisting the heap would
-    /// resume a callable whose body is gone. Refused fail-closed at
-    /// `begin_store_session` and `checkpoint_to_store`; unreachable
-    /// today on the daemon path, which installs no source compiler,
-    /// so `eval` halts before any segment exists.
-    DynamicSegmentsUnsupported,
     /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
     /// its last crank halted. Rewind or complete a crank before
     /// persisting.
@@ -1336,6 +1327,8 @@ pub struct SmallState {
     pub regexps: Vec<crate::image::RegExpImage>,
     /// Date `[[DateValue]]` records (schema 14; the `DATE` encoding).
     pub dates: Vec<crate::image::DateImage>,
+    /// Atomic retained guest-callability state (schema 15; `FUNC`).
+    pub function_state: ironhorse_vm::FunctionStateSnapshot,
     /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
     pub arguments_brands: Vec<u32>,
     /// The Temporal record tables (schema 11; the `TMPR` encoding).
@@ -1351,26 +1344,26 @@ pub struct SmallState {
 }
 
 impl SmallState {
-    /// Serialize: twenty-one sections, each `u32` length-prefixed, in
+    /// Serialize: twenty-two sections, each `u32` length-prefixed, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
-    /// intl, name floor, iterators, dates
+    /// intl, name floor, iterators, dates, function state
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
     /// family since schema 10, the data-only language rows since
     /// schema 11, the Intl record tables plus the installed-names
     /// floor since schema 12, and the iterator cursors since schema
-    /// 13, and Date records since schema 14, whose migrations append
-    /// their empty sections the same
+    /// 13, Date records since schema 14, and retained function state
+    /// since schema 15, whose migrations append their empty sections the same
     /// way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 21] = [
+        let sections: [Vec<u8>; 22] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1395,6 +1388,7 @@ impl SmallState {
             },
             crate::image::encode_iterators(&self.iterators),
             crate::image::encode_dates(&self.dates),
+            crate::image::encode_function_state(&self.function_state),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1404,7 +1398,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the twenty-one sections. Every section length is
+    /// Decode the twenty-two sections. Every section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1556,7 +1550,14 @@ impl SmallState {
         } else {
             crate::image::decode_dates(dates_bytes).map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: twenty-one
+        // Schema-15 atomic retained function state.
+        let function_bytes = section("small state function section")?;
+        let function_state = if function_bytes.is_empty() {
+            ironhorse_vm::FunctionStateSnapshot::default()
+        } else {
+            crate::image::decode_function_state(function_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: twenty-two
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1581,6 +1582,7 @@ impl SmallState {
             wrappers,
             regexps,
             dates,
+            function_state,
             arguments_brands,
             temporal,
             intl,
@@ -1944,6 +1946,7 @@ pub fn migrate_store(
             11 => migrate_v11_to_v12(store)?,
             12 => migrate_v12_to_v13(store)?,
             13 => migrate_v13_to_v14(store)?,
+            14 => migrate_v14_to_v15(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2250,6 +2253,35 @@ fn migrate_v13_to_v14(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// 14 → 15: the atomic retained guest-callability cluster joins the
+/// small state. Schema 14 did not carry callable metadata or defining
+/// bytecode, so the migration appends one empty section.
+fn migrate_v14_to_v15(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 15;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2391,6 +2423,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         wrappers: image.wrappers.clone(),
         regexps: image.regexps.clone(),
         dates: image.dates.clone(),
+        function_state: image.function_state.clone(),
         arguments_brands: image.arguments_brands.clone(),
         temporal: image.temporal.clone(),
         intl: image.intl.clone(),
@@ -2605,6 +2638,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             wrappers: &small.wrappers,
             regexps: &small.regexps,
             dates: &small.dates,
+            function_state: &small.function_state,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -2641,6 +2675,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         wrappers: small.wrappers,
         regexps: small.regexps,
         dates: small.dates,
+        function_state: small.function_state,
         arguments_brands: small.arguments_brands,
         temporal: small.temporal,
         intl: small.intl,
@@ -2931,6 +2966,7 @@ pub fn validate_store(
             wrappers: &small.wrappers,
             regexps: &small.regexps,
             dates: &small.dates,
+            function_state: &small.function_state,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -3313,6 +3349,7 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
+            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3345,6 +3382,7 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
+            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3532,6 +3570,10 @@ mod tests {
                 slot.value = ironhorse_vm::Payload::Integer(0);
             }
         }
+        // Function name chunks are external chunk holders. This
+        // geometry-only fixture drops the corresponding function rows
+        // together with the arena bytes.
+        shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&shrunk, 2, &prev);
         batch.chunk_extents.clear(); // nothing to write; drop-only

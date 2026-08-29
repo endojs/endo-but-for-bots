@@ -85,10 +85,6 @@ pub enum MachineSnapshotError {
     /// exception that no snapshot carries. Rewind or complete a crank
     /// before persisting.
     NotQuiescent,
-    /// The heap holds a live eval-defined function whose bytecode lives
-    /// in a dynamic code segment no snapshot carries (wave-6 W6-12 -
-    /// the same refusal the store verbs make).
-    DynamicSegmentsUnsupported,
     /// The heap holds live state in a SILENT-WRONG Pending side table
     /// (wave-6 W6-9: proxies, accessors, typed arrays) - a resumed
     /// machine would answer wrong values, so persist refuses by name
@@ -103,9 +99,6 @@ impl std::fmt::Display for MachineSnapshotError {
             MachineSnapshotError::Snapshot(e) => write!(f, "snapshot decode error: {e:?}"),
             MachineSnapshotError::NotQuiescent => {
                 write!(f, "machine is not at a quiescent crank boundary")
-            }
-            MachineSnapshotError::DynamicSegmentsUnsupported => {
-                write!(f, "live eval-defined function: dynamic code segments do not travel")
             }
             MachineSnapshotError::PendingStateUnsupported { row } => {
                 write!(f, "heap holds live {row}: that side table does not travel yet")
@@ -207,9 +200,6 @@ impl MachineSnapshot for Interp {
         if !self.is_quiescent() {
             return Err(MachineSnapshotError::NotQuiescent);
         }
-        if self.live_dynamic_segment_function().is_some() {
-            return Err(MachineSnapshotError::DynamicSegmentsUnsupported);
-        }
         if let Some(row) = self.stored_unpersistable_row() {
             return Err(MachineSnapshotError::PendingStateUnsupported { row });
         }
@@ -254,6 +244,7 @@ impl MachineSnapshot for Interp {
         )
         .with_iterators(tables.iterators)
         .with_dates(tables.dates)
+        .with_function_state(tables.function_state)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -274,6 +265,7 @@ struct SideTableImages {
     wrappers: Vec<crate::image::WrapperImage>,
     regexps: Vec<crate::image::RegExpImage>,
     dates: Vec<crate::image::DateImage>,
+    function_state: ironhorse_vm::FunctionStateSnapshot,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -378,6 +370,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         .into_iter()
         .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
         .collect();
+    let function_state = interp.function_state_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -393,6 +386,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         intl,
         iterators,
         dates,
+        function_state,
     }
 }
 
@@ -418,6 +412,7 @@ fn restore_side_tables(
     wrappers: Vec<crate::image::WrapperImage>,
     regexps: Vec<crate::image::RegExpImage>,
     dates: Vec<crate::image::DateImage>,
+    function_state: ironhorse_vm::FunctionStateSnapshot,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -497,6 +492,11 @@ fn restore_side_tables(
             .map(|d| (d.owner, d.value_bits))
             .collect(),
     );
+    if !interp.restore_function_state(function_state) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed retained function state",
+        ));
+    }
     interp.restore_arguments_brands(arguments_brands);
     let ok = interp.restore_temporal_records(
         temporal.instants,
@@ -583,6 +583,7 @@ pub fn image_to_interp(
         image.wrappers,
         image.regexps,
         image.dates,
+        image.function_state,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -825,6 +826,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         wrappers: tables.wrappers,
         regexps: tables.regexps,
         dates: tables.dates,
+        function_state: tables.function_state,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -860,14 +862,6 @@ pub fn begin_store_session(
     // cranks; this gate covers every other caller.
     if !interp.is_quiescent() {
         return Err((interp, StoreError::MachineNotQuiescent));
-    }
-    // Dynamic code segments do not travel (no ledger row yet): a live
-    // eval-defined function would resume with its body gone. Refuse by
-    // name before anything is written. (Unreachable on the daemon
-    // path, which installs no source compiler — defense in depth for
-    // an embedder that wires one.)
-    if interp.live_dynamic_segment_function().is_some() {
-        return Err((interp, StoreError::DynamicSegmentsUnsupported));
     }
     // The four SILENT-WRONG Pending rows (wave-6 W6-9): a resumed heap
     // holding one answers wrong values, not visible failures. Refuse by
@@ -962,14 +956,6 @@ pub fn checkpoint_to_store(
     // `begin_store_session` / `resume_from_store` keep the full-image
     // audit for adopted bytes.
     //
-    // Dynamic code segments are the state that still cannot travel: a
-    // crank that ran `eval` and left a live eval-defined function
-    // refuses here by name, before anything is written, and the caller
-    // rewinds the crank (same contract the intern gate had). One
-    // emptiness check for the no-eval common case.
-    if session.interp.live_dynamic_segment_function().is_some() {
-        return Err(StoreError::DynamicSegmentsUnsupported);
-    }
     if let Some(row) = session.interp.stored_unpersistable_row() {
         return Err(StoreError::PendingStateUnsupported { row });
     }
@@ -1540,6 +1526,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.wrappers,
         small.regexps,
         small.dates,
+        small.function_state,
         small.arguments_brands,
         small.temporal,
         small.intl,

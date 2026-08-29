@@ -15,7 +15,8 @@
 //!   zeroes the index by design; `rearm_meter` preserves it.
 
 use ironhorse_snapshot::machine::{
-    begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
+    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
+    MachineSnapshot,
 };
 use ironhorse_snapshot::store::{HeapStore, MemoryStore};
 use ironhorse_snapshot::Signature;
@@ -97,10 +98,10 @@ fn a_completed_machine_still_passes_the_blob_verbs() {
         .expect("a quiescent completed machine snapshots as before");
 }
 
-/// W6-12: the blob verbs get the dynamic-segments gate the store verbs
-/// already have.
+/// The former W6-12 refusal flips once retained function state travels:
+/// a blob carries an eval-defined function and its defining segment.
 #[test]
-fn a_live_eval_function_refuses_the_blob_verbs() {
+fn a_live_eval_function_round_trips_the_blob_verbs() {
     struct TestCompiler;
     impl ironhorse_vm::SourceCompiler for TestCompiler {
         fn compile_source(
@@ -125,10 +126,13 @@ fn a_live_eval_function_refuses_the_blob_verbs() {
         m.live_dynamic_segment_function().is_some(),
         "the escaped function is the live segment witness"
     );
-    assert!(
-        m.write_snapshot(&sig()).is_err(),
-        "the blob verb must refuse what the store verbs refuse"
-    );
+    let bytes = m.write_snapshot(&sig()).expect("retained function snapshots");
+    let mut restored = from_snapshot_bytes(&bytes, &sig()).expect("restore");
+    let (b2, n2) = compile("var f; var t; t = f(41); t");
+    let b2 = restored.relink_crank(&b2, &n2).expect("relink");
+    let out = restored.run(&b2);
+    assert!(out.completed, "resumed eval function: {:?}", out.halt);
+    assert_eq!(out.result, "42");
 }
 
 /// W6-13: `rearm_meter` preserves the restored computron index, and the

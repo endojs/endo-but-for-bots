@@ -479,11 +479,9 @@ void xs_oracle_free(EndorOracleResult *out)
  * This is what lets the differential harness compare CROSS-CRANK
  * semantics — state created by crank 1 observed by crank 2 — where the
  * single-crank entry structurally cannot (a class of divergence the
- * wave-6 analysis showed 1093 single-crank tests missed). The harness
- * scope is the self-contained-crank contract the ironhorse side pins:
- * data/state reads across cranks, never calls of a prior crank's
- * functions (ironhorse's crank bytecode is the caller's; XS retains
- * it, so such a fixture diverges by design and is out of scope).
+ * wave-6 analysis showed 1093 single-crank tests missed). Retained
+ * defining-crank bytecode lets the ironhorse side include calls of
+ * functions and closures created by earlier cranks too.
  *
  * An uncaught throw in crank i captures into outs[i] exactly as the
  * single-crank entry's catch does and STOPS the run; later cranks are

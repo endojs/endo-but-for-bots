@@ -3769,11 +3769,9 @@ pub struct Interp {
     /// the cross-segment call path, which is itself gated on
     /// [`Self::func_segments`] being non-empty (an eval having run).
     top_level_code: Option<std::rc::Rc<Vec<u8>>>,
-    /// Which persisted [`Self::code_segments`] buffer a function's body lives
-    /// in, for the functions defined inside an eval/`Function` unit. Absent ⇒
-    /// the top-level program buffer (the common case; the map stays empty
-    /// until the source bridge is first used, so a program that never evals
-    /// pays nothing and dispatches exactly as before).
+    /// Which retained [`Self::code_segments`] buffer a guest function's body
+    /// lives in. Top-level crank buffers are promoted lazily at their first
+    /// function definition; eval/`Function` buffers enter directly.
     func_segments: std::collections::HashMap<crate::value::SlotIndex, usize>,
     /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
     /// of the `eval` native call, so the bridge can tell a **direct** eval
@@ -4640,6 +4638,55 @@ pub struct IteratorRow {
     pub enum_keys: Vec<(u16, u32)>,
     /// A string iterator's UTF-16BE text; `index` is a byte offset.
     pub str_bytes: Vec<u8>,
+}
+
+/// One guest or bound function's serializable metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionRow {
+    pub owner: u32,
+    pub segment: Option<u32>,
+    pub body_start: Option<u64>,
+    pub body_len: u64,
+    pub closures: u32,
+    pub name: String,
+    pub arity: u32,
+    pub name_chunk: u32,
+    pub is_generator: bool,
+    pub home: u32,
+    pub class_derived: Option<bool>,
+}
+
+/// One `Function.prototype.bind` wrapper's internal slots.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoundFunctionRow {
+    pub owner: u32,
+    pub target: u32,
+    pub this_arg: Slot,
+    pub args: Vec<Slot>,
+}
+
+/// Atomic snapshot unit for guest callability.
+///
+/// Segment indices in `functions` refer to the compact `segments` vector.
+/// Constructor links, bound data, and deleted metadata are bundled because
+/// carrying any one without the function rows would restore a partial exotic.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FunctionStateSnapshot {
+    pub segments: Vec<Vec<u8>>,
+    pub functions: Vec<FunctionRow>,
+    pub bound_functions: Vec<BoundFunctionRow>,
+    pub ctor_prototypes: Vec<(u32, u32)>,
+    pub deleted_meta: Vec<(u32, u16)>,
+}
+
+impl FunctionStateSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+            && self.functions.is_empty()
+            && self.bound_functions.is_empty()
+            && self.ctor_prototypes.is_empty()
+            && self.deleted_meta.is_empty()
+    }
 }
 
 /// A suspended activation: the caller's scope and resume point, saved by
@@ -8270,19 +8317,11 @@ impl Interp {
         out
     }
 
-    /// The first LIVE function instance whose body lives in a DYNAMIC
-    /// code segment (an `eval` / dynamic-`Function` unit's persisted-in-
-    /// RAM bytecode) — or `None` when no live one exists. Segment
-    /// buffers are realm session state that no snapshot carries, so
-    /// persisting such a heap would resume a callable whose body is
-    /// gone; the store gates refuse it by name
-    /// (`StoreError::DynamicSegmentsUnsupported`). The map is pruned by
-    /// both collectors, so a machine whose eval-defined functions have
-    /// all been collected persists again — the witness is what the heap
-    /// HOLDS, not what the session once did (the wave-5 mint-counter
-    /// lesson). The common no-eval case is one emptiness check. The one
-    /// conservative direction: an eval function that is dead but not
-    /// yet collected still refuses until a collection runs.
+    /// The first live function backed by an owned code segment.
+    ///
+    /// The legacy name predates top-level crank-code retention, when only
+    /// eval/dynamic-Function bodies entered `func_segments`. Both top-level
+    /// and dynamic segments now persist in the atomic function snapshot.
     pub fn live_dynamic_segment_function(&self) -> Option<u32> {
         if self.func_segments.is_empty() {
             return None;
@@ -8673,6 +8712,206 @@ impl Interp {
             self.dates
                 .insert(crate::value::SlotIndex(owner), f64::from_bits(value_bits));
         }
+    }
+
+    /// Snapshot the atomic guest-callability cluster.
+    pub fn function_state_snapshot(&self) -> FunctionStateSnapshot {
+        let mut owners = std::collections::BTreeSet::new();
+        for (owner, info) in &self.functions {
+            if info.native.is_none() && info.method.is_none() {
+                owners.insert(owner.0);
+            }
+        }
+
+        let referenced_segments: std::collections::BTreeSet<usize> = owners
+            .iter()
+            .filter_map(|owner| {
+                let owner = crate::value::SlotIndex(*owner);
+                self.functions
+                    .get(&owner)
+                    .and_then(|info| info.body_start)
+                    .map(|_| {
+                        *self
+                            .func_segments
+                            .get(&owner)
+                            .expect("every guest bytecode function owns a code segment")
+                    })
+            })
+            .collect();
+        let segment_remap: std::collections::BTreeMap<usize, u32> = referenced_segments
+            .iter()
+            .enumerate()
+            .map(|(new, old)| (*old, new as u32))
+            .collect();
+        let segments = referenced_segments
+            .iter()
+            .map(|old| self.code_segments[*old].as_ref().clone())
+            .collect();
+
+        let mut functions: Vec<FunctionRow> = owners
+            .iter()
+            .map(|owner| {
+                let owner = crate::value::SlotIndex(*owner);
+                let info = &self.functions[&owner];
+                let segment = info
+                    .body_start
+                    .map(|_| segment_remap[&self.func_segments[&owner]]);
+                FunctionRow {
+                    owner: owner.0,
+                    segment,
+                    body_start: info.body_start.map(|v| v as u64),
+                    body_len: info.body_len as u64,
+                    closures: info.closures.0,
+                    name: info.name.clone(),
+                    arity: info.arity,
+                    name_chunk: info.name_chunk.0,
+                    is_generator: info.is_generator,
+                    home: info.home.0,
+                    class_derived: info.class_derived,
+                }
+            })
+            .collect();
+        functions.sort_unstable_by_key(|row| row.owner);
+
+        let mut bound_functions: Vec<BoundFunctionRow> = self
+            .bound_functions
+            .iter()
+            .filter(|(owner, _)| owners.contains(&owner.0))
+            .map(|(owner, data)| BoundFunctionRow {
+                owner: owner.0,
+                target: data.target.0,
+                this_arg: data.this_arg,
+                args: data.args.clone(),
+            })
+            .collect();
+        bound_functions.sort_unstable_by_key(|row| row.owner);
+
+        let mut ctor_prototypes: Vec<(u32, u32)> = self
+            .ctor_prototype
+            .iter()
+            .filter(|(owner, _)| owners.contains(&owner.0))
+            .map(|(owner, prototype)| (owner.0, prototype.0))
+            .collect();
+        ctor_prototypes.sort_unstable();
+
+        let mut deleted_meta: Vec<(u32, u16)> = self
+            .deleted_fn_meta
+            .iter()
+            .map(|(owner, id)| (owner.0, *id))
+            .collect();
+        deleted_meta.sort_unstable();
+
+        FunctionStateSnapshot {
+            segments,
+            functions,
+            bound_functions,
+            ctor_prototypes,
+            deleted_meta,
+        }
+    }
+
+    /// Restore a validated atomic guest-callability cluster.
+    pub fn restore_function_state(&mut self, state: FunctionStateSnapshot) -> bool {
+        let function_owners: std::collections::BTreeSet<u32> =
+            state.functions.iter().map(|row| row.owner).collect();
+        let bound_owners: std::collections::BTreeSet<u32> =
+            state.bound_functions.iter().map(|row| row.owner).collect();
+
+        for row in &state.functions {
+            let owner = crate::value::SlotIndex(row.owner);
+            if self.functions.contains_key(&owner) {
+                return false;
+            }
+            match (row.segment, row.body_start) {
+                (Some(segment), Some(start)) => {
+                    let Some(code) = state.segments.get(segment as usize) else {
+                        return false;
+                    };
+                    let Some(end) = start.checked_add(row.body_len) else {
+                        return false;
+                    };
+                    if end > code.len() as u64 {
+                        return false;
+                    }
+                }
+                (None, None) if bound_owners.contains(&row.owner) => {}
+                _ => return false,
+            }
+        }
+        for row in &state.bound_functions {
+            if !function_owners.contains(&row.owner)
+                || (!function_owners.contains(&row.target)
+                    && !self
+                        .functions
+                        .contains_key(&crate::value::SlotIndex(row.target)))
+            {
+                return false;
+            }
+        }
+        if state
+            .ctor_prototypes
+            .iter()
+            .any(|(owner, _)| !function_owners.contains(owner))
+            || state
+                .deleted_meta
+                .iter()
+                .any(|(owner, _)| {
+                    !function_owners.contains(owner)
+                        && !self.functions.contains_key(&crate::value::SlotIndex(*owner))
+                })
+        {
+            return false;
+        }
+
+        self.code_segments = state
+            .segments
+            .into_iter()
+            .map(std::rc::Rc::new)
+            .collect();
+        self.func_segments.clear();
+        for row in state.functions {
+            let owner = crate::value::SlotIndex(row.owner);
+            if let Some(segment) = row.segment {
+                self.func_segments.insert(owner, segment as usize);
+            }
+            self.functions.insert(
+                owner,
+                FuncInfo {
+                    body_start: row.body_start.map(|v| v as usize),
+                    body_len: row.body_len as usize,
+                    closures: crate::value::SlotIndex(row.closures),
+                    native: None,
+                    method: None,
+                    name: row.name,
+                    arity: row.arity,
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    is_generator: row.is_generator,
+                    home: crate::value::SlotIndex(row.home),
+                    class_derived: row.class_derived,
+                },
+            );
+        }
+        for row in state.bound_functions {
+            self.bound_functions.insert(
+                crate::value::SlotIndex(row.owner),
+                BoundData {
+                    target: crate::value::SlotIndex(row.target),
+                    this_arg: row.this_arg,
+                    args: row.args,
+                },
+            );
+        }
+        for (owner, prototype) in state.ctor_prototypes {
+            self.ctor_prototype.insert(
+                crate::value::SlotIndex(owner),
+                crate::value::SlotIndex(prototype),
+            );
+        }
+        for (owner, id) in state.deleted_meta {
+            self.deleted_fn_meta
+                .insert((crate::value::SlotIndex(owner), id));
+        }
+        true
     }
 
     /// Quiescent snapshot of the four Temporal record tables (ledger
@@ -9257,6 +9496,11 @@ impl Interp {
         )
     }
 
+    /// Number of retained defining-code segments, for the GC compaction lock.
+    pub fn retained_code_segment_count(&self) -> usize {
+        self.code_segments.len()
+    }
+
     /// Whether the machine stands at a QUIESCENT crank boundary — the
     /// precondition every persist verb requires (wave-6 W6-10). A crank
     /// that HALTED (uncaught throw, meter abort, unsupported opcode)
@@ -9696,6 +9940,11 @@ impl Interp {
         // buffer from a nested segment. Only the cross-segment call path reads
         // it, and that path is gated on an eval having defined a function.
         self.top_level_code = Some(std::rc::Rc::new(code.to_vec()));
+        // Top-level functions defined by this crank lazily promote the
+        // current buffer into `code_segments` at their first CODE opcode.
+        // No-function cranks retain no segment and keep the common path
+        // allocation-free beyond the existing top-level copy.
+        self.active_segment = None;
         // A crank's top level starts sloppy until its own `BEGIN_STRICT`
         // says otherwise (wave-6 W6-6: nothing reset this register at
         // crank entry, so one strict crank latched strict semantics onto
@@ -9767,6 +10016,10 @@ impl Interp {
             self.locals.clear();
             self.id_map.clear();
         }
+        // `active_segment` identifies only the buffer of the dispatch in
+        // progress. Every surviving function has its own `func_segments`
+        // entry, so no segment cursor crosses a crank boundary.
+        self.active_segment = None;
         RunOutcome {
             completed,
             result,
@@ -11830,15 +12083,14 @@ impl Interp {
                         info.body_start = Some(body_start);
                         info.body_len = n;
                         info.arity = arity;
-                        // Record which run-time-compiled segment this body
-                        // lives in, so a call reaching it from a different
-                        // buffer dispatches over the right bytes even after the
-                        // eval returns. Top-level functions (`active_segment ==
-                        // None`) never enter the map — the common no-eval path
-                        // stays untouched.
-                        if let Some(seg) = self.active_segment {
-                            self.func_segments.insert(f, seg);
-                        }
+                        // Every guest function names an owned segment,
+                        // including a top-level crank function. Dynamic/eval
+                        // dispatch already has an active segment; the first
+                        // top-level definition lazily promotes this crank's
+                        // retained buffer and makes it active for the rest of
+                        // the dispatch.
+                        let seg = self.ensure_active_code_segment(code);
+                        self.func_segments.insert(f, seg);
                     }
                     pc = body_start + n;
                 }
@@ -12400,11 +12652,30 @@ impl Interp {
                             continue;
                         }
                         match self.enter_call_bound(bf, base, argc, ret_pc) {
-                            Ok(body_start) => {
+                            Ok((body_start, target)) => {
                                 if self.check_meter() == MeterCheck::Abort {
                                     return Halt::MeterAbort;
                                 }
-                                pc = body_start;
+                                let segment = self.callee_segment(target);
+                                if segment == self.active_segment {
+                                    pc = body_start;
+                                    continue;
+                                }
+                                match self.dispatch_entered_cross_segment(body_start, segment) {
+                                    Ok(result) => {
+                                        self.push(result);
+                                        pc = ret_pc;
+                                    }
+                                    Err(Halt::Resume(target))
+                                        if self.call_stack.len() < return_depth =>
+                                    {
+                                        return Halt::Resume(target);
+                                    }
+                                    Err(Halt::Resume(target)) => {
+                                        pc = target;
+                                    }
+                                    Err(halt) => return halt,
+                                }
                             }
                             Err(h) => return h,
                         }
@@ -14964,8 +15235,7 @@ impl Interp {
     /// buffer handle when a cross-segment switch is needed; a `None` buffer
     /// keeps the caller's `code`. Mirrors the callback cross-segment routing in
     /// [`Self::run_callback`]; for a top-level body (`func` not in
-    /// [`Self::func_segments`]) it is a no-op, so a program that never evals is
-    /// unaffected.
+    /// [`Self::func_segments`]) it is a no-op.
     fn resume_segment_buffer(
         &self,
         func: crate::value::SlotIndex,
@@ -14988,6 +15258,26 @@ impl Interp {
         }
     }
 
+    /// Ensure the currently executing buffer has an owned segment.
+    ///
+    /// Eval/dynamic-Function dispatch installs its segment before entering.
+    /// A top-level crank stays segment-free until its first function body is
+    /// defined, then promotes the `top_level_code` copy already owned by the
+    /// machine. This is the crank-code retention half of cross-crank calls.
+    fn ensure_active_code_segment(&mut self, code: &[u8]) -> usize {
+        if let Some(segment) = self.active_segment {
+            return segment;
+        }
+        let segment = self.code_segments.len();
+        let buffer = self
+            .top_level_code
+            .clone()
+            .unwrap_or_else(|| std::rc::Rc::new(code.to_vec()));
+        self.code_segments.push(buffer);
+        self.active_segment = Some(segment);
+        segment
+    }
+
     /// The code segment a callee function's body lives in, and whether it
     /// differs from the segment the current dispatch loop runs over — i.e.
     /// whether entering it needs a cross-segment nested dispatch rather than
@@ -15003,11 +15293,10 @@ impl Interp {
     /// on the value stack and, if its body lives in a different segment than
     /// this loop's buffer, return `Some(callee_segment)` to route it through a
     /// cross-segment dispatch. Returns `None` (stay in-loop) in the common
-    /// same-segment case, and — the zero-overhead fast path — immediately when
-    /// no eval has ever defined a function ([`Self::func_segments`] empty), so
-    /// a program that never evals dispatches exactly as before.
+    /// same-segment case, and immediately when no retained function exists.
     ///
-    /// The fast-path guard is `code_segments` empty (no eval has ever run):
+    /// The fast-path guard is `code_segments` empty (no function has retained
+    /// a defining buffer):
     /// only then is every callee guaranteed same-segment. Once an eval has
     /// run, the check is needed both ways — the top-level program calling an
     /// eval-defined function, and (while dispatching an eval segment) that
@@ -15041,11 +15330,21 @@ impl Interp {
         has_target: bool,
         callee_segment: Option<usize>,
     ) -> Result<Slot, Halt> {
+        let body_start = self.enter_call(argc, 0, has_target)?;
+        self.dispatch_entered_cross_segment(body_start, callee_segment)
+    }
+
+    /// Dispatch a frame that has already been entered over its retained
+    /// segment. Shared by ordinary and bound cross-crank calls.
+    fn dispatch_entered_cross_segment(
+        &mut self,
+        body_start: usize,
+        callee_segment: Option<usize>,
+    ) -> Result<Slot, Halt> {
         let buf = match self.segment_buffer(callee_segment) {
             Some(buf) => buf,
-            None => return Err(Halt::Unsupported("eval:missing-segment")),
+            None => return Err(Halt::Unsupported("function:missing-segment")),
         };
-        let body_start = self.enter_call(argc, 0, has_target)?;
         let return_depth = self.call_stack.len();
         let saved_segment = self.active_segment;
         self.active_segment = callee_segment;
@@ -22390,7 +22689,7 @@ impl Interp {
         base: usize,
         argc: usize,
         ret_pc: usize,
-    ) -> Result<usize, Halt> {
+    ) -> Result<(usize, crate::value::SlotIndex), Halt> {
         let data = self.bound_functions[&bf].clone();
         // A bound function whose target is itself bound needs the trampoline to
         // re-dispatch through the target's own bound handler (XS's `mxRunCount`
@@ -22425,6 +22724,7 @@ impl Interp {
         self.meter
             .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
         self.enter_call(total, ret_pc, false)
+            .map(|body_start| (body_start, data.target))
     }
 
     /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
@@ -42825,11 +43125,8 @@ impl Interp {
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
         // `func_segments` holds no slots or chunks (function slot →
-        // dynamic-segment index), so it prunes late like the rest of
-        // this list. Pruning it is what keeps the dynamic-segment
-        // persistence witness (`live_dynamic_segment_function`) from
-        // counting collected eval functions — and from mis-answering
-        // through a reused slot index.
+        // retained-segment index), so it prunes late like the rest of
+        // this list and cannot survive a reused owner slot.
         self.func_segments.retain(|k, _| !dead.contains(k));
         // The llm sweep's slot-and-chunk-free tables — edge maps keyed
         // by an instance or function slot, and pure brand/scalar
@@ -42873,6 +43170,7 @@ impl Interp {
         // real omission and the reverse map's `retain` above shows the
         // shape the fix takes.
 
+        self.compact_code_segments();
         self.compact_reaction_arenas();
 
         stats
@@ -42992,6 +43290,32 @@ impl Interp {
             .map(|(_, e)| e)
             .collect();
     }
+
+    /// Drop code buffers no live guest function references and remap the
+    /// surviving function→segment indices densely.
+    fn compact_code_segments(&mut self) {
+        let live: std::collections::BTreeSet<usize> =
+            self.func_segments.values().copied().collect();
+        if live.len() == self.code_segments.len()
+            && live.iter().copied().eq(0..self.code_segments.len())
+        {
+            return;
+        }
+        let remap: std::collections::BTreeMap<usize, usize> = live
+            .iter()
+            .enumerate()
+            .map(|(new, old)| (*old, new))
+            .collect();
+        let old = std::mem::take(&mut self.code_segments);
+        self.code_segments = old
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, segment)| live.contains(&index).then_some(segment))
+            .collect();
+        for segment in self.func_segments.values_mut() {
+            *segment = remap[segment];
+        }
+    }
 }
 
 // --- page-granular freeing for the store-side partial collector
@@ -43106,6 +43430,7 @@ impl Interp {
         // GC-P3d). If the registry is ever made weak, this becomes a
         // real omission and the reverse map's `retain` above shows the
         // shape the fix takes.
+        self.compact_code_segments();
         self.compact_reaction_arenas();
         freed.len() as u32
     }

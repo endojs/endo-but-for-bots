@@ -367,6 +367,8 @@ pub struct MachineImage {
     pub regexps: Vec<RegExpImage>,
     /// `DATE`: Date `[[DateValue]]` records, owner-ascending.
     pub dates: Vec<DateImage>,
+    /// `FUNC`: retained guest-callability state.
+    pub function_state: ironhorse_vm::FunctionStateSnapshot,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -448,6 +450,7 @@ impl MachineImage {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
+            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -563,6 +566,15 @@ impl MachineImage {
     /// Attach Date `[[DateValue]]` records, already owner-ascending.
     pub fn with_dates(mut self, dates: Vec<DateImage>) -> MachineImage {
         self.dates = dates;
+        self
+    }
+
+    /// Attach the atomic retained guest-callability state.
+    pub fn with_function_state(
+        mut self,
+        function_state: ironhorse_vm::FunctionStateSnapshot,
+    ) -> MachineImage {
+        self.function_state = function_state;
         self
     }
 
@@ -1441,6 +1453,197 @@ pub(crate) fn decode_dates(p: &[u8]) -> Result<Vec<DateImage>, SnapshotError> {
     Ok(out)
 }
 
+/// Encode the atomic retained guest-callability cluster (`FUNC`).
+pub(crate) fn encode_function_state(state: &ironhorse_vm::FunctionStateSnapshot) -> Vec<u8> {
+    let mut v = Vec::new();
+    let text = |v: &mut Vec<u8>, value: &str| {
+        v.extend_from_slice(&(value.len() as u32).to_be_bytes());
+        v.extend_from_slice(value.as_bytes());
+    };
+    v.extend_from_slice(&(state.segments.len() as u32).to_be_bytes());
+    for segment in &state.segments {
+        v.extend_from_slice(&(segment.len() as u32).to_be_bytes());
+        v.extend_from_slice(segment);
+    }
+    v.extend_from_slice(&(state.functions.len() as u32).to_be_bytes());
+    for row in &state.functions {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        match (row.segment, row.body_start) {
+            (Some(segment), Some(start)) => {
+                v.push(1);
+                v.extend_from_slice(&segment.to_be_bytes());
+                v.extend_from_slice(&start.to_be_bytes());
+                v.extend_from_slice(&row.body_len.to_be_bytes());
+            }
+            (None, None) => v.push(0),
+            _ => unreachable!("function snapshot body and segment must travel together"),
+        }
+        v.extend_from_slice(&row.closures.to_be_bytes());
+        text(&mut v, &row.name);
+        v.extend_from_slice(&row.arity.to_be_bytes());
+        v.extend_from_slice(&row.name_chunk.to_be_bytes());
+        v.push(row.is_generator as u8);
+        v.extend_from_slice(&row.home.to_be_bytes());
+        v.push(match row.class_derived {
+            None => 0,
+            Some(false) => 1,
+            Some(true) => 2,
+        });
+    }
+    v.extend_from_slice(&(state.bound_functions.len() as u32).to_be_bytes());
+    for row in &state.bound_functions {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.target.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.this_arg, &mut v);
+        v.extend_from_slice(&(row.args.len() as u32).to_be_bytes());
+        for arg in &row.args {
+            crate::slot_codec::encode_slot(arg, &mut v);
+        }
+    }
+    v.extend_from_slice(&(state.ctor_prototypes.len() as u32).to_be_bytes());
+    for &(owner, prototype) in &state.ctor_prototypes {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.extend_from_slice(&prototype.to_be_bytes());
+    }
+    v.extend_from_slice(&(state.deleted_meta.len() as u32).to_be_bytes());
+    for &(owner, id) in &state.deleted_meta {
+        v.extend_from_slice(&owner.to_be_bytes());
+        v.extend_from_slice(&id.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_function_state(
+    p: &[u8],
+) -> Result<ironhorse_vm::FunctionStateSnapshot, SnapshotError> {
+    let mut c = Cursor::new(p, "function state");
+    let text = |c: &mut Cursor<'_>| -> Result<String, SnapshotError> {
+        let len = c.u32()? as usize;
+        String::from_utf8(c.bytes(len)?.to_vec())
+            .map_err(|_| SnapshotError::Corrupt("function state: name not UTF-8"))
+    };
+    let u64_value = |c: &mut Cursor<'_>| -> Result<u64, SnapshotError> {
+        Ok(((c.u32()? as u64) << 32) | c.u32()? as u64)
+    };
+
+    let segment_count = c.u32()? as usize;
+    let mut segments = Vec::with_capacity(segment_count.min(p.len() / 4));
+    for _ in 0..segment_count {
+        let len = c.u32()? as usize;
+        segments.push(c.bytes(len)?.to_vec());
+    }
+
+    let function_count = c.u32()? as usize;
+    let mut functions = Vec::with_capacity(function_count.min(p.len() / 30));
+    for _ in 0..function_count {
+        let owner = c.u32()?;
+        if functions
+            .last()
+            .is_some_and(|row: &ironhorse_vm::FunctionRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "function state: owners not strictly ascending",
+            ));
+        }
+        let (segment, body_start, body_len) = match c.u8()? {
+            0 => (None, None, 0),
+            1 => (Some(c.u32()?), Some(u64_value(&mut c)?), u64_value(&mut c)?),
+            _ => return Err(SnapshotError::Corrupt("function state: bad body tag")),
+        };
+        let closures = c.u32()?;
+        let name = text(&mut c)?;
+        let arity = c.u32()?;
+        let name_chunk = c.u32()?;
+        let is_generator = match c.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(SnapshotError::Corrupt("function state: bad boolean byte")),
+        };
+        let home = c.u32()?;
+        let class_derived = match c.u8()? {
+            0 => None,
+            1 => Some(false),
+            2 => Some(true),
+            _ => return Err(SnapshotError::Corrupt("function state: bad class tag")),
+        };
+        functions.push(ironhorse_vm::FunctionRow {
+            owner,
+            segment,
+            body_start,
+            body_len,
+            closures,
+            name,
+            arity,
+            name_chunk,
+            is_generator,
+            home,
+            class_derived,
+        });
+    }
+
+    let bound_count = c.u32()? as usize;
+    let mut bound_functions = Vec::with_capacity(bound_count.min(p.len() / 32));
+    for _ in 0..bound_count {
+        let owner = c.u32()?;
+        if bound_functions
+            .last()
+            .is_some_and(|row: &ironhorse_vm::BoundFunctionRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "bound-function state: owners not strictly ascending",
+            ));
+        }
+        let target = c.u32()?;
+        let this_arg = c.slot()?;
+        let arg_count = c.u32()? as usize;
+        let mut args = Vec::with_capacity(arg_count.min(p.len() / SLOT_RECORD_BYTES));
+        for _ in 0..arg_count {
+            args.push(c.slot()?);
+        }
+        bound_functions.push(ironhorse_vm::BoundFunctionRow {
+            owner,
+            target,
+            this_arg,
+            args,
+        });
+    }
+
+    let ctor_count = c.u32()? as usize;
+    let mut ctor_prototypes = Vec::with_capacity(ctor_count.min(p.len() / 8));
+    for _ in 0..ctor_count {
+        let row = (c.u32()?, c.u32()?);
+        if ctor_prototypes
+            .last()
+            .is_some_and(|prev: &(u32, u32)| row.0 <= prev.0)
+        {
+            return Err(SnapshotError::Corrupt(
+                "constructor-prototype state: rows not strictly ascending",
+            ));
+        }
+        ctor_prototypes.push(row);
+    }
+
+    let deleted_count = c.u32()? as usize;
+    let mut deleted_meta = Vec::with_capacity(deleted_count.min(p.len() / 6));
+    for _ in 0..deleted_count {
+        let row = (c.u32()?, c.u16()?);
+        if deleted_meta.last().is_some_and(|prev| row <= *prev) {
+            return Err(SnapshotError::Corrupt(
+                "deleted-function metadata: rows not strictly ascending",
+            ));
+        }
+        deleted_meta.push(row);
+    }
+    c.done()?;
+    Ok(ironhorse_vm::FunctionStateSnapshot {
+        segments,
+        functions,
+        bound_functions,
+        ctor_prototypes,
+        deleted_meta,
+    })
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2125,6 +2328,7 @@ pub(crate) struct LangRows<'a> {
     pub wrappers: &'a [WrapperImage],
     pub regexps: &'a [RegExpImage],
     pub dates: &'a [DateImage],
+    pub function_state: &'a ironhorse_vm::FunctionStateSnapshot,
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2136,6 +2340,7 @@ impl LangRows<'_> {
         wrappers: &[],
         regexps: &[],
         dates: &[],
+        function_state: &EMPTY_FUNCTION_STATE,
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -2160,6 +2365,14 @@ static EMPTY_INTL: IntlTables = IntlTables {
     segment_iterators: Vec::new(),
     date_time_formats: Vec::new(),
 };
+static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
+    ironhorse_vm::FunctionStateSnapshot {
+        segments: Vec::new(),
+        functions: Vec::new(),
+        bound_functions: Vec::new(),
+        ctor_prototypes: Vec::new(),
+        deleted_meta: Vec::new(),
+    };
 
 /// Every slot index and chunk offset a decoded image can carry, checked
 /// against the geometry the image itself declares.
@@ -2403,6 +2616,115 @@ pub(crate) fn check_image_slot_bounds(
     for d in lang.dates {
         owned(d.owner)?;
     }
+    let function_owners: std::collections::BTreeSet<u32> = lang
+        .function_state
+        .functions
+        .iter()
+        .map(|row| row.owner)
+        .collect();
+    let bound_owners: std::collections::BTreeSet<u32> = lang
+        .function_state
+        .bound_functions
+        .iter()
+        .map(|row| row.owner)
+        .collect();
+    let mut referenced_segments = std::collections::BTreeSet::new();
+    for row in &lang.function_state.functions {
+        owned(row.owner)?;
+        if row.closures != u32::MAX {
+            owned(row.closures)?;
+        }
+        if row.home != u32::MAX {
+            owned(row.home)?;
+        }
+        if row.name_chunk != u32::MAX {
+            let offset = row.name_chunk as usize;
+            if offset < CHUNK_HEADER || offset > chunk_len {
+                return Err(OOC);
+            }
+        }
+        match (row.segment, row.body_start) {
+            (Some(segment), Some(start)) => {
+                let Some(code) = lang.function_state.segments.get(segment as usize) else {
+                    return Err(SnapshotError::Corrupt(
+                        "function state: body names no segment",
+                    ));
+                };
+                let Some(end) = start.checked_add(row.body_len) else {
+                    return Err(SnapshotError::Corrupt(
+                        "function state: body range overflow",
+                    ));
+                };
+                if end > code.len() as u64 {
+                    return Err(SnapshotError::Corrupt(
+                        "function state: body range outside segment",
+                    ));
+                }
+                let mut pc = start as usize;
+                let end = end as usize;
+                while pc < end {
+                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
+                        return Err(SnapshotError::Corrupt(
+                            "function state: malformed body bytecode",
+                        ));
+                    };
+                    pc = pc.saturating_add(len);
+                }
+                if pc != end {
+                    return Err(SnapshotError::Corrupt(
+                        "function state: body instruction crosses its range",
+                    ));
+                }
+                referenced_segments.insert(segment);
+            }
+            (None, None) if bound_owners.contains(&row.owner) => {}
+            _ => {
+                return Err(SnapshotError::Corrupt(
+                    "function state: body and segment disagree",
+                ))
+            }
+        }
+    }
+    if referenced_segments.len() != lang.function_state.segments.len()
+        || referenced_segments
+            .iter()
+            .copied()
+            .ne(0..lang.function_state.segments.len() as u32)
+    {
+        return Err(SnapshotError::Corrupt(
+            "function state: segments not densely referenced",
+        ));
+    }
+    for row in &lang.function_state.bound_functions {
+        owned(row.owner)?;
+        owned(row.target)?;
+        if !function_owners.contains(&row.owner) {
+            return Err(SnapshotError::Corrupt(
+                "bound-function state: owner has no function row",
+            ));
+        }
+        check(&row.this_arg)?;
+        for arg in &row.args {
+            check(arg)?;
+        }
+    }
+    for &(owner, prototype) in &lang.function_state.ctor_prototypes {
+        owned(owner)?;
+        owned(prototype)?;
+        if !function_owners.contains(&owner) {
+            return Err(SnapshotError::Corrupt(
+                "constructor-prototype state: owner has no function row",
+            ));
+        }
+    }
+    for &(owner, id) in &lang.function_state.deleted_meta {
+        owned(owner)?;
+        if id == 0 || id as usize > names_len {
+            return Err(SnapshotError::Corrupt(
+                "deleted-function metadata: id outside the name table",
+            ));
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -2585,6 +2907,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     if !image.dates.is_empty() {
         w.atom(crate::format::DATE, &encode_dates(&image.dates));
     }
+    if !image.function_state.is_empty() {
+        w.atom(
+            crate::format::FUNC,
+            &encode_function_state(&image.function_state),
+        );
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -2740,6 +3068,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_dates(a.payload)?,
         None => Vec::new(),
     };
+    let function_state = match r.find(crate::format::FUNC) {
+        Some(a) => decode_function_state(a.payload)?,
+        None => ironhorse_vm::FunctionStateSnapshot::default(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -2787,6 +3119,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             wrappers: &wrappers,
             regexps: &regexps,
             dates: &dates,
+            function_state: &function_state,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -2822,6 +3155,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         wrappers,
         regexps,
         dates,
+        function_state,
         arguments_brands,
         temporal,
         intl,
@@ -3198,6 +3532,7 @@ mod tests {
                 wrappers: &[],
                 regexps: &[],
                 dates: &[],
+                function_state: &EMPTY_FUNCTION_STATE,
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -3554,6 +3889,7 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
+            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -3592,6 +3928,7 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
+            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -3711,6 +4048,7 @@ mod tests {
             wrappers: Vec::new(),
             regexps: Vec::new(),
             dates: Vec::new(),
+            function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),

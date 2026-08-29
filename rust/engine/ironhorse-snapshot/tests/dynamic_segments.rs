@@ -1,24 +1,12 @@
-//! Dynamic code segments (the `eval` / dynamic-`Function` source
-//! bridge) versus heap persistence.
+//! Retained code segments (top-level cranks and the `eval` /
+//! dynamic-`Function` source bridge) versus heap persistence.
 //!
-//! An eval-defined function's bytecode lives in a per-realm SEGMENT
-//! buffer (`Interp::code_segments`) that no snapshot carries — the
-//! ledger has no segments row yet — so persisting a heap that holds a
-//! live such function would resume a callable whose body is gone. On
-//! the daemon path this is unreachable today (nothing installs a
-//! source compiler, so `eval` halts with `Unsupported("eval:
-//! no-compiler")` before any segment exists), but an embedder that
-//! wires a compiler AND a store would hit it silently. The store
-//! gates refuse it by name instead
-//! (`StoreError::DynamicSegmentsUnsupported`), at both
-//! `begin_store_session` and `checkpoint_to_store` — the same
-//! refuse-before-writing, caller-rewinds contract the old intern gate
-//! had — and the witness is what the heap HOLDS (a live
-//! `func_segments` entry, pruned by both collectors), not whether an
-//! eval ever ran (the wave-5 mint-counter lesson).
+//! Every guest function names an owned segment and the atomic `FUNC`
+//! carry serializes those buffers with function, constructor, bound
+//! function, and deleted-metadata rows.
 
 use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, resume_from_store};
-use ironhorse_snapshot::store::{HeapStore, MemoryStore, StoreError};
+use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
@@ -65,9 +53,9 @@ fn without_a_compiler_eval_halts_before_any_segment_exists() {
     assert!(m.live_dynamic_segment_function().is_none());
 }
 
-/// A live eval-defined function refuses to BEGIN a store session.
+/// A live eval-defined function begins, resumes, and remains callable.
 #[test]
-fn live_eval_function_refuses_begin() {
+fn live_eval_function_persists_from_begin() {
     let (b, n) = compile("var f = 0; f = eval('(function (x) { return x * 2; })'); var t = 0; t = f(4); t");
     let mut m = Interp::new();
     m.link_intrinsics(&n);
@@ -80,18 +68,23 @@ fn live_eval_function_refuses_begin() {
         "the escaped function is the live segment witness"
     );
     let mut store = MemoryStore::new();
-    match begin_store_session(m, &sig(), &mut store) {
-        Err((_, StoreError::DynamicSegmentsUnsupported)) => {}
-        Err((_, e)) => panic!("expected DynamicSegmentsUnsupported, got {e:?}"),
-        Ok(_) => panic!("expected a fail-closed refusal, got a session"),
-    }
+    drop(
+        begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, error)| error)
+            .expect("retained eval function persists"),
+    );
+    let mut resumed = resume_from_store(&store, &sig()).expect("resume");
+    let (b2, n2) = compile("var f; var t; t = f(5); t");
+    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let out = resumed.machine_mut().run(&b2);
+    assert!(out.completed, "resumed eval function: {:?}", out.halt);
+    assert_eq!(out.result, "10");
 }
 
-/// A crank that runs `eval` under an OPEN session refuses at the
-/// checkpoint, before anything is written — the store stands at its
-/// prior epoch and the caller can rewind the crank.
+/// A crank that creates an eval function under an open session
+/// checkpoints it and the next resumed crank can call it.
 #[test]
-fn eval_crank_refuses_checkpoint_and_writes_nothing() {
+fn eval_crank_checkpoints_its_retained_function() {
     let (_b0, n0) = compile("var f = 0; var t = 0; t = 1; t");
     let mut m = Interp::new();
     m.link_intrinsics(&n0);
@@ -105,12 +98,14 @@ fn eval_crank_refuses_checkpoint_and_writes_nothing() {
     let o = session.machine_mut().run(&b1);
     assert!(o.completed, "eval crank: {:?}", o.halt);
     assert_eq!(o.result, "7");
-    assert_eq!(
-        checkpoint_to_store(&mut session, &sig(), &mut store),
-        Err(StoreError::DynamicSegmentsUnsupported),
-        "a live eval-defined function cannot checkpoint"
-    );
-    assert_eq!(store.manifest().unwrap().epoch, 1, "nothing landed");
+    assert_eq!(checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(), 2);
+    drop(session);
+    let mut resumed = resume_from_store(&store, &sig()).expect("resume");
+    let (b2, n2) = compile("var f; var t; t = f(); t");
+    let b2 = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
+    let out = resumed.machine_mut().run(&b2);
+    assert!(out.completed, "resumed eval function: {:?}", out.halt);
+    assert_eq!(out.result, "7");
 }
 
 /// The witness asks what the heap HOLDS: once the eval-defined
@@ -142,49 +137,21 @@ fn collected_eval_function_persists_again() {
     resume_from_store(&store, &sig()).expect("resumes");
 }
 
-/// What cross-crank function references cost today, pinned from both
-/// sides. A function defined in crank 1 and stored in a global is NOT
-/// callable from crank 2 — on the LIVE machine or the resumed one —
-/// because its `FuncInfo.body` is a pc into the DEFINING crank's
-/// bytecode buffer, which is the caller's borrow and gone when the
-/// next crank runs (and, across a suspend, `FuncInfo` itself is the
-/// Pending `functions` ledger row and does not travel). The two sides
-/// fail with DIFFERENT visible signatures:
-///
-/// - live: the call dispatches crank 1's pc into crank 2's buffer and
-///   dies on malformed execution (`Unsupported` today — the hazard is
-///   that nothing type-checks the pc against the buffer, so this is
-///   fail-visible by LUCK of the bytes, not by construction);
-/// - resumed: the restored machine has no `FuncInfo` at all, so the
-///   call finds a non-callable and throws a catchable TypeError.
-///
-/// Both directions of the contract ("cranks are self-contained; a
-/// function does not outlive its crank") are pinned here so a change
-/// on either side is a deliberate flip, not a drift. The fix that
-/// makes cross-crank functions REAL is the functions ledger row plus
-/// crank-code retention (the segments machinery generalized), and it
-/// flips this pin.
+/// Defining-crank bytecode and function metadata survive both a later
+/// live crank and a checkpoint/resume boundary.
 #[test]
-fn cross_crank_function_reference_fails_visibly_live_and_resumed() {
+fn cross_crank_function_reference_works_live_and_resumed() {
     let (b1, n1) = compile("var f = 0; f = function (x) { return x + 1; }; var t = 0; t = f(1); t");
     let (b2, n2) = compile("var f; var t2 = 0; t2 = f(41); t2");
 
-    // LIVE machine: the call dies visibly (never a silent wrong answer
-    // in this fixture; see the doc comment for why this is luck).
     let mut live = Interp::new();
     live.link_intrinsics(&n1);
     assert!(live.run(&b1).completed);
     let b2l = live.relink_crank(&b2, &n2).expect("relink");
     let l = live.run(&b2l);
-    assert!(
-        !l.completed,
-        "PIN FLIPPED (live): cross-crank calls answer now — crank code \
-         retention must have landed; update this pin"
-    );
+    assert!(l.completed, "live cross-crank call: {:?}", l.halt);
+    assert_eq!(l.result, "42");
 
-    // RESUMED machine: persists (nothing refuses — the instance slot is
-    // ordinary heap), resumes, and the call throws a catchable
-    // TypeError (no FuncInfo).
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
     let mut store = MemoryStore::new();
@@ -197,14 +164,6 @@ fn cross_crank_function_reference_fails_visibly_live_and_resumed() {
     let mut resumed = resume_from_store(&store, &sig()).expect("resume");
     let b2r = resumed.machine_mut().relink_crank(&b2, &n2).expect("relink");
     let r = resumed.machine_mut().run(&b2r);
-    assert!(
-        !r.completed,
-        "PIN FLIPPED (resumed): the functions ledger row must have \
-         landed; update this pin and the Pending row"
-    );
-    assert!(
-        matches!(&r.halt, ironhorse_vm::Halt::Throw(msg) if msg.contains("TypeError")),
-        "the resumed divergence stays a catchable TypeError: {:?}",
-        r.halt
-    );
+    assert!(r.completed, "resumed cross-crank call: {:?}", r.halt);
+    assert_eq!(r.result, "42");
 }

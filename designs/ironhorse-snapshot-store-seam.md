@@ -1466,10 +1466,10 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 17 `Pending` ledger rows
-  (functions/closures, generators, promises, function-dependent
-  per-instance tables, dynamic code segments, and modules — several
-  unreachable cross-crank in the vm today regardless of restore).
+  STILL OPEN in this workstream: the 13 `Pending` ledger rows
+  (generators, promises, function-dependent per-instance tables, and
+  modules — several unreachable cross-crank in the vm today regardless
+  of restore).
   The old intern gap is NOT among them: runtime string keys live in
   the NAME table and symbol keys travel in `SYMB` (id-space
   unification, 2026-08-26), so no interning gates relink or
@@ -1686,15 +1686,16 @@ rather than work items.
   provenance (a content re-pin, not a format one). A bare detached
   prototype method with a wrong receiver stays a NAMED refusal, never
   a wrong answer. Locked by the four `detached_natives` tests.
-- [ ] Dynamic code segments do not persist — the store gates refuse a
-  heap holding a live eval-defined function by name
-  (`StoreError::DynamicSegmentsUnsupported`; the ledger's `Segments`
-  row; unreachable on the daemon path, which installs no source
-  compiler). The lift is crank-code retention — the segments
-  machinery generalized to retain and serialize defining-crank
-  bytecode — which is also what makes cross-crank function
-  references real (the `functions` row's other half). Pinned from
-  both sides in `dynamic_segments.rs`.
+- [x] ~~Dynamic code segments do not persist~~ Done (2026-08-29,
+  schema v15 / format v4): every defining crank lazily promotes its
+  bytecode into an owned segment when it defines a function, and
+  `FUNC` carries the compact segment set atomically with guest
+  `FuncInfo`, bound-function state, constructor→prototype links, and
+  deleted function metadata. Cross-crank calls now work live, eager,
+  lazy and through blobs; eval-defined functions no longer trip a
+  persistence gate. Both collectors compact unreferenced code
+  segments. Locks: `functions_carry.rs`, `dynamic_segments.rs`, and
+  the multi-crank XS oracle function/closure twin.
 - [ ] Ledger G3 — carry the SILENT-WRONG rows. The wave-6 fix
   pass gated them (`PendingStateUnsupported{row}` at every persist
   verb: `proxies`, `accessors`, the typed-array family, `error_data`
@@ -1877,15 +1878,10 @@ rather than work items.
     Memory, file, lazy and blob twins live in `date_carry.rs`; the
     codec lock covers arbitrary NaN payload bits. `Dates` graduates
     Serialized and the ledger returns to 17 Pending rows.
-  - [ ] `proxies`, `accessors`: dependency-gated on the `functions`
-    row, with the probe evidence recorded (2026-08-27): a resumed
-    guest function is UNCALLABLE today (`f(2)` throws TypeError,
-    `typeof f` answers `"object"` — the `functions` FuncInfo row does
-    not travel), and both remaining rows hold function slots (traps,
-    getters/setters). Carrying them before `functions` would trade
-    silent-wrong for visible-broken, not for correct — so the gates
-    stay, and the `functions` carry (per-instance FuncInfo + the
-    code-segment story) is the prerequisite lift.
+  - [ ] `proxies`, `accessors`: their `functions` prerequisite landed
+    with schema v15. Their own target/handler and getter/setter rows
+    remain gated until the next carry; the former dependency blocker
+    is now cleared.
 - [x] ~~The `combinators` / `from_async` / `promise_guards` tables
   are append-only for the machine's lifetime (wave-6 W6-19)~~ Done
   (2026-08-27): both collectors' sweeps now COMPACT the three arenas
@@ -2793,6 +2789,15 @@ bite-checked by reverting the fix under the lock). Statuses:
   `Dates` is no longer Pending. Format v3 makes older readers refuse
   the new state-bearing atom instead of skipping it, and both golden
   pins moved consciously.
+- **Atomic function carry (2026-08-29, schema v15 / format v4):**
+  defining-crank and eval bytecode, guest and bound function metadata,
+  constructor prototype links, and deleted `.name`/`.length` metadata
+  travel together in `FUNC` and the twenty-second small-state section.
+  Defining-crank buffers are retained lazily only when a function is
+  created, and both collectors compact dead segments. Cross-crank
+  calls, closures, bound calls, constructors, and eval-defined
+  functions now survive eager, lazy, file, and blob resumes. The four
+  ledger rows graduate together; 13 Pending rows remain.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2810,8 +2815,9 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. The reader accepts a read RANGE (`1..=3`) — older atoms are a subset
-  with the same encodings — and refuses anything newer; the store's
+  reason. The function carry later advanced it to 4. The reader accepts
+  a read RANGE (`1..=4`) — older atoms are a subset with the same
+  encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
   still open and migrate.
   Both golden pins moved (`format.rs`, `metamorphic_determinism.rs`).

@@ -7,10 +7,8 @@
 //! never compiled the name and only observable from a LATER crank.
 //! That exact shape is the first lock here.
 //!
-//! Scope: the self-contained-crank contract — cross-crank DATA and
-//! state reads, never calls of a prior crank's functions (ironhorse's
-//! crank bytecode belongs to the caller; XS retains it, so such a
-//! fixture diverges by design and is out of scope).
+//! Retained defining-crank bytecode now extends the scope to function
+//! and closure calls created by earlier cranks.
 
 use ironhorse_262::{dual_run_cranks, Agreement};
 
@@ -72,6 +70,14 @@ fn typed_array_state_reads_back_across_cranks() {
     agrees(&[
         "var ta = new Uint8Array(4); ta[0] = 7; ta[3] = 9; 0",
         "ta[0] + ta[3] + ta.length + ta.byteLength",
+    ]);
+}
+
+#[test]
+fn retained_function_and_closure_call_across_cranks() {
+    agrees(&[
+        "var f = 0; (function () { var x = 40; f = function (y) { return x + y; }; })(); 0",
+        "f(2)",
     ]);
 }
 
