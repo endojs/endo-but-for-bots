@@ -11,7 +11,7 @@
 
 import { makeError, X, q } from '@endo/errors';
 
-/** @import { GuestFormulaId } from './types.js' */
+/** @import { GuestFormulaId } from './claude.types.js' */
 
 const FORMULA_ID = /^[0-9a-f]{64}$/;
 

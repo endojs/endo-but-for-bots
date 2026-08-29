@@ -11,7 +11,7 @@
 import { makeError, X, q } from '@endo/errors';
 import { toPassableError } from '@endo/pass-style';
 
-/** @import { BridgeDownResult, CancelledResult, FacetThrewResult, LimitExceededResult, NonzeroExitResult, OkResult, ParseErrorResult, PoolExhaustedResult, RateLimitedResult } from './types.js' */
+/** @import { BridgeDownResult, CancelledResult, FacetThrewResult, LimitExceededResult, NonzeroExitResult, OkResult, ParseErrorResult, PoolExhaustedResult, RateLimitedResult } from './claude.types.js' */
 
 /** The exhaustive set of `type` discriminants, for validation and tests. */
 export const INFER_RESULT_TYPES = harden([

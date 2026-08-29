@@ -34,7 +34,7 @@ import { renderMcpConfig, serializeMcpConfig } from './mcp-config.js';
 import { renderApiKeyHelperSettings } from './credentials-pool.js';
 import { cancelled as cancelledResult, poolExhausted } from './results.js';
 
-/** @import { AcquireResult, Broker, HarnessOptions, InferResult, LaunchSpec, SpawnFiles } from './types.js' */
+/** @import { AcquireResult, Broker, HarnessOptions, InferResult, LaunchSpec, SpawnFiles } from './claude.types.js' */
 
 const InferInterface = M.interface('GuestInference', {
   infer: M.call(M.string())
