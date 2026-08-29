@@ -12,6 +12,8 @@ import { E } from '@endo/eventual-send';
 import { M, mustMatch } from '@endo/patterns';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+import { GLOB_MAX_RESULTS, GREP_MAX_RESULTS } from '@endo/platform/fs/lite';
+
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import {
   makeMount,
@@ -431,6 +433,18 @@ test('clampStreamBuffer clamps a requested buffer to [0, STREAM_BUFFER_MAX]', t 
   );
   t.is(clampStreamBuffer(Number.NaN), 0);
   t.is(clampStreamBuffer(Number.POSITIVE_INFINITY), 0);
+  t.is(clampStreamBuffer(Number.NEGATIVE_INFINITY), 0);
+  t.is(clampStreamBuffer(-0), 0, 'negative zero collapses to 0');
+  t.is(
+    clampStreamBuffer(STREAM_BUFFER_MAX),
+    STREAM_BUFFER_MAX,
+    'the exact ceiling passes through unclamped (the > vs === boundary)',
+  );
+  t.is(
+    clampStreamBuffer(STREAM_BUFFER_MAX - 1),
+    STREAM_BUFFER_MAX - 1,
+    'just below the ceiling passes through',
+  );
   t.is(clampStreamBuffer(undefined), 0);
 });
 
@@ -450,5 +464,287 @@ test('the MountInterface guard rejects a non-number buffer', async t => {
     // @ts-expect-error deliberate bad option shape
     () => collect(E(mount).streamGlob('**', { buffer: 'lots' })),
     { message: /Must be a number/ },
+  );
+});
+
+// --- No result cap: the streaming variants yield past the eager caps ---
+// The whole reason the streaming surface exists is to move the boundary the
+// eager `glob`/`grep` collectors truncate at. Pin that the eager forms stop at
+// their cap while the stream keeps going. [corner-prober finding 1]
+
+test('streamGrep yields past GREP_MAX_RESULTS while grep truncates at it', async t => {
+  t.timeout(60_000);
+  const root = makeTempRoot(t, 'mount-stream-grepcap-');
+  // One file, more matching lines than the eager grep cap. Every line matches,
+  // so the match count — not the file count — crosses the boundary cheaply.
+  const overCap = GREP_MAX_RESULTS + 25;
+  const lines = Array.from({ length: overCap }, () => 'needle').join('\n');
+  fs.writeFileSync(path.join(root, 'many.txt'), `${lines}\n`);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  const eager = [...(await E(mount).grep('needle'))];
+  t.is(
+    eager.length,
+    GREP_MAX_RESULTS,
+    'eager grep truncates at GREP_MAX_RESULTS',
+  );
+
+  const streamed = await collect(E(mount).streamGrep('needle'));
+  t.is(
+    streamed.length,
+    overCap,
+    'streamGrep yields every match, past the eager cap',
+  );
+  t.true(streamed.length > eager.length);
+});
+
+test('streamGlob yields past GLOB_MAX_RESULTS while glob truncates at it', async t => {
+  t.timeout(120_000);
+  const root = makeTempRoot(t, 'mount-stream-globcap-');
+  // A flat directory just over the eager glob cap. Empty files keep this cheap;
+  // `glob('*')` walks one directory and sorts the names, no recursion.
+  const overCap = GLOB_MAX_RESULTS + 1;
+  for (let i = 0; i < overCap; i += 1) {
+    fs.writeFileSync(path.join(root, `f${String(i).padStart(6, '0')}`), '');
+  }
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  const eager = [...(await E(mount).glob('*'))];
+  t.is(
+    eager.length,
+    GLOB_MAX_RESULTS,
+    'eager glob truncates at GLOB_MAX_RESULTS',
+  );
+
+  const streamed = await collect(E(mount).streamGlob('*'));
+  t.is(
+    streamed.length,
+    overCap,
+    'streamGlob yields every path, past the eager cap',
+  );
+  t.true(streamed.length > eager.length);
+});
+
+// --- Buffer clamp is enforced at the call site, not merely unit-tested ---
+// `clampStreamBuffer` is exercised in isolation above; this observes that the
+// producer's actual pre-ack read-ahead is bounded to STREAM_BUFFER_MAX when a
+// caller requests more. If a regression dropped the clamp at the call site, the
+// producer would read the whole (over-ceiling) fixture ahead of demand and this
+// would redden. [prover finding; corner-prober finding 3]
+
+test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
+  t.timeout(120_000);
+  const root = makeTempRoot(t, 'mount-stream-clamp-');
+  // More one-match files than the ceiling, so "clamped to 1024" is observably
+  // distinct from "reads them all". One matching line per file ⇒ one element
+  // (and one readFileText) per file.
+  const total = STREAM_BUFFER_MAX + 100;
+  for (let i = 0; i < total; i += 1) {
+    fs.writeFileSync(
+      path.join(root, `f${String(i).padStart(5, '0')}.txt`),
+      'needle\n',
+    );
+  }
+  const { powers, counters } = countingPowers();
+  const mount = makeMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers: powers,
+  });
+  await null;
+
+  // Request a buffer far above the ceiling and DON'T pull: the producer pre-acks
+  // up to its clamped buffer, then blocks awaiting a synchronize node.
+  const iterator = iterateReader(
+    E(mount).streamGrep('needle', { buffer: STREAM_BUFFER_MAX * 4 }),
+  );
+  // Let the producer run until its pre-ack read-ahead settles (it cannot exceed
+  // the clamp), then a grace window in which a broken clamp would over-read.
+  for (
+    let waited = 0;
+    counters.readFileText < STREAM_BUFFER_MAX && waited < 400;
+    waited += 1
+  ) {
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  t.is(
+    counters.readFileText,
+    STREAM_BUFFER_MAX,
+    `producer read-ahead is clamped to STREAM_BUFFER_MAX (${STREAM_BUFFER_MAX}), not the requested ${STREAM_BUFFER_MAX * 4} nor the unbounded ${total}`,
+  );
+
+  await iterator.return();
+});
+
+// --- Revocation is not atomic with buffer > 0: the window is bounded ---
+// A non-zero buffer lets the producer pre-acknowledge settled elements ahead of
+// demand; a mid-stream revoke() cannot un-deliver those. Pin the worst case:
+// the post-revoke delivery is bounded by the clamped buffer, and the stream
+// still eventually rejects. [breaker finding 1]
+
+test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buffer', async t => {
+  const root = makeTempRoot(t, 'mount-stream-revoke-buf-');
+  const total = 40;
+  for (let i = 0; i < total; i += 1) {
+    fs.writeFileSync(
+      path.join(root, `f${String(i).padStart(3, '0')}.txt`),
+      'match\n',
+    );
+  }
+  const { mount, control } = makeRevocableMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers,
+  });
+
+  const buffer = 4;
+  const iterator = iterateReader(E(mount).streamGrep('match', { buffer }));
+  const first = await iterator.next();
+  t.false(first.done, 'a first match arrives before revocation');
+
+  // Revoke while the producer is pre-acking ahead. Elements already settled into
+  // the buffer are still deliverable; only the pull past the drained buffer
+  // rejects. This is the documented revocation-latency window.
+  await E(control).revoke();
+
+  let delivered = 0;
+  let rejected = false;
+  try {
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const next = await iterator.next();
+      if (next.done) break;
+      delivered += 1;
+      // Safety valve so a broken clamp cannot loop forever.
+      if (delivered > buffer + 5) break;
+    }
+  } catch (error) {
+    rejected = true;
+    t.regex(error.message, /Mount has been revoked/);
+  }
+
+  t.true(rejected, 'the stream rejects once the pre-acked buffer drains');
+  t.true(
+    delivered <= clampStreamBuffer(buffer),
+    `at most the clamped buffer (${clampStreamBuffer(
+      buffer,
+    )}) elements arrive after revoke; got ${delivered}`,
+  );
+});
+
+// --- Directory walk is eager, content reads are incremental (asymmetric) ---
+// The design aspired to a fully incremental walk, but glob's global sort forces
+// the whole confined tree to be enumerated before the first element — for
+// streamGrep too, since its file list comes from the same walk. Pin the shipped
+// reality the corrected docs now describe: at the first match the directory walk
+// is already complete, yet only the files needed for that match were read.
+// [engine-realist finding]
+
+test('streamGrep enumerates the whole tree before the first match, but reads only as far as needed', async t => {
+  const root = makeTempRoot(t, 'mount-stream-deep-');
+  // A match at the root (sorts first) and a chain of nested directories whose
+  // deepest file also matches. The walk must descend the whole chain regardless
+  // of where the first match sorts.
+  fs.writeFileSync(path.join(root, 'aaa.txt'), 'deep-needle\n');
+  let dir = root;
+  const depth = 10;
+  for (let i = 0; i < depth; i += 1) {
+    dir = path.join(dir, `d${i}`);
+    fs.mkdirSync(dir);
+  }
+  fs.writeFileSync(path.join(dir, 'deep.txt'), 'deep-needle\n');
+
+  // Learn the full-walk directory-read count from a complete streamGlob pass.
+  const glob = countingPowers();
+  const globMount = makeMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers: glob.powers,
+  });
+  await collect(E(globMount).streamGlob('**'));
+  const fullWalkDirReads = glob.counters.readDirectory;
+  t.true(fullWalkDirReads >= depth, 'the fixture is genuinely deep');
+
+  const { powers, counters } = countingPowers();
+  const mount = makeMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers: powers,
+  });
+  const iterator = iterateReader(E(mount).streamGrep('deep-needle'));
+  const firstMatch = await iterator.next();
+  t.false(firstMatch.done);
+  t.is(
+    /** @type {any} */ (firstMatch.value).file,
+    'aaa.txt',
+    'the root file sorts first',
+  );
+
+  // The directory walk is eager: at the first match the whole tree has already
+  // been enumerated (same directory reads as a full glob walk).
+  t.is(
+    counters.readDirectory,
+    fullWalkDirReads,
+    'the whole confined tree is walked before the first match (eager walk)',
+  );
+  // But content reads are incremental: only the first file was read, not the
+  // deep one still pending in the walk order.
+  t.is(counters.readFileText, 1, 'only the first match file was read');
+
+  await iterator.return();
+  await null;
+  await null;
+  t.is(counters.readFileText, 1, 'early close leaves the deep file unread');
+});
+
+// --- streamGlob early cancellation: return() cleans up before completion ---
+// [corner-prober finding 5: streamGlob had zero cancellation coverage]
+
+test('breaking out of a streamGlob for-await stops cleanly with no late reads', async t => {
+  const { root } = buildMountFixture(t);
+  const { powers, counters } = countingPowers();
+  const mount = makeMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers: powers,
+  });
+
+  let seen = 0;
+  for await (const p of iterateReader(E(mount).streamGlob('**'))) {
+    t.is(typeof p, 'string');
+    seen += 1;
+    if (seen === 1) {
+      break; // triggers iterator.return()
+    }
+  }
+  t.is(seen, 1);
+  const dirReadsAtBreak = counters.readDirectory;
+  await null;
+  await null;
+  t.is(
+    counters.readDirectory,
+    dirReadsAtBreak,
+    'no directory reads after cancellation',
+  );
+});
+
+// --- streamGrep with a glob matching zero files yields nothing ---
+// [corner-prober finding 6]
+
+test('streamGrep with a glob that matches no file yields an empty stream', async t => {
+  const { root } = buildMountFixture(t);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+  t.deepEqual(
+    await collect(
+      E(mount).streamGrep('export', { glob: 'no-such-dir/**/*.nope' }),
+    ),
+    [],
+    'a glob matching nothing produces no matches',
   );
 });
