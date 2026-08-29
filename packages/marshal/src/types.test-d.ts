@@ -140,13 +140,33 @@ expectType<true>(
   >,
 );
 
-// TreeOf<string> is a leaf or a record of subtrees.
+// TreeOf<string> is a leaf or a record of subtrees. Pinned bidirectionally with
+// `Equal<>`, matching every other exported type in this file: the positive
+// `expectAssignable` pins below stay green when the declaration is silently
+// widened (e.g. `TreeOf<T>` to `any`, or `T | { [x: PropertyKey]: any }`), so the
+// `Equal<...>` pin is what reddens on such a regression on this recursive type.
 expectAssignable<TreeOf<string>>('leaf');
 expectAssignable<TreeOf<string>>({ a: 'leaf', b: { c: 'leaf' } });
+expectType<true>(
+  null as unknown as Equal<
+    TreeOf<string>,
+    string | { [x: PropertyKey]: TreeOf<string> }
+  >,
+);
+// Negative pin: a function value is neither a leaf nor a record of subtrees, so it
+// must NOT be assignable. Reddens if `TreeOf` is widened to admit non-tree shapes.
+// @ts-expect-error - a function is not a leaf or a record of subtrees
+expectAssignable<TreeOf<string>>(() => 'leaf');
 
-// Encoding is the JSON-representable tree of EncodingElements.
+// Encoding is the JSON-representable tree of EncodingElements. Pinned
+// bidirectionally against its definition so a silent widening of `Encoding`
+// itself (independent of `TreeOf`) reddens here rather than shipping undetected.
 expectAssignable<Encoding>('leaf');
 expectAssignable<Encoding>({ '@qclass': 'NaN' });
+expectType<true>(null as unknown as Equal<Encoding, TreeOf<EncodingElement>>);
+// Negative pin: a function value is not a valid Encoding tree.
+// @ts-expect-error - a function is not assignable to Encoding
+expectAssignable<Encoding>(() => 'leaf');
 
 // CapData pins its body/slots shape.
 expectType<true>(
