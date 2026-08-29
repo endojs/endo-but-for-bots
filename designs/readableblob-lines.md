@@ -63,9 +63,9 @@ spelled `startLine`/`endLine` to match the sibling vocabulary rather than
 diverging on names for an identical index value.
 
 `lines` is bare-named rather than prefixed `streamLines`, even though it returns a
-stream like the guard's one existing stream-returning member, `streamBase64` (which
-pumps the blob's bytes to the caller as a base64-encoded stream). It is unlike the
-materializing `text`/`json` pair. The `streamBase64` prefix
+stream — unlike the materializing `text`/`json` pair, and like the guard's one
+existing stream-returning member, `streamBase64` (which pumps the blob's bytes to
+the caller as a base64-encoded stream). The `streamBase64` prefix
 disambiguates an *encoding*: it names which representation the base64 pump emits,
 not merely that the method streams, so its prefix is not a general "this returns a
 stream" convention on the guard that `lines` would violate. `lines` instead
@@ -83,10 +83,12 @@ Two consequences of the bare spelling are called out so they are not left to the
 implementation. First, this repo's feature detection keys on method *names*, not on
 the exo tag (`readableBlobMethodGuards`' own comment, and `AGENTS.md` § CapTP
 introspection, which instructs a caller to enumerate `__getMethodNames__()` and
-reason from the name). A caller listing this guard sees `text`, `json`, `lines`,
-`streamBase64`, `getInfo`, `fetch`; by this repo's own naming pattern `text`,
-`json`, and `lines` all read as materializing accessors, yet only `lines` is a
-remotable driven with `iterateReader`. Because the bare name cannot itself carry
+reason from the name). A caller listing this base guard sees `help`, `streamBase64`, `text`, `json`, and
+now `lines` (the base record is only these; the `getInfo`/`fetch` a caller sees on
+a richer producer come from the composed `rangeReadMethodGuards`/`getInfoMethodGuard`,
+not from `readableBlobMethodGuards` itself); by this repo's own naming pattern
+`text`, `json`, and `lines` all read as materializing accessors, yet only `lines`
+is a remotable driven with `iterateReader`. Because the bare name cannot itself carry
 the "returns a stream" signal that name-based discovery relies on, the guard's own
 shared doc-comment (not only per-producer `help()`/TSDoc) must carry the
 "returns a reader to iterate, not a value" callout, so a maintainer reading the
@@ -153,8 +155,8 @@ last line clamps to the end, and an empty range (`startLine === endLine`) yields
 nothing, so an in-bounds empty window is defined without an error. A `startLine`
 at or past the total line count likewise yields nothing rather than erroring: the
 skip-forward exhausts the source and the stream ends empty, the same result as an
-in-bounds empty range. For five lines,
-for example, `{ startLine: 1, endLine: 3 }` selects lines 1 and 2;
+in-bounds empty range. For example, with five lines,
+`{ startLine: 1, endLine: 3 }` selects lines 1 and 2;
 `{ startLine: 2 }` selects lines 2, 3, and 4; `{ endLine: 2 }` selects lines 0 and
 1; `{ startLine: 4, endLine: 9 }` selects only line 4 (the `endLine` clamps); and
 `{ startLine: 9 }` selects nothing (the `startLine` is past the last line).
@@ -191,9 +193,17 @@ that whole line in memory before it can yield anything, which for a source that 
 one unterminated line degrades to whole-source materialization. This is an
 accepted, documented limitation, not an oversight: `lines` bounds memory per
 *line*, not per byte, and offers no maximum-line-length option in this iteration.
-A caller that must defend against adversarial or pathological line lengths should
-range-attenuate the blob first (`textRange`, once landed) or use the byte reader
-directly; a future maximum-line-length option is noted under Follow-up. The
+A caller that must defend against adversarial or pathological line lengths has one
+fallback available *today*: drop to the byte reader (`streamBase64` /
+`PassableBytesReader`), which yields fixed-size chunks and never accumulates a
+whole line, at the cost of doing its own line framing — the very work `lines`
+exists to save. Range-attenuating the blob first would bound the input more
+ergonomically, but `textRange` is itself `Status: Proposed` and unlanded, so it is
+not a mitigation a caller can reach for yet, and a future maximum-line-length
+option on `lines` itself is only noted under Follow-up. This design therefore ships
+`lines` with no in-method memory bound and only the lower-level byte reader as a
+present-day mitigation; that is a stated limitation, not a mitigation deferred to
+another design that would leave a caller with no working fallback in the meantime. The
 verification plan's overlong-line case asserts the line is delivered whole rather
 than truncated, pinning this behavior.
 
@@ -219,10 +229,10 @@ normalizing the text.
 
 | Input bytes, shown as text | `lines()` values |
 |---|---|
-| `a\nb\n` | `['a\\n', 'b\\n']` |
-| `a\rb\r` | `['a\\r', 'b\\r']` |
-| `a\r\nb\r\n` | `['a\\r\\n', 'b\\r\\n']` |
-| `a\r\nb\rc` | `['a\\r\\n', 'b\\r', 'c']` |
+| `a\nb\n` | `['a\n', 'b\n']` |
+| `a\rb\r` | `['a\r', 'b\r']` |
+| `a\r\nb\r\n` | `['a\r\n', 'b\r\n']` |
+| `a\r\nb\rc` | `['a\r\n', 'b\r', 'c']` |
 | `` (empty) | `[]` |
 
 The final non-empty suffix is yielded once with the empty terminator. A blob
@@ -241,15 +251,25 @@ verification plan, because both are capability-safety properties a conformance
 test must assert against a defined outcome.
 
 *Revocation mid-stream.* On the daemon mount view, the underlying byte reader
-re-checks the mount's confinement/revocation on each read, exactly as `getInfo`
-and `fetch` do. If the mount is revoked while a `lines()` stream is in flight, the
-next pull that reaches the revoked source rejects: the reader yields already-buffered
+checks confinement once before it starts and re-checks the mount's revocation on
+each read — the same per-chunk pattern `streamBase64`
+(`packages/daemon/src/mount.js`) already uses for its streaming pump, and the one
+the implementation table below records ("preserve confinement and re-check
+revocation"). This differs from the single-shot `getInfo`/`fetch`, which check
+liveness exactly once per call because they do not stream, so `streamBase64`, not
+`getInfo`/`fetch`, is the precedent an implementer copies. If the mount is revoked
+while a `lines()` stream is in flight, the next pull that reaches the revoked
+source rejects (not a silent stream end): the reader yields the already-buffered
 lines that were pulled before revocation, and then the pending/next iteration
-settles to a rejection carrying the same revocation error `fetch`/`getInfo` throw
-on a revoked mount (an `EPERM`-class error marshalled across the CapTP boundary as
-that error's passable form), not a silent stream end. The adapter does not swallow
-the error into a clean `done`, so a caller cannot mistake revocation for
-end-of-content.
+settles to a rejection carrying the same revocation error a revoked mount raises
+elsewhere. Today that error is the mount's bare `Error('Mount has been revoked')`
+— `assertLive()` in `packages/daemon/src/mount.js` tags no `code`/`EPERM` — 
+marshalled across the CapTP boundary as that error's passable form. This design
+pins the *outcome* (a rejection, not a clean `done`), not a specific error `code`,
+and does not add EPERM-tagging as a deliverable; a conformance test written off
+this contract must assert the rejection, not an `EPERM` shape the daemon does not
+produce today. The adapter does not swallow the error into a clean `done`, so a
+caller cannot mistake revocation for end-of-content.
 
 *Growth mid-stream (live sources).* A mount file is a live, non-snapshot face:
 its bytes can grow underneath the reader. `lines()` reads the source to *current*
@@ -257,7 +277,25 @@ EOF and ends the stream there; it does not wait for further appends the way a
 directory watch does. A caller processing a growing log therefore drains the
 lines available at the moment it started, sees `done`, and resumes by invoking
 `lines({ startLine: <count already consumed> })` again. The zero-based
-`startLine` skip makes resumption exact without re-reading consumed lines. `lines`
+`startLine` skip makes resumption *exact* — it yields precisely the lines the
+prior drain did not — but not *cheap*: the adapter holds no persistent line index
+or byte cursor, so on every resumed call it re-decodes from byte 0 and counts
+terminators forward to reach `startLine` (§ Design, the "no whole-source
+materialization" paragraph — the skip is a forward re-scan, not a stored
+position). Repeatedly draining a growing log therefore pays re-scan work that
+grows with the *current* file size on each poll, so total read cost over K polls
+of a file that reaches N bytes is O(K·N), not linear in the new bytes each poll
+adds. This asymptotic cost — a performance property, not a correctness gap — is a
+concrete reason the deferred follow/tail-mode reader (§ Follow-up) matters:
+`startLine`-resumption is exact but quadratic-in-polls as a tailing strategy,
+workable for occasional resumption and a poor fit for tight polling of a large
+growing source. Exactness further rests on an *append-only* assumption:
+`startLine` names a stable line only while indices `0..startLine-1` keep the
+content they had when they were drained. If a live source truncates or rewrites
+already-yielded content, a resumed `lines({ startLine: N })` silently reads a
+different window rather than erroring — unlike revocation above, this design pins
+no error for that case — so a caller resuming over a source that can rewrite its
+history must not rely on `startLine` parity across calls. `lines`
 is deliberately a finite reader over the content present when it opens the source,
 not a tail-follower; a follow-mode reader, if wanted, is separate future work
 noted under Follow-up.
@@ -383,7 +421,13 @@ and the stream ends empty, matching the in-bounds empty-range case) as well as a
 negative, fractional, and non-safe bounds rejecting with `EINVAL`. Include
 `buffer` values `0` and greater than the selected line count, invalid buffer
 values, early iterator return, early source closure at `endLine`, and propagated
-source errors. The mount cases must also verify revocation mid-stream. Because
+source errors. The mount cases must also verify both stated source-liveness contracts against a
+defined outcome: revocation mid-stream (a mount revoked while a `lines()` stream
+is in flight settles its next iteration to a rejection, not a clean `done`) and
+growth-mid-stream resumption (drain a live source to current EOF, append further
+lines, then resume with `lines({ startLine: <count already consumed> })` and
+assert the resumed drain yields exactly the appended lines — neither repeating a
+consumed line nor skipping an appended one). Because
 `lines` diverges from `rangeReadText`/`textRange` on the line-boundary model,
 include a case that pins the divergence rather than asserting parity: for a
 terminator-ending input (`a\nb\n`) and a lone-CR input (`a\rb\r`), assert that
