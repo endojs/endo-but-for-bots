@@ -5,8 +5,9 @@ import { makeExo } from '@endo/exo';
 import { M, makeCopyMap, makeCopySet } from '@endo/patterns';
 import { Fail, q } from '@endo/errors';
 
-/** @import { FormulaIdentifier, FormulaNumber, MapStore, SetStore } from './types.js' */
+/** @import { DaemonicPersistencePowers, FormulaIdentifier, FormulaNumber, MapStore, SetStore } from './types.js' */
 /** @import { Passable } from '@endo/pass-style' */
+/** @import { Pattern } from '@endo/patterns' */
 
 /**
  * The interface guard for a strong `MapStore`. Mirrors the `@agoric/store`
@@ -14,7 +15,7 @@ import { Fail, q } from '@endo/errors';
  * keys (`M.scalar()`); the follow-on broadens `keyShape` to `M.key()` so
  * nested passables and remotables at any depth may key the map.
  *
- * @param {import('@endo/patterns').Pattern} keyShape
+ * @param {Pattern} keyShape
  */
 export const makeMapStoreInterface = keyShape =>
   M.interface('MapStore', {
@@ -34,7 +35,7 @@ export const makeMapStoreInterface = keyShape =>
  * The interface guard for a strong `SetStore`. The key-taking methods share
  * the same signatures and semantics as their `MapStore` counterparts.
  *
- * @param {import('@endo/patterns').Pattern} keyShape
+ * @param {Pattern} keyShape
  */
 export const makeSetStoreInterface = keyShape =>
   M.interface('SetStore', {
@@ -62,7 +63,7 @@ export const makeSetStoreInterface = keyShape =>
  * index and per-slot retention counts) lives in the returned exo.
  *
  * @param {object} powers
- * @param {import('./types.js').DaemonicPersistencePowers} powers.persistence
+ * @param {DaemonicPersistencePowers} powers.persistence
  * @param {(value: Passable) => { body: string, slots: string[] }} powers.marshalToCapData
  *   Serialize a passable to the daemon's durable body+slots representation.
  * @param {(capData: { body: string, slots: string[] }) => Promise<Passable>} powers.unmarshalFromCapData

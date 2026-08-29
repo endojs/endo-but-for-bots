@@ -30,10 +30,10 @@ The endo pet daemon has **no equivalent**. What it has today:
   content-addressed blob store (`packages/daemon-cas`). Objects are re-derived
   ("formulated") from their formulas on restart.
 - **Name maps, not value stores.** The `pet-store` family (`src/pet-store.js`;
-  the `pet_store_entry` table) is a **string-name → formula-id** directory.
+  the `pet_store_entry` table) is a **string-name -> formula-id** directory.
   `directory` / `NameHub` (`src/directory.js`) is the guest-facing wrapper. The
-  `synced-store` layer (`synced_store_entry`) replicates name→locator maps
-  across peers. None of these is a general passable-key → passable-value store.
+  `synced-store` layer (`synced_store_entry`) replicates name->locator maps
+  across peers. None of these is a general passable-key -> passable-value store.
 - **Write-once value snapshots.** `storeValue(value, petName)` (`src/guest.js`,
   `formulateMarshalValue`) serializes a passable `value` into an **immutable**
   `marshal` formula and binds it to a pet name. There is no way to mutate a
@@ -228,7 +228,7 @@ For all map-like kinds, semantics match `@agoric/store`:
 - `delete(key)` — throws if `key` absent.
 - `has(key)` — never throws.
 - `snapshot()` — returns a hardened, passable `CopyMap` (`makeCopyMap`) that can
-  cross CapTP and be pattern-matched, giving a durable-store → passable-value
+  cross CapTP and be pattern-matched, giving a durable-store -> passable-value
   bridge symmetric with the existing write-once `storeValue`.
 
 Every mutating method **writes through to SQLite in the same turn** before
@@ -353,11 +353,11 @@ Each interface carries ~10 methods. Hanging all of them off the flat top level
 would collide with existing verbs (`get`, `remove`, `list`, and in particular
 the existing **write-once** `store` command — a distinct feature) and swamp
 `endo --help`. So the mutation/query verbs live under a **command group named
-for the store kind** — `endo map <name> <verb> …` and `endo set <name> <verb> …`
+for the store kind** — `endo map <name> <verb> ...` and `endo set <name> <verb> ...`
 — which would be the CLI's first subcommand groups, a departure justified by the
 method count. The constructors stay flat as `mk*` to match `mkdir`.
 
-`MapStore` (`endo map <name> …`):
+`MapStore` (`endo map <name> ...`):
 
 | Interface method | CLI verb |
 |---|---|
@@ -408,7 +408,7 @@ the name, key, and value/count in the same positions as `endo map` and
 `endo set`. This is a design commitment for a later phase, not an additional
 kind implemented by this change.
 
-The **weak** variants (`endo weakmap …` / `endo weakset …`) share the mutating
+The **weak** variants (`endo weakmap ...` / `endo weakset ...`) share the mutating
 verbs (`init`/`set`/`get`/`has`/`delete` or `add`/`has`/`delete`) but **omit the
 enumeration verbs** (`keys`/`values`/`entries`/`size`/`snapshot`), because weak
 stores are non-enumerable by design (Phase 3).
@@ -451,7 +451,7 @@ mirroring the encodings today's `store` command already offers (`--json`,
 data without invoking user code, so a key expression can neither diverge nor
 execute. This is exactly why the vocabulary must **not** accept raw `eval`-style
 source for a key (unlike `endo eval`, whose purpose *is* to run code): a key is
-*data*, decoded → `harden`ed → `M.scalar()`/`M.key()`-checked before it ever
+*data*, decoded -> `harden`ed -> `M.scalar()`/`M.key()`-checked before it ever
 touches the store. Output is symmetric: `get`/`keys`/`values`/`entries`/`snapshot`
 render passables back in the same encodings (`--out json|justin|shon`, default a
 human Justin-ish render), so round-tripping a key through the shell is lossless
@@ -465,11 +465,11 @@ direct-manipulation actions, mirroring how the File Explorer Space
 (`packages/space-file-explorer`) exposes "creating / renaming / removing
 entries":
 
-- **New Map / New Set / New Weak…** buttons ⇒ the `mk*` constructors.
+- **New Map / New Set / New Weak...** buttons => the `mk*` constructors.
 - One row per entry, with **＋ Add entry** (`init`/`add`), inline **edit value**
   (`set`), **✕** (`delete`), a **size** badge, and a live-updating table fed by a
   `follow`-style subscription.
-- **Snapshot** action ⇒ binds a `CopyMap`/`CopySet` under a new pet name — a value
+- **Snapshot** action => binds a `CopyMap`/`CopySet` under a new pet name — a value
   the user can then drag into another space.
 - A shared **key/value editor** widget carrying the same encoding selector as the
   CLI (JSON / Justin / SHON / pick-a-capability), the capability picker resolving
@@ -529,8 +529,8 @@ on the daemon's `WeakMapStore` exercises the weak substrate end-to-end the way r
 consumers do: keys held weakly by remotable identity, entries surviving a daemon
 restart while the purse/payment remotables remain live, and ledger entries dropping
 when a payment is collected. The integration test drives a minimal ERTP issuer kit
-(mint → purse → deposit/withdraw/transfer) whose ledger is a daemon `WeakMapStore`,
-asserting conservation of `Amount` across a create → mint → transfer → **restart** →
+(mint -> purse -> deposit/withdraw/transfer) whose ledger is a daemon `WeakMapStore`,
+asserting conservation of `Amount` across a create -> mint -> transfer -> **restart** ->
 balances-intact sequence. This makes ERTP a first-class acceptance target for the
 weak variants rather than a synthetic micro-test, and validates that the daemon's
 `WeakMapStore` is a drop-in substrate for the primary real-world consumer of one.
@@ -549,7 +549,7 @@ bigint multiplicities in the value columns. Preserve shared map/set verb
 signatures as specified above, and add only the bag-specific decrement verb.
 
 **Phase 6 — human surfaces (CLI + WUI).** The command vocabulary specified in
-*Design → CLI and WUI command vocabulary*: the `mk*` constructors, the
+*Design -> CLI and WUI command vocabulary*: the `mk*` constructors, the
 `endo map`/`endo set` (and weak) verb groups, the typed key/value encodings
 (`--json`/`--justin`/`--shon`/`@pet-name`) over a total non-evaluating decoder,
 and the chat client's **Store Space**. Can land incrementally alongside any of
@@ -597,7 +597,7 @@ new dependency.
 8. **`mk*` constructors flat; per-store verbs in a named group.** Constructors
    join the existing flat `mk*` family (`mkdir`/`mkhost`/`mkguest`/`mktmp`) so
    `mkmap`/`mkset` read as siblings. The ~10 interface methods per store go under
-   `endo map <name> …` / `endo set <name> …` subcommand groups rather than flat
+   `endo map <name> ...` / `endo set <name> ...` subcommand groups rather than flat
    top-level verbs — the flat namespace would collide (`get`, `remove`, the
    write-once `store`) and swamp `endo --help`. This introduces the CLI's first
    subcommand groups, a departure the method count justifies.
@@ -638,7 +638,7 @@ new dependency.
 - [ ] Phase 1 implementation and restart-persistence tests (closes #59).
 - [ ] **ERTP integration test** on the `WeakMapStore` (Phase 3): a minimal
       issuer/mint/purse kit whose ledger is a daemon `WeakMapStore`, asserting
-      `Amount` conservation across create → mint → transfer → restart →
+      `Amount` conservation across create -> mint -> transfer -> restart ->
       balances-intact, and weak-key drop when a payment is collected
       (kriskowal/garden#59, motivated by the ERTP mention in #58).
 - [ ] Confirm the exact formula-graph callback contract for collection of a

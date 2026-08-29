@@ -13,7 +13,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { CollectionStoreDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { CollectionStoreDeferredTaskParams, CollectionStoreFormula, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 
@@ -340,7 +340,7 @@ export const makeGuestMaker = ({
 
     /**
      * @param {string | string[]} petName
-     * @param {import('./types.js').CollectionStoreFormula['kind']} kind
+     * @param {CollectionStoreFormula['kind']} kind
      */
     const makeCollectionStore = async (petName, kind) => {
       const { namePath } = petNamePathFrom(petName);

@@ -1,4 +1,5 @@
 // @ts-nocheck
+// spell-out-exempt: standardized environment variable names
 
 import '@endo/init';
 
