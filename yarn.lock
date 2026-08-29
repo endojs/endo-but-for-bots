@@ -3324,6 +3324,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/spaces-util": "workspace:^"
     "@endo/workflow": "workspace:^"
     eslint: "catalog:dev"
     preact: "npm:^10.29.2"
