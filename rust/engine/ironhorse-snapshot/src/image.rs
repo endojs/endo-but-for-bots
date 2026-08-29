@@ -369,6 +369,8 @@ pub struct MachineImage {
     pub dates: Vec<DateImage>,
     /// `FUNC`: retained guest-callability state.
     pub function_state: ironhorse_vm::FunctionStateSnapshot,
+    /// `PROX`: Proxy internal slots and revoker links.
+    pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -451,6 +453,7 @@ impl MachineImage {
             regexps: Vec::new(),
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -575,6 +578,14 @@ impl MachineImage {
         function_state: ironhorse_vm::FunctionStateSnapshot,
     ) -> MachineImage {
         self.function_state = function_state;
+        self
+    }
+
+    pub fn with_proxy_state(
+        mut self,
+        proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    ) -> MachineImage {
+        self.proxy_state = proxy_state;
         self
     }
 
@@ -1644,6 +1655,76 @@ pub(crate) fn decode_function_state(
     })
 }
 
+pub(crate) fn encode_proxy_state(state: &ironhorse_vm::ProxyStateSnapshot) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(state.proxies.len() as u32).to_be_bytes());
+    for row in &state.proxies {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.target.to_be_bytes());
+        v.extend_from_slice(&row.handler.to_be_bytes());
+        v.push(row.revoked as u8);
+    }
+    v.extend_from_slice(&(state.revokers.len() as u32).to_be_bytes());
+    for row in &state.revokers {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&row.proxy.to_be_bytes());
+        v.extend_from_slice(&row.name_chunk.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_proxy_state(
+    p: &[u8],
+) -> Result<ironhorse_vm::ProxyStateSnapshot, SnapshotError> {
+    let mut c = Cursor::new(p, "proxy state");
+    let count = c.u32()? as usize;
+    let mut proxies = Vec::with_capacity(count.min(p.len() / 13));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if proxies
+            .last()
+            .is_some_and(|row: &ironhorse_vm::ProxyRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "proxy state: owners not strictly ascending",
+            ));
+        }
+        let target = c.u32()?;
+        let handler = c.u32()?;
+        let revoked = match c.u8()? {
+            0 => false,
+            1 => true,
+            _ => return Err(SnapshotError::Corrupt("proxy state: bad boolean byte")),
+        };
+        proxies.push(ironhorse_vm::ProxyRow {
+            owner,
+            target,
+            handler,
+            revoked,
+        });
+    }
+    let count = c.u32()? as usize;
+    let mut revokers = Vec::with_capacity(count.min(p.len() / 12));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if revokers
+            .last()
+            .is_some_and(|row: &ironhorse_vm::ProxyRevokerRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "proxy revokers: owners not strictly ascending",
+            ));
+        }
+        revokers.push(ironhorse_vm::ProxyRevokerRow {
+            owner,
+            proxy: c.u32()?,
+            name_chunk: c.u32()?,
+        });
+    }
+    c.done()?;
+    Ok(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2329,6 +2410,7 @@ pub(crate) struct LangRows<'a> {
     pub regexps: &'a [RegExpImage],
     pub dates: &'a [DateImage],
     pub function_state: &'a ironhorse_vm::FunctionStateSnapshot,
+    pub proxy_state: &'a ironhorse_vm::ProxyStateSnapshot,
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2341,6 +2423,7 @@ impl LangRows<'_> {
         regexps: &[],
         dates: &[],
         function_state: &EMPTY_FUNCTION_STATE,
+        proxy_state: &EMPTY_PROXY_STATE,
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -2373,6 +2456,10 @@ static EMPTY_FUNCTION_STATE: ironhorse_vm::FunctionStateSnapshot =
         ctor_prototypes: Vec::new(),
         deleted_meta: Vec::new(),
     };
+static EMPTY_PROXY_STATE: ironhorse_vm::ProxyStateSnapshot = ironhorse_vm::ProxyStateSnapshot {
+    proxies: Vec::new(),
+    revokers: Vec::new(),
+};
 
 /// Every slot index and chunk offset a decoded image can carry, checked
 /// against the geometry the image itself declares.
@@ -2725,6 +2812,39 @@ pub(crate) fn check_image_slot_bounds(
             ));
         }
     }
+    let proxy_owners: std::collections::BTreeSet<u32> = lang
+        .proxy_state
+        .proxies
+        .iter()
+        .map(|row| row.owner)
+        .collect();
+    for row in &lang.proxy_state.proxies {
+        owned(row.owner)?;
+        if row.revoked {
+            if row.target != u32::MAX || row.handler != u32::MAX {
+                return Err(SnapshotError::Corrupt(
+                    "proxy state: revoked proxy retains target or handler",
+                ));
+            }
+        } else {
+            owned(row.target)?;
+            owned(row.handler)?;
+        }
+    }
+    for row in &lang.proxy_state.revokers {
+        owned(row.owner)?;
+        if !proxy_owners.contains(&row.proxy) {
+            return Err(SnapshotError::Corrupt(
+                "proxy revoker names no proxy row",
+            ));
+        }
+        if row.name_chunk != u32::MAX {
+            let offset = row.name_chunk as usize;
+            if offset < CHUNK_HEADER || offset > chunk_len {
+                return Err(OOC);
+            }
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -2913,6 +3033,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
             &encode_function_state(&image.function_state),
         );
     }
+    if !image.proxy_state.is_empty() {
+        w.atom(
+            crate::format::PROX,
+            &encode_proxy_state(&image.proxy_state),
+        );
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -3072,6 +3198,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_function_state(a.payload)?,
         None => ironhorse_vm::FunctionStateSnapshot::default(),
     };
+    let proxy_state = match r.find(crate::format::PROX) {
+        Some(a) => decode_proxy_state(a.payload)?,
+        None => ironhorse_vm::ProxyStateSnapshot::default(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -3120,6 +3250,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             regexps: &regexps,
             dates: &dates,
             function_state: &function_state,
+            proxy_state: &proxy_state,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -3156,6 +3287,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         regexps,
         dates,
         function_state,
+        proxy_state,
         arguments_brands,
         temporal,
         intl,
@@ -3533,6 +3665,7 @@ mod tests {
                 regexps: &[],
                 dates: &[],
                 function_state: &EMPTY_FUNCTION_STATE,
+                proxy_state: &EMPTY_PROXY_STATE,
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -3890,6 +4023,7 @@ mod tests {
             regexps: Vec::new(),
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -3929,6 +4063,7 @@ mod tests {
             regexps: Vec::new(),
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4049,6 +4184,7 @@ mod tests {
             regexps: Vec::new(),
             dates: Vec::new(),
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
+            proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),

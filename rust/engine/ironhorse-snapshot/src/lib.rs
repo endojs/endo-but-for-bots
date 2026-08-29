@@ -72,7 +72,7 @@ pub(crate) mod test_dir;
 pub use atom::{Atom, AtomError, AtomReader, AtomWriter};
 pub use format::{
     FourCc, Signature, SignatureError, SnapshotError, Version, VersionError, ARRY, BLOC, COLL,
-    CREA, DATE, FUNC, HEAP, KEYS, METR, NAME, REGY, SIGN, STAC, SYMB, VERS, XS_M,
+    CREA, DATE, FUNC, HEAP, KEYS, METR, NAME, PROX, REGY, SIGN, STAC, SYMB, VERS, XS_M,
 };
 pub use image::{
     read_machine, read_validated_machine, write_machine, ArrayImage, CollectionImage,

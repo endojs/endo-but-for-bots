@@ -498,7 +498,7 @@ impl SideTable {
             // retained defining-crank bytecode in `FUNC`.
             SideTable::Functions => ("functions", Serialized),
             SideTable::BoundFunctions => ("bound_functions", Serialized),
-            SideTable::Proxies => ("proxies/proxy_revokers", Pending),
+            SideTable::Proxies => ("proxies/proxy_revokers", Serialized),
             SideTable::CallStack => ("call_stack", EmptyAtBoundary),
             SideTable::Jumps => ("jumps", EmptyAtBoundary),
             SideTable::ErrorData => ("error_data", Serialized),
@@ -760,7 +760,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 13, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 12, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -784,12 +784,12 @@ mod tests {
         // first of the four silent-wrong refuse-on-hold rows.
         assert!(!pending.contains(&SideTable::ErrorData));
         // The typed-array family followed (`ABUF`/`TARR`/`DVIW`,
-        // schema 10); proxies/accessors stay pending, dependency-gated
-        // on the `functions` row.
+        // schema 10). Proxy state graduates in schema 16 after the
+        // function prerequisite; accessors remain the next row.
         assert!(!pending.contains(&SideTable::ArrayBuffers));
         assert!(!pending.contains(&SideTable::TypedArrays));
         assert!(!pending.contains(&SideTable::DataViews));
-        assert!(pending.contains(&SideTable::Proxies));
+        assert!(!pending.contains(&SideTable::Proxies));
         assert!(pending.contains(&SideTable::Accessors));
         // The schema-11 data-only language rows graduated: wrappers,
         // regexps (recompiled from source at restore), and the four
