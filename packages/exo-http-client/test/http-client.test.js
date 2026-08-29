@@ -259,6 +259,25 @@ test('response headers preserve prototype-adjacent names as own data properties'
   );
 });
 
+test('fetch copies a native Response before hardening', async t => {
+  const nativeResponse = new Response('ok', {
+    headers: { 'x-native-response': 'yes' },
+  });
+  const { client } = makeHttpClientAndControl({
+    fetch: /** @type {FetchLike} */ (
+      async () => /** @type {unknown} */ (nativeResponse)
+    ),
+    allowedOrigins: [ALLOWED],
+  });
+
+  const response = await E(client).fetch(ALLOWED_URL);
+
+  t.is(await E(response).status(), 200);
+  t.is((await E(response).headers())['x-native-response'], 'yes');
+  t.is(await E(response).text(), 'ok');
+  t.notThrows(() => [...nativeResponse.headers]);
+});
+
 test('fetch forwards only supported transport options', async t => {
   const fake = makeFakeFetch();
   const { client } = makeHttpClientAndControl({
