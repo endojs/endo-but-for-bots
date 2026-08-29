@@ -94,7 +94,11 @@ test('ping is answered with an empty result without touching the broker', async 
   const shim = mkShim(async () => {
     forwarded += 1;
   });
-  const res = await shim.handleMessage({ jsonrpc: '2.0', id: 6, method: 'ping' });
+  const res = await shim.handleMessage({
+    jsonrpc: '2.0',
+    id: 6,
+    method: 'ping',
+  });
   t.deepEqual(res, { jsonrpc: '2.0', id: 6, result: {} });
   t.is(forwarded, 0);
 });
