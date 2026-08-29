@@ -94,41 +94,53 @@ Every concrete registry node in this table additionally exposes a
 `getInfo()` facet layered above its guard: `getInfo().temporal` on every
 node (see § Read consistency) and `getInfo().integrity` on the version
 leaf (see § Resolver, mapper, and mockability).
-A caller who discovers this surface through the two named guard
-interfaces therefore learns of `getInfo` here, at the entry point, rather
-than only from later prose.
+The composite each node kind actually presents is named once in
+§ Non-enumerability is a capability shape — `RegistryHub` (a
+`LookupTree & RegistryNode`) for the npm and scope hubs and
+`RegistryDirectory` (an `EnumerableTree & RegistryNode`) for the root and
+package directories — so a caller who types against that composite
+discovers `getInfo` structurally, at the entry point, rather than only
+from later prose.
 
 Scoped names use two path segments because `/` is a tree separator.
 The leading `@` makes the intermediate scope hub unambiguous.
 
-`lookup`, `has`, and `list` all take a path as variadic segments
-(`lookup('@endo', 'patterns')`), matching the rest-parameter form
-[fs-interface-reconciliation](fs-interface-reconciliation.md) establishes
-for these methods, so one calling convention serves the whole interface
-and there is no string-versus-array shape for a caller to disambiguate at
-runtime.
+`has` and `list` take a path as variadic segments while `lookup` takes a
+single `string | string[]` path argument, exactly as the shipped
+`readableTreeMethodGuards` in `@endo/platform/fs/lite` types them today
+(`has` / `list` as `M.call().rest(NamePathShape)`, `lookup` as
+`M.call(NameOrPathShape)`); this design factors that record into lookup
+and enumeration layers without restating or widening its argument shapes.
+A caller therefore reaches a scoped package through `lookup` either as the
+single npm-shaped string `lookup('@endo/patterns')` or as the path array
+`lookup(['@endo', 'patterns'])` — the two spellings the reconciled
+`string | string[]` vocabulary
+[fs-interface-reconciliation](fs-interface-reconciliation.md) already
+standardizes on for `lookup`, so no two-argument `lookup('@endo',
+'patterns')` form (which the shipped single-argument guard would reject on
+arity) is introduced.
 Each segment is normally matched literally against the current node's
 children.
 This follows the standing convention in `packages/daemon/src/mount.js`,
 whose `segmentsFromEntryPathArg` reserves slash-splitting for `entry()`
 and keeps every other path-bearing method on single-name segment
 matching.
-So a scoped package is reached by `lookup('@endo', 'patterns')` (two
-segments), by a stepwise `lookup('@endo')` then `lookup('patterns')`, or
-by the npm hub's scoped-package convenience spelling
-`lookup('@endo/patterns')`.
+So a scoped package is reached by `lookup(['@endo', 'patterns'])` (a
+two-segment path array), by a stepwise `lookup('@endo')` then
+`lookup('patterns')`, or by the npm hub's scoped-package convenience
+spelling `lookup('@endo/patterns')`.
 Reaching for the npm-shaped single string (`lookup('@endo/patterns')`),
 spelled the way `package.json` and every import specifier already spell
 it, is predictable enough to support directly.
 The npm hub recognizes exactly one slash-bearing form: one leading-`@`
-scope segment, one `/`, and one non-empty package segment. It normalizes
-that form to the same two-segment traversal as
-`lookup('@endo', 'patterns')`; `has` applies the same normalization.
+scope segment, one `/`, and one non-empty package segment.
+It normalizes that form to the same two-segment traversal as
+`lookup(['@endo', 'patterns'])`; `has` applies the same normalization.
 Any other segment that contains `/` rejects with a structured
-`@endo/errors` `SyntaxError` that names the offending slash-bearing
-segment and the accepted scoped-package or multi-segment forms, a
-distinct concrete shape rather than the identical not-found `RangeError`
-a genuinely absent package raises.
+`@endo/errors` `SyntaxError` — a distinct concrete shape from the
+identical not-found `RangeError` a genuinely absent package raises — that
+names the offending slash-bearing segment and the accepted scoped-package
+or multi-segment forms.
 The cross-backend conformance suite asserts this slash-bearing-segment
 `SyntaxError` shape separately from the plain not-found shape.
 This convenience does not make slash-splitting a general path grammar:
@@ -161,15 +173,27 @@ rejecting not-found) needs the same packument truth a package
 directory's `list()` fetches over the network.
 Determining existence is therefore itself a fetch, and an offline hub
 must not conflate "does not exist" with "cannot be checked right now".
-When the packument required to decide existence is not cached and the
-backend holds no network authority, a hub-level `lookup(name)` or
-`has(name)` rejects with `RegistryOfflineError` (can't tell), never with
-the not-found `RangeError` (which asserts non-existence).
-The not-found `RangeError` is reserved for the case where the truth is
-reachable and the name is genuinely absent.
-The cross-backend conformance suite asserts this hub-level offline
-distinction alongside the version-tree offline miss, so neither adapter
-reports a false not-found for an unreachable name.
+That three-valued answer (present / genuinely-absent / undecidable
+offline) is carried by `lookup(name)` alone, because only `lookup`'s
+error channel can distinguish the last two: when the packument required
+to decide existence is not cached and the backend holds no network
+authority, a hub-level `lookup(name)` rejects with `RegistryOfflineError`
+(can't tell), never with the not-found `RangeError` (which asserts
+non-existence), and the not-found `RangeError` is reserved for the case
+where the truth is reachable and the name is genuinely absent.
+`has(name)` keeps the platform-wide no-throw boolean contract every other
+tree (mount, git, zip, directory) honors: it never rejects, so a caller
+writing `if (await hub.has(name))` cannot meet an unhandled rejection.
+A `has` that cannot confirm presence offline folds "can't tell" into
+`false` rather than rejecting; a caller that needs to tell a genuinely
+absent name from an unreachable one uses `lookup(name)` and handles its
+`RangeError`-versus-`RegistryOfflineError` outcomes, the one surface where
+that distinction is contractually pinned.
+The cross-backend conformance suite asserts this hub-level `lookup`
+offline distinction alongside the version-tree offline miss, so neither
+adapter reports a false not-found for an unreachable name, and asserts
+that `has` on the same uncached-offline name resolves to `false` rather
+than rejecting.
 
 ### Non-enumerability is a capability shape
 
@@ -179,13 +203,31 @@ and enumeration is an extension:
 ```ts
 interface LookupTree {
   help(method?: string): string;
+  // `has` takes variadic segments and `lookup` a single `string | string[]`
+  // path, matching the shipped `readableTreeMethodGuards` argument shapes
+  // in `@endo/platform/fs/lite` verbatim (`.rest(NamePathShape)` versus
+  // `M.call(NameOrPathShape)`); this design factors that record, it does
+  // not restate or widen those shapes.
   has(...path: string[]): Promise<boolean>;
-  lookup(...path: string[]): Promise<unknown>;
+  lookup(path: string | string[]): Promise<unknown>;
 }
 
 interface EnumerableTree extends LookupTree {
   list(...path: string[]): Promise<string[]>;
 }
+
+// Every concrete registry node carries a `getInfo` facet above its guard
+// (§ Read consistency, § Resolver, mapper, and mockability). Naming the
+// composite once means a caller types against the surface it actually
+// holds — including `getInfo` — rather than discovering that method only
+// from prose. `integrity` is present on the version leaf alone.
+interface RegistryNode {
+  getInfo(): { temporal: 'stable' | 'live' | 'immutable'; integrity?: string };
+}
+type RegistryHub = LookupTree & RegistryNode;          // /npm, /npm/@<scope>
+type RegistryDirectory = EnumerableTree & RegistryNode; // /, /npm/<package>
+// the version leaf is the shipped SnapshotTree, whose own getInfo() this
+// design widens with `integrity` (§ Resolver, mapper, and mockability).
 ```
 
 `@endo/platform/fs/lite` exports the base method-guard record and
@@ -216,6 +258,29 @@ conformance suite asserts it on both npm and scope hubs.
 `LookupTree` is the only genuinely new method shape; `EnumerableTree`
 merely names the already exported common guard surface.
 All other nodes reuse the consolidated filesystem interfaces.
+
+### One error family, distinct shapes
+
+The three registry-*originated* structured failures — not-found
+(`RangeError`), malformed slash-bearing segment (`SyntaxError`), and
+offline-can't-tell (`RegistryOfflineError`) — reuse familiar native
+constructors that JavaScript itself also throws for unrelated programmer
+mistakes, so a caller discriminating this surface's failures from an
+incidental bug cannot rely on the constructor alone.
+Each of the three therefore carries a shared `@endo/errors` discriminant
+(a common `errorName` tag the concrete shapes agree on, the `@endo/errors`
+analogue of a shared base class), so a caller can catch "a registry
+lookup failed in a documented way" as one family through that tag while
+each concrete shape stays independently pinned by the cross-backend
+conformance suite.
+The lookup-only hub's absent-method rejection is deliberately *outside*
+this family: it is the platform interface guard's own generic `TypeError`
+for calling a method the guard does not expose (the same rejection any
+`LookupTree`-only cap raises), not a registry-contract outcome, so it
+keeps the platform's shape rather than being retagged as a registry error.
+A caller that wants the whole four-way space still checks that `TypeError`
+separately, but the three contract failures it will actually branch on
+share one discriminant.
 
 ## One shape over both backends
 
@@ -269,9 +334,12 @@ The Node and Endor adapters run one shared conformance suite over the
 same mock packuments and tarballs.
 The suite asserts paths, method names, ordering, the not-found error
 shape, the slash-bearing-segment error shape, the absent-method
-rejection shape when `list` is invoked on a lookup-only hub, cache-miss
-offline errors, content hashes, and the absence of `list` on both npm
-and scope hubs.
+rejection shape when `list` is invoked on a lookup-only hub, the shared
+registry-error discriminant the three contract failures agree on,
+cache-miss offline errors including a hub-level `lookup` on an uncached
+name rejecting `RegistryOfflineError` while `has` on that same name
+resolves to `false` rather than rejecting, content hashes, and the
+absence of `list` on both npm and scope hubs.
 
 ## Read consistency
 
@@ -375,9 +443,9 @@ incidental property, and it fixes where the resolver executes per backend:
 - Endor: `resolveRegistryTree` itself, the `@endo/exo-npm` tree Exos it
   walks, and the shared resolver logic all run inside the single XS
   engine the Endor daemon embeds (not in a separate Rust or Endor
-  process), so the traversal is same-vat dispatch within XS. That XS
-  engine's `hasPackage` / `listVersions` / `providePackageTree` callbacks
-  reach the Rust mechanics through in-process host powers rather than a
+  process), so the traversal is same-vat dispatch within XS.
+  That XS engine's `hasPackage` / `listVersions` / `providePackageTree`
+  callbacks reach the Rust mechanics through in-process host powers rather than a
   cross-process bus, so a dependency walk crosses the XS/Rust boundary at
   most when a version leaf must be checked in, never once per `lookup` or
   `list`.
@@ -428,6 +496,20 @@ traversal, not only for the mapper.
 round trips.
 Snapshot-mapper's late-bind fallback replaces `registry.fetch(name,
 version)` with the same package/version tree traversal helper.
+That fallback runs on the same side of the worker boundary the mapper's
+`makeFromPackage` already runs on, so where it fires it walks the tree by
+local dispatch, not `E()` round trips — the same colocation constraint
+`resolveRegistryTree` carries, applied to the fallback for the same
+reason.
+It also does not carry `resolveRegistryTree`'s hot per-dependency
+round-trip budget, because it is a cold miss path: the eager
+`RegistryResolution` already pins every dependency the mapper needs, and
+the fallback fires only for a package the eager resolution did not
+pin (a genuine late binding, not the per-import steady state).
+Its traversal cost is therefore bounded by the count of late-bound
+packages, which is normally zero, rather than by total dependency count,
+so it needs no separate round-trip accounting beyond inheriting the same
+colocation guarantee.
 `resolutionHash` keeps its shipped input unchanged: `hashResolution` in
 `packages/exo-npm/src/mvs-resolver.js` hashes each canonical package key
 together with that package's npm `dist.integrity`, exactly as
@@ -548,10 +630,12 @@ registry fake is required for resolver and mapper tests.
    registry-name set, not arbitrary data) and a caller that must preserve
    the old `[]` shape reaches it through the separately-named deprecated
    adapter of step 4, whose `list()` still returns `[]`.
-   The arity collision therefore surfaces, for `lookup`, as a diagnosable
+   The `lookup` arity collision therefore surfaces as a diagnosable
    rejection at the first stale call rather than a wrong object returned,
-   so an unaudited holder learns of the migration by a clean error rather
-   than by silently receiving the wrong protocol.
+   while the `list` arity collision instead surfaces as the silently
+   changed value described just above; so for `lookup` an unaudited holder
+   learns of the migration by a clean error rather than by silently
+   receiving the wrong protocol.
 4. Retain a deprecated method-call-to-tree adapter, obtained under its own
    explicit name rather than at `@registry`, for callers that still need
    the old `EndoRegistry.lookup` / `list` call shape (whether they
@@ -605,10 +689,12 @@ requiring one path-safe root segment.
 - Shared path tests cover unscoped and scoped packages, unknown scopes,
   packages, and versions (asserting the structured not-found `RangeError`),
   the scoped-package convenience spelling `lookup('@endo/patterns')`
-  returning the same capability as `lookup('@endo', 'patterns')`, and
+  returning the same capability as the path array
+  `lookup(['@endo', 'patterns'])`, and
   malformed slash-bearing names such as `lookup('endo/patterns')` and
   `lookup('@endo/patterns/extra')` rejecting with the distinct
-  `SyntaxError` diagnostic, separate from not-found. They also cover the
+  `SyntaxError` diagnostic, separate from not-found.
+  They also cover the
   `temporal` descriptor `getInfo()` reports on each of the
   four node kinds (`'stable'` root, `'live'` npm and scope hubs, `'live'`
   package directory, `'immutable'` version leaf), the version leaf's
@@ -647,7 +733,7 @@ requiring one path-safe root segment.
 | [registry-capability](registry-capability.md) | Superseded capability shape; retained as the migration record for the shipped method-call interface. |
 | [mvs-resolver](mvs-resolver.md) | Keeps the algorithm and changes its registry input adapter from packument/fetch methods to tree traversal. |
 | [snapshot-mapper](snapshot-mapper.md) | Continues consuming an eager `RegistryResolution`; only its late-bind fallback changes. |
-| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | Node integration reads the root tree from `@registry`. |
+| [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | Node integration reads the root tree from `@registry`, and — because relocating resolution daemon-side removes the `registry` `FormulaIdentifier` slot on `MakeFromPackageFormula` and the `registryP` worker-dispatch argument that design documents — needs a companion revision to that document, not a pure caller swap (tracked in § Migration and compatibility, step 2). |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | Implemented Rust mechanics wrapped by the Endor tree adapter; otherwise unchanged. |
 | [endor-registry-proxy-worker](endor-registry-proxy-worker.md) | XS-hosted seam where Rust powers become the common directory-tree Exos. |
 | [fs-interface-consolidation](fs-interface-consolidation.md) | Owns the shared method-guard records this design factors into lookup and enumeration layers. |
