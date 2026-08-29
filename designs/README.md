@@ -466,7 +466,7 @@ The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardi
 
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
 
-The 2026-08-29 update adds [readableblob-lines](readableblob-lines.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194. It is a flow-controlled `ReadableBlob.lines({ start, end, buffer })` reader with optional zero-based, end-exclusive line bounds and exact CR, LF, CRLF, and final unterminated-line behavior. It adds no critical-path dependency.
+The 2026-08-29 update adds [readableblob-lines](readableblob-lines.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194. It is a flow-controlled `ReadableBlob.lines({ startLine, endLine, buffer })` reader with optional zero-based, end-exclusive line bounds and exact CR, LF, CRLF, and final unterminated-line behavior. It adds no critical-path dependency.
 
 ## Roadmap
 
@@ -851,7 +851,7 @@ capabilities available to agents.
 | agentry-git-verb-gaps | Proposed | Narrow local-git history-editing verb set for the agentry `stack-surgery` eval lane: `cherryPick`, `commit({ amend })`, `reword`, `rebase({ autosquash })`, and `checkoutConflict`. Depends on `daemon-git-capability`; the downstream `agentry-git-eval-scenarios` `stack-surgery` edge lands with that design's README node. |
 | agentry-git-eval-scenarios | Not Started | Small canonical git code-mode eval set for `@endo/agentry`: trim to `stage-and-commit`, `conflict-rebase`, and `stack-surgery`; rework PR #526 in place as the buildable conflict leg; rework PR #626 in place so its fixture and scorer land behind a pending live row, with live activation depending on agentry-git-verb-gaps for cherry-pick, amend, reword, autosquash, and conflict-side selection; name ReadableBlob `fetch`, `rangeRead`, and `rangeReadText` as the sed-like filesystem/blob path; retain rendered Git output bounds and remote exo propagation as follow-ups; and score outcomes by final state and authority boundary, never command sequence. |
 | ~~platform-fs~~ | **Complete** | `@endo/platform/fs` — shared types, content store, tree adapters; landed on `llm` (initial commit `e0dda06fb` + PR #122 review cycle fixups) |
-| readableblob-lines | Proposed | CapTP `ReadableBlob.lines({ start, end, buffer })` reader with optional zero-based, end-exclusive line bounds (matching `rangeReadText`/`textRange`), retaining CR, LF, CRLF, and a final unterminated line; shared-guard update across platform (including `BlobRef` and snapshots), daemon, mount, Git, unzip, and the browser bridge. |
+| readableblob-lines | Proposed | CapTP `ReadableBlob.lines({ startLine, endLine, buffer })` reader with optional zero-based, end-exclusive line bounds (matching `rangeReadText`/`textRange`), retaining CR, LF, CRLF, and a final unterminated line; shared-guard update across platform (including `BlobRef` and snapshots), daemon, mount, Git, unzip, and the browser bridge. |
 | daemon-capability-filesystem | Reference | `Dir`/`File` capabilities sketch retained as reference; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | **Complete** | Content-store pruning and scratch-mount directory cleanup at GC time; landed in PR #99 |
 | daemon-mount | In Progress | Phases 1-3, 5 on `llm` (commit `e22f71327`); symlink confinement, 20 integration tests; Phase 4 (sub-mounts, snapshot) in PR #135 open, mount extensions in PR #127 open, `followNameChanges` in PR #277 open |
@@ -1491,7 +1491,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | exo-git-follow-root-advancement | M-L | 1-1.5 weeks | 3 | `@endo/platform/fs` tree identity, snapshots, atomic mutators, change/latest followers, high-level patching, and conformance across in-memory/native/composed adapters; `GitStage` tentative metadata, mutable roots, explicit commit, stale-base checks, matching Git followers, declarations, attenuation, and recovery |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
-| readableblob-lines | M | 2-3 days | 3 | Shared interface addition plus streaming line scanner, all blob producers, generated declarations, and cross-surface conformance tests. |
+| readableblob-lines | M-L | 1 week | 3 | Shared interface addition plus streaming line scanner, all blob producers, generated declarations, and cross-surface conformance tests. |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
