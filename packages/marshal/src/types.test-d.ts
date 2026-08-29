@@ -192,11 +192,11 @@ expectType<true>(
   null as unknown as Equal<
     MakeMarshalOptions,
     {
-      errorTagging?: 'on' | 'off' | undefined;
+      errorTagging?: 'on' | 'off';
       marshalName?: string | undefined;
       errorIdNum?: number | undefined;
       marshalSaveError?: ((err: Error) => void) | undefined;
-      serializeBodyFormat?: 'capdata' | 'smallcaps' | undefined;
+      serializeBodyFormat?: 'capdata' | 'smallcaps';
     }
   >,
 );

@@ -82,7 +82,7 @@ export type MakeMarshalOptions = {
    * `errorTagging` option defaults to `'on'`. Serialized
    * errors are also logged to `marshalSaveError` only if tagging is `'on'`.
    */
-  errorTagging?: 'on' | 'off' | undefined;
+  errorTagging?: 'on' | 'off';
   /**
    * Used to identify sent errors.
    */
@@ -111,7 +111,7 @@ export type MakeMarshalOptions = {
    * an unambiguous signal since a valid JSON string cannot begin with
    * `'#'`.
    */
-  serializeBodyFormat?: 'capdata' | 'smallcaps' | undefined;
+  serializeBodyFormat?: 'capdata' | 'smallcaps';
 };
 /**
  * RankCover represents the inclusive lower bound and *inclusive* upper bound
