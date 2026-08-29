@@ -59,8 +59,9 @@ const makeHarness = (overrides = {}) => {
     pinnedModels: ['claude-opus-4-8', 'claude-sonnet-4-5'],
     getClaudeVersion: overrides.getClaudeVersion ?? (async () => PINNED),
     mintSessionTag: () => `tag-${(tagSeq += 1)}`,
-    async prepareSpawnFiles({ sessionTag }) {
-      return {
+    prepareSpawnFiles:
+      overrides.prepareSpawnFiles ??
+      (async ({ sessionTag }) => ({
         mcpConfigPath: `/run/spawn/${sessionTag}/mcp.json`,
         settingsPath: `/run/spawn/${sessionTag}/settings.json`,
         apiKeyHelperCommand: '/run/spawn/helper',
@@ -68,8 +69,7 @@ const makeHarness = (overrides = {}) => {
         async cleanup() {
           observed.cleaned += 1;
         },
-      };
-    },
+      })),
     launch:
       overrides.launch ??
       (async spec => {
@@ -169,6 +169,57 @@ test('a cancel already fired before spawn settles to cancelled/before-spawn and 
   t.deepEqual({ ...r }, { type: 'cancelled', at: 'before-spawn' });
   t.is(observed.launched, null);
   t.is(observed.released, 1); // slot freed even though nothing spawned
+});
+
+test('a cancel during spawn-file preparation prevents launch and cleans up', async t => {
+  /** @type {() => void} */
+  let preparationStartedResolve = () => {};
+  /** @type {Promise<void>} */
+  const preparationStarted = new Promise(resolve => {
+    preparationStartedResolve = resolve;
+  });
+  /** @type {() => void} */
+  let finishPreparationResolve = () => {};
+  /** @type {Promise<void>} */
+  const finishPreparation = new Promise(resolve => {
+    finishPreparationResolve = resolve;
+  });
+  /** @type {() => void} */
+  let cancelResolve = () => {};
+  /** @type {Promise<void>} */
+  const cancelled = new Promise(resolve => {
+    cancelResolve = resolve;
+  });
+  let cleaned = 0;
+
+  const { provider, observed } = makeHarness({
+    async prepareSpawnFiles({ sessionTag }) {
+      preparationStartedResolve();
+      await finishPreparation;
+      return {
+        mcpConfigPath: `/run/spawn/${sessionTag}/mcp.json`,
+        settingsPath: `/run/spawn/${sessionTag}/settings.json`,
+        apiKeyHelperCommand: '/run/spawn/helper',
+        pathValue: '/opt/shim/bin',
+        async cleanup() {
+          cleaned += 1;
+        },
+      };
+    },
+  });
+  const infer = await provider.makeGuestInference(HEX64);
+  const resultP = infer.infer('hi', { cancelled });
+
+  await preparationStarted;
+  cancelResolve();
+  await null;
+  finishPreparationResolve();
+
+  const result = await resultP;
+  t.deepEqual({ ...result }, { type: 'cancelled', at: 'before-spawn' });
+  t.is(observed.launched, null);
+  t.is(observed.released, 1);
+  t.is(cleaned, 1);
 });
 
 test('a version mismatch fails closed (throws) but still releases the slot', async t => {

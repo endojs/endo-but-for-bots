@@ -198,12 +198,24 @@ export const make = (powers, _context, options) => {
 
           // Assert the pinned CLI version at call time: an upgraded `claude` on
           // PATH must fail closed until the live confinement test is re-run.
-          assertPinnedVersion(await getClaudeVersion(), pinnedCliVersion);
+          const claudeVersion = await getClaudeVersion();
+          if (cancelToken.fired) {
+            return cancelledResult('before-spawn');
+          }
+          assertPinnedVersion(claudeVersion, pinnedCliVersion);
 
           const transport = await E(broker).transport();
+          if (cancelToken.fired) {
+            return cancelledResult('before-spawn');
+          }
           const mcpConfig = renderMcpConfig({ serverName, transport });
           const mcpConfigJson = serializeMcpConfig(mcpConfig);
 
+          // prepareSpawnFiles writes credential-bearing settings and MCP files.
+          // Re-check immediately before that side effect as well as after it.
+          if (cancelToken.fired) {
+            return cancelledResult('before-spawn');
+          }
           files = await prepareSpawnFiles({
             sessionTag,
             mcpConfigJson,
@@ -218,6 +230,9 @@ export const make = (powers, _context, options) => {
               ),
             ),
           });
+          if (cancelToken.fired) {
+            return cancelledResult('before-spawn');
+          }
 
           const argv = buildArgv({
             mcpConfigPath: files.mcpConfigPath,
@@ -236,6 +251,9 @@ export const make = (powers, _context, options) => {
           // The launch seam owns the spawn, the three bounds, stream-json
           // parsing, and mid-stream / after-exit cancellation; it returns a
           // tagged InferResult and never rejects for a per-call outcome.
+          if (cancelToken.fired) {
+            return cancelledResult('before-spawn');
+          }
           const result = await launch({
             argv,
             env,
