@@ -41,11 +41,18 @@ export { GLOB_MAX_RESULTS };
 // Ceiling on a streaming search's pre-ack buffer window. Where the eager
 // variants bound their daemon-side memory with a result cap (`GLOB_MAX_RESULTS`
 // / `GREP_MAX_RESULTS`), the streaming variants have no result cap — the
-// consumer's pull-based flow control is the bound — so the only daemon-side
-// memory commitment is the buffer the producer pre-acknowledges ahead of
+// consumer's pull-based flow control is the bound — so the daemon-side memory
+// commitment is the number of elements the producer pre-acknowledges ahead of
 // demand. Clamping the caller-requested buffer to this ceiling keeps a remote
-// caller from demanding unbounded pre-materialization. An implementation may
-// lower this only with measurement and a corresponding design update
+// caller from demanding unbounded pre-materialization. The clamp bounds element
+// *count*, not aggregate bytes: a `streamGrep` record's `text` is one whole
+// matched line, so 1024 buffered records can still be large in bytes (the same
+// per-line memory cost the eager `grep` already carries). The ceiling also
+// bounds the revocation-latency window: because each pre-acknowledged element is
+// already settled by the time a mid-stream `revoke()` lands, up to this many
+// elements may still be delivered after revocation (see `clampStreamBuffer` and
+// designs/mount-stream-glob-grep.md § Revocation). An implementation may lower
+// this only with measurement and a corresponding design update
 // (designs/mount-stream-glob-grep.md § Resolved Questions).
 export const STREAM_BUFFER_MAX = 1024;
 
@@ -56,6 +63,13 @@ export const STREAM_BUFFER_MAX = 1024;
  * whole number of elements. The `MountInterface` guard already rejects a
  * non-number `buffer`, so the type coercion here is defense in depth for a
  * direct (non-exo) caller.
+ *
+ * The clamp is the daemon's sole bound on both the pre-ack memory commitment
+ * and the revocation-latency window: at `buffer: 0` the producer never
+ * pre-pulls, so a mid-stream `revoke()` rejects the next pull with no further
+ * delivery; at `buffer: n` up to `n` already-settled elements may still be
+ * delivered after `revoke()`. A caller that needs `revoke()` to be a hard
+ * content cutoff must keep the default `0`.
  *
  * @param {number} [requested]
  * @returns {number}
@@ -969,11 +983,17 @@ const makeMountExo = ctx => {
   // piped straight into grep as an async iterable of path batches, so — unlike
   // the eager `grep(pattern, glob(g))` composition, which awaits the whole glob
   // array first — no intermediate file list is materialized. With `paths`
-  // omitted, every file under the face's root is searched. grep needs no global
-  // sort (its order is path-then-line as files are read), so `streamGrep` is
-  // genuinely incremental: a consumer that stops early leaves the unread files
-  // unread. `assertLive()` runs at invocation and is re-checked before each
-  // yield.
+  // omitted, every file under the face's root is searched. Incrementality is
+  // asymmetric: the directory *enumeration* is eager — the file list comes from
+  // the same `globPaths` walk `streamGlob` uses (both when `options.glob` is
+  // given and, via `grepFiles`' internal `**` fallback, when it is omitted),
+  // which collects the whole confined tree before yielding its first path — so,
+  // like `streamGlob`, the first element only arrives after the full walk. What
+  // *is* incremental is the content read: grep needs no global sort (its order
+  // is path-then-line as files are read), so a consumer that stops early leaves
+  // the remaining files' *contents* unread. Early close thus bounds file reads,
+  // not the directory walk. `assertLive()` runs at invocation and is re-checked
+  // before each yield.
   /**
    * @param {string} pattern
    * @param {{ glob?: string, buffer?: number }} [options]

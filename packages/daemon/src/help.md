@@ -834,6 +834,78 @@ Mount-specific extensions (entry, stat, readText, makeFile) are not on the view.
 
 Capture current state as an immutable readable-tree.
 
+## glob(pattern) -> Promise<string[]>
+
+Recursively enumerate paths matching a glob pattern, relative to this mount face.
+pattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.
+`*` matches zero or more characters within one segment (never `/`, and it does match
+leading-dot names); `**` as a whole segment matches zero or more directory levels,
+and a trailing `**` additionally matches file descendants, not only directories.
+Every other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
+Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
+Entries whose symlinks escape the mount root are excluded. Results include
+directories as well as files, are sorted by UTF-16 code unit, and are capped at
+10,000 with silent truncation. Results are capped; for incremental or unbounded
+result sets use streamGlob.
+Example: glob("**/*.js") → all JavaScript files at any depth.
+Example: glob("src/*") → the immediate children of src.
+
+## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
+
+Search file contents for a regular expression across selected files.
+pattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.
+paths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose
+the two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of
+paths (the promise is awaited for you). Omit it to search every file under the mount face.
+options.maxResults: number — Cap on the number of match records (default 1000).
+Each matching line yields one { file, line, text } record: file is the mount-face-relative
+path, line is 1-based, and text is the whole line with any trailing carriage return stripped
+(CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot
+be read is skipped silently. Results are capped; for incremental or unbounded result sets
+use streamGrep.
+Example: grep("TODO", glob("src/**/*.js")) → every TODO line under src.
+Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+
+## glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>
+
+Fused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.
+glob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.
+grep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.
+Both patterns are required, so the whole operation is one call whose two patterns a native filesystem
+layer can push down and fuse into a single enumerate-and-scan pass. It returns the same
+{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
+options.maxResults: number — Cap on the number of match records (default 1000).
+glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
+Example: glorp("src/**/*.js", "TODO") → every TODO line under src.
+
+## streamGlob(pattern, options?) -> PassableReader<string>
+
+Streaming glob: a reader that yields matching mount-relative paths one at a time, in the same
+UTF-16-sorted order as glob(), with the same dialect, deny filtering, and confinement.
+pattern: string — A glob pattern (same dialect as glob()).
+options.buffer: number — Elements the producer may pre-acknowledge ahead of demand, for
+high-latency links (default 0, fully synchronized; clamped to 1024).
+Iterate with iterateReader from @endo/exo-stream. Unlike glob(), there is no 10,000-result cap;
+closing the iterator early (break out of for await) stops the remote walk. Because glob order is a
+global sort, the whole match set is walked before the first element, so streamGlob bounds message
+size rather than time-to-first-result.
+Example: for await (const p of iterateReader(E(mount).streamGlob("**/*.js"))) { ... }
+
+## streamGrep(pattern, options?) -> PassableReader<{ file, line, text }>
+
+Streaming grep: a reader that yields { file, line, text } match records one at a time, in
+path-then-line order, with the same confinement, deny filtering, and CRLF normalization as grep().
+pattern: string — An ECMAScript RegExp source (same as grep()).
+options.glob: string — Restrict the search to files matching this glob (piped straight into grep,
+no intermediate list). Omit to search every file under the mount face.
+options.buffer: number — Pre-acknowledge window for high-latency links (default 0; clamped to 1024).
+Iterate with iterateReader from @endo/exo-stream. There is no maxResults cap. Content reads are
+incremental — closing the iterator early leaves the remaining files' contents unread — but the
+directory walk is eager (the whole tree is enumerated before the first match, like streamGlob), so
+early close bounds file reads, not the walk. With buffer 0 a mid-stream revoke() rejects the next
+pull immediately; a non-zero buffer may still deliver up to that many already-buffered elements first.
+Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { if (done) break; }
+
 # EndoMountFile - A file within a mounted directory.
 
 A live, host-backed file. Read it with text() / json() / streamBase64(),

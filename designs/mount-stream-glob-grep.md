@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-07-09 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | Implemented ([PR #1085](https://github.com/endojs/endo-but-for-bots/pull/1085)) |
 | **Source** | Review comment on [PR #127](https://github.com/endojs/endo-but-for-bots/pull/127#discussion_r3548861664) (mount extensions help text) |
 
 ## What is the Problem Being Solved?
@@ -168,6 +168,19 @@ error at the consumer's `for await`. A revoked-but-never-pulled stream
 holds only a suspended generator closure (no open file handles between
 pulls), so no separate teardown registration with the revocation context is
 needed.
+
+Revocation is **not** an atomic cutoff when `buffer > 0`. With a non-zero
+pre-ack window the producer pump pulls (and settles) up to `buffer` elements
+ahead of consumer demand, each past its own `assertLive()` at pull time. A
+`revoke()` after those pulls have settled cannot un-deliver them: the consumer
+still receives up to the clamped buffer's worth of already-acknowledged
+elements, and only the first pull past the drained buffer rejects. The clamp
+(`STREAM_BUFFER_MAX`) therefore bounds not only daemon-side memory but this
+revocation-latency window; a grantor that treats `revoke()` as a hard content
+cutoff must keep `buffer` at the default `0`, where the pump never pre-pulls and
+the next pull after `revoke()` rejects with no further delivery. The test plan
+pins the worst case (revoke immediately after a `buffer > 0` stream starts;
+assert the post-revoke delivery is bounded by the clamped buffer).
 
 ### Confinement, deny patterns, and attenuations
 

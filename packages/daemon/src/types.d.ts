@@ -1387,7 +1387,10 @@ export interface EndoMount extends PathEntryIssuer {
    * Streaming grep: a `PassableReader` yielding `{ file, line, text }` records
    * one element at a time, in path-then-line order. `options.glob` selects the
    * file set (piped into grep with no intermediate materialization). No
-   * `maxResults`; early close stops the walk.
+   * `maxResults`. Content reads are incremental — early close leaves the
+   * remaining files' contents unread — but the directory walk is eager (the
+   * whole confined tree is enumerated before the first match), like
+   * `streamGlob`, so early close bounds file reads, not the walk.
    */
   streamGrep(
     pattern: string,
