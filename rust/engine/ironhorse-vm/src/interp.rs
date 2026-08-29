@@ -11293,6 +11293,14 @@ impl Interp {
                         return Halt::Unsupported("get_super:no-home");
                     }
                     let base = self.instance_prototype(home);
+                    // GetValue on a super reference performs ToObject on the
+                    // home prototype; a null [[Prototype]] is a TypeError
+                    // (ECMA-262 6.2.5.5), raised at use, after key evaluation.
+                    if base.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let value = dispatch_result!(
                         self.ordinary_get(code, base, id, receiver),
                         pc,
@@ -11319,6 +11327,13 @@ impl Interp {
                         _ => return Halt::Unsupported("get_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    // A computed super reference defers the null-base
+                    // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
+                    if super_ref.next.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let value = dispatch_result!(
                         self.ordinary_get(code, super_ref.next, id, receiver),
                         pc,
@@ -11341,6 +11356,14 @@ impl Interp {
                         return Halt::Unsupported("set_super:no-home");
                     }
                     let base = self.instance_prototype(home);
+                    // PutValue on a super reference performs ToObject on the
+                    // home prototype; a null [[Prototype]] is a TypeError
+                    // (ECMA-262 6.2.5.6), raised after the RHS has evaluated.
+                    if base.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, base, id, value, receiver),
                         pc,
@@ -11373,6 +11396,14 @@ impl Interp {
                         _ => return Halt::Unsupported("set_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    // A computed super reference defers the null-base
+                    // TypeError to PutValue (ECMA-262 6.2.5.6 via ToObject),
+                    // after both the key and the RHS have evaluated.
+                    if super_ref.next.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, super_ref.next, id, value, receiver),
                         pc,
