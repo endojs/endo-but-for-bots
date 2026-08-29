@@ -27,7 +27,9 @@ test('buffer permits the sink to wait before the spring writes', async t => {
 });
 
 test('buffer transports return and throw terminal operations', async t => {
-  const { spring, sink } = /** @type {AutoBuffer<string, string>} */ (makeAutoBuffer());
+  const { spring, sink } = /** @type {AutoBuffer<string, string>} */ (
+    makeAutoBuffer()
+  );
 
   spring.next('value');
   spring.return('finished');
