@@ -87,9 +87,16 @@ consolidated filesystem-interface hierarchy; see
 [fs-interface-consolidation](fs-interface-consolidation.md) and
 [fs-interface-reconciliation](fs-interface-reconciliation.md) for that
 hierarchy.
-The `LookupTree` and `EnumerableTree` capability surfaces this table
+The `LookupTree` and `EnumerableTree` capability surfaces that this table
 names are the lookup-only and enumerable method-guard layers defined
 below in § Non-enumerability is a capability shape.
+Every concrete registry node in this table additionally exposes a
+`getInfo()` facet layered above its guard: `getInfo().temporal` on every
+node (see § Read consistency) and `getInfo().integrity` on the version
+leaf (see § Resolver, mapper, and mockability).
+A caller who discovers this surface through the two named guard
+interfaces therefore learns of `getInfo` here, at the entry point, rather
+than only from later prose.
 
 Scoped names use two path segments because `/` is a tree separator.
 The leading `@` makes the intermediate scope hub unambiguous.
@@ -113,12 +120,26 @@ literal child named `@endo/patterns`, finds none (the only matching key
 is the scope hub `@endo`), and rejects.
 Reaching for the npm-shaped single string (`lookup('@endo/patterns')`),
 spelled the way `package.json` and every import specifier already spell
-it, is a predictable slip, so a segment that itself contains `/` rejects
-with a distinct diagnostic that names the offending slash-bearing segment
-and points at the two-segment (or stepwise) form, rather than the
-identical unknown-name error a genuinely absent package raises.
+it, is a predictable slip.
+A segment that itself contains `/` therefore rejects with a structured
+`@endo/errors` `SyntaxError` that names the offending slash-bearing
+segment and points at the two-segment (or stepwise) form, a distinct
+concrete shape rather than the identical not-found `RangeError` a
+genuinely absent package raises.
 The cross-backend conformance suite asserts this slash-bearing-segment
-error shape separately from the plain not-found shape.
+`SyntaxError` shape separately from the plain not-found shape.
+The primary tree surface rejects the slash-bearing spelling on purpose:
+keeping one unambiguous per-segment grammar is what lets `lookup`, `has`,
+and `list` share a single rest-parameter calling convention with no
+string-versus-array shape to disambiguate at runtime, and adopting the
+`@scope/pkg`-splitting behavior the deprecated adapter needs (§ Migration
+and compatibility step 4) would reintroduce exactly that ambiguity for
+every new caller.
+The friendlier split is confined to the retiring compatibility shim
+because that shim exists only to keep the legacy opaque-string call shape
+resolving; the primary surface trades a one-time predictable rejection
+(with a diagnostic that names the fix) for a grammar that never has to
+guess whether a segment is one name or two.
 Adapters must return the same intermediate scope-hub capability for the
 stepwise and multi-segment forms.
 
@@ -138,6 +159,22 @@ miss raises when the backend holds no network authority (see § One shape
 over both backends).
 The cross-backend conformance suite asserts this not-found shape so the
 Node and Endor adapters cannot diverge on it.
+
+Deciding whether a package name is *known* at the `/npm` hub (so
+`lookup(name)` can choose between entering its version directory and
+rejecting not-found) needs the same packument truth a package
+directory's `list()` fetches over the network.
+Determining existence is therefore itself a fetch, and an offline hub
+must not conflate "does not exist" with "cannot be checked right now".
+When the packument required to decide existence is not cached and the
+backend holds no network authority, a hub-level `lookup(name)` or
+`has(name)` rejects with `RegistryOfflineError` (can't tell), never with
+the not-found `RangeError` (which asserts non-existence).
+The not-found `RangeError` is reserved for the case where the truth is
+reachable and the name is genuinely absent.
+The cross-backend conformance suite asserts this hub-level offline
+distinction alongside the version-tree offline miss, so neither adapter
+reports a false not-found for an unreachable name.
 
 ### Non-enumerability is a capability shape
 
@@ -358,15 +395,16 @@ hundreds of packages costs no per-dependency transport.
 Because `resolveRegistryTree` is an ordinary mockable library function
 with no brand check that would catch a future caller wiring it against a
 remote (`E()`-wrapped) tree, this colocation is enforced mechanically
-rather than by code-review vigilance: the resolver test harness injects
-a tree whose methods count their invocations and asserts the resolver
-issues only synchronous same-vat dispatch (no eventual-send crossing a
-worker or vat boundary) for a multi-dependency fixture, so a later
-refactor that moves the traversal into the worker (the design's own
-predicted erosion) fails this dispatch-shape assertion instead of
-silently regressing into O(dependency count) round trips.
-The concrete change this guards against is specifically the one the
-platform's own invariants would *not* already surface loudly.
+rather than by code-review vigilance.
+The resolver test harness injects a tree whose methods count their
+invocations and asserts the resolver issues only synchronous same-vat
+dispatch (no eventual-send crossing a worker or vat boundary) for a
+multi-dependency fixture, so a later refactor that moves the traversal
+into the worker (the design's own predicted erosion) fails this
+dispatch-shape assertion instead of silently regressing into
+O(dependency count) round trips.
+This test guards specifically against the change the platform's own
+invariants would *not* already surface loudly.
 A naive relocation that called a tree method directly on a genuine
 remote Presence without `E()` would throw at first use under Endo's
 ocap dispatch model (a Presence rejects synchronous method application),
@@ -402,9 +440,24 @@ together with that package's npm `dist.integrity`, exactly as
 migration produces byte-identical `resolutionHash` values and does not
 invalidate any pinned `RegistryResolution`, reproducibility record, or
 `resolutionHash`-keyed cache entry.
-The tree presentation changes how a package tree is reached, not what the
-resolution hashes over; `dist.integrity` stays the hashed fetch
-attestation and does not become an enumerable tree entry.
+For this byte-identical guarantee to hold, `resolveRegistryTree` must be
+able to read each selected version's `dist.integrity` through the tree
+interface, because that npm packument attestation is distinct from the
+CAS content-identity hash the version leaf's `getInfo()` / `sha256()`
+already report (the two hash different things: the published tarball
+versus the assembled tree).
+The version leaf's registry-node `getInfo()` facet therefore carries an
+`integrity` field alongside `temporal`, populated from the packument's
+`dist.integrity` for that exact version, and `resolveRegistryTree` reads
+it as `getInfo().integrity` on the selected leaf and feeds it to
+`hashResolution` unchanged.
+This keeps `dist.integrity` on the read-only info facet rather than
+making it an enumerable tree entry: the tree presentation changes how a
+package tree is reached, not what the resolution hashes over, and
+`dist.integrity` stays the hashed fetch attestation.
+The cross-backend conformance suite asserts the version leaf reports the
+packument `integrity` its `getInfo()` facet promises, so the Node and
+Endor adapters cannot diverge on the value that feeds `resolutionHash`.
 Retention links continue to pin the returned CAS trees.
 
 A fixture registry is an ordinary readable layout.
@@ -470,18 +523,40 @@ registry fake is required for resolver and mapper tests.
    deprecated adapter.
    An externally held pre-migration reference the repo's audit cannot see
    (a pet name in a running daemon, a script, or another vat) resolves
-   to the new tree at the same identifier, so its shape changes under it;
-   this is a bounded, loud change rather than a silent misresolve.
+   to the new tree at the same identifier, so the reference's shape
+   changes under the holder; this is a bounded, loud change rather than a
+   silent misresolve.
    A stale two-string `E(registry).lookup(name, version)` from such a
    holder walks `name` as a top-level registry segment, and unless `name`
    happens to equal a configured registry family (`npm`) it finds no such
    child and rejects with the structured not-found `RangeError`; even the
    degenerate `lookup('npm', version)` enters the npm hub and then rejects
    at the `version` segment (no package named `version`).
-   The arity collision therefore surfaces as a diagnosable rejection at
-   the first stale call, not as a wrong object returned, so an unaudited
-   holder learns of the migration by a clean error rather than by silently
-   receiving the wrong protocol.
+   One residual risk is accepted rather than proven away: the
+   `lookup('npm', version)` rejection assumes no published npm package is
+   ever literally named after the version-shaped string a stale caller
+   passes, so a stale `name === 'npm'` caller whose `version` argument
+   happened to match a real package name would receive that package's
+   version directory instead of a rejection.
+   This collision is vanishingly unlikely (a version-shaped string is a
+   poor package name) and is scoped as an accepted residual risk rather
+   than being pinned by a conformance assertion, unlike the design's
+   other exhaustively-proven failure shapes.
+   The `list` arity collision is different and does not surface as a
+   rejection at all: the shipped `E(registry).list()` returned `[]` before
+   any fetch, whereas the new root's zero-argument `list()` returns
+   `['npm']`, so a stale caller that consumed the always-empty shipped
+   shape (for example by checking `list().length === 0`) silently reads a
+   changed value rather than an error.
+   This is the one migration exposure that is a changed value rather than
+   a loud rejection; it is bounded (the value is the fixed one-element
+   registry-name set, not arbitrary data) and a caller that must preserve
+   the old `[]` shape reaches it through the separately-named deprecated
+   adapter of step 4, whose `list()` still returns `[]`.
+   The arity collision therefore surfaces, for `lookup`, as a diagnosable
+   rejection at the first stale call rather than a wrong object returned,
+   so an unaudited holder learns of the migration by a clean error rather
+   than by silently receiving the wrong protocol.
 4. Retain a deprecated method-call-to-tree adapter, obtained under its own
    explicit name rather than at `@registry`, for callers that still need
    the old `EndoRegistry.lookup` / `list` call shape (whether they
@@ -535,15 +610,18 @@ requiring one path-safe root segment.
   `list` method and invoking `list()` on it raises the interface guard's
   absent-method rejection.
 - Shared path tests cover unscoped and scoped packages, unknown scopes,
-  packages, and versions (asserting the structured not-found error), a
-  single-segment slash-bearing name such as `lookup('@endo/patterns')`
-  (asserting its distinct diagnostic, separate from not-found), the
-  `temporal` descriptor `getInfo()` reports on each of the four node kinds
-  (`'stable'` root, `'live'` npm and scope hubs, `'live'` package
-  directory, `'immutable'` version leaf), ascending version ordering, and
-  exact version leaves.
+  packages, and versions (asserting the structured not-found `RangeError`),
+  a single-segment slash-bearing name such as `lookup('@endo/patterns')`
+  (asserting its distinct `SyntaxError` diagnostic, separate from
+  not-found), the `temporal` descriptor `getInfo()` reports on each of the
+  four node kinds (`'stable'` root, `'live'` npm and scope hubs, `'live'`
+  package directory, `'immutable'` version leaf), the version leaf's
+  `getInfo().integrity` matching the packument `dist.integrity` that feeds
+  `resolutionHash`, ascending version ordering, and exact version leaves.
 - Node adapter tests cover metadata-only listing, lazy tarball fetch,
-  integrity failure, cache hit, eviction/refetch, and offline miss.
+  integrity failure, cache hit, eviction/refetch, a version-tree offline
+  miss, and a hub-level offline `lookup(name)` on an uncached name
+  rejecting with `RegistryOfflineError` rather than a false not-found.
 - Endor adapter tests run the same cases over `RegistryTable`, the CAS,
   and online/offline HTTP powers.
 - Resolver tests run the same MVS, peer, optional, workspace, and
