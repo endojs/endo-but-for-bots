@@ -1,5 +1,5 @@
 // spell-out-exempt: Preserve the public ConvertValToSlot name.
-import { expectType } from 'tsd';
+import { expectAssignable, expectType } from 'tsd';
 
 import { Far, type AtomStyle, type RemotableObject } from '@endo/pass-style';
 import type {
@@ -24,21 +24,75 @@ import type {
 } from '../index.js';
 import { makeMarshal } from './marshal.js';
 
-type PublicMarshalTypes = [
-  Encoding,
-  EncodingClass<'NaN'>,
-  EncodingElement,
-  EncodingUnion,
-  TreeOf<string>,
-  CapData<string>,
-  Marshal<string>,
-  MakeMarshalOptions,
-  RankComparison,
-  RankCover,
-  PartialComparison,
-];
+// Each public type is pinned against an independently-written expected shape,
+// so a future edit that drops or malforms a member reddens this suite (a bare
+// `expectType<T>(x as unknown as T)` self-assertion cannot — it only checks that
+// the name still exports).
 
-expectType<PublicMarshalTypes>(null as unknown as PublicMarshalTypes);
+// EncodingClass carries a literal `@qclass` discriminant.
+expectType<{ '@qclass': 'NaN' }>(null as unknown as EncodingClass<'NaN'>);
+
+// EncodingUnion's representative members keep their per-tag payload shapes.
+expectAssignable<EncodingUnion>({ '@qclass': 'undefined' });
+expectAssignable<EncodingUnion>({ '@qclass': 'bigint', digits: '123' });
+expectAssignable<EncodingUnion>({ '@qclass': 'symbol', name: 'foo' });
+expectAssignable<EncodingUnion>({
+  '@qclass': 'error',
+  name: 'Error',
+  message: 'boom',
+});
+expectAssignable<EncodingUnion>({ '@qclass': 'slot', index: 0, iface: 'x' });
+expectAssignable<EncodingUnion>({
+  '@qclass': 'tagged',
+  tag: 't',
+  payload: null,
+});
+
+// EncodingElement is a primitive leaf or an EncodingUnion.
+expectType<boolean | number | null | string | EncodingUnion>(
+  null as unknown as EncodingElement,
+);
+
+// TreeOf<string> is a leaf or a record of subtrees.
+expectAssignable<TreeOf<string>>('leaf');
+expectAssignable<TreeOf<string>>({ a: 'leaf', b: { c: 'leaf' } });
+
+// Encoding is the JSON-representable tree of EncodingElements.
+expectAssignable<Encoding>('leaf');
+expectAssignable<Encoding>({ '@qclass': 'NaN' });
+
+// CapData pins its body/slots shape.
+expectType<{ body: string; slots: string[] }>(
+  null as unknown as CapData<string>,
+);
+
+// Marshal exposes the (de)serialize pair plus the toCapData/fromCapData names.
+expectType<{
+  serialize: ToCapData<string>;
+  unserialize: FromCapData<string>;
+  toCapData: ToCapData<string>;
+  fromCapData: FromCapData<string>;
+}>(null as unknown as Marshal<string>);
+
+// MakeMarshalOptions pins every option's name, optionality, and value set.
+expectType<{
+  errorTagging?: 'on' | 'off' | undefined;
+  marshalName?: string | undefined;
+  errorIdNum?: number | undefined;
+  marshalSaveError?: ((err: Error) => void) | undefined;
+  serializeBodyFormat?: 'capdata' | 'smallcaps' | undefined;
+}>(null as unknown as MakeMarshalOptions);
+
+// RankComparison is exactly the three-way result.
+expectType<-1 | 0 | 1>(null as unknown as RankComparison);
+
+// RankCover is an inclusive [lower, upper] string pair.
+expectType<[string, string]>(null as unknown as RankCover);
+
+// PartialComparison widens to `number` (TS has no NaN literal type) rather than
+// narrowing to the three ordered results.
+expectType<number>(null as unknown as PartialComparison);
+
 expectType<(value: RemotableObject) => string>(
   null as unknown as ConvertValToSlot<string, RemotableObject>,
 );

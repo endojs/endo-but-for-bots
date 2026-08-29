@@ -60,6 +60,10 @@ export type CapData<Slot> = {
   slots: Slot[];
 };
 export type ToCapData<Slot> = (val: Passable) => CapData<Slot>;
+/**
+ * @returns a Passable. Typed as `any` rather than `Passable` because that is
+ * more practical for callers, but the returned value is always a Passable.
+ */
 export type FromCapData<Slot> = (data: CapData<Slot>) => any;
 export type Marshal<Slot> = {
   /** Use `toCapData`. */
