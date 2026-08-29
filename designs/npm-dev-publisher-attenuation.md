@@ -139,6 +139,104 @@ proxy is just an npm registry URL.
 | [registry-capability](registry-capability.md) | The `EndoRegistry` capability shape (`resolve`/`fetch`/`lookup`/`list`) is **read-only by design** and stays so. This design adds no methods to it. The deferred "credentials lane" its anti-design steers name is realized here for the write half only: `PublishGrant` is a *separate* capability family, minted by a `PublishGrantIssuer`, never merged into `@registry`. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | Precedent for 256-bit bearer tokens, per-IP accruing-penalty rate limiting on failed auth, and explicit opt-in exposure. The proxy reuses that failure-penalty shape for its token surface. |
 | [daemon-capability-bank](daemon-capability-bank.md) | The eventual catalog home for `PublishGrant` when the Endo-native realization lands (§ *Endo integration roadmap*). |
+| [llm-dev-publish](llm-dev-publish.md) (PR #853) | The **chronological source layer** that produces the publications this boundary constrains: an `llm`-triggered FIFO workflow, commit-derived prerelease versions, staged workspace manifests, manifest-backed idempotent recovery, and two-phase development-tag promotion. This design and #853 are two halves of one system; § *Continuous `llm` publishing: the source layer* below states which design owns which part, and replaces #853's original direct-to-npmjs.com credential path with publication into this proxy behind the promoter boundary. |
+
+## Continuous `llm` publishing: the source layer
+
+The [llm-dev-publish](llm-dev-publish.md) design (PR #853) and this design
+are the two halves of one continuous development-publishing system. They
+were written separately and must be read together: #853 answers "what is
+published, in what order, with what versions"; this design answers "through
+what boundary, and to npmjs.com by what path." The maintainer directed that
+the implementation reconcile the two rather than build #853's original
+direct-to-npmjs.com credential path unchanged (garden issue #64).
+
+### What each design owns
+
+| Concern | Owner | Notes |
+|---------|-------|-------|
+| Trigger, ordering, force-push suppression | **#853** | `llm`-only workflow, repository-wide FIFO concurrency group (`cancel-in-progress: false`), immutable-SHA checkout, ancestor-of-`llm`-tip check. |
+| Commit-derived prerelease version | **#853** | `X.Y.Z-dev.<UTC-commit-time>.<short-sha>`; chronological, collision-free, rerun-stable. Satisfies this design's prerelease condition (§ *Semantics of a development release*) by construction. |
+| Staged workspace manifests and `workspace:` dep rewriting | **#853** | `scripts/prepare-dev-release.mjs`, `dist/dev-release.json`; private workspaces excluded. |
+| Manifest-backed retry/recovery | **#853** | Rerunning the same SHA is idempotent: unique version + unique staging tag mean a rerun re-verifies and completes rather than duplicating. Composes with this design's replay/idempotency (§ *Replay and idempotency*): a re-published `(name, version)` with byte-identical bytes and tag is an idempotent accept, not an overwrite. |
+| Two-phase development-tag promotion | **#853**, targeting this proxy | Publish each tarball under a unique staging tag, verify the whole set is present, then move the shared channel tag. Under the reconciled system both tags are `dev-*` tags on the proxy (below), so the flow runs unchanged against the proxy's dist-tag routes. |
+| The publisher's credential | **this design** | The `llm` workflow holds only a `PublishGrant` bearer token for `npm.minion.town`, never an npmjs.com credential. This is the resolution of #853's central limitation ("an npmjs.com writer cannot be restricted by npm to development releases only"): the workflow can no longer reach npmjs.com at all. |
+| The staging boundary | **this design** | The proxy's route allowlist, publish validation pipeline P1-P8, immutability, tag monotonicity, per-package serialization, ledger, and durable event log. |
+| The npmjs.com credential and outbound publication | **this design** | The deterministic promoter is the sole holder of the upstream token and the only path to npmjs.com (§ *Promotion service*). It independently revalidates policy, grant/subject state, integrity, and byte identity before forwarding. |
+
+### What changes in #853
+
+Its original *Credentials and permissions* and *Trusted publishing setup*
+sections gave the `llm` workflow direct npmjs.com publish authority (npm
+trusted publishing, or a temporary publish-only token). Under this
+reconciliation that authority moves out of the workflow entirely:
+
+- The workflow authenticates to `https://npm.minion.town` with a
+  `PublishGrant` token (operator-issued under a maintainer-approved
+  standing subject policy, § *Availability to unattended jobs*), and
+  publishes with `npm publish --tag <staging-tag>` exactly as #853
+  specifies, except the registry is the proxy.
+- npmjs.com is reached only by the promoter. #853's trusted-publishing
+  discussion is retained as the *pre-production* form of the promoter, not
+  the demo form (§ *Open questions*, "Trusted publishing instead of a
+  stored token?").
+- #853 keeps its FIFO, versioning, manifest, ancestor-check, and
+  two-phase-tag mechanics verbatim; this design does not restate them and
+  references them normatively.
+
+### The combined pipeline
+
+```mermaid
+flowchart TD
+    push["push to llm"] --> fifo["#853 FIFO workflow<br/>(immutable SHA, ancestor check)"]
+    fifo --> build["#853 build: commit-derived<br/>prerelease versions + dev-release.json"]
+    build --> pub["npm publish --tag dev-&lt;ts&gt;-&lt;sha&gt;<br/>(PublishGrant token)"]
+    pub -->|HTTPS| proxy["npm-dev-proxy (npm.minion.town)<br/>P1-P8, immutability, monotonic tags"]
+    proxy --> promoteTag["#853 two-phase: move channel tag<br/>dev-llm after full set present"]
+    proxy -->|durable event log| promoter["npm-dev-promoter<br/>(sole npmjs.com credential)"]
+    promoter -->|revalidate policy, grant,<br/>integrity, byte identity| npmjs["registry.npmjs.org<br/>tag: dev"]
+    consumer["consumers"] -->|scope routing, no credential| proxy
+    consumer -.->|after gated promotion| npmjs
+```
+
+The **credential boundary** the maintainer asked to be made explicit:
+agents (the `llm` workflow, any other grant holder) publish only
+constrained prerelease artifacts to `npm.minion.town`, and never hold an
+npmjs.com credential; a separate non-agent promoter alone holds the
+npmjs.com credential and independently revalidates policy, grant/subject
+state, integrity, and byte identity before forwarding a byte-identical
+tarball. Neither a compromised workflow nor a compromised proxy can move
+`latest` or publish a non-prerelease upstream.
+
+### Tag reconciliation
+
+#853 (before this reconciliation) resolved its consumer dist-tag to
+exactly `dev`. This proxy's structural guarantee (§ *Semantics of a
+development release*) is that every tag it emits begins with the literal
+`dev-` prefix, so `latest` is structurally unreachable. The two are
+reconciled by tag layer, not by weakening either rule:
+
+| Tag | Where | Value | Rule |
+|-----|-------|-------|------|
+| Per-build staging tag | proxy | `dev-<UTC-commit-time>-<short-sha>` | Already a `dev-*` tag; unique per build, never moves. Set by #853's first publish phase. |
+| Shared channel tag | proxy | `dev-llm` | A `dev-*` tag naming "the current `llm` development build." Moved forward by #853's second phase via the proxy's dist-tag route (P7). |
+| Consumer tag | npmjs.com (after promotion) | `dev` | #853's resolved consumer tag; applied upstream by the promoter as a metadata-only retag (the tarball bytes are never touched, § *Promotion service*). Prerelease versioning keeps it out of default semver ranges. |
+
+Two alignments fall out of this and are worth stating, because they mean
+the two designs reinforce rather than merely coexist:
+
+- **Monotonicity enforces chronology.** #853's goal is that a newer `llm`
+  commit never lets an older one overtake it at the shared tag. This
+  proxy's monotonic-tag rule (P7) enforces exactly that at the boundary:
+  because commit-time-derived prerelease versions sort chronologically, a
+  forward channel-tag move always exceeds the high-water mark, while a
+  *stale rerun* of an older SHA that tries to move `dev-llm` backward is
+  rejected by P7 rather than relying on the FIFO alone.
+- **A version may carry more than one `dev-*` tag over its life.** P4's
+  "exactly one `dev-*` tag" bounds a single *publish* operation; #853's
+  second phase adds the shared `dev-llm` tag through the separate,
+  monotonic dist-tag route, so a promoted build legitimately carries both
+  its staging tag and `dev-llm`. Both are `dev-*`; `latest` never appears.
 
 ## Semantics of a development release
 
@@ -772,12 +870,19 @@ decision from sources it owns:
 
 Only then does the promoter publish: the exact blob bytes fetched and
 re-hashed in step 1, the field-allowlisted manifest from the event
-(payload recorded at accept time), and the same `dev-*` tag:
-`npm publish --tag <dev-tag>` semantics against the upstream registry
+(payload recorded at accept time), and an upstream dist-tag from the
+promoter's own per-scope tag policy:
+`npm publish --tag <upstream-tag>` semantics against the upstream registry
 API directly (no CLI subprocess required, though the CLI is an
-acceptable implementation shim). **The tarball is never rebuilt,
-repacked, or modified between registries**; byte identity is an
-acceptance-tested invariant (§ *Acceptance tests*).
+acceptable implementation shim). The upstream tag is a **metadata-only**
+choice that never touches the tarball bytes: for the `@minion-town`
+fixtures it is the same `dev-*` tag the proxy carried; for the `@endo/*`
+scope it is the bare `dev` consumer tag [llm-dev-publish](llm-dev-publish.md)
+(PR #853) resolved on (§ *Tag reconciliation*). Only a `dev-*`-shaped
+proxy tag can ever be mapped, so the upstream tag is always a development
+channel and `latest` remains unreachable through the promoter. **The
+tarball is never rebuilt, repacked, or modified between registries**; byte
+identity is an acceptance-tested invariant (§ *Acceptance tests*).
 
 ### Crash-safe state machine
 
@@ -917,20 +1022,38 @@ promoter has no DNS presence at all.
 
 ## Fixture packages and namespaces
 
-- **Scope:** `@minion-town`, an npm organization the maintainer
-  registers as an explicit stage-2 precondition (scoped *public*
-  packages are free). Until that org exists and is owned by the
+The system is proved on a throwaway scope with no real consumers, and
+only then extended to the production `@endo/*` scope that
+[llm-dev-publish](llm-dev-publish.md) (PR #853) actually publishes. Two
+scopes, two stages:
+
+- **Demo/proving scope:** `@minion-town`, an npm organization the
+  maintainer registers as an explicit stage-2 precondition (scoped
+  *public* packages are free). Until that org exists and is owned by the
   maintainer-controlled account, upstream promotion stays disabled and
   the system runs as a self-contained demo.
 - **Fixture packages:** `@minion-town/fixture-alpha` (a tiny library)
   and `@minion-town/fixture-beta` (depends on alpha, enabling a
   transitive dev-install walk). No install scripts, no native code,
   versions `0.0.x-dev.n`.
+- **Production scope:** `@endo/*`, the non-private workspaces #853's
+  `llm` FIFO builds. This scope is deliberately kept **out of both
+  allowlists until the system is proven on fixtures and the maintainer
+  gates it** (§ *Staged rollout*, stage S4). Admitting `@endo/*` is
+  precisely the point of the attenuation: because the proxy accepts only
+  prerelease `dev-*` publications and the promoter independently
+  revalidates before forwarding, an agent (or a prompt-injected `llm`
+  workflow) publishing `@endo/*` can at worst mint an attributable
+  prerelease under a `dev-*` tag; it can never move `@endo/*@latest` or
+  publish a production version. That safety is why letting agents touch a
+  scope with real consumers is acceptable *here* and nowhere else.
 - **Namespace hygiene rules** (encoded in both the proxy allowlist and
-  the promoter's policy config): never `@endo/*` or any scope with real
-  consumers; never a name that exists upstream under someone else's
-  control (checked at the stage-2 gate); no unscoped lookalikes of
-  popular packages (dependency-confusion optics cut both ways).
+  the promoter's policy config): a scope with real consumers (today only
+  `@endo/*`) is admitted only through the stage-S4 gate below, never in
+  the demo stages; never a name that exists upstream under someone else's
+  control (checked at every allowlist-widening gate); no unscoped
+  lookalikes of popular packages (dependency-confusion optics cut both
+  ways).
 
 ## Observability without secret leakage
 
@@ -980,15 +1103,32 @@ promoter has no DNS presence at all.
 
 ## Staged rollout
 
+The rollout deliberately front-loads **consumption from the proxy** and
+defers **public promotion** to the last, explicitly gated stages. Fixtures
+prove the machinery (S0-S2); the real `@endo/*` chronological feed is
+consumed from the proxy for real work (S3) *before* any gated public
+npmjs.com promotion of `@endo/*` (S4).
+
 | Stage | Content | Exit criteria |
 |-------|---------|---------------|
 | **S0: local** | Proxy + promoter on loopback; fixture grants; promoter in `dryRun` (validates, records "would publish", zero upstream capability because no token is present) | Full acceptance suite green, including adversarial and failure-injection cases (§ *Acceptance tests*) |
 | **S1: deployed demo** | `npm.minion.town` live behind Caddy; grants issued to a gardener job; promoter still `dryRun` | End-to-end dev release published through the proxy and consumed via scope routing; ledgers inspected; dry-run promoter validates every event |
-| **S2: live-fire upstream** | Token installed; promoter enabled for the fixture scope | **All stage-2 conditions met** (below); one fixture release promoted; byte-identity check upstream vs proxy; emergency-stop drill, rotation drill, restore drill executed |
-| **S3: operate** | Allowlist widened only by maintainer decision and a fresh upstream ownership/unclaimed-name check for every added package; weekly audit review; quarterly rotation | Sustained clean ledgers; each widening records the ownership check and maintainer decision before policy deployment |
+| **S2: live-fire fixtures upstream** | Token installed; promoter enabled for the `@minion-town` fixture scope only | **All stage-2 conditions met** (below); one fixture release promoted; byte-identity check upstream vs proxy; emergency-stop drill, rotation drill, restore drill executed |
+| **S3: chronological `@endo/*` into the proxy (consume-only)** | [llm-dev-publish](llm-dev-publish.md) (PR #853)'s `llm` FIFO wired to publish `@endo/*` dev releases into the proxy under a standing-policy `PublishGrant`; `@endo/*` added to the **proxy** allowlist but **not** the promoter's; promoter stays `dryRun` for `@endo/*` | Consumers install `@endo/<pkg>@dev-llm` from the proxy via scope routing for real development work; FIFO ordering, two-phase `dev-llm` promotion, and manifest-backed rerun all observed against the proxy; dry-run promoter validates every `@endo/*` event and forwards none |
+| **S4: gated public `@endo/*` promotion** | Only after an explicit maintainer gate (the stage-2 conditions re-run for the `@endo/*` scope, below), the promoter's own allowlist admits `@endo/*` and forwards accepted dev releases to npmjs.com under the `dev` tag | Maintainer sign-off recorded; per-package upstream ownership confirmed for the promoted set; byte-identity verified on the first promoted `@endo/*` release; consumers can install `@endo/<pkg>@dev` from npmjs.com |
+| **S5: operate** | Allowlist widened only by maintainer decision and a fresh upstream ownership/unclaimed-name check for every added package; weekly audit review; quarterly rotation | Sustained clean ledgers; each widening records the ownership check and maintainer decision before policy deployment |
+
+Consumption precedes promotion by construction: `@endo/*` dev releases are
+installable from the proxy at S3 with the promoter forwarding nothing, and
+public npmjs.com promotion of `@endo/*` is unreachable until the separate
+S4 gate. S3 requires no npmjs.com credential for `@endo/*` at all, which is
+the concrete payoff of the credential boundary: development install and
+evaluation of the `llm` feed do not depend on granting any public-registry
+credential.
 
 **Explicit conditions before any real upstream publication (the
-stage-2 gate), all required:**
+stage-2 gate, required at S2 for fixtures and re-run at S4 for the
+`@endo/*` scope), all required:**
 
 1. Maintainer sign-off recorded (a journal `message` entry naming this
    design and the go-ahead).
@@ -997,9 +1137,14 @@ stage-2 gate), all required:**
 3. Granular token scoped to exactly the fixture org/scope, Bypass-2FA,
    CIDR-pinned where egress allows; stored only in the promoter's
    secret path; no other copy anywhere.
-4. Fixture names confirmed unclaimed-or-controlled upstream.
-5. S0 and S1 exit criteria green; the adversarial and failure-injection
-   suites passing against the deployed instance, not just locally.
+4. The scope being promoted confirmed unclaimed-or-controlled upstream:
+   the fixture names at S2, and every `@endo/*` package in the promoted
+   set at S4 (the `@endo/*` packages already exist upstream under
+   maintainer control, so the S4 check is ownership confirmation, not a
+   claim).
+5. S0 and S1 exit criteria green (and, for S4, S3 as well); the
+   adversarial and failure-injection suites passing against the deployed
+   instance, not just locally.
 6. Emergency-stop, token-rotation, and backup-restore drills each
    executed once and ledger-verified.
 7. Quarantine runbook written (who gets paged, what `retry`/`reject`
@@ -1009,11 +1154,13 @@ stage-2 gate), all required:**
 
 The name-control check is a continuing gate, not a one-time fixture
 check.
-Every S3 allowlist addition must repeat condition 4 for each new package
+Admitting `@endo/*` to the promoter's allowlist at S4, and every S5
+allowlist addition after it, must repeat condition 4 for each new package
 or scope, record the evidence with the maintainer's decision, and land
 the proxy and promoter policy updates together.
-Until that record exists, the package remains absent from both
-allowlists.
+Until that record exists, the package remains absent from the promoter's
+allowlist (and so is never forwarded upstream) even when the proxy already
+accepts and serves it for S3-style consumption.
 
 ## Build vs adapt: the Verdaccio comparison
 
@@ -1216,6 +1363,15 @@ both new and existing packages.
   computed integrity.
 - G4 drills: emergency stop, token rotation, backup-restore with
   ledger-head re-derivation. Each leaves ledger evidence.
+- G5 chronological integration (with [llm-dev-publish](llm-dev-publish.md),
+  PR #853): two queued `llm` commits publish through the proxy under a
+  `PublishGrant` token; the earlier build completes its two-phase staging
+  publish before the later build's `dev-llm` move, the shared `dev-llm`
+  channel tag ends at the later commit, and a rerun of the *earlier* SHA's
+  build re-verifies its versions idempotently and is refused (P7) when it
+  attempts to move `dev-llm` backward. In S3 the dry-run promoter validates
+  every `@endo/*` event and forwards none; the `llm` workflow holds no
+  npmjs.com credential at any point.
 
 ## Design Decisions
 
@@ -1267,6 +1423,16 @@ both new and existing packages.
     properties are custom either way, and the minimum proxy fails
     closed where a Verdaccio plugin would fail open (§ *Build vs adapt:
     the Verdaccio comparison*).
+12. **Source layer and boundary layer are separate designs, reconciled
+    not merged.** [llm-dev-publish](llm-dev-publish.md) (PR #853) owns the
+    chronological build/versioning/ordering; this design owns the
+    attenuation boundary and the outbound promoter. The seam is a single
+    credential swap in #853's workflow (a `PublishGrant` for the proxy in
+    place of an npmjs.com credential), which is what makes #853's
+    otherwise-unrestrictable npmjs.com writer safe. Keeping them separate
+    lets the boundary be proved on throwaway fixtures before the `@endo/*`
+    feed rides it, and lets #853's mechanics stand alone if the boundary
+    is ever swapped (§ *Continuous `llm` publishing: the source layer*).
 
 ## Anti-design steers
 
@@ -1309,10 +1475,15 @@ both new and existing packages.
   token-free path: a promoter running as a GitHub Actions workflow
   could publish with no long-lived token at all, and get Sigstore
   provenance attestations automatically. It relocates the promoter off
-  the minion.town box and binds publication to a workflow identity.
-  Recommend evaluating as the pre-production form; the self-hosted
-  promoter above remains the demo form. Which CI identity would the
-  workflow bind to?
+  the minion.town box and binds publication to a workflow identity. This
+  is the same trusted-publishing path [llm-dev-publish](llm-dev-publish.md)
+  (PR #853) originally proposed for its direct-to-npmjs.com workflow;
+  under this reconciliation it becomes a property of the *promoter*, not
+  the agent-facing `llm` workflow, so the workflow identity it would bind
+  to is the promoter's CI environment, not `publish-dev.yml`. Recommend
+  evaluating as the pre-production form; the self-hosted promoter above
+  remains the demo form. Which CI identity would the promoter workflow
+  bind to?
 - **Provenance/signing for promoted artifacts.** Beyond trusted
   publishing's automatic attestations, should the promoter sign
   anything itself (and should the proxy implement its own
@@ -1372,6 +1543,7 @@ grew.
 | [registry-capability](registry-capability.md) | Read-only capability shape kept intact; this design realizes the write half of its deferred credentials lane as a separate capability family. |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | Precedent reused for bearer tokens, per-IP auth-failure penalties, and explicit opt-in exposure. |
 | [daemon-capability-bank](daemon-capability-bank.md) | Eventual catalog home of the Endo-native `PublishGrant` (roadmap). |
+| [llm-dev-publish](llm-dev-publish.md) (PR #853) | The chronological source layer whose publications this boundary constrains. #853 owns the `llm` FIFO, commit-derived prerelease versions, staged manifests, manifest-backed recovery, and two-phase development-tag promotion; this design owns the staging boundary and the outbound promoter, and supersedes #853's original direct-to-npmjs.com credential path (§ *Continuous `llm` publishing: the source layer*). |
 
 ## Prompt
 
