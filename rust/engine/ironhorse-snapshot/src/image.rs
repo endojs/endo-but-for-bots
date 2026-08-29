@@ -373,6 +373,8 @@ pub struct MachineImage {
     pub proxy_state: ironhorse_vm::ProxyStateSnapshot,
     /// `ACCS`: guest accessor getter/setter mappings.
     pub accessors: Vec<ironhorse_vm::AccessorRow>,
+    /// `IBFN`: runtime Intl bound-function links.
+    pub intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -457,6 +459,7 @@ impl MachineImage {
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
+            intl_bound_functions: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -594,6 +597,14 @@ impl MachineImage {
 
     pub fn with_accessors(mut self, accessors: Vec<ironhorse_vm::AccessorRow>) -> MachineImage {
         self.accessors = accessors;
+        self
+    }
+
+    pub fn with_intl_bound_functions(
+        mut self,
+        rows: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+    ) -> MachineImage {
+        self.intl_bound_functions = rows;
         self
     }
 
@@ -1789,6 +1800,61 @@ pub(crate) fn decode_accessors(
     Ok(rows)
 }
 
+pub(crate) fn encode_intl_bound_functions(rows: &[ironhorse_vm::IntlBoundFunctionRow]) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.push(row.kind);
+        v.extend_from_slice(&row.function.to_be_bytes());
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.extend_from_slice(&(row.name.len() as u32).to_be_bytes());
+        v.extend_from_slice(row.name.as_bytes());
+        v.extend_from_slice(&row.name_chunk.to_be_bytes());
+        v.extend_from_slice(&row.arity.to_be_bytes());
+    }
+    v
+}
+
+pub(crate) fn decode_intl_bound_functions(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::IntlBoundFunctionRow>, SnapshotError> {
+    let mut c = Cursor::new(p, "Intl bound-function state");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / 17));
+    for _ in 0..count {
+        let kind = c.u8()?;
+        if kind > 1 {
+            return Err(SnapshotError::Corrupt(
+                "Intl bound-function state: unknown kind",
+            ));
+        }
+        let function = c.u32()?;
+        if rows
+            .last()
+            .is_some_and(|row: &ironhorse_vm::IntlBoundFunctionRow| function <= row.function)
+        {
+            return Err(SnapshotError::Corrupt(
+                "Intl bound-function state: functions not strictly ascending",
+            ));
+        }
+        let owner = c.u32()?;
+        let name_len = c.u32()? as usize;
+        let name = String::from_utf8(c.bytes(name_len)?.to_vec()).map_err(|_| {
+            SnapshotError::Corrupt("Intl bound-function state: name not UTF-8")
+        })?;
+        rows.push(ironhorse_vm::IntlBoundFunctionRow {
+            kind,
+            function,
+            owner,
+            name,
+            name_chunk: c.u32()?,
+            arity: c.u32()?,
+        });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2476,6 +2542,7 @@ pub(crate) struct LangRows<'a> {
     pub function_state: &'a ironhorse_vm::FunctionStateSnapshot,
     pub proxy_state: &'a ironhorse_vm::ProxyStateSnapshot,
     pub accessors: &'a [ironhorse_vm::AccessorRow],
+    pub intl_bound_functions: &'a [ironhorse_vm::IntlBoundFunctionRow],
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2490,6 +2557,7 @@ impl LangRows<'_> {
         function_state: &EMPTY_FUNCTION_STATE,
         proxy_state: &EMPTY_PROXY_STATE,
         accessors: &[],
+        intl_bound_functions: &[],
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -2930,6 +2998,34 @@ pub(crate) fn check_image_slot_bounds(
             check(&value)?;
         }
     }
+    for row in lang.intl_bound_functions {
+        owned(row.function)?;
+        owned(row.owner)?;
+        if row.name_chunk != u32::MAX {
+            let offset = row.name_chunk as usize;
+            if offset < CHUNK_HEADER || offset > chunk_len {
+                return Err(OOC);
+            }
+        }
+        let owner_exists = match row.kind {
+            0 => lang
+                .intl
+                .collators
+                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
+                .is_ok(),
+            1 => lang
+                .intl
+                .number_formats
+                .binary_search_by_key(&row.owner, |(owner, _)| *owner)
+                .is_ok(),
+            _ => false,
+        };
+        if !owner_exists {
+            return Err(SnapshotError::Corrupt(
+                "Intl bound-function state: owner has no Intl row",
+            ));
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -3127,6 +3223,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     if !image.accessors.is_empty() {
         w.atom(crate::format::ACCS, &encode_accessors(&image.accessors));
     }
+    if !image.intl_bound_functions.is_empty() {
+        w.atom(
+            crate::format::IBFN,
+            &encode_intl_bound_functions(&image.intl_bound_functions),
+        );
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -3294,6 +3396,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_accessors(a.payload)?,
         None => Vec::new(),
     };
+    let intl_bound_functions = match r.find(crate::format::IBFN) {
+        Some(a) => decode_intl_bound_functions(a.payload)?,
+        None => Vec::new(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -3344,6 +3450,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             function_state: &function_state,
             proxy_state: &proxy_state,
             accessors: &accessors,
+            intl_bound_functions: &intl_bound_functions,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -3382,6 +3489,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         function_state,
         proxy_state,
         accessors,
+        intl_bound_functions,
         arguments_brands,
         temporal,
         intl,
@@ -3761,6 +3869,7 @@ mod tests {
                 function_state: &EMPTY_FUNCTION_STATE,
                 proxy_state: &EMPTY_PROXY_STATE,
                 accessors: &[],
+                intl_bound_functions: &[],
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -4120,6 +4229,7 @@ mod tests {
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
+            intl_bound_functions: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4161,6 +4271,7 @@ mod tests {
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
+            intl_bound_functions: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4283,6 +4394,7 @@ mod tests {
             function_state: ironhorse_vm::FunctionStateSnapshot::default(),
             proxy_state: ironhorse_vm::ProxyStateSnapshot::default(),
             accessors: Vec::new(),
+            intl_bound_functions: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),

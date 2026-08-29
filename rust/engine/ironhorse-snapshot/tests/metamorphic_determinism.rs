@@ -130,7 +130,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // fixture holds no proxy, so only VERS changes.
         // Re-pinned for format version 6, marking accessor mappings.
         // This fixture holds no guest accessor, so only VERS changes.
-        "b99c5c99d330b4ba1619d2e7fce2afa108291802c0f13c13f15531b85fe2d497",
+        // Re-pinned for format version 7, marking Intl bound-function
+        // links. This fixture holds none, so only VERS changes.
+        "4e5d7d61eb6758991b6cc8975f089bb4148e92eb27d3962ddfadf37833d49257",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -204,7 +206,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // proxy records and VERS marks `PROX`.
         // Re-pinned for schema 17 and format 6: the small state gains
         // guest accessor mappings and VERS marks `ACCS`.
-        "5ff091b5436250da06ca96fa5530983dab76519c41c7bce9100d565bbd50fb5e",
+        // Re-pinned for schema 18 and format 7: the small state gains
+        // Intl bound-function links and VERS marks `IBFN`.
+        "918d245e0e590ae513a0fcbcb9df97b49d607d4b257675b9f5fb264ddcfa4ec5",
         "epoch-3 seal chain"
     );
 }

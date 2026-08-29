@@ -7,16 +7,9 @@
 //! resumed instance WORKS (a resumed segment iterator continues its
 //! walk from the persisted position, the `lastIndex` discipline).
 //!
-//! Deliberately NOT carried: the bound-function link satellites
-//! (`collator_compare_functions`, `number_format_bound_functions`)
-//! and the `NumberFormatData::bound_format` cache. A minted bound
-//! function IS a `functions` (`FuncInfo`) row — the Pending,
-//! dependency-gating row — so those links travel with `functions` or
-//! not at all; the caches are boundary-droppable because both getters
-//! re-mint on a cache miss (first post-resume read behaves exactly
-//! like first access). A guest that held the bound function ITSELF
-//! across the suspend degrades exactly as every held guest function
-//! does today.
+//! Schema v18 adds `IBFN`: the bound compare/format function links and
+//! cached NumberFormat identity. Restore rebuilds their runtime native
+//! function metadata after the Intl data rows.
 //!
 //! Every arm is an uninterrupted-vs-resumed TWIN (the
 //! `error_data_carry.rs` discipline). Before the carry these rows
@@ -28,13 +21,14 @@ mod common;
 
 use common::TempDir;
 
+use ironhorse_snapshot::image::{read_machine, write_machine};
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
 use ironhorse_snapshot::store::{validate_store, HeapStore, MemoryStore};
 use ironhorse_snapshot::store_file::FileStore;
-use ironhorse_snapshot::Signature;
+use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_vm::{parse_symbols, Interp};
 
 fn sig() -> Signature {
@@ -245,4 +239,43 @@ fn blob_snapshot_carries_the_intl_rows_too() {
     let mut r = from_snapshot_bytes(&bytes, &sig()).expect("rebuild");
     let resumed = crank(&mut r, obs);
     assert_eq!(resumed, continuous, "blob twin agrees");
+}
+
+#[test]
+fn bound_compare_and_format_functions_keep_identity_across_resume() {
+    assert_twin(
+        "ih-intl-bound-functions",
+        "var nf = 0; var format = 0; var coll = 0; var compare = 0; var t = 0; \
+         nf = new Intl.NumberFormat('en', { style: 'percent' }); format = nf.format; \
+         coll = new Intl.Collator('en'); compare = coll.compare; t = 7; t",
+        &[
+            "var nf; var format; var t; t = nf.format === format; t",
+            "var format; var t; t = format(0.25); t",
+            "var coll; var compare; var t; t = coll.compare === compare; t",
+            "var compare; var t; t = compare('a', 'b'); t",
+        ],
+        &["true", "25%", "true", "-1"],
+    );
+}
+
+#[test]
+fn malformed_intl_bound_function_rows_are_refused() {
+    let (bytecode, names) = compile(
+        "var nf = 0; var format = 0; var t = 0; \
+         nf = new Intl.NumberFormat('en'); format = nf.format; t = 7; t",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let mut image = read_machine(&bytes, &sig()).expect("read IBFN");
+    assert_eq!(image.intl_bound_functions.len(), 1);
+    image.intl_bound_functions[0].kind = 9;
+    match from_snapshot_bytes(&write_machine(&image), &sig()) {
+        Err(SnapshotError::Corrupt(
+            "Intl bound-function state: unknown kind",
+        )) => {}
+        Err(other) => panic!("wrong Intl-bound refusal: {other:?}"),
+        Ok(_) => panic!("unknown Intl bound-function kind must not restore"),
+    }
 }

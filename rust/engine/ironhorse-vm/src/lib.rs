@@ -40,9 +40,9 @@ pub use gc::{GcStats, Heap};
 pub use interp::{
     dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, BoundFunctionRow,
     CollatorData, CollectionSnapshot, CompiledSource, DateTimeFormatData, FunctionRow,
-    FunctionStateSnapshot, Halt, Interp, IntlTables, IteratorRow, ListFormatData, LocaleData,
-    Native, NumberFormatData, PluralRulesData, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot,
-    RelinkError, RunOutcome,
+    FunctionStateSnapshot, Halt, Interp, IntlBoundFunctionRow, IntlTables, IteratorRow,
+    ListFormatData, LocaleData, Native, NumberFormatData, PluralRulesData, ProxyRevokerRow,
+    ProxyRow, ProxyStateSnapshot, RelinkError, RunOutcome,
     SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };

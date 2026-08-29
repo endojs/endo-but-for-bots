@@ -1466,7 +1466,7 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 11 `Pending` ledger rows
+  STILL OPEN in this workstream: the 10 `Pending` ledger rows
   (generators, promises, function-dependent per-instance tables, and
   modules — several unreachable cross-crank in the vm today regardless
   of restore).
@@ -1835,7 +1835,8 @@ rather than work items.
     migration appends the two empty sections (a pure 8-byte suffix,
     verify-root-then-restamp). The ledger stands at 18 Pending rows:
     `IntlRecords` and the new `NameFloor` graduated Serialized;
-    `IntlBoundFunctions` joined Pending.
+    `IntlBoundFunctions` joined Pending. It later graduated in schema
+    v18 after the function carry supplied its prerequisite.
   - [x] The built-in iterator cursors LANDED (2026-08-28, store
     schema v13): the `ITER` atom + a twentieth small-state section
     carrying the `iterators` side table — array values/keys/entries
@@ -2817,6 +2818,12 @@ bite-checked by reverting the fix under the lock). Statuses:
   holding runtime native functions from a Pending owner row retain a
   narrowed dependency gate; ordinary guest accessors now resume across
   every path. Eleven Pending rows remain.
+- **Intl bound-function carry (2026-08-29, schema v18 / format v7):**
+  `IBFN` carries collator compare and NumberFormat format function
+  links, rebuilding their runtime native `FuncInfo` and owner caches
+  at restore. Held bound functions preserve identity and remain
+  callable across resume; accessors may now safely reference them.
+  Ten Pending rows remain.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2834,8 +2841,8 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. Function, proxy, and accessor carries later advanced it
-  through 6. The reader accepts a read RANGE (`1..=6`) — older atoms
+  reason. Function, proxy, accessor, and Intl-bound carries later
+  advanced it through 7. The reader accepts a read RANGE (`1..=7`) — older atoms
   are a subset with the same
   encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
