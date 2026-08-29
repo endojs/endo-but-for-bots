@@ -22,7 +22,7 @@
 
 import { makeError, X, q } from '@endo/errors';
 
-/** @import { AcquireResult, InternalSlot, Subscription } from './types.js' */
+/** @import { AcquireResult, InternalSlot, Subscription } from './claude.types.js' */
 
 /**
  * The default selection policy: least-recently-issued free, non-cooling

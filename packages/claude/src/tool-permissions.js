@@ -18,7 +18,7 @@
 
 import { makeError, X, q } from '@endo/errors';
 
-/** @import { McpToolDescriptor, PinnedCatalog } from './types.js' */
+/** @import { McpToolDescriptor, PinnedCatalog } from './claude.types.js' */
 
 /**
  * The one syntactic charset a tool name (and a server name) may use before it is

@@ -17,7 +17,7 @@ import { makeError, X, q } from '@endo/errors';
 import { isAdmissibleServerName } from './tool-permissions.js';
 import { assertGuestFormulaId } from './formula-id.js';
 
-/** @import { McpTransport } from './types.js' */
+/** @import { McpTransport } from './claude.types.js' */
 
 /**
  * Assert a loopback URL is actually loopback (not `0.0.0.0` or a routable host),
