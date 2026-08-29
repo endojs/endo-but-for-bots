@@ -350,6 +350,13 @@ type MountStreamYieldNode<Y = unknown, R = undefined> = {
     remove: (path: string | string[] | MountEndoMountEntry) => Promise<void>;
     snapshot: () => Promise<MountSnapshotTree>;
     stat: (path: string | string[] | MountEndoMountEntry) => Promise<MountEndoMountStat | undefined>;
+    streamGlob: (pattern: string, options?: {
+        buffer?: number;
+    }) => MountPassableReader<string, undefined>;
+    streamGrep: (pattern: string, options?: {
+        glob?: string;
+        buffer?: number;
+    }) => MountPassableReader<MountGrepMatch, undefined>;
     subView: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace>;
     write: (path: string | string[] | MountEndoMountEntry, value: MountDirectoryWriteSource) => Promise<void>;
     writeText: (path: string | string[] | MountEndoMountEntry, content: string) => Promise<void>;
