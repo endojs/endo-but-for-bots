@@ -313,6 +313,31 @@ test('composing nested open-ended ranges clamps an overflowing composed bound', 
   t.is(await E(nestedClosed).text(), '');
 });
 
+test('streamBase64 of a near-MAX_SAFE open-ended range drains to empty', async t => {
+  // Regression for the fuzzer-caught divergence: a producer WITHOUT a
+  // `streamBytes` primitive (BlobRef here) derives `streamBase64` through
+  // `streamWindowBase64`'s scalar-read loop. On an open-ended range whose start
+  // sits within one `BASE64_CHUNK_RAW_BYTES` (48 KiB) of MAX_SAFE_INTEGER — a
+  // documented valid empty attenuation, e.g. `range(MAX_SAFE)` — the per-window
+  // `end` (position + chunk) overflowed MAX_SAFE_INTEGER and `readWindow`
+  // rejected it with a bare EINVAL, so `streamBase64` threw while `text()`,
+  // `getInfo().size`, and every `streamBytes`-backed producer answered empty.
+  // The sub-window end is now clamped into the safe-integer domain, so all four
+  // read methods agree on empty. The nested-open-ended test above exercised
+  // only `text()`/`getInfo()`, never `streamBase64`, and so missed this.
+  const max = BigInt(Number.MAX_SAFE_INTEGER);
+  const blob = makeBlobRefExo(bytesOf('hello world\n')); // 12 bytes
+  const farOpen = await E(blob).range(max); // [MAX_SAFE, EOF) — empty
+  // The three methods that already agreed on empty.
+  t.is(await E(farOpen).text(), '');
+  t.is((await E(farOpen).getInfo()).size, 0n);
+  // The method the fuzzer found throwing: it must drain to empty, not EINVAL.
+  t.deepEqual(await collectBytes(farOpen), new Uint8Array(0));
+  // Just inside the throwing threshold (start > MAX_SAFE − 48 KiB) drains empty.
+  const nearMax = await E(blob).range(max - 1n);
+  t.deepEqual(await collectBytes(nearMax), new Uint8Array(0));
+});
+
 test('text decoding is position-independent across a BOM (whole-value and window agree)', async t => {
   const preserveDecoder = new TextDecoder('utf-8', { ignoreBOM: true });
   // An interior U+FEFF (its UTF-8 bytes begin at offset 3, not 0) is literal
