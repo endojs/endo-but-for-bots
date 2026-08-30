@@ -1884,6 +1884,35 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 mod tests {
     use super::*;
 
+    /// Regression for continuous-fuzz finding `66facfd52ae8c673` (target
+    /// `differential_source`). The exact 3-byte minimized input folds into
+    /// arithmetic whose result is the exactly representable double
+    /// `51298825763029616`. XS renders that exact integer while ironhorse uses
+    /// the shorter round-tripping decimal `51298825763029620`; both strings
+    /// parse to the same `f64`. This is the same oracle-rendering class as
+    /// finding `d99d263fcf6ca7a7`, so the numeric `results_agree` comparison
+    /// must suppress the false divergence.
+    #[test]
+    fn finding_66facfd52ae8c673_large_integer_dtoa_agrees() {
+        let data: &[u8] = include_bytes!(
+            "../tests/fixtures/finding-66facfd52ae8c673.input.bin"
+        );
+        assert_eq!(
+            data.len(),
+            3,
+            "the minimized finding remains exactly three bytes"
+        );
+
+        let program = gen_program(data);
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(divergence) => panic!(
+                "finding 66facfd52ae8c673 must not diverge: {:?}",
+                divergence
+            ),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `d99d263fcf6ca7a7` (target
     /// `differential_source`). The 5-byte input `2d 57 27 48 86` folds into
     /// `((729808896 && …) * ((… * (729808896 % 603979776)) % 729808896))`,
