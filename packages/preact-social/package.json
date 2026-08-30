@@ -61,14 +61,14 @@
     "preact": "^10.0.0 || ^11.0.0"
   },
   "devDependencies": {
-    "@vitest/browser": "^4.1.10",
-    "@vitest/browser-playwright": "^4.1.10",
+    "@vitest/browser": "^4.1.11",
+    "@vitest/browser-playwright": "^4.1.11",
     "eslint": "catalog:dev",
     "playwright": "^1.62.1",
     "preact": "^10.29.8",
     "ses": "workspace:^",
     "vite": "^8.0.16",
-    "vitest": "^4.1.10"
+    "vitest": "^4.1.11"
   },
   "files": [
     "src",
