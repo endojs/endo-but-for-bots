@@ -206,8 +206,22 @@ async function* streamWindowBase64(source, start, end) {
     if (end !== undefined && position >= end) {
       return;
     }
+    // Clamp the sub-window end into the safe-integer domain, matching
+    // `intersectInterval`'s composed-offset clamp. Without this, an open-ended
+    // selection whose `position` sits within one chunk of `MAX_SAFE_INTEGER`
+    // (a legitimate empty attenuation, e.g. `range(MAX_SAFE)`) would compute a
+    // `windowEnd` past `MAX_SAFE_INTEGER`, which `readWindow` rejects with
+    // EINVAL instead of short-reading to empty. Content cannot exist past
+    // `MAX_SAFE_INTEGER`, so clamping there still reads to end-of-content.
     const windowEnd =
-      end === undefined ? position + chunk : minBigInt(position + chunk, end);
+      end === undefined
+        ? minBigInt(position + chunk, MAX_SAFE_INTEGER)
+        : minBigInt(position + chunk, end);
+    if (windowEnd <= position) {
+      // The selection begins at or past the safe-integer domain: no content
+      // can exist here, so the stream is empty.
+      return;
+    }
     const requested = windowEnd - position;
     // eslint-disable-next-line no-await-in-loop
     const bytes = await readWindow(position, windowEnd);
