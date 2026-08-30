@@ -1539,6 +1539,55 @@ pub struct Divergence {
     pub detail: String,
 }
 
+/// Whether two completion result strings denote the same guest value.
+///
+/// Byte-identical strings agree. Beyond that, a **Number** completion is
+/// compared by its IEEE-754 double rather than its decimal spelling. XS's
+/// `fx_dtoa` renders some large integer-valued doubles in a non-shortest,
+/// exact-integer form — finding `d99d263fcf6ca7a7` reproduced
+/// `327155712 * ((327155712 * (729808896 % 603979776)) % 729808896)`, whose
+/// value is the exactly-representable double `57632001481506816`, which XS
+/// prints verbatim (17 digits). ironhorse — like V8/SpiderMonkey and
+/// ECMA-262 §6.1.6.1.20's "k is as small as possible" — prints the *shortest*
+/// round-tripping decimal, `57632001481506820` (16 digits). Both spellings
+/// parse back to the identical double, so the two engines computed the same
+/// value and disagree only on rendering; forcing byte-identity would make
+/// ironhorse reproduce XS's non-shortest, non-conformant rendering.
+///
+/// Comparing the parsed doubles suppresses that spurious spelling divergence
+/// while still flagging every genuine value divergence: two *different*
+/// doubles never share a parse (a decimal string parses to exactly one
+/// nearest double), so `a.to_bits() == b.to_bits()` fails the moment the
+/// engines actually computed different numbers.
+fn results_agree(oracle: &str, ironhorse: &str) -> bool {
+    if oracle == ironhorse {
+        return true;
+    }
+    match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
+        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
+        _ => false,
+    }
+}
+
+/// Parse a completion string as the ECMAScript `String()` of a finite
+/// Number, or `None` when it is not a plain decimal Number spelling — so
+/// `"Infinity"`, `"NaN"`, booleans, and string results fall through to the
+/// byte comparison in [`results_agree`] (and `Infinity`/`NaN` already match
+/// byte-for-byte anyway). The character allow-list is what keeps Rust's
+/// float parser from accepting `inf`/`nan`/`infinity`, which JS never prints.
+fn as_ecma_number(s: &str) -> Option<f64> {
+    if s.is_empty() {
+        return None;
+    }
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
+    {
+        return None;
+    }
+    s.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
 /// Target 1 body: run `source` on both engines, returning `Err` on any
 /// completion / result / computron divergence. `Ok(())` also covers the
 /// legitimate "ironhorse reached an opcode outside the stage-1 subset" case
@@ -1566,7 +1615,7 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
         });
     }
     if oracle.completed {
-        if oracle.result != ironhorse.result {
+        if !results_agree(&oracle.result, &ironhorse.result) {
             return Err(Divergence {
                 source: source.to_string(),
                 detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
@@ -1621,7 +1670,7 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
         });
     }
     if oracle.completed {
-        if oracle.result != ironhorse.result {
+        if !results_agree(&oracle.result, &ironhorse.result) {
             return Err(Divergence {
                 source: source.to_string(),
                 detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
@@ -1671,7 +1720,7 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
             ),
         });
     }
-    if oracle.completed && oracle.result != ironhorse.result {
+    if oracle.completed && !results_agree(&oracle.result, &ironhorse.result) {
         return Err(Divergence {
             source: source.to_string(),
             detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
@@ -1834,6 +1883,48 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for continuous-fuzz finding `d99d263fcf6ca7a7` (target
+    /// `differential_source`). The 5-byte input `2d 57 27 48 86` folds into
+    /// `((729808896 && …) * ((… * (729808896 % 603979776)) % 729808896))`,
+    /// whose value is the exactly-representable double `57632001481506816`.
+    /// XS's `fx_dtoa` prints that double verbatim as its 17-digit exact
+    /// integer, whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's
+    /// shortest-round-tripping rule — prints the 16-digit `57632001481506820`.
+    /// Both denote the identical double, so the engines agree on the value and
+    /// diverge only on decimal spelling; the differential check must not read
+    /// that as a finding.
+    #[test]
+    fn finding_d99d263fcf6ca7a7_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 749f2021f82cf2664d886690b5e87184f084e600df531f9ab232e3f64e09a4f9).
+        let data: &[u8] = &[0x2d, 0x57, 0x27, 0x48, 0x86];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer arithmetic whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding d99d263fcf6ca7a7 must not diverge: {:?}", d),
+        }
+    }
+
+    #[test]
+    fn results_agree_on_equal_doubles_spelled_differently() {
+        // The finding's two renderings of the same double.
+        assert!(results_agree("57632001481506816", "57632001481506820"));
+        // A genuine value divergence is still caught.
+        assert!(!results_agree("57632001481506816", "57632001481506824"));
+        assert!(!results_agree("3", "4"));
+        // Non-numeric completions compare byte-for-byte.
+        assert!(results_agree("true", "true"));
+        assert!(!results_agree("true", "false"));
+        assert!(!results_agree("Infinity", "1e999"));
+        // `Infinity`/`NaN` are not parsed as numbers (they match as strings).
+        assert!(as_ecma_number("Infinity").is_none());
+        assert!(as_ecma_number("NaN").is_none());
+        assert!(as_ecma_number("").is_none());
+    }
 
     /// Regression for continuous-fuzz finding `493390fc03979205` (target
     /// `differential_regexp_surface`). The 4-byte input folds into a deeply
