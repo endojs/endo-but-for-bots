@@ -21,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -48,7 +48,7 @@ if (!available) {
 }
 
 // Wire swissnums are (immutable) bytes, as `enlivenSturdyRef` encodes.
-const SHELL_SWISSNUM = bytesToImmutable(new TextEncoder().encode('shell'));
+const SHELL_SWISSNUM = frozenBytes(new TextEncoder().encode('shell'));
 
 const COUNTER_SOURCE = `
 (() => {

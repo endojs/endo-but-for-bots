@@ -16,6 +16,9 @@
     },
     {
       "path": "../is-well-formed-string/tsconfig.composite.json"
+    },
+    {
+      "path": "../utf8/tsconfig.composite.json"
     }
   ]
 }

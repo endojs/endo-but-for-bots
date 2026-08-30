@@ -153,6 +153,22 @@ test('filterOnlyRules keeps an onlyStrict case in the strict and module modes on
   }
 });
 
+test('onlyRaw keeps direct bare-engine scenarios only', async () => {
+  const scenarios = await collect(
+    scenariosForTests(
+      asyncIterable([fakeCase({ flags: ['onlyRaw'] })]),
+      ['xs', 'sesXs', 'sesNode'],
+      {},
+    ),
+  );
+  assert.ok(scenarios.length > 0);
+  for (const scenario of scenarios) {
+    assert.equal(scenario.agent, 'xs');
+    assert.equal(scenario.lockdown, false);
+    assert.equal(scenario.compartment, false);
+  }
+});
+
 // --- filterNoRules: the parallel-but-differently-cased twin of filterOnlyRules
 
 test('filterNoRules drops a noStrict case from the strict and module modes', async () => {

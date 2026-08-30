@@ -1,6 +1,6 @@
 // @ts-check
 
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 
 /**
  * @param {Uint8Array} left
@@ -86,14 +86,15 @@ export function compareUint8Arrays(
 }
 
 /**
- * Compare two immutable ArrayBuffers
- * @param {ArrayBufferLike} left
- * @param {ArrayBufferLike} right
+ * Compare two byteArray-passable values. Each is a `Uint8Array`: a plain
+ * mutable one, a genuine frozen view over an immutable `ArrayBuffer`, or an
+ * emulated `@endo/immutable-arraybuffer` wrapper (which reports
+ * `ArrayBuffer.isView === false`).
+ *
+ * @param {Uint8Array} left
+ * @param {Uint8Array} right
  * @returns {number}
  */
 export const compareImmutableArrayBuffers = (left, right) => {
-  return compareUint8Arrays(
-    bytesFromImmutable(left),
-    bytesFromImmutable(right),
-  );
+  return compareUint8Arrays(thawedBytes(left), thawedBytes(right));
 };

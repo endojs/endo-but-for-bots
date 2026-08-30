@@ -1,6 +1,5 @@
 // @ts-check
 import harden from '@endo/harden';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { Far } from '@endo/marshal';
 
 import {
@@ -98,18 +97,27 @@ import { makeSturdyRef } from '../client/sturdyrefs.js';
 const BOOTSTRAP_POSITION = '0';
 const STATE_VERSION = 2;
 
-/** @param {ArrayBufferLike | Uint8Array} bytes */
+const { isView } = ArrayBuffer;
+
+/**
+ * Hex-encode a byteArray `Uint8Array`. A byteArray passable is always a
+ * whole-buffer-spanning `Uint8Array` (issue #573), never a bare
+ * `ArrayBufferLike` nor some other `ArrayBufferView`, so this is typed
+ * `Uint8Array`. The runtime `isView` branch is *not* buffer-vs-view type
+ * generality — it is tolerance for the single emulation infidelity of the
+ * `@endo/immutable-arraybuffer` shim: an emulated frozen wrapper (as
+ * `makeSessionId`/`frozenBytes` yield) is *typed* `Uint8Array` yet is a plain
+ * object that reports `ArrayBuffer.isView === false` and is not
+ * integer-indexable, so it must first be copied into a fresh mutable
+ * `Uint8Array`. A genuine view — including one over a native immutable buffer
+ * — is read in place. This mirrors `@endo/bytes`' `toIndexableUint8Array`.
+ *
+ * @param {Uint8Array} bytes
+ */
 const hexFromBytes = bytes => {
-  let view;
-  if (bytes instanceof Uint8Array) {
-    view = bytes;
-  } else {
-    view = new Uint8Array(/** @type {ArrayBuffer} */ (bytes));
-    if (view.length === 0 && bytes.byteLength > 0) {
-      // An endo immutable ArrayBuffer: view it via its transfer seam.
-      view = bytesFromImmutable(bytes);
-    }
-  }
+  const view = isView(bytes)
+    ? bytes
+    : new Uint8Array(/** @type {Uint8Array} */ (bytes).slice(0));
   return Array.from(view, byte => byte.toString(16).padStart(2, '0')).join('');
 };
 
@@ -126,7 +134,7 @@ const bytesFromHex = hex => {
  * The publications table key for a swissnum in either of its accepted
  * forms.
  *
- * @param {string | Uint8Array | ArrayBufferLike} swissnum
+ * @param {string | Uint8Array} swissnum
  */
 const swissnumHex = swissnum =>
   typeof swissnum === 'string'
@@ -1066,7 +1074,7 @@ export const makeOcapnHub = ({
         const handoffReceive = makeHandoffReceiveDescriptor(
           signedGive,
           handoffCount,
-          /** @type {any} */ (bytesFromHex(session.identity.sessionId).buffer),
+          /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
           selfAtExporter.publicKey.id,
         );
         const signature = cryptography.signHandoffReceive(
@@ -1213,9 +1221,8 @@ export const makeOcapnHub = ({
     } = handoffGive;
 
     // Our peer must be the authorized receiver, on this same session.
-    // (Bytestrings in this codec are ArrayBuffers, not views.)
     const peerPublicKey = cryptography.makeOcapnPublicKey(
-      bytesFromHex(identity.peerPublicKeyQ).buffer,
+      bytesFromHex(identity.peerPublicKeyQ),
     );
     if (hexFromBytes(receivingSide) !== hexFromBytes(peerPublicKey.id)) {
       throw Error('ocapn hub: withdraw-gift: receiver key mismatch');
@@ -1239,7 +1246,7 @@ export const makeOcapnHub = ({
       throw Error('ocapn hub: withdraw-gift: unknown gifter session');
     }
     const gifterPublicKey = cryptography.makeOcapnPublicKey(
-      bytesFromHex(gifterSession.identity.peerPublicKeyQ).buffer,
+      bytesFromHex(gifterSession.identity.peerPublicKeyQ),
     );
     cryptography.assertHandoffGiveSignatureValid(
       handoffGive,
@@ -1926,7 +1933,7 @@ export const makeOcapnHub = ({
      *   instead of being dropped (the policy for sessions from beyond
      *   the process boundary)
      * @param {(error: unknown) => void} [powers.onAbort]
-     * @param {{ sessionId: Uint8Array | ArrayBufferLike, peerPublicKeyQ: Uint8Array | ArrayBufferLike, selfPrivateKeyBytes?: Uint8Array | ArrayBufferLike }} [powers.identity]
+     * @param {{ sessionId: Uint8Array, peerPublicKeyQ: Uint8Array, selfPrivateKeyBytes?: Uint8Array }} [powers.identity]
      *   the session's wire identity from the embedder's handshake
      *   (including the hub side's session private key, which signs
      *   gift handoff receives); omitted on reattach, the persisted

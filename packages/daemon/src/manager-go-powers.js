@@ -15,8 +15,8 @@
  */
 
 import { makePromiseKit } from '@endo/promise-kit';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { makeNetstringCapTP } from './connection.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { decodeEnvelope, readFrameFromStream } from './envelope.js';
@@ -222,7 +222,7 @@ export const makeDaemonicGoControlPowers = (
     const response = await spawnResponse;
 
     if (response.verb === 'error') {
-      const errorText = bytesToText(response.payload);
+      const errorText = decodeUtf8(response.payload);
       throw new Error(`Worker spawn failed: ${errorText}`);
     }
 
@@ -402,19 +402,19 @@ const encodeSpawnPayload = (command, args) => {
   const buf = [];
   cborHead(buf, CBOR_MAP, 2);
   // "command": text
-  const commandKey = bytesFromText('command');
+  const commandKey = encodeUtf8('command');
   cborHead(buf, CBOR_TEXT, commandKey.length);
   for (let i = 0; i < commandKey.length; i += 1) buf.push(commandKey[i]);
-  const commandVal = bytesFromText(command);
+  const commandVal = encodeUtf8(command);
   cborHead(buf, CBOR_TEXT, commandVal.length);
   for (let i = 0; i < commandVal.length; i += 1) buf.push(commandVal[i]);
   // "args": [text...]
-  const argsKey = bytesFromText('args');
+  const argsKey = encodeUtf8('args');
   cborHead(buf, CBOR_TEXT, argsKey.length);
   for (let i = 0; i < argsKey.length; i += 1) buf.push(argsKey[i]);
   cborHead(buf, CBOR_ARRAY, args.length);
   for (const arg of args) {
-    const argVal = bytesFromText(arg);
+    const argVal = encodeUtf8(arg);
     cborHead(buf, CBOR_TEXT, argVal.length);
     for (let i = 0; i < argVal.length; i += 1) buf.push(argVal[i]);
   }

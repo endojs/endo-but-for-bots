@@ -1,5 +1,3 @@
-import harden from '@endo/harden';
-
 // Capture a single `TextEncoder` at module load.
 // `TextEncoder` only ever emits UTF-8 by spec, so the instance is
 // stateless and safe to share across calls.
@@ -13,5 +11,4 @@ const textEncoder = new TextEncoder();
  * @param {string} s
  * @returns {Uint8Array}
  */
-export const bytesFromText = s => textEncoder.encode(s);
-harden(bytesFromText);
+export const encodeUtf8 = s => textEncoder.encode(s);

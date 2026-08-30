@@ -1,6 +1,7 @@
 import type { Reader, Writer } from '@endo/stream';
 import type { OcapnCodec } from '@endo/ocapn/codec-interface';
 import type { OcapnLocation, OcapnSignature } from '@endo/ocapn/components';
+import type { SessionId } from '@endo/ocapn/client/types';
 
 /**
  * 32-byte Ed25519 signing keys. The same keypair backs both the Noise
@@ -78,7 +79,7 @@ export interface OcapnNoiseTransport {
  * `@endo/ocapn`'s `NetworkSession` is itself stream-based.
  */
 export interface OcapnNoiseSession {
-  sessionId: ArrayBufferLike;
+  sessionId: SessionId;
   selfIdentity: {
     location: OcapnLocation;
     locationSignature: OcapnSignature;
@@ -91,7 +92,7 @@ export interface OcapnNoiseSession {
   };
   remoteLocation: OcapnLocation;
   remoteLocationSignature: OcapnSignature;
-  remotePublicKeyBytes: ArrayBufferLike;
+  remotePublicKeyBytes: Uint8Array;
   isInitiator: boolean;
   reader: Reader<Uint8Array>;
   writer: Writer<Uint8Array>;

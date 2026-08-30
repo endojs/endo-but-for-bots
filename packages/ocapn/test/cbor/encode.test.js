@@ -1,7 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makeCborWriter } from '../../src/cbor/encode.js';
 import {
   cborToDiagnostic,
@@ -204,9 +204,7 @@ test('encode string rejects unpaired surrogates', t => {
 // ===== Byte Strings =====
 
 test('encode empty byte string', t => {
-  const { hex, diagnostic } = encode(w =>
-    w.writeBytestring(new ArrayBuffer(0)),
-  );
+  const { hex, diagnostic } = encode(w => w.writeBytestring(new Uint8Array(0)));
   t.is(hex, '40'); // Major 2, length 0
   t.is(diagnostic, "h''");
 });
@@ -214,7 +212,7 @@ test('encode empty byte string', t => {
 test('encode byte string', t => {
   const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
   const { hex, diagnostic } = encode(w =>
-    w.writeBytestring(bytesToImmutable(bytes)),
+    w.writeBytestring(frozenBytes(bytes)),
   );
   t.is(hex, '44deadbeef'); // Major 2, length 4, bytes
   t.is(diagnostic, "h'deadbeef'");

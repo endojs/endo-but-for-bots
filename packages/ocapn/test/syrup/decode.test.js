@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/test.js';
 
+import { equals } from '../../src/cbor/diagnostic/util.js';
 import { decodeSyrup } from '../../src/syrup/js-representation.js';
 import { table } from './_table.js';
 import { throws } from '../_util.js';
@@ -19,7 +20,7 @@ test('affirmative decode cases', t => {
     t.notThrows(() => {
       actual = decodeSyrup(bytes);
     }, desc);
-    t.deepEqual(actual, value, desc);
+    t.true(equals(actual, value), desc);
   }
 });
 

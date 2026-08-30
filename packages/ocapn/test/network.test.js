@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 import { makeQueue } from '@endo/stream';
+import { equals } from '../src/cbor/diagnostic/util.js';
 import { makeOcapn } from '../src/client/index.js';
 import { syrupCodec } from '../src/syrup/index.js';
 import { makeCryptography, makeSessionId } from '../src/cryptography.js';
@@ -198,7 +199,7 @@ test('provideSession routes through OcapnNetwork.provideSession and adopts its i
   const peerKey = debug.sessionManager.getPeerPublicKeyForSessionId(sessionId);
   if (!peerKey) throw Error('expected peer public key registered for session');
   t.is(peerKey.bytes.byteLength, 32);
-  t.deepEqual(peerKey.id, remoteKeyPair.publicKey.id);
+  t.true(equals(peerKey.id, remoteKeyPair.publicKey.id));
 
   session.abort();
   t.true(closed, 'NetworkSession.close runs when the session aborts');

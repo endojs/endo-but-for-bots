@@ -11,7 +11,7 @@ import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
 
 import { encodeBase64 } from '@endo/base64';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
@@ -979,7 +979,7 @@ const hashIdentityConfig = configText => {
         !/^\s*\[branch /u.test(line) &&
         !/^\s*(url|pushurl|remote|merge)\s*=/u.test(line),
     );
-  return encodeHex(sha256(bytesFromText(stableLines.join('\n'))));
+  return encodeHex(sha256(encodeUtf8(stableLines.join('\n'))));
 };
 harden(hashIdentityConfig);
 

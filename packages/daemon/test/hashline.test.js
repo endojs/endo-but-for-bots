@@ -4,7 +4,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { encodeHex } from '@endo/hex';
 import { sha256 } from '@endo/sha256';
 
@@ -26,7 +26,7 @@ import {
 const sha256Hex = bytes => encodeHex(sha256(bytes));
 
 /** @param {string} text */
-const hashOfText = text => sha256Hex(bytesFromText(text));
+const hashOfText = text => sha256Hex(encodeUtf8(text));
 
 /**
  * A patch envelope against `text` with anchors computed from the live

@@ -7,8 +7,8 @@ import harden from '@endo/harden';
  */
 
 import test from '@endo/ses-ava/test.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeHex } from '@endo/hex';
 
 import { makeSelector } from '../../src/selector.js';
@@ -22,9 +22,9 @@ import {
 
 /**
  * @param {string} hex
- * @returns {ArrayBuffer}
+ * @returns {Uint8Array}
  */
-const hexToImmutableBuffer = hex => bytesToImmutable(decodeHex(hex));
+const hexToImmutableBuffer = hex => frozenBytes(decodeHex(hex));
 
 /** @type {CodecTestEntry[]} */
 export const table = [
@@ -155,20 +155,14 @@ export const table = [
     makeValue: testKit => ({
       type: 'op:deliver',
       to: testKit.referenceKit.provideRemoteObjectValue(0n),
-      args: [
-        makeSelector('fetch'),
-        bytesToImmutable(bytesFromText('swiss-number')),
-      ],
+      args: [makeSelector('fetch'), frozenBytes(encodeUtf8('swiss-number'))],
       answerPosition: 3n,
       resolveMeDesc: testKit.makeLocalObject(5n),
     }),
     makeExpectedValue: testKit => ({
       type: 'op:deliver',
       to: testKit.makeLocalObject(0n),
-      args: [
-        makeSelector('fetch'),
-        bytesToImmutable(bytesFromText('swiss-number')),
-      ],
+      args: [makeSelector('fetch'), frozenBytes(encodeUtf8('swiss-number'))],
       answerPosition: 3n,
       resolveMeDesc: testKit.referenceKit.provideRemoteObjectValue(5n),
     }),
@@ -325,7 +319,7 @@ export const table = [
         makeSelector('foo'),
         1n,
         false,
-        bytesToImmutable(Uint8Array.from([0x62, 0x61, 0x72])),
+        frozenBytes(Uint8Array.from([0x62, 0x61, 0x72])),
         ['baz'],
       ]),
       answerPosition: false,
@@ -338,7 +332,7 @@ export const table = [
         makeSelector('foo'),
         1n,
         false,
-        bytesToImmutable(Uint8Array.from([0x62, 0x61, 0x72])),
+        frozenBytes(Uint8Array.from([0x62, 0x61, 0x72])),
         ['baz'],
       ],
       answerPosition: false,

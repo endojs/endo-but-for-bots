@@ -1,11 +1,46 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
 import { passStyleOf } from '@endo/pass-style';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
-import { isSturdyRef, getSturdyRefDetails } from '../src/client/sturdyrefs.js';
+import {
+  decodeSwissnum,
+  encodeSwissnum,
+  swissnumFromBytes,
+  swissnumToBytes,
+} from '../src/client/util.js';
+import {
+  isSturdyRef,
+  getSturdyRefDetails,
+  makeSturdyRefTracker,
+} from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
+
+test('swissnum text conversion rejects U+0080 without changing raw bytes', t => {
+  t.throws(() => encodeSwissnum('\u0080'), { instanceOf: RangeError });
+
+  const swissNum = swissnumFromBytes(Uint8Array.of(0x80));
+  t.throws(() => decodeSwissnum(swissNum), { instanceOf: RangeError });
+  t.deepEqual([...swissnumToBytes(swissNum)], [0x80]);
+});
+
+test('SturdyRef lookup preserves non-ASCII swissnum bytes', async t => {
+  /** @type {unknown[]} */
+  const lookedUpSecrets = [];
+  const tracker = makeSturdyRefTracker({
+    get: secret => {
+      lookedUpSecrets.push(secret);
+      return 'found';
+    },
+  });
+
+  t.is(await tracker.lookup(swissnumFromBytes(Uint8Array.of(0x80))), 'found');
+  const [lookedUpSecret] = lookedUpSecrets;
+  t.true(lookedUpSecret instanceof Uint8Array);
+  t.deepEqual([.../** @type {Uint8Array} */ (lookedUpSecret)], [0x80]);
+});
 
 testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
   const { client: clientA, location: locationB } = await makeTestClient({

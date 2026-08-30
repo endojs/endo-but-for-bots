@@ -4,5 +4,9 @@
   "compilerOptions": {
     "composite": true
   },
-  "references": []
+  "references": [
+    {
+      "path": "../harden/tsconfig.composite.json"
+    }
+  ]
 }

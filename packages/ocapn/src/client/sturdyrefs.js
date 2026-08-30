@@ -1,3 +1,4 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 /**
@@ -6,9 +7,15 @@
  */
 
 import harden from '@endo/harden';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { makeTagged } from '@endo/pass-style';
-import { encodeSwissnum, swissnumFromBytes } from './util.js';
+import {
+  decodeSwissnum,
+  encodeSwissnum,
+  swissnumFromBytes,
+  swissnumToBytes,
+} from './util.js';
 
 /**
  * @import { CopyTagged } from '@endo/pass-style'
@@ -101,7 +108,7 @@ export const enlivenSturdyRef = async (
 /**
  * @typedef {object} SturdyRefTracker
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
- * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
+ * @property {(secretBytes: Uint8Array) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
  *   ASCII-decoded string (for printable secrets) or the raw bytes (for
@@ -113,25 +120,22 @@ export const enlivenSturdyRef = async (
  * @returns {SturdyRefTracker}
  */
 export const makeSturdyRefTracker = locator => {
-  const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
     makeSturdyRef: (location, secret) => makeSturdyRef(location, secret),
     lookup: async secretBytes => {
-      const view =
-        secretBytes instanceof Uint8Array
-          ? secretBytes
-          : new Uint8Array(/** @type {ArrayBuffer} */ (secretBytes.slice()));
+      const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
       // Try ASCII decoding first so locators keyed by friendly string
       // names continue to match. If the bytes aren't valid ASCII (e.g.
       // a Spritely-style random 24-byte secret), fall back to passing
       // the raw bytes through; locators that index by bytes can match
       // those, locators that don't will simply return undefined.
+      let secret;
       try {
-        const secret = textDecoder.decode(view);
-        return locator.get(secret);
+        secret = decodeSwissnum(swissNum);
       } catch {
-        return locator.get(view);
+        return locator.get(swissnumToBytes(swissNum));
       }
+      return locator.get(secret);
     },
   });
 };

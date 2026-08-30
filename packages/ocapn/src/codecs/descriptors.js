@@ -1,3 +1,4 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 /**
@@ -11,7 +12,7 @@
  */
 
 import harden from '@endo/harden';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -50,7 +51,7 @@ import { encodeSwissnum } from '../client/util.js';
  * @property {OcapnLocation} exporterLocation
  * @property {SessionId} exporterSessionId
  * @property {PublicKeyId} gifterSideId
- * @property {ArrayBufferLike} giftId
+ * @property {Uint8Array} giftId
  */
 
 /**
@@ -321,13 +322,7 @@ export const makeDescCodecs = referenceKit => {
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      const textDecoder = new TextDecoder('ascii', { fatal: true });
-      const secretBytes =
-        swissNum instanceof Uint8Array
-          ? swissNum
-          : new Uint8Array(/** @type {ArrayBuffer} */ (swissNum.slice()));
-      const secret = textDecoder.decode(secretBytes);
-      const value = referenceKit.makeSturdyRef(node, secret);
+      const value = referenceKit.makeSturdyRef(node, swissNum);
       return value;
     },
     /**
@@ -345,12 +340,7 @@ export const makeDescCodecs = referenceKit => {
       // wire verbatim so non-ASCII swissnums (e.g. Spritely Goblins'
       // 24-byte randoms) round-trip without corruption.
       const wireSecret =
-        typeof secret === 'string'
-          ? /** @type {ArrayBufferLike} */ (encodeSwissnum(secret))
-          : secret.buffer.slice(
-              secret.byteOffset,
-              secret.byteOffset + secret.byteLength,
-            );
+        typeof secret === 'string' ? encodeSwissnum(secret) : secret;
       writer.writeBytestring(wireSecret);
     },
     2, // 2 fields: node, swissNum
@@ -410,7 +400,7 @@ const makeSigEnvelope = (object, signature) => {
  * @param {OcapnLocation} exporterLocation
  * @param {SessionId} exporterSessionId
  * @param {PublicKeyId} gifterSideId
- * @param {ArrayBufferLike} giftId
+ * @param {Uint8Array} giftId
  * @returns {HandoffGive}
  */
 export const makeHandoffGiveDescriptor = (
@@ -433,12 +423,12 @@ export const makeHandoffGiveDescriptor = (
 /**
  * @param {HandoffGive} handoffGive
  * @param {OcapnCodec} codec
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const serializeHandoffGive = (handoffGive, codec) => {
   const writer = codec.makeWriter();
   DescHandoffGiveCodec.write(handoffGive, writer);
-  return bytesToImmutable(writer.getBytes());
+  return frozenBytes(writer.getBytes());
 };
 
 /**
@@ -486,10 +476,10 @@ export const makeHandoffReceiveSigEnvelope = (handoffReceive, signature) => {
 /**
  * @param {HandoffReceive} handoffReceive
  * @param {OcapnCodec} codec
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const serializeHandoffReceive = (handoffReceive, codec) => {
   const writer = codec.makeWriter();
   DescHandoffReceiveCodec.write(handoffReceive, writer);
-  return bytesToImmutable(writer.getBytes());
+  return frozenBytes(writer.getBytes());
 };

@@ -1,3 +1,4 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 /**
@@ -5,16 +6,16 @@
  * @import { LocationId, SwissNum } from './types.js'
  */
 
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { encodeAscii } from '@endo/ascii/encode.js';
+import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex } from '@endo/hex';
 
 /**
- * @param {ArrayBufferLike} value
+ * @param {Uint8Array} value
  * @returns {string}
  */
 export const toHex = value => {
-  return encodeHex(bytesFromImmutable(value));
+  return encodeHex(thawedBytes(value));
 };
 
 /**
@@ -49,14 +50,21 @@ export const locationToLocationId = location => {
 };
 
 const swissnumDecoder = new TextDecoder('ascii', { fatal: true });
-const swissnumEncoder = new TextEncoder();
 
 /**
- * @param {ArrayBufferLike} value
+ * @param {SwissNum} value
  * @returns {string}
  */
 export const decodeSwissnum = value => {
-  return swissnumDecoder.decode(bytesFromImmutable(value));
+  const bytes = thawedBytes(value);
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (bytes[i] > 0x7f) {
+      throw RangeError(
+        `Non-ASCII byte 0x${bytes[i].toString(16)} at offset ${i} of swissnum`,
+      );
+    }
+  }
+  return swissnumDecoder.decode(bytes);
 };
 
 /**
@@ -64,17 +72,8 @@ export const decodeSwissnum = value => {
  * @returns {SwissNum}
  */
 export const encodeSwissnum = value => {
-  // Validate the value is strictly valid ASCII
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code > 127) {
-      throw new Error(
-        `Invalid ASCII character in swissnum at position ${i}: ${value[i]}`,
-      );
-    }
-  }
-  // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
-  return bytesToImmutable(swissnumEncoder.encode(value));
+  // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
+  return frozenBytes(encodeAscii(value, 'swissnum'));
 };
 
 /**
@@ -91,8 +90,8 @@ export const encodeSwissnum = value => {
  * @returns {SwissNum}
  */
 export const swissnumFromBytes = bytes => {
-  // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
-  return bytesToImmutable(bytes);
+  // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
+  return frozenBytes(bytes);
 };
 
 /**
@@ -104,5 +103,5 @@ export const swissnumFromBytes = bytes => {
  * @returns {Uint8Array}
  */
 export const swissnumToBytes = swissNum => {
-  return bytesFromImmutable(swissNum);
+  return thawedBytes(swissNum);
 };

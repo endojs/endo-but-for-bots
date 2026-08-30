@@ -13,12 +13,12 @@
 
 import '@endo/init/debug.js';
 
-import test from 'ava';
-import { E } from '@endo/far';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { E } from '@endo/far';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import test from 'ava';
 
 import { makeInMemoryFilesystem } from '../src/fs/extended/in-memory.js';
 import { collectBytes } from '../src/fs/extended/helpers.js';
@@ -38,8 +38,8 @@ const readerOf = frames =>
     })(),
   );
 
-const utf8 = s => bytesFromText(s);
-const fromUtf8 = b => bytesToText(b);
+const utf8 = s => encodeUtf8(s);
+const fromUtf8 = b => decodeUtf8(b);
 
 const writeBytes = async (writerRef, bytes) => {
   const writer = iterateBytesWriter(writerRef);

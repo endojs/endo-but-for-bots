@@ -64,6 +64,7 @@ import { filterCommands } from './command-registry.js';
  * hardened — both sides assign onto it.
  *
  * @typedef {object} CommandSelectorController
+ * @property {CommandMenuState | null} state
  * @property {(s: CommandMenuState | null) => void} [setState]
  * @property {(index: number) => void} [onHover]
  * @property {(index: number) => void} [onPick]
@@ -166,6 +167,7 @@ const CommandSelectorRoot = ({ controller }) => {
 
   useEffect(() => {
     controller.setState = setState;
+    setState(controller.state);
     return () => {
       if (controller.setState === setState) delete controller.setState;
     };
@@ -213,7 +215,7 @@ export const commandSelectorComponent = ({
   // component's effect). Intentionally NOT hardened — the component writes its
   // setter and the host writes the row callbacks onto it.
   /** @type {CommandSelectorController} */
-  const controller = {};
+  const controller = { state: null };
 
   /**
    * Push the current selection state into the Preact tree and, after the tree
@@ -222,14 +224,13 @@ export const commandSelectorComponent = ({
    * outside the vnode tree; no DOM node is ever handed to a confined vnode.
    */
   const render = () => {
+    controller.state = harden({
+      commands: filteredCommands,
+      selectedIndex,
+      hasFilter: currentFilter !== '',
+    });
     if (controller.setState) {
-      controller.setState(
-        harden({
-          commands: filteredCommands,
-          selectedIndex,
-          hasFilter: currentFilter !== '',
-        }),
-      );
+      controller.setState(controller.state);
     }
     // Keep the selected item in view when navigating with arrow keys. Preact
     // flushes the render synchronously here, but guard with optional chaining
@@ -255,8 +256,9 @@ export const commandSelectorComponent = ({
     $menu.classList.remove('visible');
     currentFilter = '';
     selectedIndex = 0;
+    controller.state = null;
     if (controller.setState) {
-      controller.setState(null);
+      controller.setState(controller.state);
     }
   };
 

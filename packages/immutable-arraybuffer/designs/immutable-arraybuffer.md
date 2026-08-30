@@ -229,7 +229,7 @@ The `[toStringTag]` slot is *not* installed on `ArrayBuffer.prototype`
 by the shim.
 The genuine `ArrayBuffer.prototype` already has
 `[toStringTag] = 'ArrayBuffer'`, and overwriting it to
-`'ImmutableArrayBuffer'` would break every genuine ArrayBuffer's
+`'emulated immutable ArrayBuffer'` would break every genuine ArrayBuffer's
 `Object.prototype.toString` output.
 
 **Design departure (recorded post-implementation, barrister panel round 1):**
@@ -244,19 +244,21 @@ immutable reads as `[object ArrayBuffer]`, concordance routes into
 (`Received an instance of ArrayBuffer`) is not handled gracefully but
 instead kills 13 ocapn codec test cases.
 The implementation restores the
-`[Symbol.toStringTag] = 'ImmutableArrayBuffer'` slot as an own property
+`[Symbol.toStringTag] = 'emulated immutable ArrayBuffer'` slot as an own property
 on each emulated immutable buffer (installed via `defineProperty` in
 `makeImmutableArrayBufferInternal`), *not* on the shared prototype.
 Genuine ArrayBuffers continue to inherit `'ArrayBuffer'` from the
 prototype; emulated immutables carry their own
-`'ImmutableArrayBuffer'` slot.
+`'emulated immutable ArrayBuffer'` slot.
 The design's "no intermediate prototype" property is preserved (the
 emulated immutable still inherits directly from `ArrayBuffer.prototype`);
 the cost is one extra own-property per emulated instance.
 
 The post-departure observable contract:
 `Object.prototype.toString.call(immuAB)` returns
-`'[object ImmutableArrayBuffer]'` (as it did in master);
+`'[object emulated immutable ArrayBuffer]'` (master tagged these
+`'ImmutableArrayBuffer'`; this fork's tag names the emulation explicitly
+per review of endo-but-for-bots#475);
 `Object.prototype.toString.call(genuineAB)` returns `'[object ArrayBuffer]'`
 (unchanged).
 The `immutable` accessor remains the canonical brand check for callers
@@ -295,9 +297,9 @@ The package is now side-effect-only: there is no way to import a named
 binding from `@endo/immutable-arraybuffer`.
 Callers detect immutability via the `ArrayBuffer.prototype.immutable`
 accessor (after the shim has loaded) or via
-`Object.prototype.toString.call(buffer) === '[object ImmutableArrayBuffer]'`
+`Object.prototype.toString.call(buffer) === '[object emulated immutable ArrayBuffer]'`
 (which works even before the shim loads, because the
-`'ImmutableArrayBuffer'` toStringTag is installed as an own-property of
+`'emulated immutable ArrayBuffer'` toStringTag is installed as an own-property of
 each emulated immutable instance).
 Callers convert genuine ArrayBuffers to emulated immutables via
 `buffer.sliceToImmutable(...)` and `buffer.transferToImmutable(...)`
@@ -478,7 +480,7 @@ explicitly:
   unchanged`.
 - `emulated immutable.resize throws TypeError` (the brand-check
   discriminates on WeakMap membership).
-- `Object.prototype.toString.call(immuAB) === '[object ImmutableArrayBuffer]'`
+- `Object.prototype.toString.call(immuAB) === '[object emulated immutable ArrayBuffer]'`
   (documents the purposeful-violation: the `[Symbol.toStringTag]` slot
   is installed as an own-property on each emulated immutable instance,
   not on the shared prototype, so genuine ArrayBuffers continue to read

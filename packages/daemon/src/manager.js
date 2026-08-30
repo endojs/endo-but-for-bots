@@ -14,8 +14,8 @@ import { makeError, q, X } from '@endo/errors';
 import { ZipWriter } from '@endo/zip/writer.js';
 import { encodeBase64 } from '@endo/base64';
 import { mapReader } from '@endo/stream';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
@@ -2211,7 +2211,7 @@ const makeDaemonCore = async (
     }
 
     const zip = new ZipWriter();
-    zip.write('compartment-map.json', bytesFromText(mapText));
+    zip.write('compartment-map.json', encodeUtf8(mapText));
 
     // Pipeline the per-module reads via Promise.all to avoid the
     // round-trip-per-file stall that a naive sequential walk would
@@ -2254,7 +2254,7 @@ const makeDaemonCore = async (
     }
     const sources = await Promise.all(moduleReads.map(r => r.srcP));
     moduleReads.forEach(({ archivePath }, i) => {
-      zip.write(archivePath, bytesFromText(sources[i]));
+      zip.write(archivePath, encodeUtf8(sources[i]));
     });
 
     return zip.snapshot();
@@ -2295,8 +2295,8 @@ const makeDaemonCore = async (
           );
           return pump(/** @type {any} */ (synPromise));
         },
-        text: async () => bytesToText(bytes),
-        json: async () => JSON.parse(bytesToText(bytes)),
+        text: async () => decodeUtf8(bytes),
+        json: async () => JSON.parse(decodeUtf8(bytes)),
         getInfo: () => info,
         /**
          * @param {bigint} offset

@@ -1,3 +1,4 @@
+test/ArrayBuffer/view-behavior-matrix.js
 test/Compartment/evaluate.js
 test/Compartment/import-hook/module-source-evaluate.js
 test/Compartment/import-hook/returns-no-promise.js
@@ -7,6 +8,8 @@ test/Compartment/import-now-hook/record-and-specifier-descriptor.js
 test/Compartment/import-now-hook/redirect-record.js
 test/Compartment/import-now-hook/returns-undefined.js
 test/Compartment/import-now-hook/source-specifier-descriptor.js
+test/TextDecoder/immutable-arraybuffer-intersection.js
+test/TextEncoder/immutable-arraybuffer-intersection.js
 test/freeze/monadic.js
 test/intrinsics/ArrayBuffer/prototype-slice.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js

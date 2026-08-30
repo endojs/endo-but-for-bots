@@ -19,7 +19,7 @@
  * See docs/cbor-encoding.md for the specification.
  */
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 import {
   makeCborReader as makeCborReaderState,
@@ -203,12 +203,12 @@ export class CborReader {
   }
 
   /**
-   * @returns {ArrayBufferLike}
+   * @returns {Uint8Array}
    */
   readBytestring() {
     this.#decrementRemaining();
     // Immutability conversion stays OCapN policy at the class layer.
-    return bytesToImmutable(readByteString(this.#reader));
+    return frozenBytes(readByteString(this.#reader));
   }
 
   /**
@@ -430,7 +430,7 @@ export class CborReader {
 
     if (major === MAJOR_BYTESTRING) {
       // Use raw function to avoid double-decrement
-      const value = bytesToImmutable(readByteString(this.#reader));
+      const value = frozenBytes(readByteString(this.#reader));
       return { type: 'bytestring', value };
     }
 

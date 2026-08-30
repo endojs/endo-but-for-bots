@@ -38,7 +38,8 @@
     "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/harden": "workspace:^",
-    "@endo/is-well-formed-string": "workspace:^"
+    "@endo/is-well-formed-string": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",

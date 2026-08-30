@@ -12,7 +12,7 @@
  */
 import test from '@endo/ses-ava/test.js';
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { makeOcapnHub } from '@endo/ocapn/hub';
 import { syrupCodec } from '@endo/ocapn/syrup';
@@ -28,7 +28,7 @@ import { makeTestOcapn } from './_util.js';
 
 const textEncoder = new TextEncoder();
 /** @param {string} text */
-const bytesOf = text => bytesToImmutable(textEncoder.encode(text));
+const bytesOf = text => frozenBytes(textEncoder.encode(text));
 const SHELL_SWISSNUM = bytesOf('shell');
 
 const COUNTER_SOURCE = `

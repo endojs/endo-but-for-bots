@@ -9,8 +9,8 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { E } from '@endo/far';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { createHash } from 'node:crypto';
 
 import {
@@ -74,7 +74,7 @@ const makeFakeBackend = (fixture, { tamper = new Set() } = {}) => {
           peerDependencies: record.peerDependencies,
           optionalDependencies: record.optionalDependencies,
         };
-        const bytes = bytesFromText(JSON.stringify(pj));
+        const bytes = encodeUtf8(JSON.stringify(pj));
         const treeRef = harden({ tag: 'tree', key });
         pjByTree.set(key, bytes);
         return harden({ treeRef, integrity: `sha512-fake-${key}` });
@@ -370,7 +370,7 @@ test('workspace: workspace: specifier resolves the member, mismatch diagnosed', 
       const member = members[name];
       return member === undefined
         ? undefined
-        : bytesFromText(JSON.stringify(member));
+        : encodeUtf8(JSON.stringify(member));
     },
   });
   const registry = makeEndoRegistry(backend);
@@ -403,8 +403,8 @@ test('table: LRU eviction past the configured bound', t => {
 
 test('readPackageJson is decoded from resolved trees during the walk', t => {
   // Guards the text round-trip the resolver relies on.
-  const bytes = bytesFromText(JSON.stringify({ name: 'x', version: '1' }));
-  t.deepEqual(JSON.parse(bytesToText(bytes)), {
+  const bytes = encodeUtf8(JSON.stringify({ name: 'x', version: '1' }));
+  t.deepEqual(JSON.parse(decodeUtf8(bytes)), {
     name: 'x',
     version: '1',
   });

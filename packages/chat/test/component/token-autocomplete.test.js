@@ -10,7 +10,6 @@ import { makeMockPowers } from '../helpers/mock-powers.js';
 import {
   createDOM,
   createInputElements,
-  tick,
   waitFor,
 } from '../helpers/dom-setup.js';
 
@@ -115,9 +114,6 @@ const setup = async (names = ['alice', 'bob', 'charlie']) => {
     // setup phase.
     externalPetNames: names,
   });
-
-  // Allow the confined root's effect to wire its controller before typing.
-  await tick(50);
 
   // Focus and set initial cursor
   $input.focus();

@@ -44,8 +44,8 @@ import { makeCapTP } from '@endo/captp';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { makeError, X } from '@endo/errors';
 
 import { makeDaemon } from './manager.js';
@@ -409,18 +409,18 @@ const encodeSpawnPayload = (command, args) => {
   /** @type {number[]} */
   const buf = [];
   cborHead(buf, CBOR_MAP, 2);
-  const commandKey = bytesFromText('command');
+  const commandKey = encodeUtf8('command');
   cborHead(buf, CBOR_TEXT, commandKey.length);
   for (let i = 0; i < commandKey.length; i += 1) buf.push(commandKey[i]);
-  const commandVal = bytesFromText(command);
+  const commandVal = encodeUtf8(command);
   cborHead(buf, CBOR_TEXT, commandVal.length);
   for (let i = 0; i < commandVal.length; i += 1) buf.push(commandVal[i]);
-  const argsKey = bytesFromText('args');
+  const argsKey = encodeUtf8('args');
   cborHead(buf, CBOR_TEXT, argsKey.length);
   for (let i = 0; i < argsKey.length; i += 1) buf.push(argsKey[i]);
   cborHead(buf, CBOR_ARRAY, args.length);
   for (const arg of args) {
-    const argVal = bytesFromText(arg);
+    const argVal = encodeUtf8(arg);
     cborHead(buf, CBOR_TEXT, argVal.length);
     for (let i = 0; i < argVal.length; i += 1) buf.push(argVal[i]);
   }
@@ -507,7 +507,7 @@ const makeWorker = async (
   const response = await spawnResponse;
 
   if (response.verb === 'error') {
-    const errorText = bytesToText(response.payload);
+    const errorText = decodeUtf8(response.payload);
     throw new Error(`Worker spawn failed: ${errorText}`);
   }
 
@@ -722,10 +722,10 @@ const main = async () => {
   /** @type {number[]} */
   const listenBuf = [];
   cborHead(listenBuf, CBOR_MAP, 1);
-  const pathKey = bytesFromText('path');
+  const pathKey = encodeUtf8('path');
   cborHead(listenBuf, CBOR_TEXT, pathKey.length);
   for (let i = 0; i < pathKey.length; i += 1) listenBuf.push(pathKey[i]);
-  const pathVal = bytesFromText(sockPath);
+  const pathVal = encodeUtf8(sockPath);
   cborHead(listenBuf, CBOR_TEXT, pathVal.length);
   for (let i = 0; i < pathVal.length; i += 1) listenBuf.push(pathVal[i]);
   sendEnvelope(0, 'listen-path', new Uint8Array(listenBuf), 0);
@@ -742,10 +742,10 @@ const main = async () => {
     /** @type {number[]} */
     const irohBuf = [];
     cborHead(irohBuf, CBOR_MAP, 1);
-    const nodeKey = bytesFromText('node');
+    const nodeKey = encodeUtf8('node');
     cborHead(irohBuf, CBOR_TEXT, nodeKey.length);
     for (let i = 0; i < nodeKey.length; i += 1) irohBuf.push(nodeKey[i]);
-    const nodeVal = bytesFromText(nodeNumber);
+    const nodeVal = encodeUtf8(nodeNumber);
     cborHead(irohBuf, CBOR_TEXT, nodeVal.length);
     for (let i = 0; i < nodeVal.length; i += 1) irohBuf.push(nodeVal[i]);
     sendEnvelope(0, 'listen-iroh', new Uint8Array(irohBuf), 0);
@@ -794,7 +794,7 @@ const setupClientSession = connectionHandle => {
    */
   const send = message => {
     const json = JSON.stringify(message);
-    const bytes = bytesFromText(json);
+    const bytes = encodeUtf8(json);
     hostTrace(
       `daemon-xs: client SEND handle=${connectionHandle} type=${message.type || '?'}`,
     );
@@ -836,7 +836,7 @@ const setupPeerSession = connectionHandle => {
    */
   const send = message => {
     const json = JSON.stringify(message);
-    const bytes = bytesFromText(json);
+    const bytes = encodeUtf8(json);
     hostTrace(
       `daemon-xs: peer SEND handle=${connectionHandle} type=${message.type || '?'}`,
     );
@@ -910,7 +910,7 @@ globalThis.handleCommand = harden(bytes => {
       const json =
         env.payload.length > 8192
           ? hostDecodeUtf8(env.payload)
-          : bytesToText(env.payload);
+          : decodeUtf8(env.payload);
       const message = JSON.parse(json);
       hostTrace(
         `daemon-xs: peer deliver handle=${handle} type=${message.type || '?'}`,
@@ -933,7 +933,7 @@ globalThis.handleCommand = harden(bytes => {
       const json =
         env.payload.length > 8192
           ? hostDecodeUtf8(env.payload)
-          : bytesToText(env.payload);
+          : decodeUtf8(env.payload);
       const message = JSON.parse(json);
       hostTrace(
         `daemon-xs: client deliver handle=${handle} type=${message.type || '?'} method=${message.method || '?'}`,
@@ -1017,7 +1017,7 @@ globalThis.handleCommand = harden(bytes => {
 
   // Iroh listener acknowledgement: payload is the published address.
   if (env.verb === 'listening-iroh') {
-    const address = bytesToText(env.payload);
+    const address = decodeUtf8(env.payload);
     globalThis.__irohAddress = address;
     hostTrace(`daemon-xs: iroh listening at ${address}`);
     return;

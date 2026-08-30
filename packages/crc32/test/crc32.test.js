@@ -2,18 +2,18 @@
 
 import test from 'ava';
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { crc32 } from '../index.js';
 
-const checkBytes = bytesFromText('123456789');
+const checkBytes = encodeUtf8('123456789');
 
 test('matches the IEEE CRC-32 check value', t => {
   t.is(crc32(checkBytes), 0xcbf4_3926);
 });
 
 test('computes a byte range', t => {
-  const framed = bytesFromText('xx123456789yy');
+  const framed = encodeUtf8('xx123456789yy');
   t.is(crc32(framed, checkBytes.length, 2), 0xcbf4_3926);
   t.is(crc32(framed, 0, 2), 0);
 });

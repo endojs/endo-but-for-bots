@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import zlib from 'node:zlib';
 import harden from '@endo/harden';
 import { encodeHex } from '@endo/hex';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeError, q, X } from '@endo/errors';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makePipe } from '@endo/stream';
@@ -890,7 +890,7 @@ export const makeCryptoPowers = crypto => {
     const digester = crypto.createHash('sha256');
     return harden({
       update: chunk => digester.update(chunk),
-      updateText: chunk => digester.update(bytesFromText(chunk)),
+      updateText: chunk => digester.update(encodeUtf8(chunk)),
       digestHex: () => encodeHex(digester.digest()),
     });
   };

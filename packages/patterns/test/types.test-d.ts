@@ -268,11 +268,11 @@ const passable: Passable = null as any;
   expectTypeOf(null as unknown as T).toExtend<string>();
 }
 
-// M.byteArray() → ArrayBuffer (via kind)
+// M.byteArray() → Uint8Array (via kind)
 {
   const p = M.byteArray();
   type T = TypeFromPattern<typeof p>;
-  expectTypeOf(null as unknown as T).toEqualTypeOf<ArrayBuffer>();
+  expectTypeOf(null as unknown as T).toEqualTypeOf<Uint8Array>();
 }
 
 // M.record() → CopyRecord

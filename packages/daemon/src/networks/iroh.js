@@ -1,6 +1,6 @@
 // @ts-check
 
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import harden from '@endo/harden';
@@ -20,7 +20,7 @@ import {
 // from a JS Array, not a TypedArray), both when advertised at bind time and
 // when dialing (see @number0/iroh test/endpoint.mjs).
 const ALPN_STRING = 'endo/captp/0';
-const ALPN_ARRAY = Array.from(bytesFromText(ALPN_STRING));
+const ALPN_ARRAY = Array.from(encodeUtf8(ALPN_STRING));
 
 /**
  * Encode a string as the `Array<number>` byte form the native binding's
@@ -31,7 +31,7 @@ const ALPN_ARRAY = Array.from(bytesFromText(ALPN_STRING));
  * @param {string} text
  * @returns {number[]}
  */
-const toByteArray = text => Array.from(bytesFromText(text));
+const toByteArray = text => Array.from(encodeUtf8(text));
 
 const processEnv = /** @type {any} */ (globalThis).process?.env;
 // Publish loopback/private direct addresses as dialing hints. Off by default
