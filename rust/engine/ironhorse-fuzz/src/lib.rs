@@ -1935,6 +1935,36 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `7289e31013d074ec` (target
+    /// `differential_source`). The 4-byte input `d8 7f 33 ba` folds into
+    /// `((~(~(1560281088 * true))) * ((~(1560281088 * true)) << ((~true) << (true << true))))`,
+    /// where `1560281088 = 186 * 2^23` (the generator's "larger integer" atom).
+    /// In ToInt32 arithmetic the left factor is `1560281088`, the outer shift is
+    /// by `24`, the right factor is `(~1560281088) << 24 = -16777216`, and the
+    /// product is `-(93 * 2^48)` = `-26177172834091008`, an exactly-representable
+    /// double whose magnitude overflows 2^53. XS's `fx_dtoa` prints that double
+    /// verbatim as its 17-digit exact integer, whereas ironhorse — like V8 and
+    /// ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
+    /// `-26177172834091010`. Both denote the identical double, so the engines
+    /// agree on the value and diverge only on decimal spelling; the same class
+    /// as `d99d263fcf6ca7a7` / `5c29667cc15d6d93`, already suppressed by the
+    /// numeric `results_agree` comparison. The differential check must not read
+    /// this as a finding.
+    #[test]
+    fn finding_7289e31013d074ec_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 6abb2fe734124222bc19e12518fa968a59f254edea3c9ed262414cb4637c736f).
+        let data: &[u8] = &[0xd8, 0x7f, 0x33, 0xba];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7289e31013d074ec must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
