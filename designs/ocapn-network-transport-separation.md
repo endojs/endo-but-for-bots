@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-08-28 |
+| **Updated** | 2026-08-30 |
 | **Author** | Kris Kowal (prompted), Kriscendo Bot (prompted) |
 | **Status** | In Progress |
 
@@ -43,44 +43,59 @@ location serialization until they migrate to this identity rule.
 ```mermaid
 flowchart LR
     location[OCapN location: network np + Ed25519 designator]
-    location --> tcp[TCP + CBOR-frame hint]
-    location --> ws[WebSocket hint]
+    location --> tcp[TCP + CBOR hint]
+    location --> ws[WebSocket + CBOR hint]
     tcp --> noise[One Noise IK session implementation]
     ws --> noise
     noise --> captp[Plaintext OCapN / CapTP session]
 ```
 
-Hints retain the OCapN locator's string-to-string table so they remain
-serializable by the existing codec. **There is exactly one hint per transport
-protocol: the hint key is the transport scheme, and its value is the single
-connection string a peer needs to dial that carrier.** An earlier draft of this
-design split the TCP carrier across two keys (`tcp+cbor:host`, `tcp+cbor:port`);
-that is an aberration — separate host and port hints for one protocol — and is
-superseded here (Kris Kowal,
+Hints retain the OCapN location's string-to-string table so they remain
+serializable by the existing codec. In an external locator, each table entry is
+an `@`-delimited path component of the form
+`<transport>+<codec>:<host>:<port>`. Hints do **not** go in the query string;
+the query string is reserved for alleged attributes such as `type`, consistently
+with [daemon-locator-reference.md](daemon-locator-reference.md).
+
+**There is exactly one hint per transport-and-codec combination.** The hint key
+is `<transport>+<codec>`, and its value is the single authority a peer needs to
+dial that combination. An earlier draft of this design split the TCP carrier
+across two keys (`tcp+cbor:host`, `tcp+cbor:port`); that is an aberration —
+separate host and port hints for one protocol — and is superseded here (Kris
+Kowal,
 [issue #58](https://github.com/kriscendobot/garden/issues/58#issuecomment-5447781817),
 2026-08-28: "Separate hints for the TCP host and port is an aberration. There
-should only be one hint per transport protocol"). The `<scheme>:<field>`
-sub-keying is dropped: the key is the bare scheme. The initial registered
-schemes are:
+should only be one hint per transport protocol"). The `<transport>:<field>`
+sub-keying is dropped. The initial combinations are:
 
-| Carrier | Scheme | Published hint | Value | Framing |
-|---|---|---|---|---|
-| TCP | `tcp+cbor` | `tcp+cbor` | `host:port` authority (IPv6 literals bracketed, e.g. `[::1]:3469`) | One definite-length CBOR byte string per Noise handshake or ciphertext frame |
-| WebSocket | `ws` | `ws` | The `wss://…` / `ws://…` dial URL | One binary WebSocket message per Noise handshake or ciphertext frame |
+| Carrier | Transport | Codec | Published hint | Value | Framing |
+|---|---|---|---|---|---|
+| TCP | `tcp` | `cbor` | `tcp+cbor` | `host:port` authority (IPv6 literals bracketed, e.g. `[::1]:3469`) | One definite-length CBOR byte string per Noise handshake or ciphertext frame |
+| WebSocket Secure | `wss` | `cbor` | `wss+cbor` | `host:port` authority | One binary WebSocket message per Noise handshake or ciphertext frame |
+| WebSocket | `ws` | `cbor` | `ws+cbor` | `host:port` authority | One binary WebSocket message per Noise handshake or ciphertext frame |
+
+For example, an external peer locator ends with components such as
+`@wss+cbor:example.com:443@tcp+cbor:127.0.0.1:3469`. The same carrier may
+appear once for each supported codec (for example, `tcp+cbor` and
+`tcp+syrup`). A peer filters hints to combinations for which it implements
+both the carrier and codec, then tries eligible combinations in its configured
+preference order. This permits a browser to ignore direct-TCP hints while a
+LAN peer can use raw IPv6 TCP without a relay; future relay hints can
+participate in speculative connection races.
 
 `tcp+cbor` is deliberately distinct from the current TCP netstring adapter:
-the scheme is a wire commitment, not a nickname. The TCP implementation uses
-the byte-string framing primitive described by [cbor-frame.md](cbor-frame.md) (now named
-`@endo/cbor-frame`), with a bounded inbound frame size. A peer only selects a
-transport for which it has both a registered dial adapter and a complete hint
-set. It tries matching schemes in the caller-configured preference order; a
-failed dial closes its partial stream before the next eligible scheme is tried.
+the composite prefix is a wire commitment, not a nickname. The TCP
+implementation uses the byte-string framing primitive described by
+[cbor-frame.md](cbor-frame.md) (now named `@endo/cbor-frame`), with a bounded
+inbound frame size. A peer only selects a transport-and-codec combination for
+which it has both a registered dial adapter and a complete hint. A failed dial
+closes its partial stream before the next eligible combination is tried.
 
-Only one published endpoint per scheme is allowed in a location — which the
-one-hint-per-transport rule makes structural, since a scheme owns a single key.
-Registering two `ws` listeners must fail rather than silently overwrite the `ws`
-hint. A future multi-endpoint scheme needs an explicitly specified encoding,
-rather than an array smuggled into the string-only hints table.
+Only one published endpoint per transport-and-codec combination is allowed in
+a location, which the one-hint rule makes structural. Registering two
+`ws+cbor` listeners must fail rather than silently overwrite the `ws+cbor`
+hint. A future multi-endpoint combination needs an explicitly specified
+encoding, rather than an array smuggled into the string-only hints table.
 
 ## Target API
 
@@ -89,39 +104,48 @@ explicit operation and returns the authority needed to withdraw the associated
 hints.
 
 ```js
-const network = makeOcapnNoiseNetwork({ codec: cborCodec });
+const network = makeOcapnNoiseNetwork({
+  codec: cborCodec,
+  codecName: 'cbor',
+});
 const keyId = network.addSigningKeys(signingKeys);
 
 const tcp = makeTcpCborTransport();
-const ws = makeWebSocketTransport({ WebSocket, WebSocketServer });
+const wss = makeWebSocketTransport({
+  WebSocket,
+  WebSocketServer,
+  secure: true,
+});
 network.addTransport(tcp);
-network.addTransport(ws);
+network.addTransport(wss);
 
 const tcpListener = await network.listen(tcp, {
   host: '127.0.0.1',
   port: 3469,
 });
-const wsListener = await network.listen(ws, {
+const wssListener = await network.listen(wss, {
   host: '127.0.0.1',
   port: 443,
-  url: 'wss://peer.example/ocapn-cbor-np',
+  advertisedHost: 'peer.example',
 });
 
 const location = network.locationFor(keyId);
 // location.hints === {
 //   'tcp+cbor': '127.0.0.1:3469',
-//   'ws': 'wss://peer.example/ocapn-cbor-np',
+//   'wss+cbor': 'peer.example:443',
 // }
+// External locator path:
+// /@tcp+cbor:127.0.0.1:3469@wss+cbor:peer.example:443
 
 tcpListener.close(); // withdraws only the tcp+cbor hint and listener
-wsListener.close(); // withdraws only the ws hint and listener
+wssListener.close(); // withdraws only the wss+cbor hint and listener
 ```
 
 The transport and listener contracts are:
 
 ```ts
 interface OcapnNoiseTransport<ListenOptions> {
-  readonly scheme: string;
+  readonly scheme: string; // byte-stream carrier, such as tcp, ws, or wss
   connect(hint: string): Promise<ByteStream>;
   listen(
     options: ListenOptions,
@@ -131,7 +155,7 @@ interface OcapnNoiseTransport<ListenOptions> {
 }
 
 interface TransportListener {
-  readonly hint: string; // the transport's single connection string
+  readonly hint: string; // the transport's single host:port authority
   close(): void;
 }
 
@@ -145,8 +169,10 @@ interface OcapnNoiseNetwork {
 }
 ```
 
-The network keys each `listener.hint` under its transport's scheme and
-validates it before publication. A
+The network keys each `listener.hint` under
+`${transport.scheme}+${codecName}` and validates both the composite key and
+authority before publication. Locator serialization emits each pair as an
+`@<transport>+<codec>:<authority>` path component. A
 listener is live only after binding succeeds; a failed bind changes neither the
 registered adapters nor any advertised location. `removeTransport` fails while
 that transport owns a listener. `shutdown` closes every listener, then every
@@ -162,26 +188,32 @@ without a transport becoming part of the identity.
 
 ## Migration Plan
 
-1. Land or expose the bounded `@endo/cbor-frame` reader/writer from
+1. Treat the single `tcp:url` listener hint introduced by PR #1072 as a
+   transitional implementation detail. Normalize it to an authority at the
+   transport boundary, publish it as `tcp+cbor`, and serialize it as an
+   `@tcp+cbor:<authority>` locator path component. Apply the same target grammar
+   to WebSocket rather than publishing `ws:url` or a full URL as the hint.
+2. Land or expose the bounded `@endo/cbor-frame` reader/writer from
    [cbor-frame.md](cbor-frame.md), and implement `makeTcpCborTransport`. Keep the
    netstring TCP adapter available under its current scheme; it is not wire
    compatible with `tcp+cbor`.
-2. Split the current `OcapnNoiseTransport.listen(handler)` into
+3. Split the current `OcapnNoiseTransport.listen(handler)` into
    `listen(options, accept)`, and change `addTransport` to registration only.
    Update the mock, TCP, and WebSocket adapters plus their tests. Provide a
    short-lived compatibility helper only if an external consumer still calls
    the old one-step API; do not retain implicit listening in the new API.
-3. Add `OcapnNoiseNetwork.listen`, atomic hint aggregation, duplicate-scheme
+4. Add `OcapnNoiseNetwork.listen`, atomic hint aggregation,
+   duplicate-transport-and-codec
    rejection, ordered fallback, and lifecycle tests. The core
    `@endo/ocapn` `OcapnNetwork.provideSession` and `inboundSessions` surface is
    already the correct handoff and does not gain transport knowledge. Change its
    `.np` session key to `(network, designator)` so hint publication never
    creates a second session for the same authenticated peer.
-4. Migrate all Noise fixtures to obtain locations only after listeners bind.
+5. Migrate all Noise fixtures to obtain locations only after listeners bind.
    Exercise TCP-only, WS-only, and dual-listener peers; verify that a dual
    peer dials a TCP-only and a WS-only peer, that the preferred unreachable
    hint falls back, and that closing one listener removes only its hints.
-5. Only then resume PR #684 as a daemon adapter. It creates the TCP+CBOR and
+6. Only then resume PR #684 as a daemon adapter. It creates the TCP+CBOR and
    WebSocket listeners through this API, persists each resolved bind address
    independently, and publishes one serialized `.np` location in the daemon
    peer address. It does not add a transport-specific location format or
@@ -196,10 +228,13 @@ listener adapters must reject non-binary or malformed frames and close the
 stream. WebSocket TLS is useful defense in depth but does not replace Noise.
 
 This changes the private, pre-1.0 `@endo/ocapn-noise` embedding API. The OCapN
-locator codec remains compatible because the published hints are still string
-values and `transport: 'np'` remains present during the `network` migration. It
-intentionally creates a new TCP wire scheme: a netstring peer and a `tcp+cbor`
-peer must not be treated as interchangeable.
+location codec remains compatible because the published hints are still string
+values and `transport: 'np'` remains present during the `network` migration.
+External locator serialization changes from transitional `tcp:url` / `ws:url`
+entries to `@`-delimited composite hints; query parameters remain available for
+alleged attributes. The design intentionally creates a new TCP wire
+combination: a netstring peer and a `tcp+cbor` peer must not be treated as
+interchangeable.
 
 ## Test Plan
 
@@ -228,6 +263,6 @@ peer must not be treated as interchangeable.
 
 ## Prompt
 
-> Let’s return to PR #684 after OCapN has been refactored such that the Noise
+> Let's return to PR #684 after OCapN has been refactored such that the Noise
 > Protocol Network (`.np`) provides connection hints for multiple transports
 > and can listen on both WebSocket and TCP+CBOR-frame ports separately.
