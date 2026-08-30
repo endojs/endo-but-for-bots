@@ -1909,6 +1909,32 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `5c29667cc15d6d93` (target
+    /// `differential_source`). The 5-byte input `e1 1b dc dc dc` folds into
+    /// `((-(-(-226492416))) * (-(-(-226492416))))`, i.e. `226492416^2` where
+    /// `226492416 = 27 * 2^23`, whose value is the exactly-representable double
+    /// `729 * 2^46` = `51298814505517056`. XS's `fx_dtoa` prints that double
+    /// verbatim as its 17-digit exact integer, whereas ironhorse — like V8 and
+    /// ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
+    /// `51298814505517060`. Both denote the identical double, so the engines
+    /// agree on the value and diverge only on decimal spelling; the same class
+    /// as `d99d263fcf6ca7a7`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_5c29667cc15d6d93_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 203db557fe4893accc7f29b36e0fc723551a7494f0c33a65e809ec88045449e2).
+        let data: &[u8] = &[0xe1, 0x1b, 0xdc, 0xdc, 0xdc];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 5c29667cc15d6d93 must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn results_agree_on_equal_doubles_spelled_differently() {
         // The finding's two renderings of the same double.
