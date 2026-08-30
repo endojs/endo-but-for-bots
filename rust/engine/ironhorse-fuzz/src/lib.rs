@@ -1965,6 +1965,34 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `783be6e6106bad98` (target
+    /// `differential_source`). The 6-byte input `00 00 66 69 27 44` folds into
+    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712)))
+    /// + (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
+    /// right operand; the outer `!(...)` is `false` → `0`) to the single product
+    /// `(~570425344) * (327155712 + 1) = -570425345 * 327155713`. Its exact value
+    /// `-186617910456745985` overflows 2^53 and rounds to the double
+    /// `-186617910456745984`. XS's `fx_dtoa` renders a non-shortest 17-digit form
+    /// (`-186617910456745980`) while ironhorse — like V8 and ECMA-262
+    /// §6.1.6.1.20's shortest-round-tripping rule — renders `-186617910456746000`.
+    /// Both denote the identical double; the same class as `5c29667cc15d6d93` and
+    /// `d99d263fcf6ca7a7`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_783be6e6106bad98_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 95c5064e49e6c191f7f9b8be24270555d12b04c226cbc72c01406e024ff39008).
+        let data: &[u8] = &[0x00, 0x00, 0x66, 0x69, 0x27, 0x44];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 783be6e6106bad98 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
