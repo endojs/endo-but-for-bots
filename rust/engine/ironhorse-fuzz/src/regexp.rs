@@ -263,7 +263,7 @@ pub fn differential_check_regexp(case: &RegExpCase) -> Result<bool, Divergence> 
             });
         }
     }
-    if outcome.match_meter_raw != oracle.match_meter_raw as u64 {
+    if outcome.match_meter_raw != oracle.match_meter_raw {
         return Err(Divergence {
             source,
             detail: format!(
