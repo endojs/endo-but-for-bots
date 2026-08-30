@@ -2018,6 +2018,36 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `ab889c8f6184c60d` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// exact 4-byte input folds into a deeply nested
+    /// `new RegExp(<pattern>, "s").source` whose completion value is a
+    /// 1216-byte string — longer than the oracle's old 1024-byte capture
+    /// buffer, so the pre-fix oracle truncated its own reference to 1023 bytes
+    /// and the harness read the port's correct full result as a divergence.
+    /// This is a distinct `.source` input of the same class as
+    /// `493390fc03979205`, already covered by that finding's causal fix (larger
+    /// buffer + honest skip on overflow). The exact input must check clean.
+    #[test]
+    fn finding_ab889c8f6184c60d_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // e31b5a31b37ce02cba6b665098b0d9844e248e95e89f252910a4ec2660412e07).
+        let data =
+            include_bytes!("../tests/fixtures/finding-ab889c8f6184c60d.input.bin");
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp `.source`
+        // accessor whose rendered pattern overflows the old 1023-byte buffer.
+        assert!(
+            prog.ends_with(".source"),
+            "finding program is a RegExp.source: {}",
+            prog
+        );
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding ab889c8f6184c60d must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn results_agree_on_equal_doubles_spelled_differently() {
         // The finding's two renderings of the same double.
