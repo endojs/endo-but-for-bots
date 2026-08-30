@@ -1601,6 +1601,16 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
     if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
         return Ok(());
     }
+    // The oracle captures the completion value into a fixed-size buffer; when
+    // the value is longer than that buffer, `oracle.result` is a truncated
+    // prefix and cannot be compared against the port's full result without a
+    // spurious divergence (finding 493390fc03979205: a deeply nested regexp
+    // whose `.toString()` exceeds the buffer). The oracle cannot faithfully
+    // represent this result, so skip honestly, exactly like an out-of-subset
+    // program — never report the truncation as a port defect.
+    if oracle.result_truncated {
+        return Ok(());
+    }
     if oracle.completed != ironhorse.completed {
         return Err(Divergence {
             source: source.to_string(),
@@ -1643,6 +1653,13 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
     };
     let ironhorse = run_program(&oracle.bytecode);
     if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
+        return Ok(());
+    }
+    // A completion value longer than the oracle's fixed capture buffer is a
+    // truncated prefix on the oracle side; comparing it against the port's
+    // full result would be a spurious divergence, so skip honestly (see
+    // `differential_check_with_symbols`, finding 493390fc03979205).
+    if oracle.result_truncated {
         return Ok(());
     }
     if oracle.completed != ironhorse.completed {
@@ -1817,6 +1834,29 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for continuous-fuzz finding `493390fc03979205` (target
+    /// `differential_regexp_surface`). The 4-byte input folds into a deeply
+    /// nested `new RegExp(<pattern>, "s").toString()` whose completion value is
+    /// 1099 bytes — longer than the oracle's old 1024-byte capture buffer. The
+    /// oracle truncated its own reference to 1023 bytes and the harness read
+    /// the port's correct full result as a divergence. With the oracle fix
+    /// (larger buffer + honest skip on overflow) the exact finding input must
+    /// check clean, not diverge.
+    #[test]
+    fn finding_493390fc03979205_long_regexp_tostring_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 450a95b7db1bd744fc94f63a2842714b4e8bf996f97d589fb8aeef172dabbcf7).
+        let data: &[u8] = &[0x08, 0x74, 0x74, 0x2a];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp.toString()
+        // whose rendered source overflows the old 1023-byte buffer.
+        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
+        }
+    }
 
     #[test]
     fn generated_programs_agree_with_oracle() {

@@ -16,6 +16,10 @@ use std::os::raw::{c_char, c_int};
 
 // NOT #![forbid(unsafe_code)] — this crate is the audited FFI seam.
 
+/// Must stay byte-identical to `ENDOR_RESULT_MAX` in `csrc/xs_shim.c` — the
+/// fixed capacity of the completion-value buffer shared across the FFI.
+const RESULT_BUF_CAP: usize = 16384;
+
 #[repr(C)]
 struct XsOracleResultRaw {
     code: *mut i8,
@@ -25,8 +29,12 @@ struct XsOracleResultRaw {
     computrons: u32,
     meter_raw: u32,
     ok: u32,
-    result: [u8; 1024],
+    result: [u8; RESULT_BUF_CAP],
     error: [u8; 256],
+    /// True byte length of the completion value before it was copied into the
+    /// fixed `result` buffer. Greater than `RESULT_BUF_CAP - 1` means `result`
+    /// holds a truncated prefix.
+    result_len: u32,
 }
 
 impl Default for XsOracleResultRaw {
@@ -39,8 +47,9 @@ impl Default for XsOracleResultRaw {
             computrons: 0,
             meter_raw: 0,
             ok: 0,
-            result: [0u8; 1024],
+            result: [0u8; RESULT_BUF_CAP],
             error: [0u8; 256],
+            result_len: 0,
         }
     }
 }
@@ -202,6 +211,12 @@ pub struct OracleOutcome {
     /// Completion value coerced with JS `String()` (valid when
     /// `completed`), else empty.
     pub result: String,
+    /// `true` when the completion value was longer than the oracle's fixed
+    /// capture buffer, so [`result`](Self::result) holds only a truncated
+    /// prefix. A differential caller must treat this as "the oracle cannot
+    /// faithfully represent this result" and skip the comparison rather than
+    /// reading a divergence from the truncation (finding `493390fc0397`).
+    pub result_truncated: bool,
     /// The thrown value stringified (valid when `!completed`).
     pub error: String,
     /// Run-only computrons: `meterIndex >> 16` measured over execution,
@@ -255,6 +270,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         symbols,
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
+        result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -424,6 +440,24 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
+    /// value longer than the old 1024-byte capture buffer used to be silently
+    /// truncated to 1023 bytes, so the oracle reported a shorter string than
+    /// the (correct) port and the differential harness read a spurious
+    /// divergence. The capture buffer now holds well over 1 KiB, and any
+    /// result that still overflows it is flagged `result_truncated` so callers
+    /// skip rather than compare a truncated prefix.
+    #[test]
+    fn long_completion_value_is_captured_untruncated() {
+        // A 2000-char completion value — comfortably past the old 1023-byte
+        // usable buffer, comfortably inside the current one.
+        let out = run("'x'.repeat(2000)").expect("oracle machine must start");
+        assert!(out.completed, "program completes: {}", out.error);
+        assert_eq!(out.result.len(), 2000, "the full string is captured, not a 1023-byte prefix");
+        assert!(out.result.bytes().all(|b| b == b'x'));
+        assert!(!out.result_truncated, "a result within the buffer is not flagged truncated");
+    }
 
     /// Materialize `files` into a unique temp dir, run `main` as a module
     /// graph, and return the outcome (dir removed afterward). Unit tests do

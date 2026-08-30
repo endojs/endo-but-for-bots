@@ -31,7 +31,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define ENDOR_RESULT_MAX 1024
+#define ENDOR_RESULT_MAX 16384
 #define ENDOR_ERROR_MAX 256
 
 typedef struct {
@@ -44,6 +44,12 @@ typedef struct {
 	txU4 ok;         /* 1 = completed normally, 0 = threw / parse error */
 	char result[ENDOR_RESULT_MAX]; /* completion value coerced to String() */
 	char error[ENDOR_ERROR_MAX];   /* message when ok == 0 */
+	/* True byte length of the coerced completion value BEFORE the copy
+	 * into the fixed `result` buffer. When this exceeds ENDOR_RESULT_MAX-1
+	 * the stored `result` is a truncated prefix, so a caller comparing it
+	 * against the port must not read a divergence from the truncation — the
+	 * differential check skips such a case honestly (finding 493390fc0397). */
+	txU4 result_len;
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
@@ -347,6 +353,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			{
 				txString s = result->value.string;
 				if (s) {
+					out->result_len = (txU4)c_strlen(s);
 					strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
 					out->result[ENDOR_RESULT_MAX - 1] = 0;
 				}
@@ -692,6 +699,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 				fxGetID(the, fxID(the, "result"));
 				fxToString(the, the->stack);
 				if (the->stack->value.string) {
+					out->result_len = (txU4)c_strlen(the->stack->value.string);
 					strncpy(out->result, the->stack->value.string,
 						ENDOR_RESULT_MAX - 1);
 					out->result[ENDOR_RESULT_MAX - 1] = 0;
