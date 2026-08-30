@@ -1949,6 +1949,31 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `3ea435c58b4c588e` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// 4-byte input folds into a deeply nested
+    /// `new RegExp(<pattern>, "s").toString()` whose completion value is 1128
+    /// bytes — longer than the oracle's old 1024-byte capture buffer, so the
+    /// pre-fix oracle truncated its own reference to 1023 bytes and the harness
+    /// read the port's correct full result as a divergence. A distinct input
+    /// of the same class as `493390fc03979205`, already covered by that fix
+    /// (larger buffer + honest skip on overflow): the exact finding input must
+    /// check clean, not diverge.
+    #[test]
+    fn finding_3ea435c58b4c588e_regexp_tostring_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 9df4e2b4ff1278d84c09d3caad69d47b90401dae21573f6d581a7085716e1638).
+        let data: &[u8] = &[0x8c, 0x8c, 0x8c, 0xa2];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp.toString()
+        // whose rendered source overflows the old 1023-byte buffer.
+        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
