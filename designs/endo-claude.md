@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-16 |
-| **Updated** | 2026-08-16 |
+| **Updated** | 2026-08-31 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | Not Started |
 
@@ -226,7 +226,7 @@ the others do not close.
 | Flag | Value | What it closes |
 | --- | --- | --- |
 | `--bare` | (present) | Per its 2.1.232 help text, skips hooks, LSP, plugin sync, attribution, auto-memory, background prefetches, keychain reads, and `CLAUDE.md` auto-discovery. It does **not** close settings layers or MCP auto-discovery. Those are the jobs of `--setting-sources ""` and `--strict-mcp-config` below; do not conflate them (a first reading over-credits `--bare`). It is still the single most important flag for one reason beyond the above: **it narrows the credential surface.** Under `--bare`, Anthropic auth is strictly an `ANTHROPIC_API_KEY` or an `apiKeyHelper` named via `--settings`; the OAuth / keychain credentials `claude` normally reads (including `CLAUDE_CODE_OAUTH_TOKEN`) are **never** consulted. It also warns that Skills still resolve via `/skill-name`, so `Skill` / `SlashCommand` survive it (closed by `--disable-slash-commands`, with the `--tools ""` baseline emptying the built-in set, not by `--bare`). This shapes how the subscription reaches the process (see the `--settings` row and *Design Decision 5*). |
-| `--mcp-config <configs...>` | path to a generated config naming only the Endo endpoint | **Variadic** (space-separated) and accepts a JSON **file path or a JSON string**. Carries the generated MCP config (the stdio shim command, or the loopback URL, plus the guest's bearer). The path belongs here, **not** on `--strict-mcp-config`. Because it accepts inline JSON *and* is variadic, it is the highest-value argv-injection target (§ *Argv order is a confinement boundary*): a positional that lands after it is read as another server definition. |
+| `--mcp-config <configs...>` | path to a generated config naming only the Endo endpoint | **Variadic** (space-separated) and accepts a JSON **file path or a JSON string**. Carries the generated MCP config (the stdio shim command, or the loopback URL, plus the guest's bearer). The path belongs here, **not** on `--strict-mcp-config`. Because it accepts inline JSON *and* is variadic, it is the highest-value argv-injection target (§ *Argv order is a confinement boundary*): a positional that lands after it is read as another server definition. The harness always renders this as a file path, never inline JSON, so the value never rides argv (§ *Argv length is an operational ceiling*). |
 | `--strict-mcp-config` | (present; takes **no** argument) | Boolean. Restricts the process to only the servers named in `--mcp-config`, ignoring all other MCP configuration (`.mcp.json`, `~/.claude/`). **This (not `--bare`) is the flag that closes MCP auto-discovery.** Without it, auto-discovery can add servers the design did not intend to expose. Writing a path after this flag is a silent error: it binds to the prompt positional and the process starts with **zero** MCP servers, so confinement "passes" by exposing nothing. |
 | `--setting-sources ""` | empty | Drops the discovered user / project / local `settings.json` layers. Composes with `--settings` below: `--setting-sources ""` removes everything *discovered*, and `--settings` injects exactly one *named* file, so the sole settings surface the process sees is that one generated file. **Open:** whether *managed* (enterprise-policy) settings can be suppressed at all is undocumented. `--safe-mode`'s help states admin-managed policy settings still apply even in that stronger mode, so this design assumes managed settings cannot be dropped until verified against a real managed-settings deployment, and a host that runs `@endo/claude` must not carry managed Claude settings that grant tools. |
 | `--settings <file>` | a generated file carrying only an `apiKeyHelper` | The one credential escape `--bare` honors (see *Design Decision 5*). The pool renders a minimal settings file whose **sole** key is an `apiKeyHelper` that emits the acquired credential; combined with `--setting-sources ""` it is the only settings the process reads. This is the deliberate, tightly scoped re-admission of a settings file into a design that otherwise treats settings as a leak surface, accepted because `--bare` leaves no other authenticated path. The `apiKeyHelper` is itself an *executed* command outside the tool-permission system (§ *The `apiKeyHelper` is an execution grant, not a value*), so its argv must be harness-fixed and never prompt-influenceable. |
@@ -237,6 +237,61 @@ the others do not close.
 | `--model <value>` | a value from a harness-pinned model list | Caller-supplied via `infer(prompt, {model, ...})`, so it is a **second** value that reaches argv (§ *Argv order is a confinement boundary*); validated by **membership in a pinned model set**, not a charset check, before rendering. A `model` outside the set fails closed. |
 | `--max-turns <n>` | a harness-fixed ceiling | Bounds the number of agent turns a launched inference may take. One of the three bounds on a launched inference (§ *Pooling subscriptions*, *A launched inference is bounded on three axes*), alongside a wall-clock deadline and an output-byte cap; the bridge independently counts dispatches so a CLI that ignores `--max-turns` is still bounded, each terminating into `{type: 'limit-exceeded', which}` (DD8). |
 | (never) `--resume` / `--continue` | omitted, always | Both restore the *full* prior transcript, including past tool calls and their results, with no documented filter, regardless of the new invocation's tool-permission flags. A sandboxed call must never resume. |
+
+### Argv length is an operational ceiling (`spawn E2BIG`)
+
+The prompt already rides stdin (§ *Argv order is a confinement boundary*), but two
+caller/facet-derived values still reach *argv* and can grow with the facet: the
+per-guest `--allowedTools` allow-list and `--mcp-config`. Both are rendered so neither
+approaches Linux's per-argument `MAX_ARG_STRLEN` (~128 KB, the per-argument cap,
+distinct from the whole-command-line `ARG_MAX` ceiling), whose breach surfaces as
+`spawn E2BIG`.
+
+`--mcp-config` is passed by **file path, not inline JSON — always, with no size
+threshold** (the `--mcp-config` table row above records this unconditional contract),
+so that value never rides argv at all; the credential-bearing config never touches the
+argv surface § *Argv order is a confinement boundary* guards, regardless of facet
+size.
+
+That file path need not be an on-disk temp file. The config is read exactly once, at
+spawn, so the harness may back the path with an anonymous pipe or a `memfd` and pass the
+corresponding `/dev/fd/N` — the descriptor-backed, non-shell analogue of a shell's
+`<( … )` process substitution — delivering the config *as a path* with **no temp file to
+reap**. (`<( … )` itself is a shell construct, and this design spawns `claude` directly,
+never through a shell (§ *Argv order is a confinement boundary*), so the harness must
+mint the descriptor-backed path itself rather than lean on shell expansion.) For a
+long-running pool minting many confined inferences this is the preferable rendering: it
+drops a per-invocation cleanup obligation — the temp garbage an autonomous agent would
+otherwise have to remember to collect — while preserving the file-path contract that
+keeps the credential-bearing config off the argv surface.
+
+`--allowedTools` has no documented file-path form, but it **is variadic** (comma-**or**-space
+separated; the same table row and § *Argv order is a confinement boundary*). The
+harness renders each tool name as its **own space-separated argv token**, not one
+comma-joined string, so no single argument grows with the catalog and the governing
+limit becomes the whole-command `ARG_MAX` (typically low-single-digit MB), not the
+~128 KB per-argument cap — a realistic tool-name catalog never approaches it.
+(Considered and rejected: routing the allow-list through the generated `--settings`
+file instead. Design Decision 5 keeps that file deliberately minimal — a single
+`apiKeyHelper` key — to hold its leak surface small; the multi-token argv form
+relocates the ceiling without widening the settings surface, so the allow-list stays
+on argv as multiple tokens and the settings file stays minimal.)
+
+Because the allow-list is a **static** function of the pinned `tools/list` snapshot,
+fixed once at grant time (§ *Design Decision 2*), a catalog large enough to push even
+the multi-token command past `ARG_MAX` is a property of the *guest*, not of any one
+call. The harness therefore checks it **once at `makeGuestInference`**, alongside the
+other grant-time throws (§ *Design Decision 8*: a non-64-hex formula id, an
+unresolvable guest, an empty post-prune catalog), and refuses to mint an inference
+capability whose every spawn would fail identically — rather than deferring a
+pre-determined static failure to every `infer` call, which would draw and release a
+credential-pool slot on each doomed attempt (the per-call churn § *Pooling
+subscriptions across concurrent guests* is careful to avoid). It surfaces as a
+**throw** at grant time, on the same footing as those other grant-time refusals, not a
+per-call `{type: 'cancelled'}` tagged record — so error visibility stays uniform and
+the check fails closed, consistent with the argv invariant. A builder should size
+against this ceiling rather than rediscover it live; the property-test checklist below
+names a case that exercises the grant-time refusal.
 
 ### Argv order is a confinement boundary, not a formatting detail
 
@@ -427,6 +482,22 @@ or a memory capability the facet itself exposes as a tool (the threaded-session
 extension below is one such capability). The harness stays stateless so the
 confinement holds identically on every call.
 
+Fresh process per call does cost a CLI spawn on every turn, so it is fair to read it
+as a latency trade. It is not merely that. Amortizing that spawn cost with a keepalive
+process pool would be a false economy for an isolated (bring-your-own-credential)
+turn: one shared authenticated process reused across callers would run one caller's
+prompt inside another caller's still-live in-memory session, a cross-user leak, not a
+slow start. A reused authenticated process is thus a confinement hole, so the
+structural boundary here is that the underlying `claude -p` **process** is never
+reused across calls, full stop: every call gets a freshly spawned child. The
+per-`sessionTag` identity minted per spawn (§ *Pooling subscriptions across concurrent
+guests*) is an orthogonal credential-occupancy and cancellation bookkeeping label, not
+the mechanism that prevents reuse; a distinct `sessionTag` handed to a pooled, reused
+process would still be the same confinement hole. Fresh process per call, not the tag,
+is what makes cross-guest session reuse impossible, so the harness treats the fresh
+spawn as a confinement invariant rather than a performance cost it might optimize
+away.
+
 ### An optional threaded session models follow-up — as an Endo capability, not `--resume`
 
 The stateless default is not the only mode a guest may want. Sometimes a guest needs
@@ -519,6 +590,21 @@ reasons the design must close:
 
 The env allowlist is thus a peer of the argv invariant: both fail closed, and both
 are asserted before the child runs, not trusted to the inherited process state.
+
+**The named failure mode these flags exist to prevent:
+*fail-open-onto-operator-credential*.** `--setting-sources ""` and the constructed env
+allowlist are not mere tidiness; they close a specific worst-direction failure. If the
+child were allowed to read a credential store out of `HOME` (the CLI's own discovered
+user settings, the `--setting-sources user` shape, or an inherited OAuth/keychain
+path), an *unauthenticated* run would not fail: it would **silently fall back to the
+operator's own login**, running a guest's prompt under the operator's subscription and
+identity. That is the worst direction an auth fallback can fail: an unauthenticated
+caller silently inheriting the host's credential rather than being refused.
+`@endo/claude` fails closed the other way on purpose: `--bare` consults no
+keychain/OAuth path, `--setting-sources ""` drops every discovered store, and the sole
+credential is the one the harness injects through the generated `--settings`
+`apiKeyHelper`, so a run with no pooled credential is *refused*, never quietly promoted
+onto the operator's login.
 
 ## The facet-to-MCP bridge (the local/remote question)
 
@@ -1368,7 +1454,8 @@ remaining, independent axis of who triggers an inference.)
 
    **The throw-vs-return rule is stated, not left for a caller to guess:** grant-time
    validation failures (a non-64-hex formula id, an unresolvable guest, an empty
-   post-prune catalog) and harness-invariant violations (a failed argv or env
+   post-prune catalog, a tool allow-list whose multi-token render would exceed
+   `ARG_MAX`) and harness-invariant violations (a failed argv or env
    assertion, a `claude --version` mismatch, a refused spawn) **throw** — they are
    programmer / deployment errors surfaced *before* any inference runs, so
    `makeGuestInference` and a pre-spawn `infer` may reject with them. Every **per-call
@@ -1385,6 +1472,26 @@ remaining, independent axis of who triggers an inference.)
    of the rarer cases as the build measures them — not the existence of the taxonomy.
    Property tests (below) exercise the guard as universally quantified claims, not
    spot checks.
+
+   **Considered and rejected: a provider-spend ring / multi-provider router.** One
+   could generalize this harness into multi-provider machinery: a spend-attenuation
+   ring across `local | subscription | paid` tiers (a policy layer that routes each
+   call to the cheapest capable tier — a free local model, then a flat-rate
+   subscription, then a metered paid API — and caps spend per tier), and a router that
+   self-describes a provider by a model-id prefix (dispatching to Anthropic versus
+   another vendor by inspecting the requested `--model` string). That is **out of
+   scope** for `@endo/claude`, which is
+   *single-provider confinement* (confine one subscription's `claude -p` to one facet),
+   not a multi-provider gateway. Adding a routing tier would dilute the one property
+   this package exists to prove. The one transferable *principle* worth keeping: when a
+   call must be attenuated or degraded (a limit hit, a cooling subscription), the
+   **host composes the limit/degradation notice**, never routing that explanation
+   *through the model* (an agent asked to explain a limit it just hit will improvise
+   one). That is already this design's posture: the harness
+   settles a host-built tagged record (`{type: 'limit-exceeded', which}`,
+   `{type: 'rate-limited', ...}`, `{type: 'pool-exhausted', ...}` above), authored
+   outside the confined process, rather than asking the model to narrate why it
+   stopped.
 
 ## Known Gaps and TODOs
 
@@ -1418,12 +1525,42 @@ remaining, independent axis of who triggers an inference.)
       the real credential outbound, so a leaked child never holds a re-usable one),
       or **per-guest rather than pooled** credentials so a leak cannot
       cross-contaminate. Until one lands, `0600` on the `--settings` file is not
-      sufficient confinement of the credential.
+      sufficient confinement of the credential. A caution on scoping the fix: it is
+      tempting to reach for **per-holder** isolation: give each pooled subscription
+      owner a **fresh `HOME` / `CLAUDE_CONFIG_DIR`** so one holder's login can neither
+      read nor overwrite another's, with the credential **riding the call rather than
+      any `process.env` global** (a process-global is one value for every concurrent
+      caller, the exact cross-user leak this residual guards against). That isolates
+      one *subscription owner* from another, and is sound for the allocator side
+      (keeping the pool's N subscriptions from contaminating each other), but it is
+      **not** the same axis as per-guest: guests can outnumber subscriptions
+      (§ *Pooling subscriptions across concurrent guests*, "N accounts, M concurrent
+      consumers"), so a genuinely per-guest credential branch would have to abandon
+      pooling below the guest-concurrency ceiling rather than inherit per-holder
+      isolation for free. Per-holder isolation is thus the right shape for the
+      allocator, not a drop-in per-guest confinement; the egress-proxy branch remains
+      the other option.
 - [ ] Resolve the **entitlement** question (orthogonal to the mechanism above):
       whether the Claude subscription terms and usage policy permit pooling one
       Max/Pro plan across a fleet of concurrent confined guests at all. A negative
       answer collapses the value premise regardless of whether `apiKeyHelper` works
-      (§ *Pooling subscriptions across concurrent guests*).
+      (§ *Pooling subscriptions across concurrent guests*). A structural hazard argues
+      for the same conclusion: a flat-rate subscription lane may be
+      **metering-invisible** — whether any burn signal is observable at all through the
+      CLI or token is itself still open (§ *Open questions*, the pool-allocator
+      quota-accounting question) — so to whatever extent such a lane never appears in a
+      metered purse, a cross-user leak on it would surface
+      in no usage accounting and could persist unnoticed. The isolation properties must
+      therefore be **ratcheted at the source (the spawn/credential construction) rather
+      than trusted to metering**. That is why the live confinement test below asserts
+      the single-spawn confinement it *does* cover structurally rather than inferring it
+      from usage. It does **not** follow that cross-guest credential isolation is
+      already verified: that property is the still-open DD7 residual in the preceding
+      bullet (*Attenuate the pooled subscription credential*)
+      (the pooled credential is not yet held outside the confinement boundary, and the
+      live test below names no cross-guest leak or concurrent-isolation assertion). The
+      metering-invisibility hazard is therefore a reason to close that residual at the
+      source, not a claim that the current test already covers it.
 - [ ] Run a live negative-**and-positive** confinement test: spawn the real confined
       `claude -p`. **Negative:** no built-in tool (Bash, Read, Write, and the rest)
       executes; a prompt containing a `/skill-name` resolves **no** skill (asserting
@@ -1476,10 +1613,18 @@ remaining, independent axis of who triggers an inference.)
     - the **credential-pool lifecycle** — an `fc.commands` model of acquire/return
       under induced failures that never strands a subscription, and whose admission
       failure settles to `{type: 'pool-exhausted'}` rather than blocking.
+    - the **argv-length ceiling** (§ *Argv length is an operational ceiling*): over a
+      large-facet catalog generator whose rendered multi-token `--allowedTools` tokens
+      would push the whole command past `ARG_MAX`, `makeGuestInference` **refuses at
+      grant time** (throwing before any inference capability is minted), never reaching
+      a `claude -p` spawn or `spawn E2BIG`; the complement (an under-ceiling catalog
+      grants) fixes the boundary.
 - [ ] Verify on a real managed-settings deployment whether `--setting-sources ""`
       can suppress managed settings, or whether the host must be kept free of
       managed Claude settings that grant tools (`--safe-mode`'s help states managed
-      policy settings still apply even there).
+      policy settings still apply even there). A managed layer the flags cannot drop
+      is a *fail-open-onto-operator-credential* surface (§ *The child environment is a
+      constructed allowlist*), not just an extra tool grant.
 - [ ] Write a minion.town-side deployment plus configuration companion design (see
       below).
 
@@ -1512,7 +1657,12 @@ is accepted, not written in this pass.
 - Can *managed* (enterprise-policy) Claude settings be suppressed by
   `--setting-sources ""`? Undocumented; treat as "assume they cannot" until
   verified against a real managed-settings deployment, and keep `@endo/claude`
-  hosts free of managed settings that grant tools until then.
+  hosts free of managed settings that grant tools until then. This is the same
+  *fail-open-onto-operator-credential* hazard named in § *The child environment is a
+  constructed allowlist*: a managed layer the flags cannot drop that grants a tool or
+  a credential is precisely the store an unauthenticated run would silently inherit,
+  so a host that carries one has re-opened the failure `--setting-sources ""` exists to
+  close.
 - Does the pool allocator's quota accounting read burn from the subscription
   (is a weekly-cap signal observable through the Claude Code CLI or the token?),
   or must the operator set weights manually the way that agent fleet edits its
