@@ -3015,7 +3015,7 @@ Locks: `a_guest_bind_over_an_intl_bound_function_resumes` and
 both red pre-fix with exactly that error, across container, eager
 store, and lazy store.
 
-#### P1-2 — Runtime-minted intrinsic natives are carried by no table
+#### P1-2 — Runtime-minted intrinsic natives are carried by no table — FIXED
 
 Three `%IteratorPrototype%`-adjacent natives are minted during
 `link_intrinsics` rather than during `Interp::new`, so they sit ABOVE
@@ -3049,14 +3049,37 @@ already encodes exactly the right predicate ("does this function slot
 survive resume") but is only consulted for accessor getters/setters,
 never for a function reference reached through a plain data property.
 
-The fix is to mint the three at boot alongside the siblings that
-already work this way (`async_iterator_identity`,
+Fixed by minting the three at boot alongside the siblings that
+already work this way (`async_iterator_identity` and
 `string_iterator_method` are `Interp` fields allocated in
-`create_intrinsics`), so they land below `boot_slot_count` and resume
-re-derives them at identical indices with identical name chunks.
-That moves boot slot layout, so both golden pins re-pin.
+`create_intrinsics`), so they land below `boot_slot_count` and a fresh
+boot re-derives them at identical indices with identical name chunks;
+the link-time installs reference the fields.
+Twins in `boot_native_identity.rs` across the container and both store
+backings, all three red pre-fix.
+Both mechanical nets caught the new fields and both classifications
+are filled in — the snapshot ledger (boot-derived) and the GC
+visitation registry (identity caches over rooted boot structure).
+Both golden vectors re-pinned as a boot-heap CONTENT move, the same
+class as the four mainline re-pins before it; container format and
+store schema unchanged.
 
-#### P1-3 — Generator PCs are validated against the segment, not the body
+One question this raises is left for the branch owner rather than
+decided here.
+Boot-derived maps keyed by `SlotIndex` (`functions` above all) survive
+the fresh boot that `image_to_interp` performs and are NOT rebuilt
+from the image, so adopting a container written under a different boot
+layout attaches boot metadata to the wrong slots.
+Every prior boot-heap change on this branch was handled as a content
+re-pin with the format untouched, and nothing in the container
+(`boot_slot_count` is not serialized) would catch the mismatch.
+That is sound while the branch is unreleased and every container is
+regenerated, but if containers are ever expected to outlive an engine
+build, boot layout needs to be a versioned axis — the `SIGN`
+callback-table signature is the natural place, since it already exists
+to mean "this container was written by a compatible engine".
+
+#### P1-3 — Generator PCs are validated against the segment, not the body — FIXED
 
 `image.rs:3466-3491` checks only `frame.resume_pc > code.len()` and
 `jump.target_pc > code.len()`, against the whole code SEGMENT.
@@ -3067,23 +3090,32 @@ The external reviewer confirmed acceptance empirically by rewriting
 `frame.resume_pc` to the segment length and passing the bytes back
 through `write_machine`/`from_snapshot_bytes`.
 
-The proof-carrying boundary is therefore able to hand restore a
+The proof-carrying boundary was therefore able to hand restore a
 machine whose next `.next()` enters dispatch at an invalid PC.
-Fix: derive the valid instruction starts with `instruction_len` over
-exactly `[body_start, body_start + body_len)` of `frame.cur_func`, and
-require `resume_pc` and every `jump.target_pc` to be members of that
-set.
-Crafted container and store arms must cover the segment end, an
-operand byte, and a valid instruction start in a different body.
+Fixed by deriving the valid instruction starts with `instruction_len`
+over exactly `[body_start, body_start + body_len)` of
+`frame.cur_func` — the walk the function-state gate above already
+proves sizes cleanly to its end — and requiring `resume_pc` and every
+`jump.target_pc` to be members of that set.
+Memoized per function so a crafted image naming one large body from
+many rows cannot make the gate quadratic.
+Locks in `generator_carry.rs` cover the segment end, the body end, an
+operand byte, and a sibling body's instruction start, for the cursor
+and for the handler target; the store mirror is in
+`crafted_row_refusals.rs`, since the gate is shared by the container
+read and both store resume paths.
 
-#### P2-1 — Saved handler `id_map` is bounded by the wrong length
+#### P2-1 — Saved handler `id_map` is bounded by the wrong length — FIXED
 
 Same block: a saved exception handler's `id_map` entries are checked
 with `index >= frame.locals.len()`, but the handler resolves against
 its own `jump.locals_len`.
 A crafted row with `locals_len` shorter than the frame's locals
-passes validation and misresolves a name in the resumed `catch`.
+passed validation and misresolved a name in the resumed `catch`.
 A panic was not demonstrated; the misresolution was.
+Fixed with P1-3 (the bound is `jump.locals_len` now), bite-checked
+separately: reverting just that one bound makes the short-`locals_len`
+arm accept again.
 
 #### P2-2 — Cross-crank `.call`/`.apply` on a detached intrinsic
 
@@ -3101,8 +3133,12 @@ re-pinned.
 Disabling it entirely leaves all 35 test binaries green, so nothing
 pins what it refuses.
 It also inspects `accessors` only — not `bound_functions[..].target`,
-not `disposable_stacks[..].records[..].method` — which is how P1-2
-reaches the store instead of being refused at the boundary.
+not `disposable_stacks[..].records[..].method`.
+With P1-2 fixed at the source (the natives are boot-derived now, so
+`accessor_function_persists` answers true for them), widening the gate
+is no longer load-bearing for that defect, but it remains the right
+shape for the next non-persisting native to appear in a data property,
+and the gate still needs tests of its own.
 
 #### P2-4 — Instrument debt across the new carries
 
