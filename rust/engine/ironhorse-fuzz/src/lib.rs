@@ -2072,6 +2072,36 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `284de587e16bce32` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 9-byte input
+    /// `00 fc 00 01 b1 5d 00 00 00` folds into
+    /// `(((~(true && true)) - ((780140544 - true) * (true + true))) * (…same…))`,
+    /// i.e. the square of `-2 - (780140543 * 2) = -1560281088`. In IEEE-754
+    /// doubles that is `1560281088^2 = (186 * 2^23)^2 = 8649 * 2^48`, the
+    /// exactly-representable double whose real value is `2434477073570463744`.
+    /// XS's `fx_dtoa` prints that double verbatim as its 19-digit exact integer,
+    /// whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's shortest-round-
+    /// tripping rule — prints `2434477073570464000`. Both denote the identical
+    /// double, so the engines agree on the value and diverge only on decimal
+    /// spelling; the same class as `d99d263fcf6ca7a7` / `5c29667cc15d6d93` /
+    /// `7289e31013d074ec` / `783be6e6106bad98`, already suppressed by the
+    /// numeric `results_agree` comparison. The differential check must not read
+    /// this as a finding.
+    #[test]
+    fn finding_284de587e16bce32_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 05b1ea60cf0ed92291daeb24a160652baaa07e231d88d84f48548d261b517c33).
+        let data: &[u8] = &[0x00, 0xfc, 0x00, 0x01, 0xb1, 0x5d, 0x00, 0x00, 0x00];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 284de587e16bce32 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
