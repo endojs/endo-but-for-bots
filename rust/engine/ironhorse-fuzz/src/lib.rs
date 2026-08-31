@@ -2102,6 +2102,37 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `7152c1a9960a0688` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 8-byte input
+    /// `27 79 00 00 00 57 2d 08` folds into the arithmetic program
+    /// `((((1015021568 / true) * (377487360 + -89)) + (-(true + 377487360))) ||
+    /// 1015021568)`, i.e. `1015021568 * 377487271 - 377487361`, whose IEEE-754
+    /// double is `8'315'...` — precisely the exactly-representable double whose
+    /// real value is `383157721332973568` (bits `0x439544ffab840000`). XS's
+    /// `fx_dtoa` renders it in a non-shortest 18-digit form
+    /// (`383157721332973570`), while ironhorse — like V8 and ECMA-262
+    /// §6.1.6.1.20's shortest-round-tripping rule — renders `383157721332973600`.
+    /// Both spellings parse back to the identical double, so the engines agree on
+    /// the value and diverge only on decimal spelling; the same class as
+    /// `d99d263fcf6ca7a7` / `5c29667cc15d6d93` / `7289e31013d074ec` /
+    /// `783be6e6106bad98` / `284de587e16bce32`, already suppressed by the numeric
+    /// `results_agree` comparison. The differential check must not read this as a
+    /// finding.
+    #[test]
+    fn finding_7152c1a9960a0688_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // f8b5e31e69a227500b3733aebdfffee49512debf2bb863c825991a4435652bc1).
+        let data: &[u8] = &[0x27, 0x79, 0x00, 0x00, 0x00, 0x57, 0x2d, 0x08];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program is
+        // the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7152c1a9960a0688 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
