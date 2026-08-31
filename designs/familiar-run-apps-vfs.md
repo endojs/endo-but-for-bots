@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-13 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-08-31 |
 | **Author** | kriscendobot (prompted by kriskowal) |
 | **Status** | Proposed |
 
@@ -31,14 +31,51 @@ filesystem and then shells out to a `node` child process that loads the
 application from disk, for applications that genuinely need Node.js APIs
 and where the guest-side POSIX sandbox is not yet available.
 
+## Relationship to the four-layer `importLocation` stack
+
+Case 1's fully-virtualized sub-case is **not** new territory: it is the
+Familiar- and guest-facing consumer of the accepted four-layer
+daemon-worker `importLocation` stack, which `designs/README.md` records
+as Not Started (accepted 2026-07-10) and whose canonical
+dependency-ordered build plan lives in
+[daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)
+§ *Phased Implementation*. This design does not re-specify that stack; it
+composes it, and every Case 1 mechanism below is a use of a layer that
+stack owns:
+
+| This design (Case 1) | Owned by | Canonical shape |
+|----------------------|----------|-----------------|
+| The sqlite-backed module store (`## Module store: npm-to-sqlite`) | [registry-capability](registry-capability.md) | the `EndoRegistry` capability and `@registry` host special name over the CAS-backed registry table; this design's raw-sqlite framing is that capability's backing, not a second store |
+| The Go-style resolver (`## Resolution: Go-mod-shaped`) | [mvs-resolver](mvs-resolver.md) | the JS reference MVS implementation producing a `RegistryResolution` (content-addressed `resolutionHash`); this design reuses that algorithm rather than restating a variant |
+| Ad-hoc compartment-map construction (`## Ad-hoc compartment maps`) | [snapshot-mapper](snapshot-mapper.md) | `mapSnapshot`, which turns a `(RegistryResolution, EndoMount)` into a `CompartmentMap` via the archive-precedent peer-directory layout; this design's in-memory descriptor is that mapper's output |
+| The `endor run entry.js` integration path | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | the `makeFromPackage`/`makeFromMount` daemon-worker entry that runs a `package.json`-rooted mount through `compartment-mapper.importLocation` |
+
+What this design adds *over* that stack, and why it remains a distinct
+document rather than a fifth layer or a supersession:
+
+- **The two-case host/guest framing.** The stack is the confined-import
+  substrate (Case 1). This design frames *who* drives it (Familiar's
+  daemon, the CLI, and a Lal caplet acting for a guest) and the
+  mount-cap authorization surface in front of it.
+- **Case 2 (host-eject to Node.js)**, which the four-layer stack does
+  not cover at all: shelling out to an unconfined `node` against a
+  materialised tree for applications that need Node APIs XS cannot
+  satisfy.
+- **The `endor` (Rust-side) mirror** in `## Endor cross-references`.
+
+Where a term below has a canonical name in the stack (`EndoRegistry`,
+`mapSnapshot`, `RegistryResolution`), the stack's name is authoritative;
+this design's prose names the same object and defers its exact shape to
+the owning layer.
+
 ## Glossary
 
-We reuse vocabulary from existing designs rather than coining new
-terms.
+This design reuses vocabulary from existing designs rather than
+coining new terms.
 **Filesystem mount interface (VFS)**: the `MountInterface` defined by
 [daemon-mount](daemon-mount.md) (has / list / lookup / write / remove
 / move / makeDirectory / readOnly / snapshot).
-We use VFS as a short name for this interface throughout.
+VFS is used as a short name for this interface throughout.
 **Readable tree**: the immutable, content-addressed snapshot of a
 directory tree per [daemon-checkin-checkout](daemon-checkin-checkout.md);
 the shape a `MountInterface.snapshot()` produces.
@@ -83,8 +120,15 @@ A Lal caplet that wraps `endor run` lets an agent run an application
 against a mount set the host authorized.
 **Ejection**: producing a host-filesystem layout from a mount such
 that an external program (in Case 2, `node`) can read it directly.
-The dual of `endo checkin` (the readable-tree commit step defined in
-`daemon-checkin-checkout.md`).
+Mechanically this is [`endo checkout`](daemon-checkin-checkout.md),
+the documented dual of `endo checkin` that "writes a `readable-tree`
+from the daemon back to the local filesystem", restricted to a
+scratch mount: eject writes to a daemon-managed scratch directory
+reclaimed by scratch GC (`## Case 2 § Shape` step 5) rather than to a
+caller-named persistent path, and materialises no persistent formula.
+"Eject" is used, rather than reusing "checkout" bare, only to mark
+that scratch-mount-and-GC restriction; the write mechanism is
+`checkout`'s.
 
 ## Case 1: confined application execution
 
@@ -146,7 +190,7 @@ module store, building on [endor-npm-registry-proxy](endor-npm-registry-proxy.md
 registry table and [daemon-cas-management](daemon-cas-management.md)'s
 content-addressed store.
 The schema in `endor-npm-registry-proxy.md` § Registry table
-already records `(name, version) → CAS tree hash`; this design
+already records `(name, version) -> CAS tree hash`; this design
 treats that table as the canonical module store.
 A package's files are CAS blobs; the registry table indexes them by
 the npm name and version that the ingestion run resolved.
@@ -166,15 +210,16 @@ entirely on what is already in the table.
 `node_modules` exists today partly to materialise a resolved
 dependency graph and partly to feed Node's directory-walking
 resolver.
-With a CAS-backed module store we can replace both with a Go-style
-resolution computed at compartment-map construction time and never
-materialised on disk.
+With a CAS-backed module store the design replaces both with a
+Go-style resolution computed at compartment-map construction time and
+never materialised on disk.
 
 The resolution shape mirrors Go's `go.mod`.
-In Go's MVS, each module's `go.mod` declares the minimum version of
-each direct dependency it builds against, and the build picks the
-greatest of those minimums across the whole transitive graph.
-We adapt the same shape to npm's `package.json`:
+In Go's Minimal Version Selection (MVS), each module's `go.mod`
+declares the minimum version of each direct dependency it builds
+against, and the build picks the greatest of those minimums across
+the whole transitive graph.
+The design adapts the same shape to npm's `package.json`:
 
 - The entry package's `package.json` lists *direct* dependencies as
   it does today (the `dependencies`, `peerDependencies`, and
@@ -191,14 +236,38 @@ We adapt the same shape to npm's `package.json`:
   first time, see *ingestion failures* below for the on-miss path)
   and reads its direct dependencies.
 - The full transitive set is computed by walking this graph from
-  the entry package's direct dependencies down.
+  the entry package's direct dependencies down, fetching each newly
+  reached package's `package.json` once.
 - Within each `(name, major)` group, the resolver picks the
   *highest minimum across the transitive set*: for each
   `(name, major)`, it scans every range any transitive dependency
   declares against that name and major, computes each range's
   minimum, and selects the greatest of those minimums.
   This is Go's MVS rule restated in npm terms, per
-  `endor-npm-registry-proxy.md` § Minimal Version Selection.
+  [endor-npm-registry-proxy](endor-npm-registry-proxy.md)
+  § Minimal Version Selection.
+- **Re-walk to a fixed point.** After selecting a version for each
+  `(name, major)` group, the resolver re-walks the dependency graph
+  with the *selected* versions and repeats the two steps above,
+  repeating until the selection stabilizes (typically 1-2
+  iterations). This is step 4 ("Resolve transitively") of the
+  reused algorithm in `endor-npm-registry-proxy.md` § Version
+  resolution, and it is load-bearing: bumping a `(name, major)` to a
+  higher minimum can pull in transitive edges that a lower candidate
+  version's `package.json` never declared, so a single downward pass
+  would omit modules the actually-selected version requires. The
+  earlier bullets describe one pass; this bullet is the convergence
+  the algorithm's correctness depends on.
+- **A group with no satisfying version fails closed.** The greatest
+  minimum a `(name, major)` group selects must also satisfy every
+  range declared against that group; if a dependent pins an upper
+  bound below that minimum, so that no single version satisfies all
+  declared ranges for the group, the resolver fails closed at
+  compartment-map construction time, the same disposition the peer
+  policy takes for an unprovided peer (below), raising the
+  `IngestionError`-family structured error (`@endo/errors`) naming
+  the conflicting `(name, major)` and the incompatible ranges,
+  rather than silently selecting a version some dependent forbids.
 
 The resolution is a deterministic function of the entry package's
 direct deps plus the registry table's contents at resolution time.
@@ -236,6 +305,15 @@ The failure mode under the default is silent transitive drift: a
 run that re-resolves after an unrelated ingestion may pick up a
 newer `(name, version)` row, and the run's behavior changes
 accordingly.
+So that the drift is at least *observable* rather than silent, every
+`endor run` logs the resolved `(name, version)` set (the same set
+`endor lock` would freeze) to the daemon's run log before spawning
+the worker. An operator (or a host comparing successive runs) can
+diff the logged set between two runs of the same entry point to see
+exactly which transitive selection changed, without having adopted a
+lockfile. The default stays "no lockfile, resolution computed each
+run"; the log makes the accepted non-determinism auditable when it
+fires rather than leaving it undetectable.
 A future revision may promote `endor lock` to the default once the
 command lands and the operational ergonomics are clear.
 
@@ -270,9 +348,37 @@ the compartment-map build aborting before the worker starts, with
 `IngestionError` carrying the offending `(name, version)` pair and
 the registry's response.
 
+All three resolver failure paths belong to one family: an unprovided
+peer, a `(name, major)` group with no version satisfying all declared
+ranges, and a refused ingestion each raise an `@endo/errors`-shaped
+structured error at compartment-map construction time. The one
+deferred failure is an *optional* dependency that was unavailable:
+that surfaces as a runtime missing-module error at first use rather
+than a build-time error, and it too is `@endo/errors`-shaped when it
+fires.
+
 `package.json` is the Go-mod analogue: it carries direct-dependency
-intent. The resolved `compartment-map.json` is a deterministic,
-content-addressable output for a given `package.json`.
+intent. The resolved `compartment-map.json` is a deterministic
+output, and therefore content-addressable, *for a given
+`package.json` together with a fixed registry-table state*. It is not
+a pure function of `package.json` alone: as the conditional-determinism
+paragraph above states, an ingestion that advances the table between
+two runs of the same `package.json` can change the resolution, so any
+cache keyed on this output must key on `(package.json, registry-table
+snapshot identity)`, not on `package.json`'s hash alone.
+
+**Worked example.** The entry package declares `dep-a: ^1.2.0` and
+`dep-b: ^1.0.0`. `dep-a@1.2.0` declares `shared: ^2.1.0`;
+`dep-b@1.0.0` declares `shared: ^2.4.0`. The `(shared, major 2)` group
+sees two ranges; their minimums are `2.1.0` and `2.4.0`, and the
+resolver selects the greatest, `2.4.0` (the highest minimum, never a
+newer patch no package mentioned). If selecting `shared@2.4.0` reveals
+that `shared@2.4.0`'s own `package.json` newly declares `tiny: ^1.0.0`
+(a dependency `shared@2.1.0` did not have), the re-walk step picks
+`tiny` up on the next pass and the selection then stabilizes. Had
+`dep-b` instead declared `shared: ">=2.4.0 <2.5.0"` while `dep-a`
+declared `shared: "~2.6.0"`, no single version would satisfy both
+ranges and the resolver would fail closed on the `(shared, 2)` group.
 
 #### Ad-hoc compartment maps
 
@@ -314,8 +420,10 @@ a host filesystem path.
 
 The confined XS worker is a regular `endor` worker per
 `daemon-endor-architecture.md` § Worker platforms.
-Its `MountHandle` set is GC-pinned by the formula that incarnates
-it, so a daemon restart can re-create the same confinement.
+Its `MountHandle` set (the per-`Mount` capability references the
+worker holds, one handle per `Mount` in the mount set the host passed
+in) is GC-pinned by the formula that incarnates the worker, so a
+daemon restart can re-create the same confinement.
 Mount writes the worker performs land in the backing store of the
 underlying mount (a `mount` formula writes through to the host
 directory; a `scratch-mount` formula writes to the daemon's state
@@ -386,7 +494,12 @@ The application needs Node.js APIs that XS cannot satisfy (native
 modules, the full `node:*` surface, a binary the package's
 `postinstall` ran), so confined execution under `endor` is not
 viable.
-The host instead:
+The *supervisor* here is the daemon-side component that owns the
+child process's lifecycle: the same `make-unconfined` worker manager
+`daemon-endo-rust-sqlite.md` already uses to spawn and relay for
+unconfined workers. It is the daemon (Case 2 has no `endor`-hosted XS
+worker to supervise); it spawns the `node` child, relays its fds, and
+records its exit. The host instead:
 
 1. Allocates a scratch mount (`provideScratchMount`).
 2. Ejects each input mount into a subdirectory of the scratch
@@ -427,14 +540,61 @@ follow-up (below).
 ### Re-eject discipline
 
 If the host re-runs the same application without the input mounts
-having changed, the scratch directory is re-used; ejection is a
-no-op when the destination's `realpath` already matches the input
-mount's content hash.
-Content equality is computed by content hash. Mount formulas compute
-their current content hash; git filesystems can use their current
-tree hash directly.
-This matches the spirit of `daemon-cas-management.md`'s
-deduplication.
+having changed, the scratch directory can be re-used rather than
+re-ejected. The scratch directory is named by the source mount's
+content hash, so the reuse check is hash-to-hash: ejection is a no-op
+when a scratch directory named for the current source-mount content
+hash already exists. Mount formulas compute their current content
+hash; git filesystems can use their current tree hash directly. This
+matches the spirit of `daemon-cas-management.md`'s deduplication.
+
+Reuse is gated on the *destination staying pristine*, not only on the
+source hash matching. Case 2 hands the ejected directory to an
+unconfined `node` process as a writable cwd (`§ Shape` step 3), so
+that process can dirty the directory (a build cache, a config file, a
+mutated `node_modules` entry). A directory a prior run wrote into no
+longer equals a fresh ejection of the same source hash, so reusing it
+would silently break run-to-run isolation. The discipline is
+therefore: a scratch directory the child was allowed to write into is
+**single-use**; it is marked dirty when the child starts and is
+discarded (not reused) at GC, so a later run against the same
+unchanged source mount ejects fresh rather than inheriting the prior
+run's mutations. Only a scratch directory that was never handed to a
+writer (or was mounted read-only for the child) is eligible for the
+no-op reuse above.
+
+### Test catalog
+
+Case 2 lands with at least the following integration tests, mirroring
+Case 1's acceptance-set shape, all exercised against a real spawned
+`node` child:
+
+- **Fresh eject and run.** Given input `Mount`s and a `type:
+  'host-node-app'` formula, the host allocates a scratch mount, ejects
+  every input mount to disk, spawns `node` with the ejected cwd, and
+  runs the application to a clean (zero) exit.
+  Verifies: the eject write path, `node` spawn, fd relay, exit-code
+  capture.
+- **Re-eject no-op on unchanged source.** A second run against input
+  mounts whose content hash is unchanged, where the prior run did not
+  write into the scratch directory, reuses the existing scratch
+  directory and performs no re-eject.
+  Verifies: the hash-to-hash reuse gate under § Re-eject discipline.
+- **Dirtied scratch is not reused.** A run whose child writes into its
+  cwd marks the scratch directory single-use; a subsequent run against
+  the same unchanged source mount ejects fresh rather than inheriting
+  the prior run's mutations.
+  Verifies: the destination-mutation gate under § Re-eject discipline.
+- **Non-zero exit-code propagation.** A child that exits non-zero
+  causes the supervisor to record and surface that exact exit code to
+  the formula owner.
+  Verifies: the exit-code relay under § Shape step 4.
+- **Scratch GC reclaim.** When the worker exits or the formula is
+  unpinned, the daemon's scratch GC reclaims the scratch mount.
+  Verifies: § Shape step 5.
+
+Tests are AVA-shaped per the project convention and run under the
+daemon's existing integration-test harness.
 
 ## Endor cross-references
 
@@ -456,8 +616,11 @@ Alignment:
   via `daemon-endo-rust-sqlite.md`.
   The schema is shared.
 - The Go-style resolver in Case 1 reuses the algorithm
-  `endor-npm-registry-proxy.md` § Minimal Version Selection
-  specifies for the Rust side.
+  [endor-npm-registry-proxy](endor-npm-registry-proxy.md) § Minimal
+  Version Selection specifies for the Rust side, including its
+  transitive re-walk to a fixed point (§ Resolution: Go-mod-shaped,
+  "Re-walk to a fixed point"), so the two sides converge on the same
+  selection rather than diverging on a dropped step.
 
 Divergence:
 
@@ -483,8 +646,8 @@ Divergence:
    scratch mount, then run XS against it (no Go-style
    resolution).** Rejected: keeps the directory-walking
    resolution that the Go-style resolver retires, and produces a
-   per-run scratch dir whose hash collisions across runs we would
-   then have to manage.
+   per-run scratch dir whose hash collisions across runs the daemon
+   would then have to manage.
 3. **Use npm's existing maximal version selection (newest within
    range) instead of MVS.** Rejected: aggressive, brings in
    versions no package in the graph has tested against; conflicts
@@ -513,6 +676,20 @@ each application that elects host-Node execution.
 The POSIX-sandbox follow-up retires Case 2's ad-hoc confinement
 once the sandbox is available on the deployment target.
 
+**One entry point, explicit dispatch.** `endor run` remains the sole
+caller-facing verb for both cases; a caller never picks a case by
+reaching for a different command. `endor run` dispatches on the
+formula's `type`: a default formula runs the confined Case 1 path,
+and a formula carrying the `host-node-app` opt-in runs the Case 2
+host-eject path. Because the opt-in is an explicit, maintainer-audited
+per-formula flag (not something `endor run` infers from the
+application's contents), `endor run` against an application that needs
+Node APIs but lacks the opt-in fails closed with an error naming the
+`host-node-app` opt-in as the required next step, rather than silently
+falling back to host-eject. The two cases are thus reachable from the
+one entry point a caller starts at, and the path between them is a
+named flag, not a second command.
+
 **Cross-major-version semantics.** Case 1 and Case 2 both host
 multiple major versions of the same package in distinct
 compartments. Moving an application between paths therefore does
@@ -521,10 +698,16 @@ not change its dependency semantics.
 ## Resolved design decisions
 
 1. **`package.json` remains the Go-mod analogue.** It declares the
-   application's direct dependencies. The `compartment-map.json` is
-   a deterministic output for a given `package.json`, so it can be
-   cached by content address rather than carrying a second source of
-   dependency intent.
+   application's direct dependencies. The `compartment-map.json` is a
+   deterministic output for a given `package.json` *together with a
+   fixed registry-table state* (§ Resolution: Go-mod-shaped,
+   conditional determinism), so it can be cached by content address,
+   but the cache key is `(package.json, registry-table snapshot
+   identity)`, not `package.json`'s hash alone, and the cache is
+   invalidated whenever ingestion advances the table. Keyed on
+   `package.json` alone it would return a stale map after an unrelated
+   ingestion, reintroducing the silent transitive drift that section
+   names. It carries no second source of dependency intent.
 2. **The module store is per daemon.** The sqlite-backed store lives
    at `{statePath}/registry.sqlite`, as in
    `endor-npm-registry-proxy.md`; no system-wide shared cache is
