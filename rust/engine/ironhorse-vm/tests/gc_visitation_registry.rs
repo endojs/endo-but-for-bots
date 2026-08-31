@@ -354,6 +354,9 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("async_generator_function_proto", &[Req::DocumentedOnly], "reachable via rooted proto rows"),
     ("string_iterator_method", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted string proto"),
     ("async_iterator_identity", &[Req::DocumentedOnly], "identity cache over rooted boot structure"),
+    ("iterator_identity", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %IteratorPrototype%"),
+    ("segments_iterator_method", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %Segments.prototype%"),
+    ("segment_iterator_identity", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %SegmentIterator.prototype%"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::DocumentedOnly], "armed by SUPER, consumed/disarmed before every boundary (W6-15); collections run only at quiescent boundaries"),
 ];

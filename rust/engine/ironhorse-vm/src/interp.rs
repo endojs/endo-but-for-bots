@@ -3881,6 +3881,16 @@ pub struct Interp {
     segmenter_proto: crate::value::SlotIndex,
     segments_proto: crate::value::SlotIndex,
     segment_iterator_proto: crate::value::SlotIndex,
+    /// `%Segments.prototype%[@@iterator]` and the `%SegmentIterator%`
+    /// self-identity, minted at BOOT beside their `async_iterator_identity`
+    /// and `string_iterator_method` siblings rather than during
+    /// `link_intrinsics`. A native minted after `boot_slot_count` is
+    /// re-derived by nothing on the resume path -- restore reinstates the
+    /// heap reference but not its `FuncInfo`, so the property reads back as
+    /// a plain object and `for..of` over a resumed `Segments` dies. Boot
+    /// slots come back at identical indices with identical name chunks.
+    segments_iterator_method: crate::value::SlotIndex,
+    segment_iterator_identity: crate::value::SlotIndex,
     date_time_format_proto: crate::value::SlotIndex,
     number_format_proto: crate::value::SlotIndex,
     locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
@@ -4284,6 +4294,9 @@ pub struct Interp {
     async_generator_proto: crate::value::SlotIndex,
     async_generator_function_proto: crate::value::SlotIndex,
     async_iterator_identity: crate::value::SlotIndex,
+    /// `%IteratorPrototype%[@@iterator]`. See `segments_iterator_method`
+    /// for why this is a boot field rather than a link-time mint.
+    iterator_identity: crate::value::SlotIndex,
     async_gen_run_stack: Vec<AsyncGenRunFrame>,
     /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an
     /// `AWAIT` resume (XS's `the->status`): `NoStatus` (a fulfilled resume —
@@ -5137,6 +5150,8 @@ impl Interp {
             segmenter_proto: crate::value::SlotIndex::NULL,
             segments_proto: crate::value::SlotIndex::NULL,
             segment_iterator_proto: crate::value::SlotIndex::NULL,
+            segments_iterator_method: crate::value::SlotIndex::NULL,
+            segment_iterator_identity: crate::value::SlotIndex::NULL,
             date_time_format_proto: crate::value::SlotIndex::NULL,
             number_format_proto: crate::value::SlotIndex::NULL,
             locales: std::collections::HashMap::new(),
@@ -5233,6 +5248,7 @@ impl Interp {
             async_generator_proto: crate::value::SlotIndex::NULL,
             async_generator_function_proto: crate::value::SlotIndex::NULL,
             async_iterator_identity: crate::value::SlotIndex::NULL,
+            iterator_identity: crate::value::SlotIndex::NULL,
             async_gen_run_stack: Vec::new(),
             resume_status: ResumeStatus::NoStatus,
             promise_functions: std::collections::HashMap::new(),
@@ -5868,6 +5884,11 @@ impl Interp {
             self.proto_methods.push((async_generator_proto, name, mf));
         }
         self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
+        self.iterator_identity = self.alloc_named_method(
+            NativeMethod::AsyncIteratorIdentity,
+            "[Symbol.iterator]",
+            0,
+        );
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         // `%AsyncGenerator%` (the common prototype of async-generator
         // functions) exposes `%AsyncGeneratorPrototype%` through its own
@@ -6342,6 +6363,16 @@ impl Interp {
         self.segments_proto = segments_proto;
         let segment_iterator_proto = self.slots.alloc(Slot::instance(self.object_proto));
         self.segment_iterator_proto = segment_iterator_proto;
+        self.segments_iterator_method = self.alloc_named_method(
+            NativeMethod::SegmentsIterator,
+            "[Symbol.iterator]",
+            0,
+        );
+        self.segment_iterator_identity = self.alloc_named_method(
+            NativeMethod::SegmentIteratorSymbolIterator,
+            "[Symbol.iterator]",
+            0,
+        );
 
         let date_time_format = self.alloc_named_native(Native::DateTimeFormat);
         let date_time_format_proto = self.slots.alloc(Slot::instance(self.object_proto));
@@ -7662,15 +7693,10 @@ impl Interp {
             );
         }
         if let Some(id) = self.well_known_symbol_property_id("iterator") {
-            let identity = self.alloc_named_method(
-                NativeMethod::AsyncIteratorIdentity,
-                "[Symbol.iterator]",
-                0,
-            );
             self.set_own_unmetered_with_flag(
                 self.iterator_proto,
                 id,
-                Slot::of(Kind::Reference, Payload::Reference(identity)),
+                Slot::of(Kind::Reference, Payload::Reference(self.iterator_identity)),
                 XS_DONT_ENUM_FLAG,
             );
             self.set_own_unmetered_with_flag(
@@ -7708,22 +7734,22 @@ impl Interp {
             // the iterator itself carries the identity `[Symbol.iterator]`
             // (`%IteratorPrototype%`) so it survives spread/`Array.from`.
             if !self.segments_proto.is_null() {
-                let iter = self.alloc_named_method(NativeMethod::SegmentsIterator, "[Symbol.iterator]", 0);
                 self.set_own_unmetered_with_flag(
                     self.segments_proto,
                     id,
-                    Slot::of(Kind::Reference, Payload::Reference(iter)),
+                    Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(self.segments_iterator_method),
+                    ),
                     XS_DONT_ENUM_FLAG,
-                );
-                let identity = self.alloc_named_method(
-                    NativeMethod::SegmentIteratorSymbolIterator,
-                    "[Symbol.iterator]",
-                    0,
                 );
                 self.set_own_unmetered_with_flag(
                     self.segment_iterator_proto,
                     id,
-                    Slot::of(Kind::Reference, Payload::Reference(identity)),
+                    Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(self.segment_iterator_identity),
+                    ),
                     XS_DONT_ENUM_FLAG,
                 );
             }

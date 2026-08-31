@@ -719,6 +719,15 @@ mod tests {
             "boot_slot_count",
             "well_known_symbols", "proto_methods", "proto_data", "proto_accessors",
             "proto_value_data", "string_iterator_method", "async_iterator_identity",
+            // The three `@@iterator` natives that used to be minted
+            // during `link_intrinsics` (above `boot_slot_count`, so
+            // resume re-derived neither their `FuncInfo` nor their name
+            // chunk, and the heap's reference to them read back as a
+            // plain object). Minting them at boot beside the two
+            // siblings above is what makes them boot-derived, and a
+            // fresh boot reproduces them at identical indices.
+            "iterator_identity", "segments_iterator_method",
+            "segment_iterator_identity",
             "object_proto", "function_proto", "array_proto",
             "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
             "arraybuffer_proto", "dataview_proto", "array_iterator_proto",
