@@ -49,18 +49,19 @@ try { doWork(timeuot /* typo: bare variable */); } catch (e) { retry(); }
 
 Here the mistyped **bare variable** `timeuot` raises a `ReferenceError`
 (precisely the engine-raised error panic-on-reference-error intercepts), and the
-`catch` silently turns it into a retry loop. (A mistyped *property* access,
-`config.tiemout`, is a **different** bug this design does *not* address: it reads
-as `undefined` and raises nothing at all, so no mechanism here (panic or tracker)
-catches it. That is an acknowledged, unaddressed gap, revisited in § 2's
-synchronous-swallow caveat; the example above is deliberately the bare-variable
-case, the one the mechanism actually resolves.) By the time anyone notices (minutes, or many messages, later)
-the interpreter has unwound through the `catch`, the activation that raised the
-error is gone, and the heap has moved on. **Unwinding through a `catch` (or a
-promise rejection handler) before anyone inspects the failure destroys the single
-most useful piece of evidence: the exact program counter and heap state at the
-moment of the fault.** A post-hoc log line or a re-thrown wrapper is a photograph
-of the scene after the body has been moved.
+`catch` silently turns it into a retry loop. By the time anyone notices (minutes,
+or many messages, later) the interpreter has unwound through the `catch`, the
+activation that raised the error is gone, and the heap has moved on. **Unwinding
+through a `catch` (or a promise rejection handler) before anyone inspects the
+failure destroys the single most useful piece of evidence: the exact program
+counter and heap state at the moment of the fault.** A post-hoc log line or a
+re-thrown wrapper is a photograph of the scene after the body has been moved.
+
+The example is deliberately the *bare-variable* case, the one the mechanism
+actually resolves. A mistyped *property* access, `config.tiemout`, is a
+**different** bug this design does *not* address: it reads as `undefined` and
+raises nothing at all, so no mechanism here (panic or tracker) catches it. That is
+an acknowledged, unaddressed gap, revisited in § 2's synchronous-swallow caveat.
 
 Panicking on the reference error instead **freezes the world at the fault
 site**. The program counter still points at the faulting opcode; the activation
@@ -127,7 +128,8 @@ harden into a verdict.
 
 A note on vocabulary, since this document sits among siblings that spell the
 concept differently. Node, the XS oracle functions
-(`fxAddUnhandledRejection`/`fxCheckUnhandledRejections`), and the project's
+(the C reference implementation Ironhorse is checked against:
+`fxAddUnhandledRejection`/`fxCheckUnhandledRejections`), and the project's
 existing designs
 ([ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md),
 [unhandled-rejection-display](unhandled-rejection-display.md)) all say
@@ -152,8 +154,8 @@ passed as an argument, or resolved into another vat's reference graph. Under
 **promise pipelining**, messages are sent to a promise *before it resolves*, and
 the promise's eventual settlement is commonly owned by the **far side**, because
 the promise returned by `E(x).m()` stands in for a *result the far side has yet to
-compute*, so it is the far side's delivery of that result (or its failure to) that
-ultimately settles the promise, not any local turn. The
+compute*, so it is the far side's delivery of that result (or its failure to
+deliver it) that ultimately settles the promise, not any local turn. The
 whole point of the handoff is that *someone else now holds the obligation to
 observe and settle it*. A local "nobody subscribed here yet" check cannot see
 across the CapTP boundary. It has no way to distinguish (a) a promise
@@ -236,16 +238,48 @@ Be precise about *what* the always-on timeout ever covered, because it is easy t
 over-claim here. The unhandled-rejection timeout fires only on **promise
 rejections**; it has never observed a reference error swallowed by a *synchronous*
 `try`/`catch` at all. § 1's lead example is exactly that synchronous case
-(`try { doWork(config.tiemout); } catch (e) { retry(); }`, with no promise
-anywhere). That bug has **no** always-on net today and never did: Node's timeout could not
-see it (no promise is created), and the report-at-terminal-boundary tracker
-recommended below (Recommendation 3) likewise accounts only for *rejections*, so
-it cannot see it either. For the synchronous-swallow class, the **armed panic is
-the only tool**, exactly as it is today; retiring the rejection timeout takes
-nothing away from it, because the timeout never covered it. This document does not
+(`try { doWork(timeuot); } catch (e) { retry(); }`, the bare-variable
+`ReferenceError`, with no promise anywhere). That bug has **no** always-on net
+today and never did: Node's timeout could not see it (no promise is created), and
+the report-at-terminal-boundary tracker recommended below (Recommendation 3, an
+always-on reporter that accumulates unobserved rejections and reports them at the
+**most-deferred checkpoint available**: end-of-crank, drain, or worker exit)
+likewise accounts only for *rejections*, so it cannot see it either. For the
+*truly* synchronous-swallow class (a bare `try`/`catch` with no promise anywhere,
+as in § 1's lead example) the **armed panic is the only tool**, exactly as it is
+today; retiring the rejection timeout takes nothing away from it, because the
+timeout never covered it. This document does not
 claim otherwise, and a reader must not read § 2 as promising always-on coverage
 for synchronously-caught reference errors: there is none, and the recommendation
-does not create one.
+does not create one. (A reference error inside an `async function` body is a
+different matter: `step_async` converts it into a promise rejection, so it is
+*not* panic-only, and the next paragraph works that overlap out.)
+
+**The reference-error / rejection split is not clean, because async bodies
+convert one into the other.** The disjunction just drawn, that a reference error
+is *either* swallowed synchronously (panic-only) *or* manifests as a rejection
+(the tracker's residue), holds only for a reference error raised outside any async
+function. `ironhorse-vm`'s `step_async` catches a `Halt::Throw` that escapes an
+async function body and rejects that function's result promise
+(`settle_via_function(reject_fn, reason)`, `rust/engine/ironhorse-vm/src/interp.rs`),
+and it does so on the initial synchronous run (`is_start`), before any `await`. So
+a bare-variable reference error as the *first statement* of any `async function`
+(the exact `Halt::Throw` § 1 says the reference-error opcodes build, at the exact
+raise site § 1 says the panic intercepts) already becomes a promise rejection
+today, with no synchronous `catch` involved. That subclass is simultaneously
+reference-error-caused *and* rejection-shaped: an armed panic would freeze on it
+(it is a `Halt::Throw` at the raise site), **and** the report-at-terminal-boundary
+tracker would also see it (it is a rejection that can reach a terminal boundary
+unobserved). The two tools' territories therefore **overlap** rather than
+partition, and the tracker's scope (Recommendation 3 / Open Question 1) must
+resolve the overlap explicitly: either reference-error-sourced rejections are the
+**panic's** territory and the tracker excludes them to avoid double-reporting one
+fault as two, or they are the **tracker's** and the "armed panic is the only tool"
+framing above is scoped strictly to the *truly synchronous* case (a bare
+`try`/`catch` with no promise anywhere), not to reference errors in general. This
+document takes no position on which; it flags the interaction as Open Question 5
+so the tracker design settles it rather than inheriting a taxonomy that silently
+omits it.
 
 Where the always-on story *does* hold is the **rejection** manifestation of a
 dropped failure. There, retiring the timeout is a swap of one always-on mechanism
@@ -306,7 +340,7 @@ default and then trying to tune its false-positive rate. Concretely:
 
    The right response is to **report** it, the way XS (the C engine Ironhorse
    reimplements) accumulates unhandled rejections in a weak list and reports them
-   at drain/exit (`fxAddUnhandledRejection` / `fxCheckUnhandledRejections`; see
+   at drain/exit (`fxAddUnhandledRejection`/`fxCheckUnhandledRejections`; see
    [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md)
    § Ironhorse Decisions item 3), **not** to abort. Note that "report" covers two
    distinct surfaces with different temporal shapes: a one-shot **batch** report
@@ -342,7 +376,13 @@ instead of a coarse timeout guess.
 - **Pending promises**, attributed to the **line and column where each was
   created**: a "where did this promise come from?" view. The attribution point
   is creation site, so a promise stuck pending has a source location, not just an
-  opaque identity.
+  opaque identity. Like the unwatched-rejections panel below, an **entry here is
+  keyed by the promise's own identity, with the creation-site line/column carried
+  as a label only**. This is the same load-bearing split, for the same reason: a
+  loop that creates many promises at one call site produces many distinct pending
+  entries sharing a label, and the settlement of one must remove exactly that one
+  row, not the whole label group. Keying on creation-site instead would collapse
+  siblings and make single-entry retraction impossible to express here too.
 - **As-yet-unhandled ("unwatched") rejections**, shown **live, until each is
   handled**, and attributed (like the pending-promises panel) to the **line and
   column where the rejected promise was created**, so "where did this go wrong?"
@@ -382,7 +422,7 @@ goal: precise, timely information over a coarse timeout.
 | [unhandled-rejection-display](unhandled-rejection-display.md) | The diagnostic-rendering discipline (`renderRejection` / `passableAsJustin`) any rejection *report* should reuse. |
 | `packages/ses/src/error/unhandled-rejection.js` (`makeRejectionHandlers`) | **Existing prior art** for the track-retract-report-at-terminal-boundary shape Open Question 1 recommends, already wired into `lockdown()` (`unhandledRejectionTrapping: 'report'`). A follow-on tracker must reconcile with or supersede it, not treat the mechanism as unbuilt. |
 | `packages/daemon/src/worker.js` (`process.on('unhandledRejection', ...)`) | A **second, live report-only instance** in the actual host process that supervises Endo workers: it records a trace and never escalates. Strengthens § 2's claim that the project already leans report-over-escalate; the follow-on tracker's prior-art survey should cite it alongside `makeRejectionHandlers`. |
-| `@endo/eventual-send`, `@endo/captp` | Establish the `E()` / promise-pipelining / handoff vocabulary § 2 relies on; a local "unhandled" check cannot see across the CapTP boundary. |
+| `@endo/eventual-send`, `@endo/captp` | Establish the `E()`/promise-pipelining/handoff vocabulary § 2 relies on; a local "unhandled" check cannot see across the CapTP boundary. |
 
 ## 5. Open questions
 
@@ -417,24 +457,17 @@ implicit; each needs its own design or build job.
    SES-shimmed, this always-on reporter may already be running above Ironhorse.
    The follow-on `design-ironhorse-rejection-tracker` must therefore **reconcile
    with or explicitly supersede** the SES layer, deciding what an engine-level
-   tracker adds over `makeRejectionHandlers` (e.g. creation-site attribution,
+   tracker adds over `makeRejectionHandlers` (for example, creation-site attribution,
    CapTP-handoff awareness the SES layer lacks), rather than re-deriving the
    terminal-boundary and retraction questions as if they were unsolved. The
    residual-gap framing in § 2 is correspondingly narrower for *rejections* than a
    first read suggests: for the SES-shimmed rejection path, an always-on reporter
    may already exist.
 
-   **Resolve the naming split, not just the mechanism.** This document renames the
-   concept to **unwatched** for any new report/API surface (§ 2), but the
-   already-shipped SES knob a developer actually types is spelled `unhandled`:
-   `unhandledRejectionTrapping`. If the Ironhorse tracker's reports say "unwatched"
-   while the config option that arms the SES-layer reporter stays
-   `unhandledRejectionTrapping`, the *same concept* is spelled two ways depending
-   on which layer you look at. The follow-on `design-ironhorse-rejection-tracker`
-   must therefore decide the naming explicitly (rename the SES option, alias it,
-   or justify keeping `unhandled` as the shipped public term with `unwatched` as
-   internal/doc framing only) as part of the reconciliation, not just reconcile
-   the tracking mechanics.
+   The **naming** half of this reconciliation is carved out as its own,
+   lower-stakes Open Question 6 below: the terminal-boundary and handoff-awareness
+   mechanism can be designed and shipped under the name "unhandled" today with no
+   loss, so it must not stall on a public-API rename.
 
 2. **How do the two debugger panels get their live feed from `ironhorse-vm`?**
    The pending-promises and
@@ -463,6 +496,39 @@ implicit; each needs its own design or build job.
    that observable from `ironhorse-vm` alone, or does it need a signal from the
    CapTP layer above? (Ties into Open Question 1.)
 
+5. **Do reference-error-sourced rejections belong to the panic or to the
+   tracker?** § 2 establishes that a reference error thrown as the first statement
+   of an `async function` body is converted to a promise rejection by `step_async`
+   (`rust/engine/ironhorse-vm/src/interp.rs`), so a single fault is simultaneously
+   reference-error-caused (the panic's stated territory) and rejection-shaped (the
+   report-at-terminal-boundary tracker's territory). The follow-on
+   `design-ironhorse-rejection-tracker` must decide whether such rejections are
+   **excluded** from the tracker (deferred to the panic, so one fault is not
+   reported twice) or **included** (in which case the tracker, not the panic, is
+   the always-on net for this subclass, and § 2's "armed panic is the only tool"
+   framing is scoped to the truly-synchronous case only). Whichever way it goes,
+   the two mechanisms' coverage must be stated as a partition or an explicit
+   deliberate overlap, not left to each design assuming the other owns it. (Ties
+   into Open Question 1's terminal-boundary scoping.)
+
+6. **The naming split: `unwatched` reports vs. the shipped `unhandled` knob (a
+   lower-stakes, deferrable decision).** This document renames the concept to
+   **unwatched** for any new report/API surface (§ 2), but the already-shipped SES
+   knob a developer actually types is spelled `unhandled`:
+   `unhandledRejectionTrapping`. If the Ironhorse tracker's reports say "unwatched"
+   while the config option that arms the SES-layer reporter stays
+   `unhandledRejectionTrapping`, the *same concept* is spelled two ways depending
+   on which layer you look at. The follow-on `design-ironhorse-rejection-tracker`
+   should decide the naming explicitly (rename the SES option, alias it, or justify
+   keeping `unhandled` as the shipped public term with `unwatched` as internal/doc
+   framing only). This is deliberately kept **separate from Open Question 1's
+   mechanism decision**: it is a public-API vocabulary question that touches a knob
+   outside this document's control, the mechanism (terminal boundary, handoff
+   awareness, reconciliation with `makeRejectionHandlers`) can land without it, and
+   it can be settled independently of whether the tracker exists yet, so it must
+   not be allowed to block or entangle the mechanism work. It may be deferred past
+   the tracker's initial landing.
+
 ## 6. Prompt
 
 > Discuss: why panic-on-reference-error matters, and how it interacts with
@@ -477,5 +543,3 @@ implicit; each needs its own design or build job.
 > mechanism lands. Close with a debugger note for reactive pending-promise and
 > unwatched-rejection panels. Sibling to `design-ironhorse-panic`; land as a
 > draft PR against `llm`.
-
-(endolinbot, prompted, 2026-08-17)
