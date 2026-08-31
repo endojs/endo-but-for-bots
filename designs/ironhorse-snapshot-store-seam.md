@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-06 |
-| **Updated** | 2026-08-29 |
+| **Updated** | 2026-08-31 |
 | **Author** | Aaron Kumavis (prompted) |
 | **Status** | In Progress |
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
@@ -2973,6 +2973,152 @@ bite-checked lock:
   A literally infallible restore remains inappropriate until
   boot-derived index rebuilding and lazy page faults carry equivalent
   prepared proofs.
+
+### Review round 2 over the graduation wave (2026-08-31): the open ledger
+
+Two reviews landed on `dbd7d2199` (the head after the eight-atom
+graduation wave): an internal ultrareview across seven dimensions, and
+a second external pass from the same reviewer as the round above.
+They agree on the first finding independently.
+This section is the working ledger — every entry carries its
+reproduction, so a lost session does not lose the finding.
+Entries move to **fixed** with the lock that pins them.
+
+#### P1-1 — Intl-bound callables restore after the functions that bind them — FIXED
+
+`restore_side_tables` adjudicated the generic `FUNC` cluster
+(`machine.rs:530`) before installing the `IBFN` natives
+(`machine.rs:559`), but `restore_function_state`
+(`interp.rs:8876-8884`) refuses a bound row whose target is in
+neither the incoming `FUNC` snapshot nor the boot machine.
+An Intl bound native is in neither: it travels in `IBFN`.
+
+```js
+var collator = new Intl.Collator();
+var bound = collator.compare.bind(null);   // or nf.format.bind(null)
+```
+
+Checkpoint succeeds; every subsequent resume fails
+`Corrupt("side-table restore: malformed retained function state")`,
+on the container path and both store paths.
+That is data loss on ordinary code — the machine is committed and
+permanently unopenable.
+
+Fixed by restoring `INTL` and `IBFN` *before* the retained function
+state.
+`restore_intl_bound_functions` depends only on the Intl data rows, so
+the earlier position is otherwise inert, and the two collision checks
+stay mutually exclusive: `IBFN` still refuses a slot boot already
+minted, `FUNC` still refuses one an earlier verb installed.
+Locks: `a_guest_bind_over_an_intl_bound_function_resumes` and
+`a_guest_bind_over_a_collator_compare_resumes` in `intl_carry.rs`,
+both red pre-fix with exactly that error, across container, eager
+store, and lazy store.
+
+#### P1-2 — Runtime-minted intrinsic natives are carried by no table
+
+Three `%IteratorPrototype%`-adjacent natives are minted during
+`link_intrinsics` rather than during `Interp::new`, so they sit ABOVE
+`boot_slot_count` and a fresh boot does not re-derive them
+(`interp.rs:7570`, `7616`, `7623`):
+
+| Slot | Site | Reached by |
+|---|---|---|
+| `AsyncIteratorIdentity` | `iterator_proto[@@iterator]` | `for..of` over any built-in iterator object |
+| `SegmentsIterator` | `segments_proto[@@iterator]` | `for..of` over `Intl.Segmenter#segment(...)` |
+| `SegmentIteratorSymbolIterator` | `segment_iterator_proto[@@iterator]` | spread / `Array.from` over a segment iterator |
+
+Resume restores the heap reference to the slot but never restores its
+`FuncInfo`, so the property reads back as a dead object:
+
+```js
+// crank 1
+var sg = new Intl.Segmenter('en'); var seg = sg.segment('ab');
+// resumed crank
+typeof seg[Symbol.iterator]        // "function" continuous, "object" resumed
+for (var x of seg) {}              // 2 iterations continuous,
+                                   // Unsupported("to_primitive:non-callable") resumed
+```
+
+No hostile input, no crafted bytes: an honest machine silently loses
+callability.
+`Map`/`Set`/`String` iteration is unaffected — those `@@iterator`
+values are boot slots that a fresh boot re-mints at the same indices.
+The persist gate does not see this class at all: `accessor_function_persists`
+already encodes exactly the right predicate ("does this function slot
+survive resume") but is only consulted for accessor getters/setters,
+never for a function reference reached through a plain data property.
+
+The fix is to mint the three at boot alongside the siblings that
+already work this way (`async_iterator_identity`,
+`string_iterator_method` are `Interp` fields allocated in
+`create_intrinsics`), so they land below `boot_slot_count` and resume
+re-derives them at identical indices with identical name chunks.
+That moves boot slot layout, so both golden pins re-pin.
+
+#### P1-3 — Generator PCs are validated against the segment, not the body
+
+`image.rs:3466-3491` checks only `frame.resume_pc > code.len()` and
+`jump.target_pc > code.len()`, against the whole code SEGMENT.
+That accepts `resume_pc == code.len()`, a PC inside an instruction's
+operand or variable-length payload, and a PC belonging to a different
+function body sharing the segment.
+The external reviewer confirmed acceptance empirically by rewriting
+`frame.resume_pc` to the segment length and passing the bytes back
+through `write_machine`/`from_snapshot_bytes`.
+
+The proof-carrying boundary is therefore able to hand restore a
+machine whose next `.next()` enters dispatch at an invalid PC.
+Fix: derive the valid instruction starts with `instruction_len` over
+exactly `[body_start, body_start + body_len)` of `frame.cur_func`, and
+require `resume_pc` and every `jump.target_pc` to be members of that
+set.
+Crafted container and store arms must cover the segment end, an
+operand byte, and a valid instruction start in a different body.
+
+#### P2-1 — Saved handler `id_map` is bounded by the wrong length
+
+Same block: a saved exception handler's `id_map` entries are checked
+with `index >= frame.locals.len()`, but the handler resolves against
+its own `jump.locals_len`.
+A crafted row with `locals_len` shorter than the frame's locals
+passes validation and misresolves a name in the resumed `catch`.
+A panic was not demonstrated; the misresolution was.
+
+#### P2-2 — Cross-crank `.call`/`.apply` on a detached intrinsic
+
+Shape-dependent: one shape completes with a stale receiver value,
+another halts `Unsupported("")`, a third
+`Decode("pc N past end M")`.
+The pin that used to document this behavior was deleted rather than
+updated during the wave.
+Needs re-derivation from the current head before it is fixed or
+re-pinned.
+
+#### P2-3 — The residual persist gate has no test coverage
+
+`stored_unpersistable_row` is the last refuse-on-hold gate.
+Disabling it entirely leaves all 35 test binaries green, so nothing
+pins what it refuses.
+It also inspects `accessors` only — not `bound_functions[..].target`,
+not `disposable_stacks[..].records[..].method` — which is how P1-2
+reaches the store instead of being refused at the boundary.
+
+#### P2-4 — Instrument debt across the new carries
+
+The carries landed with locks but without instrument coverage:
+the fuzz generator populates 1 of the 8 new atoms (`dates`), the
+seven-way metamorphic determinism suite has never been extended by a
+single carry (still 5 scenarios: globals, strings, objects, free
+list, wide heap), and no carry twin asserts per-crank computrons —
+including the generator twins added in this round.
+
+#### Verified clean this round
+
+GC visitation over the new atoms; the decode and bounds gates for
+every graduated family; the `ValidatedSnapshot` / `ValidatedStoreState`
+boundary; the v13→v21 migration ladder; and the `FUNC` reconstruction
+mechanics.
 
 ## What Is the Problem Being Solved?
 
