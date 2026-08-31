@@ -769,10 +769,18 @@ is missing.
 Upward migrations run automatically on startup, recording each step
 to a `migrations.log` adjacent to the state.
 
-State here is the multi-tenant CAS, the relay registration table, and
-the per-account resource ledger; the schema for each lives in
-[`gateway-package`](gateway-package.md) and is referenced rather than
-re-defined here.
+State here is the multi-tenant CAS and the relay registration table,
+whose schemas are defined in [`gateway-package`](gateway-package.md)
+and are referenced rather than re-defined here. The per-account
+resource ledger is **deliberately excluded** from the set of
+versioned state this design plans a migration for: its schema is
+**not** defined in [`gateway-package`](gateway-package.md) — Feature
+1b there defers the ledger (no schema, no CapTP surface) to an
+unwritten follow-up design. This design therefore does not version a
+schema that does not yet exist; when the follow-up lands the ledger's
+schema, the ledger joins the versioned-state set and this migration
+story is extended to cover it. Until then, `STATE_VERSION` covers
+only the CAS and the relay table.
 
 ### sqlite (or sibling) database
 

@@ -406,11 +406,55 @@ durable signing key:
   key. The historical-key registry is KMS's own key-version
   history.
 
-This **fully resolves** the verification side of parent Open
-Question 4. The remaining *user-visible workflow* question (do
-clients re-issue every Git remote URL on rotation, or is the old
-token valid for the full grace period?) is the operator's
-product call, not a design gap.
+**Reconciliation with the parent token model (this is a second
+credential shape, not a redefinition of the first).**
+[`gateway-package`](gateway-package.md) Design Decision 4 defines
+the bearer token as the pre-existing **opaque 256-bit formula
+identifier** — a *capability*, keyed by formula id, that grants the
+authority of whatever formula it names (the Git repo handle, the
+Chat `fetch(token)` target). The signed `(account-id,
+issuance-time, durable-key-id)` credential above is a **different,
+account-scoped, time-scoped claim**, and this design does **not**
+silently replace the formula-identifier token with it. The two
+coexist by construction:
+
+- **Formula-identifier capability tokens** (Git remotes, Chat
+  `fetch(token)`) stay exactly as the parent design defines them:
+  opaque, formula-keyed, not account-scoped. The AWS-attuned
+  variant does not re-key these onto account id; a Git remote URL
+  is still a formula-identifier bearer token and rotates only by
+  the parent's (still-open) formula-identifier rotation story.
+- **The enclave-signed account credential** is a *new, additional*
+  credential minted at account onboarding for the **hosted
+  multi-tenant** control surface (account provisioning, ledger
+  access, tenant-scoped admin). It is the credential the enclave's
+  durable key backs and the one the rotation flow above rotates.
+  It is account-scoped precisely because the hosted product's unit
+  of tenancy is the account, not the formula.
+
+So Open Question 4's *rotation* concern is resolved **only for the
+account credential**, which is the credential the durable key
+signs; the formula-identifier capability tokens are out of that
+resolution's scope and keep their parent-design rotation gap. The
+mapping "which surfaces use which token" is: Git-over-HTTP and Chat
+`fetch(token)` use formula-identifier capabilities; account/ledger/
+tenant-admin use the enclave-signed account credential.
+
+On the **Pass-Invariant-Eq** framing the parent question carries
+(object identity must hold across a key change so two paths to the
+same object still compare `Eq`): the mechanism above resolves the
+*verification* side (dual-validity during the grace period, hard
+cutover after) but does **not** by itself establish the Eq
+property — a hard cutover where old account tokens "fail closed"
+is a re-issuance, not an identity-preserving rotation. This design
+therefore claims to resolve the **verification and custody** side
+of Open Question 4 for the account credential, and explicitly
+leaves the Pass-Invariant-Eq identity-preservation question open
+(it is the same open question the parent inherits from
+[`endo-gateway`](endo-gateway.md) § Open Questions 1). The
+remaining *user-visible workflow* question (do clients re-issue on
+rotation, or is the old token valid for the full grace period?) is
+the operator's product call.
 
 ### Cost
 
@@ -435,10 +479,11 @@ The AWS-attuned variant introduces **DNS-level tenant isolation**:
 
 Each tenant gets a subdomain:
 
-```
-acme.gateways.endojs.org      →  Route53 A-record  →  ALB for tenant acme
-bcorp.gateways.endojs.org     →  Route53 A-record  →  ALB for tenant bcorp
-operator-shared.gateways.endojs.org → shared ALB (small tenants)
+```mermaid
+flowchart LR
+    acme[acme.gateways.endojs.org] --> r53a[Route53 A-record] --> albA[ALB for tenant acme]
+    bcorp[bcorp.gateways.endojs.org] --> r53b[Route53 A-record] --> albB[ALB for tenant bcorp]
+    shared[operator-shared.gateways.endojs.org] --> albS[shared ALB for small tenants]
 ```
 
 Large tenants (>1000 RPS sustained) get a dedicated ALB; smaller
@@ -449,7 +494,7 @@ within.
 
 A tenant can bring their own domain (`chat.example.com`):
 
-1. Tenant creates a CNAME `chat.example.com → acme.gateways.endojs.org`.
+1. Tenant creates a CNAME `chat.example.com -> acme.gateways.endojs.org`.
 2. Operator provisions an ACM certificate (DNS validation) for
    `chat.example.com`.
 3. Operator adds `chat.example.com` to the tenant's ALB listener
@@ -485,6 +530,14 @@ The cross-tenant case (two tenants both want `chat`) becomes a
 non-issue because `acme.gateways.endojs.org/chat` and
 `bcorp.gateways.endojs.org/chat` are different URLs.
 
+It is **partial** — not full — because "per-tenant first-bind-wins
+is trivial" holds only where a tenant is a **single trust domain**.
+A tenant that contains several mutually-distrusting accounts still
+needs an intra-tenant allocation rule; that missing half is named
+and resolved (falling back to the parent's `authenticated-allocation`
+mode keyed by `ACCOUNT#<aid>`) in § Correspondence between
+row-identity and handle-identity below.
+
 ## DynamoDB as the SQLite Analogue
 
 The "appropriate analogue to sqlite for a hosted gateway service" in
@@ -512,7 +565,7 @@ Per-tenant items prefix `pk` with the tenant ID:
 |----|-----|-----------|------------|
 | `TENANT#<tid>` | `META` | Tenant metadata | name, plan, created_at, custom_domains |
 | `TENANT#<tid>` | `ACCOUNT#<aid>` | Account record | created_at, status, bearer_token_hash (enclave-decryptable) |
-| `TENANT#<tid>` | `LEDGER#<aid>` | Resource ledger | compute, storage, network counters; token balance |
+| `TENANT#<tid>` | `LEDGER#<aid>` | Resource ledger (**deferred — reserved key prefix only, see note below**) | compute, storage, network counters; token balance |
 | `TENANT#<tid>` | `WEBLET#<formula-id>` | Weblet binding | virtual_host, content_root_ref, mime_types, ssr_handler |
 | `TENANT#<tid>` | `RELAY#<pubkey-hex>` | Relay registration | target_handle, registered_at |
 | `TENANT#<tid>` | `SESSION#<session-id>` | Active OCapN session (hot) | last_seen, frame_count |
@@ -520,6 +573,71 @@ Per-tenant items prefix `pk` with the tenant ID:
 
 A **GSI** on `(account_id, sk)` lets the Gateway look up everything
 related to a single account regardless of tenant.
+
+### The `LEDGER#` row is a reserved prefix, not a settled schema
+
+[`gateway-package`](gateway-package.md) Feature 1b **defers** the
+resource ledger: it withholds the `ResourceLedger` shape from the
+design surface precisely because the gateway-side-vs-daemon-side
+compute-metering **trust boundary** is unsettled, and requires a
+follow-up design to land before any phase depends on it. This
+AWS-attuned design does **not** override that deferral, and the
+`LEDGER#<aid>` row above must not be read as settling the ledger's
+schema. It is included only to **reserve the sort-key prefix**
+(`LEDGER#`) so a later single-table migration does not collide with
+it; the attribute list (`compute, storage, network counters; token
+balance`) is illustrative of the *kind* of counters such a row
+would hold, not a committed column set. The actual ledger
+schema — which counters exist, who may read them, who may charge,
+and where the authoritative meter lives (gateway, daemon, or
+split) — is owned by the parent's Feature 1b follow-up design and
+lands there first. If that follow-up chooses a shape incompatible
+with a single DynamoDB row (for example, splitting the meter across
+the gateway and the user daemon), this reserved prefix is dropped
+rather than forcing the ledger into it. This design raises **no**
+new resolution of the ledger trust boundary; it defers to the
+parent exactly as the parent requires.
+
+### Correspondence between row-identity and handle-identity
+
+The single-table schema introduces a **place-oriented** identity
+scheme — `TENANT#<tid>` / `ACCOUNT#<aid>` partition/sort keys where
+"who may act" is "whoever the row says" (an ambient, DB-row
+identity). [`gateway-package`](gateway-package.md) (§ Capability
+Surface, § Feature 4) uses a **capability-oriented** identity —
+`UserDaemonHandle`, where authority is "whoever holds the handle."
+These are two different kinds of identity, and this design states
+their correspondence explicitly rather than letting them run in
+parallel unreconciled:
+
+- An `ACCOUNT#<aid>` row is the hosted product's **billing- and
+  provisioning-scoped record** for a tenant's account. It is
+  **not** itself a capability and confers no OCapN authority; it is
+  data the control plane reads under its own IAM/enclave authority.
+- A `UserDaemonHandle` remains the sole **capability** that directs
+  CapTP traffic to a user's daemon. The `RELAY#<pubkey-hex>` row's
+  `target_handle` attribute is a *serialized reference* to such a
+  handle (persisted so a data-plane instance can re-establish the
+  relay after restart), not an alternative source of authority: the
+  authority still travels with the handle, and the row is a durable
+  note of where a previously-held handle pointed.
+- A **tenant is a single trust domain** for the purpose of
+  first-bind-wins (§ Resolution of parent Open Question 3): the
+  "per-tenant first-bind-wins is trivial" claim holds **only**
+  because a `TENANT#<tid>` is one trust domain. Where a tenant
+  contains several mutually-distrusting **accounts**, the
+  intra-tenant allocation among those accounts falls back to the
+  parent design's `authenticated-allocation` mode keyed by
+  `ACCOUNT#<aid>` namespace, not to row-ownership. This is the
+  missing half the earlier draft hedged as "partially resolves":
+  cross-tenant is resolved by DNS; intra-tenant cross-account is
+  resolved by the parent's authenticated-allocation mode.
+
+The two identity models are therefore **not** orthogonal and
+**not** interchangeable: the capability model owns *authority to
+act*; the row model owns *durable product/billing state and
+persisted references*. No place-oriented row is ever the sole
+basis for granting CapTP authority.
 
 ### At-rest encryption
 
@@ -558,7 +676,7 @@ filesystem entirely:
 - Per-tenant S3 prefixes (`s3://.../tenants/<tid>/cas/`) carry
   per-tenant content with IAM-enforced isolation.
 - Dedup happens via **reference-counted entries in DynamoDB**: the
-  DynamoDB table tracks `(content-hash, tenant-id) → ref-count`; the
+  DynamoDB table tracks `(content-hash, tenant-id) -> ref-count`; the
   S3 object exists once at `s3://.../shared/cas/<hash>` for any
   shareable content, and the per-tenant prefix carries
   copy-on-restrict-access content.
@@ -705,6 +823,22 @@ through C (which establish the basic AWS deployment).
 Roughly speaking, the AWS-attuned variant is **Milestone 1 plus 2
 quarters** (per the README's milestone framing); the multi-tenant
 shape is a serious piece of software in its own right.
+
+## Test Catalog
+
+The AWS-native trust boundaries this design introduces carry their
+own adversarial coverage obligations, distinct from the
+generic-Linux catalogue in [`gateway-package`](gateway-package.md)
+§ Test Catalog (which this design references rather than repeats).
+Each row lands with the phase that lands its boundary.
+
+| Trust boundary | Adversarial tests |
+|----------------|-------------------|
+| Nitro Enclave attestation / key custody | A `kms:Decrypt` attempt whose attestation PCR does not match the pinned enclave image is denied by the KMS key policy; the parent EC2 (root-compromised) cannot obtain the durable key in plaintext; the ephemeral handshake key never signs a token (a negative assertion). |
+| Durable-key rotation / dual-verification | A token signed by the prior durable-key version verifies **during** the grace period and fails **after** it; a token signed by neither the current nor prior version always fails; the account credential's `durable-key-id` must match a KMS key version the enclave will verify against. |
+| Per-tenant DynamoDB isolation | A request scoped to `TENANT#<a>` cannot read or write `TENANT#<b>` items; the `(account_id, sk)` GSI does not leak cross-tenant rows to an account query; the `LEDGER#` prefix is inert (no code path reads it as a settled ledger) until the Feature 1b follow-up lands. |
+| Per-tenant S3 prefix isolation | A signed URL / IAM path scoped to one tenant's prefix cannot read another tenant's objects; the shared-dedup ref-count table cannot be driven negative to delete an object another tenant still references. |
+| Route53 / custom-domain binding | A tenant cannot add a custom domain to another tenant's ALB listener rules; ACM validation is required before a custom domain routes. |
 
 ## Design Decisions
 

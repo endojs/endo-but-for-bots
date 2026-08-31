@@ -43,16 +43,26 @@ re-introducing the per-user, multi-user, and bundled-fallback
 forks the existing design corpus has been working around one PR
 at a time.
 
-Today, the daemon's HTTP+WebSocket server lives inline in
-`packages/daemon/src/web-server-node.js` as the `@apps` formula.
-This design extracts that code into `packages/gateway/` and
-generalizes the configuration surface so the five deployment
-shapes above all reduce to one package with different feature
-toggles.
-The extracted code keeps its present per-user behavior on the
-developer install, picks up the system-service shape via a thin
-`@endo/gateway-daemon` wrapper, and rides into the Familiar via
-the same package imported into the Electron main process.
+Today, the daemon's HTTP+WebSocket surface lives inline in
+`packages/daemon/src/ws-gateway.js` (the `startWsGateway` entry
+point). That file is deliberately narrow: at this design's base
+commit (`b1c3f4dca9`) it is ~226 lines implementing only the
+bearer-token `fetch(token)` WebSocket bootstrap and a per-key rate
+limiter. It has **no** Host-header virtual hosting, **no**
+content-addressed static-asset cache, and **no** weblet
+content-tree resolution. This design therefore does two distinct
+things, and is careful not to conflate them: it **relocates** the
+existing `ws-gateway.js` bootstrap-and-rate-limit surface into
+`packages/gateway/`, and it **builds new** the virtual-hosting
+table, the CAS read-through cache, and the weblet content-tree
+serving that the deployment shapes above require but that the
+daemon does not have today. The relocated code keeps its present
+per-user behavior on the developer install; the new subsystems
+land phase by phase; the whole picks up the system-service shape
+via a thin `@endo/gateway-daemon` wrapper and rides into the
+Familiar via the same package imported into the Electron main
+process. See Open Question 7 for the relocation-vs-new-construction
+accounting that the phase sizing depends on.
 
 The proposal is to extract the gateway concerns from `@endo/daemon`
 into a new package, **`@endo/gateway`**, that exposes a `make({ ... })`
@@ -110,7 +120,7 @@ import { make } from '@endo/gateway';
 const gateway = await make({
   powers,            // filesystem, net, crypto, time
   config,            // see Configuration Model below
-  hostAgent,         // optional: per-user host this gateway serves
+  userDaemon,        // optional: UserDaemonHandle this gateway serves
   trustedProxy,      // optional: HTTPS-terminating proxy contract
 });
 
@@ -119,11 +129,21 @@ await E(gateway).start();
 await E(gateway).stop();
 ```
 
+The `userDaemon` option is a `UserDaemonHandle` — the **one**
+name this design uses for a handle to a user's per-user daemon
+(see § Capability Surface; earlier drafts spelled the same
+concept `hostAgent` and `HostHandle`, now unified to
+`UserDaemonHandle` everywhere it appears — param, type, and field).
+
 `make({ ... })` returns a hardened exo with an `M.interface` guard
 (per `project/CLAUDE.md` § makeExo).
-The exo exposes `start`, `stop`, `getBindAddress`, `getApps`,
-and feature-specific facets named per the Capability Surface
-section below.
+The exo exposes `start`, `stop`, and `getBindAddress`, plus the
+feature-specific facets named per the Capability Surface section
+below. `getApps` is **not** on this base exo: it is an
+admin-tooling convenience method that lives only on the UDS-only
+`GatewayBootstrap` (§ Capability Surface), reachable through the
+bootstrap socket and never from the base `make()` exo or any public
+surface.
 
 The gateway does not own the formula graph, the content store, or
 the worker pool.
@@ -132,7 +152,7 @@ The gateway holds:
 
 - An HTTP listener (Node `http.Server`).
 - A WebSocket server (`@endo/ws-relay` style, see `packages/daemon/src/networks/ws-relay.js`).
-- A virtual-host registration table (Host header → weblet handle).
+- A virtual-host registration table (Host header -> weblet handle).
 - A content-addressed read-through cache for static assets.
 - A registration table for OCapN public keys to relay targets.
 - Optionally, a UNIX-domain bootstrap socket for local registration.
@@ -142,7 +162,7 @@ current built-in gateway uses
 ([`daemon-web-gateway`](daemon-web-gateway.md)); the daemon
 formulates a gateway in the same place it formulates `@apps`
 today, but the gateway code lives in `@endo/gateway` rather than
-inline in `packages/daemon/src/web-server-node.js`.
+inline in `packages/daemon/src/ws-gateway.js`.
 The Familiar's bundled variant uses the same package with a
 different configuration (OS-assigned port, single-user, no UDS
 bootstrap).
@@ -284,7 +304,7 @@ directly meter compute inside a user daemon's worker without
 instrumentation on the daemon side.
 The follow-up resource-ledger design picks this up.
 
-### Feature 2: Virtual hosting (Host header → Weblet formula)
+### Feature 2: Virtual hosting (Host header -> Weblet formula)
 
 The gateway routes incoming HTTP and WebSocket traffic by the
 `Host` header to the corresponding weblet.
@@ -342,23 +362,26 @@ wins, the other gets a silent registration that never serves
 traffic, and a malicious user can deny service to a legitimate
 user by binding popular names first.
 This design therefore restricts the deployment shapes that may
-enable Feature 2 to one of two profiles:
+enable Feature 2 to one of two allocation **modes** (the word
+"profile" is reserved throughout this document for the named
+configurations in § Configuration Model, and is deliberately not
+reused for these allocation-policy variants):
 
 1. **Single-user / mutually-trusting deployment** (developer-install,
    Familiar-bundled, single-tenant system-service). First-bind-wins
    is acceptable because the only registrants are the same trust
-   domain. This is the default profile.
+   domain. This is the default mode.
 2. **Multi-user / mutually-distrusting deployment** (a public
    system-service, a multi-tenant host). Enabling Feature 2
-   requires the **authenticated-allocation** sub-mode: the operator
+   requires the **authenticated-allocation** mode: the operator
    pre-allocates a hostname namespace per user (a subdomain prefix
    or an explicit allowlist), and `bind` is checked against that
    namespace at registration time.
-   First-bind-wins is **disabled** in this sub-mode.
+   First-bind-wins is **disabled** in this mode.
 
 The configuration flag `vhost.allocationPolicy` selects between
-`first-bind-wins` (profile 1) and `authenticated-allocation`
-(profile 2); the gateway refuses to start under
+`first-bind-wins` (mode 1) and `authenticated-allocation`
+(mode 2); the gateway refuses to start under
 `first-bind-wins` if the operator has also enabled multi-user
 registration via the UDS bootstrap's group-relaxed mode (Feature 4),
 because the combination is unsafe.
@@ -368,14 +391,14 @@ the multi-user case differently, by moving the allocation into the
 DNS layer (each tenant gets a subdomain).
 That AWS-native resolution does **not** apply to the non-AWS
 deployment shape, which is why this design pins the
-`authenticated-allocation` sub-mode for the generic-Linux
+`authenticated-allocation` mode for the generic-Linux
 multi-user case.
 
 The content-tree resolution path:
 
 1. Gateway receives `GET /index.html`, `Host: chat.example.com`.
 2. Gateway looks up `chat.example.com` in its virtual-host table
-   → `webletFormulaId`.
+   -> `webletFormulaId`.
 3. Gateway fetches the weblet formula from the originating user
    daemon (or its cache).
 4. Gateway resolves `index.html` against `webletFormula.contentRoot`
@@ -522,7 +545,7 @@ interface GatewayBootstrap {
   getBindAddress(): Promise<string>;
 
   /** Get the @apps NameHub for the calling user's host. */
-  getApps(userHandle: HostHandle): Promise<AppsNameHub>;
+  getApps(userDaemon: UserDaemonHandle): Promise<AppsNameHub>;
 
   /** Issue a fresh nonce for proof-of-possession. */
   challenge(): Promise<Uint8Array>;
@@ -952,8 +975,8 @@ The gateway exposes the following CapTP-reachable exos:
 
 - `GatewayBootstrap`: the entry exo, with `challenge`,
   `registerRelay`, `getBindAddress`, and a single admin-tool
-  convenience `getApps(userHandle)` that returns the
-  `AppsNameHub` for the named user's host (admin / operator
+  convenience `getApps(userDaemon)` that returns the
+  `AppsNameHub` for the named user's daemon (admin / operator
   tooling reaches a user's `@apps` through this path so it can
   enumerate bindings without holding the user's host agent).
 - `RelayRegistration`: handle returned by `registerRelay`, with
@@ -963,7 +986,7 @@ The gateway exposes the following CapTP-reachable exos:
   `E(apps).lookup('chat')` returns the weblet formula identifier).
   The **canonical access path** is `E(agent).lookup('@apps')` on
   the calling user's own host agent's special-names; the bootstrap-
-  side `getApps(userHandle)` is a *convenience for admin tooling
+  side `getApps(userDaemon)` is a *convenience for admin tooling
   only*. End-user code does not call `getApps`; admin tooling does
   not reach into per-user host agents.
 - `GatewayAdmin`: `listRegistrations`, `deregisterRelay`,
@@ -978,10 +1001,16 @@ follow-up lands, the ledger's surface joins this list.
 
 ### Via the public HTTP/WS surface
 
-- `GatewayBootstrap` (a narrower variant): exposes only the
-  Chat-facing `fetch(token)` per
+- `PublicGatewayBootstrap`: a **distinct, deliberately smaller**
+  interface (not a "variant" sharing the `GatewayBootstrap` name)
+  that exposes only the Chat-facing `fetch(token)` per
   [`gateway-bearer-token-auth`](gateway-bearer-token-auth.md).
-  No relay registration, no admin, no apps NameHub.
+  No relay registration, no admin, no apps NameHub. It carries a
+  separate name precisely because it has a materially different —
+  and far narrower — method set and trust radius than the UDS
+  `GatewayBootstrap`; a reader who greps for `GatewayBootstrap`
+  methods must not assume the wider surface is reachable from the
+  network.
 - Virtual-hosted weblets: the gateway routes by `Host` to the
   weblet's `respond` and `connect` handlers; the weblet runs as
   the user's guest formula and exposes its own CapTP surface to
@@ -1092,7 +1121,7 @@ startup; a misconfiguration (e.g., `relay.enabled` with
 | Design | Relationship |
 |--------|--------------|
 | [endo-gateway](endo-gateway.md) | **Superseded by** this design. The prior framing (system-service Daemon variant relaying to per-user Daemons) is the feature-4 + feature-6 + feature-7 subset of the new package. The prior design's specific decisions (no TLS, Noise in-band, `@apps` NameHub, separate config trees, IPC for local-vs-remote, deferred key rotation) carry forward unless explicitly revised. |
-| [daemon-web-gateway](daemon-web-gateway.md) | The current in-daemon HTTP+WS server, which this package extracts and generalizes. The daemon's `@apps` formula transitions from inline `web-server-node.js` to a `@endo/gateway` import. |
+| [daemon-web-gateway](daemon-web-gateway.md) | The current in-daemon HTTP+WS surface (`packages/daemon/src/ws-gateway.js`, `startWsGateway`), whose bearer-token bootstrap + rate limiter this package relocates. Note the daemon does **not** today have virtual hosting or a CAS; those are new construction here, not a generalization of existing daemon code. The daemon's `startWsGateway` call site transitions to a `@endo/gateway` import. |
 | [daemon-weblet-application](daemon-weblet-application.md) | Provides the `readable-tree-weblet` formula type the new Weblet formula generalizes (feature 2). The gateway's content-tree serving reuses the `readable-tree` traversal. |
 | [weblet-next](weblet-next.md) | Reference doc for the removed weblet feature; the new design's feature 2 picks up the `@webs`-style NameHub idea sketched there. |
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | The multi-user / per-session-confidentiality concerns flagged in the 2026-04-17 revision are addressed by this package's feature 8 (Noise in-band) and feature 4 (UDS for local-vs-remote attestation). |
@@ -1114,13 +1143,18 @@ startup; a misconfiguration (e.g., `relay.enabled` with
 
 Phase 1: **Package skeleton plus core surface.**
 Establish `packages/gateway/` in the monorepo; implement
-`make({ ... })`; land feature 2 (virtual hosting via `@apps`
-NameHub) and feature 8 (`/ocapn-cbor-np` WebSocket).
-Wire the daemon's existing `@apps` formula to import `@endo/gateway`
-instead of inline `web-server-node.js`.
-The package binds `0.0.0.0:3469` by default and behaves
-indistinguishably from today's daemon-internal gateway for the
-single-user case.
+`make({ ... })`; **relocate** the daemon's existing
+`ws-gateway.js` bootstrap-and-rate-limit surface into the package,
+and **build new** feature 2 (virtual hosting via `@apps` NameHub)
+and feature 8 (`/ocapn-cbor-np` WebSocket) — neither exists in the
+daemon today, so this half of phase 1 is fresh construction, not
+extraction, and the phase's size estimate must reflect that. Wire
+the daemon's existing `startWsGateway` call site to import
+`@endo/gateway` instead of `ws-gateway.js`. The package binds
+`0.0.0.0:3469` by default. For the single-user `fetch(token)`
+path it behaves indistinguishably from today's `ws-gateway.js`;
+the virtual-hosting and CAS behavior is **added** capability with
+no prior daemon behavior to match.
 
 Phase 2: **System-service shape.**
 Land feature 4 (UDS bootstrap), feature 7 (admin daemon), and
@@ -1135,7 +1169,7 @@ Phase 3: **Multi-deployment fanout.**
 Land feature 5 (Familiar-bundled fallback) and feature 3 (Git
 over HTTP).
 The Familiar starts embedding `@endo/gateway` directly; the per-
-user daemon's built-in `web-server-node.js` is deprecated.
+user daemon's built-in `ws-gateway.js` is deprecated.
 
 Phase 4: **Public service.**
 Land feature 6 (CapTP relay), feature 9 (HTTPS terminating-proxy
@@ -1149,6 +1183,31 @@ The phases are sequential because each builds on its predecessor;
 the Phase-1 and Phase-2 work is on the critical path to feature
 parity with the existing in-daemon gateway.
 Phases 3 and 4 are independently order-able once Phase 2 is in.
+
+## Test Catalog
+
+The `gateway-packaging-ci.md` sibling defines a `package-smoke`
+CI job that proves the package builds, installs, and starts. That
+job is necessary but not sufficient: it does not exercise the
+load-bearing **trust boundaries** this design introduces. Each such
+boundary carries an adversarial test obligation, catalogued here so
+the phase that lands the boundary lands its coverage with it (a
+phase is not "done" until its row's tests are green). The tests
+named below are design-level obligations; the builder writes the
+concrete `ava` cases.
+
+| Trust boundary | Phase | Adversarial tests the phase must land |
+|----------------|-------|----------------------------------------|
+| Feature 2 multi-user vhost allocation | 1 (mode wiring), 2 (multi-user) | Under `authenticated-allocation`: a `bind()` for a hostname outside the caller's pre-allocated namespace is rejected; a second user cannot bind a name already allocated to another user's namespace; the gateway **refuses to start** when `first-bind-wins` is combined with the UDS group-relaxed mode. |
+| Feature 4 UDS proof-of-possession | 2 | A `registerRelay` whose `proofOfPossession` does not verify under the claimed `publicKey` is rejected; a replayed nonce (reusing a prior `challenge()`) is rejected; a caller cannot register a public key it does not hold the private key for. |
+| Feature 3 Git bearer-token auth | 3 | A request with no / wrong token gets 401 and no repo access; a read-only token cannot drive `git-receive-pack`; the rate limiter blocks after N failed attempts keyed by remote IP. |
+| Feature 9 `X-Forwarded-*` trust list | 4 | An `X-Forwarded-Host` / `X-Forwarded-For` from a peer **outside** the trusted-proxy CIDR is ignored (TCP-peer IP and literal `Host` used instead); a forged `X-Forwarded-Host` from an untrusted peer cannot reach another user's weblet; `maxHops` truncation is enforced. |
+| Feature 6 relay closed-allowlist | 4 | An inbound OCapN session for an unregistered destination public key is refused by default; per-public-key and per-IP rate limits shed load; the frame relay never decrypts (a payload-inspection assertion). |
+
+The AWS-native trust boundaries (Nitro Enclave attestation and the
+bearer-token durable-key rotation flow) carry their own coverage
+obligations in [`gateway-aws-attuned`](gateway-aws-attuned.md)
+§ Test Catalog, since they exist only in that variant.
 
 ## Design Decisions
 
@@ -1243,7 +1302,7 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    call and not pinned by this design.
 
 3. **Virtual-host name allocation across users (non-AWS case).**
-   Feature 2 above pins two profiles:
+   Feature 2 above pins two allocation modes:
    `first-bind-wins` for mutually-trusting deployments and
    `authenticated-allocation` for mutually-distrusting multi-user
    deployments. The remaining open product question is the
@@ -1256,16 +1315,8 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    by moving the namespace into DNS; the non-AWS analogue is
    underspecified. The first implementation picks the simplest
    shape that meets the constraint (operator-pinned namespace in
-   TOML) and revisits.
-
-   For the multi-tenant CAS isolation question that Open Question 5
-   originally named, the AWS-attuned variant resolves by moving the
-   CAS to S3 + DynamoDB per
-   [`gateway-aws-attuned`](gateway-aws-attuned.md) § Resolution of
-   parent Open Question 5. The non-AWS multi-user case remains
-   underspecified; the operator picks a CAS-isolation policy
-   (per-user subdirectory, shared dedup-by-hash with reference
-   counts) until a sibling design pins it.
+   TOML) and revisits. (Multi-tenant CAS isolation is a separate
+   question, tracked below as Open Question 5, not here.)
 
 4. **Rotation story for formula-identifier bearer tokens.**
    Inherits the Pass-Invariant-Eq follow-up from
@@ -1299,18 +1350,26 @@ Phases 3 and 4 are independently order-able once Phase 2 is in.
    The design uses `@endo/gateway` per the directive but flags
    the alternative for completeness.
 
-7. **Migration of the existing in-daemon `web-server-node.js`.**
-   The daemon's current `@apps` formula is implemented inline in
-   `packages/daemon/src/web-server-node.js`.
-   The phase-1 work transitions to `import { make } from '@endo/gateway'`,
-   but the timing of removing the inline code depends on whether
-   the package's first release covers every feature the inline
-   code today supports (it does for virtual hosting and the
-   Chat fetch endpoint; the CIDR / rate-limit machinery hoists
-   cleanly).
-   This is a builder-level question, surfaced here so the phase-
-   1 builder plans the transition rather than discovering the
-   need mid-PR.
+7. **Migration of the existing in-daemon `ws-gateway.js`, and the
+   relocation-vs-new-construction accounting.**
+   The daemon's current HTTP+WS surface is
+   `packages/daemon/src/ws-gateway.js` (`startWsGateway`), ~226
+   lines at this design's base commit implementing **only** the
+   bearer-token `fetch(token)` bootstrap and a per-key rate
+   limiter. It has no virtual hosting, no CAS, and no weblet
+   content-tree resolution. The phase-1 work therefore splits
+   cleanly into two kinds of change that the builder must size
+   separately: (a) **relocation** — move the `startWsGateway`
+   bootstrap + rate limiter into `@endo/gateway` and repoint the
+   daemon's call site at `import { make } from '@endo/gateway'`;
+   this is the only part that "extracts" existing behavior; and
+   (b) **new construction** — the vhost table (feature 2) and the
+   CAS read-through cache, which have no daemon predecessor to
+   extract from. The timing of *removing* the relocated inline
+   code depends only on (a) reaching parity with today's
+   `fetch(token)` + rate-limit behavior; it does not wait on (b).
+   Surfaced here so the phase-1 builder plans the split, and so
+   the phase-1 size estimate is not read as a pure extraction.
 
 ## Prompt
 

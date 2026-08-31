@@ -231,6 +231,63 @@ The ASG configuration:
 - Termination policy: oldest-launch-template first (so deploys roll
   out cleanly).
 
+### Correctness constraint: registration state is not shared across replicas
+
+A homogeneous ASG of ≥2 gateway replicas, each with **local,
+unshared** sqlite (`/var/lib/endo-gateway/state.db`) and a
+**host-local** UDS bootstrap socket
+([`gateway-package`](gateway-package.md) Feature 4, reachable only
+by a co-located process), has a correctness problem that this
+design must surface rather than ship silently:
+
+- The virtual-host registration table and the relay-registration
+  table are populated via the host-local UDS bootstrap and held
+  **in-process** ([`gateway-package`](gateway-package.md) Feature 2,
+  Feature 4). A `bind()` or `registerRelay()` that lands on replica
+  A is **invisible** to replicas B and C. The ALB distributes
+  requests across replicas that disagree on whether a given vhost
+  or relay exists, so the same `Host` header routes
+  non-deterministically.
+- Worse, Feature 2's `authenticated-allocation` namespace-conflict
+  check — the mechanism specifically relied on to stop malicious
+  squatting on a multi-tenant host — is a **per-replica** check
+  with no cross-replica visibility. Two users racing the same name
+  against two different replicas both "win" locally, so the check
+  fails to prevent the very race it exists to close.
+
+This is not a nuance; it is a correctness break for any deployment
+that both (a) runs ≥2 replicas and (b) accepts registrations at
+runtime. This design therefore **constrains** the multi-replica
+ASG to shapes where it is actually safe, and names the fix:
+
+1. **Single-writer registration for the ≥2-replica shape.** In this
+   deployment (sqlite, no shared store), runtime registration
+   (`bind`, `registerRelay`) must be funneled to a **single**
+   designated instance and the resulting state distributed to the
+   others, **or** registration must be a **deploy-time /
+   config-baked** input (the vhost and relay tables are rendered
+   from Parameter Store into every instance's config at launch and
+   are read-only at runtime). The first cut takes the config-baked
+   route: the ASG replicas are **read-mostly** serving instances,
+   and there is no runtime UDS registration on the fleet.
+2. **The real fix is a shared store.** Cross-replica-consistent
+   runtime registration requires moving the registration and relay
+   tables out of per-instance sqlite into a shared store. That is
+   exactly the control-plane / data-plane split and DynamoDB-backed
+   registration that [`gateway-aws-attuned`](gateway-aws-attuned.md)
+   specifies (2 long-lived control-plane instances own admin/UDS;
+   the data plane is stateless and reads shared state). The
+   sqlite-on-EBS deployment here is correct **only** as a
+   single-instance shape (Phase A) or as a config-baked read-mostly
+   fleet (Phase B under the constraint above); it is **not** a
+   correct substrate for runtime multi-user registration across a
+   live ASG.
+
+Phase B (below) therefore ships the 3-instance ASG under the
+config-baked-registration constraint, not as a general
+runtime-registration multi-user host. Open Question 1 and Design
+Decision 8 restate this so the rationale is not lost.
+
 ### Route53
 
 A single A-record `gateway.endojs.org` aliased to the ALB.
@@ -646,6 +703,15 @@ installed via Packer-baked AMI. No ASG yet, no auto-rollover.
 
 **Phase B**: ASG and instance refresh. Move from single-instance to
 3-instance multi-AZ ASG with automatic instance refresh on new AMI.
+The multi-replica fleet runs under the **config-baked,
+read-mostly registration** constraint of § Correctness constraint:
+registration state is not shared across replicas — the vhost and
+relay tables are rendered from Parameter Store into every
+instance's config at launch and are read-only at runtime; there is
+no runtime UDS registration on the fleet. Runtime multi-user
+registration across a live ASG is **not** in this deployment's
+scope and waits for the shared-store shape in
+[`gateway-aws-attuned`](gateway-aws-attuned.md).
 
 **Phase C**: Observability. CloudWatch Logs, CloudWatch Metrics,
 alarms wired to SNS.
@@ -698,13 +764,42 @@ gateway, D and E are quality improvements.
 
 8. **Sqlite local state for now, with named seam to the AWS-attuned
    variant.**
-   Don't prematurely couple the deployment to AWS-native storage
-   services; [`gateway-aws-attuned`](gateway-aws-attuned.md) is the
-   place where that coupling lands deliberately.
+   Deployment-portability taste (not prematurely coupling to
+   AWS-native storage) is a *secondary* reason to keep sqlite for
+   the first cut. The **primary** reason the storage layer must
+   eventually move is **registration-state correctness under
+   horizontal scaling**: per-instance sqlite plus a host-local UDS
+   bootstrap cannot give ≥2 replicas a consistent view of the
+   vhost / relay registration tables (see § Correctness constraint:
+   registration state is not shared across replicas). Sqlite is
+   therefore correct here **only** as a single-instance shape or as
+   a config-baked read-mostly fleet; runtime multi-user
+   registration across a live ASG requires the shared store that
+   [`gateway-aws-attuned`](gateway-aws-attuned.md) introduces
+   (DynamoDB + control/data-plane split). The seam to the
+   AWS-attuned variant is thus a **correctness** boundary, not
+   merely a portability one, and this decision states that plainly
+   so the cost of deferring the move is not understated.
 
 ## Open Questions
 
-1. **`/healthz` endpoint specification.**
+1. **Cross-replica registration consistency (the load-bearing one).**
+   Per-instance sqlite plus a host-local UDS bootstrap give ≥2 ASG
+   replicas **no** shared view of the vhost / relay registration
+   tables, which breaks routing determinism and defeats the
+   `authenticated-allocation` conflict check (§ Correctness
+   constraint: registration state is not shared across replicas).
+   This design's answer for the sqlite deployment is to constrain
+   the multi-replica fleet to **config-baked, read-mostly**
+   registration (no runtime UDS registration on the fleet); the
+   *general* runtime-multi-user answer is the shared-store
+   control/data-plane split in
+   [`gateway-aws-attuned`](gateway-aws-attuned.md). The remaining
+   open product question is the migration path from a config-baked
+   Phase-B fleet to the AWS-attuned shared store without a
+   flag-day.
+
+2. **`/healthz` endpoint specification.**
    The ALB health check needs a gateway endpoint that returns 200
    when the gateway is ready to serve.
    What counts as "ready"? Listening on 3469 is necessary but
@@ -714,7 +809,7 @@ gateway, D and E are quality improvements.
    `/healthz` with explicit ready vs. live distinction (Kubernetes-
    convention).
 
-2. **Multi-region active-active future.**
+3. **Multi-region active-active future.**
    When the gateway has enough traffic that single-region risk is
    intolerable, the multi-region story needs: cross-region DynamoDB
    global table (in the AWS-attuned variant) or cross-region sqlite
@@ -722,21 +817,21 @@ gateway, D and E are quality improvements.
    geolocation routing, per-region Secrets Manager entries.
    Deferred; surfaced as the work that would need to happen.
 
-3. **Bastion host or AWS Systems Manager Session Manager?**
+4. **Bastion host or AWS Systems Manager Session Manager?**
    First-cut decision is **SSM Session Manager** (no SSH key
    management, IAM-gated access, audit-logged); a bastion host is
    the fallback if SSM proves insufficient.
    Surfaced because some operators prefer SSH and would push back
    on SSM.
 
-4. **Backup strategy for sqlite.**
+5. **Backup strategy for sqlite.**
    Daily snapshot of the EBS volume? Stream sqlite WAL to S3?
    For the first cut, daily EBS snapshots with 14-day retention.
    The longer-term answer is to move to DynamoDB
    ([`gateway-aws-attuned`](gateway-aws-attuned.md)) and let AWS
    handle durability.
 
-5. **GitHub Actions OIDC role permissions scope.**
+6. **GitHub Actions OIDC role permissions scope.**
    The Packer build needs to launch EC2 instances, create AMIs, and
    write to Parameter Store.
    The principle of least authority suggests a per-workflow role
@@ -744,13 +839,13 @@ gateway, D and E are quality improvements.
    already too broad and should be tightened once observed usage
    pins it down.
 
-6. **Cost-control budgets.**
+7. **Cost-control budgets.**
    AWS Budgets alarms on monthly spend exceeding $400 (production)
    and $150 (staging) catch runaway costs; sensible thresholds
    depend on the operator's tolerance.
    Surfaced rather than picked.
 
-7. **Where do the AWS account credentials originate?**
+8. **Where do the AWS account credentials originate?**
    The endojs organization presumably has an AWS account; the IAM
    roles and trust policies that let the bot's CI assume those roles
    need to be configured by the maintainer at bootstrap time.
