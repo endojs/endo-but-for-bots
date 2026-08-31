@@ -374,8 +374,250 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         })
         .collect();
 
+    // The GRADUATION-WAVE atoms. Eight state-bearing families landed
+    // and only `DATE` reached this generator, so seven decoders were
+    // exercised by nothing but their own hand-written fixtures --
+    // exactly the gap the earlier ARRY/COLL/REGY comment describes,
+    // reopened one wave later. Generated VALID for the same reason:
+    // what the DECODERS accept (strictly-ascending keys, in-range
+    // enums, UTF-8 names, no records on a disposed stack, frame and
+    // state agreeing), so write -> read identity holds here while the
+    // byte-mutation target gets well-framed atoms to corrupt. The
+    // cross-table SEMANTIC rules (a callable getter, a generator frame
+    // whose function has a row) belong to the bounds gate, which this
+    // target does not run, so they are not modeled.
+    // Draw references from the LIVE prefix only: the free slots are a
+    // suffix, and the bounds gate refuses a side table that names one
+    // ("side table names a free slot").
+    let live_idxs: Vec<SlotIndex> = idxs.iter().copied().filter(|i| i.0 < live_cap).collect();
+    let slot = |c: &mut Cursor| {
+        Slot::of(Kind::Reference, Payload::Reference(pick_ref(c, &live_idxs)))
+    };
+    let opt_slot = |c: &mut Cursor| (c.byte() % 3 != 0).then(|| slot(c));
+
+    let mut next_owner = 0u32;
+    let mut proxies: Vec<ironhorse_vm::ProxyRow> = Vec::new();
+    for _ in 0..(c.byte() % 6) {
+        if next_owner >= cap {
+            break;
+        }
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        let revoked = c.byte() % 4 == 0;
+        proxies.push(ironhorse_vm::ProxyRow {
+            owner,
+            // A revoked proxy NULLs both edges (`SlotIndex::NULL`, not
+            // index 0, which is a live slot): the decoder refuses a
+            // revoked row that retains them.
+            target: if revoked { u32::MAX } else { pick_ref(&mut c, &live_idxs).0 },
+            handler: if revoked { u32::MAX } else { pick_ref(&mut c, &live_idxs).0 },
+            revoked,
+        });
+    }
+    let mut next_owner = 0u32;
+    let mut revokers: Vec<ironhorse_vm::ProxyRevokerRow> = Vec::new();
+    for _ in 0..(c.byte() % 4) {
+        if next_owner >= cap || proxies.is_empty() {
+            break;
+        }
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        revokers.push(ironhorse_vm::ProxyRevokerRow {
+            owner,
+            proxy: proxies[(c.byte() as usize) % proxies.len()].owner,
+            // A name chunk is a real chunk-arena offset (or NULL), not
+            // a free `u32`: `pick_off` draws the ones this image has.
+            name_chunk: pick_off(&mut c, &offs).0,
+        });
+    }
+
+    let mut next_owner = 0u32;
+    let mut accessors: Vec<ironhorse_vm::AccessorRow> = Vec::new();
+    for _ in 0..(c.byte() % 6) {
+        if next_owner >= cap || names.is_empty() {
+            break;
+        }
+        let owner = next_owner;
+        // Always step the OWNER, so the (owner, id) key ascends
+        // strictly whatever id the row draws -- and the id is drawn
+        // from the program-symbol space, since the decoder refuses one
+        // outside the property-key tables. (Ids are 1-based: id `k + 1`
+        // names `names[k]`.)
+        next_owner += 1 + (c.byte() % 3) as u32;
+        accessors.push(ironhorse_vm::AccessorRow {
+            owner,
+            id: (c.u32() as usize % names.len()) as u16 + 1,
+            get: opt_slot(&mut c),
+            set: opt_slot(&mut c),
+        });
+    }
+
+    // `IBFN` is NOT generated: a bound-function row's owner must have
+    // an `INTL` collator or number-format row, and this builder does
+    // not model the nine Intl tables (segment geometry above all) --
+    // the same cross-table dependence that keeps the typed-array
+    // family out, noted at the builder's tail. Crafted `IBFN` bytes
+    // are exercised by the byte-level container decoder target and by
+    // `intl_carry.rs`.
+    // Both private tables step the RECEIVER each row, so the
+    // (receiver, brand) key ascends strictly however the brand is
+    // drawn -- and the brand is a slot index like any other, so it
+    // comes from the live prefix.
+    let mut next_receiver = 0u32;
+    let mut private_values: Vec<ironhorse_vm::PrivateValueRow> = Vec::new();
+    for _ in 0..(c.byte() % 6) {
+        if next_receiver >= cap || live_idxs.is_empty() {
+            break;
+        }
+        let receiver = next_receiver;
+        next_receiver += 1 + (c.byte() % 3) as u32;
+        private_values.push(ironhorse_vm::PrivateValueRow {
+            receiver,
+            brand: pick_ref(&mut c, &live_idxs).0,
+            value: slot(&mut c),
+        });
+    }
+    // Accessor receivers start past the value receivers: the bounds
+    // gate refuses a key carrying both a value and an accessor, so
+    // keeping the two disjoint means the generated image stays
+    // adoptable as well as decodable.
+    let mut next_receiver = next_receiver + 1;
+    let mut private_accessors: Vec<ironhorse_vm::PrivateAccessorRow> = Vec::new();
+    for _ in 0..(c.byte() % 6) {
+        if next_receiver >= cap || live_idxs.is_empty() {
+            break;
+        }
+        let receiver = next_receiver;
+        next_receiver += 1 + (c.byte() % 3) as u32;
+        private_accessors.push(ironhorse_vm::PrivateAccessorRow {
+            receiver,
+            brand: pick_ref(&mut c, &live_idxs).0,
+            get: opt_slot(&mut c),
+            set: opt_slot(&mut c),
+        });
+    }
+
+    let mut next_owner = 0u32;
+    let mut disposable_stacks: Vec<ironhorse_vm::DisposableStackRow> = Vec::new();
+    for _ in 0..(c.byte() % 6) {
+        if next_owner >= cap {
+            break;
+        }
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        let disposed = c.byte() % 4 == 0;
+        // A disposed stack ran its records to completion; the decoder
+        // refuses one that still retains them.
+        let n_records = if disposed { 0 } else { (c.byte() % 3) as usize };
+        disposable_stacks.push(ironhorse_vm::DisposableStackRow {
+            owner,
+            disposed,
+            asynchronous: c.byte() % 2 == 0,
+            records: (0..n_records)
+                .map(|_| ironhorse_vm::DisposalRecordRow {
+                    resource: slot(&mut c),
+                    method: slot(&mut c),
+                    pass_resource: c.byte() % 2 == 0,
+                })
+                .collect(),
+        });
+    }
+
+    // `FUNC`, minimally but HONESTLY: one segment of `XS_CODE_END`
+    // bytes (a 1-byte opcode, so every offset in the body is an
+    // instruction start) and one function row over the whole of it.
+    // The point is not to model real bytecode -- the engine-driven
+    // target does that -- but to give the `GENR` frames below a
+    // function row to name and a body whose instruction starts a
+    // resume cursor can legally sit on, so the frame codec is
+    // exercised at all. Without it every generated generator had to be
+    // Completed, and `SavedFrameRow` never round-tripped here.
+    const XS_CODE_END: u8 = 68;
+    let n_body = 4 + (c.byte() % 8) as u64;
+    let func_owner = pick_ref(&mut c, &live_idxs);
+    let function_state = if live_idxs.is_empty() {
+        ironhorse_vm::FunctionStateSnapshot::default()
+    } else {
+        ironhorse_vm::FunctionStateSnapshot {
+            segments: vec![vec![XS_CODE_END; n_body as usize]],
+            functions: vec![ironhorse_vm::FunctionRow {
+                owner: func_owner.0,
+                segment: Some(0),
+                body_start: Some(0),
+                body_len: n_body,
+                closures: pick_ref(&mut c, &live_idxs).0,
+                name: format!("f{}", c.u32() % 1000),
+                arity: c.u32() % 8,
+                name_chunk: pick_off(&mut c, &offs).0,
+                is_generator: true,
+                home: pick_ref(&mut c, &live_idxs).0,
+                class_derived: None,
+            }],
+            bound_functions: Vec::new(),
+            ctor_prototypes: Vec::new(),
+            deleted_meta: Vec::new(),
+        }
+    };
+    let has_function = !function_state.functions.is_empty();
+
+    let mut next_owner = 0u32;
+    let mut generators: Vec<ironhorse_vm::GeneratorRow> = Vec::new();
+    for _ in 0..(c.byte() % 6) {
+        if next_owner >= cap {
+            break;
+        }
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        // 0 SuspendedStart / 1 SuspendedYield carry a frame; 2
+        // Completed must not -- the decoder checks the agreement. With
+        // no function row to name, only Completed rows are legal.
+        let state = if has_function && !names.is_empty() { c.byte() % 3 } else { 2 };
+        let frame = (state != 2).then(|| {
+            let n_locals = 1 + (c.byte() % 4) as usize;
+            ironhorse_vm::SavedFrameRow {
+                locals: (0..n_locals).map(|_| slot(&mut c)).collect(),
+                // A scope entry names a program symbol (1-based, in
+                // range) and a local of THIS frame; the ids ascend
+                // strictly, so the map is walked from a running id
+                // capped at the table size.
+                id_map: {
+                    let mut id = 0u16;
+                    (0..(c.byte() % 3) as usize)
+                        .map_while(|_| {
+                            id += 1 + (c.byte() % 3) as u16;
+                            (id as usize <= names.len())
+                                .then(|| (id, (c.byte() as usize % n_locals) as u64))
+                        })
+                        .collect()
+                },
+                args: (0..(c.byte() % 3) as usize).map(|_| slot(&mut c)).collect(),
+                this_val: slot(&mut c),
+                env: slot(&mut c),
+                cur_func: func_owner.0,
+                cur_target: c.byte() % 2 == 0,
+                target_func: u32::MAX,
+                strict: c.byte() % 2 == 0,
+                result: slot(&mut c),
+                stack_slice: (0..(c.byte() % 3) as usize).map(|_| slot(&mut c)).collect(),
+                jumps: Vec::new(),
+                // An instruction start inside the body above.
+                resume_pc: c.u32() as u64 % n_body,
+            }
+        });
+        generators.push(ironhorse_vm::GeneratorRow { state, owner, frame });
+    }
+
     MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
         .with_meter(meter)
+        .with_function_state(function_state)
+        .with_proxy_state(ironhorse_vm::ProxyStateSnapshot { proxies, revokers })
+        .with_accessors(accessors)
+        .with_private_elements(ironhorse_vm::PrivateElementSnapshot {
+            values: private_values,
+            accessors: private_accessors,
+        })
+        .with_disposable_stacks(disposable_stacks)
+        .with_generators(generators)
         // The typed-array family is left empty here: honest ABUF rows
         // need REAL chunk-arena extents, which this builder does not
         // model. Crafted family bytes are exercised by the byte-level
@@ -650,6 +892,14 @@ mod tests {
         let mut saw_collections = false;
         let mut saw_registry = false;
         let mut saw_dates = false;
+        let mut saw_functions = false;
+        let mut saw_proxies = false;
+        let mut saw_revokers = false;
+        let mut saw_accessors = false;
+        let mut saw_private = false;
+        let mut saw_disposable = false;
+        let mut saw_generators = false;
+        let mut saw_generator_frames = false;
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 7);
             let img = gen_machine_image(&buf);
@@ -661,6 +911,15 @@ mod tests {
             saw_collections |= !img.collections.is_empty();
             saw_registry |= !img.registry.is_empty();
             saw_dates |= !img.dates.is_empty();
+            saw_functions |= !img.function_state.functions.is_empty();
+            saw_proxies |= !img.proxy_state.proxies.is_empty();
+            saw_revokers |= !img.proxy_state.revokers.is_empty();
+            saw_accessors |= !img.accessors.is_empty();
+            saw_private |= !img.private_elements.values.is_empty()
+                || !img.private_elements.accessors.is_empty();
+            saw_disposable |= !img.disposable_stacks.is_empty();
+            saw_generators |= !img.generators.is_empty();
+            saw_generator_frames |= img.generators.iter().any(|g| g.frame.is_some());
             if let Err(d) = roundtrip_image_is_invariant(&img) {
                 panic!("arena snapshot round-trip divergence at seed {seed}: {d:?}");
             }
@@ -676,6 +935,20 @@ mod tests {
         assert!(saw_collections, "side-table COLL arm never exercised");
         assert!(saw_registry, "side-table REGY arm never exercised");
         assert!(saw_dates, "side-table DATE arm never exercised");
+        assert!(saw_functions, "side-table FUNC arm never exercised");
+        assert!(saw_proxies, "side-table PROX arm never exercised");
+        assert!(saw_revokers, "PROX revoker arm never exercised");
+        assert!(saw_accessors, "side-table ACCS arm never exercised");
+        assert!(saw_private, "side-table PRIV arm never exercised");
+        assert!(saw_disposable, "side-table DISP arm never exercised");
+        assert!(saw_generators, "side-table GENR arm never exercised");
+        // The frame is the substantial half of the GENR codec; a
+        // generator sweep that only ever emitted Completed rows would
+        // leave `SavedFrameRow` unexercised while looking covered.
+        assert!(saw_generator_frames, "GENR suspended-frame arm never exercised");
+        // (`IBFN` and the typed-array family are deliberately not
+        // generated -- both are cross-table dependent on state this
+        // builder does not model. See the builder for the reasons.)
     }
 
     #[test]
