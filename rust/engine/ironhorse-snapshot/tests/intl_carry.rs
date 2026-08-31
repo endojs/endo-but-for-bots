@@ -279,3 +279,75 @@ fn malformed_intl_bound_function_rows_are_refused() {
         Ok(_) => panic!("unknown Intl bound-function kind must not restore"),
     }
 }
+
+#[test]
+fn a_guest_bind_over_an_intl_bound_function_resumes() {
+    // A guest `.bind()` whose TARGET is an Intl-minted bound native:
+    // the `FUNC` row for `g` names a target that no `FUNC` row owns
+    // (the target travels in `IBFN`) and that boot does not mint.
+    // Restore has to have the `IBFN` natives installed before it
+    // adjudicates the retained function state, or an honest machine
+    // becomes permanently unresumable.
+    assert_twin(
+        "ih-intl-rebound-format",
+        "var nf = 0; var g = 0; var t = 0; \
+         nf = new Intl.NumberFormat('en', { style: 'percent' }); \
+         g = nf.format.bind(null); t = 7; t",
+        &["var g; var t; t = g(0.25); t"],
+        &["25%"],
+    );
+}
+
+#[test]
+fn a_guest_bind_over_a_collator_compare_resumes() {
+    assert_twin(
+        "ih-intl-rebound-compare",
+        "var c = 0; var g = 0; var t = 0; \
+         c = new Intl.Collator('en'); g = c.compare.bind(null); t = 7; t",
+        &["var g; var t; t = g('a', 'b'); t"],
+        &["-1"],
+    );
+}
+
+#[test]
+fn a_guest_bind_over_an_intl_bound_function_resumes_on_every_path() {
+    // `assert_twin` above covers the two EAGER store backings. The
+    // ordering defect was in `restore_side_tables`, which the blob and
+    // the LAZY store paths reach through their own adoption arms, so
+    // each carries its own lock.
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let crank1 = "var c = 0; var g = 0; var t = 0; \
+         c = new Intl.Collator('en'); g = c.compare.bind(null); t = 7; t";
+    let obs = "var g; var t; t = g('a', 'b'); t";
+    let (b1, n1) = compile(crank1);
+
+    let mut cont = Interp::new();
+    cont.link_intrinsics(&n1);
+    assert!(cont.run(&b1).completed, "crank 1 (continuous)");
+    let continuous = crank(&mut cont, obs);
+    assert_eq!(continuous.2, "-1");
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&n1);
+    assert!(m.run(&b1).completed, "crank 1 (blob)");
+    let bytes = m.write_snapshot(&sig()).expect("suspend");
+    let mut r = from_snapshot_bytes(&bytes, &sig()).expect("rebuild");
+    assert_eq!(crank(&mut r, obs), continuous, "blob twin agrees");
+
+    let mut m = Interp::new();
+    m.link_intrinsics(&n1);
+    assert!(m.run(&b1).completed, "crank 1 (lazy store)");
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(
+        begin_store_session(m, &sig(), &mut *store.borrow_mut())
+            .map_err(|(_, e)| e)
+            .expect("begin"),
+    );
+    let mut session =
+        ironhorse_snapshot::machine::resume_from_store_lazy(store.clone(), &sig()).expect("lazy");
+    assert_eq!(crank(session.machine_mut(), obs), continuous, "lazy twin agrees");
+    checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
+        .expect("checkpoint after lazy resume");
+}

@@ -527,6 +527,30 @@ fn restore_side_tables(
             "side-table restore: malformed proxy state",
         ));
     }
+    // The Intl record rows (schema 12): pure resolved-options data;
+    // segment geometry and the iterator cross-reference were validated
+    // at decode/bounds, and the vm re-validates them on the way in.
+    let ok = interp.restore_intl(intl);
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: malformed intl record"));
+    }
+    // The Intl bound natives (schema 18) install BEFORE the retained
+    // function state, not after: they are the one function-shaped
+    // population that `FUNC` does not own, and a guest `.bind()` over
+    // one (`nf.format.bind(null)`) emits a `FUNC` bound row whose
+    // target is an `IBFN` slot. Adjudicating retained function state
+    // first sees that target in neither `state.functions` nor the boot
+    // machine and refuses an HONEST snapshot — permanently, on every
+    // resume. `restore_intl_bound_functions` depends only on the Intl
+    // data rows above, so the earlier position is otherwise inert, and
+    // the two collision checks stay mutually exclusive: `IBFN` still
+    // refuses a slot boot already minted, and `FUNC` still refuses one
+    // an earlier verb installed.
+    if !interp.restore_intl_bound_functions(intl_bound_functions) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed Intl bound-function state",
+        ));
+    }
     if !interp.restore_function_state(function_state) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed retained function state",
@@ -547,18 +571,6 @@ fn restore_side_tables(
     if !ok {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed temporal record",
-        ));
-    }
-    // The Intl record rows (schema 12): pure resolved-options data;
-    // segment geometry and the iterator cross-reference were validated
-    // at decode/bounds, and the vm re-validates them on the way in.
-    let ok = interp.restore_intl(intl);
-    if !ok {
-        return Err(SnapshotError::Corrupt("side-table restore: malformed intl record"));
-    }
-    if !interp.restore_intl_bound_functions(intl_bound_functions) {
-        return Err(SnapshotError::Corrupt(
-            "side-table restore: malformed Intl bound-function state",
         ));
     }
     if !interp.restore_accessors(accessors) {
