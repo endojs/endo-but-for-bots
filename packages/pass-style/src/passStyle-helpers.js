@@ -63,6 +63,16 @@ hideAndHardenFunction(isObject);
 /**
  * Duplicates packages/ses/src/make-hardener.js to avoid a dependency.
  *
+ * Deliberately a genuine TypedArray brand check via the `%TypedArray%`
+ * `[Symbol.toStringTag]` getter, NOT `ArrayBuffer.isView`. Both are
+ * unspoofable internal-slot checks, but `isView` is also true for a
+ * `DataView`. `passStyleOf` uses this only to sharpen a diagnostic — the
+ * "Cannot pass mutable typed arrays" message — for genuine TypedArrays; the
+ * DataView-inclusive `isView` would mislabel a `DataView` (never a
+ * `byteArray`) as a mutable typed array. (`byteArray.js` commits to `isView`
+ * for a different question — emulated-vs-native shape on an already-known
+ * `Uint8Array` — where DataViews are already excluded.)
+ *
  * @param {unknown} object
  */
 export const isTypedArray = object => {

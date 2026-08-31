@@ -208,6 +208,29 @@ const makePassStyleOf = passStyleHelpers => {
               return helper.styleName;
             }
           }
+          // A TypedArray that was not claimed by any helper (most commonly a
+          // Uint8Array backed by a mutable ArrayBuffer) must not fall through to
+          // the remotable path with a confusing "non-methods" error. This
+          // normally only fires under unsafe harden taming, where `isFrozen` may
+          // return true for unfrozen objects so the early `isFrozen` gate above
+          // is bypassed; it also fires on a native Immutable-ArrayBuffer engine
+          // for a genuine frozen TypedArray over an immutable buffer.
+          //
+          // The message must name the actual unmet requirement. A `Uint8Array`
+          // only reaches here backed by a *mutable* ArrayBuffer — an
+          // immutable-backed one is always claimed by the byteArray helper — so
+          // "mutable" is accurate for it. But a non-`Uint8Array` typed array
+          // fails for its element type, whether its backing buffer is mutable or
+          // immutable; blaming mutability there is misleading (a frozen
+          // non-`Uint8Array` typed array over an immutable buffer is not mutable
+          // at all — erights review, endojs/endo-but-for-bots#475). Name the
+          // element-type requirement in that case instead.
+          isTypedArray(inner) &&
+            assert.fail(
+              inner instanceof Uint8Array
+                ? X`Cannot pass mutable typed arrays like ${inner}.`
+                : X`Cannot pass typed arrays other than Uint8Array like ${inner}.`,
+            );
           assertValid(remotableHelper, inner, passStyleOfRecur);
           return 'remotable';
         }
