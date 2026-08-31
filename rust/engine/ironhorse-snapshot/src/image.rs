@@ -27,8 +27,9 @@ use crate::format::{
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
 use ironhorse_vm::{
     dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
-    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, PluralRulesData,
-    SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena, COST_TABLE_VERSION,
+    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, Payload,
+    PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena,
+    COST_TABLE_VERSION,
 };
 
 /// The metering state carried in the `METR` atom (design row 6: "meter
@@ -2483,27 +2484,64 @@ pub(crate) fn decode_promise_cluster(
             .ok()
             .map(|i| promises[i].state)
     };
-    let mut guard_referenced = vec![false; guards.len()];
+    // A guard is the `[[AlreadyResolved]]` boolean of exactly ONE
+    // resolving pair (`fxPushPromiseFunctions` mints two rows per
+    // guard: opposite polarity, one promise). The collector may sweep
+    // one half of a pair the guest dropped, so a surviving SINGLETON
+    // is honest — but two rows on one guard must be the pair itself,
+    // and a guard spanning promises or doubling a polarity can only
+    // be crafted (its trip would then gate the WRONG settlement).
+    let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; guards.len()];
     for row in &functions {
         if !owners.contains(&row.promise) {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: resolving function names no promise row",
             ));
         }
-        match guard_referenced.get_mut(row.guard as usize) {
-            Some(seen) => *seen = true,
-            None => {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: guard index out of range",
-                ))
+        let Some(entry) = guard_rows.get_mut(row.guard as usize) else {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: guard index out of range",
+            ));
+        };
+        let polarity = 1u8 << (row.reject as u8);
+        match entry {
+            None => *entry = Some((row.promise, polarity)),
+            Some((promise, mask)) => {
+                if *promise != row.promise || *mask & polarity != 0 {
+                    return Err(SnapshotError::Corrupt(
+                        "promise cluster: guard not shared by one resolving pair",
+                    ));
+                }
+                *mask |= polarity;
             }
         }
     }
-    if !guard_referenced.iter().all(|seen| *seen) {
+    if guard_rows.iter().any(|entry| entry.is_none()) {
         return Err(SnapshotError::Corrupt(
             "promise cluster: guards not densely referenced",
         ));
     }
+    // A reaction's capability slots. `User` and `FinallyReturn`
+    // reactions always carry a full `new_promise_capability` pair —
+    // both halves alive while the reaction is pending (the reaction's
+    // own slots mark them), both naming one promise and one guard with
+    // opposite polarity. The drain recovers the DERIVED promise
+    // through `resolve` alone, so a cross-wired capability would
+    // silently settle whatever promise the crafted slot binds. A
+    // `Combine` reaction carries NO capability — its payload is its
+    // kind — so any populated slot on one can only be crafted.
+    let fn_row_of = |slot: &Slot| -> Option<&ironhorse_vm::PromiseFnRow> {
+        if slot.kind != Kind::Reference {
+            return None;
+        }
+        match slot.value {
+            Payload::Reference(r) => functions
+                .binary_search_by_key(&r.0, |row| row.function)
+                .ok()
+                .map(|i| &functions[i]),
+            _ => None,
+        }
+    };
     let mut comb_pending = vec![0u32; combinators.len()];
     let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
     for r in promises.iter().flat_map(|row| row.reactions.iter()) {
@@ -2524,6 +2562,29 @@ pub(crate) fn decode_promise_cluster(
             if !elem_seen.insert((r.a, r.b)) {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: duplicate element reaction",
+                ));
+            }
+            if [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                .iter()
+                .any(|slot| slot.kind != Kind::Undefined)
+            {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: combinator reaction carries capability slots",
+                ));
+            }
+        } else {
+            let (Some(res), Some(rej)) = (fn_row_of(&r.resolve), fn_row_of(&r.reject)) else {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: reaction capability names no resolving function",
+                ));
+            };
+            if res.reject
+                || !rej.reject
+                || res.promise != rej.promise
+                || res.guard != rej.guard
+            {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: reaction capability is not one resolving pair",
                 ));
             }
         }
@@ -4284,6 +4345,27 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         });
     }
 
+    // The canonical atom GRAMMAR (the round-3 hardening follow-up):
+    // the sequence must be an in-order subsequence of the writer's
+    // emission order with no foreign tags. Checked after the VERS and
+    // SIGN gates so a newer-format container — the one honest source
+    // of tags this reader does not know — refuses by VERSION, and the
+    // grammar refusal is reserved for what can only be crafted.
+    let mut order_cursor = 0usize;
+    for atom in r.atoms() {
+        match crate::format::CANONICAL_ATOM_ORDER[order_cursor..]
+            .iter()
+            .position(|tag| *tag == atom.tag)
+        {
+            Some(advance) => order_cursor += advance + 1,
+            None => {
+                return Err(SnapshotError::Corrupt(
+                    "container atoms out of canonical order or unknown",
+                ))
+            }
+        }
+    }
+
     let creation = match r.find(CREA) {
         Some(a) => CreationParams::decode(a.payload)?,
         None => CreationParams::default(),
@@ -4367,9 +4449,18 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     };
     // Join the frames back onto their rows. An owner naming no `ERRD`
     // row is crafted: the writer emits frames only for errors it also
-    // emitted.
+    // emitted — and emits the ATOM only when some row exists, so a
+    // present-but-empty one is the same non-canonical shape every
+    // optional atom refuses (a zero row COUNT; a zero-length frame
+    // LIST inside a row is refused by the decoder itself).
     if let Some(a) = r.find(crate::format::ESTK) {
-        for (owner, frames) in decode_error_frames(a.payload)? {
+        let rows = decode_error_frames(a.payload)?;
+        if rows.is_empty() {
+            return Err(SnapshotError::Corrupt(
+                "ESTK atom present but empty; the writer omits it",
+            ));
+        }
+        for (owner, frames) in rows {
             let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
                 return Err(SnapshotError::Corrupt(
                     "error-frame side table: owner has no error row",

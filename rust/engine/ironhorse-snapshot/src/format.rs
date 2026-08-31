@@ -149,6 +149,24 @@ pub const NFLR: FourCc = FourCc(*b"NFLR");
 /// Ironhorse-specific; emitted only when non-empty (see [`ARRY`]).
 pub const INTL: FourCc = FourCc(*b"INTL");
 
+/// The writer's canonical atom order — exactly the sequence
+/// [`crate::image::write_machine`] emits (optional atoms simply absent
+/// when their tables are empty). The reader requires a container's
+/// atom sequence to be an IN-ORDER SUBSEQUENCE of this list: `find`
+/// is order-blind and skips tags it does not know, so without the
+/// gate a reordered container, or one carrying a junk-tagged atom,
+/// would be a second accepted byte string for the same logical
+/// machine — and one logical machine must have exactly one container
+/// encoding, or its SHA-256 CAS key is not an identity. Refusing
+/// UNKNOWN tags is sound because the `VERS` range gate runs first: a
+/// container from a newer format (the one honest source of new tags)
+/// is already refused by version.
+pub const CANONICAL_ATOM_ORDER: &[FourCc] = &[
+    VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR, ARRY, COLL, REGY, ERRD, ESTK,
+    ABUF, TARR, DVIW, WRAP, REGX, ARGB, TMPR, INTL, ITER, DATE, FUNC, PROX, ACCS, IBFN, PRIV,
+    DISP, GENR, PRMS, NFLR,
+];
+
 /// The Ironhorse discriminator embedded at the head of the `VERS` atom. An
 /// Ironhorse snapshot is never mistaken for an XS one and vice versa
 /// (design § Snapshots requirement 1c): XS's `VERS` payload begins with
