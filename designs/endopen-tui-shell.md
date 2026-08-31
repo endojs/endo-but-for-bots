@@ -11,7 +11,7 @@
 
 The maintainer's framing: *"a space that is more like opencode UX
 might be helpful"*. OpenCode's TUI
-([`packages/opencode/src/cli/cmd/tui/`](../../external/opencode/packages/opencode/src/cli/cmd/tui/),
+([`packages/opencode/src/cli/cmd/tui/`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui),
 Bubble Tea / Go) has a distinctive layout that coding-agent users
 have grown to expect: file-tree sidebar, prompt + transcript in the
 center, status bar with model + tokens + cost at the bottom, and a
@@ -92,7 +92,7 @@ Components:
   (chunked, color-coded; the existing `markdown-render.js` does not
   speak diff syntax yet, so this is one new component).
 - **Todo pane** (bottom of sidebar): the agent's running plan,
-  rendered from a `todo` formula on the space's guest. New formula
+  rendered from a `todo` formula on the space's guest. A new formula
   type would be ideal (one more in the
   [`formula-type.js`](../packages/daemon/src/formula-type.js)
   registry), but a simpler initial cut is a `value` message of a
@@ -111,31 +111,31 @@ Components:
 ### Borrowed OpenCode patterns
 
 OpenCode's TUI lives in
-[`packages/opencode/src/cli/cmd/tui/`](../../external/opencode/packages/opencode/src/cli/cmd/tui/);
+[`packages/opencode/src/cli/cmd/tui/`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui);
 the routes are at
-[`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx`](../../external/opencode/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx).
+[`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuiroutes/session/index.tsx).
 The components worth borrowing:
 
 - **Dialog pattern** for permission requests / model selection /
   agent selection: see
-  [`packages/opencode/src/cli/cmd/tui/component/dialog-agent.tsx`](../../external/opencode/packages/opencode/src/cli/cmd/tui/component/dialog-agent.tsx)
+  [`packages/opencode/src/cli/cmd/tui/component/dialog-agent.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuicomponent/dialog-agent.tsx)
   and
-  [`dialog-model.tsx`](../../external/opencode/packages/opencode/src/cli/cmd/tui/component/dialog-model.tsx).
+  [`dialog-model.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuicomponent/dialog-model.tsx).
   Endo's analogue is the `add-space-modal.js` / `endow-modal.js`
   family; the dialogs above show the shape we want: a single
   full-screen overlay with a filterable list and a single
   confirm-or-cancel.
 - **Sidebar with collapsible sections**:
-  [`packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx`](../../external/opencode/packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx)
+  [`packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuiroutes/session/sidebar.tsx)
   shows the structure (sections for messages, files, branches);
   the chat space's sidebar borrows the section-collapse keyboard
   shortcuts.
 - **Todo rendering**:
-  [`packages/opencode/src/cli/cmd/tui/component/todo-item.tsx`](../../external/opencode/packages/opencode/src/cli/cmd/tui/component/todo-item.tsx)
+  [`packages/opencode/src/cli/cmd/tui/component/todo-item.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuicomponent/todo-item.tsx)
   is the OpenCode renderer for a todo row; the markup translates
   almost line-for-line to a Chat component.
 - **Permission inline prompt**:
-  [`packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx`](../../external/opencode/packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx)
+  [`packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuiroutes/session/permission.tsx)
   shows how OpenCode interrupts the transcript with a permission
   request and waits for an allow / deny / always click. Endo's
   [`daemon-form-request`](daemon-form-request.md) is the existing
@@ -242,7 +242,7 @@ shell.
   the spaces gutter already provides multi-space navigation and tabs
   would duplicate that surface.
 - **Mobile**:
-  the layout assumes ≥120 columns;
+  the layout assumes >=120 columns;
   what is the mobile fallback?
   Proposal: the coding space is desktop-only in v1;
   on narrow viewports, fall back to the regular chat space.

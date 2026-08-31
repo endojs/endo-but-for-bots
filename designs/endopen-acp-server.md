@@ -16,7 +16,7 @@ agents.
 Zed integrates with OpenCode via ACP;
 the Zed configuration is a four-line `agent_servers` block in
 `~/.config/zed/settings.json`
-(per [`packages/opencode/src/acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)).
+(per [`packages/opencode/src/acp/README.md`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/README.md)).
 
 Endo has no ACP surface, so Endo guests are not addressable from
 Zed or any other ACP-aware client.
@@ -26,7 +26,7 @@ without the client needing to learn OCapN or CapTP.
 
 The capability story has to be preserved.
 OpenCode's ACP server auto-approves all permission requests
-([`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)
+([`acp/README.md`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/README.md)
 *Current Limitations*, point 4);
 Endo's ACP server must route permission requests through the existing
 form-request machinery
@@ -39,7 +39,7 @@ guarantee survives the protocol bridge.
 
 ACP is a JSON-RPC protocol with the following methods (per
 OpenCode's
-[`acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts)
+[`acp/agent.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/agent.ts)
 imports lines 1 through 32).
 The object of every session-scoped method is the session;
 where a method also acts on something inside the session, that
@@ -91,8 +91,12 @@ sequenceDiagram
 
     Zed->>Adapter: session/new {cwd: "/path/to/repo"}
     Adapter->>Daemon: provideGuest(petName="acp-session-N", powers={Mount: cwd, Lal: default})
-    Daemon-->>Adapter: guest formula ID
-    Adapter-->>Zed: session info
+    Daemon-->>Adapter: guest formula ID (public handle, kept adapter-side)
+    Adapter-->>Zed: session info + minted session token (opaque secret)
+
+    Note over Zed,Adapter: on reconnect, Zed authenticates with the minted token
+    Zed->>Adapter: authenticate {token: "<minted session token>"}
+    Adapter-->>Zed: authenticated
 
     Zed->>Adapter: session/prompt {text: "fix the failing test"}
     Adapter->>Guest: E(guest).request(prompt)
@@ -122,22 +126,51 @@ ACP adapter must not undermine it.
 
 ### Authentication and multiplexing
 
-The ACP `authenticate` step uses the guest's formula identifier as
-its bearer token.
-The formula identifier is the durable, unforgeable handle the daemon
-already issues for every guest;
-reusing it as the ACP credential avoids inventing a parallel auth
-surface and ties the client's authority to the same capability the
-daemon enforces.
+The formula identifier is **not** a credential. A formula ID is a
+durable, freely displayable *addressing handle*: the daemon surfaces it
+in Chat, it is enumerable via `session/list`, and it appears in logs and
+shared transcripts (see [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md),
+whose design goal is that "Chat displays identifiers correctly"). A
+credential, by contrast, must be an independently mintable, independently
+revocable *secret*. Making a resource's own public name double as the
+credential that authenticates as it means anyone who observes the name —
+a log line, a `session/list` response, a shared transcript, another ACP
+client's lookup — can authenticate as that guest, the exact
+"ambient-authority" failure mode this design contrasts Endo *against*.
 
-One adapter process serves multiple ACP clients by multiplexing on
-the formula identifier:
-each connection presents its guest's formula identifier on
-`authenticate`, and the per-process session map keys sessions by
-that identifier.
-The daemon does not learn about ACP clients;
-it sees ordinary `E(guest).request(prompt)` traffic from the adapter,
-demultiplexed per-formula on the way in.
+So the adapter **mints a distinct per-session bearer token** at
+`session/new`: an opaque random secret, bound server-side (in the
+adapter's session map) to the guest's formula ID, and independently
+revocable without renaming the guest. The ACP `authenticate` step
+presents that minted token, never the formula ID. The formula ID stays
+the public addressing handle for `session/list` / `session/load`; the
+minted token stays the secret. The two are decoupled, so displaying or
+sharing a formula ID never leaks the authority to act as its guest.
+
+Two bearer surfaces are in play and must not be conflated:
+
+- **adapter -> daemon**: the adapter authenticates to the daemon once,
+  as the user, via the existing
+  [gateway-bearer-token-auth](gateway-bearer-token-auth.md) token
+  (shown in the wire diagram). This carries the user's authority.
+- **ACP client -> adapter**: each ACP client authenticates per session
+  via the adapter-minted session token above. This selects *which*
+  guest the client drives, within the authority the adapter already
+  holds.
+
+One adapter process serves multiple ACP clients by multiplexing on the
+minted session tokens: each connection presents its session token on
+`authenticate`, and the per-process session map resolves it to the
+backing guest's formula ID. The daemon does not learn about ACP clients
+or their tokens; it sees ordinary `E(guest).request(prompt)` traffic
+from the adapter, demultiplexed per-guest on the way in.
+
+Because `authenticate` presents a token minted at `session/new`, an ACP
+client with no prior session calls `session/new` first (the adapter
+issues the token in its response) and then `authenticate` on subsequent
+reconnects; a client resuming a known session presents the stored token
+directly. The adapter never requires the client to have witnessed a
+formula ID.
 
 ### ACP cwd as a virtual mount on the guest agent
 
@@ -157,13 +190,13 @@ does not have to mint a new `Mount` per session.
 | ACP method        | Endo translation                                                           |
 |-------------------|----------------------------------------------------------------------------|
 | `session/new`     | `provideGuest(pet-name, powers)`; the ACP `cwd` becomes a virtual mount narrowed from the guest agent's parent `Mount` |
-| `session/load`    | Look up guest by formula ID stored in adapter-local SQLite                 |
+| `session/load`    | Resolve the presented session token to its guest's formula ID (adapter-local SQLite); re-attach |
 | `session/prompt`  | `E(guest).request(prompt)`; subscribe to guest inbox; stream as session/update |
-| `session/cancel`  | `E(guest).cancel()` if implemented; else best-effort by closing the request promise |
+| `session/cancel`  | `E(guest).cancel()` — every guest agent module implements `cancel()` (Design Decision 9); no silent degradation |
 | `session/close`   | Adapter forgets the session; the guest persists in the daemon (durable)    |
-| `session/list`    | Enumerate the adapter's per-process session map                            |
-| `session/fork`    | `E(guest).fork()` if implemented; else create a new guest with the parent's transcript |
-| `session/resume`  | Re-attach to a guest by formula ID; replay any unread inbox messages       |
+| `session/list`    | Enumerate the adapter's per-process session map (by session token, not raw formula ID) |
+| `session/fork`    | `E(guest).fork()` — required on the guest agent interface (Design Decision 9); forks the transcript into a child guest |
+| `session/resume`  | Re-attach to the token's guest; replay any unread inbox messages           |
 
 The key insight: ACP "sessions" are ephemeral references to durable
 Endo guests. Closing an ACP session does **not** delete the guest;
@@ -227,7 +260,7 @@ as a future follow-up; this design's scope is ACP only.
 
 OpenCode is also an MCP *client*: it calls out to MCP servers
 configured in `opencode.json` and exposes their tools to its agent
-([`packages/opencode/src/mcp/index.ts`](../../external/opencode/packages/opencode/src/mcp/index.ts)).
+([`packages/opencode/src/mcp/index.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/mcp/index.ts)).
 This is a different feature (consuming MCP tools, not exposing
 Endo's tools as MCP). It composes naturally with the
 [trust-on-first-bind](trust-on-first-bind.md) capability-policy
@@ -265,7 +298,7 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
   Proposal: emit `session/update` per assistant *message* (post-streaming),
   and per *tool call* (start, result).
   OpenCode does not stream tokens to ACP today
-  ([`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md)
+  ([`acp/README.md`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/README.md)
   *Current Limitations*, point 1);
   we match this and revisit when ACP gains a token-stream channel.
 
@@ -282,16 +315,21 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
    session that the ACP client closes still exists as an Endo
    guest under its pet name. The user can resume from any client
    that re-attaches.
-4. **ACP `authenticate` uses the guest's formula identifier as a
-   bearer token.** The formula identifier is the durable handle the
-   daemon already issues; reusing it as the ACP credential ties the
-   client's authority to the same capability the daemon enforces and
-   avoids a parallel auth surface.
+4. **ACP `authenticate` uses an adapter-minted per-session bearer
+   token, not the formula identifier.** A formula ID is a public
+   addressing handle (displayed in Chat, enumerable via `session/list`,
+   present in logs and shared transcripts); a credential must be a
+   separately mintable, separately revocable secret. The adapter mints
+   an opaque token at `session/new`, binds it server-side to the guest's
+   formula ID, and accepts it on `authenticate`. Displaying or sharing a
+   formula ID never leaks the authority to act as its guest, and a
+   compromised session token is revocable without renaming the guest.
 5. **One adapter process serves multiple clients by multiplexing on
-   the formula identifier.** Each ACP connection presents its guest's
-   formula identifier on `authenticate`; the per-process session map
-   keys on that identifier. The daemon sees ordinary per-guest
-   traffic, demultiplexed at the adapter boundary.
+   the minted session tokens.** Each ACP connection presents its
+   session token on `authenticate`; the per-process session map resolves
+   the token to the backing guest's formula ID. The daemon sees ordinary
+   per-guest traffic, demultiplexed at the adapter boundary; it never
+   learns the ACP tokens.
 6. **The ACP `cwd` is exposed as a virtual mount on the guest
    agent, not as a fresh host-filesystem `Mount` per session.** The
    guest agent owns the parent `Mount` (typically the user's
@@ -306,6 +344,40 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
 8. **Considered and rejected: also implementing the MCP server
    in the same adapter.** Reason: scope. The MCP server is a
    sibling design, not part of this one.
+9. **Guest agent modules implement a minimal required interface
+   (`cancel()`, `fork()`); the adapter never silently degrades a
+   protocol method.** ACP exposes one `session/cancel` and one
+   `session/fork`. Backing them with an "if implemented, else
+   best-effort approximation" branch would give the ACP client the same
+   method name with different semantics depending on which agent module
+   happens to back the guest — a hidden, unadvertised precondition, the
+   least-surprise trap. Instead the guest agent interface *requires*
+   `cancel()` and `fork()` (trivially satisfiable), so each protocol
+   method has one meaning. If a future guest kind genuinely cannot fork,
+   the adapter advertises the missing capability to the client (at
+   `initialize` / `session/new`) rather than degrading silently.
+
+## Verification
+
+Each phase lands with checks that make its load-bearing claims
+falsifiable:
+
+- **Capability preservation (phases 1, 3).** A conformance test drives
+  the adapter with an ACP client that requests a tool the session's
+  guest was not endowed with (e.g. `Shell` when only `Mount` / `Lal`
+  were granted) and asserts the request is refused structurally, never
+  auto-approved. A second test asserts a permission request surfaces as
+  a form-request and blocks until answered.
+- **Credential hygiene (phases 1, 4).** A test asserts that a formula ID
+  observed via `session/list` cannot be used as the `authenticate`
+  bearer token, and that a minted session token authenticates exactly
+  one guest and is revocable without renaming the guest.
+- **Session durability (phases 4, 5).** A test closes an ACP session,
+  restarts the adapter, and asserts `session/list` still shows the guest
+  and `session/resume` re-attaches.
+- **No silent degradation (phase 5).** A test asserts every guest agent
+  module the adapter can back implements `cancel()` and `fork()`, so no
+  `session/cancel` / `session/fork` call falls into a best-effort path.
 
 ## Related Designs
 
@@ -315,12 +387,12 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
 - [trust-on-first-bind](trust-on-first-bind.md) — capability-policy
   adapter referenced by future MCP-client design.
 - OpenCode reference:
-  [`packages/opencode/src/acp/agent.ts`](../../external/opencode/packages/opencode/src/acp/agent.ts)
+  [`packages/opencode/src/acp/agent.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/agent.ts)
   and
-  [`acp/README.md`](../../external/opencode/packages/opencode/src/acp/README.md).
+  [`acp/README.md`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/README.md).
 
 ## Prompt
 
-> isolating chunks of code that might translate well to close feature gaps between these projects … missing features citing sources that might be applicable
+> isolating chunks of code that might translate well to close feature gaps between these projects ... missing features citing sources that might be applicable
 >
 > kriskowal, 2026-05-15

@@ -13,7 +13,7 @@ OpenCode's `task` tool can spawn one subagent at a time and wait for it
 to finish before the parent can do anything else.
 The `background: true` flag (gated behind
 `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` at
-[`packages/opencode/src/tool/task.ts`](../../external/opencode/packages/opencode/src/tool/task.ts)
+[`packages/opencode/src/tool/task.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/tool/task.ts)
 line 113) lets the parent fire-and-forget,
 but the result must be manually polled via `task_status` or arrives
 as a toast notification when the background task completes.
@@ -91,7 +91,7 @@ the parent receives one `value` message per member that resolves,
 plus one final aggregated `value` when the panel concludes.
 
 The OpenCode shape this borrows from: the `<task_result>` block in
-[`task.ts`](../../external/opencode/packages/opencode/src/tool/task.ts)
+[`task.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/tool/task.ts)
 lines 53 through 88 (`output()` and `backgroundMessage()` formatters)
 collapses subagent output into a single block in the parent's transcript.
 The Chat widget is the same shape, with the difference that the
@@ -123,6 +123,10 @@ export const make = ({ provideGuest, inbox, Timer }) =>
       async deliberate(prompt, options = {}) {
         const memberNames = options.members ?? ['assessor', 'stylist', 'archivist'];
         const deadline = options.deadlineMs ?? 60_000;
+        // Each member is formulated as a distinct guest; the panel must
+        // ensure each lands in its own worker (not the shared main
+        // worker) so the deliberation below is genuinely parallel rather
+        // than interleaved on one event loop.
         const members = await Promise.all(
           memberNames.map((name) => E(provideGuest).provideGuest(name)),
         );
@@ -149,10 +153,19 @@ const aggregate = (settled) => harden({
 
 Each `E(member).request(prompt)` returns a promise that resolves when
 the member's reply lands in the panel's inbox.
-Because each member is its own guest (its own worker, its own SES
-compartment), the `Promise.allSettled` over them is genuinely parallel;
-there is no single event loop they share.
-This is the "falls out of Endo trivially" the maintainer named.
+When each member is formulated as its own guest in its own worker (its
+own SES compartment, its own message loop), the `Promise.allSettled`
+over them runs the members genuinely in parallel rather than interleaved
+on one event loop.
+This parallelism is not automatic, though: a guest's eval path falls
+back to a shared main worker when no distinct worker is named
+(`packages/daemon/src/guest.js`, the `workerName` / `mainWorkerId`
+path), so the panel must formulate each member in its own worker rather
+than co-locating them.
+When it does, the concurrency is the "falls out of Endo trivially" the
+maintainer named; when it does not, the members share one worker and the
+panel is mechanically no better off than OpenCode's single-process
+fibers.
 
 ### CLI surface
 
@@ -180,22 +193,21 @@ a member that the panel did not endow with a `Shell` cannot invoke a
 shell, period.
 OpenCode's `subagent-permissions.ts` derives a stricter ruleset for
 the child
-(at [`packages/opencode/src/agent/subagent-permissions.ts`](../../external/opencode/packages/opencode/src/agent/subagent-permissions.ts));
+(at [`packages/opencode/src/agent/subagent-permissions.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/agent/subagent-permissions.ts));
 Endo derives a strictly smaller capability set,
 which is the same idea expressed structurally.
 
-### Reuse: the panel as the judge's tool
+### Reuse: the panel as the garden's review panel
 
-The garden's `judge` role already runs jury panels by dispatching
-subordinate roles in sequence
-(per `skills/pr-creation-flow/SKILL.md` § Jury composition).
-The judge dispatches one of two panel kinds per PR:
-a 12-seat **code panel** for source-touching PRs and a 5-seat
-**design panel** for design-only PRs;
-the two are dispatched independently, never as one 17-seat round.
-If the garden's host daemon were Endo, the panel pattern would *be*
-the judge:
-each panel's seats deliberate concurrently, the judge aggregates.
+The garden runs jury panels as a scripted review workflow: a
+supervising worker dispatches one of two panel kinds per PR — a
+12-seat **code panel** for source-touching PRs and a 5-seat
+**design panel** for design-only PRs — and the two are dispatched
+independently, never as one 17-seat round.
+If the garden's host daemon were Endo, the panel pattern here would
+*be* that review workflow:
+each panel's seats would deliberate concurrently, and a coordinator
+would aggregate their verdicts.
 This is a strong validation of the shape.
 
 ## Phased Implementation
@@ -285,14 +297,34 @@ Total: 3 to 4 weeks for phases 1-3; phase 4 is independent.
    the guest-with-capabilities pattern is sufficient and consistent
    with how Lal and Fae are modeled today.
 
+## Verification
+
+The design's central empirical claim — that panel members run genuinely
+in parallel rather than interleaved on one event loop — is checkable and
+must be checked, since it holds only when each member is formulated in
+its own worker (see § Daemon: the panel agent module):
+
+- **Parallelism.** A test dispatches a panel of `N` members whose
+  `request` handlers each block on a barrier that releases only once all
+  `N` have entered it. If the members share one worker / event loop the
+  barrier deadlocks; genuine per-worker isolation lets it release. This
+  distinguishes real parallelism from cooperative interleaving.
+- **Worker isolation.** A test asserts each member guest is pinned to a
+  distinct worker (not the shared main worker), so a member that crashes
+  or blocks its worker does not stall its siblings.
+- **Capability containment.** A test grants a member no `Shell` and
+  asserts it cannot invoke one, confirming the structural (not
+  list-based) permission story of § Permission / capability story.
+
 ## Related Designs
 
 - [endopen](endopen.md) — primary comparative analysis.
 - [endor-tui](endor-tui.md) — M6 Rust TUI; would render panels in the terminal idiom.
 - [endopen-tui-shell](endopen-tui-shell.md) — browser-side
   opencode-shaped space that uses the panel widget.
-- [judge role in the garden](../../../garden/roles/judge/AGENT.md) —
-  informs the multi-member-deliberation shape.
+- The garden's scripted review panel (a supervising worker
+  dispatching juror seats) informs the multi-member-deliberation
+  shape.
 
 ## Prompt
 

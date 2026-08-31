@@ -29,7 +29,8 @@ but the headers OpenRouter expects (`HTTP-Referer`, `X-Title`)
 are not set, and the dispatch heuristic
 (`baseURL.includes('/v1')` in
 [`packages/lal/providers/config.js`](../packages/lal/providers/config.js))
-classifies it as llama.cpp rather than as a router-aware endpoint.
+classifies it as the generic `'openai-compatible'` kind rather than as a
+router-aware endpoint.
 
 The gap is small but operationally salient:
 the maintainer named OpenRouter integration specifically.
@@ -91,32 +92,55 @@ Extend `detectProviderKind` in
 [`config.js`](../packages/lal/providers/config.js):
 
 ```js
-export const detectProviderKind = (baseURL) => {
-  // Ordering is load-bearing: the openrouter.ai check must precede
-  // the `/v1` check, because OpenRouter's base URL ends with `/v1`
-  // and a more general predicate would silently misclassify it as
-  // llamacpp.  Future reorganization (e.g., alphabetical sort) must
-  // preserve openrouter-before-llamacpp.
-  if (baseURL.includes('openrouter.ai')) return 'openrouter';
-  if (baseURL.includes('anthropic.com')) return 'anthropic';
-  if (baseURL.includes('googleapis.com')) return 'gemini';
-  if (baseURL.endsWith('/v1')) return 'llamacpp';
+// Add 'openrouter' to the existing return union
+// ('anthropic' | 'gemini' | 'openai-compatible' | 'ollama') and insert
+// its check BEFORE the general `/v1` predicate. Ordering is
+// load-bearing: OpenRouter's canonical base URL
+// (https://openrouter.ai/api/v1) contains `/v1`, so without the
+// earlier check it would classify as the existing 'openai-compatible'
+// kind. A future reorganization (e.g. alphabetical sort) must preserve
+// openrouter-before-openai-compatible.
+export const detectProviderKind = baseURL => {
+  if (baseURL.includes('openrouter.ai')) {
+    return 'openrouter';
+  }
+  if (baseURL.includes('anthropic.com')) {
+    return 'anthropic';
+  }
+  if (
+    baseURL.includes('googleapis.com') ||
+    baseURL.includes('generativelanguage')
+  ) {
+    return 'gemini';
+  }
+  if (baseURL.includes('/v1')) {
+    return 'openai-compatible';
+  }
   return 'ollama';
 };
 ```
 
+This reuses the existing kind spelling `'openai-compatible'` and its
+existing `.includes('/v1')` predicate verbatim; the only change to the
+shipped function is the new `'openrouter'` branch ahead of the `/v1`
+check.
+
 **Ordering as a design decision.**
 The check for `openrouter.ai` must come before the `/v1` predicate.
 OpenRouter's canonical base URL is `https://openrouter.ai/api/v1`,
-which ends with `/v1`;
+which contains `/v1`;
 a future refactor that sorts the dispatch table alphabetically or by
-provider name would silently regress OpenRouter into llamacpp.
+provider name would silently regress OpenRouter into the existing
+`'openai-compatible'` kind.
 The Phase 2 registry refactor below preserves the ordering by giving
 each entry an explicit `match(baseURL)` predicate that the registry
 evaluates in declared order, with router-aware entries first.
 
 Wire into `createProvider` in
-[`index.js`](../packages/lal/providers/index.js):
+[`index.js`](../packages/lal/providers/index.js), as a new branch
+*ahead of* the existing `providerKind === 'openai-compatible'` branch
+(which stays unchanged and continues to handle llama.cpp and other
+`/v1` endpoints):
 
 ```js
 if (providerKind === 'openrouter') {
@@ -126,8 +150,10 @@ if (providerKind === 'openrouter') {
 }
 ```
 
-This is the minimal cut: ~80 LOC of new code, no breaking changes,
-ships in one PR.
+This is the minimal cut: ~80 LOC of new code. It adds one branch to
+`detectProviderKind` and one to `createProvider` without altering the
+existing `'openai-compatible'` branch or its `defaultModels` entry, so
+it ships in one PR with no behavior change for existing providers.
 
 ### Phase 2: Provider registry refactor
 
@@ -153,7 +179,8 @@ The refactor:
 1. Define a `Provider` interface as today
    (`{ chat(messages, tools) => { message } }`).
 2. Add a `ProviderRegistry` keyed by `providerKind`
-   (`'anthropic'`, `'openrouter'`, `'openai'`, `'gemini'`, …).
+   (`'anthropic'`, `'openrouter'`, `'openai-compatible'`, `'gemini'`,
+   ...).
 3. Each registry entry holds
    `{ make(opts) => Provider, defaultHeaders, defaultModel, defaultBaseURL, match(baseURL) }`.
 4. `createProvider(env)` becomes a registry lookup + `make()` invocation;
@@ -253,7 +280,7 @@ day.
    in Phase 1's `detectProviderKind` source order and in Phase 2's
    registry declared order.
    Without the ordering rule, OpenRouter's `https://openrouter.ai/api/v1`
-   base URL would match the generic OpenAI-compatible (`llamacpp`) entry
+   base URL would match the existing generic `'openai-compatible'` entry
    and silently regress.
    Phase 2's registry encodes the ordering as a `match(baseURL)` per
    entry evaluated in declared order, rather than relying on source
@@ -275,11 +302,11 @@ day.
 - [lal-fae-form-provisioning](lal-fae-form-provisioning.md) — Phase 3 piggyback.
 - [endoclaw-network-fetch](endoclaw-network-fetch.md) — outbound HTTP capability story.
 - OpenCode reference:
-  [`packages/opencode/src/provider/provider.ts`](../../external/opencode/packages/opencode/src/provider/provider.ts)
+  [`packages/opencode/src/provider/provider.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/provider/provider.ts)
   (`provider.ts`), lines 88 through 119 and 410 through 459.
 
 ## Prompt
 
-> opencode … can work well with openrouter
+> opencode ... can work well with openrouter
 >
 > kriskowal, 2026-05-15
