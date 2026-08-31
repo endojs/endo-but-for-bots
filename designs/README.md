@@ -6,6 +6,17 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (added
+2026-07-30; capability-secure npm development publishing: an agent-facing
+registry proxy whose entire accepted mutation vocabulary is dev-release-shaped
+(explicit package allowlist, prerelease versions, exactly one `dev-*`
+dist-tag), gated by attenuated `PublishGrant` capabilities, plus a deterministic
+promotion service holding the only upstream npm token, independently
+revalidating and promoting byte-identical artifacts with crash-safe
+at-least-once semantics, quarantine, and hash-chained audit ledgers; reconciled
+with [registry-capability](registry-capability.md) and
+[endor-npm-registry-proxy](endor-npm-registry-proxy.md) as the write-path
+sibling; demo target `npm.minion.town`),
 [endor-registry-proxy-worker](endor-registry-proxy-worker.md) (added
 2026-08-06; an XS-hosted JavaScript mapping phase over a virtual read-only CAS
 package graph, using compartment-mapper's shared package resolver to emit a
@@ -261,6 +272,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
@@ -462,9 +474,11 @@ LLM-agent stack).*
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
-**2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design → 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
+**2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design -> 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
 
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
+
+The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
 
 ## Roadmap
 
@@ -674,6 +688,7 @@ flowchart TD
         dwimvs[mvs-resolver]
         dwisnap[snapshot-mapper]
         ernpm[endor-npm-registry-proxy<br/><i>IN PROGRESS</i>]
+        npubatten[npm-dev-publisher-attenuation<br/><i>PROPOSED</i>]
         erworker[endor-registry-proxy-worker<br/><i>PROPOSED</i>]
         ercas[daemon-cas-management<br/><i>IN PROGRESS</i>]
         dsql[daemon-endo-rust-sqlite<br/><i>COMPLETE</i>]
@@ -712,6 +727,8 @@ flowchart TD
         dmcap --> dwicap
         dmkar --> dwicap
         ernpm -.-> dwicap
+        dwicap -.-> npubatten
+        ernpm -.-> npubatten
         ernpm --> erworker
         errun --> erworker
         dmkar --> erworker
@@ -1219,6 +1236,7 @@ ecosystem.
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
+| npm-dev-publisher-attenuation | Proposed | Capability-attenuated npm dev-release publishing: an agent-facing proxy accepting only allowlisted packages with prerelease versions under `dev-*` dist-tags (behind `PublishGrant` capabilities), and a deterministic promoter (no agent/LLM in path) holding the only upstream npm token, revalidating and promoting byte-identical artifacts with hash-chained audit ledgers. Write-path sibling of the registry-capability / endor-npm-registry-proxy read stack; demo target `npm.minion.town`. Owns the staging boundary and outbound promoter for the chronological `llm` source layer in llm-dev-publish (PR #853), which supplies the FIFO ordering, commit-derived prerelease versions, and manifest recovery; the two designs reconcile into one continuous dev-publishing system |
 
 **Exit criterion:** AI coding agent runs with principle of least
 authority enforced — sandboxed processes, confined filesystem, auditable
@@ -1567,6 +1585,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endoclaw-browser | M-L | 1.5 weeks | 10 | Playwright-backed, origin-confined; smallest cut in PR #106 |
 | endoclaw-channel-bridges | M | 4-5 days | 10 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 3 days | 10 | Skills directory with capability declarations; PR #105 open |
+| npm-dev-publisher-attenuation | M | 4-5 days | 10 | Two small deterministic services (proxy ~1.5-2.5k LOC + promoter ~1k) plus demo ops config; no Endo-repo code in the first cut (repo placement is an open question in the design). References to registry-capability / endor-npm-registry-proxy are reconciliation seams, not build dependencies |
 | endor-git-bindings | L | 2-3 weeks | 11 | Re-derived up from the pre-revision `M \| 4-5 days` (which sized the pure-Rust `gix` scope): the revision adds unsafe FFI over custom `git_odb_backend`/`git_refdb_backend` callbacks, Miri/sanitizer gates, a four-lane native-run Zig cross-build matrix with a hand-maintained Windows toolchain wrapper, pack resource-bound testing, and ongoing fixture/API sync with a separate external repository. Shared `GitObjectDb` contract, Rust `git2` wrapper, vendored-libgit2 FFI boundary, Endor-tree adapter, corruption coverage, and Zig cross-build checks. Minion Town supplies its own smart-HTTP and CAS-and-SQLite adapters against the same crate and fixtures. |
 | endor-registry-proxy-worker | M-L | 1.5-2 weeks | 11 | XS mapper bundle, virtual CAS read powers, normalized package-resolution archive tables, Rust loader simplification, and the three-adapter packaged-application fixture corpus. |
 | daemon-endor-sqlite-iterate-streaming | M | 4-5 days | 11 | Native SQLite cursor map, one-row host ABI, hardened shim iterator, lifecycle cleanup, and real XS plus pet-store large-set coverage. |
