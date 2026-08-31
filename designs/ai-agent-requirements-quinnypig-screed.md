@@ -1,9 +1,9 @@
-# AI Agent Requirements: Quinn Pig Screed (reference)
+# AI Agent Requirements: Quinn Pig Screed (Reference)
 
 |             |                                                                                                                  |
 | ----------- | ---------------------------------------------------------------------------------------------------------------- |
 | **Created** | 2026-05-21                                                                                                       |
-| **Updated** | 2026-05-22                                                                                                       |
+| **Updated** | 2026-08-31                                                                                                       |
 | **Author**  | kriscendobot (prompted)                                                                                          |
 | **Status**  | Reference                                                                                                        |
 | **Source**  | <https://x.com/QuinnyPig/status/2055497559813304735> (transcript supplied by maintainer 2026-05-21)              |
@@ -25,7 +25,20 @@ post raises a concern Endo has not addressed.
 
 ## Transcript
 
-The transcript below is the verbatim thread by `@QuinnyPig` from
+**Provenance.** Automated retrieval of the source thread failed at
+authoring time (X / Twitter serves this content only to authenticated
+clients), so the `## Prompt` section's stated fallback was taken: the
+document was first committed as a source-retrieval-failure scaffold
+with a TODO, and the maintainer then supplied the thread text, which
+replaced the scaffold (git commit "design: replace screed scaffold
+with verbatim transcript"). The `**Source**` row's "supplied by
+maintainer" attribution refers to that hand-off. The text below is
+therefore verbatim *as supplied by the maintainer*; it has not been
+re-fetched and diffed against the live post from within this
+document's toolchain, and any later verbatim-fidelity check would need
+to compare against the live thread or an archive permalink.
+
+The transcript below is the thread by `@QuinnyPig` from
 2026-05-15, followed by a 2026-05-18 quote-tweet by `@QuinnyPig`
 endorsing a reply from `@Hey_ross`.
 All X / Twitter handles are wrapped in backticks so this document
@@ -231,10 +244,15 @@ The analysis lens draws on Endo's standing primitives:
   store, GC across persisted graphs.
 - **OCapN**: peer-to-peer capability network with Noise-protected
   transport and per-agent network identities.
+- **XS**: the metered JavaScript engine (from Moddable) that Endo runs
+  each confined worker in. XS accounts for a worker's memory allocation
+  and computation as it runs, can enforce a per-worker meter, and can
+  serialize a worker's heap into a snapshot; these metering and snapshot
+  facilities are the substrate several bullets below build on.
 
 ### Bullet 1: Gated changes
 
-The guardrail Endo offers here lives in the Daemon, not in any
+The guardrail Endo offers here lives in the daemon, not in any
 project-specific workflow built on top of it.
 An Endo agent is confined to the capabilities its host explicitly
 granted; it has no `process.env`, no ambient filesystem, no socket
@@ -246,6 +264,9 @@ ignore: an agent that holds no `Repo` or `Deploy` capability cannot
 mutate either, and an agent that holds a `Repo.openPullRequest`
 capability but not a `Repo.push` capability literally cannot route
 around the gated-PR pattern.
+(The `Repo` / `Deploy` / `Repo.openPullRequest` / `Repo.push` names
+here are illustrative, not existing Endo exports; they stand in for
+whatever host-granted capabilities name these powers.)
 The PR-and-review workflow is one shape this guardrail enables; the
 underlying primitive is the daemon-issued capability that names what
 the agent may do.
@@ -276,10 +297,10 @@ Every `makeExo` remotable carries an `M.interface()` method guard
 that names its methods and the pattern each argument must match;
 those guards are themselves reflectable.
 `__getMethodNames__()` lets a caller (or an LLM) enumerate the
-methods, and the interface guard's `getMethodGuards()` surface
-returns the argument and result patterns for each method, so a
-caller can discover both the method names and the shapes the
-implementation will accept without duck-typing.
+methods, and `getInterfaceGuardPayload(interfaceGuard)`
+(`@endo/patterns`) returns the argument and result patterns for each
+method, so a caller can discover both the method names and the shapes
+the implementation will accept without duck-typing.
 The pattern language itself (`@endo/patterns`) is a reflective
 type-and-shape surface that error-message rendering and runtime
 matching share.
@@ -312,22 +333,27 @@ Relevant existing designs:
 
 Endo has XS metering as the substrate on which budget primitives are
 built.
-XS measures each worker's allocation and computation, the daemon can
+XS measures each worker's allocation and computation; the daemon can
 issue workers tokens against a quota, rate-limit messages to a worker
 that is approaching its quota, terminate a worker that exceeds its
 meter, and page a worker's heap into a content-addressable snapshot
 so the trade between compute and storage is explicit rather than
 ambient.
-Storage charging follows the same shape: the daemon can charge for
-storage on the basis of writes against a quota the server agrees to
-hold (the assumption being that the writer paid enough at write time
-to cover the storage costs from reasonable interest projections),
-and users can pay for garbage collection to reclaim storage tokens.
-Per-agent token / compute / dollar budgets layered on this substrate
-are designable rather than aspirational, the meter and the quota
-already exist; what remains is exposing the budget as a capability
-the agent and its caller can observe and the daemon can fail-closed
-on at the boundary.
+On the storage side, the cited substrate is narrower than the compute
+side: the content-addressable store today provides mark/sweep GC and
+retain/release ref-counting across persisted graphs, not an economic
+layer. There is no charging, quota, or "storage token" mechanism in
+the CAS designs; a storage-budget layer that charges for writes and
+lets a user pay to reclaim space by running GC would be *new* work
+built on top of the existing ref-counting, not an existing capability.
+So compute budgets are designable rather than aspirational (the
+compute meter and the worker quota already exist), while a storage
+budget is one design step further out, resting on ref-counting that is
+built but on a charging surface that is not.
+What remains for the compute side is exposing the budget as a
+capability the agent and its caller can observe and the daemon can
+fail closed on at the boundary; what remains for the storage side is
+the charging surface itself.
 Relevant existing designs:
 [`daemon-xs-worker-metering`](daemon-xs-worker-metering.md),
 [`daemon-xs-worker-snapshot`](daemon-xs-worker-snapshot.md),
@@ -341,9 +367,9 @@ same reason bullet 5's quota and termination story is: XS metering
 sees each worker's allocation and computation, and the daemon can
 trip a breaker on a worker, a group of workers, or a particular
 capability invocation when the signal warrants it.
-The maintainers have prior experience building circuit breakers for
-RPC at scale, which gives the worker-granularity story prior art
-rather than a from-scratch design.
+Circuit breakers for RPC at scale are well-trodden prior art in the
+distributed-systems literature, so the worker-granularity story is a
+known shape rather than a from-scratch design.
 The remaining design work is the human-escalation half: Endo has the
 confirmation UX surface (the chat UI can prompt a user) but no
 standing tie between a depletion or breaker-trip signal and a
@@ -364,15 +390,25 @@ dry-run**: run the workflow against an ephemeral storage proxy that
 mirrors the real CAS for reads and discards all writes when the
 dry-run completes, with the client paying the compute and network
 costs for the dry-run pass.
-The substrate is already there (the daemon's content-addressable
-store, the XS worker snapshot mechanism, and the daemon's existing
-ability to fork workers).
+This mechanism fences only Endo's *own* persisted state: mirroring the
+CAS and discarding its writes undoes a mutation of the daemon's storage
+layer, and nothing else. It does not (and cannot) undo an external,
+irreversible side effect reached through a capability, such as a paid
+HTTP call through an `HttpClient` or a billed inference invocation.
+Those are exactly the costs bullet 7 wants previewed *before* they are
+incurred, so they need a genuinely separate estimation path: a
+`previewCost` that projects a capability's cost *without invoking it at
+all*, rather than a dry-run that still spends the money it is
+previewing. The two are not points on one spectrum. A dry-run elides
+Endo-internal writes, while a cost preview must elide the external call
+entirely, and a future budget design should keep them apart.
+For the Endo-internal dry-run, the substrate is already there (the
+daemon's content-addressable store, the XS worker snapshot mechanism,
+and the daemon's existing ability to fork workers).
 Getting the economics of dry-runs to work is the interesting open
 problem: the dry-run must be cheap enough that a caller would
 actually choose it over committing speculatively, but expensive
 enough that the daemon is not asked to compute the world for free.
-A `previewCost` projection and a full transactional dry-run are
-points on the same spectrum.
 Relevant existing designs:
 [`daemon-xs-worker-snapshot`](daemon-xs-worker-snapshot.md),
 [`daemon-cas-management`](daemon-cas-management.md),
@@ -383,7 +419,7 @@ Relevant existing designs:
 This is an area that will require attention; the foundation is in
 place but the LLM-actionable framing needs deliberate design work.
 Endo's `@endo/errors` library encourages structured, taggable errors
-(`makeError(X\`No formula for ${ref}\`)`) and `q()` for safe value
+(``makeError(X`No formula for ${ref}`)``) and `q()` for safe value
 quoting in messages, which is closer to "instructions, not puzzles"
 than AWS's IAM boilerplate.
 The active design surface for the pattern-mismatch case (the
@@ -408,7 +444,7 @@ Endo's capability model is exactly this: each agent's authority is
 the union of the capabilities it holds.
 "Capability-bounded sessions" maps to a chat session whose root
 guest sees only a curated capability bank.
-"Expiring in 30 minutes" is the gap, time-limited capabilities are
+"Expiring in 30 minutes" is the gap; time-limited capabilities are
 not a built-out story today.
 Relevant existing designs: [`daemon-capability-bank`](daemon-capability-bank.md),
 [`endo-posix-sandbox`](endo-posix-sandbox.md),
@@ -450,13 +486,13 @@ inspector lets the user walk an agent's graph
 [`daemon-retention-paths`](daemon-retention-paths.md)).
 Tying each action to the prompting LLM request and to the cost
 incurred is the unbuilt half; the action and reasoning surfaces
-exist, the cost surface does not.
+exist, but the cost surface does not.
 
 ### Bullet 12: Convention over configuration
 
 Endo's default posture is the capability-only realm, which removes
 the "explicit decisions on 1000 things" problem by removing the
-ambient surface they would configure.
+ambient surface that would otherwise force those decisions.
 "Ask the human" is the chat UI's role.
 "Flail through alone" is the failure mode Endo's pre-PR checklist,
 panel reviews, and pre-push gates exist to prevent for bot-side
@@ -493,8 +529,8 @@ remainder said is not on record here.
 
 Independent of the specific bullets, the Endo design corpus already
 takes a position on several themes the post raises.
-This section summarizes that posture as background for the per-bullet
-analysis.
+This section recaps that posture, drawing the per-bullet analysis
+above back together into the cross-cutting themes it rests on.
 
 ### Capability confinement vs. ambient authority
 
@@ -554,10 +590,18 @@ the agent-facing surface, or has not yet taken a position at all,
 also flagged in the per-bullet analysis above:
 
 - **Budget-as-capability surface**: XS metering, worker rate limits,
-  worker termination, and storage-write quotas exist as substrate;
+  and worker termination exist as substrate (storage *ref-counting*
+  exists too, but storage *charging* does not; see bullet 5);
   a per-agent token / compute / dollar budget exposed as an exo the
   agent and its caller can observe is the unbuilt layer
-  (bullets 5, 6, 7, 11).
+  (bullets 5, 6, 7, 11). These four bullets are bucketed together
+  for "where to look," but they do not collapse into one primitive:
+  their failure semantics diverge. A hard cap (5) must never be
+  exceeded, a circuit breaker (6) is a soft alert plus escalation, a
+  cost preview (7) is a before-the-fact estimate, and action /
+  reasoning / cost observability (11) is an after-the-fact trace, so a
+  single "budget exo" that tried to discharge all four would be
+  over-scoped.
 - **Confirmation UX for irreversible actions**: there is no standing
   design for "agent must ask before doing X-class-of-thing" beyond
   the capability denial it gets if it lacks the capability (bullet 6).
