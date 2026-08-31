@@ -3,13 +3,14 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
+| **Updated** | 2026-08-31 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
 ## What is the Problem Being Solved?
 
 A locator names a peer by a durable identity (its Ed25519 public key) and
-carries a plural set of ephemeral connection hints describing where that peer
+carries a set of ephemeral connection hints describing where that peer
 can currently be reached (see [daemon-locator-reference](daemon-locator-reference.md)
 and [ocapn-noise-network](ocapn-noise-network.md)). This is the concrete form
 of *relative routing*: a session is established by choosing a route from a
@@ -40,14 +41,17 @@ not authorize.
 
 ## Cases in Scope
 
+The "Shared scope tag" column uses the `<kind>:<id>` scope-tag shape defined in
+§ 1.
+
 | # | Case | Shared scope tag | Route the tag selects |
 |---|------|------------------|-----------------------|
 | 1 | Same-LAN peers | `lan:<L>` | Direct LAN address, no NAT/relay hop |
 | 2 | Workers under a shared supervisor | `supervisor:<S>` | Domain socket / named-pipe introduction, no network stack |
 | 3 | Daemons on a host behind a shared gateway | `host:<H>` or `gateway:<G>` | Host-local socket / loopback, or gateway-local introduction |
 | 4 | Loopback / same-host (or same-process) | `host:<H>` (`process:<P>`) | `127.0.0.1` route; in-process loopback when `process:<P>` also matches |
-| 5 | Home hub on the local network | `lan:<L>` + `hub:<K>` | LAN hub relay, ranked above the public relay |
-| 6 | A gateway's children, reached through the gateway | `gateway:<G>` (destination boundary the relay names, not a receiver-held tag) | Compound `via=<gateway-locator>` introduction hint, always kept |
+| 5 | Home hub on the local network | `lan:<L>` + `hub:<K>` | Direct LAN address first, then the LAN hub relay, both ranked above the public relay |
+| 6 | A gateway's children, reached through the gateway | `dest=gateway:<G>` on a `via=` hint (a *destination* marker the relay names, **not** a receiver-held `scope=` tag — see § 3) | Compound `via=<gateway-locator>` introduction hint, always kept |
 
 The mechanism is deliberately open: `<kind>` is an extensible enumeration, so
 new locality kinds (a container/mount namespace, a VPN overlay, a mesh subnet)
@@ -55,16 +59,26 @@ are added without a redesign.
 
 ## Design
 
-### 1. Scope tags: expressing "where a hint is reachable from"
+### 1. Scope Tags: Expressing "Where a Hint Is Reachable From"
 
-A **scope tag** is an opaque, comparable token `<kind>:<id>`:
+A **scope tag** is a structured, comparable token with two fields, `kind` and
+`id`:
 
-- `<kind>` names a locality boundary: `process`, `host`, `supervisor`,
-  `hub`, `lan`, `gateway` (extensible).
-- `<id>` is an opaque identifier for a *specific* instance of that boundary:
+- `kind` names a locality boundary: `process`, `host`, `supervisor`,
+  `hub`, `lan`, `gateway` (extensible). It is the classification key that
+  `costOf` (§ 4) reads to rank a hint.
+- `id` is an opaque identifier for a *specific* instance of that boundary:
   a per-process nonce, a host-scoped nonce, a supervisor-issued nonce, a
-  gateway or hub public key. Comparison is exact string match on the whole
-  `<kind>:<id>`.
+  gateway or hub public key. It is compared for equality only, never parsed.
+
+Two scope tags are equal when both `kind` and `id` are equal. The wire form is
+the string `<kind>:<id>`; it parses by splitting on the **first** colon —
+`<kind>` never contains a colon, and `<id>` may (a base64/hex public key can),
+so everything after the first colon is the opaque `id`. Keeping `kind` a
+first-class field (rather than re-parsing an "opaque" string at each `costOf`
+call) is why the type is `{ kind, id }` and not a bare string: classification
+(the ranking lookup) and identity (the equality test) are separate concerns
+sharing one value.
 
 The essential property: **the `<id>` is established by the boundary's own
 authority and distributed out-of-band to the peers inside it, never derived
@@ -75,18 +89,22 @@ Because a receiver only ever holds a scope tag it was independently given,
 a tag it does not hold cannot be conjured by a peer that merely writes it into
 a hint (see [Security](#security)).
 
-### 2. The local scope: expressing "where I am"
+### 2. The Local Scope: Expressing "Where I Am"
 
 Each vat/daemon maintains a **local scope**: the unordered set of scope tags it
 currently sits inside. Only membership matters: ranking is not read from tag
 order but from `costOf` (§ 4), so `makeLocalScope` need not order its tags.
 
 ```typescript
-type ScopeTag = string;              // "<kind>:<id>", e.g. "supervisor:9f3c..."
+type ScopeTag = {
+  kind: string;   // classification key, e.g. "supervisor" (read by costOf)
+  id: string;     // opaque instance id, compared for equality only
+};
+// wire form "<kind>:<id>", split on the first colon; equality is (kind, id).
 
 type LocalScope = {
   tags: Set<ScopeTag>;               // every boundary this vat is inside (unordered)
-  has: (tag: ScopeTag) => boolean;   // membership test used by selectRoutes
+  has: (tag: ScopeTag) => boolean;   // membership test (kind+id equality) used by selectRoutes
 
   // makeLocalScope(): LocalScope, discovers the tags for the boundaries this
   // vat sits inside (process/host/supervisor eagerly; lan/hub/gateway as they
@@ -111,24 +129,25 @@ The local scope is the receiver-side complement of the per-agent
 [daemon-agent-network-identity](daemon-agent-network-identity.md):
 `AgentConnectionHints` governs what a persona *advertises and requires* for
 inbound connections; the local scope governs how the connector *chooses* among
-a peer's advertised hints for outbound. `preferredTransports` remains the
-tiebreaker within an equal scope rank.
+a peer's advertised hints for outbound. `preferredTransports` — the connector's
+own ordered list of transport schemes it prefers (`unix` before `tcp` before
+`ws-relay`, say), carried on that same `AgentConnectionHints` policy — remains
+the tiebreaker within an equal scope rank.
 
-### 3. Encoding: a scope claim on each hint
+### 3. Encoding: A Scope Claim on Each Hint
 
-A hint's reachability scope is a field on the hint, projected into the locator
-URL. Canonically (in the Syrup hint struct that
-[ocapn-noise-network](ocapn-noise-network.md) already carries as a
-`Record<string,string>`), the hint gains one optional key:
+A hint's reachability scope is one optional field on the hint:
 
 ```
 scope = "<kind>:<id>"        // absent => globally reachable (e.g. a public relay)
 ```
 
-In the URL projection, the scope is a fragment on the hint's transport-locator
-before it is `encodeURIComponent`-encoded into its `@`-delimited path segment
-(the existing hint encoding from
-[daemon-locator-terminology](daemon-locator-terminology.md)):
+The primary substrate is the daemon's live `ConnectionHint` — the URI-string
+hints that ride the `@`-delimited locator path today
+(`packages/daemon/src/locator.js`, encoding per
+[daemon-locator-terminology](daemon-locator-terminology.md)). There the scope
+is a URL **fragment** on the hint's transport-locator, before that locator is
+`encodeURIComponent`-encoded into its `@`-delimited path segment:
 
 ```
 endo://{peerKey}/{formulaAddress}@{hint1}@{hint2}?type={formulaType}
@@ -147,57 +166,86 @@ that ignores the fragment still recovers a working transport-locator and
 behaves exactly as it does today, no worse, and the Noise handshake still
 gates the result (see [Security](#security)).
 
+The aspirational [ocapn-noise-network](ocapn-noise-network.md) hint form is a
+different shape — a flat `Record<string,string>` of prefixed keys (`ws:host`,
+`tcp:port`, …), not a single URI string, and no `OcapnNetwork` implementing it
+exists yet. It has no transport-locator to hang a `#scope=` fragment on, so
+when that struct is built it carries the scope as one more flat key,
+`scope = "<kind>:<id>"`, alongside its transport keys. The two encodings differ
+only in surface (a fragment on the URI form, a key on the record form); the
+`ScopeTag` value and the `selectRoutes` logic below are identical for both, and
+`selectRoutes` reads `h.scope` from whichever hint representation the network
+plugin hands it.
+
 Case 6 (reach a peer only through its gateway) uses a **compound hint** whose
-payload is the gateway's own locator plus the inner target, tagged
-`scope=gateway:<G>`:
+payload is the gateway's own locator plus the inner target. It carries the
+destination boundary under a distinct key, `dest=<kind>:<id>` — *not* the
+ordinary `scope=` key — precisely because its match semantics are the opposite
+of `scope=`'s:
 
 ```
-via+captp0://{gatewayLocator}?target={innerFormulaAddress}#scope=gateway:9f3c...
+via+captp0://{gatewayLocator}?target={innerFormulaAddress}#dest=gateway:9f3c...
 ```
 
-The `scope=gateway:<G>` on a `via=` hint is not an ordinary receiver-side
-filter tag. It names the *destination* boundary the relay bridges into, not a
-tag the connector is expected to hold, so `selectRoutes` does not match it
-against the local scope (see § 4): the audience for case 6 is precisely a
-connector *outside* `gateway:<G>`, which would drop the hint if the tag were
-matched the ordinary way. Instead a `via=` hint is always kept and ranked at
-`gateway` cost; its outer reachability is the embedded gateway locator, whose
-own hints are filtered recursively by the same `selectRoutes`.
+`scope=` on any ordinary hint is a receiver-side filter: keep the hint only if
+the connector *holds* that tag. `dest=` on a `via=` hint is the reverse — it
+names the *destination* boundary the relay bridges into, a tag the connector is
+expected **not** to hold (the audience for case 6 is precisely a connector
+*outside* `gateway:<G>`). Because the two are distinct keys, `selectRoutes`
+branches on schema, not on tribal knowledge of what `scope=` means on a `via=`
+hint: a `via=` hint has no `scope=` filter tag at all, so it is never dropped;
+it is always kept and ranked at `gateway` cost (via its `dest=` kind), and its
+outer reachability is the embedded gateway locator, whose own hints are
+filtered recursively by the same `selectRoutes`.
 
 The gateway-mediated introduction protocol this hint invokes is deferred to a
 follow-on design (see [Open Questions](#open-questions)); this document settles
 only the shared scope/encoding/filtering model it rides on.
 
-### 4. Filtering and ranking: choosing the route
+### 4. Filtering and Ranking: Choosing the Route
 
-Given a locator's hints and the connector's `LocalScope`, route selection is:
+Given a locator's hints and the connector's `LocalScope`, `selectRoutes`
+returns a `ConnectionHint[]` — the bare kept hints, sorted cheapest-first. The
+`{ h, cost }` records below are an internal scratch list used only to sort;
+`cost` never crosses the return boundary (callers that want a hint's rank
+re-derive it with `costOf`, so no implementation-detail field leaks into the
+public shape):
 
 ```
+# returns ConnectionHint[] (kept hints, sorted cheapest-first)
 selectRoutes(hints, localScope):
-  kept = []
+  ranked = []
   for h in hints:
-    if h is a via= compound hint:               # gateway relay: the scope tag
-      kept.push({ h, cost: costOf(GATEWAY) })   #   names the far boundary, not a
-                                                #   receiver-held tag, so it is
-                                                #   never dropped; the embedded
-                                                #   gateway locator's own hints
-                                                #   are filtered recursively
+    if h is a via= compound hint:               # gateway relay: dest= names the
+      ranked.push({ h, cost: costOf("gateway") })  # far boundary, not a receiver-
+                                                #   held tag, so it is never
+                                                #   dropped; the embedded gateway
+                                                #   locator's own hints are
+                                                #   filtered recursively
     elif h.scope is absent:                     # global route
-      kept.push({ h, cost: GLOBAL })
+      ranked.push({ h, cost: costOf("global") })
     elif localScope.has(h.scope):               # shared boundary => reachable
-      kept.push({ h, cost: costOf(h.scope) })
+      ranked.push({ h, cost: costOf(h.scope.kind) })
     else:
       drop h                                     # not reachable from here
-  return kept sorted by cost ascending           # closest first, global last
+  return [ r.h for r in ranked sorted by r.cost ascending ]   # closest first, global last
 ```
 
-`costOf` reads a configurable **locality order** keyed by `<kind>`, default:
+`costOf(kind)` takes a bare `<kind>` string at every call site — the via= and
+global branches pass a literal (`"gateway"`, `"global"`), the ordinary branch
+passes `h.scope.kind` — and reads a configurable **locality order**, default:
 
 ```
-process(0) < supervisor(1) < host(2) < hub(3) < lan(4) < gateway(5) < GLOBAL(6)
+process(0) < supervisor(1) < host(2) < lan(3) < hub(4) < gateway(5) < global(6)
 ```
 
-Kept hints are tried closest-first with fallback down the list; a global relay
+`lan` (a direct address on the LAN) ranks **below** `hub` (a relay hop through
+a LAN hub) on purpose: a direct link to the peer is by construction no costlier
+than routing through an intermediary on the same LAN, so "closest first" must
+prefer it. A deployment where the direct address is less reliable than the hub
+(LAN client isolation, say) reconfigures the order; the default ranks the
+direct route cheaper. Kept hints are tried closest-first with fallback down the
+list; a global relay
 hint, always kept, is the fallback tail that works from anywhere. Within one
 cost rank, equally-local hints may be tried concurrently (a happy-eyeballs
 race) with `preferredTransports` as the tiebreaker. Hints whose scope the
@@ -209,11 +257,11 @@ flowchart TD
     P["process:P<br/>(same process)"]
     S["supervisor:S<br/>(sibling workers)"]
     H["host:H<br/>(same host / loopback)"]
-    B["hub:K<br/>(LAN hub)"]
-    L["lan:L<br/>(same LAN)"]
+    L["lan:L<br/>(direct LAN address)"]
+    B["hub:K<br/>(LAN hub relay)"]
     G["gateway:G<br/>(behind one gateway)"]
     R["global<br/>(public relay)"]
-    P --> S --> H --> B --> L --> G --> R
+    P --> S --> H --> L --> B --> G --> R
 ```
 
 A hint is reachable from the connector when the connector's local scope
@@ -224,7 +272,7 @@ connector may hold `gateway:<G>` without `host:<H>` (case 3), and each hint is
 kept or dropped on its own tag. A global hint and a `via=` gateway-relay hint
 are always kept regardless of local scope.
 
-### Worked example (case 2)
+### Worked Example (Case 2)
 
 Worker A and worker B are spawned by supervisor S, which injected
 `supervisor:9f3c` into both. A's locator for a formula advertises three hints:
@@ -234,7 +282,7 @@ Worker A and worker B are spawned by supervisor S, which injected
 `{process:..., supervisor:9f3c, host:..., lan:2b7a}`. `selectRoutes` keeps all
 three (B shares `supervisor:9f3c` and `lan:2b7a`, and the relay is global),
 ranks the domain socket first (supervisor, cost 1), the LAN address second
-(lan, cost 4), the relay last, and B connects over the domain socket without
+(lan, cost 3), the relay last, and B connects over the domain socket without
 touching the network stack. A worker on a different host, lacking
 `supervisor:9f3c` and `lan:2b7a`, drops the first two and reaches A through
 the relay.
@@ -250,7 +298,7 @@ public key. A scope match is evidence of co-location, never of permission.
 **A narrow-scope hint confers no reach by traveling.** Because filtering is
 receiver-side and the handshake still gates, a `supervisor:`- or `lan:`-scoped
 hint included in a locator that travels beyond that boundary grants an outsider
-nothing: the outsider lacks the matching tag, so it drops the hint; even a
+nothing. The outsider lacks the matching tag, so it drops the hint; even a
 scope-blind peer that tries the raw address either cannot route to it or lands
 on its own unrelated local endpoint, where the handshake fails against the
 absent peer.
@@ -263,7 +311,16 @@ path, an internal IP, the existence of a supervisor. Two mitigations:
   ([daemon-locator-terminology](daemon-locator-terminology.md)). A producer
   that knows a locator is bound for a peer outside a boundary SHOULD omit that
   boundary's hints. Production-side scope filtering is the mirror of the
-  receiver-side filtering above.
+  receiver-side filtering above. The iroh transport already ships a special
+  case of exactly this SHOULD as a MUST: `isPublishableDirectAddress`
+  (`packages/daemon/src/networks/iroh-address.js`) blanket-excludes
+  loopback/private/link-local direct addresses from published hints (re-enabled
+  only behind an env flag for same-host tests). The scope model **generalizes**
+  it: rather than one hardcoded producer-side drop of a fixed address class, a
+  producer omits a hint whenever the audience lacks its boundary tag, for any
+  `<kind>` (see [Alternatives Considered](#alternatives-considered)). The
+  existing iroh check remains valid as a transport-specific fast path for the
+  loopback/private case and is not obsoleted by this design.
 - **Keep scope ids opaque.** A `<kind>:<id>` should be a nonce or public key,
   not a literal internal address, so the tag itself reveals no topology.
 
@@ -295,6 +352,19 @@ owner and never derived from a locator.
   single compound `via=<gateway>` hint cover the introduced-through-gateway
   case without mandating multi-hop source routing; a genuine multi-relay path
   is left to a follow-on if a case demands it.
+- **Producer-side address-class exclusion alone (the shipped
+  `isPublishableDirectAddress`).** The iroh transport already omits
+  loopback/private/link-local addresses from published hints
+  (`packages/daemon/src/networks/iroh-address.js`), which solves the
+  loopback/private half of the case-1 correctness problem *for that transport
+  by address class*. Rejected as the whole answer, kept as a fast path: a fixed
+  address-class blacklist cannot express "cheap from *here*" (the cost half),
+  cannot rank a supervisor domain socket ahead of a LAN address, and cannot
+  cover non-address boundaries (`supervisor:`, `hub:`, `gateway:`) whose
+  reachability is not visible in an IP literal at all. The scope model
+  subsumes it as the general, receiver-relative, per-`<kind>` case while the
+  iroh check stays as a transport-specific producer-side guard (see § Security,
+  "Produce for the audience's scope").
 
 ## Dependencies
 
@@ -302,7 +372,7 @@ owner and never derived from a locator.
 |--------|--------------|
 | [daemon-locator-reference](daemon-locator-reference.md) | Extends the locator hint format this design annotates with scope |
 | [daemon-locator-terminology](daemon-locator-terminology.md) | The `@`-delimited hint path encoding the scope fragment rides on |
-| [ocapn-noise-network](ocapn-noise-network.md) | The transport-plugin `connect(hints)` surface that consumes selected routes; hints are its `Record<string,string>` struct |
+| [ocapn-noise-network](ocapn-noise-network.md) | The (aspirational, not-yet-implemented) transport-plugin `connect(hints)` surface that will consume selected routes; its `Record<string,string>` hint struct carries the scope as a flat `scope` key rather than a `#scope=` fragment (§ 3) |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | `AgentConnectionHints` is the inbound-policy complement to this outbound scope model |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | The network/transport layering `selectRoutes` slots into |
 
@@ -311,8 +381,8 @@ owner and never derived from a locator.
 1. **Scope tag + local scope.** `ScopeTag`, `LocalScope`, `makeLocalScope`
    with `process`/`host`/`supervisor` discovery. Domain-socket and loopback
    cases (2, 4) are reachable with these three tag kinds alone.
-2. **Hint scope encoding.** Add the `scope` field to the hint struct and its
-   `#scope=` URL projection; make parse scope-aware and scope-blind-tolerant.
+2. **Hint scope encoding.** The `scope` field on the hint struct and its
+   `#scope=` URL projection; a scope-aware, scope-blind-tolerant parse.
 3. **`selectRoutes` filter/rank.** The configurable locality order, drop
    behavior, and same-rank race, wired into the network's transport selection.
 4. **LAN and gateway kinds.** `lan:` discovery and the `hub:` route (cases 1,

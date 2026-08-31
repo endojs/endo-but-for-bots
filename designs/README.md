@@ -275,7 +275,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [relative-routing](relative-routing.md) | 2026-08-17 | 2026-08-17 | Not Started |
+| [relative-routing](relative-routing.md) | 2026-08-17 | 2026-08-31 | Not Started |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
