@@ -37,14 +37,19 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
-fn crank(m: &mut Interp, src: &str) -> (bool, String, String) {
+/// Relink and run one crank, returning `(completed, halt debug, result,
+/// computrons)`. The COMPUTRON count is part of the observation: a
+/// resumed machine that answers correctly while charging differently
+/// has still diverged, and consensus is on the count as much as the
+/// value. Every twin below therefore compares metering too.
+fn crank(m: &mut Interp, src: &str) -> (bool, String, String, u64) {
     let (b, n) = compile(src);
     let b = m.relink_crank(&b, &n).expect("relink");
     let o = m.run(&b);
-    (o.completed, format!("{:?}", o.halt), o.result)
+    (o.completed, format!("{:?}", o.halt), o.result, o.computrons)
 }
 
-fn continuous(crank1: &str, observations: &[&str]) -> Vec<(bool, String, String)> {
+fn continuous(crank1: &str, observations: &[&str]) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
@@ -52,7 +57,7 @@ fn continuous(crank1: &str, observations: &[&str]) -> Vec<(bool, String, String)
     observations.iter().map(|s| crank(&mut m, s)).collect()
 }
 
-fn store_twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String)> {
+fn store_twin(crank1: &str, observations: &[&str], store: &mut dyn HeapStore) -> Vec<(bool, String, String, u64)> {
     let (b1, n1) = compile(crank1);
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
@@ -79,7 +84,7 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
     for got in &cont {
         assert!(got.0, "observation completes uninterrupted: {}", got.1);
     }
-    let got: Vec<&str> = cont.iter().map(|(_, _, r)| r.as_str()).collect();
+    let got: Vec<&str> = cont.iter().map(|(_, _, r, _)| r.as_str()).collect();
     assert_eq!(got, expect, "the continuous observations are the real answers");
 
     let (b1, n1) = compile(crank1);
