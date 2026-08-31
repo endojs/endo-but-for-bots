@@ -50,28 +50,32 @@ Chat's rendering layer picks the layout.
 
 ### Layout
 
+The following is an illustrative UI mockup (literal rendered layout,
+not an architecture diagram), with ASCII stand-ins for the tree and
+cursor glyphs:
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│ ▾ workspace                       │ user > implement endopen.md     │
-│   ▾ designs                       │                                 │
-│     • endopen.md           ●      │ assistant > I will start by     │
-│     • endopen-openrouter.md      │ reading the prompt, then walk    │
-│   ▾ packages                      │ opencode end-to-end, then       │
-│     ▸ chat                        │ author the comparative doc.     │
-│     ▸ daemon                      │                                 │
-│     ▸ lal                         │ • read designs/endoclaw.md      │
-│   • README.md                     │   (template)                    │
-│                                   │ • read designs/README.md        │
-│ ─────────────── todo ─────────── │                                 │
-│ [x] read designs/endoclaw.md      │                                 │
-│ [ ] author designs/endopen.md     │                                 │
-│ [ ] spin out 4 sibling designs    │                                 │
-│ [ ] commit + push                 │                                 │
-│ ─────────────── status ───────── │                                 │
-│ model: anthropic/claude-sonnet    │ ▌                               │
-│ tokens: 47k in / 8k out / 28k$    │                                 │
-│ cost: $0.42                       │ [/ command]    [esc back]       │
-└─────────────────────────────────────────────────────────────────────┘
++---------------------------------------------------------------------+
+| [v] workspace                     | user > implement endopen.md     |
+|   [v] designs                     |                                 |
+|     * endopen.md          (sel)   | assistant > I will start by     |
+|     * endopen-openrouter.md       | reading the prompt, then walk   |
+|   [v] packages                    | opencode end-to-end, then       |
+|     [>] chat                      | author the comparative doc.     |
+|     [>] daemon                    |                                 |
+|     [>] lal                       | * read designs/endoclaw.md      |
+|   * README.md                     |   (template)                    |
+|                                   | * read designs/README.md        |
+| --------------- todo ------------ |                                 |
+| [x] read designs/endoclaw.md      |                                 |
+| [ ] author designs/endopen.md     |                                 |
+| [ ] spin out 4 sibling designs    |                                 |
+| [ ] commit + push                 |                                 |
+| --------------- status ---------- |                                 |
+| model: anthropic/claude-sonnet    | _                               |
+| tokens: 47k in / 8k out / 28k$    |                                 |
+| cost: $0.42                       | [/ command]    [esc back]       |
++---------------------------------------------------------------------+
 ```
 
 Components:
@@ -92,11 +96,21 @@ Components:
   (chunked, color-coded; the existing `markdown-render.js` does not
   speak diff syntax yet, so this is one new component).
 - **Todo pane** (bottom of sidebar): the agent's running plan,
-  rendered from a `todo` formula on the space's guest. A new formula
-  type would be ideal (one more in the
-  [`formula-type.js`](../packages/daemon/src/formula-type.js)
-  registry), but a simpler initial cut is a `value` message of a
-  known shape that the space subscribes to.
+  rendered from durable state on the space's guest. The parent design's
+  persistence invariant ([endopen.md](endopen.md) § Major Contrasts:
+  Persistence) rules out a transport-only model: "any imported OpenCode
+  data model (sessions, parts, todos) lands as new formula types or as
+  fields on existing types." So even the minimal initial cut keeps the
+  todo list *durable*: a `todo` field on the space's guest (readable
+  after a reconnect or reload), updated through the guest's normal
+  message handling and surfaced to the space via the same subscription
+  used for other guest state. A dedicated `todo` formula type (one more
+  in the [`formula-type.js`](../packages/daemon/src/formula-type.js)
+  registry) is the fuller shape if the plan later needs its own
+  identity, addressing, or cross-space sharing; the guest field is the
+  smaller durable cut that still honors the invariant. A transient
+  `value` message with no backing state is explicitly *not* the cut,
+  since it would leave the plan unreadable after reload.
 - **Status bar**: model name, token count, cost (from the Lal
   provider's response metadata; the OpenRouter provider design's
   Phase 3 surfaces cost in the chat envelope), and a clock /
@@ -263,13 +277,29 @@ shell.
    if a user wants full edit affordances they can shell out
    ([cli-edit-verb](cli-edit-verb.md)).
 
+## Verification
+
+- **Durable todo state.** A test writes a todo list to the space's
+  guest, reloads the space (fresh subscription), and asserts the todo
+  pane re-renders the same list, confirming the plan survives a
+  reconnect (the durability the § Layout todo-pane cut commits to, not a
+  transient message).
+- **Responsive fallback.** A test renders the coding space at a viewport
+  narrower than the assumed `>=120` columns and asserts it falls back to
+  the regular chat space rather than overflowing, making the
+  desktop-only assumption (§ Open Questions, Mobile) a checked boundary
+  rather than an untested one.
+- **Component reuse.** A test asserts the coding space instantiates the
+  existing `blob-viewer`, `browser-tree`, and `command-registry`
+  components (Design Decision 2) rather than parallel reimplementations.
+
 ## Related Designs
 
-- [endopen](endopen.md) — primary comparative analysis.
-- [endor-tui](endor-tui.md) — M6 Rust TUI successor.
-- [daemon-mount](daemon-mount.md) — provides the file-tree data source.
-- [chat-slot-slash-commands](chat-slot-slash-commands.md) — command-palette discipline.
-- [chat-edit-message-ui](chat-edit-message-ui.md) — hover-pencil pattern for inline edits.
+- [endopen](endopen.md): primary comparative analysis.
+- [endor-tui](endor-tui.md): M6 Rust TUI successor.
+- [daemon-mount](daemon-mount.md): provides the file-tree data source.
+- [chat-slot-slash-commands](chat-slot-slash-commands.md): command-palette discipline.
+- [chat-edit-message-ui](chat-edit-message-ui.md): hover-pencil pattern for inline edits.
 
 ## Prompt
 

@@ -133,9 +133,9 @@ shared transcripts (see [daemon-256-bit-identifiers](daemon-256-bit-identifiers.
 whose design goal is that "Chat displays identifiers correctly"). A
 credential, by contrast, must be an independently mintable, independently
 revocable *secret*. Making a resource's own public name double as the
-credential that authenticates as it means anyone who observes the name —
-a log line, a `session/list` response, a shared transcript, another ACP
-client's lookup — can authenticate as that guest, the exact
+credential that authenticates as it means anyone who observes the name
+(a log line, a `session/list` response, a shared transcript, another ACP
+client's lookup) can authenticate as that guest, the exact
 "ambient-authority" failure mode this design contrasts Endo *against*.
 
 So the adapter **mints a distinct per-session bearer token** at
@@ -185,6 +185,21 @@ The narrowing happens in the guest agent's address space, so the host
 filesystem capability never leaks to the ACP client and the daemon
 does not have to mint a new `Mount` per session.
 
+**When the `cwd` falls outside the parent `Mount`.** The narrowing
+assumes the ACP-supplied `cwd` lies *within* the guest agent's parent
+`Mount` (typically the user's projects root). When a client opens a
+repository the parent mount does not cover, narrowing is impossible, and
+this is exactly the boundary where the "host filesystem capability never
+leaks" guarantee is tested. The adapter does **not** widen the mount or
+fall back to host-filesystem access. Instead `session/new` routes the
+out-of-scope `cwd` through the existing form-request machinery
+([daemon-form-request](daemon-form-request.md)): the user is prompted to
+grant (or decline) a fresh parent-scoped mount covering that path. On
+decline, `session/new` fails with an ACP error rather than silently
+opening a session with no filesystem access or, worse, ambient access.
+The grant, when given, extends the guest agent's parent-mount set
+explicitly and auditably; it is never implicit in the ACP request.
+
 ### Session lifecycle
 
 | ACP method        | Endo translation                                                           |
@@ -192,10 +207,10 @@ does not have to mint a new `Mount` per session.
 | `session/new`     | `provideGuest(pet-name, powers)`; the ACP `cwd` becomes a virtual mount narrowed from the guest agent's parent `Mount` |
 | `session/load`    | Resolve the presented session token to its guest's formula ID (adapter-local SQLite); re-attach |
 | `session/prompt`  | `E(guest).request(prompt)`; subscribe to guest inbox; stream as session/update |
-| `session/cancel`  | `E(guest).cancel()` — every guest agent module implements `cancel()` (Design Decision 9); no silent degradation |
+| `session/cancel`  | `E(guest).cancel()`; every guest agent module implements `cancel()` (Design Decision 9), so no silent degradation |
 | `session/close`   | Adapter forgets the session; the guest persists in the daemon (durable)    |
 | `session/list`    | Enumerate the adapter's per-process session map (by session token, not raw formula ID) |
-| `session/fork`    | `E(guest).fork()` — required on the guest agent interface (Design Decision 9); forks the transcript into a child guest |
+| `session/fork`    | `E(guest).fork()`, required on the guest agent interface (Design Decision 9); forks the transcript into a child guest |
 | `session/resume`  | Re-attach to the token's guest; replay any unread inbox messages           |
 
 The key insight: ACP "sessions" are ephemeral references to durable
@@ -335,7 +350,11 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
    guest agent owns the parent `Mount` (typically the user's
    projects root); each session narrows that parent in the guest's
    address space to the ACP-supplied `cwd`. The host filesystem
-   capability never leaves the guest.
+   capability never leaves the guest. When the `cwd` falls outside the
+   parent mount, narrowing is impossible; the adapter routes the request
+   through form-request for an explicit fresh grant and fails the session
+   if the user declines, rather than widening authority silently (see
+   § ACP cwd as a virtual mount on the guest agent).
 7. **Considered and rejected: making the daemon directly speak
    ACP.** Reason: protocol coupling. The daemon is the OCapN node;
    adding ACP to its top-level routing makes it harder to keep
@@ -350,8 +369,8 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
    `session/fork`. Backing them with an "if implemented, else
    best-effort approximation" branch would give the ACP client the same
    method name with different semantics depending on which agent module
-   happens to back the guest — a hidden, unadvertised precondition, the
-   least-surprise trap. Instead the guest agent interface *requires*
+   happens to back the guest, a hidden, unadvertised precondition and
+   the least-surprise trap. Instead the guest agent interface *requires*
    `cancel()` and `fork()` (trivially satisfiable), so each protocol
    method has one meaning. If a future guest kind genuinely cannot fork,
    the adapter advertises the missing capability to the client (at
@@ -372,6 +391,11 @@ falsifiable:
   observed via `session/list` cannot be used as the `authenticate`
   bearer token, and that a minted session token authenticates exactly
   one guest and is revocable without renaming the guest.
+- **cwd containment (phases 1, 3).** A test opens a `session/new` whose
+  `cwd` lies outside the guest agent's parent `Mount` and asserts the
+  adapter neither widens the mount silently nor grants host-filesystem
+  access: the request either surfaces a form-request grant or fails with
+  an ACP error.
 - **Session durability (phases 4, 5).** A test closes an ACP session,
   restarts the adapter, and asserts `session/list` still shows the guest
   and `session/resume` re-attaches.
@@ -381,10 +405,10 @@ falsifiable:
 
 ## Related Designs
 
-- [endopen](endopen.md) — primary comparative analysis.
-- [gateway-bearer-token-auth](gateway-bearer-token-auth.md) — auth substrate.
-- [daemon-form-request](daemon-form-request.md) — permission UX.
-- [trust-on-first-bind](trust-on-first-bind.md) — capability-policy
+- [endopen](endopen.md): primary comparative analysis.
+- [gateway-bearer-token-auth](gateway-bearer-token-auth.md): auth substrate.
+- [daemon-form-request](daemon-form-request.md): permission UX.
+- [trust-on-first-bind](trust-on-first-bind.md): capability-policy
   adapter referenced by future MCP-client design.
 - OpenCode reference:
   [`packages/opencode/src/acp/agent.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/acp/agent.ts)

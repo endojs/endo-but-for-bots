@@ -296,11 +296,58 @@ day.
    (the headers, the per-request cost field, the model-catalog endpoint)
    that deserves its own file, even when the wire format overlaps.
 
+5. **Considered and rejected (for now): an explicit `providerKind`
+   field instead of URL-shape inference.**
+   The order-dependent `match(baseURL)` dispatch (Phase 1's
+   `detectProviderKind`, carried into Phase 2's declared-order registry)
+   infers *which provider* from *what the base URL happens to look
+   like*: place-oriented inference that the "openrouter-before-`/v1`"
+   ordering rule exists only to compensate for.
+   A value-oriented alternative removes the inference entirely: let the
+   user or config state `providerKind` directly
+   (`'openrouter'`, `'anthropic'`, `'openai-compatible'`, `'gemini'`,
+   `'ollama'`), matched on that field with no ordering dependency, so
+   "which vendor" is decoupled from "what its URL happens to look like".
+   `detectProviderKind` would survive only as a best-effort default when
+   the field is omitted.
+   Reason it is not the Phase 1/2 default: the shipped config surface is
+   URL-first today (`LAL_HOST`), so an explicit-kind field is a config
+   migration that belongs with the Phase 3 provider-config form, where
+   `providerKind` becomes an explicit form field and the ordering rule
+   can retire.
+   Until then the ordering rule stands, documented as a known
+   place-oriented wart (this decision and Design Decision 3) rather than
+   an invisible one.
+
+## Verification
+
+Phase 1's load-bearing claim is the provider-detection *ordering* one:
+the `openrouter.ai` predicate must resolve before the generic `/v1`
+predicate, or OpenRouter silently misclassifies as
+`'openai-compatible'`.
+That claim is falsifiable and lands with a check:
+
+- **Detection ordering.** A unit test asserts
+  `detectProviderKind('https://openrouter.ai/api/v1')` returns
+  `'openrouter'`, not `'openai-compatible'`, and that a plain
+  `'https://host/v1'` still returns `'openai-compatible'`. A future
+  reordering that regresses OpenRouter fails this test rather than
+  shipping silently.
+- **Existing-branch preservation.** A test asserts the
+  `'openai-compatible'` branch and its
+  `defaultModels['openai-compatible']` lookup are unchanged by the new
+  `'openrouter'` branch, so llama.cpp and other generic `/v1` endpoints
+  still resolve as before.
+- **Header injection.** A test drives `makeOpenRouterProvider` against a
+  stub endpoint and asserts the request carries `HTTP-Referer` and
+  `X-Title`, distinguishing the router-aware path from the generic
+  OpenAI-compatible adapter that omits them.
+
 ## Related Designs
 
-- [endopen](endopen.md) — primary comparative analysis.
-- [lal-fae-form-provisioning](lal-fae-form-provisioning.md) — Phase 3 piggyback.
-- [endoclaw-network-fetch](endoclaw-network-fetch.md) — outbound HTTP capability story.
+- [endopen](endopen.md): primary comparative analysis.
+- [lal-fae-form-provisioning](lal-fae-form-provisioning.md): Phase 3 piggyback.
+- [endoclaw-network-fetch](endoclaw-network-fetch.md): outbound HTTP capability story.
 - OpenCode reference:
   [`packages/opencode/src/provider/provider.ts`](https://github.com/anomalyco/opencode/blob/d59d9966/packages/opencode/src/provider/provider.ts)
   (`provider.ts`), lines 88 through 119 and 410 through 459.

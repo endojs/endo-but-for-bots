@@ -28,8 +28,14 @@ process when configured.
 (A *vat* in the OCapN sense is the unit of isolation a guest runs in.
 See [daemon-capability-filesystem](daemon-capability-filesystem.md) for
 the capability-graph story and `formula-type.js` for the durable types.)
-A guest spawning a sibling guest is a regular `formulateGuest` + `send`
-interaction.
+A guest does not spawn a sibling directly: `formulateGuest` /
+`provideGuest` are host powers, not guest powers
+(`packages/daemon/src/interfaces.js` defines them on the host
+interface, absent from the guest interface). A guest that needs to
+create siblings holds an *attenuated, host-constructed guest-creation
+facet* (see § Permission / capability story for how it is granted and
+bounded); given that facet, spawning a sibling and messaging it is a
+regular `send` interaction.
 The runtime can have 10 guests in flight at once with no special flag.
 
 The gap is **not** concurrency itself;
@@ -61,25 +67,40 @@ Vocabulary:
 - The sibling sub-guests a panel dispatches to are its **panel members**.
 - The aggregated reply a panel returns to its parent is the **panel verdict**.
 
-The panel parent calls `E(panel).deliberate(prompt, options)`. The
-panel formulates `N` member guests (or reuses pre-existing pet-named
-ones), sends each the prompt as a `request` message, gathers each
-member's reply, and resolves the deliberate-promise with the
+The panel parent calls `E(panel).deliberate(prompt, options)`. Using
+its host-constructed guest-creation facet (§ Permission / capability
+story), the panel formulates `N` member guests (or reuses pre-existing
+pet-named ones), sends each the prompt as a `request` message, gathers
+each member's reply, and resolves the deliberate-promise with the
 aggregated verdict.
+
+The operation is spelled `deliberate`, not `request`, even though a
+panel is itself a guest and every ordinary guest (each panel member
+included) answers `request(prompt)`. The divergence is deliberate and
+carries meaning: `request` is the single-prompt / single-reply verb,
+whereas `deliberate` denotes a different reply cardinality: a fan-out
+to `N` members returning one *aggregated verdict* envelope, with an
+`options` bag selecting members and deadlines. To keep a caller who
+only knows the guest verb from needing new vocabulary, the panel also
+answers `request(prompt)` as an alias that delegates to `deliberate`
+with default members; `deliberate` is the richer entry point for
+callers that want to choose members or read the aggregate shape.
 
 ### Chat UX: the panel widget
 
 In `packages/chat`, panel deliberations render as a single
-collapsible block in the panel-parent's space:
+collapsible block in the panel-parent's space. The following is an
+illustrative UI mockup (literal rendered output, not an architecture
+diagram), with ASCII stand-ins for the status glyphs:
 
 ```
-┌─ Panel: 3 members deliberating ────────────────────────┐
-│ ▾ assessor   ✓ done (2.3s, 412 tok)    [view reply]    │
-│ ▾ stylist    ⠋ thinking…                                │
-│ ▾ archivist  ✓ done (1.8s, 287 tok)    [view reply]    │
-│                                                         │
-│ Verdict: 2 of 3 agree on the approach; stylist pending │
-└─────────────────────────────────────────────────────────┘
++- Panel: 3 members deliberating ------------------------+
+| [v] assessor   [done] 2.3s, 412 tok      [view reply]  |
+| [v] stylist    [thinking...]                           |
+| [v] archivist  [done] 1.8s, 287 tok      [view reply]  |
+|                                                        |
+| Verdict: 2 of 3 agree on the approach; stylist pending |
++--------------------------------------------------------+
 ```
 
 Each row links to the member's own space (which has its own inbox
@@ -101,10 +122,14 @@ underlying execution is genuinely concurrent.
 
 The panel is an agent module. Its `make(powers)` entry point
 receives:
-- `provideGuest`: to formulate panel members on demand.
+- `provideGuest`: the host-constructed, attenuated guest-creation facet
+  (not the host's own `provideGuest`; see § Permission / capability
+  story) used to formulate panel members on demand.
 - `inbox` / `submit`: standard guest plumbing for parent communication.
 - `Timer`: for per-member deadlines ([endoclaw-timer](endoclaw-timer.md)).
-- a `Lal` or `Fae` provider capability: to ask the LLM for an aggregation strategy (optional).
+- a `Lal` or `Fae` provider capability (Fae is Lal's sibling
+  LLM-provider capability): to ask the LLM for an aggregation strategy
+  (optional).
 
 API (sketch):
 
@@ -118,8 +143,15 @@ export const make = ({ provideGuest, inbox, Timer }) =>
     'Panel',
     M.interface('Panel', {
       deliberate: M.call(M.string()).optional(M.record()).returns(M.promise()),
+      // guest-verb alias: request(prompt) === deliberate(prompt, {})
+      request: M.call(M.string()).returns(M.promise()),
     }),
     {
+      // Alias so a caller that only knows the ordinary guest verb can
+      // still prompt a panel; delegates to deliberate with defaults.
+      request(prompt) {
+        return this.deliberate(prompt, {});
+      },
       async deliberate(prompt, options = {}) {
         const memberNames = options.members ?? ['assessor', 'stylist', 'archivist'];
         const deadline = options.deadlineMs ?? 60_000;
@@ -179,14 +211,25 @@ dispatches `deliberate`, and prints the verdict.
 
 ### Permission / capability story
 
-The panel is a guest.
-To formulate member sub-guests, it needs a `provideGuest` capability.
-The panel parent grants this when it creates the panel;
-the parent retains the right to revoke
-(the caretaker pattern from
-[daemon-capability-filesystem](daemon-capability-filesystem.md)).
-Members hold whatever capabilities the panel was authorized to hand them;
-the panel cannot escalate.
+The panel is a guest, and guests cannot mint guests: `formulateGuest` /
+`provideGuest` are defined on the host interface, not the guest
+interface (`packages/daemon/src/interfaces.js`), and the daemon's
+maker-pattern rule restricts creation to the host, with guests holding
+only attenuated instances (see
+[daemon-capability-bank](daemon-capability-bank.md)). So the panel does
+*not* receive `provideGuest` from its parent: the panel parent, being
+an ordinary guest, does not hold it to give.
+Instead, the **host** constructs an attenuated guest-creation facet at
+panel-formulation time (a scoped maker that formulates panel members
+whose capability sets are no broader than the panel parent's own) and
+grants that facet to the panel. The panel parent requests panel
+formulation from the host (the same host mediation every guest already
+relies on to be formulated at all); the parent retains the right to
+revoke the panel via the caretaker pattern from
+[daemon-capability-filesystem](daemon-capability-filesystem.md).
+Members hold whatever capabilities that host-scoped facet was
+authorized to hand them; the panel cannot escalate beyond the parent's
+own authority.
 
 The Endo *advantage* is that the permission story is structural:
 a member that the panel did not endow with a `Shell` cannot invoke a
@@ -200,9 +243,9 @@ which is the same idea expressed structurally.
 ### Reuse: the panel as the garden's review panel
 
 The garden runs jury panels as a scripted review workflow: a
-supervising worker dispatches one of two panel kinds per PR — a
+supervising worker dispatches one of two panel kinds per PR (a
 12-seat **code panel** for source-touching PRs and a 5-seat
-**design panel** for design-only PRs — and the two are dispatched
+**design panel** for design-only PRs), and the two are dispatched
 independently, never as one 17-seat round.
 If the garden's host daemon were Endo, the panel pattern here would
 *be* that review workflow:
@@ -214,10 +257,16 @@ This is a strong validation of the shape.
 
 1. **Daemon-level panel agent module**
    (`packages/lal/panel.js` or a new `packages/panel/`):
-   the `Panel` exo, the `deliberate` method, the per-member timeout,
-   the aggregation function.
-   ~200 LOC.
-   **Size: S-M.**
+   the `Panel` exo, the `deliberate` method (plus the `request` alias),
+   the per-member timeout, the aggregation function.
+   This phase also includes the **host-side attenuated guest-creation
+   facet** the panel depends on: a scoped maker on the host interface
+   that formulates panel members bounded by the panel parent's
+   authority. That facet is new daemon-core plumbing (guests cannot
+   supply it for themselves; see § Permission / capability story), so it
+   is scoped here explicitly rather than assumed to exist.
+   ~200 LOC panel module plus ~100-150 LOC host-facet plumbing.
+   **Size: M** (raised from S-M once the host facet is counted).
 2. **Chat UX widget**:
    a new message-part type `panel-deliberation` rendered as a
    collapsible block;
@@ -242,6 +291,7 @@ Total: 3 to 4 weeks for phases 1-3; phase 4 is independent.
 | Design                          | Relationship                                         |
 |---------------------------------|------------------------------------------------------|
 | [endoclaw-timer](endoclaw-timer.md) | Provides the per-member deadline mechanism      |
+| [daemon-capability-bank](daemon-capability-bank.md) | Establishes the host-mediated maker pattern the panel's attenuated guest-creation facet extends (guests hold attenuated instances; creation stays with the host) |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | Provides the caretaker / revoke pattern for member capabilities |
 | [daemon-form-request](daemon-form-request.md) | Members may use form-request to ask the parent for input mid-deliberation |
 | [daemon-mount](daemon-mount.md) | Members may share a read-only mount as the deliberation target |
@@ -299,8 +349,8 @@ Total: 3 to 4 weeks for phases 1-3; phase 4 is independent.
 
 ## Verification
 
-The design's central empirical claim — that panel members run genuinely
-in parallel rather than interleaved on one event loop — is checkable and
+The design's central empirical claim (that panel members run genuinely
+in parallel rather than interleaved on one event loop) is checkable and
 must be checked, since it holds only when each member is formulated in
 its own worker (see § Daemon: the panel agent module):
 
@@ -318,9 +368,9 @@ its own worker (see § Daemon: the panel agent module):
 
 ## Related Designs
 
-- [endopen](endopen.md) — primary comparative analysis.
-- [endor-tui](endor-tui.md) — M6 Rust TUI; would render panels in the terminal idiom.
-- [endopen-tui-shell](endopen-tui-shell.md) — browser-side
+- [endopen](endopen.md): primary comparative analysis.
+- [endor-tui](endor-tui.md): M6 Rust TUI; would render panels in the terminal idiom.
+- [endopen-tui-shell](endopen-tui-shell.md): browser-side
   opencode-shaped space that uses the panel widget.
 - The garden's scripted review panel (a supervising worker
   dispatching juror seats) informs the multi-member-deliberation

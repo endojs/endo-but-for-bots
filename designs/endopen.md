@@ -86,22 +86,25 @@ Per-guest worker isolation is a formulation choice, not an automatic
 guarantee: a guest's eval path falls back to a shared main worker when
 no distinct worker is named
 (`packages/daemon/src/guest.js`, the `workerName` / `mainWorkerId`
-path), so genuine parallelism depends on pinning each guest to its own
-worker.
+path).
 In the OCapN sense each guest is a *vat*:
 an isolated message-queue plus compartment plus worker
 (see [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md) for
 the formula identity story and
 [daemon-capability-filesystem](daemon-capability-filesystem.md) for
 the capability-graph story).
-Concurrent execution needs no experimental flag in Endo, whereas
-OpenCode gates it:
-the `background: true` flag is behind
+Concurrent execution needs no experimental flag in Endo, though genuine
+parallelism still depends on pinning each guest to its own worker rather
+than co-locating them on the shared main worker.
+OpenCode, by contrast, gates background execution behind an experimental
+flag entirely: `background: true` is reachable only under
 `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
-(see `task.ts` lines 113 through 117 in the citation index).
-Endo's guests still have to be formulated in distinct workers to run
-truly in parallel rather than interleaved on one worker; see
-[endopen-concurrent-subagents](endopen-concurrent-subagents.md).
+(the gate at `task.ts` lines 113 through 117 in the citation index).
+That single caveat (own-worker pinning) is the only precondition on
+Endo's advantage, and it carries through every claim about concurrency
+below; see
+[endopen-concurrent-subagents](endopen-concurrent-subagents.md) for the
+worker-pinning mechanics.
 
 ## Feature-by-Feature Mapping
 
@@ -207,13 +210,25 @@ the gate is one boolean in `task.ts` line 113.
 Endo's concurrency story is structurally different.
 Each guest is a vat in the OCapN sense:
 its own SES compartment, its own message loop, addressable by formula ID.
-A guest spawning another guest is a regular `formulateGuest` + `send`
-interaction, not a special tool;
-several guests are in flight simultaneously by default.
-The *hard* problem in OpenCode (concurrent subagents) is the *trivial*
-fall-out in Endo.
+Guest creation is host-mediated, not a capability an ordinary guest
+already holds: `formulateGuest` / `provideGuest` live on the host
+interface, not the guest interface
+([`packages/daemon/src/interfaces.js`](../packages/daemon/src/interfaces.js)),
+so a guest spawns a sibling only through an attenuated guest-creation
+facet the host constructed and granted it, never by holding
+`formulateGuest` itself.
+Given that facet, the spawn is a regular `send` interaction rather than
+a special tool, and several guests can be in flight simultaneously.
+The concurrency is not automatic even so: genuine parallelism still
+requires each guest to land in its own worker (the same `workerName` /
+`mainWorkerId` caveat noted above), not co-located on the shared main
+worker.
+With the host-mediated creation facet in place and each guest pinned to
+its own worker, the *hard* problem in OpenCode (concurrent subagents) is
+the comparatively *trivial* fall-out in Endo.
 See [endopen-concurrent-subagents](endopen-concurrent-subagents.md)
-for the UX surface that exposes this advantage.
+for the UX surface that exposes this advantage and the host-mediated
+guest-creation machinery it depends on.
 
 ### UX surface: the TUI question
 
@@ -325,7 +340,7 @@ Each entry is keyed by its 256-bit formula ID
 (as of [daemon-256-bit-identifiers](daemon-256-bit-identifiers.md))
 and the daemon reconstitutes its objects on demand.
 Only some formula types (readable blobs and other content stores) are
-truly *content-addressed* — keyed by a hash of their bytes; most
+truly *content-addressed* (keyed by a hash of their bytes); most
 formula IDs (guest, worker, host, pet-store, mailbox) are independently
 random 256-bit numbers, not hashes of anything. The distinction matters
 for secrecy: a content hash is derivable from public content, so a
@@ -560,16 +575,16 @@ Total: 19 OpenCode source files cited.
 
 ## Related Designs
 
-- [endoclaw](endoclaw.md) — the OpenClaw precedent this document mirrors.
-- [endopen-concurrent-subagents](endopen-concurrent-subagents.md) — gap 1 sibling.
-- [endopen-openrouter](endopen-openrouter.md) — gap 2 sibling.
-- [endopen-tui-shell](endopen-tui-shell.md) — gap 3 sibling.
-- [endopen-acp-server](endopen-acp-server.md) — gap 4 sibling.
-- [daemon-agent-tools](daemon-agent-tools.md) — Endo's tool-arming story.
-- [daemon-capability-filesystem](daemon-capability-filesystem.md) — Endo's filesystem confinement.
-- [endoclaw-network-fetch](endoclaw-network-fetch.md) — Endo's HTTP fetch story.
-- [endoclaw-skill-registry](endoclaw-skill-registry.md) — the skill / plugin index parallel.
-- [endor-tui](endor-tui.md) — the Rust TUI roadmap (M6); complement of `endopen-tui-shell`.
+- [endoclaw](endoclaw.md): the OpenClaw precedent this document mirrors.
+- [endopen-concurrent-subagents](endopen-concurrent-subagents.md): gap 1 sibling.
+- [endopen-openrouter](endopen-openrouter.md): gap 2 sibling.
+- [endopen-tui-shell](endopen-tui-shell.md): gap 3 sibling.
+- [endopen-acp-server](endopen-acp-server.md): gap 4 sibling.
+- [daemon-agent-tools](daemon-agent-tools.md): Endo's tool-arming story.
+- [daemon-capability-filesystem](daemon-capability-filesystem.md): Endo's filesystem confinement.
+- [endoclaw-network-fetch](endoclaw-network-fetch.md): Endo's HTTP fetch story.
+- [endoclaw-skill-registry](endoclaw-skill-registry.md): the skill / plugin index parallel.
+- [endor-tui](endor-tui.md): the Rust TUI roadmap (M6); complement of `endopen-tui-shell`.
 
 ## Prompt
 
