@@ -3245,7 +3245,7 @@ an ordinary program sat behind all of it because no scenario had ever
 combined a non-empty side table with an adversarial residency
 schedule.
 
-#### P1-4 — The persist gate enumerates holders instead of traversing state (round 3)
+#### P1-4 — The persist gate enumerates holders instead of traversing state (round 3) — FIXED
 
 Reported externally against `612208f4b`, and the sharper half is a hole in
 this round's own P2-3 fix.
@@ -3302,6 +3302,48 @@ Two things to carry into that fix:
 
 The real lift remains the promise-cluster carry; this is the fail-closed
 interim, made complete.
+
+Fixed as described: the doomed set first (almost always empty, so the
+common machine skips every traversal), then a walk of the heap, the
+value stack, the Slot-bearing side tables and suspended generator
+frames, under one message.
+At `checkpoint_to_store` the heap walk is restricted to the pages the
+crank dirtied, which the site's documented O(dirty) budget requires and
+induction justifies: `begin_store_session` audits the whole heap, and a
+reference enters a page only by being written there, which dirties it.
+
+The control arms became sharper in the process. They now DROP the
+resolver instead of retaining it, so the machine has still minted a
+runtime native — the traversal runs in full and finds nothing. Minting
+is not storing, which is the same lesson the intern gate learned in
+wave 5, now pinned on this gate too.
+
+Still recorded, not fixed: `stored_unregistered_key_id` retains the
+partial-traversal shape this fix abandoned (it walks live slots, the
+stack, arrays and collections, but not private elements, bound-function
+`this_arg`/`args`, generator frames or disposable stack records). The
+id-space audit it serves refuses ids that only crafted or torn bytes can
+produce, so the exposure is narrower than this one was — but the two
+should share a traversal rather than each keeping its own list.
+
+#### Rebase onto the 2026-08-31 llm head (86 commits)
+
+Replayed cleanly with one textual conflict (both sides added the same
+`ironhorse-compile` dev-dependency with different rationales; the
+comments were merged) and one SEMANTIC conflict git could not see: the
+base gave `OracleOutcome` a `result_truncated` flag, and this branch's
+multi-crank copy-out — which did not exist when that landed — did not
+set it. It surfaced as a missing-field build error and is fixed the
+same way `run`'s inline copy-out derives it.
+
+Recorded rather than widened into that fix: the 262 differential
+comparators (`build_dual_run`, and so `dual_run_with`, `dual_run_async`
+and `dual_run_cranks`) do not honor `result_truncated` at all — only the
+fuzz harness does. A completion value longer than the oracle's capture
+buffer would therefore read as a divergence rather than a skip. It
+predates this branch and is unreachable from hand-written 262 sources,
+whose results are short, but it is a real latent gap in a differential
+comparator.
 
 #### Verified clean this round
 
