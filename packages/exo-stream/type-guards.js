@@ -89,16 +89,16 @@ export const PassableWriterInterface = M.interface('PassableWriter', {
 
 /**
  * Interface for passable bytes reader references.
- * Uses the generic stream() method while carrying base64 strings.
+ * Uses the generic stream() method while carrying passable byte arrays.
  *
  * No readPattern() method - the interface implies Uint8Array yields
- * (transmitted as base64 strings over the wire).
+ * (transmitted as immutable Uint8Arrays over the wire).
  *
  * @see bytesReaderFromIterator - responder side for bytes readers
  * @see iterateBytesReader - initiator side for bytes readers
  */
 export const PassableBytesReaderInterface = M.interface('PassableBytesReader', {
-  // stream(synPromise: ERef<StreamNode<Passable, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>
+  // stream(synPromise: ERef<StreamNode<Passable, TReadReturn>>): Promise<StreamNode<Uint8Array, TReadReturn>>
   stream: M.call(M.any()).returns(M.promise()),
   // readReturnPattern(): Pattern | undefined - pattern for TReadReturn
   readReturnPattern: M.call().returns(M.opt(M.pattern())),
@@ -106,7 +106,7 @@ export const PassableBytesReaderInterface = M.interface('PassableBytesReader', {
 
 /**
  * Interface for passable bytes writer references.
- * Uses the generic stream() method while carrying base64 strings.
+ * Uses the generic stream() method while carrying passable byte arrays.
  *
  * No writePattern() method - the interface implies Uint8Array writes. When the
  * initiator calls `return(value)` to close early, the final syn node carries
@@ -114,13 +114,13 @@ export const PassableBytesReaderInterface = M.interface('PassableBytesReader', {
  * a `return(value)` method, it forwards the argument and uses the iterator’s
  * returned value as the terminal ack; otherwise it terminates with the original
  * argument value.
- * (transmitted as base64 strings over the wire).
+ * (transmitted as immutable Uint8Arrays over the wire).
  *
  * @see bytesWriterFromIterator - responder side for bytes writers
  * @see iterateBytesWriter - initiator side for bytes writers
  */
 export const PassableBytesWriterInterface = M.interface('PassableBytesWriter', {
-  // stream(synPromise: ERef<StreamNode<string, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>
+  // stream(synPromise: ERef<StreamNode<Uint8Array, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>
   stream: M.call(M.any()).returns(M.promise()),
   // writeReturnPattern(): Pattern | undefined - pattern for TWriteReturn
   writeReturnPattern: M.call().returns(M.opt(M.pattern())),

@@ -31,7 +31,7 @@ const zipOf = entries => {
  * Drain a blob's `stream` reader into the underlying bytes via
  * the platform's syn/ack reader-pump protocol. `iterateBytesReader`
  * initiates the stream (calling `stream(synHead)`) and yields
- * each ack chunk base64-DECODED to a `Uint8Array`; we concatenate the
+ * each passable ack chunk thawed to a mutable `Uint8Array`; we concatenate the
  * decoded byte chunks. Matches `@endo/exo-zip`'s `drainBytes`.
  *
  * @param {any} blob A blob exo exposing `stream`.
@@ -113,7 +113,7 @@ test('stream streams multiple chunks that reconstruct the bytes exactly', async 
   // Drain via the platform byte reader, capturing the decoded chunk
   // shape so the test fails loudly if the producer stops streaming in
   // multiple chunks. Each ack chunk is decoded to bytes independently,
-  // so the historical base64 mid-stream-padding concern is subsumed by
+  // so the historical text-encoding boundary concern is subsumed by
   // per-chunk decode; the verifiable intent preserved here is
   // multi-chunk streaming plus byte-exact reconstruction.
   /** @type {Uint8Array[]} */

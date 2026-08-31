@@ -44,8 +44,8 @@ hand "a directory" to a peer across a CapTP boundary.
   provide. No vector clocks, no causal consistency. The remote
   daemon's storage tier decides what writes mean.
 - **A new bytes-passing protocol.** We use what
-  `@endo/exo-stream` already provides — base64-on-the-wire today,
-  native binary when CapTP gains it. The interface promises
+  `@endo/exo-stream` already provides: passable immutable byte arrays over the
+  generic stream protocol. The interface promises
   `Stream<Bytes>`; the implementation uses `PassableBytesReader` /
   `PassableBytesWriter`.
 - **POSIX-isms in the base interface.** POSIX permissions /
@@ -75,7 +75,7 @@ hand "a directory" to a peer across a CapTP boundary.
 | Live FS access | `@endo/daemon` `Mount` (`packages/daemon/src/mount.js`): `has`, `list`, `lookup`, `readText`, `writeText`, `makeDirectory`, `remove`, `move`, ... | Typed `Directory` / `File` subtypes; explicit `open()` separation; eager qid on every Node |
 | Immutable snapshot | `@endo/daemon` `ReadableTree`: `has`, `list`, `lookup` over a content-addressed snapshot | `Node.snapshot() -> BlobRef` returns a content-addressed handle anyone holding the bytes can fetch |
 | File-shaped capability | `@endo/daemon` `MountFile`: `text`, `stream`, `json`, `writeText`, `writeBytes`, `readOnly` | `File.open(flags) -> OpenFile`; range reads, range writes, fsync, locks, watches |
-| Byte streaming over CapTP | `@endo/exo-stream`: `PassableBytesReader` / `PassableBytesWriter`, base64 over the generic stream protocol | Consumed; not replaced |
+| Byte streaming over CapTP | `@endo/exo-stream`: `PassableBytesReader` / `PassableBytesWriter`, byte arrays over the generic stream protocol | Consumed; not replaced |
 | Interface guards | `@endo/patterns` `M.interface(...)` | Same pattern; PascalCase interface names |
 | Iteration over CapTP | `@endo/daemon`'s `makeIteratorRef`, `@endo/exo-stream`'s reader/writer pairs | Subscriptions, directory listings, range reads all use these |
 
@@ -575,9 +575,8 @@ abstractions. The current realisation:
 
 - **`Stream<Bytes>` -> `PassableBytesReader`** from
   `@endo/exo-stream/bytes-reader-from-iterator.js`. Producer wraps an
-  `AsyncIterator<Uint8Array>`; over the wire, bytes are base64-
-  encoded (a CapTP limitation today; will become native binary when
-  CapTP supports it).
+  `AsyncIterator<Uint8Array>`; mutable chunks are frozen into passable byte
+  arrays for the wire and thawed on receipt.
 - **`Sink<Bytes>` -> `PassableBytesWriter`** from
   `@endo/exo-stream/bytes-writer-from-iterator.js`. Consumer wraps
   an `AsyncIterator<Uint8Array>` (a pipe-writer end); the producer

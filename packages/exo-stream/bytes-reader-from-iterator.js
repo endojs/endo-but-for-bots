@@ -1,7 +1,7 @@
 // @ts-check
 
 import { makeExo } from '@endo/exo';
-import { encodeBase64 } from '@endo/base64';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { asyncIterate } from './async-iterate.js';
 import { PassableBytesReaderInterface } from './type-guards.js';
@@ -16,12 +16,11 @@ import { makeReaderPump } from './reader-pump.js';
  * (Responder/Producer side).
  *
  * This is the Producer for a bytes Reader: it wraps a local bytes iterator and
- * produces base64-encoded values for the remote Initiator/Consumer.
+ * produces immutable byte arrays for the remote Initiator/Consumer.
  *
- * Bytes are automatically base64-encoded for transmission over CapTP.
- * Uses the generic stream() protocol. The bytes-specific helpers remain the
- * canonical adapters because CapTP currently marshals byteArray values as hex,
- * which is larger and slower than the base64 representation used here.
+ * Mutable local chunks are copied into immutable byte arrays before they enter
+ * the generic stream() protocol. The bytes-specific helpers remain the
+ * canonical adapters because they own this passability boundary.
  *
  * The interface implies Uint8Array yields (no readPattern method).
  * Only readReturnPattern can be customized.
@@ -33,7 +32,7 @@ import { makeReaderPump } from './reader-pump.js';
  *   JavaScript iterator with a `return(value)` method, it forwards the argument
  *   and uses the iterator’s returned value as the terminal ack; otherwise it
  *   terminates with the original argument value.
- * - Responder sends acknowledgements (base64 strings) via the acknowledgement chain
+ * - Responder sends acknowledgements (immutable bytes) via the acknowledgement chain
  *
  * @param {SomehowAsyncIterable<Uint8Array>} bytesIterator
  * @param {MakeBytesReaderOptions} [options]
@@ -48,26 +47,26 @@ export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   const iterator = asyncIterate(bytesIterator);
   /**
    * @param {IteratorResult<Uint8Array, Passable>} result
-   * @returns {IteratorResult<string, Passable>}
+   * @returns {IteratorResult<Uint8Array, Passable>}
    */
-  const encodeResult = result =>
+  const freezeResult = result =>
     result.done
       ? result
-      : harden({ done: false, value: encodeBase64(result.value) });
-  const base64Iterator = harden({
+      : harden({ done: false, value: frozenBytes(result.value) });
+  const frozenIterator = harden({
     async next() {
       const result = await iterator.next();
-      return encodeResult(result);
+      return freezeResult(result);
     },
     /** @param {undefined} [value] */
     async return(value) {
       await null;
-      if (iterator.return) return encodeResult(await iterator.return(value));
+      if (iterator.return) return freezeResult(await iterator.return(value));
       return harden({ done: /** @type {const} */ (true), value });
     },
   });
 
-  const pump = makeReaderPump(base64Iterator, { buffer, cancelPending });
+  const pump = makeReaderPump(frozenIterator, { buffer, cancelPending });
 
   // @ts-expect-error Exo pump types use Passable where template expects specific subtype
   return makeExo('PassableBytesReader', PassableBytesReaderInterface, {

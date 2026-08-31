@@ -16,5 +16,5 @@ readers and writers.
 
 This is a breaking wire and API change. Byte-stream capabilities no longer
 provide the former bytes-only method. Producers and consumers must call
-`stream()` or use the `@endo/exo-stream` bytes adapters, which continue to
-handle the base64 representation internally.
+`stream()` or use the `@endo/exo-stream` bytes adapters, which now carry
+passable immutable byte arrays directly and own the freeze/thaw boundary.

@@ -2,7 +2,7 @@
 /* eslint-disable no-await-in-loop */
 
 import { E } from '@endo/eventual-send';
-import { encodeBase64 } from '@endo/base64';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makePromiseKit } from '@endo/promise-kit';
 
 /** @import { Passable } from '@endo/pass-style' */
@@ -13,7 +13,7 @@ import { makePromiseKit } from '@endo/promise-kit';
  * Create a local bytes writer iterator that sends Uint8Array values to a remote
  * PassableBytesWriter reference (Initiator/Producer side).
  *
- * Bytes are automatically base64-encoded for transmission over CapTP.
+ * Mutable local chunks are copied into immutable byte arrays before transmission.
  * Uses the bidirectional promise chain protocol for streaming with flow control.
  * When the local iterator is closed early via `return(value)`, the final syn node
  * carries that argument value to the responder, which may replace it with its
@@ -22,8 +22,7 @@ import { makePromiseKit } from '@endo/promise-kit';
  * responder busy without additional round-trips.
  *
  * Calls the generic stream() method on the responder. The bytes-specific
- * adapter encodes to the base64 representation that remains preferable to
- * CapTP's current hex encoding for passable byteArray values.
+ * adapter owns the passability boundary.
  *
  * @template {Passable} [TWriteReturn=undefined]
  * @param {ERef<PassableBytesWriter<TWriteReturn>>} bytesWriterRef
@@ -81,9 +80,9 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
     await null;
 
     try {
-      const base64Value = encodeBase64(value);
+      const passableValue = frozenBytes(value);
       const { promise, resolve } = makePromiseKit();
-      synResolve(harden({ value: base64Value, promise }));
+      synResolve(harden({ value: passableValue, promise }));
       synResolve = resolve;
       if (preBufferRemaining > 0) {
         preBufferRemaining -= 1;
