@@ -26,18 +26,23 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
-fn crank(m: &mut Interp, source: &str) -> (bool, String, String) {
+/// Relink and run one crank, returning `(completed, halt debug, result,
+/// computrons)`. The COMPUTRON count is part of the observation: a
+/// resumed machine that answers correctly while charging differently
+/// has still diverged, and consensus is on the count as much as the
+/// value. Every twin below therefore compares metering too.
+fn crank(m: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = m.relink_crank(&bytecode, &names).expect("relink");
     let outcome = m.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result)
+    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
 }
 
 fn twin(
     crank1: &str,
     observations: &[&str],
     store: &mut dyn HeapStore,
-) -> Vec<(bool, String, String)> {
+) -> Vec<(bool, String, String, u64)> {
     let (bytecode, names) = compile(crank1);
 
     let mut continuous = Interp::new();
@@ -81,7 +86,7 @@ fn resumed_date_values_and_mutations_match_uninterrupted() {
     let mut memory = MemoryStore::new();
     let seen = twin(crank1, &observations, &mut memory);
     assert_eq!(
-        seen.iter().map(|(_, _, value)| value.as_str()).collect::<Vec<_>>(),
+        seen.iter().map(|(_, _, value, _)| value.as_str()).collect::<Vec<_>>(),
         expected,
     );
 

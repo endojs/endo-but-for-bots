@@ -24,11 +24,16 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
-fn crank(machine: &mut Interp, source: &str) -> (bool, String, String) {
+/// Relink and run one crank, returning `(completed, halt debug, result,
+/// computrons)`. The COMPUTRON count is part of the observation: a
+/// resumed machine that answers correctly while charging differently
+/// has still diverged, and consensus is on the count as much as the
+/// value. Every twin below therefore compares metering too.
+fn crank(machine: &mut Interp, source: &str) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(source);
     let bytecode = machine.relink_crank(&bytecode, &names).expect("relink");
     let outcome = machine.run(&bytecode);
-    (outcome.completed, format!("{:?}", outcome.halt), outcome.result)
+    (outcome.completed, format!("{:?}", outcome.halt), outcome.result, outcome.computrons)
 }
 
 const FIRST: &str = "var log = ''; var stack = 0; var t = 0; \
@@ -37,7 +42,7 @@ const FIRST: &str = "var log = ''; var stack = 0; var t = 0; \
      stack.defer(function () { log += 'b'; }); t = 7; t";
 const OBSERVATION: &str = "var log; var stack; var t; stack.dispose(); t = log; t";
 
-fn twin(store: &mut dyn HeapStore) -> (bool, String, String) {
+fn twin(store: &mut dyn HeapStore) -> (bool, String, String, u64) {
     let (bytecode, names) = compile(FIRST);
     let mut continuous = Interp::new();
     continuous.link_intrinsics(&names);
