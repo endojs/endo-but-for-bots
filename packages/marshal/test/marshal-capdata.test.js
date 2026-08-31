@@ -45,7 +45,14 @@ test('serialize unserialize round trip pairs', t => {
     const encoding = JSON.stringify(encoded);
     t.is(body, encoding);
     const decoding = unserialize({ body, slots: [] });
-    t.deepEqual(decoding, plain);
+    if (passStyleOf(plain) === 'byteArray') {
+      t.deepEqual(
+        [.../** @type {Uint8Array} */ (decoding)],
+        [.../** @type {Uint8Array} */ (plain)],
+      );
+    } else {
+      t.deepEqual(decoding, plain);
+    }
     t.assert(isFrozen(decoding));
   }
 });

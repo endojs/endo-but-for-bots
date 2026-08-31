@@ -15,6 +15,8 @@ import {
   nameForPassableSymbol,
   passableSymbolForName,
 } from '@endo/pass-style';
+import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
+import { encodeHex, decodeHex } from '@endo/hex';
 import { X, Fail, q } from '@endo/errors';
 
 /** @import {Passable, RemotableObject} from '@endo/pass-style' */
@@ -194,8 +196,10 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
         return passable.map(encodeToCapDataRecur);
       }
       case 'byteArray': {
-        // TODO implement
-        throw Fail`marsal of byteArray not yet implemented: ${passable}`;
+        return {
+          [QCLASS]: 'byteArray',
+          data: encodeHex(thawedBytes(passable)),
+        };
       }
       case 'tagged': {
         return {
@@ -367,6 +371,12 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           const { tag, payload } = jsonEncoded;
           return makeTagged(tag, decodeFromCapData(payload));
         }
+        case 'byteArray': {
+          const { data } = jsonEncoded;
+          typeof data === 'string' ||
+            Fail`invalid byteArray data typeof ${q(typeof data)}`;
+          return frozenBytes(decodeHex(data, 'capData byteArray'));
+        }
         case 'slot': {
           // See note above about how the current encoding cannot reliably
           // distinguish which we should call, so in the non-default case
@@ -441,3 +451,4 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
   };
   return harden(decodeFromCapData);
 };
+harden(makeDecodeFromCapData);
