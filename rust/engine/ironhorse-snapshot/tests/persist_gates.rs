@@ -317,17 +317,15 @@ fn assert_every_persist_verb_refuses(m: Interp, row: &str) {
 
 #[test]
 fn a_held_unpersistable_native_refuses_every_persist_verb() {
+    const ROW: &str = "a stored reference to a non-persisted native function";
     assert_every_persist_verb_refuses(
         resolver_fixture("Object.defineProperty(o, 'x', { get: g });"),
-        "accessors with non-persisted native functions",
+        ROW,
     );
-    assert_every_persist_verb_refuses(
-        resolver_fixture("b = g.bind(null);"),
-        "bound functions with non-persisted targets",
-    );
+    assert_every_persist_verb_refuses(resolver_fixture("b = g.bind(null);"), ROW);
     assert_every_persist_verb_refuses(
         resolver_fixture("s = new DisposableStack(); s.adopt(1, g);"),
-        "disposable stacks with non-persisted disposal methods",
+        ROW,
     );
 }
 
@@ -336,6 +334,11 @@ fn the_persistable_function_classes_are_not_refused() {
     // The gate must stay narrow: each of these holds a function that
     // resume DOES bring back, in the same three holders. A gate that
     // refused any of them would make ordinary programs unpersistable.
+    // Every tail ends by DROPPING the resolver. That is what makes these
+    // controls: the machine still MINTED a runtime native, so the doomed
+    // set is non-empty and the traversal runs in full -- it just finds
+    // nothing stored. Minting is not storing (the wave-5 lesson, which
+    // the intern gate learned the expensive way).
     for tail in [
         // A guest bytecode function: carried by `FUNC`.
         "Object.defineProperty(o, 'x', { get: function () { return 1; } });",
@@ -353,7 +356,7 @@ fn the_persistable_function_classes_are_not_refused() {
         "var c = 0; c = new Intl.Collator('en'); \
          Object.defineProperty(o, 'x', { get: c.compare });",
     ] {
-        let m = resolver_fixture(tail);
+        let m = resolver_fixture(&format!("{tail} g = 0;"));
         assert_eq!(
             m.stored_unpersistable_row(),
             None,
@@ -435,4 +438,85 @@ fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
     );
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
         .expect("checkpoint after the re-faults");
+}
+
+/// Enumerating HOLDERS cannot be complete: every carried row adds one.
+/// The round-2 gate inspected accessors, `bound_functions[..].target`,
+/// and disposal methods -- so a non-persisting runtime native reached
+/// the store through any other stored reference, and in particular
+/// through the two halves of `BoundData` the target check does not
+/// touch. Both of these persisted and resumed non-callable:
+///
+///   - a plain global holding a promise resolver;
+///   - a resolver captured as a bound ARGUMENT, whose target is an
+///     ordinary persistable guest function.
+///
+/// The gate traverses the persisted state now instead of enumerating
+/// holders, so it is complete by construction rather than by memory.
+#[test]
+fn a_runtime_native_reached_through_any_stored_reference_refuses() {
+    const ROW: &str = "a stored reference to a non-persisted native function";
+    for (name, tail) in [
+        ("a plain global", "g = g;"),
+        ("a plain property", "o = {}; o.x = g;"),
+        ("a bound argument", "b = (function (x) { return typeof x; }).bind(null, g);"),
+        ("a bound this", "b = (function () { return typeof this; }).bind(g);"),
+        ("an array element", "o = [g];"),
+        ("a Map value", "o = new Map(); o.set('k', g);"),
+        ("a Set member", "o = new Set(); o.add(g);"),
+    ] {
+        let m = resolver_fixture(tail);
+        assert_eq!(
+            m.stored_unpersistable_row(),
+            Some(ROW),
+            "the gate must refuse a resolver held as {name}"
+        );
+        match m.write_snapshot(&sig()) {
+            Err(MachineSnapshotError::PendingStateUnsupported { row }) => assert_eq!(row, ROW),
+            other => panic!("the blob verb must refuse {name}: {other:?}"),
+        }
+        let mut store = MemoryStore::new();
+        match begin_store_session(m, &sig(), &mut store) {
+            Err((_, StoreError::PendingStateUnsupported { row })) => assert_eq!(row, ROW),
+            Err((_, other)) => panic!("wrong gate for {name}: {other:?}"),
+            Ok(_) => panic!("the store verb must refuse {name}"),
+        }
+    }
+}
+
+/// The traversal must not refuse machines that hold only functions
+/// resume DOES bring back -- otherwise it makes ordinary programs
+/// unpersistable, which is worse than the hole it closes.
+#[test]
+fn stored_references_to_persistable_functions_are_not_refused() {
+    for (name, src) in [
+        ("a guest function in a global", "var f = 0; f = function () { return 1; }; 7"),
+        ("a guest function in an array", "var o = 0; o = [function () { return 1; }]; 7"),
+        ("a boot native in a property", "var o = 0; o = {}; o.k = Object.keys; 7"),
+        ("a boot native in a Map", "var m = 0; m = new Map(); m.set('k', Math.max); 7"),
+        (
+            "an Intl bound native in a global",
+            "var nf = 0; var g = 0; nf = new Intl.NumberFormat('en'); g = nf.format; 7",
+        ),
+        (
+            "a proxy revoker in a global",
+            "var r = 0; var g = 0; r = Proxy.revocable({}, {}); g = r.revoke; 7",
+        ),
+        (
+            "a bound guest function with ordinary arguments",
+            "var b = 0; b = (function (x) { return x; }).bind(null, 41); 7",
+        ),
+    ] {
+        let (bytes, names) = compile(src);
+        let mut m = Interp::new();
+        m.link_intrinsics(&names);
+        assert!(m.run(&bytes).completed, "fixture: {name}");
+        assert_eq!(m.stored_unpersistable_row(), None, "must stay persistable: {name}");
+        assert!(m.write_snapshot(&sig()).is_ok(), "blob verb: {name}");
+        let mut store = MemoryStore::new();
+        assert!(
+            begin_store_session(m, &sig(), &mut store).is_ok(),
+            "store verb: {name}"
+        );
+    }
 }

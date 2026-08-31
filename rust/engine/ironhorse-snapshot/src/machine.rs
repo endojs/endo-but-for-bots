@@ -1036,7 +1036,7 @@ pub fn checkpoint_to_store(
     // `begin_store_session` / `resume_from_store` keep the full-image
     // audit for adopted bytes.
     //
-    if let Some(row) = session.interp.stored_unpersistable_row() {
+    if let Some(row) = session.interp.stored_unpersistable_row_at_checkpoint() {
         return Err(StoreError::PendingStateUnsupported { row });
     }
     // And the quiescence gate (wave-6 W6-10): a halted crank must be

@@ -8516,37 +8516,131 @@ impl Interp {
     /// `RebuiltAtRestore` pattern, not a carry. A guest REDEFINITION
     /// at the seed key stores a different getter and still refuses.
     pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
-        if self.accessors.iter().any(|((o, id), data)| {
-            !self.slots.is_free_index(*o)
-                && !self.is_boot_seed_accessor(*o, *id, data)
-                && (!self.accessor_function_persists(data.get)
-                    || !self.accessor_function_persists(data.set))
-        }) {
-            return Some("accessors with non-persisted native functions");
+        self.stored_unpersistable_row_inner(false)
+    }
+
+    /// The checkpoint form: identical, except the heap walk covers only
+    /// the pages this crank DIRTIED, keeping the per-crank cost O(dirty)
+    /// as the site requires.
+    ///
+    /// Sound by induction. `begin_store_session` audits the whole heap,
+    /// and a reference can only enter a page by being WRITTEN there,
+    /// which dirties the page — so every stored reference was audited by
+    /// the checkpoint that followed its write. A slot's persistability
+    /// never changes under it either: a slot is a boot native, a guest
+    /// function, or a runtime-minted native for as long as it lives, and
+    /// a freed slot reused for a fresh native has no live reference to
+    /// the old one. The side tables are walked in FULL regardless —
+    /// they are small state, re-serialized on every checkpoint anyway.
+    pub fn stored_unpersistable_row_at_checkpoint(&self) -> Option<&'static str> {
+        self.stored_unpersistable_row_inner(true)
+    }
+
+    fn stored_unpersistable_row_inner(&self, dirty_heap_only: bool) -> Option<&'static str> {
+        // Enumerating HOLDERS cannot be complete: every carried row adds
+        // one, and the round-2 widening proved it by covering
+        // `BoundData.target` while `this_arg` and `args` — the same
+        // struct — went on reaching the store. So ask the question the
+        // other way round: which function slots does resume fail to
+        // bring back, and is ANY of them named by state we are about to
+        // persist?
+        //
+        // The doomed set is computed first because it is almost always
+        // EMPTY (a machine that minted no runtime native has nothing to
+        // lose), and an empty set skips every traversal below.
+        let doomed = self.non_persisting_functions();
+        if doomed.is_empty() {
+            return None;
         }
-        // A bound function's TARGET is the sharpest case: the `FUNC`
-        // row travels, names a target no table carries, and
-        // `restore_function_state` then refuses the whole machine as
-        // `malformed retained function state` -- so an honest machine
-        // COMMITS and can never be resumed again. Refusing to persist
-        // keeps it running instead. (`nf.format.bind(null)` is not
-        // this: an `IBFN` target persists, and its restore ORDERING is
-        // fixed separately.)
-        if self.bound_functions.iter().any(|(owner, data)| {
-            !self.slots.is_free_index(*owner) && !self.function_persists(data.target)
-        }) {
-            return Some("bound functions with non-persisted targets");
+        let names = |slot: &Slot| -> bool {
+            matches!(slot.value, Payload::Reference(f) if doomed.contains(&f.0))
+        };
+        let names_index = |i: u32| doomed.contains(&i);
+
+        // The heap itself, which carries every ordinary property, every
+        // global, and every closure capture — Sol's plain-global and
+        // plain-property cases.
+        let mut page_hit = false;
+        if dirty_heap_only {
+            for page in self.slots.dirty_pages() {
+                let start = page.saturating_mul(crate::value::SLOTS_PER_PAGE);
+                let end = start
+                    .saturating_add(crate::value::SLOTS_PER_PAGE)
+                    .min(self.slots.capacity());
+                for i in start..end {
+                    let idx = crate::value::SlotIndex(i);
+                    if !self.slots.is_free_index(idx) && names(&self.slots.get(idx)) {
+                        page_hit = true;
+                        break;
+                    }
+                }
+                if page_hit {
+                    break;
+                }
+            }
+        } else {
+            for i in 0..self.slots.capacity() {
+                let idx = crate::value::SlotIndex(i);
+                if !self.slots.is_free_index(idx) && names(&self.slots.get(idx)) {
+                    page_hit = true;
+                    break;
+                }
+            }
         }
-        // A disposal method reaches its holder the same way and dies
-        // at `dispose()` on a non-callable record.
-        if self.disposable_stacks.iter().any(|(owner, data)| {
-            !self.slots.is_free_index(*owner)
-                && data
-                    .records
-                    .iter()
-                    .any(|record| !self.accessor_function_persists(Some(record.method)))
-        }) {
-            return Some("disposable stacks with non-persisted disposal methods");
+        if page_hit || self.stack.iter().any(names) {
+            return Some("a stored reference to a non-persisted native function");
+        }
+
+        // The side tables that carry Slots of their own, outside the
+        // heap arena. Kept in the ledger's order so a new carried row is
+        // easy to slot in beside its neighbours.
+        let side_hit = self
+            .arrays
+            .values()
+            .flat_map(|a| a.items().iter().map(|(_, v)| v))
+            .any(names)
+            || self
+                .collections
+                .values()
+                .flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1]))
+                .any(names)
+            || self.accessors.values().any(|d| {
+                d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
+            })
+            || self.private_values.values().any(names)
+            || self.private_accessors.values().any(|d| {
+                d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
+            })
+            // `BoundData` in full: the target is an index, while
+            // `this_arg` and `args` are Slots the round-2 check missed.
+            || self.bound_functions.values().any(|d| {
+                names_index(d.target.0) || names(&d.this_arg) || d.args.iter().any(names)
+            })
+            || self
+                .disposable_stacks
+                .values()
+                .flat_map(|d| d.records.iter())
+                .any(|r| names(&r.resource) || names(&r.method))
+            || self.wrapper_data.values().any(names);
+        if side_hit {
+            return Some("a stored reference to a non-persisted native function");
+        }
+
+        // Suspended generator frames: every slot of a saved activation
+        // travels, so every one of them can retain a doomed native.
+        let frame_hit = self.generators.values().any(|g| {
+            g.frame.as_ref().is_some_and(|f| {
+                f.locals.iter().any(names)
+                    || f.args.iter().any(names)
+                    || f.stack_slice.iter().any(names)
+                    || names(&f.this_val)
+                    || names(&f.env)
+                    || names(&f.result)
+                    || f.jumps.iter().any(|j| names(&j.env))
+            })
+        });
+        if frame_hit {
+            return Some("a stored reference to a non-persisted native function");
         }
         None
     }
@@ -8569,6 +8663,18 @@ impl Interp {
         self.functions
             .get(&function)
             .is_some_and(|info| info.native.is_none() && info.method.is_none())
+    }
+
+    /// The function slots resume cannot bring back: everything in
+    /// [`Self::functions`] that [`Self::function_persists`] rejects — a
+    /// native minted at RUNTIME, above `boot_slot_count`, carried by no
+    /// table. Usually empty.
+    fn non_persisting_functions(&self) -> std::collections::BTreeSet<u32> {
+        self.functions
+            .keys()
+            .filter(|f| !self.function_persists(**f))
+            .map(|f| f.0)
+            .collect()
     }
 
     /// Whether an `accessors` entry is exactly a boot
