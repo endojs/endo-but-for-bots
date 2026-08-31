@@ -279,3 +279,137 @@ fn malformed_generator_rows_are_refused() {
     // And the honest row still restores.
     assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
 }
+
+/// The resume cursor and every saved-handler target must name an
+/// INSTRUCTION START inside the owning function's own body -- not
+/// merely an offset inside the code segment. A segment holds every
+/// function a crank compiled, so a segment-wide bound accepts the
+/// segment end, an operand byte, and a perfectly valid instruction
+/// belonging to a DIFFERENT function. Each would enter dispatch at a
+/// pc the generator never suspended at.
+#[test]
+fn generator_pcs_outside_the_owning_body_are_refused() {
+    let (bytecode, names) = compile(
+        "var it = 0; var t = 0; \
+         function* g() { var a = 11; yield a; yield a + 1; } \
+         function* h() { var b = 22; yield b; yield b + 1; } \
+         it = g(); t = it.next().value; t",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let image = read_machine(&bytes, &sig()).expect("read GENR");
+    assert_eq!(image.generators.len(), 1);
+
+    let frame = image.generators[0].frame.as_ref().expect("suspended frame");
+    let owner = frame.cur_func;
+    let functions = &image.function_state.functions;
+    let mine = functions
+        .iter()
+        .find(|f| f.owner == owner)
+        .expect("the frame's function has a row");
+    let segment = mine.segment.expect("a guest body owns a segment");
+    let code = &image.function_state.segments[segment as usize];
+    let body_start = mine.body_start.expect("a guest body starts somewhere");
+    let body_end = body_start + mine.body_len;
+
+    // The instruction starts of the owning body, derived exactly as
+    // the gate must derive them.
+    let mut starts = Vec::new();
+    let mut pc = body_start as usize;
+    while pc < body_end as usize {
+        starts.push(pc as u64);
+        pc += ironhorse_vm::instruction_len(code, pc).expect("honest body sizes");
+    }
+    assert!(starts.len() > 2, "the fixture body has several instructions");
+
+    // A sibling body in the SAME segment, and one of its starts that
+    // is not also a start of ours.
+    let sibling = functions
+        .iter()
+        .find(|f| f.owner != owner && f.segment == Some(segment))
+        .expect("the fixture compiled two generator bodies into one segment");
+    let sibling_start = sibling.body_start.expect("sibling body starts somewhere");
+    assert!(
+        !starts.contains(&sibling_start),
+        "the sibling body begins outside ours"
+    );
+
+    // An operand byte: the second byte of a multi-byte instruction.
+    let operand = starts
+        .iter()
+        .find(|&&s| ironhorse_vm::instruction_len(code, s as usize).unwrap() > 1)
+        .map(|&s| s + 1)
+        .expect("the body has a multi-byte instruction");
+    assert!(!starts.contains(&operand), "an operand byte is not a start");
+
+    let expect = |crafted: &ironhorse_snapshot::image::MachineImage, want: &'static str| {
+        match from_snapshot_bytes(&write_machine(crafted), &sig()) {
+            Err(SnapshotError::Corrupt(msg)) if msg == want => {}
+            Err(other) => panic!("refused, but not by the named gate ({want}): {other:?}"),
+            Ok(_) => panic!("a crafted generator pc must not restore ({want})"),
+        }
+    };
+    const CURSOR: &str = "generator frame: invalid resume cursor or scope map";
+    const HANDLER: &str = "generator frame: invalid saved handler";
+
+    for (name, pc) in [
+        ("segment end", code.len() as u64),
+        ("body end", body_end),
+        ("operand byte", operand),
+        ("a sibling body's instruction", sibling_start),
+    ] {
+        let mut crafted = image.clone();
+        crafted.generators[0].frame.as_mut().unwrap().resume_pc = pc;
+        assert!(
+            matches!(
+                from_snapshot_bytes(&write_machine(&crafted), &sig()),
+                Err(SnapshotError::Corrupt(CURSOR))
+            ),
+            "resume_pc at {name} must be refused"
+        );
+    }
+
+    // The saved-handler target takes the same bound. Give the frame a
+    // handler whose every other field is honest.
+    let mut with_handler = image.clone();
+    with_handler.generators[0]
+        .frame
+        .as_mut()
+        .unwrap()
+        .jumps
+        .push(ironhorse_vm::SavedJumpRow {
+            target_pc: starts[1],
+            stack_offset: 0,
+            locals_len: frame.locals.len() as u64,
+            id_map: Vec::new(),
+            call_depth_offset: 0,
+            env: ironhorse_vm::Slot::undefined(),
+            flag: 1,
+        });
+    assert!(
+        from_snapshot_bytes(&write_machine(&with_handler), &sig()).is_ok(),
+        "the honest handler still restores"
+    );
+    for pc in [code.len() as u64, body_end, operand, sibling_start] {
+        let mut crafted = with_handler.clone();
+        crafted.generators[0].frame.as_mut().unwrap().jumps[0].target_pc = pc;
+        expect(&crafted, HANDLER);
+    }
+
+    // And a handler's `id_map` is bounded by the handler's OWN
+    // `locals_len` -- the length its resumed `catch` resolves against
+    // -- not by the frame's current locals. A shorter `locals_len`
+    // with an index in between misresolves a name on the way out.
+    let mut short = with_handler.clone();
+    {
+        let jump = &mut short.generators[0].frame.as_mut().unwrap().jumps[0];
+        jump.locals_len = 0;
+        jump.id_map = vec![(1, 0)];
+    }
+    expect(&short, HANDLER);
+
+    // The honest image is untouched by all of it.
+    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+}
