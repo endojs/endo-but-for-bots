@@ -1938,6 +1938,34 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `314f811064b8febb` (target
+    /// `differential_source`). The 5-byte input `75 6c 74 7b 2d` (`"ult{-"`)
+    /// folds into the *division* chain
+    /// `(377487360 / (377487360 / (377487360 / (-5 / 981467136))))`, whose
+    /// value is the exactly-representable double `0xc370740000000000`. XS's
+    /// `fx_dtoa` renders that double as the 17-digit `-74098287619080190`,
+    /// whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's
+    /// shortest-round-tripping rule — prints `-74098287619080200`. Both parse
+    /// back to the identical double, so the engines agree on the value and
+    /// diverge only on decimal spelling; the same class as `d99d263fcf6ca7a7`,
+    /// already suppressed by the numeric `results_agree` comparison — reached
+    /// here through division rather than a product. The differential check must
+    /// not read this as a finding.
+    #[test]
+    fn finding_314f811064b8febb_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 4f6dc01326c7629a715a037a135e47010efe913a121ae02b43846601c850a1a5).
+        let data: &[u8] = &[0x75, 0x6c, 0x74, 0x7b, 0x2d];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-magnitude division chain whose value overflows 2^53.
+        assert!(prog.contains('/'), "finding program is a division chain: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 314f811064b8febb must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `5c29667cc15d6d93` (target
     /// `differential_source`). The 5-byte input `e1 1b dc dc dc` folds into
     /// `((-(-(-226492416))) * (-(-(-226492416))))`, i.e. `226492416^2` where
