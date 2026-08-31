@@ -39,7 +39,7 @@ in usage, because the protocol is symmetric.
   When the initiator calls `return(value)` to close early, the final
   synchronization node carries that argument value to the responder. If the
   responder is backed by a JavaScript iterator with a `return(value)` method,
-  it forwards the argument and uses the iterator’s returned value as the final
+  it forwards the argument and uses the iterator's returned value as the final
   acknowledgement. Otherwise, it terminates with the original argument value.
 - For a **Writer**, the **Initiator** is the **Producer** and the **Responder**
   is the **Consumer**.
@@ -47,7 +47,7 @@ in usage, because the protocol is symmetric.
   The acknowledgement chain carries `undefined` (flow control only). When the
   initiator calls `return(value)` to close early, the final syn node carries that
   argument value. If the responder is backed by a JavaScript iterator with a
-  `return(value)` method, it forwards the argument and uses the iterator’s
+  `return(value)` method, it forwards the argument and uses the iterator's
   returned value as the terminal ack; otherwise it terminates with the original
   argument value.
 - We leave a void in the terminology for configurations where neither or both
@@ -154,7 +154,7 @@ For a Reader, the synchronization chain carries `undefined` for flow control,
 except that when the initiator calls `return(value)` to close early, the final
 synchronization node carries that argument value to the responder. If the
 responder is backed by a JavaScript iterator with a `return(value)` method, it
-forwards the argument and uses the iterator’s returned value as the final
+forwards the argument and uses the iterator's returned value as the final
 acknowledgement. Otherwise, it terminates with the original argument value. The
 acknowledgement chain carries `TRead` (data):
 
@@ -168,7 +168,7 @@ acknowledgement chain carries `TRead` (data):
 For a Writer, the synchronization chain carries `TWrite` (data). When the
 initiator calls `return(value)` to close early, the final syn node carries that
 argument value. If the responder is backed by a JavaScript iterator with a
-`return(value)` method, it forwards the argument and uses the iterator’s
+`return(value)` method, it forwards the argument and uses the iterator's
 returned value as the terminal ack; otherwise it terminates with the original
 argument value. The acknowledgement chain carries `undefined` (flow control):
 
@@ -183,17 +183,17 @@ argument value. The acknowledgement chain carries `undefined` (flow control):
 1. **Responder** (`bytesReaderFromIterator`):
    - Takes `AsyncIterator<Uint8Array>`
    - Encodes each chunk to base64
-   - Creates Exo with `streamBase64()` method
+   - Creates Exo with `stream()` method
 
 2. **Initiator** (`iterateBytesReader`):
    - Creates synchronize chain
-   - Calls `streamBase64(synHead)` to get acknowledge chain head
+   - Calls `stream(synHead)` to get acknowledge chain head
    - Sends synchronizes to induce production
    - Decodes base64 to Uint8Array
 
 3. **Transmission over CapTP**:
-   - Synchronizes flow: initiator → responder (via synchronize promise chain)
-   - Acknowledges flow: responder → initiator (via acknowledge promise chain)
+   - Synchronizes flow: initiator -> responder (via synchronize promise chain)
+   - Acknowledges flow: responder -> initiator (via acknowledge promise chain)
    - CapTP transmits resolved nodes opportunistically
 
 ### Bytes Writer Flow
@@ -204,14 +204,14 @@ argument value. The acknowledgement chain carries `undefined` (flow control):
    - Sends base64 strings on the synchronize chain via `next(value)`
 
 2. **Responder** (`bytesWriterFromIterator`):
-   - Creates Exo with `streamBase64()` method
+   - Creates Exo with `stream()` method
    - Receives base64 strings on the synchronize chain
    - Decodes base64 to Uint8Array
    - Pushes decoded bytes to local sink iterator
 
 3. **Transmission over CapTP**:
-   - Synchronizes flow: initiator → responder (base64 strings via synchronize promise chain)
-   - Acknowledges flow: responder → initiator (flow control via acknowledge promise chain)
+   - Synchronizes flow: initiator -> responder (base64 strings via synchronize promise chain)
+   - Acknowledges flow: responder -> initiator (flow control via acknowledge promise chain)
    - CapTP transmits resolved nodes opportunistically
 
 ## Why E.get() Pipelining Works
@@ -231,16 +231,22 @@ nodePromise = node.promise;                      // Get next node
 This allows the initiator to immediately start resolving synchronization nodes
 without waiting for the acknowledge chain to resolve first, avoiding datalock.
 
-## Migration Path for Bytes Streams
+## Bytes Transport Decision
 
-The `streamBase64()` method exists to support graceful migration:
+The method-surface migration is complete: every reader and writer now uses the
+single `stream()` method. The former bytes-only method was removed.
 
-1. **Current**: `streamBase64()` yields base64 strings
-2. **Future**: When CapTP supports binary, implement `stream()` yielding `Uint8Array`
-3. **Migration**:
-   - Responders implement both `stream()` and `streamBase64()`
-   - Initiators elect to migrate from `iterateBytesReader()` to `iterateReader()`,
-     and from `iterateBytesWriter()` to `iterateWriter()`.
-   - Eventually `streamBase64()` can be deprecated
+The value-representation migration is deliberately deferred. A passable
+`byteArray` is a frozen `Uint8Array` backed by an immutable `ArrayBuffer`, so a
+mutable filesystem, socket, or inflater chunk must first be copied with
+`frozenBytes` (or transferred when the producer can relinquish a whole backing
+buffer). CapTP's current marshal format then hex-encodes the byteArray, producing
+two wire characters per byte. The bytes adapters instead encode mutable chunks
+as base64 strings, producing about four characters per three bytes and restoring
+mutable `Uint8Array` chunks on receipt.
 
-This allows bytes-streamable Exos to evolve without breaking existing initiators.
+Consequently the four bytes-specific modules remain the one recommended way to
+stream bytes. They are protocol adapters over `stream()`, not a second remote
+protocol. Replacing them with `readerFromIterator` / `iterateReader` or
+`writerFromIterator` / `iterateWriter` should wait until CapTP supplies a compact
+binary representation; pass-style support alone is not that representation.

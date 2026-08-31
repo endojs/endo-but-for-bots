@@ -108,7 +108,7 @@ const PLATFORM_DIRECTORY_METHODS = [
 /** Method names the platform `File` contract requires. */
 const PLATFORM_FILE_METHODS = [
   'help',
-  'streamBase64',
+  'stream',
   'text',
   'json',
   'writeText',
@@ -134,7 +134,7 @@ const PLATFORM_READABLE_TREE_METHODS = [
  * the range methods too. See designs/fs-interface-consolidation.md § C4.
  */
 const PLATFORM_READABLE_BLOB_METHODS = [
-  'streamBase64',
+  'stream',
   'text',
   'json',
   'help',
@@ -328,7 +328,7 @@ test('EndoMount.readOnly listTree recursively lists a sub-tree', async t => {
 test('EndoMount.write accepts a ReadableBlob and materializes bytes', async t => {
   const { mount, rootPath } = makeConfiguredMount(t);
   // A PassableBytesReader (the new-protocol blob shape).  mount.write
-  // detects the blob via __getMethodNames__.includes('streamBase64')
+  // detects the blob via __getMethodNames__.includes('stream')
   // and consumes via iterateBytesReader.
   const blob = bytesReaderFromIterator([
     new TextEncoder().encode('hello blob'),
@@ -533,7 +533,7 @@ test('EndoMountFile.readOnly() returns a structural ReadableBlob view', async t 
   );
 });
 
-test('EndoMountFile json and streamBase64 re-check confinement on use', async t => {
+test('EndoMountFile json and stream re-check confinement on use', async t => {
   const { mount, rootPath } = makeConfiguredMount(t);
   const outsideRoot = makeTempRoot(t);
   const outsideFile = path.join(outsideRoot, 'outside.json');

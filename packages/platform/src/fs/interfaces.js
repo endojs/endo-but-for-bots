@@ -33,7 +33,7 @@ export const pathEntryMethodGuards = harden({
 // § C2 / C4).
 export const readableBlobMethodGuards = harden({
   help: HelpMethod,
-  streamBase64: M.call(M.any()).returns(M.promise()),
+  stream: M.call(M.any()).returns(M.promise()),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
 });
@@ -94,7 +94,7 @@ export const getInfoMethodGuard = harden({
 // round-trip (so a caller can consult a local CAS before fetching), and
 // `fetch(offset, length)` reads a byte *range* without streaming the whole
 // blob — the two methods that make remote reads optimal. The whole-value
-// `text` / `json` / `streamBase64` accessors layer on top. See
+// `text` / `json` / `stream` accessors layer on top. See
 // designs/fs-interface-consolidation.md § C4.
 export const rangeReadMethodGuards = harden({
   ...getInfoMethodGuard,

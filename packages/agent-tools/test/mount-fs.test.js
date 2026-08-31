@@ -50,7 +50,7 @@ const makeTempRoot = t => {
  */
 const makeFakeBytesReader = bytes =>
   Far('FakeBytesReader', {
-    streamBase64() {
+    stream() {
       return harden({
         value: Buffer.from(bytes).toString('base64'),
         promise: Promise.resolve(harden({ value: undefined, promise: null })),

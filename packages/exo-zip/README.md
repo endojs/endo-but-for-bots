@@ -34,7 +34,7 @@ const bytes = await zip(tree);
 The input tree must conform to
 [`@endo/platform`](../platform)'s `ReadableTreeInterface` (`has`,
 `list`, `lookup`); leaf blobs must conform to `ReadableBlobInterface`
-(`streamBase64`, `text`, `json`).
+(`stream`, `text`, `json`).
 Both interfaces are honoured by `unzip` from `@endo/exo-unzip`,
 the daemon's `ReadableTree`, and any other exo that conforms.
 
@@ -54,7 +54,7 @@ bytes.
   time at construction).
 
 The function is async because `list`, `lookup`, and the
-`streamBase64` drain are all async.
+`stream` drain are all async.
 
 Sub-tree vs leaf-blob discrimination uses `__getMethodNames__()`
 rather than duck-typing, mirroring `@endo/platform`'s

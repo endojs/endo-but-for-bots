@@ -18,10 +18,9 @@ import { makeReaderPump } from './reader-pump.js';
  * produces base64-encoded values for the remote Initiator/Consumer.
  *
  * Bytes are automatically base64-encoded for transmission over CapTP.
- * Uses streamBase64() method instead of stream() to allow future migration
- * to direct bytes transport when CapTP supports it. At that time, bytes-streamable
- * Exos can implement stream() directly, and initiators can gracefully transition
- * to using iterateReader() instead of iterateBytesReader().
+ * Uses the generic stream() protocol. The bytes-specific helpers remain the
+ * canonical adapters because CapTP currently marshals byteArray values as hex,
+ * which is larger and slower than the base64 representation used here.
  *
  * The interface implies Uint8Array yields (no readPattern method).
  * Only readReturnPattern can be customized.
@@ -53,7 +52,7 @@ export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
 
   // @ts-expect-error Exo pump types use Passable where template expects specific subtype
   return makeExo('PassableBytesReader', PassableBytesReaderInterface, {
-    streamBase64: pump,
+    stream: pump,
 
     /**
      * Returns the pattern for validating TReadReturn (return value).

@@ -28,10 +28,9 @@ const { freeze } = Object;
  * terminates with the original argument value.
  * With buffer > 0, nodes propagate via CapTP before I/O yields, keeping the responder busy.
  *
- * Calls streamBase64() on the responder, which allows future migration to direct
- * bytes transport when CapTP supports it. At that time, bytes-streamable Exos can
- * implement stream() directly, and initiators can gracefully transition to using
- * iterateReader() instead of iterateBytesReader().
+ * Calls the generic stream() method on the responder. The bytes-specific
+ * adapter decodes the base64 representation that remains preferable to CapTP's
+ * current hex encoding for passable byteArray values.
  *
  * The interface implies Uint8Array yields. Only readReturnPattern can be customized.
  *
@@ -58,9 +57,9 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
     synResolve = resolve;
   }
 
-  // Call streamBase64() - returns a promise for the acknowledge chain head
+  // Call stream() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<string, TReadReturn>>} */
-  let nodePromise = E(bytesReaderRef).streamBase64(synHead);
+  let nodePromise = E(bytesReaderRef).stream(synHead);
 
   /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>> | null} */
   let terminalPromise = null;

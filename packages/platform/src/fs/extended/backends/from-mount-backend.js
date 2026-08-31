@@ -8,7 +8,7 @@
  * adapter projects it into the `FsBackend` protocol.
  *
  * - No partial-range I/O: `read(path, offset, length)` fetches the
- *   whole file via `streamBase64()` and slices. `write`/`setStat`
+ *   whole file via `stream()` and slices. `write`/`setStat`
  *   likewise read-modify-write the whole file, since Mount has no
  *   partial-range write. Cost is O(filesize) on the wire (≈1.33×, base64)
  *   and in memory; the write side sends the file as a *single* base64
@@ -23,7 +23,7 @@
  *   entry, all entries concurrent) rather than two serial sends each.
  *
  * Bytes streaming uses the `@endo/exo-stream` wire protocol on both
- * sides: reads drain a file's `streamBase64` via `iterateBytesReader`,
+ * sides: reads drain a file's `stream` via `iterateBytesReader`,
  * and the write-blob is produced by `bytesReaderFromIterator` (which
  * `Mount.write` drains the same way).
  */
@@ -57,7 +57,7 @@ harden(isNotFoundMessage);
 
 /**
  * Wrap a `Uint8Array` as a `PassableBytesReader` that `Mount.write`
- * accepts. `Mount.write` introspects for a `streamBase64` method and
+ * accepts. `Mount.write` introspects for a `stream` method and
  * drains it through `iterateBytesReader` (the `@endo/exo-stream`
  * protocol), so the producer must speak that protocol too. A raw
  * `Uint8Array` cannot cross CapTP (byte arrays are not yet passable),
@@ -75,10 +75,10 @@ const makeBytesBlob = bytes => {
 harden(makeBytesBlob);
 
 /**
- * Drain a Mount/MountFile `streamBase64` reader into a `Uint8Array`
+ * Drain a Mount/MountFile `stream` reader into a `Uint8Array`
  * using the `@endo/exo-stream` consumer protocol.
  *
- * @param {any} fileCap - a remotable exposing `streamBase64`
+ * @param {any} fileCap - a remotable exposing `stream`
  */
 const drainBytesReader = async fileCap => {
   /** @type {Uint8Array[]} */
@@ -100,14 +100,14 @@ const drainBytesReader = async fileCap => {
 /**
  * Map a Mount child's CapTP method names to a node kind. A sub-Mount
  * (directory) advertises `lookup`; a MountFile advertises `text` /
- * `streamBase64`.
+ * `stream`.
  *
  * @param {string[]} methods
  * @returns {NodeKind | undefined}
  */
 const kindFromMethods = methods => {
   if (methods.includes('lookup')) return 'directory';
-  if (methods.includes('text') || methods.includes('streamBase64')) {
+  if (methods.includes('text') || methods.includes('stream')) {
     return 'file';
   }
   return undefined;

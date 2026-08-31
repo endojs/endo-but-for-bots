@@ -111,7 +111,7 @@ type GitWorktreeEntry = {
 };
 type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryPage = {
@@ -150,7 +150,7 @@ type GitQid<K = GitNodeKind> = {
     version: bigint;
 };
 type GitReadableBlobSource = {
-    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+    stream: (...args: any[]) => PromiseLike<unknown>;
 };
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
@@ -267,7 +267,7 @@ type GitWatchFromResult = {
     watcher: GitNodeWatcher;
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
 };
 type GitBlobRef = {
@@ -480,7 +480,7 @@ type GitWorktreeEntry = {
 };
 type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryPage = {
@@ -610,7 +610,7 @@ type GitWatchFromResult = {
     watcher: GitNodeWatcher;
 };
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
+    stream: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
 };
 type GitBlobRef = {

@@ -34,7 +34,7 @@ export const snapshotBlobMethods = (store, sha256) => {
         size: size ? await size() : await byteLengthOfReader(makeFileReader),
       }),
     /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
+    stream(synPromise) {
       const pump = makeReaderPump(mapReader(makeFileReader(), encodeBase64));
       return pump(/** @type {any} */ (synPromise));
     },
@@ -43,7 +43,7 @@ export const snapshotBlobMethods = (store, sha256) => {
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'SnapshotBlob: immutable content-addressed bytes (sha256, getInfo, text, json, streamBase64).'
+        ? 'SnapshotBlob: immutable content-addressed bytes (sha256, getInfo, text, json, stream).'
         : `No documentation for method ${method}.`,
   });
 };

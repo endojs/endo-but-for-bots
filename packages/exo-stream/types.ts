@@ -152,7 +152,7 @@ export interface ReaderIterator<
 
 /**
  * A passable bytes reader reference.
- * Uses streamBase64() to allow future migration to direct bytes transport.
+ * Uses the generic stream() protocol with base64 strings on the wire.
  * The final synchronization node carries the argument value passed to the
  * initiator's return(value) call when closing early; if the responder is backed
  * by a JavaScript iterator with a return(value) method, it may replace that
@@ -161,7 +161,7 @@ export interface ReaderIterator<
  * Yields base64-encoded strings (decoded to Uint8Array by initiator).
  */
 export interface PassableBytesReader<TReadReturn extends Passable = undefined> {
-  streamBase64(
+  stream(
     synPromise: ERef<StreamNode<Passable, TReadReturn>>,
   ): Promise<StreamNode<string, TReadReturn>>;
   /** Pattern for TReadReturn */
@@ -170,7 +170,7 @@ export interface PassableBytesReader<TReadReturn extends Passable = undefined> {
 
 /**
  * A passable bytes writer reference.
- * Uses streamBase64() to allow future migration to direct bytes transport.
+ * Uses the generic stream() protocol with base64 strings on the wire.
  * Receives base64-encoded strings (encoded from Uint8Array by initiator).
  * When the initiator calls `return(value)` to close early, the final syn node
  * carries that argument value. If the responder is backed by a JavaScript
@@ -181,7 +181,7 @@ export interface PassableBytesReader<TReadReturn extends Passable = undefined> {
 export interface PassableBytesWriter<
   TWriteReturn extends Passable = undefined,
 > {
-  streamBase64(
+  stream(
     synPromise: ERef<StreamNode<string, TWriteReturn>>,
   ): Promise<StreamNode<undefined, TWriteReturn>>;
   /** Pattern for TWriteReturn */

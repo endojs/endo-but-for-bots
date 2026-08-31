@@ -82,7 +82,7 @@ export const makeLocalBlob = filePath => {
   /** @satisfies {ReadableBlobRangeRead} */
   const localBlobMethods = {
     /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
+    stream(synPromise) {
       const nodeReadStream = fs.createReadStream(filePath);
       const reader = makeNodeReader(nodeReadStream);
       const pump = makeReaderPump(mapReader(reader, encodeBase64));
@@ -144,7 +144,7 @@ export const makeLocalBlob = filePath => {
     },
     help: method =>
       method === undefined
-        ? 'LocalBlob: read-only handle to a host file (text, json, streamBase64, getInfo, fetch, rangeRead, rangeReadText).'
+        ? 'LocalBlob: read-only handle to a host file (text, json, stream, getInfo, fetch, rangeRead, rangeReadText).'
         : `No documentation for method ${method}.`,
   };
   return makeExo('LocalBlob', ReadableBlobRangeReadInterface, localBlobMethods);

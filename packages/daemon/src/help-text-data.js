@@ -152,9 +152,9 @@ export const helpTextEntries = harden([
       getFormulaGraph:
         "getFormulaGraph() -> Promise<{ nodes, edges }>\nReturns a snapshot of the formula dependency graph reachable from\nthis agent's pet store.\n\n- nodes: Array of { id, type } for each formula\n- edges: Array of { sourceId, targetId, label } for each dependency\n\nUsed by the Chat inventory graph space to visualize formula relationships.",
       listRetentionPaths:
-        'listRetentionPaths(locator) -> Promise<RetentionPath[]>\nSnapshot every retention path from a GC root to the target locator.\n\nEach path is an array of segments walking upstream from the target to a root.\nA segment carries:\n- groupMembers: identifiers union-merged into the segment\'s group\n- referencedBy: id of the upstream group representative (absent on the root)\n- labels: edge labels from the referrer into this group; pet-store edges\n  render as "pet:<name>", internal edges keep their field name\n  (e.g. "worker", "petStore", "retention"), and the root segment carries\n  type: "root".\n\nUseful for answering "why is this value still alive?" without polling the\nwhole graph. See `endo paths <name>` for the CLI form.',
+        'listRetentionPaths(locator) -> Promise<RetentionPath[]>\nSnapshot every retention path from a GC root to the target locator.\n\nEach path is an array of segments walking upstream from the target\nto a root. A segment carries:\n\n- `groupMembers`: identifiers union-merged into the segment\'s group\n- `referencedBy`: id of the upstream group representative\n  (absent on the root)\n- `labels`: edge labels from the referrer into this group;\n  pet-store edges render as `pet:<name>`, internal edges keep\n  their field name (e.g. `worker`, `petStore`, `retention`), and\n  the root segment carries `type: "root"`.\n\nUseful for answering "why is this value still alive?" without\npolling the whole graph. See `endo paths <name>` for the CLI form.',
       followRetentionPaths:
-        'followRetentionPaths(locator) -> AsyncIterator<RetentionPathDelta>\nSubscribe to retention-path changes for the target locator.\n\nThe first delta is always a full { snapshot: RetentionPath[] }. Subsequent\ndeltas are { added, removed } diffs over a microtask-coalesced batch\nwindow, so a single provideGuest yields one delta rather than many.\n\nDrop the returned reference to release the subscription, exactly as with\nfollowNameChanges and followLocatorNameChanges.\n\nUse with for-await-of to receive updates.',
+        'followRetentionPaths(locator) -> AsyncIterator<RetentionPathDelta>\nSubscribe to retention-path changes for the target locator.\n\nThe first delta is always a full `{ snapshot: RetentionPath[] }`.\nSubsequent deltas are `{ added, removed }` diffs over a\nmicrotask-coalesced batch window, so a single `provideGuest`\nyields one delta rather than many.\n\nDrop the returned reference to release the subscription, exactly\nas with `followNameChanges` and `followLocatorNameChanges`.\n\nUse with `for-await-of` to receive updates.',
       readText:
         'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
       maybeReadText:
@@ -166,14 +166,14 @@ export const helpTextEntries = harden([
   [
     'EndoReadable',
     {
-      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstreamBase64() for streaming access, or getInfo()/fetch()\nfor the content-addressed range-I/O surface.',
+      '': 'EndoReadable - A readable blob of binary data.\n\nBlobs store binary content with a content-addressed hash.\nUse text() to read as a string, json() to parse as JSON,\nstream() for streaming access, or getInfo()/fetch()\nfor the content-addressed range-I/O surface.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the blob in one round-trip:\nalgorithm ("sha256"), hash (base64), and size (bigint bytes).\nLets a caller consult a local content store before fetching.',
       fetch:
         'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) without\nstreaming the whole blob. offset and length are bigints;\nthe range is clamped at end-of-content.',
-      streamBase64:
-        'streamBase64(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
+      stream:
+        'stream(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
       text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
       json: 'json() -> Promise<any>\nRead and parse the blob as JSON.',
     },
@@ -195,7 +195,7 @@ export const helpTextEntries = harden([
       nodeId:
         "nodeId() -> string\nGet this node's unique identifier.\nUsed for peer-to-peer communication.",
       readLog:
-        'readLog(options?) -> AsyncIterator\nStream the daemon logs as { source, chunk } records, where source is a log\ndisplay name (such as endo.log or worker/<id8>) and chunk is a run of UTF-8\ntext. Returns a reader; consume it with iterateReader. The optional\noptions.name restricts the stream to a single log by display name; omitting\nit streams every log. options.pattern emits only lines matching a regular\nexpression given as a RegExp source string (a plain substring is just an\nunanchored pattern). By default the stream ends once the current logs have\nbeen read; pass options.follow true to keep it open and keep emitting new\nlines as the logs grow (and as new logs appear) until you close the reader.\nLogs are read in bounded windows so a large log is never buffered whole.',
+        'readLog(options?) -> AsyncIterator\nStream the daemon logs as { source, chunk } records, where source is a log\ndisplay name (such as endo.log or worker/<id8>) and chunk is a run of UTF-8\ntext.\nReturns a reader; consume it with iterateReader.\nThe optional options.name restricts the stream to a single log by display\nname; omitting it streams every log.\noptions.pattern emits only lines matching a regular expression given as a\nRegExp source string (a plain substring is just an unanchored pattern).\nBy default the stream ends once the current logs have been read; pass\noptions.follow true to keep it open and keep emitting new lines as the logs\ngrow (and as new logs appear) until you close the reader.\nLogs are read in bounded windows so a large log is never buffered whole.',
       reviveNetworks:
         'reviveNetworks() -> Promise<void>\nRestore network connections from persisted state.',
       revivePins:
@@ -213,10 +213,10 @@ export const helpTextEntries = harden([
         "sha256() -> string\nThe content address of the tree's manifest, as base64.",
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the tree in one round-trip: algorithm\n("sha256"), hash (base64, the same value as sha256()), and size (the byte\nlength of the tree\'s own manifest). The uniform identity accessor shared with\nblobs, so generic code can read a content hash off any blob or tree.',
-      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
-      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
+      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
+      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [
@@ -227,10 +227,6 @@ export const helpTextEntries = harden([
       kind: 'kind() -> "directory"\nReturn the structural kind of this lookup result.\nUse this before choosing directory-only or file-only methods.',
       has: 'has(...pathSegments | entry) -> Promise<boolean>\nCheck if a path exists within the mount.\nEither pass path segments (has("dir", "file.txt")) or a single EndoMountEntry.',
       list: 'list(...pathSegments) -> Promise<string[]>\nList directory entries at the given path.\nEach argument is one path segment: list("subdir").\nCall with no arguments to list the root.\nEntries with symlinks escaping the mount root are excluded.',
-      glob: 'glob(pattern) -> Promise<string[]>\nRecursively enumerate paths matching a glob pattern, relative to this mount face.\npattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.\n`*` matches zero or more characters within one segment (never `/`, and it does match\nleading-dot names); `**` as a whole segment matches zero or more directory levels,\nand a trailing `**` additionally matches file descendants, not only directories.\nEvery other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.\nDenied names (such as .ssh, .aws, .env) never appear, even when named literally.\nEntries whose symlinks escape the mount root are excluded. Results include\ndirectories as well as files, are sorted by UTF-16 code unit, and are capped at\n10,000 with silent truncation.\nExample: glob("**/*.js") → all JavaScript files at any depth.\nExample: glob("src/*") → the immediate children of src.',
-      grep: 'grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>\nSearch file contents for a regular expression across selected files.\npattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.\npaths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose\nthe two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of\npaths (the promise is awaited for you). Omit it to search every file under the mount face.\noptions.maxResults: number — Cap on the number of match records (default 1000).\nEach matching line yields one { file, line, text } record: file is the mount-face-relative\npath, line is 1-based, and text is the whole line with any trailing carriage return stripped\n(CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot\nbe read is skipped silently.\nExample: grep("TODO", glob("src/**/*.js")) → every TODO line under src.\nExample: grep("^export") → up to 1000 exported-symbol lines across the whole mount.',
-      glorp:
-        'glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>\nFused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.\nglob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.\ngrep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.\nBoth patterns are required, so the whole operation is one call whose two patterns a native filesystem\nlayer can push down and fuse into a single enumerate-and-scan pass. It returns the same\n{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.\noptions.maxResults: number — Cap on the number of match records (default 1000).\nglorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.\nExample: glorp("src/**/*.js", "TODO") → every TODO line under src.',
       lookup:
         'lookup(path) -> Promise<EndoMount | EndoMountFile>\nResolve a path within the mount.\npath: string | string[] | EndoMountEntry — A string is one segment; an array\nis a sequence of segments. For a slash-joined nested path, use\nlookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).\nReturns EndoMount for directories, EndoMountFile for files.',
       readText:
@@ -261,7 +257,7 @@ export const helpTextEntries = harden([
   [
     'EndoMountFile',
     {
-      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / streamBase64(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
+      '': 'EndoMountFile - A file within a mounted directory.\n\nA live, host-backed file. Read it with text() / json() / stream(),\ninspect and range-read it with getInfo() / fetch(), write it with\nwriteText() / append() / writeBytes(), or snapshot() it into the content\nstore. kind() returns "file" and stat() returns the bigint-nanosecond metadata\nrecord.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.',
       kind: 'kind() -> "file"\nReturn the structural kind of this lookup result.',
       list: 'list() -> never\nNot available on a file.\nUse text() to read its contents.',
@@ -270,8 +266,8 @@ export const helpTextEntries = harden([
       fetch:
         'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) of the live file without\nstreaming the whole thing. offset and length are bigints; the range is\nclamped at end-of-content.',
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
-      streamBase64:
-        'streamBase64(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
+      stream:
+        'stream(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
       json: 'json() -> Promise<any>\nRead and parse the file as JSON.',
       writeText:
         'writeText(content) -> Promise<void>\nWrite a string to the file. Throws if read-only.',
@@ -280,7 +276,7 @@ export const helpTextEntries = harden([
       writeBytes:
         'writeBytes(readableRef) -> Promise<void>\nWrite bytes from an async iterator. Throws if read-only.',
       readOnly:
-        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, streamBase64, getInfo,\nfetch) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
+        'readOnly() -> ReadableBlob\nReturns a structural ReadableBlob view (text, json, stream, getInfo,\nfetch) of this file. The view is a write-disabled face over the live file,\nnot a snapshot. Mount-specific extensions (stat, snapshot) are not on it.',
     },
   ],
 ]);

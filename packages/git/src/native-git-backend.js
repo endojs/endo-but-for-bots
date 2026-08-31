@@ -2196,7 +2196,7 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
       /**
        * @param {unknown} synPromise
        */
-      streamBase64(synPromise) {
+      stream(synPromise) {
         const pump = makeReaderPump(
           mapReader(streamBlobBytes(blobOid), encodeBase64),
         );

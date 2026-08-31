@@ -409,7 +409,7 @@ harden(NodeWatcherInterface);
  * `text()` / `json()` are whole-value conveniences mirroring the daemon
  * `EndoBlob` / lite `SnapshotBlob` surface, so a `BlobRef` and a daemon blob
  * are mutually interchangeable for the common read shapes: `getInfo` + `fetch`
- * (range I/O) and `text` + `json` (whole value). `streamBase64` stays
+ * (range I/O) and `text` + `json` (whole value). `stream` stays
  * daemon-only — the extended layer streams via `fetch` / `PassableBytesReader`
  * rather than the CapTP base64 pump. See
  * designs/fs-interface-consolidation.md § C4.

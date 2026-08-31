@@ -1591,16 +1591,14 @@ export const makeHostMaker = ({
           }
         }
         const looksLikeBlob =
-          kind === undefined
-            ? methodNames.includes('streamBase64')
-            : kind === 'file';
+          kind === undefined ? methodNames.includes('stream') : kind === 'file';
         const looksLikeTree =
           kind === undefined
             ? methodNames.includes('list')
             : kind === 'directory';
         if (looksLikeBlob && looksLikeTree) {
           throw makeError(
-            X`Tree entry ${q(subPath)} has both streamBase64 and list — ambiguous shape`,
+            X`Tree entry ${q(subPath)} has both stream and list — ambiguous shape`,
           );
         } else if (looksLikeBlob || looksLikeTree) {
           // eslint-disable-next-line no-await-in-loop

@@ -258,7 +258,7 @@ Get documentation for this interface or a specific method.
 - help() returns an overview of the interface
 - help("fetch") returns documentation for the fetch method
 
-## streamBase64(syndicationPromise) -> Promise
+## stream(syndicationPromise) -> Promise
 
 Stream the blob's bytes as base64-encoded chunks.
 The syndication promise drives the reader-pump flow-control protocol.

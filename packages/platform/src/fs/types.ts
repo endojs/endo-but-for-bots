@@ -10,7 +10,7 @@ export type ReadableStream = AsyncIterator<Uint8Array>;
  * Exposed by platform as an Exo; directly usable locally.
  */
 export interface ReadableBlob {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   help: (method?: string) => string;
@@ -102,11 +102,11 @@ export interface ReadableTree {
 /**
  * A remotable byte source accepted by `Directory.write()`.
  *
- * The streaming protocol only needs `streamBase64`; optional reader metadata
+ * The streaming protocol only needs `stream`; optional reader metadata
  * such as `readReturnPattern` is not part of the materialization contract.
  */
 export type ReadableBlobSource = {
-  streamBase64: (...args: any[]) => PromiseLike<unknown>;
+  stream: (...args: any[]) => PromiseLike<unknown>;
 };
 
 /** Portable semantic payload accepted by `Directory.write()`. */
@@ -251,7 +251,7 @@ export interface TreeWriter {
  * a mount root).
  */
 export interface File {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   writeText: (content: string) => Promise<void>;

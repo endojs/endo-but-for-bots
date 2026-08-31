@@ -65,7 +65,7 @@ import type {
 } from '../src/fs/extended/backend-types.js';
 
 type ExpectedReadableBlob = {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   help: (method?: string) => string;

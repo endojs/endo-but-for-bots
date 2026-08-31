@@ -623,7 +623,7 @@ export const InspectorInterface = M.interface('EndoInspector', {
 
 // `EndoBlob` is the daemon's immutable-bytes cap and the CapTP remote-read
 // target. It carries the whole-value `readableBlobMethodGuards` (help / text /
-// json / streamBase64) plus the range-I/O `rangeReadMethodGuards` (getInfo /
+// json / stream) plus the range-I/O `rangeReadMethodGuards` (getInfo /
 // fetch) — i.e. exactly the shared `ReadableBlobRangeInterface`. The content
 // hash is reported by `getInfo().hash` (base64); there is no separate
 // `sha256()` accessor (the daemon's internals always already hold the hex
@@ -745,7 +745,7 @@ export const MountInterface = M.interface('EndoMount', {
 });
 
 // `EndoMountFile` extends `File` from `@endo/platform/fs`.  The
-// overlapping methods (`streamBase64`, `text`, `json`, `writeText`,
+// overlapping methods (`stream`, `text`, `json`, `writeText`,
 // `writeBytes`, `append`, `snapshot`) carry the same shapes as
 // `PlatformFileInterface`; `stat`, `help`, and the `rangeReadMethodGuards`
 // (`getInfo` / `fetch`) are mount-specific extensions.  `getInfo` / `fetch`
@@ -758,7 +758,7 @@ export const MountFileInterface = M.interface('EndoMountFile', {
   // Diagnostic-only stub: this keeps the common `file.list()` mistake useful
   // without granting a file any directory authority.
   list: M.call().returns(M.promise()),
-  // Whole-value read surface (help / streamBase64 / text / json) shared with
+  // Whole-value read surface (help / stream / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
   // (getInfo / fetch) over the live file, plus the mount-file write surface.
   ...readableBlobMethodGuards,

@@ -89,8 +89,7 @@ export const PassableWriterInterface = M.interface('PassableWriter', {
 
 /**
  * Interface for passable bytes reader references.
- * Uses streamBase64() method instead of stream() to allow future migration
- * to a direct bytes stream() method when CapTP supports binary transport.
+ * Uses the generic stream() method while carrying base64 strings.
  *
  * No readPattern() method - the interface implies Uint8Array yields
  * (transmitted as base64 strings over the wire).
@@ -99,16 +98,15 @@ export const PassableWriterInterface = M.interface('PassableWriter', {
  * @see iterateBytesReader - initiator side for bytes readers
  */
 export const PassableBytesReaderInterface = M.interface('PassableBytesReader', {
-  // streamBase64(synPromise: ERef<StreamNode<Passable, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>
-  streamBase64: M.call(M.any()).returns(M.promise()),
+  // stream(synPromise: ERef<StreamNode<Passable, TReadReturn>>): Promise<StreamNode<string, TReadReturn>>
+  stream: M.call(M.any()).returns(M.promise()),
   // readReturnPattern(): Pattern | undefined - pattern for TReadReturn
   readReturnPattern: M.call().returns(M.opt(M.pattern())),
 });
 
 /**
  * Interface for passable bytes writer references.
- * Uses streamBase64() method instead of stream() to allow future migration
- * to a direct bytes stream() method when CapTP supports binary transport.
+ * Uses the generic stream() method while carrying base64 strings.
  *
  * No writePattern() method - the interface implies Uint8Array writes. When the
  * initiator calls `return(value)` to close early, the final syn node carries
@@ -122,8 +120,8 @@ export const PassableBytesReaderInterface = M.interface('PassableBytesReader', {
  * @see iterateBytesWriter - initiator side for bytes writers
  */
 export const PassableBytesWriterInterface = M.interface('PassableBytesWriter', {
-  // streamBase64(synPromise: ERef<StreamNode<string, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>
-  streamBase64: M.call(M.any()).returns(M.promise()),
+  // stream(synPromise: ERef<StreamNode<string, TWriteReturn>>): Promise<StreamNode<undefined, TWriteReturn>>
+  stream: M.call(M.any()).returns(M.promise()),
   // writeReturnPattern(): Pattern | undefined - pattern for TWriteReturn
   writeReturnPattern: M.call().returns(M.opt(M.pattern())),
 });
