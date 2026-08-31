@@ -314,10 +314,11 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let errors = interp
         .errors_snapshot()
         .into_iter()
-        .map(|(owner, name, message)| crate::image::ErrorImage {
+        .map(|(owner, name, message, frames)| crate::image::ErrorImage {
             owner,
             name: name.to_string(),
             message,
+            frames,
         })
         .collect();
     let buffers = interp
@@ -469,7 +470,7 @@ fn restore_side_tables(
     let ok = interp.restore_error_data(
         errors
             .into_iter()
-            .map(|e| (e.owner, e.name, e.message))
+            .map(|e| (e.owner, e.name, e.message, e.frames))
             .collect(),
     );
     if !ok {

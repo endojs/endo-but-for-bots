@@ -191,3 +191,23 @@ fn blob_snapshot_carries_error_data_too() {
     assert_eq!(resumed, continuous, "blob twin agrees");
     assert_eq!(continuous.1, "Throw(\"EvalError: ev\")");
 }
+
+/// The `stack` accessor renders the call frames an Error captured at
+/// CONSTRUCTION. Those frames cannot be rebuilt — the constructing call
+/// stack is long gone by the time a resume happens — so they have to
+/// travel, and before the `ESTK` atom they did not:
+/// `"Error: boom\n at inner ()\n at ()"` came back as `"Error: boom"`.
+/// A silent divergence on an ordinary program, and the reason the row
+/// gained its own atom rather than a wider `ERRD` row: an added atom
+/// keeps every older container an encoding-identical subset, where a
+/// widened row would have made one undecodable.
+#[test]
+fn a_resumed_error_renders_its_construction_frames() {
+    assert_twin(
+        "ih-error-frames",
+        "var e = 0; var t = 0; e.stack; \
+         e = (function inner() { return new Error('boom'); })(); t = 7; t",
+        &["var e; var t; e.stack; t = e.stack; t"],
+        &[(true, "Error: boom\n at inner ()\n at ()")],
+    );
+}

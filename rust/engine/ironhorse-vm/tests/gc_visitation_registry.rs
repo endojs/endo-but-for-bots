@@ -357,6 +357,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("iterator_identity", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %IteratorPrototype%"),
     ("segments_iterator_method", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %Segments.prototype%"),
     ("segment_iterator_identity", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %SegmentIterator.prototype%"),
+    ("error_stack_accessor", &[Req::DocumentedOnly], "identity cache; the proto and both accessor functions are boot slots, and the installed pair is a property of the rooted %Error.prototype%"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::DocumentedOnly], "armed by SUPER, consumed/disarmed before every boundary (W6-15); collections run only at quiescent boundaries"),
 ];

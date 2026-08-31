@@ -186,6 +186,14 @@ pub struct ErrorImage {
     pub owner: u32,
     pub name: String,
     pub message: Option<String>,
+    /// The call-frame names captured when the error was CONSTRUCTED,
+    /// which the `stack` accessor renders as `\n at <name> ()` lines.
+    /// They must travel: the constructing call stack is gone by the
+    /// time a resume happens, so nothing can rebuild them, and a
+    /// resumed `e.stack` that drops them diverges silently (measured:
+    /// `"Error: boom\n at inner ()\n at ()"` became `"Error: boom"`).
+    /// Encoded in the SEPARATE `ESTK` atom, not in this row.
+    pub frames: Vec<String>,
 }
 
 /// One `ArrayBuffer` instance's serialized side-table row (the `ABUF`
@@ -1261,7 +1269,72 @@ pub(crate) fn decode_errors(p: &[u8]) -> Result<Vec<ErrorImage>, SnapshotError> 
             owner,
             name,
             message,
+            // The construction frames ride their OWN atom (`ESTK`), so
+            // this row's encoding is unchanged and every older reader
+            // still sees the subset it always did. Joined below.
+            frames: Vec::new(),
         });
+    }
+    c.done()?;
+    Ok(out)
+}
+
+/// Encode the error-frame side table (the `ESTK` payload / small-state
+/// error-frames section): `(owner, frame names)` ascending by owner,
+/// emitted only for errors that captured a non-empty frame list.
+///
+/// A SEPARATE atom rather than wider `ERRD` rows, which is what keeps
+/// the format's read range honest: every prior bump ADDED an atom, so
+/// an older container is an encoding-identical SUBSET of a newer one
+/// and `1..=current` means what it says. Widening an existing row
+/// would have made a v10 container undecodable by a v11 reader and
+/// forced a rewrite-a-middle-section migration for a field that is
+/// naturally optional.
+pub(crate) fn encode_error_frames(errors: &[ErrorImage]) -> Vec<u8> {
+    let rows: Vec<&ErrorImage> = errors.iter().filter(|e| !e.frames.is_empty()).collect();
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for e in rows {
+        v.extend_from_slice(&e.owner.to_be_bytes());
+        v.extend_from_slice(&(e.frames.len() as u32).to_be_bytes());
+        for f in &e.frames {
+            let f = f.as_bytes();
+            v.extend_from_slice(&(f.len() as u32).to_be_bytes());
+            v.extend_from_slice(f);
+        }
+    }
+    v
+}
+
+/// Decode the error-frame side table, refusing the non-canonical
+/// shapes an honest writer never emits: unordered or duplicate owners,
+/// an empty frame list (the writer omits the row instead), and
+/// non-UTF-8 names.
+pub(crate) fn decode_error_frames(p: &[u8]) -> Result<Vec<(u32, Vec<String>)>, SnapshotError> {
+    let mut c = Cursor::new(p, "error-frame side table");
+    let count = c.u32()? as usize;
+    let mut out: Vec<(u32, Vec<String>)> = Vec::with_capacity(count.min(p.len() / 8));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if out.last().is_some_and(|(prev, _)| owner <= *prev) {
+            return Err(SnapshotError::Corrupt(
+                "error-frame side table: owners not strictly ascending",
+            ));
+        }
+        let n = c.u32()? as usize;
+        if n == 0 {
+            return Err(SnapshotError::Corrupt(
+                "error-frame side table: empty frame list is not emitted",
+            ));
+        }
+        let mut frames = Vec::with_capacity(n.min(p.len() / 4));
+        for _ in 0..n {
+            let len = c.u32()? as usize;
+            frames.push(String::from_utf8(c.bytes(len)?.to_vec()).map_err(|_| {
+                SnapshotError::Corrupt("error-frame side table: frame name not UTF-8")
+            })?);
+        }
+        out.push((owner, frames));
     }
     c.done()?;
     Ok(out)
@@ -3710,6 +3783,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     }
     if !image.errors.is_empty() {
         w.atom(crate::format::ERRD, &encode_errors(&image.errors));
+        // Emitted only when some error actually captured frames, so a
+        // machine whose errors have none writes byte-identically to
+        // before this atom existed.
+        if image.errors.iter().any(|e| !e.frames.is_empty()) {
+            w.atom(crate::format::ESTK, &encode_error_frames(&image.errors));
+        }
     }
     if !image.buffers.is_empty() {
         w.atom(crate::format::ABUF, &encode_buffers(&image.buffers));
@@ -3891,10 +3970,23 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_registry(a.payload)?,
         None => Vec::new(),
     };
-    let errors = match r.find(crate::format::ERRD) {
+    let mut errors = match r.find(crate::format::ERRD) {
         Some(a) => decode_errors(a.payload)?,
         None => Vec::new(),
     };
+    // Join the frames back onto their rows. An owner naming no `ERRD`
+    // row is crafted: the writer emits frames only for errors it also
+    // emitted.
+    if let Some(a) = r.find(crate::format::ESTK) {
+        for (owner, frames) in decode_error_frames(a.payload)? {
+            let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
+                return Err(SnapshotError::Corrupt(
+                    "error-frame side table: owner has no error row",
+                ));
+            };
+            row.frames = frames;
+        }
+    }
     let buffers = match r.find(crate::format::ABUF) {
         Some(a) => decode_buffers(a.payload)?,
         None => Vec::new(),
@@ -4137,8 +4229,8 @@ mod tests {
     fn error_data_decode_refuses_crafted_rows() {
         // Duplicate owner: restore would displace the first row.
         let dup = vec![
-            ErrorImage { owner: 3, name: "Error".to_string(), message: None },
-            ErrorImage { owner: 3, name: "TypeError".to_string(), message: None },
+            ErrorImage { owner: 3, name: "Error".to_string(), message: None , frames: Vec::new() },
+            ErrorImage { owner: 3, name: "TypeError".to_string(), message: None , frames: Vec::new() },
         ];
         assert!(matches!(
             decode_errors(&encode_errors(&dup)),
@@ -4150,6 +4242,7 @@ mod tests {
             owner: 1,
             name: "NotAnError".to_string(),
             message: None,
+                frames: Vec::new(),
         }];
         assert!(matches!(
             decode_errors(&encode_errors(&unknown)),
@@ -4160,6 +4253,7 @@ mod tests {
             owner: 1,
             name: "Error".to_string(),
             message: None,
+                frames: Vec::new(),
         }]);
         *bytes.last_mut().unwrap() = 2;
         assert!(matches!(
@@ -4168,12 +4262,12 @@ mod tests {
         ));
         // The well-formed rows round-trip, message halves preserved.
         let ok = vec![
-            ErrorImage { owner: 2, name: "RangeError".to_string(), message: Some("r".to_string()) },
-            ErrorImage { owner: 7, name: "SuppressedError".to_string(), message: None },
+            ErrorImage { owner: 2, name: "RangeError".to_string(), message: Some("r".to_string()) , frames: Vec::new() },
+            ErrorImage { owner: 7, name: "SuppressedError".to_string(), message: None , frames: Vec::new() },
         ];
         assert_eq!(decode_errors(&encode_errors(&ok)).unwrap(), ok);
         // And an out-of-arena owner is refused by the bounds gate.
-        let oob = vec![ErrorImage { owner: 9, name: "Error".to_string(), message: None }];
+        let oob = vec![ErrorImage { owner: 9, name: "Error".to_string(), message: None, frames: Vec::new() }];
         assert!(check_image_slot_bounds(
             &[],
             &[],
@@ -4678,7 +4772,7 @@ mod tests {
             "live records keep the wave-5 refusals"
         );
         // A side-table row owned by a free slot: refused by name.
-        let row = [ErrorImage { owner: 1, name: "Error".to_string(), message: None }];
+        let row = [ErrorImage { owner: 1, name: "Error".to_string(), message: None, frames: Vec::new() }];
         assert!(
             matches!(
                 gate(&[Slot::undefined(); 4], &row, &[1]),

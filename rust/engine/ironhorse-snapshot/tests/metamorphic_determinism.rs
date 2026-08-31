@@ -146,7 +146,14 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // re-derives them. Above the floor they were carried by no
         // table and resume silently lost their callability
         // (`boot_native_identity.rs`).
-        "fd0cc8c5c8c7ead6c9d0db539960c515ae52e30141cefae84fa3fb2dfd1f4835",
+        // Re-pinned at the 2026-08-31 llm rebase, for BOTH reasons at
+        // once: the mainline grew the boot heap again (the real
+        // `.prototype` property and `%Error.prototype%`'s `stack` host
+        // accessor pair), and this branch bumped the container format
+        // to 11 for the `ESTK` atom. This fixture holds no error, so
+        // `ESTK` is absent from its bytes and only the `VERS` payload
+        // moves on that account.
+        "9c4f0575ceca16db24bfe821b06af28de0c80c98901663e321732a93e8feb9ce",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -232,7 +239,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // content move: three link-time `@@iterator` mints became boot
         // mints, so the page rows carrying the boot heap moved and the
         // root and seal move with them. Schema and format unchanged.
-        "637202d7cb7d6a9a5ae1bb58cd04c74d2ad2e7534557a0af8f7a7c59c0c65eb9",
+        // Re-pinned with the blob at the 2026-08-31 llm rebase: the
+        // mainline boot heap moved the page rows, and schema 22 adds
+        // the (empty here) error-frames section to the small state, so
+        // the small leaf, the root and the seal all move.
+        "508563ef64ca3d1bb531958dbb3f595a17e78c9aa62f7825bb397e17c06cb3a2",
         "epoch-3 seal chain"
     );
 }

@@ -8759,13 +8759,15 @@ impl Interp {
     /// `None` (bare-name render) or the recorded text — exactly what
     /// the abort-value render consults, so a resumed `throw e`
     /// stringifies as the uninterrupted machine's would.
-    pub fn errors_snapshot(&self) -> Vec<(u32, &'static str, Option<String>)> {
-        let mut out: Vec<(u32, &'static str, Option<String>)> = self
+    pub fn errors_snapshot(&self) -> Vec<(u32, &'static str, Option<String>, Vec<String>)> {
+        let mut out: Vec<(u32, &'static str, Option<String>, Vec<String>)> = self
             .error_data
             .iter()
-            .map(|(owner, info)| (owner.0, info.name, info.message.clone()))
+            .map(|(owner, info)| {
+                (owner.0, info.name, info.message.clone(), info.frames.clone())
+            })
             .collect();
-        out.sort_unstable_by_key(|(owner, _, _)| *owner);
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
         out
     }
 
@@ -8776,13 +8778,22 @@ impl Interp {
     /// ([`error_name_static`]) — the decoder already refused anything
     /// else, so the `false` return is a belt-and-braces corrupt signal
     /// (the caller fails its decode closed).
-    pub fn restore_error_data(&mut self, rows: Vec<(u32, String, Option<String>)>) -> bool {
-        for (owner, name, message) in rows {
+    pub fn restore_error_data(
+        &mut self,
+        rows: Vec<(u32, String, Option<String>, Vec<String>)>,
+    ) -> bool {
+        for (owner, name, message, frames) in rows {
             let Some(name) = error_name_static(&name) else {
                 return false;
             };
-            self.error_data
-                .insert(crate::value::SlotIndex(owner), ErrorInfo { name, message });
+            self.error_data.insert(
+                crate::value::SlotIndex(owner),
+                ErrorInfo {
+                    name,
+                    message,
+                    frames,
+                },
+            );
         }
         true
     }

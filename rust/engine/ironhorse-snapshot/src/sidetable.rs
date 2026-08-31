@@ -728,6 +728,12 @@ mod tests {
             // fresh boot reproduces them at identical indices.
             "iterator_identity", "segments_iterator_method",
             "segment_iterator_identity",
+            // `%Error.prototype%`'s `stack` host accessor pair. Both
+            // function slots are minted in `create_intrinsics`, so a
+            // fresh boot re-derives them at identical indices; the
+            // property install is link-time and its side-table entry
+            // rides `ACCS` like any other.
+            "error_stack_accessor",
             "object_proto", "function_proto", "array_proto",
             "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
             "arraybuffer_proto", "dataview_proto", "array_iterator_proto",
@@ -742,6 +748,10 @@ mod tests {
             "temporal_plain_protos", "temporal_zoned_proto", "byte_length_id",
             "byte_offset_id", "buffer_id", "size_id", "length_id", "name_id",
             "value_id", "done_id", "then_id", "constructor_id", "last_index_id",
+            // The same cached-key-id class as its neighbours above:
+            // derived from the symbol table at link and re-derived by
+            // `bind_program_symbols` on restore.
+            "prototype_key_id",
             "regexp_getter_ids", "regexp_result_ids",
         ];
 

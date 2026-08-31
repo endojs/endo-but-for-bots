@@ -363,6 +363,13 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             owner: next_owner,
             name,
             message,
+            // The construction frames, in their own `ESTK` atom: a
+            // frame list is either absent or non-empty (the writer
+            // omits the row rather than emitting a zero count), so the
+            // generator emits both shapes.
+            frames: (0..(c.byte() % 3) as usize)
+                .map(|k| format!("f{}", c.u32() % 100 + k as u32))
+                .collect(),
         });
         next_owner += 1;
     }
