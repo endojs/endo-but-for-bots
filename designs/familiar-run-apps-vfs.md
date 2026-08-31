@@ -18,7 +18,7 @@ Case 1 is the confined path.
 An application is hosted inside an XS worker (via `endor`) whose only
 filesystem reach is one or more `Mount` capabilities the host has handed
 it.
-Within Case 1, the design's main subject is the fully virtualised
+Within Case 1, the design's main subject is the fully virtualized
 sub-case: when the entry-point is a bare `entry.js` rather than a
 prebuilt `compartment-map.json`, the design replaces `node_modules` with
 a sqlite-backed module store and constructs the compartment map ad hoc
@@ -33,7 +33,7 @@ and where the guest-side POSIX sandbox is not yet available.
 
 ## Relationship to the four-layer `importLocation` stack
 
-Case 1's fully-virtualised sub-case is **not** new territory: it is the
+Case 1's fully-virtualized sub-case is **not** new territory: it is the
 Familiar- and guest-facing consumer of the accepted four-layer
 daemon-worker `importLocation` stack, which `designs/README.md` records
 as Not Started (accepted 2026-07-10) and whose canonical
@@ -59,7 +59,7 @@ document rather than a fifth layer or a supersession:
   mount-cap authorization surface in front of it.
 - **Case 2 (host-eject to Node.js)**, which the four-layer stack does
   not cover at all: shelling out to an unconfined `node` against a
-  materialised tree for applications that need Node APIs XS cannot
+  materialized tree for applications that need Node APIs XS cannot
   satisfy.
 - **The `endor` (Rust-side) mirror** in `## Endor cross-references`.
 
@@ -67,6 +67,23 @@ Where a term below has a canonical name in the stack (`EndoRegistry`,
 `mapSnapshot`, `RegistryResolution`), the stack's name is authoritative;
 this design's prose names the same object and defers its exact shape to
 the owning layer.
+
+**On the `endor run` / `endo run` verb.** This design writes
+`endor run` throughout because it is written from the Rust-hosted
+daemon's vantage, whose CLI is `endor` (glossary). But the
+integration path it composes with,
+[daemon-worker-import-from-mount](daemon-worker-import-from-mount.md),
+is the **Node-hosted** lane, whose CLI is `endo run` and which
+"does not depend on a compiled Rust binary being present." The two
+are not different dispatches: that lane states the two lanes
+"expose the same `EndoRegistry` capability shape, so Node-hosted
+and Rust-hosted daemons reach feature parity on this entry point."
+Case 1 therefore dispatches through whichever binary hosts the
+daemon in a given deployment — `endor run entry.js` on a
+Rust-hosted daemon, `endo run entry.js` on a Node-hosted one —
+and the two names alias the same mount-rooted, `package.json`-driven
+confined-run entry. Read `endor run` below as that entry, not as an
+assertion that a compiled Rust binary is required.
 
 ## Glossary
 
@@ -125,7 +142,7 @@ the documented dual of `endo checkin` that "writes a `readable-tree`
 from the daemon back to the local filesystem", restricted to a
 scratch mount: eject writes to a daemon-managed scratch directory
 reclaimed by scratch GC (§ Case 2 § Shape step 5) rather than to a
-caller-named persistent path, and materialises no persistent formula.
+caller-named persistent path, and materializes no persistent formula.
 "Eject" is used, rather than reusing "checkout" bare, only to mark
 that scratch-mount-and-GC restriction; the write mechanism is
 `checkout`'s.
@@ -159,9 +176,9 @@ mount surface.
 The XS host-powers `fs` module ([daemon-endor-architecture](daemon-endor-architecture.md)
 § Host powers) is the natural home for the cap-std bindings that
 back this.
-In the confined case `cap-std` is parametrised by the mount-resolved
+In the confined case `cap-std` is parametrized by the mount-resolved
 host paths rather than the daemon's ambient host-paths power.
-The exact parametrisation seam is left open: `cap-std`'s public API
+The exact parametrization seam is left open: `cap-std`'s public API
 roots each capability at an `OpenDir` (a real directory descriptor),
 so the natural binding is one `OpenDir` per `Mount` whose backing is
 a physical directory subtree, opened by the daemon at mount-formula
@@ -176,7 +193,7 @@ module or behind a thin `MountReadOpenable` trait) is TBD and
 should be worked out alongside the case-1 implementation; the
 implementation should not assume `cap-std` covers every `Mount`.
 
-### Sub-case: fully virtualised
+### Sub-case: fully virtualized
 
 When the entry-point hint is `entry.js` (not a prebuilt
 `compartment-map.json`), the host has no `node_modules` tree to feed
@@ -207,12 +224,12 @@ entirely on what is already in the table.
 
 #### Resolution: Go-mod-shaped
 
-`node_modules` exists today partly to materialise a resolved
+`node_modules` exists today partly to materialize a resolved
 dependency graph and partly to feed Node's directory-walking
 resolver.
 With a CAS-backed module store the design replaces both with a
 Go-style resolution computed at compartment-map construction time and
-never materialised on disk.
+never materialized on disk.
 
 The resolution shape mirrors Go's `go.mod`.
 In Go's Minimal Version Selection (MVS), each module's `go.mod`
@@ -404,7 +421,7 @@ memory:
   edge to the specific compartment whose `(name, version)` is the
   resolution result.
 
-This is the case-1 generalisation of `endor-run-expanded.md`'s
+This is the case-1 generalization of `endor-run-expanded.md`'s
 Form 3.
 The compartment map is never written to disk in the confined case;
 it lives in the XS host's memory for the duration of the run.
@@ -420,7 +437,7 @@ mount, the module-source bytes from CAS or from the mount's blobs,
 and constructs the in-memory compartment map directly from the
 manifest.
 This is the existing `endor run <archive>` and `endor run
-<directory>` path generalised to read from a mount instead of from
+<directory>` path generalized to read from a mount instead of from
 a host filesystem path.
 
 ### Lifecycle
@@ -435,6 +452,29 @@ Mount writes the worker performs land in the backing store of the
 underlying mount (a `mount` formula writes through to the host
 directory; a `scratch-mount` formula writes to the daemon's state
 dir; a CAS-backed read-only mount throws on write).
+
+### Guest access via a Lal caplet
+
+The three hosts in § Shape — Familiar's daemon, the CLI, and a Lal
+caplet acting for a guest — reach `endor run` identically; only the
+guest case adds an authorization surface, and that surface is
+**owned by [lal-fae-form-provisioning](lal-fae-form-provisioning.md)**,
+not re-specified here. This design's contract with it is narrow: a
+guest never holds a host-path power and never calls `endor run`
+directly. It holds only a caplet the host granted, and that caplet
+closes over a fixed mount set — the exact `Mount` capabilities the
+host chose to expose, no more — plus the entry-point hint; the
+caplet's sole action is "run this application against *these*
+mounts." The guest cannot widen the mount set or reach the host
+filesystem outside it, because the mount caps are the only
+filesystem reach the confined worker is given (§ Shape). How the
+host mints and hands over that caplet, and why a guest cannot mint
+one for itself, is the host-mediated grant of
+`lal-fae-form-provisioning.md` § Processing Form Submissions and its
+§ Architectural Constraint: Guest Cannot Create Guests (Options B/C,
+the manager-follows-the-form / host-power grant); this design adds
+nothing to that mechanism beyond fixing what the caplet closes over
+(the mount set + entry hint).
 
 ### Test catalog
 
@@ -477,7 +517,44 @@ exercised against a real `endor` worker spawned by the daemon:
   mount's `lookup` for a path outside the mount root, or attempts
   ambient host-fs access, receives an authorization failure (not a
   silent fallthrough to the daemon's host fs).
-  Verifies: the cap-std parametrisation seam under § Shape.
+  Verifies: the cap-std parametrization seam under § Shape.
+- **Re-walk to a fixed point.** Given an entry whose direct deps
+  select a `(name, major)` group whose chosen higher-minimum
+  version declares a transitive dependency that the lower candidate
+  version's `package.json` did *not* (the § Resolution worked
+  example's `shared@2.4.0` → `tiny` shape), `endor run` picks up
+  the newly-revealed transitive on the re-walk pass and the
+  application imports it successfully.
+  Verifies: the convergence step under § Resolution: Go-mod-shaped,
+  "Re-walk to a fixed point"; that a single downward pass would
+  have omitted the module.
+- **Unsatisfiable `(name, major)` group fails closed.** Given an
+  entry where two dependents pin incompatible ranges against one
+  `(name, major)` group so that no single version satisfies both
+  (the worked example's `>=2.4.0 <2.5.0` vs `~2.6.0` shape),
+  `endor run` fails at compartment-map build time with the
+  `IngestionError`-family structured error naming the conflicting
+  `(name, major)` and the incompatible ranges, and never spawns the
+  worker.
+  Verifies: the fail-closed disposition under § Resolution:
+  Go-mod-shaped, "A group with no satisfying version fails closed."
+- **Unprovided peer fails closed.** Given an entry whose transitive
+  graph records a `peerDependencies` requirement that no entry in
+  the resolved closure satisfies, `endor run` fails at
+  compartment-map build time with the peer's structured error and
+  never spawns the worker; the companion case where a *different*
+  package in the closure supplies the peer resolves cleanly.
+  Verifies: the peer cross-check and fail-closed path under § Peer
+  and optional policy.
+- **Missing optional dependency defers to runtime.** Given an entry
+  with an `optionalDependencies` entry that is unavailable in the
+  store and un-ingestible, compartment-map construction succeeds
+  (the optional does not fail closed), the worker spawns, and the
+  application receives a `@endo/errors`-shaped missing-module error
+  only at the first `require`/`import` of the optional.
+  Verifies: the best-effort optional path under § Peer and optional
+  policy; that an optional miss is a runtime error, not a build-time
+  one.
 
 The test catalog above is the minimum acceptance set; the
 implementation may add more.
@@ -492,21 +569,15 @@ Node.js APIs that XS cannot satisfy.
 The two cases share the mount-cap front end but diverge sharply at
 the execution boundary: Case 1 stays inside the daemon's
 `endor`-hosted worker, Case 2 shells out to a Node child process
-against a materialised tree.
+against a materialized tree.
 
 ### Shape
 
 The host has an application bound to one or more `Mount`s.
 The application needs Node.js APIs that XS cannot satisfy (native
 modules, the full `node:*` surface, a binary the package's
-`postinstall` ran), so confined execution under `endor` is not
-viable.
-The *supervisor* here is the daemon-side component that owns the
-child process's lifecycle: the same `make-unconfined` worker manager
-`daemon-endo-rust-sqlite.md` already uses to spawn and relay for
-unconfined workers. It is the daemon (Case 2 has no `endor`-hosted XS
-worker to supervise); it spawns the `node` child, relays its fds, and
-records its exit. The host instead:
+`postinstall` ran), so a confined XS worker under `endor` is not
+viable. The host instead:
 
 1. Allocates a scratch mount (`provideScratchMount`).
 2. Ejects each input mount into a subdirectory of the scratch
@@ -518,22 +589,54 @@ records its exit. The host instead:
    `familiar-electron-shell.md` § Resource paths) with the
    ejected directory as its cwd and the entry-point module as
    its argv.
-   The child process is a regular `make-unconfined` worker per
-   `daemon-endo-rust-sqlite.md`'s spawn pattern; it speaks CBOR
-   envelopes back to the supervisor on fds 3 and 4.
+   The child process is an unconfined Node worker spawned through
+   the `"node"` worker platform of
+   [daemon-endor-architecture](daemon-endor-architecture.md)
+   § Worker platforms (`NODE_BIN`/`node`, "required for unconfined
+   caplets that depend on Node.js APIs"); it speaks CBOR envelopes
+   back to the supervisor on fds 3 and 4, as that section's
+   separate-spawning path specifies.
 4. Runs the application to completion under Node's native
    module resolution.
    The supervisor relays stdout, stderr, and the worker's CBOR
-   envelopes; on exit, the supervisor records the worker's exit
-   code and surfaces it to the formula owner.
+   envelopes; on a clean (zero) exit it returns normally, and on a
+   non-zero exit it surfaces an `@endo/errors`-shaped failure whose
+   payload carries the numeric exit code (and captured stderr) to
+   the formula owner, matching Case 1's structured-error failure
+   shape (§ Recommended approach, "Uniform failure shape") rather
+   than a bare exit code.
 5. The daemon's existing scratch GC reclaims the scratch mount
    when the worker exits or the formula is unpinned.
+
+The *supervisor* here is the daemon-side component that owns the
+child process's lifecycle. It is the host-side `makeUnconfined` /
+`makeUnconfinedFromTree` manager of
+[daemon-make-archive](daemon-make-archive.md) §§ Phase 6/8 (the
+scratch-staging bridge that runs Node's unconfined loader against
+a staged tree — explicitly a host-only capability an XS worker
+never gets), driving the `"node"` worker platform above. There is
+no `endor`-hosted XS worker to supervise in Case 2; the supervisor
+spawns the `node` child, relays its fds, and records its exit.
 
 The host-eject path uses `node`'s native resolver to load the
 application: the ejected directory is a normal Node.js source tree
 with `node_modules` inside it (ejected from a sub-mount that is
 itself the cached output of an earlier `npm install`, or
-re-materialised from the CAS-backed module store on demand).
+re-materialized from the CAS-backed module store on demand).
+
+This is *not* the CAS-to-`node_modules` materialization that
+`## Alternatives considered` #2 rejects. That rejection is scoped
+to **Case 1**: materializing a tree only to run **XS** against it
+keeps directory-walking resolution *in place of* the Go-style
+resolver (the resolver's whole point is to retire it), and leaves a
+per-run scratch dir whose reuse the daemon has no discipline for. In
+Case 2, directory-walking resolution is the *requirement*, not a
+regression — the leaf runs under Node precisely because it needs
+Node's native resolver — so nothing is being retired here. And the
+per-run scratch dir is exactly what § Re-eject discipline governs:
+content-hash naming plus the single-use-if-dirtied rule give the
+daemon the reuse discipline the rejected Case 1 variant lacked. The
+two rejection reasons therefore do not carry over.
 
 This case is intentionally smaller in scope than Case 1.
 The compartment-mapper machinery is not exercised; the application
@@ -547,7 +650,7 @@ follow-up (below).
 ### Re-eject discipline
 
 If the host re-runs the same application without the input mounts
-having changed, the scratch directory can be re-used rather than
+having changed, the scratch directory can be reused rather than
 re-ejected. The scratch directory is named by the source mount's
 content hash, so the reuse check is hash-to-hash: ejection is a no-op
 when a scratch directory named for the current source-mount content
@@ -593,9 +696,11 @@ Case 1's acceptance-set shape, all exercised against a real spawned
   the prior run's mutations.
   Verifies: the destination-mutation gate under § Re-eject discipline.
 - **Non-zero exit-code propagation.** A child that exits non-zero
-  causes the supervisor to record and surface that exact exit code to
-  the formula owner.
-  Verifies: the exit-code relay under § Shape step 4.
+  causes the supervisor to surface an `@endo/errors`-shaped failure
+  whose payload carries that exact exit code to the formula owner,
+  catchable the same way a Case 1 build-time failure is.
+  Verifies: the exit-code relay and uniform failure shape under
+  § Shape step 4 and § Recommended approach, "Uniform failure shape."
 - **Scratch GC reclaim.** When the worker exits or the formula is
   unpinned, the daemon's scratch GC reclaims the scratch mount.
   Verifies: § Shape step 5.
@@ -619,9 +724,14 @@ Alignment:
   Both read module bytes by hash; the difference is whether the
   hash comes from a mount lookup or directly from a CAS root.
 - The sqlite-backed module store (Case 1, sub-case "fully
-  virtualised") is the same sqlite the Rust side already opens
-  via `daemon-endo-rust-sqlite.md`.
-  The schema is shared.
+  virtualized") is the JS lane's backing for the same
+  `EndoRegistry` capability the Rust side exposes. The two lanes
+  do **not** share a schema: per
+  [registry-capability](registry-capability.md) § Non-Goals, each
+  lane owns its own registry-table representation and resolver
+  internals, and they meet only at the `EndoRegistry` capability
+  shape and at the content-addressed CAS contents (shareable by
+  hash), never at the SQLite schema.
 - The Go-style resolver in Case 1 reuses the algorithm
   [endor-npm-registry-proxy](endor-npm-registry-proxy.md) § Minimal
   Version Selection specifies for the Rust side, including its
@@ -631,12 +741,20 @@ Alignment:
 
 Divergence:
 
-- Case 2 (host-eject) has no equivalent in the Rust design.
-  `endor` does not shell out to `node`; the Rust supervisor either
-  hosts an XS machine or fails.
-  Host-eject is a Node.js-host concession; the Familiar and the
-  Node-side daemon are deployed in places where Node.js is the
-  only viable runtime for the unconfined leaf.
+- Case 2 (host-eject) is *not* new to the Rust design — it wraps
+  the existing `"node"` worker platform
+  [daemon-endor-architecture](daemon-endor-architecture.md)
+  § Worker platforms already documents (a Node.js child spawned via
+  `NODE_BIN`/`node`, "required for unconfined caplets that depend on
+  Node.js APIs"). What Case 2 adds on top is the eject-to-scratch
+  materialization and the re-eject discipline (§ Shape, § Re-eject
+  discipline), so that a mount-bound application — not just a
+  pre-staged tree — reaches that `"node"` platform. Case 2 is a
+  Node.js-host concession in the sense that the confined XS path
+  cannot run these leaves; it does not claim `endor` lacks a Node
+  worker. The Familiar and the Node-side daemon are deployed in
+  places where Node.js is the only viable runtime for the
+  unconfined leaf.
 - Case 1's compartment-map construction lives in JS (using the
   existing `@endo/compartment-mapper`); the Rust side has its own
   archive loader.
@@ -649,7 +767,7 @@ Divergence:
    runs.** Rejected: defeats the case-1 confinement story and
    forces every Familiar deployment to ship or build a real
    `node_modules` tree.
-2. **Materialise a `node_modules` tree from the CAS lazily into a
+2. **Materialize a `node_modules` tree from the CAS lazily into a
    scratch mount, then run XS against it (no Go-style
    resolution).** Rejected: keeps the directory-walking
    resolution that the Go-style resolver retires, and produces a
@@ -696,6 +814,21 @@ Node APIs but lacks the opt-in fails closed with an error naming the
 falling back to host-eject. The two cases are thus reachable from the
 one entry point a caller starts at, and the path between them is a
 named flag, not a second command.
+
+**Uniform failure shape across the two cases.** Because both cases
+share the one `endor run` entry point, they also share one failure
+shape: a caller writing generic error handling against `endor run`
+must get an `@endo/errors`-shaped structured failure whichever case
+dispatched. Case 1's build-time and runtime failures are already
+that shape (§ Resolution: Go-mod-shaped, § Ingestion failures, § Peer
+and optional policy). Case 2's leaf-process failures are made to
+match: when the ejected `node` child exits non-zero, the supervisor
+does not surface a bare exit code — it wraps the exit code (and
+captured stderr) in an `@endo/errors`-shaped failure whose payload
+carries the numeric code, so both cases catch the same way. The
+raw exit code remains available on that error for callers that want
+it. A caller therefore never has to branch its error handling on
+which case ran.
 
 **Cross-major-version semantics.** Case 1 and Case 2 both host
 multiple major versions of the same package in distinct
@@ -756,8 +889,9 @@ the assumption that host-eject is a host-only path forever.
 | [endor-run-expanded](endor-run-expanded.md) | Case 1 is the JS-side mirror of Form 3 |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | Provides the sqlite-backed module store and the MVS algorithm reused in Case 1 |
 | [daemon-cas-management](daemon-cas-management.md) | Provides the CAS that backs the module store |
-| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | Provides the sqlite host power and the spawn pattern Case 2 borrows |
-| [daemon-endor-architecture](daemon-endor-architecture.md) | Case 1's confined worker is a regular `endor` worker |
+| [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | Provides the sqlite host power backing Case 1's module store |
+| [daemon-endor-architecture](daemon-endor-architecture.md) | Case 1's confined worker is a regular `endor` worker; Case 2's unconfined leaf is its `"node"` worker platform (fd 3/4 CBOR relay) |
+| [daemon-make-archive](daemon-make-archive.md) | Provides the host-side `makeUnconfined`/`makeUnconfinedFromTree` manager (Phase 6/8) Case 2's supervisor drives to spawn and relay the `node` leaf |
 | [endo-posix-sandbox](endo-posix-sandbox.md) | Gates the case-2 follow-up that opens host-eject to guests |
 | [familiar-electron-shell](familiar-electron-shell.md) | Case 2 uses the bundled Node binary the Familiar already carries |
 
@@ -768,7 +902,7 @@ the assumption that host-eject is a host-only path forever.
 > mount interface. In the confined case, the host wires up one or
 > more Mount caps and runs the app under endor against the mount
 > set; the app's only filesystem reach is the caps the host
-> passed in. In the fully-virtualised-and-confined sub-case, npm
+> passed in. In the fully-virtualized-and-confined sub-case, npm
 > packages live in a sqlite-backed module store fed from CAS, and
 > the compartment map is constructed ad hoc per run using
 > Go-style transitive dependency resolution against that store
