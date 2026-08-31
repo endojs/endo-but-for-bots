@@ -1,3 +1,4 @@
+/* global globalThis */
 import '@endo/eventual-send/shim.js';
 
 import { compareBytes } from '@endo/bytes/compare.js';

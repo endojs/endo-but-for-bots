@@ -1,3 +1,4 @@
+/* global globalThis */
 const {
   ArrayBuffer,
   DataView,

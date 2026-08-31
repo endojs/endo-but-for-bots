@@ -1,3 +1,4 @@
+/* global globalThis */
 import '../shim.js';
 import harden from '@endo/harden';
 
@@ -8,7 +9,8 @@ const {
   // eslint-disable-next-line no-restricted-globals
 } = globalThis;
 
-const { sliceToImmutable } = /** @type {{
+const { sliceToImmutable } = /**
+   @type {{
   sliceToImmutable: typeof ArrayBuffer.prototype.slice,
 }} */ (/** @type {unknown} */ (ArrayBuffer.prototype));
 const { isView } = ArrayBuffer;

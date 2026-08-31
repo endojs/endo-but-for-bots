@@ -1,3 +1,4 @@
+/* global globalThis */
 import './capture-test262-assert.js';
 import 'ses/lockdown-shim.js';
 import 'ses/compartment-shim.js';

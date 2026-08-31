@@ -1,3 +1,4 @@
+/* global process */
 import { execFile } from 'node:child_process';
 import { mkdtemp, rm, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';

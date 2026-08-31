@@ -1,3 +1,4 @@
+/* global globalThis */
 import {
   immutableArrayBufferLibProperties,
   freezableTypedArrayLibProperties,
