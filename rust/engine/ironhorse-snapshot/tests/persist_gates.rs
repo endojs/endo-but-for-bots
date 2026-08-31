@@ -520,3 +520,130 @@ fn stored_references_to_persistable_functions_are_not_refused() {
         );
     }
 }
+
+/// The other half of the gate's contract, and the half that was
+/// missing. A fixture the gate ADMITS must not merely snapshot — it
+/// must RESUME FAITHFULLY. Asserting `write_snapshot().is_ok()` proves
+/// only that we let the machine through, which is exactly how a
+/// resolver captured as a bound argument survived review: admitted,
+/// snapshotted, restored, and silently non-callable.
+///
+/// So every admitted fixture here carries a post-resume behavioral
+/// oracle: run the observation uninterrupted, run it again across a
+/// store round trip, and require the two to agree. A future hole in
+/// the gate shows up as a DIVERGENCE rather than as a green
+/// admission.
+#[test]
+fn every_admitted_fixture_resumes_faithfully() {
+    // (name, mentions interned by both cranks, setup, observation, expected)
+    for (name, mentions, setup, observe, expect) in [
+        (
+            "a guest function in a global",
+            "",
+            "f = function (a) { return a + 1; };",
+            "t = typeof f + ':' + f(41); t",
+            "function:42",
+        ),
+        (
+            "a guest function in an array",
+            "",
+            "o = [function (a) { return a + 1; }];",
+            "t = typeof o[0] + ':' + o[0](41); t",
+            "function:42",
+        ),
+        (
+            "a boot native in a property",
+            "Object.keys(o);",
+            "o = {}; o.k = Object.keys;",
+            "t = typeof o.k + ':' + o.k({ a: 1 }).length; t",
+            "function:1",
+        ),
+        (
+            "a boot native in a Map",
+            "new Map(); m.set('k', Math.max); m.get('k');",
+            "m = new Map(); m.set('k', Math.max);",
+            "t = typeof m.get('k') + ':' + m.get('k')(1, 5); t",
+            "function:5",
+        ),
+        (
+            "a bound guest function with ordinary arguments",
+            "",
+            "b = (function (x, y) { return x + y; }).bind(null, 41);",
+            "t = typeof b + ':' + b(1); t",
+            "function:42",
+        ),
+        (
+            "an Intl bound native in a global",
+            "new Intl.NumberFormat('en'); nf.format(0);",
+            "nf = new Intl.NumberFormat('en'); f = nf.format;",
+            "t = typeof f + ':' + f(0.5); t",
+            "function:0.5",
+        ),
+        (
+            "a proxy revoker in a global",
+            "Proxy.revocable({}, {}); r.revoke();",
+            "r = Proxy.revocable({}, {}); f = r.revoke;",
+            "t = typeof f; t",
+            "function",
+        ),
+        (
+            // The shape that made the controls sharper: a runtime
+            // native was MINTED, so the traversal runs in full — it
+            // just finds nothing retained, and the machine both
+            // persists and resumes correctly.
+            "a dropped resolver",
+            "new Promise(function (res) { g = res; });",
+            "p = new Promise(function (res) { g = res; }); g = 0; p = 0;",
+            "t = typeof g; t",
+            "number",
+        ),
+    ] {
+        // Both cranks must intern the SAME program symbols, in order —
+        // the setup crank's function literals intern their parameter
+        // names and `caller`, so the observation crank interns them
+        // too, from a dead literal it never runs.
+        let decls = "var b; var f; var g; var m; var nf; var o; var p; var r; var t; ";
+        let pre = format!(
+            "{decls} if (0) {{ (function (a, x, y, res) {{ return a + x + y + res; }}); \
+             o.k; o.length; o[0]; m.get('k'); m.set('k', 0); new Map(); \
+             Object.keys(o); Math.max(1, 2); f.bind(null); f(0); \
+             new Intl.NumberFormat('en'); nf.format(0); \
+             Proxy.revocable({{}}, {{}}); r.revoke(); \
+             new Promise(function (res) {{ g = res; }}); {mentions} }} "
+        );
+        let (b1, n1) = compile(&format!("{pre}{setup} 7"));
+        let (b2, n2) = compile(&format!("{pre}{observe}"));
+        assert_eq!(n1, n2, "{name}: both cranks must intern the same symbols");
+
+        let mut cont = Interp::new();
+        cont.link_intrinsics(&n1);
+        assert!(cont.run(&b1).completed, "{name}: setup crank");
+        let continuous = cont.run(&b2);
+        assert!(continuous.completed, "{name}: observation halted: {:?}", continuous.halt);
+        assert_eq!(continuous.result, expect, "{name}: the uninterrupted answer");
+
+        let mut m = Interp::new();
+        m.link_intrinsics(&n1);
+        assert!(m.run(&b1).completed, "{name}: setup crank (store)");
+        assert_eq!(
+            m.stored_unpersistable_row(),
+            None,
+            "{name}: the gate admits this machine"
+        );
+        let mut store = MemoryStore::new();
+        drop(
+            begin_store_session(m, &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap_or_else(|e| panic!("{name}: begin: {e:?}")),
+        );
+        let mut session = resume_from_store(&store, &sig())
+            .unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
+        let resumed = session.machine_mut().run(&b2);
+        assert_eq!(
+            (resumed.completed, resumed.result.as_str()),
+            (continuous.completed, continuous.result.as_str()),
+            "{name}: an ADMITTED machine must resume faithfully (halt {:?})",
+            resumed.halt
+        );
+    }
+}
