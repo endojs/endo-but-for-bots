@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-12 |
-| **Updated** | 2026-06-25 (added the macOS CI verification plan for the assumed-working chain, per review) |
+| **Updated** | 2026-08-31 (refreshed stale status-quo citations against the current checkout and fixed dead cross-references, per design-panel review) |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Source** | Issue [#229](https://github.com/endojs/endo-but-for-bots/issues/229) |
@@ -33,7 +33,7 @@ install, a `corepack` activation, an `electron-forge` invocation,
 or any other developer tool on the host that runs the application.
 
 This document audits the present state of `packages/familiar/`,
-catalogues the gaps, and proposes a phased plan with a clear
+catalogs the gaps, and proposes a phased plan with a clear
 minimum-viable-release (MVR) scope.
 
 ## Status quo
@@ -64,15 +64,15 @@ The relevant supporting designs already landed:
 - [`familiar-bundled-agents`](familiar-bundled-agents.md): `lal`
   setup bundle and agent bundle inside `bundles/`.
   The daemon's `ENDO_EXTRA` mechanism (in
-  [`packages/daemon/src/daemon-node.js`](../packages/daemon/src/daemon-node.js))
+  [`packages/daemon/src/manager-node.js`](../packages/daemon/src/manager-node.js))
   imports the bundled `endo-lal-setup.cjs` after the host is
   ready and runs its `main(host)`.
 - [`lal-fae-form-provisioning`](lal-fae-form-provisioning.md):
   the agent sends a configuration form to the host inbox; the
   user supplies host, model, and auth token through Chat.
 
-The agent already self-bundles its own Primer.
-`packages/lal/agent.js` (line 1641 onward) does:
+The agent already self-bundles the Primer.
+`packages/lal/agent.js` (line 186 onward) does:
 
 ```js
 const primerDirPath = new URL('./primer', import.meta.url).pathname;
@@ -100,7 +100,7 @@ The `dependencies` block today is:
 ```json
 "dependencies": {
   "@endo/where": "workspace:^",
-  "electron": "^40.8.0"
+  "electron": "^43.3.0"
 }
 ```
 
@@ -119,7 +119,7 @@ from the packaged app; the bundles are self-contained.
 - The agent sends a config form to the host inbox.
 - The user fills in the form in Chat.
 - The agent stores the Primer as a `readable-tree` in the daemon's
-  CAS.
+  CAS (content-addressable store).
 - Each spawned worker loop receives a `primer` reference.
 
 ### What does not work today (assumed gaps)
@@ -127,12 +127,14 @@ from the packaged app; the bundles are self-contained.
 This audit identifies the discrepancies between the implemented
 build pipeline and a downloadable preliminary release.
 Each gap is itemized in the next section with severity, current
-behaviour, target behaviour, and rough effort.
+behavior, target behavior, and rough effort.
 
 ## Gaps
 
-The gaps fall into four categories: build prerequisites, runtime
-prerequisites, distribution and trust, and first-run experience.
+The gaps span build prerequisites, runtime prerequisites,
+distribution and trust, and first-run experience; they are
+numbered G1 through G16 below in audit order rather than grouped
+under those category headings.
 
 ### G1. Bundles directory not committed; build is mandatory
 
@@ -150,10 +152,19 @@ build:package` on a single CI host per target platform; the
 output `out/make/Familiar-<version>-<plat>-<arch>.zip` (and the
 DMG on macOS) is the artifact users download.
 The user installs the artifact and never needs Yarn.
-A builder pass wires the existing pipeline into a CI workflow
-(see Axis-2 followups).
-**Effort:** Day, if CI is willing to run the existing pipeline.
-The pipeline already exists; the missing step is automation.
+The `familiar-release.yml` workflow already wires this pipeline
+into CI: it builds the bundles and chat dist, runs a per-platform
+`make` matrix (macOS arm64 on `macos-14`, macOS x64 on `macos-13`,
+Linux x64 on `ubuntu-latest`), and publishes a draft GitHub
+Release with the artifacts attached.
+It fires only on `workflow_dispatch` and `familiar-v*` tags, so
+the remaining MVR step is confirming that release flow produces
+installable per-platform artifacts end to end and (per Tier 0 in
+the CI-verification section) promoting a build smoke onto the
+per-PR gate, not authoring the workflow from scratch.
+**Effort:** Day to confirm the existing workflow's artifacts
+install cleanly; the release pipeline already exists, so no new
+workflow is authored.
 
 ### G2. macOS code signing and notarization
 
@@ -175,6 +186,14 @@ prompts.
 The early user pool is small enough to accept the manual
 `xattr -d com.apple.quarantine` workaround documented in the
 README.
+This is a deliberate, explicitly-acknowledged exception to the
+problem statement's "no developer tool on the host" criterion:
+the `xattr` invocation is a terminal command a non-developer
+would not run unaided, so the README must both spell out the
+exact command and state plainly that it is a known first-run
+speed-bump that notarization (deferred here) removes.
+Until notarization lands, the Gatekeeper dialog is the app's only
+signal, so the README workaround is the sole bridge to it.
 The certificate-acquisition process is tracked in a separate
 issue (see G3 for the parallel ask on Windows; the macOS issue
 covers the Developer ID Application certificate and the
@@ -191,7 +210,7 @@ configuration, not code.
 **Severity:** Out of scope for MVR (resolved 2026-05-19).
 **Current:** No Windows signing.
 A user double-clicking `Familiar-<version>-win32-x64.zip` and the
-extracted `Familiar.exe` triggers SmartScreen's "unrecognised
+extracted `Familiar.exe` triggers SmartScreen's "unrecognized
 publisher" dialog.
 **Target:** Sign the exe with an EV (or OV) certificate; the EV
 certificate yields immediate SmartScreen reputation, the OV
@@ -233,16 +252,15 @@ phase ships Flatpak.
 
 **Severity:** Important.
 **Current:** `scripts/download-node.mjs` defaults to
-`v20.18.1` (a string literal in the script).
-Node 20 is no longer the current LTS; per maintainer direction
-(2026-05-19) the pin needs to advance to a currently-supported
-LTS (Node 22 or 24).
-A vulnerability disclosure against Node 20.x or a Node EOL
-event has no documented response cadence.
-**Target:** A documented policy in the package README that
-matches the Endo project's
-[`skills/verify-upstream-state.md`](../skills/verify-upstream-state.md)
-posture for external deps.
+`v22.22.3` (a string literal in the script); the pin was advanced
+from `v20.18.1` to a currently-supported LTS in 2026-05 per
+maintainer direction (2026-05-19), so the version-advance itself
+is already done.
+What is still missing is a documented response cadence: a
+vulnerability disclosure against the embedded Node line or a Node
+EOL event has no written policy.
+**Target:** A documented policy in the package README for keeping
+the embedded Node current with a supported LTS.
 The release engineer pins to the latest LTS in each release
 cycle and ships a security release if a CVE affecting the
 embedded Node lands.
@@ -324,16 +342,15 @@ default
 ([`src/daemon-manager.js`](../packages/familiar/src/daemon-manager.js)
 line 296).
 A user who already runs an Endo daemon (as a developer might)
-will see the Familiar's daemon collide with theirs on the
-Unix socket (the Familiar checks for an existing socket and
-joins it).
-A user who has an unrelated process bound to TCP 8920 will see
-the daemon fail to start.
+will see the Familiar's daemon detect the existing one and join
+it on the Unix socket, which is the graceful case.
+The failing case is different: a user who has an unrelated
+process bound to TCP 8920 will see the daemon fail to start.
 **Target:** For MVR, document the collision case in the
 README; the Familiar already detects the existing-daemon
 case and joins the running daemon.
 For followups, align with the shared-host-gateway direction
-described in [`endo-gateway`](endo-gateway.md): the Familiar
+described in [`gateway-package`](gateway-package.md): the Familiar
 participates as a per-user daemon that connects to a
 host-wide Gateway service rather than terminating external
 HTTP itself.
@@ -346,19 +363,20 @@ Provide a fallback for the single-user case: a Familiar-managed
 gateway listening on an ephemeral OS-assigned port (the
 existing `127.0.0.1:0` posture, with the assigned port
 persisted).
-The Familiar weblet story collapses to a single flavour:
+Because that same long-term fix routes weblets through the
+shared Gateway rather than a Familiar-terminated HTTP port, the
+per-port weblet variant is dropped as part of the same change:
+the Familiar weblet story collapses to a single flavor,
 Familiar iframe weblets served through the custom protocol
 scheme (`localhttp://`) and HTTP virtual-host proxy on the
 shared gateway, per
 [`familiar-localhttp-protocol`](familiar-localhttp-protocol.md)
 and
 [`familiar-unified-weblet-server`](familiar-unified-weblet-server.md).
-The "weblet on a user-assigned localhost port" variant is no
-longer pursued.
 **Effort:** Day for the README; multi-day for the OS-assigned
 fallback; multi-week to multi-month for the host-wide Gateway
 packaging story (tracked under
-[`endo-gateway`](endo-gateway.md), out of MVR scope).
+[`gateway-package`](gateway-package.md), out of MVR scope).
 
 ### G10. State directory shape on a fresh install
 
@@ -387,7 +405,7 @@ packaging uninstall hook handles it.
 name, and auth token through a form sent to their inbox by the
 agent.
 The form's `authToken` field is marked `secret: true` and the
-Chat UI honours the secret marker by masking the input.
+Chat UI honors the secret marker by masking the input.
 On submission, the value is stored in the daemon's CAS.
 **Target:** The MVR can ship this flow as-is; it is functional
 and user-tested by the maintainer.
@@ -423,6 +441,11 @@ There is no upload mechanism, no opt-in, and no UI for
 "submit logs".
 **Target:** For MVR, document the log locations in the README
 so a user can attach the file to a bug report.
+The two sibling logs do not share a naming prefix, so the README
+must also give the selection rule between them: `familiar.log`
+(written by `src/logger.js`) covers the Electron shell and UI,
+and `endo.log` covers the daemon and agent; a bug report should
+attach whichever matches the symptom (or both when unsure).
 A followup adds an opt-in Sentry-style uploader; a designer
 pass fleshes out the opt-in telemetry / crash-reporting shape
 before any implementation work (see Axis-2 followups).
@@ -488,7 +511,7 @@ section.
 
 ## Primer-into-CAS migration
 
-The issue body offers a permission ("It may fall to the lal code
+The issue body grants permission ("It may fall to the lal code
 to carry the Primer and inject it into the CAS on initialization
 instead of relying on the setup script").
 The migration is **already implemented** in `agent.js`; this
@@ -503,7 +526,7 @@ It does **not** carry the Primer.
 
 The agent caplet
 ([`packages/lal/agent.js`](../packages/lal/agent.js)) does carry
-the Primer, after the form-loop initialises:
+the Primer, after the form-loop initializes:
 
 ```js
 const primerDirPath = new URL('./primer', import.meta.url).pathname;
@@ -523,7 +546,7 @@ if (!await E(guest).has('primer')) {
 
 The `bundles/primer/` copy in
 [`scripts/bundle.mjs`](../packages/familiar/scripts/bundle.mjs)
-(line 99 onward) ensures `import.meta.url` resolves to a
+(line 80 onward) ensures `import.meta.url` resolves to a
 sibling directory in the packaged build.
 
 ### What this design adds
@@ -588,7 +611,10 @@ drive the form path through the daemon's CapTP API instead of the
 Chat renderer.
 Point the agent at an in-process mock LLM gateway (see below) so
 no live credentials or public network sit in the assertion path.
-One assertion per assumption:
+One assertion per assumption, plus a final assertion for the
+MVR exit criterion itself (that the user can exchange a message
+with `lal`), which the mock gateway's one-turn surface exists to
+support:
 
 | Assumption | CI assertion |
 |---|---|
@@ -598,6 +624,7 @@ One assertion per assumption:
 | (stand-in for) user fills the form in Chat | submit the form over CapTP with the mock gateway's host, model, and token |
 | Agent stores the Primer as a `readable-tree` in CAS | `E(host).identify('lal-primer')` resolves to a readable-tree |
 | Each spawned worker loop receives a `primer` reference | a spawned worker guest has a `primer` reference |
+| (the MVR exit criterion) the user exchanges a message with `lal` | send one message over CapTP; the agent completes a turn against the mock gateway and a reply appears in the host inbox |
 
 This is G16 made concrete and given a macOS runner.
 It is deterministic (no display, no live model) and is the tier
@@ -642,7 +669,7 @@ naive smoke flaky or unusable.
    [issue #260](https://github.com/endojs/endo-but-for-bots/issues/260)
    found that the dominant macOS-CI failure is not a test flake
    but `getaddrinfo ENOTFOUND repo.yarnpkg.com` during corepack's
-   `yarn@4.13.0` auto-download, at roughly eight percent of macOS
+   `yarn@4.13.0` auto-download, at roughly 8% of macOS
    jobs, aborting before any familiar code runs.
    The smoke is only meaningful once the canonical fix lands:
    vendor `.yarn/releases/yarn-4.13.0.cjs` and set `yarnPath` in
@@ -688,12 +715,13 @@ No developer tooling is touched on the user's machine.
 
 | Item | Resolves | Effort |
 |---|---|---|
-| Wire the existing build pipeline into a CI workflow that emits per-platform artifacts | G1 | day |
+| Confirm the existing `familiar-release.yml` workflow emits installable per-platform artifacts end to end (it already builds, packages, and publishes on dispatch/tag) | G1 | day |
 | Verify the Primer-into-CAS path in a packaged-build smoke test | G16 | day |
 | Aggregate third-party LICENSE notices into the bundle | G14 | day |
 | Document Node version pin policy in the package README | G5 | day |
-| Advance the bundled Node pin from v20.18.1 to a current LTS (22 or 24) | G5 | day |
-| Document log locations and state directory in the package README | G10, G13 | day |
+| Bundled Node pin advanced from v20.18.1 to a current LTS (now v22.22.3) | G5 | done (2026-05) |
+| Document log locations and state directory in the package README, including which log (`familiar.log` vs `endo.log`) covers which failure class | G10, G13 | day |
+| Document the Linux `chrome-sandbox` suid setup in the README | G4 | day |
 | Document the `127.0.0.1:8920` collision case in the README | G9 | day |
 | Confirm icon assets resolve on every target platform | G7 | day |
 | Build CI pipeline producing releases for macOS arm64, macOS x64, and Linux x64 | G15 (full), G4 | multi-day |
@@ -734,7 +762,7 @@ Windows is out of scope for MVR (G3).
   ([`daemon-docker-selfhost`](daemon-docker-selfhost.md)) is
   Milestone 1.
 - The Endo Gateway split
-  ([`endo-gateway`](endo-gateway.md)) is multi-milestone; G9's
+  ([`gateway-package`](gateway-package.md)) is multi-milestone; G9's
   long-term shape aligns with that split.
 - Multi-agent provisioning (Familiar ships only `lal`; Fae,
   bundled in
@@ -819,5 +847,5 @@ answers are recorded inline below.
 - [`lal-reply-chain-transcripts`](lal-reply-chain-transcripts.md): agent transcripts.
 - [`endoclaw-network-fetch`](endoclaw-network-fetch.md): outbound HTTP confinement (followup).
 - [`gateway-bearer-token-auth`](gateway-bearer-token-auth.md): bearer-token auth (followup).
-- [`endo-gateway`](endo-gateway.md): host-scoped Gateway (out of scope).
+- [`gateway-package`](gateway-package.md): host-scoped Gateway (out of scope).
 - [`daemon-docker-selfhost`](daemon-docker-selfhost.md): Docker (out of scope).
