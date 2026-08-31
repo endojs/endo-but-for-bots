@@ -3173,7 +3173,7 @@ throws `TypeError`.
 Gating that would mean scanning the whole heap for function
 references at every persist verb, so it waits on the carry.
 
-#### P2-4 — Instrument debt across the new carries — PARTLY FIXED
+#### P2-4 — Instrument debt across the new carries — FIXED
 
 The carries landed with locks but without instrument coverage:
 the fuzz generator populates 1 of the 8 new atoms (`dates`), the
@@ -3195,8 +3195,30 @@ discipline is now ENFORCED (it was documented but unchecked, and
 violating it surfaced three layers down as a bare `TypeError`), and a
 baseline halt names its scenario and crank.
 
-Still open: the fuzz generator's seven unpopulated atoms, and
-computron assertions in the per-family carry twins.
+The fuzz generator is extended too: `FUNC`, `PROX` (with revokers),
+`ACCS`, `PRIV` and `GENR` are generated valid in the sense the
+decoders and the bounds gate mean — strictly-ascending keys,
+references from the live prefix, ids inside the program-symbol space,
+real chunk offsets for name chunks, a revoked proxy with NULL edges, a
+disposed stack retaining no records, frame and state agreeing.
+`FUNC` is minimal but honest (one segment of `XS_CODE_END`, a 1-byte
+opcode, so every body offset is an instruction start), and it exists
+to give the `GENR` frames a function row to name: without it every
+generated generator had to be Completed and `SavedFrameRow` — the
+substantial half of that codec — never round-tripped, so a witness
+asserts suspended frames really are emitted.
+Two families stay out with their reasons at the builder: `IBFN` needs
+an `INTL` row for its owner, and the typed-array family needs real
+chunk extents; neither is modeled there, and both are covered by the
+byte-level container target and their own carry suites.
+
+And all fourteen carry twins compare computrons now.
+That passes as written, which is itself the result: resumed metering
+already matches uninterrupted across every carried family.
+The twins had compared results alone, so a resumed machine that
+answered correctly while charging differently passed them — and a
+metering divergence across a suspend is exactly what a carry can
+introduce without changing an answer.
 
 ##### What it found immediately — the stale lazy chunk bound — FIXED
 
