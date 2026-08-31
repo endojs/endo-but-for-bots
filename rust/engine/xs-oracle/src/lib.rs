@@ -320,6 +320,11 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         symbols,
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
+        // Same derivation as `run`'s inline copy-out: a completion value
+        // longer than the shim's fixed capture buffer arrives truncated,
+        // and a differential caller must skip the comparison rather than
+        // read the truncation as a divergence.
+        result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
