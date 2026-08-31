@@ -32,7 +32,7 @@ import { parseLocator } from '../../src/locator.js';
 const dirname = url.fileURLToPath(new URL('../..', import.meta.url)).toString();
 
 const useWs = Boolean(process.env.OCAPN_WS);
-const listenAddrName = useWs ? 'ws-listen-addr' : 'ocapn-listen-addr';
+const listenAddressName = useWs ? 'ws-listen-addr' : 'ocapn-listen-addr';
 const expectedProtocol = useWs ? 'ocapn+noise+ws' : 'ocapn+noise+tcp';
 
 const log = (...args) => console.log('demo:', ...args);
@@ -74,7 +74,7 @@ const bootDaemon = async (label, cancelled) => {
   // Ask the daemon to bind an OCapN-Noise listener, then install the
   // network module at `@nets/ocapn` — the only network this daemon
   // knows, so every advertised hint is an ocapn+noise hint.
-  await E(host).storeValue('127.0.0.1:0', listenAddrName);
+  await E(host).storeValue('127.0.0.1:0', listenAddressName);
   const modulePath = path.join(dirname, 'src/networks/ocapn.js');
   await E(host).makeUnconfined('@main', url.pathToFileURL(modulePath).href, {
     powersName: '@agent',

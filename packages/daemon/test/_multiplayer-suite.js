@@ -38,7 +38,7 @@ import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
 const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
 
-const MAX_CONFIG_DIR_LENGTH = 80;
+const MAX_CONFIG_DIRECTORY_LENGTH = 80;
 let configPathId = 0;
 
 /**
@@ -60,7 +60,7 @@ const getNetworkNamespace = network =>
   network.expectedHintProtocol
     .replace(/[^a-zA-Z0-9-]/g, '-')
     .toLowerCase()
-    .slice(0, MAX_CONFIG_DIR_LENGTH);
+    .slice(0, MAX_CONFIG_DIRECTORY_LENGTH);
 
 const getConfigDirectoryName = (testTitle, configNumber) => {
   const cleanTitle = testTitle
@@ -69,9 +69,9 @@ const getConfigDirectoryName = (testTitle, configNumber) => {
     .slice(0, 50);
   const defaultPath = `${cleanTitle}`;
   const basePath =
-    defaultPath.length <= MAX_CONFIG_DIR_LENGTH
+    defaultPath.length <= MAX_CONFIG_DIRECTORY_LENGTH
       ? defaultPath
-      : defaultPath.slice(0, MAX_CONFIG_DIR_LENGTH);
+      : defaultPath.slice(0, MAX_CONFIG_DIRECTORY_LENGTH);
   const testId = String(configPathId).padStart(4, '0');
   const configId = String(configNumber).padStart(2, '0');
   const configSubDirectory = `${basePath}#${testId}-${configId}`;

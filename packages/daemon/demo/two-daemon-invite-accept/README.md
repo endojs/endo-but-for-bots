@@ -20,8 +20,8 @@ OCAPN_WS=1 node demo/two-daemon-invite-accept/run.mjs   # ocapn+noise+ws
 ```
 
 The script boots daemon A (inviter) and daemon B (acceptor), has A `invite('bob')`,
-prints the invitation locator (showing the `ocapn+noise+…` hint), has B
-`accept(…, 'alice')`, then:
+prints the invitation locator (showing the `ocapn+noise+...` hint), has B
+`accept(..., 'alice')`, then:
 
 1. A publishes `Far('Adder', { add })`; B invokes `E(adder).add(2, 3)` and receives
    `5` back — a remote method call whose computed result crosses the Noise session.
@@ -33,7 +33,7 @@ prints the invitation locator (showing the `ocapn+noise+…` hint), has B
 - [`transcript-tcp.txt`](./transcript-tcp.txt) — `ocapn+noise+tcp`
 - [`transcript-ws.txt`](./transcript-ws.txt) — `ocapn+noise+ws`
 
-For the **local ↔ minion.town** WebSocket demonstration (a local peer dialing a
+For the **local <-> minion.town** WebSocket demonstration (a local peer dialing a
 remote Pet-Daemon-shaped OCapN-Noise-WS service through Caddy's TLS 443), see
 [`../minion-town/`](../minion-town/) and its
 [`transcript-minion-live.txt`](../minion-town/transcript-minion-live.txt).
