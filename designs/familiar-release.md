@@ -797,7 +797,7 @@ support:
 | Bundled daemon spawns under embedded Node | the daemon process starts under the bundled `node` and answers on its endpoint |
 | `lal` setup provisions the manager guest | `setup.js` `main(host)` completes and the manager guest resolves |
 | Agent sends a config form to the host inbox | a form message appears in the host inbox |
-| (stand-in for) user fills the form in Chat | submit the form over CapTP with the mock gateway's host, model, and token |
+| (stand-in for) user fills the form in Chat | submit the form over CapTP with the mock gateway's host, model, and token, plus the per-shape endpoint-redirect seam that actually points the request at the mock (`OLLAMA_HOST` for the Ollama shape, the new `baseUrl` override for the registry-provider shape — see [The mock LLM gateway](#the-mock-llm-gateway)) |
 | Agent stores the Primer as a `readable-tree` in CAS | `E(host).identify('lal-primer')` resolves to a readable-tree |
 | Each spawned worker loop receives a `primer` reference | a spawned worker guest has a `primer` reference |
 | (the MVR exit criterion) the user exchanges a message with `lal` | send one message over CapTP; the agent completes a turn against the mock gateway and a reply appears in the host inbox |
@@ -849,22 +849,63 @@ The CI stand-in for "the user points it at a provider" is a tiny
 HTTP server bound to `127.0.0.1` that speaks the minimal provider
 surface the agent needs to complete one turn (or replays a
 recorded fixture).
-Injecting its address as the form's host keeps the assertion path
-off the public network and fully deterministic, which is what
-makes Tier 1 gate-able.
+For the assertion path to stay off the public network and fully
+deterministic — which is what makes Tier 1 gate-able — every
+provider shape the smoke drives must have a seam that redirects its
+outbound request endpoint to the mock's address. The two shapes G12
+puts in scope do **not** share one seam today, and — a correction to
+an earlier draft of this section that assumed "injecting the mock's
+address as the form's `host` field" would redirect every shape — the
+registry-provider shape has no such seam at all:
 
-The shipped form drives more than one provider code path.
-`packages/lal/model-resolution.js` branches between the pi-ai
-registry providers (Anthropic, OpenAI, and the like, which carry a
-real auth token) and the `ollama/<id>` case, which uses a distinct
-auth-token sentinel (the literal `'ollama'` fallback rather than a
-user key); and "point it at Ollama" is one of the three provider
-shapes G12 names as in scope. So the Tier-1 smoke parametrizes the
-mock gateway over **both** shapes: one run drives a
-registry-provider model with a bearer token, and one drives an
-`ollama/<id>` model exercising the sentinel-token branch. Covering
-only the registry path would let a regression in the Ollama
-auth-token handling ship uncaught by the gated smoke.
+- **The `ollama/<id>` shape** already has a redirect seam.
+  `resolveModel` (`@endo/agentry/harness`, re-exported from
+  `packages/lal/model-resolution.js`) special-cases the `ollama/`
+  prefix through `buildOllamaModel`, which reads an `OLLAMA_HOST`
+  credential (default `http://127.0.0.1:11434`) and threads it into
+  the pi-ai model's `baseUrl`. So the Tier-1 Ollama cell injects the
+  mock's address as `OLLAMA_HOST` — a credential, **not** the form's
+  `host` field — and its request path lands on the mock.
+- **The registry-provider shape** (Anthropic, OpenAI, and the like,
+  which carry a real bearer token) has **no** endpoint-redirect seam
+  today, so the design must add one before Tier 1 can drive it
+  offline. The form's `host` field becomes `LAL_HOST`, and
+  `resolveModelString` only substring-matches `LAL_HOST` to *pick a
+  provider name* (`anthropic.com` → `anthropic`, `openai.com` →
+  `openai`, and the like) — it then **discards the host string**.
+  `resolveModel` resolves that provider through pi-ai's built-in
+  registry (`getModel(provider, modelId)`), whose `Model` carries
+  pi-ai's own hardcoded endpoint (`https://api.anthropic.com`,
+  `https://api.openai.com/v1`); nothing threads the form's host into
+  the request. A mock bound to `127.0.0.1:<port>` would not even
+  match a registry substring — it would fall through to the `ollama`
+  default — so pointing the form's host at the mock either silently
+  exercises the Ollama branch (a false pass for the registry cell)
+  or, were a match forced, still dispatches to the real public API,
+  the opposite of the off-network property this section relies on.
+  The seam Tier 1 needs is a harness-level `baseUrl` override
+  threaded from the form/test config into `resolveModel` (a
+  `LAL_BASE_URL`-style credential the registry branch honors the way
+  the Ollama branch honors `OLLAMA_HOST`), **not** `LAL_HOST`
+  substring sniffing. Adding that override seam is a Tier-1
+  prerequisite for the registry-provider cell and is budgeted in the
+  MVR table below (a day of harness work).
+
+The registry/Ollama split also matters for auth, not just the
+endpoint: the registry branch carries a real bearer token while the
+`ollama/<id>` case uses a distinct auth-token sentinel (the literal
+`'ollama'` fallback rather than a user key), and "point it at
+Ollama" is one of the three provider shapes G12 names as in scope.
+So, with the registry `baseUrl` seam in place, the Tier-1 smoke
+parametrizes the mock gateway over **both** shapes: one run drives a
+registry-provider model with a bearer token (redirected via the new
+`baseUrl` override), and one drives an `ollama/<id>` model
+exercising the sentinel-token branch (redirected via `OLLAMA_HOST`).
+Covering only the registry path would let a regression in the Ollama
+auth-token handling ship uncaught by the gated smoke; conversely,
+until the registry `baseUrl` seam lands, the registry-provider cell
+cannot run deterministically offline, and Tier 1 gates G16 on the
+Ollama shape alone.
 
 ### macOS-runner hazards the plan must design around
 
@@ -995,6 +1036,7 @@ exceptions.
 |---|---|---|
 | Confirm the existing `familiar-release.yml` workflow emits installable per-platform artifacts end to end (it already builds, packages, and publishes on dispatch/tag) | G1, G15, G4 | day |
 | Verify the Primer-into-CAS path in a packaged-build smoke test (Tier 1, gated per-PR across all three MVR runners) | G16 | day |
+| Add a harness-level `baseUrl` override seam (a `LAL_BASE_URL`-style credential threaded into `resolveModel`'s registry branch) so the Tier-1 registry-provider cell can redirect its outbound endpoint to the in-process mock gateway, off the public network; a prerequisite for the registry-provider half of the Tier-1 smoke (the Ollama half already redirects via `OLLAMA_HOST`) | G16 | day |
 | Aggregate third-party LICENSE notices into the bundle | G14 | day |
 | Document Node version pin policy in the package README | G5 | day |
 | Advance the bundled Node pin from v20.18.1 to a current LTS (now v22.22.3) | G5 | done (2026-05) |
