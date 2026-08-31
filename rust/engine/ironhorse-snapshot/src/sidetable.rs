@@ -534,7 +534,7 @@ impl SideTable {
             SideTable::PromiseGuards => ("promise_guards", Pending),
             SideTable::PromiseJobs => ("promise_jobs", EmptyAtBoundary),
             SideTable::Combinators => ("combinators", Pending),
-            SideTable::Generators => ("generators", Pending),
+            SideTable::Generators => ("generators", Serialized),
             SideTable::GenRunStack => ("gen_run_stack", EmptyAtBoundary),
             SideTable::AsyncInstances => ("async_instances", Pending),
             SideTable::AsyncRunStack => ("async_run_stack", EmptyAtBoundary),
@@ -762,11 +762,11 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 8, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 7, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
-        assert!(pending.contains(&SideTable::Generators));
+        assert!(!pending.contains(&SideTable::Generators));
         // `ctor_prototype` is a HashMap-only constructor→prototype link (no
         // arena property slot) and needs the `functions` table to interpret,
         // so it is honestly Pending — not the false `InArena` it once claimed.

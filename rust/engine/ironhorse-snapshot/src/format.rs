@@ -123,6 +123,8 @@ pub const IBFN: FourCc = FourCc(*b"IBFN");
 pub const PRIV: FourCc = FourCc(*b"PRIV");
 /// `DISP` — DisposableStack/AsyncDisposableStack state and records.
 pub const DISP: FourCc = FourCc(*b"DISP");
+/// `GENR` — synchronous generator lifecycle and saved activations.
+pub const GENR: FourCc = FourCc(*b"GENR");
 /// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
@@ -158,11 +160,12 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// likewise skip. Version 4 adds the atomic `FUNC` callability cluster;
 /// version 5 adds proxy internal slots; version 6 adds accessors;
 /// version 7 adds Intl bound-function links; version 8 adds private
-/// elements; version 9 adds disposable stacks.
+/// elements; version 9 adds disposable stacks; version 10 adds
+/// synchronous generators.
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 9;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 10;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
@@ -408,10 +411,10 @@ mod tests {
     /// atoms; version 3 introduces Date records; version 4 introduces
     /// retained function state; versions 5 and 6 introduce proxy and
     /// accessor state; versions 7 and 8 introduce Intl bound functions
-    /// private elements, and disposable stacks.
+    /// private elements, disposable stacks, and generators.
     #[test]
     fn the_write_stamp_is_past_the_side_table_addition() {
-        assert!(IRONHORSE_FORMAT_VERSION >= 9, "the disposable atom is a format bump");
+        assert!(IRONHORSE_FORMAT_VERSION >= 10, "the generator atom is a format bump");
         assert_eq!(Version::current().format_version, IRONHORSE_FORMAT_VERSION);
     }
 

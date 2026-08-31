@@ -136,7 +136,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // This fixture holds none, so only VERS changes.
         // Re-pinned for format version 9, marking disposable stacks.
         // This fixture holds none, so only VERS changes.
-        "d1b609434aa14cc0b9df4220c9c044499c73766c12ab8d41416ebc0178a75529",
+        // Re-pinned for format version 10, marking synchronous generator
+        // activations. This fixture holds none, so only VERS changes.
+        "50e953e320771e3f133b2f2e3880932443086a462303b11b253e6df123a42c76",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -216,7 +218,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // private elements and VERS marks `PRIV`.
         // Re-pinned for schema 20 and format 9: the small state gains
         // disposable stacks and VERS marks `DISP`.
-        "df444cefebbfe22745f6bf3ef6efdacd82b8ece1ed2a2b60476417801e4765e9",
+        // Re-pinned for schema 21 and format 10: the small state gains
+        // synchronous generator activations and VERS marks `GENR`.
+        "0072f072e3b8d56bd378badb1abaac80223f3d55799b997faf96d3d00ba12527",
         "epoch-3 seal chain"
     );
 }

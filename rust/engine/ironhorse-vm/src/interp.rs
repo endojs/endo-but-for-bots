@@ -4781,6 +4781,42 @@ pub struct DisposableStackRow {
     pub records: Vec<DisposalRecordRow>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedJumpRow {
+    pub target_pc: u64,
+    pub stack_offset: u64,
+    pub locals_len: u64,
+    pub id_map: Vec<(u16, u64)>,
+    pub call_depth_offset: u64,
+    pub env: Slot,
+    pub flag: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedFrameRow {
+    pub locals: Vec<Slot>,
+    pub id_map: Vec<(u16, u64)>,
+    pub args: Vec<Slot>,
+    pub this_val: Slot,
+    pub env: Slot,
+    pub cur_func: u32,
+    pub cur_target: bool,
+    pub target_func: u32,
+    pub strict: bool,
+    pub result: Slot,
+    pub stack_slice: Vec<Slot>,
+    pub jumps: Vec<SavedJumpRow>,
+    pub resume_pc: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneratorRow {
+    /// 0 = SuspendedStart, 1 = SuspendedYield, 2 = Completed.
+    pub state: u8,
+    pub owner: u32,
+    pub frame: Option<SavedFrameRow>,
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -9291,6 +9327,122 @@ impl Interp {
                 },
             );
         }
+    }
+
+    fn saved_frame_snapshot(frame: &SavedFrame) -> SavedFrameRow {
+        let sorted_map = |map: &std::collections::HashMap<u16, usize>| {
+            let mut rows: Vec<(u16, u64)> =
+                map.iter().map(|(id, index)| (*id, *index as u64)).collect();
+            rows.sort_unstable();
+            rows
+        };
+        SavedFrameRow {
+            locals: frame.locals.clone(),
+            id_map: sorted_map(&frame.id_map),
+            args: frame.args.clone(),
+            this_val: frame.this_val,
+            env: frame.env,
+            cur_func: frame.cur_func.0,
+            cur_target: frame.cur_target,
+            target_func: frame.target_func.0,
+            strict: frame.strict,
+            result: frame.result,
+            stack_slice: frame.stack_slice.clone(),
+            jumps: frame
+                .jumps
+                .iter()
+                .map(|jump| SavedJumpRow {
+                    target_pc: jump.target_pc as u64,
+                    stack_offset: jump.stack_offset as u64,
+                    locals_len: jump.locals_len as u64,
+                    id_map: sorted_map(&jump.id_map),
+                    call_depth_offset: jump.call_depth_offset as u64,
+                    env: jump.env,
+                    flag: jump.flag,
+                })
+                .collect(),
+            resume_pc: frame.resume_pc as u64,
+        }
+    }
+
+    fn restore_saved_frame(row: SavedFrameRow) -> Option<SavedFrame> {
+        let map = |rows: Vec<(u16, u64)>| -> Option<std::collections::HashMap<u16, usize>> {
+            rows.into_iter()
+                .map(|(id, index)| Some((id, usize::try_from(index).ok()?)))
+                .collect()
+        };
+        Some(SavedFrame {
+            locals: row.locals,
+            id_map: map(row.id_map)?,
+            args: row.args,
+            this_val: row.this_val,
+            env: row.env,
+            cur_func: crate::value::SlotIndex(row.cur_func),
+            cur_target: row.cur_target,
+            target_func: crate::value::SlotIndex(row.target_func),
+            strict: row.strict,
+            result: row.result,
+            stack_slice: row.stack_slice,
+            jumps: row
+                .jumps
+                .into_iter()
+                .map(|jump| {
+                    Some(SavedJump {
+                        target_pc: usize::try_from(jump.target_pc).ok()?,
+                        stack_offset: usize::try_from(jump.stack_offset).ok()?,
+                        locals_len: usize::try_from(jump.locals_len).ok()?,
+                        id_map: map(jump.id_map)?,
+                        call_depth_offset: usize::try_from(jump.call_depth_offset).ok()?,
+                        env: jump.env,
+                        flag: jump.flag,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+            resume_pc: usize::try_from(row.resume_pc).ok()?,
+        })
+    }
+
+    pub fn generators_snapshot(&self) -> Vec<GeneratorRow> {
+        let mut rows: Vec<GeneratorRow> = self
+            .generators
+            .iter()
+            .map(|(owner, data)| GeneratorRow {
+                owner: owner.0,
+                state: match data.state {
+                    GeneratorState::SuspendedStart => 0,
+                    GeneratorState::SuspendedYield => 1,
+                    GeneratorState::Completed => 2,
+                    GeneratorState::Executing => 3,
+                },
+                frame: data.frame.as_ref().map(Self::saved_frame_snapshot),
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    pub fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> bool {
+        for row in rows {
+            let state = match row.state {
+                0 => GeneratorState::SuspendedStart,
+                1 => GeneratorState::SuspendedYield,
+                2 => GeneratorState::Completed,
+                _ => return false,
+            };
+            let frame = match row.frame {
+                Some(frame) => match Self::restore_saved_frame(frame) {
+                    Some(frame) => Some(frame),
+                    None => return false,
+                },
+                None => None,
+            };
+            if (state == GeneratorState::Completed) != frame.is_none() {
+                return false;
+            }
+            self.generators
+                .insert(crate::value::SlotIndex(row.owner), GeneratorData { state, frame });
+        }
+        true
     }
 
     /// Quiescent snapshot of the four Temporal record tables (ledger

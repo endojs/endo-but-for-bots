@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 20;
+pub const STORE_SCHEMA_VERSION: u32 = 21;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1339,6 +1339,8 @@ pub struct SmallState {
     pub private_elements: ironhorse_vm::PrivateElementSnapshot,
     /// Explicit resource-management stacks (schema 20; `DISP`).
     pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    /// Synchronous generator saved activations (schema 21; `GENR`).
+    pub generators: Vec<ironhorse_vm::GeneratorRow>,
     /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
     pub arguments_brands: Vec<u32>,
     /// The Temporal record tables (schema 11; the `TMPR` encoding).
@@ -1354,12 +1356,13 @@ pub struct SmallState {
 }
 
 impl SmallState {
-    /// Serialize: twenty-seven sections, each `u32` length-prefixed, in
+    /// Serialize: twenty-eight sections, each `u32` length-prefixed, in
     /// the fixed order stack, free list, keys, names, symbols, meter,
     /// arrays, collections, registry, errors, buffers, typed arrays,
     /// data views, wrappers, regexps, arguments brands, temporal,
     /// intl, name floor, iterators, dates, function state, proxy state,
-    /// accessors, Intl bound functions, private elements, disposable stacks
+    /// accessors, Intl bound functions, private elements, disposable stacks,
+    /// generators
     /// (arrays/collections/registry since store schema 7 — the
     /// side-table ledger; the 6→7 migration appends them empty, a
     /// pure 12-byte suffix — errors since schema 9, the typed-array
@@ -1370,14 +1373,15 @@ impl SmallState {
     /// since schema 15, and proxy state since schema 16, whose
     /// migrations append their empty sections the same; accessors join
     /// in schema 17, Intl bound functions in schema 18, and private
-    /// elements in schema 19, and disposable stacks in schema 20
+    /// elements in schema 19, disposable stacks in schema 20, and
+    /// synchronous generators in schema 21
     /// way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 27] = [
+        let sections: [Vec<u8>; 28] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1408,6 +1412,7 @@ impl SmallState {
             crate::image::encode_intl_bound_functions(&self.intl_bound_functions),
             crate::image::encode_private_elements(&self.private_elements),
             crate::image::encode_disposable_stacks(&self.disposable_stacks),
+            crate::image::encode_generators(&self.generators),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1417,7 +1422,7 @@ impl SmallState {
         v
     }
 
-    /// Decode the twenty-seven sections. Every section length is
+    /// Decode the twenty-eight sections. Every section length is
     /// bounds-checked against the remaining payload before it is
     /// sliced.
     pub fn decode(p: &[u8]) -> Result<SmallState, StoreError> {
@@ -1613,7 +1618,14 @@ impl SmallState {
             crate::image::decode_disposable_stacks(disposable_bytes)
                 .map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: twenty-seven
+        // Schema-21 synchronous generator activations.
+        let generator_bytes = section("small state generator section")?;
+        let generators = if generator_bytes.is_empty() {
+            Vec::new()
+        } else {
+            crate::image::decode_generators(generator_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: twenty-eight
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1644,6 +1656,7 @@ impl SmallState {
             intl_bound_functions,
             private_elements,
             disposable_stacks,
+            generators,
             arguments_brands,
             temporal,
             intl,
@@ -2013,6 +2026,7 @@ pub fn migrate_store(
             17 => migrate_v17_to_v18(store)?,
             18 => migrate_v18_to_v19(store)?,
             19 => migrate_v19_to_v20(store)?,
+            20 => migrate_v20_to_v21(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2490,6 +2504,33 @@ fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// 20 → 21: synchronous generator activations join the small state.
+fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 21;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2637,6 +2678,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         intl_bound_functions: image.intl_bound_functions.clone(),
         private_elements: image.private_elements.clone(),
         disposable_stacks: image.disposable_stacks.clone(),
+        generators: image.generators.clone(),
         arguments_brands: image.arguments_brands.clone(),
         temporal: image.temporal.clone(),
         intl: image.intl.clone(),
@@ -2857,6 +2899,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             intl_bound_functions: &small.intl_bound_functions,
             private_elements: &small.private_elements,
             disposable_stacks: &small.disposable_stacks,
+            generators: &small.generators,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -2899,6 +2942,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         intl_bound_functions: small.intl_bound_functions,
         private_elements: small.private_elements,
         disposable_stacks: small.disposable_stacks,
+        generators: small.generators,
         arguments_brands: small.arguments_brands,
         temporal: small.temporal,
         intl: small.intl,
@@ -3195,6 +3239,7 @@ pub fn validate_store(
             intl_bound_functions: &small.intl_bound_functions,
             private_elements: &small.private_elements,
             disposable_stacks: &small.disposable_stacks,
+            generators: &small.generators,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -3583,6 +3628,7 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            generators: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3621,6 +3667,7 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            generators: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
