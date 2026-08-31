@@ -27,7 +27,7 @@ test('repository Node engine covers npm-packlist 10 runtime support', async t =>
     await readFile(join(repoRoot, 'package.json'), 'utf8'),
   );
 
-  t.is(packageJson.engines?.node, '^20.17.0 || >=22.9.0');
+  t.is(packageJson.engines?.node, '^20.19.0 || >=22.12.0');
 });
 
 /**
