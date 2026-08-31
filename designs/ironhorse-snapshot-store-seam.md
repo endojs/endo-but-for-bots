@@ -3245,6 +3245,64 @@ an ordinary program sat behind all of it because no scenario had ever
 combined a non-empty side table with an adversarial residency
 schedule.
 
+#### P1-4 — The persist gate enumerates holders instead of traversing state (round 3)
+
+Reported externally against `612208f4b`, and the sharper half is a hole in
+this round's own P2-3 fix.
+
+The gate inspects three holders — accessors, `bound_functions[..].target`,
+and `disposable_stacks[..].records[..].method` — so a non-persisting
+runtime native reaches the store through any OTHER stored reference.
+Two reproductions:
+
+```js
+// (a) a plain global. Recorded already as a known gap, but it is
+// silent at `typeof`, not merely visible at the call.
+var g; var p = new Promise(function (res) { g = res; });
+// typeof g: "function" continuous, "object" resumed
+
+// (b) a bound ARGUMENT. The target is a persistable guest function, so
+// the round-2 check passes -- `BoundData` also carries `this_arg` and
+// `args`, and neither is inspected.
+var b; var p = new Promise(function (res) {
+  b = (function (x) { return typeof x; }).bind(null, res);
+});
+// b(): "function" continuous, "object" resumed
+```
+
+(b) is the immediate defect: the round-2 widening looked at `data.target`
+and stopped, while `BoundData` is `{ target, this_arg, args }`.
+
+The reporter's architectural point is the right one and is what should
+land: enumerate-the-holders cannot be complete, because every new carried
+row adds a holder. Traverse instead.
+
+The shape that fits this codebase already exists — `stored_unregistered_key_id`
+on `MachineImage` audits stored property ids by walking the serialized
+form, for exactly the reason that applies here ("a counter says only that
+minting HAPPENED, not that an id was stored").
+The analogue: ask the LIVE machine for the set of function slots where
+`function_persists` is false (one pass over `self.functions`; usually
+EMPTY, in which case the whole check short-circuits), then ask the IMAGE
+whether any stored reference names one.
+That makes the guarantee "whatever is written is what is checked" rather
+than "the holders someone remembered", and costs nothing on the common
+machine that has no runtime-minted natives at all.
+
+Two things to carry into that fix:
+
+- `stored_unregistered_key_id` has the SAME incompleteness. It walks live
+  slots, the stack, arrays and collections — not private elements, not
+  bound-function `this_arg`/`args`, not generator frames, not disposable
+  stack records. Whatever traversal the new gate uses should be shared
+  with it, so the id-space audit stops being partial too.
+- At `checkpoint_to_store` the cost should stay O(dirty), by the same
+  induction the intern gate uses: a reference stored in an earlier crank
+  was already adjudicated by that crank's checkpoint.
+
+The real lift remains the promise-cluster carry; this is the fail-closed
+interim, made complete.
+
 #### Verified clean this round
 
 GC visitation over the new atoms; the decode and bounds gates for
