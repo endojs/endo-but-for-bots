@@ -10,7 +10,7 @@
  * - No partial-range I/O: `read(path, offset, length)` fetches the
  *   whole file via `stream()` and slices. `write`/`setStat`
  *   likewise read-modify-write the whole file, since Mount has no
- *   partial-range write. Cost is O(filesize) on the wire (≈1.33×, base64)
+ *   partial-range write. Cost is O(filesize) on the wire
  *   and in memory; the write side sends the file as a *single* base64
  *   chunk via `makeBytesBlob` (no back-pressure). Acceptable for the
  *   config/source-tree files this adapter targets; large-blob streaming

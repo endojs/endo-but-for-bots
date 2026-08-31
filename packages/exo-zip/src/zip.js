@@ -29,7 +29,7 @@ try {
  * The blob conforms to the platform's syn/ack reader-pump protocol
  * (`@endo/platform`'s `ReadableBlobInterface`): `stream(synHead)`
  * returns a `StreamNode` chain, which `iterateBytesReader` consumes —
- * base64-DECODING each ack chunk to a `Uint8Array` before yielding it.
+ * thawing each passable ack chunk to a mutable `Uint8Array` before yielding it.
  * Each chunk is decoded independently, so there is no interior-padding
  * concern; we simply concatenate the decoded byte chunks.
  *

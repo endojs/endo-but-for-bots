@@ -343,7 +343,7 @@ test('revocation: a range of a mount file view revokes with it', async t => {
   }
 });
 
-test('revocation: a base64 file stream refuses on a revoked mount', async t => {
+test('revocation: a byte-array file stream refuses on a revoked mount', async t => {
   const rootPath = makeTemporaryRoot(t);
   const { mount, control } = makeRevocableMount({
     rootPath,

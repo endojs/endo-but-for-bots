@@ -11,7 +11,6 @@ import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeBase64 } from '@endo/base64';
-import { mapReader } from '@endo/stream';
 import {
   ReadableBlobRangeInterface,
   ReadableTreeInterface,
@@ -28,7 +27,6 @@ import { sha256 } from '@endo/sha256';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { fromHex } from './hex.js';
@@ -1662,8 +1660,9 @@ const makeMountFileExo = (
           }
         }
       };
-      const pump = makeReaderPump(mapReader(readConfined(), encodeBase64));
-      return pump(/** @type {any} */ (synPromise));
+      return bytesReaderFromIterator(readConfined()).stream(
+        /** @type {any} */ (synPromise),
+      );
     },
 
     async json() {

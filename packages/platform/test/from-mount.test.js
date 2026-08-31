@@ -18,9 +18,7 @@ import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
-import { mapReader } from '@endo/stream';
-import { encodeBase64 } from '@endo/base64';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 
 import { mountAsFilesystem } from '../src/fs/extended/from-mount.js';
 import { makeFromMountBackend } from '../src/fs/extended/backends/from-mount-backend.js';
@@ -86,14 +84,13 @@ const makeMockMount = () => {
         return fromUtf8(node.content);
       },
       // Mirrors the real `EndoMountFile.stream(synPromise)`: an
-      // `@endo/exo-stream` reader pump over the whole content, base64
-      // encoded. The `synPromise` argument drives the flow-control chain.
+      // `@endo/exo-stream` bytes reader over the whole content. The
+      // `synPromise` argument drives the flow-control chain.
       stream(synPromise) {
         async function* contentBytes() {
           yield node.content;
         }
-        const pump = makeReaderPump(mapReader(contentBytes(), encodeBase64));
-        return pump(synPromise);
+        return bytesReaderFromIterator(contentBytes()).stream(synPromise);
       },
       async json() {
         return JSON.parse(fromUtf8(node.content));
@@ -181,7 +178,7 @@ const makeMockMount = () => {
       // Mirrors the real `EndoMount.write(path, ReadableBlob)`: the
       // value is a *remotable* reader reference (never raw bytes, which
       // are not passable over CapTP), drained via its `stream`
-      // method and base64-decoded.
+      // method and thawed into mutable local chunks.
       async write(path, value) {
         const segs = segmentsOf(path);
         const name = segs[segs.length - 1];
