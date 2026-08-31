@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-08-30 |
+| **Updated** | 2026-08-31 |
 | **Author** | Kris Kowal (prompted), Kriscendo Bot (prompted) |
 | **Status** | In Progress |
 
@@ -88,7 +88,7 @@ The initial combinations are:
 | Transport | Codec | Published hint | Value | Framing |
 |---|---|---|---|---|
 | `tcp` | `cbor` | `tcp+cbor` | `host:port` authority (IPv6 literals bracketed, for example `[::1]:3469`) | One definite-length CBOR byte string per Noise handshake or ciphertext frame |
-| `wss` | `cbor` | `wss+cbor` | `host:port/path` (path required, for example `peer.example:443/ocapn-cbor-np`) | One binary WebSocket message per Noise handshake or ciphertext frame |
+| `wss` | `cbor` | `wss+cbor` | `host:port/path` (path required, for example `minion.town:443/.well-known/ocapn-cbor-np`) | One binary WebSocket message per Noise handshake or ciphertext frame |
 | `ws` | `cbor` | `ws+cbor` | `host:port/path` (path required) | One binary WebSocket message per Noise handshake or ciphertext frame |
 
 The value grammar differs by transport.
@@ -96,11 +96,15 @@ The value grammar differs by transport.
 `wss+cbor` and `ws+cbor` publish `host:port/path`, and the path is **required**,
 not a fixed well-known default: a WebSocket endpoint mounted behind a shared TLS
 terminator distinguishes peers by path, so the hint must carry it.
-The examples here use `/ocapn-cbor-np`, the path minion.town already serves for
-this transport-and-codec combination (see
-[gateway-package.md](gateway-package.md) § `/ocapn-cbor-np` WebSocket
-subprotocol); minion.town and this design are kept aligned, and either may be
-corrected toward the other.
+The examples here use `/.well-known/ocapn-cbor-np`, the path minion.town's
+public daemon route already serves for this transport-and-codec combination
+(see the
+[minion.town Caddy route](https://github.com/kriscendobot/minion.town/blob/main/deploy/aws/caddy/conf.d/minion-town.caddy)).
+Minion.town's weblet powers plane also reserves sibling
+`/.well-known/ocapn-cbor`, `/.well-known/ocapn-syrup`, and
+`/.well-known/endo-captp` paths.
+The `-np` suffix distinguishes the Noise Protocol network endpoint this design
+describes.
 
 On the wire, each `@`-delimited component is `encodeURIComponent`-encoded
 exactly as [daemon-locator-reference.md](daemon-locator-reference.md) § Locator
@@ -113,7 +117,7 @@ the value, then on `:` and `/` within the value to recover host, port, and path
 (with IPv6 hosts bracketed).
 The examples below are shown decoded for readability.
 For example, an external peer locator ends with components that decode to
-`@wss+cbor:peer.example:443/ocapn-cbor-np@tcp+cbor:127.0.0.1:3469`.
+`@wss+cbor:minion.town:443/.well-known/ocapn-cbor-np@tcp+cbor:127.0.0.1:3469`.
 
 A peer filters hints to combinations for which it implements both the transport
 and the codec, then tries eligible combinations in its configured preference
@@ -172,17 +176,17 @@ const tcpListener = await network.listen(tcp, {
 const wssListener = await network.listen(wss, {
   host: '127.0.0.1',
   port: 443,
-  path: '/ocapn-cbor-np',
-  advertisedAuthority: 'peer.example:443',
+  path: '/.well-known/ocapn-cbor-np',
+  advertisedAuthority: 'minion.town:443',
 });
 
 const location = network.locationFor(keyId);
 // location.hints === {
 //   'tcp+cbor': '127.0.0.1:3469',
-//   'wss+cbor': 'peer.example:443/ocapn-cbor-np',
+//   'wss+cbor': 'minion.town:443/.well-known/ocapn-cbor-np',
 // }
 // External locator path (shown decoded):
-// /@tcp+cbor:127.0.0.1:3469@wss+cbor:peer.example:443/ocapn-cbor-np
+// /@tcp+cbor:127.0.0.1:3469@wss+cbor:minion.town:443/.well-known/ocapn-cbor-np
 
 tcpListener.close(); // withdraws only the tcp+cbor hint and listener
 wssListener.close(); // withdraws only the wss+cbor hint and listener
