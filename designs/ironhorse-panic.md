@@ -9,9 +9,7 @@
 
 Name, formalize, and extend the **panic**: an uncatchable, unrecoverable
 termination of a vat/worker that no JavaScript `try`/`catch`, promise handler,
-or engine recovery path can intercept. (A worker hosts exactly one vat in the
-current daemon, so "vat" and "worker" are used interchangeably throughout; the
-one-database-per-worker isolation claim below rests on that 1:1 relationship.) Ironhorse substantially has this already.
+or engine recovery path can intercept. Ironhorse substantially has this already.
 `Halt::StackOverflow` and `Halt::MeterAbort`
 ([ironhorse-engine](ironhorse-engine.md) § Interpreter, the `Halt` enum in
 `rust/engine/ironhorse-vm/src/interp.rs`) are each documented today as "an abort
@@ -19,9 +17,12 @@ to the host, not a catchable `RangeError`", and both descend from XS/xsnap's
 `fxAbort` longjmp. This design gives the pattern one name, generalizes it over
 every uncatchable-termination source, states its relationship to the daemon's
 message-delivery model, and adds an opt-in mode (the Coda) that turns selected
-reference errors into panics for post-mortem debugging.
+reference errors into panics for post-mortem debugging. (A worker hosts exactly
+one vat in the current daemon, so "vat" and "worker" are used interchangeably
+throughout; the one-database-per-worker isolation claim below rests on that 1:1
+relationship.)
 
-## What is the Problem Being Solved?
+## What Is the Problem Being Solved?
 
 A **crank** is the processing of one inbound delivery plus all resulting promise
 jobs until quiescence ([daemon-xs-worker-metering](daemon-xs-worker-metering.md)
@@ -45,8 +46,8 @@ The clean answer is a two-part contract:
    delivery, and re-run the (now fixed) delivery.
 
 Ironhorse already terminates uncatchably for two of the three natural
-*guest-behavior* cases (stack overflow, meter refusal); the third — a Rust
-engine-logic-bug panic — is the net-new source named below. (Corrupt-bytecode
+*guest-behavior* cases (stack overflow, meter refusal); the third (a Rust
+engine-logic-bug panic) is the net-new source named below. (Corrupt-bytecode
 `Decode` also aborts today, but it is a supervisor-level fault, not guest
 behavior, and sits in a different provenance bucket in the table below.) What is
 missing is (a) one formal concept that
@@ -81,9 +82,35 @@ Net-new panic sources (no existing `Halt` variant, added by this design):
   unwinds the Rust thread rather than returning) but is the *same concept* at the
   supervisor boundary. See § Formal category for the seam that unifies them (a
   *seam* here is the boundary where one component's return value becomes
-  another's input or decision — in this design, where the interpreter's `Halt`
+  another's input or decision: in this design, where the interpreter's `Halt`
   becomes the supervisor's commit/discard decision).
 - **Reference-error panic (opt-in).** The Coda's configuration, off by default.
+
+**The already-live FFI abort hazard (grounding the "not a compromised daemon"
+claim).** The "a panic is a crashed crank, not a compromised daemon" framing is
+inherited from [ironhorse-engine](ironhorse-engine.md), whose arena-index
+`panic!` unwinds a *Rust* call stack that a `catch_unwind` at the `Machine` seam
+can convert into a `Halt::Panic(EngineFault)` value. But the *currently live*
+worker does not run that engine. `rust/endo/src/inproc.rs` (`spawn_shared_worker`
+/ `spawn_inproc_xs_manager`) runs the C-XS interpreter's Rust glue **in-process,
+on a daemon thread**, and the native interpreter invokes that glue through
+`unsafe extern "C"` callbacks in `rust/endo/xsnap/src/worker_io.rs`
+(`host_send_frame`, `host_issue_command`, `host_send_raw_frame`). Those callbacks
+already contain panicking calls today: for example `with_transport`'s
+`.expect("WorkerTransport not installed on this thread")` (`worker_io.rs:363`),
+reached from every send callback. Since Rust 1.71 and later **abort the whole
+process** when a panic unwinds past an `extern "C"` frame, and no `catch_unwind`
+exists anywhere in `rust/endo/xsnap/src/` today, an uncaught panic in this glue
+kills **every vat sharing the daemon process**, not just the panicking one. That
+is the opposite of the per-vat isolation the embargo and transcript contract
+assumes. So the `EngineFault` "catch at the thread/FFI boundary" (§ The Formal
+`Panic` Category, item 3) is not a property Ironhorse already has for the live
+worker. It is a **net-new requirement this design imposes on the existing xsnap
+glue too**: a `catch_unwind` (or panic hook) must wrap each `extern "C"` callback
+body, and the machine-thread crank entry, converting the process abort into a
+`Panicked` worker-death value before it crosses the FFI boundary. Until that
+lands, the "not a compromised daemon" guarantee holds only for the prospective
+Ironhorse `Machine` seam, not for the C-XS worker on today's delivery path.
 
 **Conclusion of the scope step:** the mechanism exists for two of three natural
 cases and needs *naming and generalizing*, not building. The genuinely new
@@ -109,7 +136,9 @@ and adds classification, rather than collapsing them:
 3. **Add one `Halt::Panic(PanicKind)` variant** for net-new sources that have no
    existing variant: `PanicKind::EngineFault` (a caught Rust panic, converted into
    this `Halt` at the thread/FFI boundary so the supervisor sees a value rather
-   than a process abort) and `PanicKind::ReferenceError` (the Coda). Extensible.
+   than a process abort; the `catch_unwind`/panic-hook wrap this requires for the
+   live C-XS glue, which has none today, is surveyed in § Scope's "already-live
+   FFI abort hazard") and `PanicKind::ReferenceError` (the Coda). Extensible.
    The variant is deliberately **not** named `Host`: this document uses "host"
    throughout for the surrounding-runtime call surface (`host_send_frame`,
    `host_call`, § "Host functions are messages too"), so a `PanicKind::Host` would
@@ -128,7 +157,7 @@ the pre-existing sources stay flat (`Halt::StackOverflow(n)`, `Halt::MeterAbort`
 while the net-new ones nest under `Halt::Panic(PanicKind)`, so a consumer that
 pattern-matched `Halt` directly would see the same conceptual family spelled two
 ways. The rule that keeps this from mattering: **no commit-path consumer matches
-`Halt` variant shape directly** — the "terminate, do not commit" decision routes
+`Halt` variant shape directly**. The "terminate, do not commit" decision routes
 through `is_panic()` (item 2) and the classification routes through `CrankOutcome`
 (item 4). The flat-vs-nested asymmetry is retained only to preserve the existing
 variants' rich diagnostics and never reaches the commit decision, which is why
@@ -246,8 +275,8 @@ the transcript is a *soundness prerequisite*, not an independent later design:
 without a transcript there is no snapshot-relative record of the messages a crank
 sent and received, so a restored worker cannot replay to the pre-panic state, and
 panic recovery is unsound rather than merely unimplemented. Second, the condition
-that made deferral right before — the mechanism was net-new *and the daemon's
-behavior was unsurveyed* — is discharged by this revision's own § "Where admission
+that made deferral right before (the mechanism was net-new *and the daemon's
+behavior was unsurveyed*) is discharged by this revision's own § "Where admission
 control does not reach," which surveyed the live crank path and established there
 is *no* existing commit point to build on. That finding is exactly what promotes
 the transcript from a speculative follow-on to a named prerequisite of this
@@ -257,7 +286,7 @@ backend owns the joint commit" question is carried explicitly (below and in Open
 Questions), not asserted as settled.
 
 Each endor worker (a worker running under Endor, the endo daemon's Rust runtime
-that hosts the Ironhorse engine — [ironhorse-engine](ironhorse-engine.md)
+that hosts the Ironhorse engine; see [ironhorse-engine](ironhorse-engine.md)
 § Endor integration) owns
 `<endo-dir>/workers/<handle>/transcript.sqlite`, opened in WAL mode. A database
 per worker avoids a global writer lock between vats and confines corruption and
@@ -297,12 +326,12 @@ chokepoint to replace with step 2. The literal crank-start/crank-end markers in
 the XS main loop supply the scope.
 
 The load-bearing invariant is that **a committed heap epoch can never name an
-uncommitted transcript suffix, or vice versa** — that is what makes a crank
+uncommitted transcript suffix, or vice versa**. That is what makes a crank
 retryable. It is backend-specific, and the two backends need different mechanisms:
 
 - **Store-backed machines**
   ([ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md)):
-  `HeapStore::commit` writes the supervisor-owned heap store (e.g. `endo.sqlite`),
+  `HeapStore::commit` writes the supervisor-owned heap store (e.g., `endo.sqlite`),
   a *separate SQLite file* from this design's
   `<endo-dir>/workers/<handle>/transcript.sqlite`. SQLite gives no cross-file
   atomic commit for free, so the two must be made to share one commit: either
@@ -312,7 +341,7 @@ retryable. It is backend-specific, and the two backends need different mechanism
   (§ Formal category: the store-backed `Machine` seam is not yet on the daemon's
   delivery path); the mechanism is named here so the invariant is buildable, not
   assumed.
-- **Production XS/CAS path** — the backend the survey above is actually grounded
+- **Production XS/CAS path**: the backend the survey above is actually grounded
   in, since the daemon still runs C-XS through `xsnap` and heap durability today
   is the CAS `suspend_to_cas`/`resume_shared` snapshot, *not* `HeapStore`. Here
   there is no shared SQLite transaction to join, because the snapshot is a CAS
@@ -320,8 +349,8 @@ retryable. It is backend-specific, and the two backends need different mechanism
   **ordering behind a watermark**: commit the transcript crank first, then record
   the CAS snapshot identity together with the transcript watermark it covers, and
   only then compact events at or below that watermark. A crash between the two
-  can only leave a snapshot naming an *earlier* watermark — replay redoes the
-  extra committed cranks idempotently — never a snapshot naming an uncommitted
+  can only leave a snapshot naming an *earlier* watermark (replay redoes the
+  extra committed cranks idempotently), never a snapshot naming an uncommitted
   suffix. Which backend carries the first production integration (and therefore
   which of these two commit disciplines lands first) is Open Question territory,
   tracked below.
@@ -332,8 +361,8 @@ The durability this buys is not free: routing every outbound send and every
 transcript-aware host call through a WAL-durable SQLite commit (with an fsync
 before an outbound frame is released) replaces today's direct, unbuffered pipe
 write in `worker_io.rs`. That is a real latency/throughput regression on the
-send path, accepted here as the cost of retryability; quantifying it — and
-choosing batch/group-commit policy for cranks that emit many frames — is deferred
+send path, accepted here as the cost of retryability; quantifying it (and
+choosing batch/group-commit policy for cranks that emit many frames) is deferred
 to the follow-on implementation's benchmarking rather than asserted at design
 time.
 
@@ -512,7 +541,7 @@ reference-error sites in `interp.rs` are:
 - `XS_CODE_GET_LOCAL_1`/`_2` (a read of a `let`/`const` binding in its temporal
   dead zone, interp.rs:8484) and `XS_CODE_GET_VARIABLE`/`XS_CODE_GET_THIS_VARIABLE`
   (an unresolved name, interp.rs:8536) already build a `ReferenceError` and
-  raise it through `raise_js(..)` — a **catchable** throw that unwinds the jump
+  raise it through `raise_js(..)`, a **catchable** throw that unwinds the jump
   chain, landed with the eval/undefined-variable message work (`47d5bb8c6`,
   `97fad0abd`). The `GET_LOCAL` site's own comment states this is "a **catchable**
   `ReferenceError` ... not an uncatchable host abort," which is exactly the
@@ -521,8 +550,8 @@ reference-error sites in `interp.rs` are:
 - `XS_CODE_GET_CLOSURE_1`/`_2` (a read of a captured `let`/`const` binding in
   its temporal dead zone, interp.rs:10774) still returns a raw
   `Halt::Throw("get closure: not initialized yet")` and has **not** been routed
-  through `raise_js`. For the option to cover reference errors uniformly — so a
-  captured-binding TDZ read behaves like a local TDZ read under the flag — this
+  through `raise_js`. For the option to cover reference errors uniformly (so a
+  captured-binding TDZ read behaves like a local TDZ read under the flag), this
   site must first be converted to the same `raise_js` seam; otherwise closures
   and locals diverge under the option.
 
@@ -578,7 +607,7 @@ peek over a `flag == 2` compiler change).
   reference-error site takes the panic path (it is not a throw), so it stops the
   world at the fault site via the panic hook (§ Debugger interaction), *not* via
   the exception-break classifier. This is strictly the intended behavior: the
-  developer wanted to freeze at the exact reference-error PC before any unwind,
+  developer wants to freeze at the exact reference-error PC before any unwind,
   and the panic path delivers exactly that. The `uncaughtExceptions`
   pseudo-breakpoint is inert for these errors while the option is on, because
   they are no longer throws. Turn the option off and the same errors revert to
@@ -621,7 +650,7 @@ peek over a `flag == 2` compiler change).
   metering design's answer is "terminate"; this design does not reopen it, but
   the `CrankOutcome` seam leaves room for a future pause outcome distinct from
   `Panicked`.
-- Which worker backend carries the first production transcript integration — the
+- Which worker backend carries the first production transcript integration: the
   store-backed `HeapStore` machine (joint commit via `ATTACH`/2PC on one SQLite
   connection) or the current production XS/CAS path (transcript-commit-then-CAS
   ordering behind a watermark)? Both commit disciplines are specified in
