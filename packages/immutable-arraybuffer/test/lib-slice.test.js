@@ -70,19 +70,16 @@ test('Standard DataView behavior baseline', t => {
   t.is(dv.byteLength, 2);
 });
 
-// This could have been written as a test.failing as compared to
-// the immutable ArrayBuffer we'll propose. However, I'd rather test what
-// the shim purposely does instead.
-test('DataView on Immutable ArrayBuffer lib limitations', t => {
+test('DataView on sliced Immutable ArrayBuffer is read-only', t => {
   const ab1 = new ArrayBuffer(2);
   const ta1 = new Uint8Array(ab1);
   ta1[0] = 3;
   ta1[1] = 4;
 
   const iab = sliceBufferToImmutable(ab1);
-  t.throws(() => new DataView(iab), {
-    instanceOf: TypeError,
-  });
+  const view = new DataView(iab);
+  t.is(view.getUint8(1), 4);
+  t.throws(() => view.setUint8(1, 5), { instanceOf: TypeError });
 });
 
 test('Standard TypedArray behavior baseline', t => {

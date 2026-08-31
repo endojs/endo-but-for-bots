@@ -1,17 +1,14 @@
-/* global globalThis */
-
 import {
   immutableArrayBufferLibProperties,
   freezableTypedArrayLibProperties,
-  makePseudoTypedArrayConstructor,
-  concreteTypedArrayCtors,
+  freezableDataViewLibProperties,
+  makeEmulatedTypedArrayConstructor,
+  concreteTypedArrayConstructors,
+  EmulatedDataView,
 } from './lib.js';
 
-const {
-  ArrayBuffer,
-  Object,
-  // eslint-disable-next-line no-restricted-globals
-} = globalThis;
+// eslint-disable-next-line no-restricted-globals
+const { ArrayBuffer, Object } = globalThis;
 
 const {
   getOwnPropertyDescriptors,
@@ -21,21 +18,19 @@ const {
 } = Object;
 const { prototype: arrayBufferPrototype } = ArrayBuffer;
 
-// Stage-3 install policy: detect-then-skip.
+// Stage-3 install policy: first evaluation wins.
 //
 // Both the Immutable ArrayBuffer proposal and the parallel Freezable
 // TypedArray proposal are part of the same TC39 proposal, which has
-// reached stage 3. At stage 3 or above our policy is detect-then-skip:
-// if a prior installation (a native implementation, or a previously
-// loaded shim) has already provided `sliceToImmutable` on
-// `ArrayBuffer.prototype`, we defer to that installation rather than
-// overwriting it. The native implementation always wins.
+// reached stage 3. The first evaluation in a realm publishes its private
+// view constructors. Later evaluations, including evaluations of another
+// physical copy of this package, defer to that winner. This keeps all installed
+// methods and emulated constructors tied to one set of WeakMaps.
 //
-// `sliceToImmutable` is the load-bearing presence check: the proposal
-// adds `sliceToImmutable`, `transferToImmutable`, and the `immutable`
-// accessor as a unit, and any installer (native or shim) that provides
-// one provides all three. Checking only one keeps the detect-then-skip
-// branch deterministic.
+// The winning evaluation still uses `sliceToImmutable` to decide whether the
+// engine already provides the stage-3 proposal. In that case it leaves the
+// native implementation intact and publishes a predicate that always returns
+// false because this evaluation creates no emulated views.
 //
 // For proposals prior to stage 3 a warn-and-overwrite policy would be
 // appropriate so the shim stays authoritative across partial or
@@ -75,18 +70,30 @@ if (!('sliceToImmutable' in arrayBufferPrototype)) {
   );
 
   // Replace each of the eleven concrete global TypedArray constructors with
-  // the pseudo-constructor produced by the lib. The pseudo-constructor
+  // the emulated constructor produced by the lib. The emulated constructor
   // discriminates on `buffers` brand membership and falls through to
   // the genuine constructor for all other call shapes.
-  for (const { name, Ctor } of concreteTypedArrayCtors) {
-    const PseudoCtor = makePseudoTypedArrayConstructor(Ctor);
+  for (const { name, Constructor } of concreteTypedArrayConstructors) {
+    const EmulatedConstructor = makeEmulatedTypedArrayConstructor(Constructor);
     defineProperty(
       // eslint-disable-next-line no-restricted-globals
       globalThis,
       name,
       {
-        value: PseudoCtor,
+        value: EmulatedConstructor,
       },
     );
   }
+
+  defineProperties(
+    // eslint-disable-next-line no-restricted-globals
+    globalThis.DataView.prototype,
+    getOwnPropertyDescriptors(freezableDataViewLibProperties),
+  );
+  defineProperty(
+    // eslint-disable-next-line no-restricted-globals
+    globalThis,
+    'DataView',
+    { value: EmulatedDataView },
+  );
 }

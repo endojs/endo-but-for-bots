@@ -13,6 +13,7 @@ import {
   isBufferImmutable,
   _amplifyArrayBufferForTests as amplifyArrayBuffer,
 } from '../src/lib.js';
+import { emulatedOnlyTest } from './_emulated-only.js';
 
 const { getPrototypeOf } = Object;
 
@@ -23,19 +24,25 @@ test('emulated immutable inherits directly from ArrayBuffer.prototype', t => {
   t.true(iab.immutable);
 });
 
-test('Object.prototype.toString.call(immuAB) reads as ImmutableArrayBuffer', t => {
-  const iab = new ArrayBuffer(2).sliceToImmutable();
-  // Per designs/immutable-arraybuffer.md section Move 2 paragraph 7 (as amended for the design-departure
-  // recorded in the same paragraph), the `[Symbol.toStringTag]` slot is
-  // installed as an own property on each emulated immutable buffer (not on
-  // the shared ArrayBuffer.prototype). Genuine ArrayBuffers continue to
-  // inherit `'ArrayBuffer'` from the prototype; emulated immutables carry
-  // their own `'ImmutableArrayBuffer'` slot so concordance (and any other
-  // downstream consumer that sniffs the toStringTag to decide whether the
-  // value is a genuine exotic) routes them through the unrenderable-value
-  // path rather than into `Buffer.from`, which throws on emulated immutables.
-  t.is(Object.prototype.toString.call(iab), '[object ImmutableArrayBuffer]');
-});
+emulatedOnlyTest(
+  'Object.prototype.toString.call(immuAB) reads as emulated immutable ArrayBuffer',
+  t => {
+    const iab = new ArrayBuffer(2).sliceToImmutable();
+    // Per designs/immutable-arraybuffer.md section Move 2 paragraph 7 (as amended for the design-departure
+    // recorded in the same paragraph), the `[Symbol.toStringTag]` slot is
+    // installed as an own property on each emulated immutable buffer (not on
+    // the shared ArrayBuffer.prototype). Genuine ArrayBuffers continue to
+    // inherit `'ArrayBuffer'` from the prototype; emulated immutables carry
+    // their own `'emulated immutable ArrayBuffer'` slot so concordance (and any other
+    // downstream consumer that sniffs the toStringTag to decide whether the
+    // value is a genuine exotic) routes them through the unrenderable-value
+    // path rather than into `Buffer.from`, which throws on emulated immutables.
+    t.is(
+      Object.prototype.toString.call(iab),
+      '[object emulated immutable ArrayBuffer]',
+    );
+  },
+);
 
 test('Object.prototype.toString.call(genuineAB) reads as ArrayBuffer', t => {
   // The toStringTag departure is restricted to emulated immutables (an

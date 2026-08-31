@@ -1,7 +1,6 @@
-/* global globalThis */
-
 const {
   ArrayBuffer,
+  DataView,
   Object,
   Reflect,
   Symbol,
@@ -30,6 +29,7 @@ const {
   getPrototypeOf,
   setPrototypeOf,
   create,
+  entries,
 } = Object;
 const { apply, ownKeys, construct } = Reflect;
 
@@ -69,6 +69,47 @@ const optArrayBufferMaxByteLength = getOwnPropertyDescriptor(
   arrayBufferPrototype,
   'maxByteLength',
 )?.get;
+
+const { prototype: dataViewPrototype } = DataView;
+const {
+  getBigInt64: dataViewGetBigInt64,
+  getBigUint64: dataViewGetBigUint64,
+  getFloat16: optDataViewGetFloat16,
+  getFloat32: dataViewGetFloat32,
+  getFloat64: dataViewGetFloat64,
+  getInt8: dataViewGetInt8,
+  getInt16: dataViewGetInt16,
+  getInt32: dataViewGetInt32,
+  getUint8: dataViewGetUint8,
+  getUint16: dataViewGetUint16,
+  getUint32: dataViewGetUint32,
+  setBigInt64: dataViewSetBigInt64,
+  setBigUint64: dataViewSetBigUint64,
+  setFloat16: optDataViewSetFloat16,
+  setFloat32: dataViewSetFloat32,
+  setFloat64: dataViewSetFloat64,
+  setInt8: dataViewSetInt8,
+  setInt16: dataViewSetInt16,
+  setInt32: dataViewSetInt32,
+  setUint8: dataViewSetUint8,
+  setUint16: dataViewSetUint16,
+  setUint32: dataViewSetUint32,
+} = dataViewPrototype;
+// @ts-expect-error TS doesn't know it'll be there
+const { get: dataViewBufferGetter } = getOwnPropertyDescriptor(
+  dataViewPrototype,
+  'buffer',
+);
+// @ts-expect-error TS doesn't know it'll be there
+const { get: dataViewByteLengthGetter } = getOwnPropertyDescriptor(
+  dataViewPrototype,
+  'byteLength',
+);
+// @ts-expect-error TS doesn't know it'll be there
+const { get: dataViewByteOffsetGetter } = getOwnPropertyDescriptor(
+  dataViewPrototype,
+  'byteOffset',
+);
 
 // %TypedArray% is the abstract superclass of all TypedArray constructors.
 // `getPrototypeOf(Uint8Array)` reaches it via the constructor's prototype chain.
@@ -137,6 +178,17 @@ const { get: typedArrayLengthGetter } = getOwnPropertyDescriptor(
   typedArrayPrototype,
   'length',
 );
+// Capture the genuine, `this`-sensitive `[Symbol.toStringTag]` getter. It reads
+// the receiver's `[[TypedArrayName]]` internal slot, returning the flavor name
+// (`'Uint8Array'`, …) for a genuine TypedArray and `undefined` for anything
+// without the slot. The shim's replacement getter (below) delegates to this via
+// the amplifier so an emulated wrapper resolves to its hidden genuine TypedArray
+// first — closing the `Object.prototype.toString` fidelity gap.
+// @ts-expect-error TS doesn't know it'll be there
+const { get: typedArrayToStringTagGetter } = getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  Symbol.toStringTag,
+);
 
 /**
  * Copy a range of values from a genuine ArrayBuffer exotic object into a new
@@ -192,6 +244,16 @@ if (optTransfer) {
  * @type {WeakMap<ArrayBuffer, ArrayBuffer>}
  */
 const buffers = new WeakMap();
+
+/**
+ * Inverse map: genuine backing ArrayBuffer -> emulated immutable wrapper.
+ * Every entry is installed alongside its inverse in `buffers`, so consumers
+ * can rely on the two maps describing the same pairs.
+ *
+ * @type {WeakMap<ArrayBuffer, ArrayBuffer>}
+ */
+const reverseBuffers = new WeakMap();
+
 const isEmulatedImmutable = buf => apply(weakmapHas, buffers, [buf]);
 
 /**
@@ -405,7 +467,7 @@ const makeImmutableArrayBufferInternal = realBuffer => {
       __proto__: arrayBufferPrototype,
     })
   );
-  // Install `[Symbol.toStringTag] = 'ImmutableArrayBuffer'` as an own
+  // Install `[Symbol.toStringTag] = 'emulated immutable ArrayBuffer'` as an own
   // property of each emulated immutable buffer (not on the shared prototype,
   // which must retain the genuine `'ArrayBuffer'` tag so genuine instances
   // continue to read as `[object ArrayBuffer]`). This is the minimum
@@ -414,16 +476,20 @@ const makeImmutableArrayBufferInternal = realBuffer => {
   // from misrouting an emulated immutable through `Buffer.from`, which
   // throws because the emulated immutable is not a genuine exotic. With the
   // own-property slot in place, `Object.prototype.toString.call(immuAB)`
-  // returns `'[object ImmutableArrayBuffer]'` and concordance routes the
+  // returns `'[object emulated immutable ArrayBuffer]'` and concordance routes the
   // value through its unrenderable-value path. Genuine ArrayBuffers
-  // continue to inherit `'ArrayBuffer'` from the prototype.
+  // continue to inherit `'ArrayBuffer'` from the prototype. The tag spells
+  // out `emulated` so no toStringTag-sniffing consumer can mistake the
+  // wrapper for an actual `ArrayBuffer` (review of
+  // endojs/endo-but-for-bots#475, gibson042).
   defineProperty(result, Symbol.toStringTag, {
-    value: 'ImmutableArrayBuffer',
+    value: 'emulated immutable ArrayBuffer',
     writable: false,
     enumerable: false,
     configurable: false,
   });
   apply(weakmapSet, buffers, [result, realBuffer]);
+  apply(weakmapSet, reverseBuffers, [realBuffer, result]);
   return result;
 };
 // Since `makeImmutableArrayBufferInternal` MUST not escape,
@@ -436,7 +502,7 @@ freeze(makeImmutableArrayBufferInternal);
  * the premise-2 fold-in the package no longer exports this from a public
  * entry point; callers use `buffer.immutable` (the accessor installed by
  * the shim on `ArrayBuffer.prototype`) or `Object.prototype.toString
- * .call(buffer) === '[object ImmutableArrayBuffer]'`. The internal export
+ * .call(buffer) === '[object emulated immutable ArrayBuffer]'`. The internal export
  * lets the in-package tests (`test/lib-*.test.js`) reach the helper
  * directly without round-tripping through the prototype.
  *
@@ -490,14 +556,14 @@ if (optArrayBufferTransfer) {
     } else {
       buffer = optArrayBufferTransfer(buffer);
       const oldLength = buffer.byteLength;
-      // eslint-disable-next-line @endo/restrict-comparison-operands
+
       if (newLength <= oldLength) {
         buffer = arrayBufferSlice(buffer, 0, newLength);
       } else {
-        const oldTA = new Uint8Array(buffer);
-        const newTA = new Uint8Array(newLength);
-        apply(uint8ArraySet, newTA, [oldTA]);
-        buffer = apply(typedArrayBufferGetter, newTA, []);
+        const oldTypedArray = new Uint8Array(buffer);
+        const newTypedArray = new Uint8Array(newLength);
+        apply(uint8ArraySet, newTypedArray, [oldTypedArray]);
+        buffer = apply(typedArrayBufferGetter, newTypedArray, []);
       }
     }
     const result = makeImmutableArrayBufferInternal(buffer);
@@ -509,35 +575,23 @@ if (optArrayBufferTransfer) {
 
 export const optTransferBufferToImmutable = transferBufferToImmutable;
 
-// ---------------------------------------------------------------------------
 // Freezable TypedArray emulation
-// ---------------------------------------------------------------------------
 //
 // The design document is at:
 //   packages/immutable-arraybuffer/designs/freezable-typedarray.md
 //
 // This section extends the immutable-ArrayBuffer lib surface with two exported bindings:
-//   - makePseudoTypedArrayConstructor (export; factory for per-flavor pseudo-constructors)
+//   - makeEmulatedTypedArrayConstructor (export; factory for per-flavor emulated constructors)
 //   - freezableTypedArrayLibProperties (export; property record the shim copies onto
 //                                       %TypedArrayPrototype%)
 //
 // The following are module-internal:
 //   - hiddenTypedArrays  (brand WeakMap)
 //   - amplifyTypedArray  (returns the hidden genuine TypedArray or the receiver on fallthrough)
-//   - virtualTypedArrayBufferGetter  (getter for %TypedArrayPrototype%.buffer)
+//   - emulatedTypedArrayBufferGetter  (getter for %TypedArrayPrototype%.buffer)
 //
 // The internal `buffers` and `reverseBuffers` WeakMaps from the ArrayBuffer
 // side are reused for `view.buffer` redirections.
-
-/**
- * Inverse map: genuine backing ArrayBuffer -> emulated immutable wrapper.
- * The ArrayBuffer-side lib owns `buffers` (wrapper -> genuine); this map is
- * the reverse direction, used by `virtualTypedArrayBufferGetter` to hand back
- * the immutable wrapper when a view's buffer is looked up.
- *
- * @type {WeakMap<ArrayBuffer, ArrayBuffer>}
- */
-const reverseBuffers = new WeakMap();
 
 /**
  * Brand WeakMap for emulated freezable TypedArray wrappers. Maps each wrapper
@@ -548,6 +602,15 @@ const reverseBuffers = new WeakMap();
  * @type {WeakMap<TypedArray, TypedArray>}
  */
 const hiddenTypedArrays = new WeakMap();
+
+/**
+ * Brand WeakMap for emulated DataView wrappers. The hidden genuine DataView
+ * performs reads against the genuine backing ArrayBuffer while the ordinary
+ * wrapper is safe to freeze.
+ *
+ * @type {WeakMap<DataView, DataView>}
+ */
+const hiddenDataViews = new WeakMap();
 
 /**
  * Amplifier-with-this-fallthrough for freezable TypedArrays. Returns the
@@ -599,37 +662,43 @@ const amplifyTypedArray = typedArray => {
  * See the README section "Function expressions versus declarations" for full
  * context (erights review comments 3439479281, 3439500526).
  */
-const taGetters = {
+const typedArrayGetters = {
   /** @type {(this: object) => ArrayBuffer} */
   get buffer() {
-    const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
-    if (genuineTA !== undefined) {
+    const genuineTypedArray = apply(weakmapGet, hiddenTypedArrays, [this]);
+    if (genuineTypedArray !== undefined) {
       // The hidden genuine TypedArray's buffer is the genuine backing buffer.
-      const genuineAB = apply(typedArrayBufferGetter, genuineTA, []);
+      const genuineArrayBuffer = apply(
+        typedArrayBufferGetter,
+        genuineTypedArray,
+        [],
+      );
       // Return the immutable wrapper (reverseBuffers maps genuine -> wrapper).
-      const immutableWrapper = apply(weakmapGet, reverseBuffers, [genuineAB]);
+      const immutableWrapper = apply(weakmapGet, reverseBuffers, [
+        genuineArrayBuffer,
+      ]);
       if (immutableWrapper !== undefined) {
         return immutableWrapper;
       }
-      return genuineAB;
+      return genuineArrayBuffer;
     }
     // Fallthrough: delegate to the genuine getter.
     return apply(typedArrayBufferGetter, this, []);
   },
 };
 
-// `getOwnPropertyDescriptor` returns `PropertyDescriptor | undefined`, and
-// `PropertyDescriptor.get` is typed `(() => any) | undefined` because a
-// descriptor can be a data descriptor. We know `taGetters.buffer` is an
-// accessor we just defined, so both the descriptor and its `get` are present.
-// @ts-expect-error TS doesn't know it'll be there
-const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
-  taGetters,
-  'buffer',
-);
+// `getOwnPropertyDescriptor` returns `PropertyDescriptor | undefined`, but
+// the `buffer` accessor was just defined on `typedArrayGetters` so the descriptor is
+// always present. The `PropertyDescriptor` cast informs TypeScript of this.
+const emulatedTypedArrayBufferGetter =
+  /** @type {(this: object) => ArrayBuffer} */ (
+    /** @type {PropertyDescriptor} */ (
+      getOwnPropertyDescriptor(typedArrayGetters, 'buffer')
+    ).get
+  );
 
 /**
- * Factory for per-flavor pseudo-constructors. Each pseudo-constructor replaces
+ * Factory for per-flavor emulated constructors. Each emulated constructor replaces
  * the corresponding global TypedArray constructor (for example `Uint8Array`).
  * When called with an emulated immutable ArrayBuffer as the first argument, it
  * produces an emulated freezable TypedArray wrapper. For all other call shapes
@@ -641,19 +710,20 @@ const { get: virtualTypedArrayBufferGetter } = getOwnPropertyDescriptor(
  * prototype.
  *
  * @param {Function} OriginalConstructor - The genuine TypedArray constructor to wrap.
- * @returns {Function} A pseudo-constructor with the same `.name` and `.prototype`.
+ * @returns {Function} A emulated constructor with the same `.name` and `.prototype`.
  */
-export const makePseudoTypedArrayConstructor = OriginalConstructor => {
+export const makeEmulatedTypedArrayConstructor = OriginalConstructor => {
   /**
    * @param {...any} args
    * @returns {object}
    */
-  function PseudoTypedArray(...args) {
+  function EmulatedTypedArray(...args) {
     // Determine whether the first argument is an emulated immutable
     // ArrayBuffer.
-    const [firstArg] = args;
+    const [firstArgument] = args;
     const isHidden =
-      firstArg !== undefined && apply(weakmapHas, buffers, [firstArg]);
+      firstArgument !== undefined &&
+      apply(weakmapHas, buffers, [firstArgument]);
 
     if (!isHidden) {
       // Fallthrough: delegate to the genuine constructor.
@@ -666,28 +736,27 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
 
     // Emulated-immutable branch.
     // Retrieve the genuine backing ArrayBuffer from the `buffers` WeakMap.
-    const genuineAB = apply(weakmapGet, buffers, [firstArg]);
+    const genuineArrayBuffer = apply(weakmapGet, buffers, [firstArgument]);
 
     // Build the remaining constructor arguments using the genuine buffer.
     const [, ...restArgs] = args;
-    const genuineTA = construct(OriginalConstructor, [genuineAB, ...restArgs]);
+    const genuineTypedArray = construct(OriginalConstructor, [
+      genuineArrayBuffer,
+      ...restArgs,
+    ]);
 
     // Create the emulated freezable wrapper as a plain object whose prototype
     // is OriginalConstructor.prototype (no intermediate prototype).
     const wrapper = create(OriginalConstructor.prototype);
 
     // Register the wrapper in the brand WeakMap (wrapper -> genuine TypedArray).
-    apply(weakmapSet, hiddenTypedArrays, [wrapper, genuineTA]);
-
-    // Register the reverse mapping so `view.buffer` can reconstruct the
-    // immutable wrapper from the genuine backing buffer.
-    apply(weakmapSet, reverseBuffers, [genuineAB, firstArg]);
+    apply(weakmapSet, hiddenTypedArrays, [wrapper, genuineTypedArray]);
 
     return wrapper;
   }
 
   // Preserve the constructor name for debugging and instanceof checks.
-  defineProperty(PseudoTypedArray, 'name', {
+  defineProperty(EmulatedTypedArray, 'name', {
     value: OriginalConstructor.name,
     writable: false,
     enumerable: false,
@@ -697,45 +766,45 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
   // The `prototype` property must be the genuine prototype so that
   // `instanceof T` and `Object.getPrototypeOf(wrapper) === T.prototype`
   // both hold. We share the genuine prototype rather than creating a new one.
-  PseudoTypedArray.prototype = OriginalConstructor.prototype;
+  EmulatedTypedArray.prototype = OriginalConstructor.prototype;
 
-  // Set the `prototype.constructor` to the pseudo-constructor so that SES's
-  // intrinsic walk finds consistency: after we install PseudoTypedArray as
+  // Set the `prototype.constructor` to the emulated constructor so that SES's
+  // intrinsic walk finds consistency: after we install EmulatedTypedArray as
   // `globalThis.BigInt64Array` (for example), SES samples `BigInt64Array` and
-  // resolves it to PseudoTypedArray. It then walks the permit graph and checks
+  // resolves it to EmulatedTypedArray. It then walks the permit graph and checks
   // that `intrinsics.%BigInt64ArrayPrototype%.constructor === intrinsics.BigInt64Array`.
   // If `prototype.constructor` still points to the original constructor,
-  // that check fails. Updating `prototype.constructor` to PseudoTypedArray
+  // that check fails. Updating `prototype.constructor` to EmulatedTypedArray
   // ensures both pointers agree with the intrinsics map.
   //
   // This does NOT affect genuine TypedArray construction:
   // `new OriginalConstructor(realAb)` delegates to the captured genuine
   // constructor via `Reflect.construct`, which ignores `prototype.constructor`.
   defineProperty(OriginalConstructor.prototype, 'constructor', {
-    value: PseudoTypedArray,
+    value: EmulatedTypedArray,
     writable: true,
     enumerable: false,
     configurable: true,
   });
 
-  // Set the pseudo-constructor's `[[Prototype]]` to `%TypedArray%` (the
+  // Set the emulated constructor's `[[Prototype]]` to `%TypedArray%` (the
   // abstract TypedArray superclass). SES's intrinsic walk validates that
   // each concrete TypedArray constructor inherits from `%TypedArray%` via the
   // constructor chain (`BigInt64Array.__proto__ === TypedArray`). A plain
   // function's default `Function.prototype` prototype would fail that check.
-  setPrototypeOf(PseudoTypedArray, TypedArray);
+  setPrototypeOf(EmulatedTypedArray, TypedArray);
 
   // Copy the `BYTES_PER_ELEMENT` static property from the original constructor.
   // Callers such as `packages/captp/src/atomics.js` read this constant
   // directly off the constructor (`BigUint64Array.BYTES_PER_ELEMENT`,
   // `Int32Array.BYTES_PER_ELEMENT`). The shim replaces the global binding with
-  // `PseudoTypedArray`, so the property must be present on the replacement or
+  // `EmulatedTypedArray`, so the property must be present on the replacement or
   // those reads return `undefined`, making arithmetic expressions produce NaN.
   //
   // `BYTES_PER_ELEMENT` is not inherited through the prototype chain on
   // TypedArray constructors; each concrete constructor carries its own own-
   // property value (8 for BigUint64Array, 4 for Int32Array, etc.).
-  defineProperty(PseudoTypedArray, 'BYTES_PER_ELEMENT', {
+  defineProperty(EmulatedTypedArray, 'BYTES_PER_ELEMENT', {
     // @ts-expect-error TS2339: BYTES_PER_ELEMENT exists on TypedArray constructors but not on Function
     value: OriginalConstructor.BYTES_PER_ELEMENT,
     writable: false,
@@ -744,13 +813,13 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
   });
 
   // Do NOT freeze here. SES's `hardenIntrinsics` will freeze all
-  // primordials (including the pseudo-constructors installed on globalThis)
+  // primordials (including the emulated constructors installed on globalThis)
   // as part of `lockdown()`. Pre-freezing would cause SES's pre-lockdown
   // consistency check ("all intrinsics must be unfrozen before repairIntrinsics")
   // to fail. The function is effectively immutable at runtime because the
   // only callers are the shim install path (which has already run) and
   // callers of the returned constructor.
-  return PseudoTypedArray;
+  return EmulatedTypedArray;
 };
 
 /**
@@ -778,16 +847,14 @@ export const makePseudoTypedArrayConstructor = OriginalConstructor => {
 export const freezableTypedArrayLibProperties = {
   __proto__: null,
 
-  // -------------------------------------------------------------------------
   // Accessors: `buffer`, `byteLength`, `byteOffset`, `length`
-  // -------------------------------------------------------------------------
 
   /**
    * @this {object}
    * @returns {ArrayBuffer}
    */
   get buffer() {
-    return apply(virtualTypedArrayBufferGetter, this, []);
+    return apply(emulatedTypedArrayBufferGetter, this, []);
   },
   /**
    * @this {object}
@@ -811,9 +878,36 @@ export const freezableTypedArrayLibProperties = {
     return apply(typedArrayLengthGetter, amplifyTypedArray(this), []);
   },
 
-  // -------------------------------------------------------------------------
+  // `[Symbol.toStringTag]`: amplify then read the genuine internal-slot tag
+
+  /**
+   * Replaces the genuine, `this`-sensitive `%TypedArrayPrototype%`
+   * `[Symbol.toStringTag]` getter with a wrapper around it. On an emulated
+   * freezable wrapper (brand-WeakMap member) it amplifies to the hidden genuine
+   * TypedArray and reads *its* tag, so `Object.prototype.toString.call(wrapper)`
+   * reads `'[object Uint8Array]'` — matching a genuine view. On a genuine
+   * TypedArray it falls through to the genuine getter (amplifier returns `this`
+   * unchanged); on any other receiver the genuine getter returns `undefined`,
+   * exactly as before.
+   *
+   * This is the getter-wrapper fidelity fix from erights's review of
+   * endojs/endo-but-for-bots#475 (comments 3817252816 / 3817264546): a
+   * higher-fidelity repair than installing a `[Symbol.toStringTag]` *data*
+   * property, which would patch only the `Object.prototype.toString` lookup
+   * path and leave this getter still reporting `undefined` on a wrapper.
+   * Because the getter and `Object.prototype.toString` now agree, any brand
+   * check that captures *this* (shim-installed) getter — e.g.
+   * `@endo/harden`'s `isTypedArray` if it captures after the shim installs —
+   * observes an emulated wrapper as a TypedArray.
+   *
+   * @this {object}
+   * @returns {string | undefined}
+   */
+  get [Symbol.toStringTag]() {
+    return apply(typedArrayToStringTagGetter, amplifyTypedArray(this), []);
+  },
+
   // Mutator methods: throw on emulated freezable wrappers
-  // -------------------------------------------------------------------------
 
   /**
    * @this {object}
@@ -885,9 +979,7 @@ export const freezableTypedArrayLibProperties = {
     return apply(typedArraySort, this, [compareFn]);
   },
 
-  // -------------------------------------------------------------------------
   // Read-only method delegates: amplify then call the captured genuine method
-  // -------------------------------------------------------------------------
 
   /**
    * @this {object}
@@ -1106,43 +1198,44 @@ export const freezableTypedArrayLibProperties = {
    * @returns {object}
    */
   subarray(begin = undefined, end = undefined) {
-    const genuineTA = apply(weakmapGet, hiddenTypedArrays, [this]);
-    if (genuineTA !== undefined) {
+    const genuineTypedArray = apply(weakmapGet, hiddenTypedArrays, [this]);
+    if (genuineTypedArray !== undefined) {
       // `this` is an emulated freezable wrapper. Delegate to the hidden genuine
       // TypedArray to get the sub-view genuine TypedArray, then wrap it in a new
       // emulated freezable wrapper so the safety contract (`sub.buffer === iab`)
       // holds for sub-views.
-      const genuineSub = apply(typedArraySubarray, genuineTA, [begin, end]);
+      const genuineSubarray = apply(typedArraySubarray, genuineTypedArray, [
+        begin,
+        end,
+      ]);
       // `create(getPrototypeOf(this))` is sufficient rather than calling the
-      // pseudo-constructor because the sub-view wrapper needs exactly three
+      // emulated constructor because the sub-view wrapper needs exactly three
       // things the parent wrapper already provides:
       //
       // 1. The right prototype. `getPrototypeOf(this)` is
       //    `OriginalConstructor.prototype`, the same prototype the
-      //    pseudo-constructor would set via `create(OriginalConstructor.prototype)`.
+      //    emulated constructor would set via `create(OriginalConstructor.prototype)`.
       //    The shim's freezable behaviors live on that prototype (installed onto
       //    `%TypedArrayPrototype%`), so they are already inherited.
       //
       // 2. A `hiddenTypedArrays` registration. The line below registers
-      //    `subWrapper -> genuineSub` in the brand WeakMap, which is what
+      //    `subWrapper -> genuineSubarray` in the brand WeakMap, which is what
       //    `amplifyTypedArray` and every method that discriminates on brand
       //    membership require. No other per-instance state is needed.
       //
       // 3. A `reverseBuffers` entry for `view.buffer` redirection. A sub-array
       //    shares its backing buffer with the parent; `typedArraySubarray` does
-      //    not allocate a new buffer. The pseudo-constructor's `reverseBuffers`
-      //    registration maps the genuine backing buffer to the immutable wrapper,
-      //    and that entry was already written when the parent was constructed.
-      //    The sub-view's genuine buffer is the same genuine buffer, so no new
-      //    `reverseBuffers` entry is needed.
+      //    not allocate a new buffer. The immutable ArrayBuffer constructor
+      //    registered the genuine backing buffer's immutable wrapper, so the
+      //    sub-view needs no new `reverseBuffers` entry.
       //
       // Static properties (`BYTES_PER_ELEMENT`) live on
       // `OriginalConstructor.prototype.constructor`, not on the instance, so
       // they are also already present via the prototype chain. There is no
-      // instance state that the pseudo-constructor would add that `create` does
+      // instance state that the emulated constructor would add that `create` does
       // not already provide.
       const subWrapper = create(getPrototypeOf(this));
-      apply(weakmapSet, hiddenTypedArrays, [subWrapper, genuineSub]);
+      apply(weakmapSet, hiddenTypedArrays, [subWrapper, genuineSubarray]);
       // `reverseBuffers` already maps the genuine backing buffer to the immutable
       // wrapper from when the parent wrapper was constructed; no new entry needed.
       return subWrapper;
@@ -1241,20 +1334,198 @@ for (const key of ownKeys(freezableTypedArrayLibProperties)) {
 
 /**
  * The eleven concrete TypedArray constructors that share `%TypedArrayPrototype%`.
- * The shim replaces each with a pseudo-constructor from `makePseudoTypedArrayConstructor`.
+ * The shim replaces each with a emulated constructor from `makeEmulatedTypedArrayConstructor`.
  *
- * @type {Array<{name: string, Ctor: Function}>}
+ * @type {Array<{name: string, Constructor: Function}>}
  */
-export const concreteTypedArrayCtors = [
-  { name: 'Int8Array', Ctor: Int8Array },
-  { name: 'Int16Array', Ctor: Int16Array },
-  { name: 'Int32Array', Ctor: Int32Array },
-  { name: 'Uint8Array', Ctor: Uint8Array },
-  { name: 'Uint8ClampedArray', Ctor: Uint8ClampedArray },
-  { name: 'Uint16Array', Ctor: Uint16Array },
-  { name: 'Uint32Array', Ctor: Uint32Array },
-  { name: 'Float32Array', Ctor: Float32Array },
-  { name: 'Float64Array', Ctor: Float64Array },
-  { name: 'BigInt64Array', Ctor: BigInt64Array },
-  { name: 'BigUint64Array', Ctor: BigUint64Array },
+export const concreteTypedArrayConstructors = [
+  { name: 'Int8Array', Constructor: Int8Array },
+  { name: 'Int16Array', Constructor: Int16Array },
+  { name: 'Int32Array', Constructor: Int32Array },
+  { name: 'Uint8Array', Constructor: Uint8Array },
+  { name: 'Uint8ClampedArray', Constructor: Uint8ClampedArray },
+  { name: 'Uint16Array', Constructor: Uint16Array },
+  { name: 'Uint32Array', Constructor: Uint32Array },
+  { name: 'Float32Array', Constructor: Float32Array },
+  { name: 'Float64Array', Constructor: Float64Array },
+  { name: 'BigInt64Array', Constructor: BigInt64Array },
+  { name: 'BigUint64Array', Constructor: BigUint64Array },
 ];
+
+// Freezable DataView emulation
+
+/** @param {DataView} view */
+const amplifyDataView = view => {
+  const result = apply(weakmapGet, hiddenDataViews, [view]);
+  return result === undefined ? view : result;
+};
+
+/**
+ * Replacement DataView constructor. Construction over a genuine mutable
+ * ArrayBuffer delegates unchanged. Construction over an emulated immutable
+ * buffer delegates all argument conversion and range validation to the
+ * genuine constructor, then exposes an ordinary, freezable wrapper.
+ *
+ * @param {...any} args
+ * @returns {DataView}
+ */
+export const EmulatedDataView = function EmulatedDataViewConstructor(...args) {
+  if (new.target === undefined) {
+    return apply(DataView, undefined, args);
+  }
+  const [buffer, ...rest] = args;
+  if (!apply(weakmapHas, buffers, [buffer])) {
+    return construct(DataView, args, new.target);
+  }
+
+  const genuineBuffer = apply(weakmapGet, buffers, [buffer]);
+  const genuineView = construct(DataView, [genuineBuffer, ...rest]);
+  const prototype =
+    typeof new.target.prototype === 'object' && new.target.prototype !== null
+      ? new.target.prototype
+      : dataViewPrototype;
+  const wrapper = /** @type {DataView} */ (create(prototype));
+  apply(weakmapSet, hiddenDataViews, [wrapper, genuineView]);
+  return wrapper;
+};
+
+defineProperty(EmulatedDataView, 'name', {
+  value: 'DataView',
+  writable: false,
+  enumerable: false,
+  configurable: true,
+});
+defineProperty(EmulatedDataView, 'length', {
+  value: DataView.length,
+  writable: false,
+  enumerable: false,
+  configurable: true,
+});
+EmulatedDataView.prototype = dataViewPrototype;
+
+/**
+ * @param {(...args: any[]) => any} method
+ * @param {string} name
+ * @returns {(...args: any[]) => any}
+ */
+const makeDataViewReader = (method, name) => {
+  const holder = {
+    /**
+     * @this {DataView}
+     * @param {...any} args
+     */
+    read(...args) {
+      return apply(method, amplifyDataView(this), args);
+    },
+  };
+  defineProperty(holder.read, 'name', { value: name, configurable: true });
+  defineProperty(holder.read, 'length', {
+    value: method.length,
+    configurable: true,
+  });
+  return holder.read;
+};
+
+/**
+ * @param {(...args: any[]) => any} method
+ * @param {string} name
+ * @returns {(...args: any[]) => any}
+ */
+const makeDataViewWriter = (method, name) => {
+  const holder = {
+    /**
+     * @this {DataView}
+     * @param {...any} args
+     */
+    write(...args) {
+      if (apply(weakmapHas, hiddenDataViews, [this])) {
+        throw TypeError(
+          `Cannot ${name} through a DataView on an immutable ArrayBuffer`,
+        );
+      }
+      return apply(method, this, args);
+    },
+  };
+  defineProperty(holder.write, 'name', { value: name, configurable: true });
+  defineProperty(holder.write, 'length', {
+    value: method.length,
+    configurable: true,
+  });
+  return holder.write;
+};
+
+export const freezableDataViewLibProperties = {
+  __proto__: null,
+  constructor: EmulatedDataView,
+  /** @this {DataView} */
+  get buffer() {
+    const genuineView = apply(weakmapGet, hiddenDataViews, [this]);
+    if (genuineView === undefined) {
+      return apply(dataViewBufferGetter, this, []);
+    }
+    const genuineBuffer = apply(dataViewBufferGetter, genuineView, []);
+    return apply(weakmapGet, reverseBuffers, [genuineBuffer]) ?? genuineBuffer;
+  },
+  /** @this {DataView} */
+  get byteLength() {
+    return apply(dataViewByteLengthGetter, amplifyDataView(this), []);
+  },
+  /** @this {DataView} */
+  get byteOffset() {
+    return apply(dataViewByteOffsetGetter, amplifyDataView(this), []);
+  },
+};
+
+/** @type {Record<string, (...args: any[]) => any>} */
+const dataViewReaders = {
+  getBigInt64: dataViewGetBigInt64,
+  getBigUint64: dataViewGetBigUint64,
+  getFloat32: dataViewGetFloat32,
+  getFloat64: dataViewGetFloat64,
+  getInt8: dataViewGetInt8,
+  getInt16: dataViewGetInt16,
+  getInt32: dataViewGetInt32,
+  getUint8: dataViewGetUint8,
+  getUint16: dataViewGetUint16,
+  getUint32: dataViewGetUint32,
+};
+if (optDataViewGetFloat16 !== undefined) {
+  dataViewReaders.getFloat16 = optDataViewGetFloat16;
+}
+for (const [name, method] of entries(dataViewReaders)) {
+  defineProperty(freezableDataViewLibProperties, name, {
+    value: makeDataViewReader(method, name),
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+/** @type {Record<string, (...args: any[]) => any>} */
+const dataViewWriters = {
+  setBigInt64: dataViewSetBigInt64,
+  setBigUint64: dataViewSetBigUint64,
+  setFloat32: dataViewSetFloat32,
+  setFloat64: dataViewSetFloat64,
+  setInt8: dataViewSetInt8,
+  setInt16: dataViewSetInt16,
+  setInt32: dataViewSetInt32,
+  setUint8: dataViewSetUint8,
+  setUint16: dataViewSetUint16,
+  setUint32: dataViewSetUint32,
+};
+if (optDataViewSetFloat16 !== undefined) {
+  dataViewWriters.setFloat16 = optDataViewSetFloat16;
+}
+for (const [name, method] of entries(dataViewWriters)) {
+  defineProperty(freezableDataViewLibProperties, name, {
+    value: makeDataViewWriter(method, name),
+    writable: true,
+    enumerable: false,
+    configurable: true,
+  });
+}
+
+for (const key of ownKeys(freezableDataViewLibProperties)) {
+  defineProperty(freezableDataViewLibProperties, key, { enumerable: false });
+}
