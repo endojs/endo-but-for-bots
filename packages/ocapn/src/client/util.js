@@ -10,7 +10,7 @@ import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
 import { encodeHex } from '@endo/hex';
 
 /**
- * @param {ArrayBufferLike} value
+ * @param {Uint8Array} value
  * @returns {string}
  */
 export const toHex = value => {
@@ -52,7 +52,7 @@ const swissnumDecoder = new TextDecoder('ascii', { fatal: true });
 const swissnumEncoder = new TextEncoder();
 
 /**
- * @param {ArrayBufferLike} value
+ * @param {Uint8Array} value
  * @returns {string}
  */
 export const decodeSwissnum = value => {
@@ -73,7 +73,7 @@ export const encodeSwissnum = value => {
       );
     }
   }
-  // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
+  // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
   return bytesToImmutable(swissnumEncoder.encode(value));
 };
 
@@ -91,7 +91,7 @@ export const encodeSwissnum = value => {
  * @returns {SwissNum}
  */
 export const swissnumFromBytes = bytes => {
-  // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
+  // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
   return bytesToImmutable(bytes);
 };
 

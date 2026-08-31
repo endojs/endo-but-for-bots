@@ -18,7 +18,7 @@ import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 const labelTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
 /**
- * @param {ArrayBufferLike} buffer
+ * @param {Uint8Array} buffer
  * @returns {string}
  */
 const decodeBytestringLabel = buffer =>
@@ -172,8 +172,8 @@ export const makeExpectedLengthBytestringCodec = (codecName, length) => {
       return bytestring;
     },
     write: (value, syrupWriter) => {
-      if (!(value instanceof ArrayBuffer)) {
-        throw Error(`Expected ArrayBuffer, got ${typeof value}`);
+      if (!(value instanceof Uint8Array)) {
+        throw Error(`Expected Uint8Array, got ${typeof value}`);
       }
       if (value.byteLength !== length) {
         throw Error(`Expected length ${length}, got ${value.byteLength}`);
@@ -202,7 +202,7 @@ export const NumberPrefixCodec = makeCodec('NumberPrefix', {
   write: (value, syrupWriter) => {
     if (typeof value === 'string') {
       syrupWriter.writeString(value);
-    } else if (value instanceof ArrayBuffer) {
+    } else if (value instanceof Uint8Array) {
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);

@@ -50,7 +50,7 @@ import { getSturdyRefDetails } from '../client/sturdyrefs.js';
  * @property {OcapnLocation} exporterLocation
  * @property {SessionId} exporterSessionId
  * @property {PublicKeyId} gifterSideId
- * @property {ArrayBufferLike} giftId
+ * @property {Uint8Array} giftId
  */
 
 /**
@@ -314,7 +314,7 @@ export const makeDescCodecs = referenceKit => {
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      // @ts-expect-error - Branded type: SwissNum is ArrayBufferLike at runtime
+      // @ts-expect-error - Branded type: SwissNum is Uint8Array at runtime
       const value = referenceKit.makeSturdyRef(node, swissNum);
       return value;
     },
@@ -387,7 +387,7 @@ const makeSigEnvelope = (object, signature) => {
  * @param {OcapnLocation} exporterLocation
  * @param {SessionId} exporterSessionId
  * @param {PublicKeyId} gifterSideId
- * @param {ArrayBufferLike} giftId
+ * @param {Uint8Array} giftId
  * @returns {HandoffGive}
  */
 export const makeHandoffGiveDescriptor = (
@@ -409,7 +409,7 @@ export const makeHandoffGiveDescriptor = (
 
 /**
  * @param {HandoffGive} handoffGive
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const serializeHandoffGive = handoffGive => {
   const syrupWriter = makeSyrupWriter();
@@ -461,7 +461,7 @@ export const makeHandoffReceiveSigEnvelope = (handoffReceive, signature) => {
 
 /**
  * @param {HandoffReceive} handoffReceive
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 export const serializeHandoffReceive = handoffReceive => {
   const syrupWriter = makeSyrupWriter();

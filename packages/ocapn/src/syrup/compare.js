@@ -86,9 +86,9 @@ export const compareUint8Arrays = (
 };
 
 /**
- * Compare two immutable ArrayBuffers
- * @param {ArrayBufferLike} left
- * @param {ArrayBufferLike} right
+ * Compare two immutable byte arrays
+ * @param {Uint8Array} left
+ * @param {Uint8Array} right
  * @returns {number}
  */
 export const compareImmutableArrayBuffers = (left, right) => {

@@ -27,7 +27,11 @@ import { makePassableCodecs } from '../../src/codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../../src/codecs/operations.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 import { makeSyrupWriter } from '../../src/syrup/encode.js';
-import { maybeDecode, notThrowsWithErrorUnwrapping } from '../_util.js';
+import {
+  maybeDecode,
+  normalizeByteArrays,
+  notThrowsWithErrorUnwrapping,
+} from '../_util.js';
 import {
   makeOcapnKeyPairFromPrivateKey,
   makeSignedHandoffGive,
@@ -372,8 +376,8 @@ export const testBidirectionally = (
     );
   } else {
     t.deepEqual(
-      readValueResult,
-      expectedValue,
+      normalizeByteArrays(readValueResult),
+      normalizeByteArrays(expectedValue),
       `value check: ${testDescriptor}`,
     );
   }
