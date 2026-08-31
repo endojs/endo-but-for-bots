@@ -1,0 +1,32 @@
+Local TCP+CBOR+Noise two-daemon invite/accept (both Pet Daemons in ONE host)
+===========================================================================
+
+The cross-host demo proves WS across two hosts; minion.town blocks non-443,
+so remote TCP is out of scope. This companion transcript demonstrates the
+TCP+CBOR transport locally, between two full Pet Daemons in the garden
+container. (Same shape as PR #688's demo/two-daemon-invite-accept/transcript-tcp.txt,
+re-run fresh in this environment.)
+
+  $ node demo/two-daemon-invite-accept/run.mjs      # OCAPN_WS=1 for the ws variant
+
+Captured 2026-07-11T17:46:23Z by garden job ocapn-cross-host-pet-daemon-invite-accept.
+-------------------------------------------------------------------------------
+demo: transport = ocapn+noise+tcp
+demo: booting daemon A (inviter) ...
+demo: booting daemon B (acceptor) ...
+demo: A: invite("bob") — creating a durable invitation
+demo: A: invitation locator =
+demo:    endo://e6b55dd8c0aa6629f7ffd17a0b82f3870ac3cdd27e76b5a2af2b30a6e98ce222?id=80a7b66f0f16d57c90e3b110d0cb01dce56211be706eb607805023924d61c4ec&type=invitation&from=cea3792606d74d3dbfc9fce5a7c6dd696d7ac8aa38416feef574aa8d0f7e3e3a&fromNode=92919f2370ec506b48528c3bb06db09ef4d81a13bb705ee3481a6346e7ca7460&at=ocapn%2Bnoise%2Btcp%3A%2F%2F127.0.0.1%3A33877%2F%3Fnode%3De6b55dd8c0aa6629f7ffd17a0b82f3870ac3cdd27e76b5a2af2b30a6e98ce222%26loc%3D%257B%2522type%2522%253A%2522ocapn-peer%2522%252C%2522network%2522%253A%2522np%2522%252C%2522transport%2522%253A%2522np%2522%252C%2522designator%2522%253A%25220ca4651ba884541464df2c5b252e2548647def1740e374aa0ffd9b0df17d51da%2522%252C%2522hints%2522%253A%257B%2522tcp%253Ahost%2522%253A%2522127.0.0.1%2522%252C%2522tcp%253Aport%2522%253A%252233877%2522%257D%257D
+demo: A: invitation advertises 1 connection hint(s):
+demo:    ocapn+noise+tcp://127.0.0.1:33877/?node=e6b55dd8c0aa6629f7ffd17a0b82f3870ac3cdd27e76b5a2af2b30a6e98ce222&loc=%7B%22type%22%3A%22ocapn-peer%22%2C%22network%22%3A%22np%22%2C%22transport%22%3A%22np%22%2C%22designator%22%3A%220ca4651ba884541464df2c5b252e2548647def1740e374aa0ffd9b0df17d51da%22%2C%22hints%22%3A%7B%22tcp%3Ahost%22%3A%22127.0.0.1%22%2C%22tcp%3Aport%22%3A%2233877%22%7D%7D
+demo: A: ✓ hints advertise ocapn+noise+tcp — pairing will route via @nets/ocapn
+demo: B: accept(<locator>, "alice") — completing the pairing
+demo: B: ✓ accepted; both daemons now hold each other's peer info
+demo: A: publish Far("Adder", { add }) as pet name "adder"
+demo: B: adopt A's adder by locator and invoke E(adder).add(2, 3)
+demo: B: ← remote result = 5
+demo: B: ✓ capability round-trip computed 2 + 3 = 5 over the Noise session
+demo: A: publish Far("Echoer", { echo }) as pet name "echoer"
+demo: B: send a fresh Far token through E(echoer).echo and check identity
+demo: B: ✓ Far reference identity preserved across the netlayer
+demo: DEMO PASSED

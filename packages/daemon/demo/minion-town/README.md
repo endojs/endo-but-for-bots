@@ -28,8 +28,10 @@ The demo exercises the **exact session layer the Pet Daemon's
 - `@endo/ocapn` CBOR framing, locator, swissnum, sturdyref -> capability
   invocation,
 - carried on a WebSocket through **Caddy TLS on 443**, terminating at a
-  **loopback** listener (the box's security group allows only 80/443 inbound —
-  raw TCP off-host is unreachable, which is why WS+Caddy is the transport).
+  **loopback** listener (the box's security group originally allowed only
+  80/443 inbound, which is why WS+Caddy was the first transport; a dedicated
+  port for the raw-TCP variant below was opened later, under maintainer
+  authorization).
 
 ## The pieces
 
@@ -41,6 +43,29 @@ The demo exercises the **exact session layer the Pet Daemon's
 | `ocapn-demo.caddy` | The `/ocapn` route as folded into `minion-town.caddy`. |
 | `run-demo.sh` | Repeatable end-to-end runner (fetch location via SSM -> rewrite hint -> dial). |
 | `ssm.sh` | Thin `aws ssm send-command` wrapper (garden AWS creds). |
+| `ocapn-tcp-server.mjs` | The **TCP+CBOR** sibling of `ocapn-ws-server.mjs`: same Greeter, listening on a raw TCP port with netstring-framed CBOR, advertising public `tcp:host`/`tcp:port` hints (`DEMO_PUBLIC_HOST`/`DEMO_PUBLIC_PORT`). |
+| `ocapn-tcp-client.mjs` | The TCP **local peer**: dial-only `makeTcpTransport`, optional `TCP_HOST_OVERRIDE`/`TCP_PORT_OVERRIDE` hint rewrites. |
+| `endo-ocapn-tcp-demo.service` | The systemd unit for the TCP service as deployed on the host. |
+
+## TCP+CBOR variant (cross-host, public port 8929)
+
+The same proof over the **second required transport**: raw TCP with
+netstring-framed CBOR, no Caddy, no TLS — the Noise IK handshake is the whole
+security layer. A raw TCP listener cannot ride the HTTPS port, so this variant
+needed a **security-group change**: inbound `tcp/8929` on `sg-0f2cf8d86744b7293`
+(rule `sgr-0d9fc044a33568003`, opened 2026-07-29 under the maintainer's
+authorization on PR #683's demo report). `endo-ocapn-tcp-demo.service` runs
+container `endo-ocapn-tcp-toy` from the same image, binding `0.0.0.0:8929`
+(docker-published) and advertising `tcp:host=minion.town tcp:port=8929` in the
+location JSON at `/opt/ocapn-demo/ocapn-tcp-location.json` — directly dialable,
+no client-side rewrite needed. The image predates `ocapn-tcp-server.mjs`, so the
+unit bind-mounts the script from `/opt/ocapn-demo/` over its in-tree path
+(which also gives it the in-image `node_modules` resolution).
+
+Live cross-host transcript (garden container -> `minion.town:8929`):
+[`transcript-tcp-cross-host.txt`](transcript-tcp-cross-host.txt).
+With this, the cross-host capability round-trip is proven over **both** OCapN.md
+transports — WebSocket/HTTP (through Caddy TLS) and TCP+CBOR (direct).
 
 ## How the daemon reached the host
 

@@ -1,0 +1,62 @@
+Cross-host Pet-Daemon <-> Pet-Daemon invite/accept over wss:// + Noise (M5, literal DoD)
+=======================================================================================
+
+Two REAL Endo Pet Daemons on DIFFERENT hosts pairing through the invite/accept
+workflow and round-tripping a capability:
+  * INVITER/PUBLISHER: the full Endo Pet Daemon on minion.town
+      (EC2 i-0380cd68b90020fad, container 'endo-pet-daemon', @nets/ocapn WS+Noise,
+       reachable at wss://minion.town/ocapn-daemon through Caddy TLS 443)
+  * ACCEPTOR/CALLER: a full Endo Pet Daemon booted locally in the garden container
+      (@nets/ocapn WS transport, dials OUT to minion)
+
+Captured 2026-07-11T17:48:18Z by garden job ocapn-cross-host-pet-daemon-invite-accept.
+Node v22.23.1 both ends; minion daemon node id a6cd6e01... designator ce47e379...
+
+-------------------------------------------------------------------------------
+STEP 1 - minion.town Pet Daemon mints an invitation + publishes a capability
+  (run INSIDE the container against its live control socket /data/endo.sock):
+  $ docker exec endo-pet-daemon node demo/cross-host-invite-accept/minion-mint-invitation.mjs
+-------------------------------------------------------------------------------
+NODE 572189b698dbc8b0fe4b31238ca634ff8cf2a1628d817adff58460a392746a56:9071f19a9b9f2965379f1c84ee955420727b0a67738b635c9432b76ddfaaf7d7
+ADDER endo://a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377/?id=83849d3e84b721504d36e4f97854de9dacd1cd9ff8f23cc93f231beffa3c912c&type=eval&at=ocapn%2Bnoise%2Bws%3A%2F%2F127.0.0.1%3A8930%2F%3Fnode%3Da6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377%26loc%3D%257B%2522type%2522%253A%2522ocapn-peer%2522%252C%2522network%2522%253A%2522np%2522%252C%2522transport%2522%253A%2522np%2522%252C%2522designator%2522%253A%2522ce47e379747de35b8c52485b1f6393a0a3e9a9588169316fef5b532ffdd60ed1%2522%252C%2522hints%2522%253A%257B%2522ws%253Aurl%2522%253A%2522ws%253A%252F%252F127.0.0.1%253A8930%2522%257D%257D
+INVITATION endo://a6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377?id=fb03375a8994d53b73a87904a815fe7a29a7866a5af55c75545906ff6f5e3195&type=invitation&from=572189b698dbc8b0fe4b31238ca634ff8cf2a1628d817adff58460a392746a56&fromNode=9071f19a9b9f2965379f1c84ee955420727b0a67738b635c9432b76ddfaaf7d7&at=ocapn%2Bnoise%2Bws%3A%2F%2F127.0.0.1%3A8930%2F%3Fnode%3Da6cd6e01283acd9a0ed7fd7377b377075fe5cc37569d341fb654d456e27ba377%26loc%3D%257B%2522type%2522%253A%2522ocapn-peer%2522%252C%2522network%2522%253A%2522np%2522%252C%2522transport%2522%253A%2522np%2522%252C%2522designator%2522%253A%2522ce47e379747de35b8c52485b1f6393a0a3e9a9588169316fef5b532ffdd60ed1%2522%252C%2522hints%2522%253A%257B%2522ws%253Aurl%2522%253A%2522ws%253A%252F%252F127.0.0.1%253A8930%2522%257D%257D
+
+  The invitation's 'at' hint carries loopback ws:url ws://127.0.0.1:8930 and
+  the Noise designator ce47e379...  The world reaches that loopback port only
+  through Caddy TLS on 443, so the local side rewrites JUST the ws:url
+  transport hint to wss://minion.town/ocapn-daemon; the Noise IK handshake
+  authenticates the *designator*, which is unchanged.
+
+-------------------------------------------------------------------------------
+STEP 2 - local Pet Daemon accepts the invitation over wss:// and invokes back
+  $ WS_URL_OVERRIDE=wss://minion.town/ocapn-daemon INVITATION=... ADDER=... \
+      node demo/cross-host-invite-accept/local-accept-invitation.mjs
+-------------------------------------------------------------------------------
+local: booting local Pet Daemon (state=/home/kris/garden2/scratch/project-wt-ocapn-cross-host-pet-daemon-invite-accept-ee8f57ff/packages/daemon/tmp/demo-cross-host/local-2508873/state)
+local: installing @nets/ocapn (WS transport) ...
+local: ✓ @nets/ocapn installed locally
+local: accepting minion.town invitation over wss://minion.town/ocapn-daemon ...
+local:    designator-preserving rewrite applied to ws:url hint
+local: ✓ accept() resolved: undefined
+local: ✓ paired with minion.town Pet Daemon
+local: local pet names after accept: ["@agent","@endo","@host","@info","@mail","@main","@nets","@node","@none","@pins","@self","minion","ws-listen-addr"]
+local: ✓ invitation bound the minion.town peer under pet name "minion"
+local: adopting minion-published capability "adder" by locator ...
+local: invoking E(adder).add(2, 3) across the wss+Noise edge ...
+local: ← remote result: 2 + 3 = 5
+local: ← remote greeting: "hello local Pet Daemon in the garden container from minion.town"
+local: ✓ capability round-trip across the cross-host Noise session
+local: CROSS-HOST DEMO PASSED
+
+-------------------------------------------------------------------------------
+STEP 3 - minion.town side confirms the pairing registered (guest + peer info)
+-------------------------------------------------------------------------------
+MINION_NAMES ["@agent","@endo","@host","@info","@mail","@main","@nets","@node","@none","@pins","@self","localpeer-<pid>",...,"xhost-adder-<pid>",...]
+  addPeerInfo(local) ran on minion when local called E(invitation).accept
+  back over the Noise session; the localpeer-* / xhost-adder-* names are the
+  invitations minted and capabilities published across runs.
+
+RESULT: a local Pet Daemon and the minion.town Pet Daemon paired via invite/accept
+over wss:// + Noise IK + CBOR, and a capability round-tripped end to end:
+  E(adder).add(2,3) => 5                          (computed on minion, result to local)
+  E(adder).greet(<local string>) => 'hello ... from minion.town'  (remote method, live arg)
