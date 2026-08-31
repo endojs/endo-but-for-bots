@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-12 |
-| **Updated** | 2026-08-31 (round-2 panel fixes: separated severity/disposition/provenance fields, resolved the dead "Axis-2 followups" reference, extended the Tier-1 CI runtime gate across all three MVR platforms, and reconciled the MVR-table build-pipeline rows) |
+| **Updated** | 2026-08-31 (round-3 panel fixes: applied the per-gap disposition schema to all 16 gaps and dropped the redundant `MVR resolution` label, disambiguated per-PR Tier 0/Tier 1 build dependencies and widened the CI path filter to the chat renderer, reframed the residual Linux launch risk, made forward references to Open questions explicit, removed the remaining prose em-dashes, and normalized `followup`/`Familiar` spelling) |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Source** | Issue [#229](https://github.com/endojs/endo-but-for-bots/issues/229) |
@@ -86,8 +86,8 @@ const primerTreeId = await E(agent).identify('lal-primer');
 `new URL('./primer', import.meta.url)` resolves under the packaged
 `bundles/` directory.
 The mechanism the issue body describes ("lal carries the Primer
-and injects it into the CAS on initialization") is therefore
-already in place.
+and injects it into the CAS, the daemon's content-addressable
+store, on initialization") is therefore already in place.
 What remains is to verify it end to end in a fresh-install
 configuration and to surface the rest of the gaps below.
 
@@ -119,7 +119,7 @@ from the packaged app; the bundles are self-contained.
 - The agent sends a config form to the host inbox.
 - The user fills in the form in Chat.
 - The agent stores the Primer as a `readable-tree` in the daemon's
-  CAS (content-addressable store).
+  CAS.
 - Each spawned worker loop receives a `primer` reference.
 
 ### What does not work today (assumed gaps)
@@ -136,17 +136,23 @@ distribution and trust, and first-run experience; they are
 numbered G1 through G16 below in audit order rather than grouped
 under those category headings.
 
-Each gap's per-item block (`**Severity:**` / `**MVR disposition:**`
-/ `**Resolved by:**` / `**Target:**`) is the single source of truth
-for that gap's status. The `MVR: minimum to ship`, `Followups`, and
-`Out of scope for this release` tables in the Phased plan are
-**derived views** for scanning by phase, not independent records: on
-any scope change, edit the per-gap block first and reconcile the
-summary tables to it.
+Each gap's per-item block is the single source of truth for that
+gap's status. Every one of G1 through G16 carries a `**Severity:**`
+line (intrinsic impact), an `**MVR disposition:**` line (in scope
+for MVR, deferred, or out of scope), and a `**Target:**` line
+(target behavior); a gap whose disposition was set by a recorded
+decision also carries a `**Resolved by:**` provenance line naming
+that decision, and gaps that are simply in MVR scope by default omit
+it. The `MVR: minimum to ship`, `Followups`, and `Out of scope for
+this release` tables in the Phased plan are **derived views** for
+scanning by phase, not independent records: on any scope change,
+edit the per-gap block first and reconcile the summary tables to it.
 
 ### G1. Uncommitted bundles directory and a mandatory build
 
 **Severity:** Blocker.
+**MVR disposition:** In scope for MVR (confirm the existing release
+workflow's artifacts and promote a per-PR build smoke).
 **Current:** `packages/familiar/bundles/` and
 `packages/familiar/binaries/` are absent from a fresh checkout
 (they are build outputs).
@@ -199,7 +205,7 @@ Application certificate and `osxNotarize` against an Apple ID
 configured in the build environment; the DMG carries a notarized
 ticket that Gatekeeper accepts on a user's machine without
 prompts.
-**MVR resolution:** Skip the notarization integration for MVR.
+For MVR, skip the notarization integration.
 The early user pool is small enough to accept the manual
 `xattr -d com.apple.quarantine` workaround documented in the
 README.
@@ -209,14 +215,15 @@ the `xattr` invocation is a terminal command a non-developer
 would not run unaided, so the instruction must both spell out the
 exact command and state plainly that it is a known first-run
 speed-bump that notarization (deferred here) removes.
-Because the Gatekeeper dialog fires the instant the user
-double-clicks — before they have any reason to have opened a
-repo README, which a DMG double-click does not route them to —
-the instruction must be discoverable *at the point of friction*,
-not only in `packages/familiar/README.md`: it must appear on the
-GitHub release / download page the user actually fetches the DMG
-from, and ideally in the DMG's own background/instructions image,
-so the user meets the workaround where the failure happens.
+The Gatekeeper dialog fires the instant the user double-clicks
+(before the user has any reason to have opened a repo README,
+which a DMG double-click does not route them to).
+The instruction must therefore be discoverable *at the point of
+friction*, not only in `packages/familiar/README.md`.
+It must appear on the GitHub release / download page the user
+actually fetches the DMG from, and ideally in the DMG's own
+background/instructions image, so the user meets the workaround
+where the failure happens.
 Until notarization lands, the Gatekeeper dialog is the app's only
 signal, so the documented workaround is the only way past it.
 The certificate-acquisition process is tracked in a separate
@@ -240,10 +247,8 @@ A user double-clicking `Familiar-<version>-win32-x64.zip` and the
 extracted `Familiar.exe` triggers SmartScreen's "unrecognized
 publisher" dialog.
 **Target:** Sign the exe with an EV (or OV) certificate; the EV
-certificate yields immediate SmartScreen reputation, the OV
+certificate yields immediate SmartScreen reputation, while the OV
 certificate accumulates reputation over downloads.
-**MVR resolution:** MVR targets macOS only; Windows signing is out
-of scope.
 The certificate-acquisition process is tracked in a separate
 issue (see the Followups section below) that records the steps for
 beginning the EV / OV certificate process so that a future
@@ -261,11 +266,19 @@ chosen for followups, other formats deferred.
 **Resolved by:** the 2026-05-19 review pass.
 **Current:** `make-distributables.mjs` emits a `.zip`.
 A Linux user who unzips it gets a directory of files including
-the `Familiar` ELF binary, `chrome-sandbox` (which must be
-`chmod 4755 chrome-sandbox` and chowned to root for Chromium's
-suid sandbox to work, otherwise Electron falls back to
-`--no-sandbox` or refuses to launch), and a tree of Chromium
-runtime files.
+the `Familiar` ELF binary, `chrome-sandbox` (which must have
+`chmod 4755` applied and be chowned to root for Chromium's suid
+sandbox to work, otherwise Electron falls back to `--no-sandbox`
+or refuses to launch), and a tree of Chromium runtime files.
+Whether the suid setup is actually required depends on the host:
+most current distros ship unprivileged user-namespace support
+(the kernel default on recent lines), which lets Chromium sandbox
+without the setuid helper and without root at all.
+The README documentation must verify, per target distro, whether
+the userns path already works before presenting the setuid
+`chown root` step as an unavoidable requirement, so the
+"needs `sudo`" framing is not overstated where the kernel already
+provides the sandbox.
 **Target:** Ship a Flatpak manifest, with documentation for the
 chrome-sandbox setup.
 A separate builder pass will propose the Flatpak pipeline (see
@@ -281,6 +294,9 @@ phase ships Flatpak.
 ### G5. Bundled Node binary version pin policy
 
 **Severity:** Important.
+**MVR disposition:** In scope for MVR (document the pin policy; the
+pin bump itself is done); the automated LTS motion-sensing mechanism
+is deferred to followups.
 **Current:** `scripts/download-node.mjs` defaults to
 `v22.22.3` (a string literal in the script); the pin was advanced
 from `v20.18.1` to a currently-supported LTS in 2026-05 per
@@ -308,17 +324,17 @@ gardener-designed motion-sensing mechanism.
 
 **Severity:** Important.
 **MVR disposition:** Out of scope (users re-download on announcement).
-**Resolved by:** the 2026-05-19 review pass (Open Question 6).
+**Resolved by:** the 2026-05-19 review pass (Open Question 6, in
+the Open questions section below).
 **Current:** None.
 A user who installs Familiar 0.1.0 will still be running 0.1.0
 when 0.2.0 ships unless they re-download.
 **Target:** `electron-updater` against an S3 bucket (or GitHub
 Releases) with a public update manifest, signature-verified
 against the same code-signing certificate as G2/G3.
-**MVR resolution:** Defer auto-update entirely (see Open
-Question 6).
+For MVR, defer auto-update entirely (see Open Question 6, below).
 Users re-download when a new release is announced; the GitHub
-Releases distribution channel (see Open Question 1) is the
+Releases distribution channel (see Open Question 1, below) is the
 publication venue.
 **Effort:** Multi-day when revisited; signature verification
 depends on G2 and G3 being in place first.
@@ -326,6 +342,9 @@ depends on G2 and G3 being in place first.
 ### G7. Application icon and metadata for `assets/icon`
 
 **Severity:** Important.
+**MVR disposition:** In scope for MVR (confirm the icon assets
+resolve per platform); the projection automation is deferred to
+followups.
 **Current:** `scripts/package-app.mjs` references
 `assets/icon` and (for DMG) `assets/icon.icns`.
 The `assets/` directory is present in the repo; whether the
@@ -368,9 +387,13 @@ reviewable material exists (see the Followups section below), even though
 the consolidation itself is deferred past MVR.
 **Effort:** Day for the followup; zero for MVR.
 
-### G9. ENDO_ADDR and gateway port collision
+### G9. Gateway port collision
 
 **Severity:** Important.
+**MVR disposition:** In scope for MVR (README note plus an in-app
+daemon-start-failure dialog); the OS-assigned fallback port and the
+host-wide Gateway packaging story are deferred to followups and
+out of MVR scope respectively.
 **Current:** The daemon binds the gateway on port `8920` by
 default
 ([`src/daemon-manager.js`](../packages/familiar/src/daemon-manager.js)
@@ -388,6 +411,11 @@ diagnose a blank or failed launch, MVR also surfaces the failure
 in-app: a daemon that fails to start shows a dialog naming the
 cause (e.g. "port `8920` already in use") and the log-file path,
 rather than silently presenting a dead window.
+This dialog is new UI/IPC work (a failure surface wired to
+daemon-start-failure detection), not a documentation task, and its
+implementation cost is the substantive part of this gap's MVR
+effort; it is independent of the longer-term gateway direction
+below, which a later implementer can adopt without it.
 For followups, align with the shared-host-gateway direction
 described in [`gateway-package`](gateway-package.md): the Familiar
 participates as a per-user daemon that connects to a
@@ -402,9 +430,11 @@ Provide a fallback for the single-user case: a Familiar-managed
 gateway listening on an ephemeral OS-assigned port (the
 existing `127.0.0.1:0` posture, with the assigned port
 persisted).
-Because that same long-term fix routes weblets through the
-shared Gateway rather than a Familiar-terminated HTTP port, the
-per-port weblet variant is dropped as part of the same change:
+Because that same long-term fix routes weblets (the Familiar's
+embedded per-site web views, each otherwise served from its own
+HTTP port) through the shared Gateway rather than a
+Familiar-terminated HTTP port, the per-port weblet variant is
+dropped as part of the same change:
 the Familiar weblet story collapses to a single flavor,
 Familiar iframe weblets served through the custom protocol
 scheme (`localhttp://`) and HTTP virtual-host proxy on the
@@ -412,9 +442,11 @@ shared gateway, per
 [`familiar-localhttp-protocol`](familiar-localhttp-protocol.md)
 and
 [`familiar-unified-weblet-server`](familiar-unified-weblet-server.md).
-**Effort:** Day for the README; multi-day for the OS-assigned
-fallback; multi-week to multi-month for the host-wide Gateway
-packaging story (tracked under
+**Effort:** Day to multi-day for the README plus the in-app
+daemon-start-failure dialog (the dialog is the bulk of it, being
+new UI/IPC rather than documentation); multi-day for the
+OS-assigned fallback; multi-week to multi-month for the host-wide
+Gateway packaging story (tracked under
 [`gateway-package`](gateway-package.md), out of MVR scope).
 
 ### G10. State directory shape on a fresh install
@@ -451,14 +483,19 @@ The form's `authToken` field is marked `secret: true` and the
 Chat UI honors the secret marker by masking the input.
 On submission, the value is stored in the daemon's CAS.
 **Target:** The MVR can ship this flow as-is; it is functional
-and user-tested by the maintainer.
-The follow-up "test connection" button is deferred.
+and user-tested by the maintainer (reported in the 2026-05-19
+review pass; treated as an informal maintainer confirmation rather
+than a CI-verified claim, unlike the "What works today (assumed)"
+list and G16, which name their verification mechanism).
+The followup "test connection" button is deferred.
 **Effort:** Zero for MVR; day for the followup test button if
 revisited.
 
 ### G12. Outbound network policy
 
 **Severity:** Important.
+**MVR disposition:** Out of scope for MVR (the unconfined agent is
+accepted; outbound HTTP confinement is tracked under Milestone 1).
 **Current:** The bundled `lal` agent fetches against
 `https://api.anthropic.com/`, `https://api.openai.com/`,
 `http://localhost:11434/v1/` (Ollama default), or whatever
@@ -478,6 +515,9 @@ already on the M1 milestone.
 ### G13. Telemetry, crash reporting, and error logs
 
 **Severity:** Nice-to-have.
+**MVR disposition:** In scope for MVR (rename the shell log and
+document log locations); the opt-in crash/telemetry uploader is
+deferred to followups, gated behind a designer pass.
 **Current:** `src/logger.js` writes to `familiar.log` in the
 Endo state directory; the daemon writes to `endo.log` in the
 same directory.
@@ -488,9 +528,9 @@ There is no upload mechanism, no opt-in, and no UI for
 self-identifies against the daemon's `endo.log` by name alone,
 rather than requiring a non-developer to learn a written selection
 rule between two similarly-named siblings.
-The daemon's `endo.log` keeps its name — it is the Endo daemon's
+The daemon's `endo.log` keeps its name (it is the Endo daemon's
 own convention, shared across every Endo host and not Familiar's to
-rename — so the README still records the one remaining pairing
+rename), so the README still records the one remaining pairing
 (`familiar-shell.log` covers the Electron shell and UI, `endo.log`
 covers the daemon and agent; attach whichever matches the symptom,
 or both when unsure), but the Familiar-side name now carries its
@@ -504,6 +544,8 @@ once the designer's shape is in hand.
 ### G14. Third-party license aggregation
 
 **Severity:** Important.
+**MVR disposition:** In scope for MVR (aggregate the LICENSE
+notices into the bundle).
 **Current:** The packaged app contains Electron, the Node
 binary, the bundled SDK code (`@anthropic-ai/sdk`, `openai`,
 `ollama`), and many transitive dependencies through the
@@ -522,6 +564,9 @@ section below).
 ### G15. macOS arm64 vs x64 build matrix
 
 **Severity:** Important (macOS).
+**MVR disposition:** In scope for MVR, and already satisfied by the
+release workflow's per-platform `make` matrix; the universal binary
+via `@electron/universal` is deferred to followups.
 **Current:** `package-app.mjs` runs with `arch: process.arch`,
 so the build host's architecture is what the build emits.
 A user on Apple Silicon needs the `arm64` build; an Intel Mac
@@ -537,6 +582,8 @@ section below).
 ### G16. Unverified Primer-into-CAS path in the packaged build
 
 **Severity:** Blocker.
+**MVR disposition:** In scope for MVR (the Tier 0 build smoke and
+the Tier 1 headless daemon smoke, gated per-PR).
 **Current:** `agent.js` calls `new URL('./primer',
 import.meta.url)`.
 In the bundled `bundles/agent.js`, `import.meta.url` resolves
@@ -641,9 +688,14 @@ so the plan is tiered from cheapest and most deterministic to
 most expensive and most display-dependent.
 
 **Tier 0: build smoke (extends what exists).**
-Promote a build-only job to per-PR CI, path-filtered to
-`packages/familiar/**`, `packages/lal/**`, and
-`packages/daemon/**`, running on `macos-14`.
+Promote a build-only job to per-PR CI, running on `macos-14`.
+The path filter must cover every package the gated build pipeline
+touches, not only the packages the gaps name: `packages/familiar/**`,
+`packages/lal/**`, `packages/daemon/**`, and `packages/chat/**`
+(the vite renderer, whose `yarn workspace @endo/chat build` is the
+pipeline's very first step, so a chat regression that breaks the
+bundled renderer would otherwise slip past this Blocker-severity
+gate).
 It runs the existing bundle, download, prepare, and make steps
 and asserts the `.app` and `.dmg` are produced.
 This catches a familiar-touching PR that breaks packaging on
@@ -654,10 +706,16 @@ precondition the next two tiers build on.
 **Tier 1: headless daemon smoke (the deterministic core).**
 Six of the seven assumptions are daemon-level and need no
 window.
-Launch the packaged daemon bundle under the embedded Node binary
-from the Tier-0 `.app`, against a clean state directory, and
-drive the form path through the daemon's CapTP API instead of the
-Chat renderer.
+Each Tier 1 runner first runs the Tier-0 build steps for its own
+platform to produce that platform's package (the packaged artifact
+is platform-specific, so a Tier 1 cell on `macos-13` or
+`ubuntu-latest` cannot reuse the `macos-14` per-PR Tier 0 build; it
+builds its own, and the per-runner build cost is part of Tier 1's
+budget on those two cells).
+It then launches the freshly-built packaged daemon bundle under the
+embedded Node binary, against a clean state directory, and drives
+the form path through the daemon's CapTP API instead of the Chat
+renderer.
 Point the agent at an in-process mock LLM gateway (see below) so
 no live credentials or public network sit in the assertion path.
 One assertion per assumption, plus a final assertion for the
@@ -708,12 +766,12 @@ Injecting its address as the form's host keeps the assertion path
 off the public network and fully deterministic, which is what
 makes Tier 1 gate-able.
 
-The shipped form does not drive a single provider code path.
+The shipped form drives more than one provider code path.
 `packages/lal/model-resolution.js` branches between the pi-ai
 registry providers (Anthropic, OpenAI, and the like, which carry a
 real auth token) and the `ollama/<id>` case, which uses a distinct
 auth-token sentinel (the literal `'ollama'` fallback rather than a
-user key) — and "point it at Ollama" is one of the three provider
+user key); and "point it at Ollama" is one of the three provider
 shapes G12 names as in-scope. So the Tier-1 smoke parametrizes the
 mock gateway over **both** shapes: one run drives a
 registry-provider model with a bearer token, and one drives an
@@ -732,7 +790,7 @@ naive smoke flaky or unusable.
    found that the dominant macOS-CI failure is not a test flake
    but `getaddrinfo ENOTFOUND repo.yarnpkg.com` during corepack's
    `yarn@4.13.0` auto-download, in roughly 8% of macOS
-   jobs, aborting before any familiar code runs.
+   jobs, aborting before any Familiar code runs.
    The smoke is only meaningful once the canonical fix lands:
    vendor `.yarn/releases/yarn-4.13.0.cjs` and set `yarnPath` in
    `.yarnrc.yml` so corepack never fetches.
@@ -758,31 +816,50 @@ naive smoke flaky or unusable.
 
 The maintainer asked for the plan "specifically on the macOS
 environment," so the tiers above are written against macOS
-runners. But Open Question 4's resolution widened the MVR ship
-list to three first-class targets — macOS arm64, macOS x64, and
-**Linux x64** — and G16 (the Primer-into-CAS path) is rated
-**Blocker**. A Blocker whose runtime verification runs on only one
-of three shipped platforms leaves the other two shipping on
-build-only evidence: `familiar-release.yml` proves each target
-*packages*, but nothing proves the packaged Linux x64 or macOS x64
-daemon actually *runs* the Primer-into-CAS chain. A broken Linux
-daemon would ship and surface only in the field.
+runners. But Open Question 4's resolution (see Open questions,
+below) widened the MVR ship list to three first-class targets,
+macOS arm64, macOS x64, and **Linux x64**, and G16 (the
+Primer-into-CAS path) is rated **Blocker**. A Blocker whose
+runtime verification runs on only one of three shipped platforms
+leaves the other two shipping on build-only evidence:
+`familiar-release.yml` proves each target *packages*, but nothing
+proves the packaged Linux x64 or macOS x64 daemon actually *runs*
+the Primer-into-CAS chain. A broken Linux daemon would ship and
+surface only in the field.
 
 Tier 1 is the tier that closes that gap, and it has no macOS
 dependency: it is a headless daemon-plus-CapTP smoke against an
-in-process mock gateway — "no display, no live model" — so it runs
+in-process mock gateway (no display, no live model), so it runs
 on `ubuntu-latest` at comparable cost to a macOS cell. The plan
 therefore **extends Tier 1 into a matrix across all three MVR
 runners** (`macos-14` arm64, `macos-13` x64, `ubuntu-latest`
 x64), so the Blocker G16 assertions gate on every platform the MVR
 ships. Tier 0 (build smoke) and Tier 2 (GUI launch) keep their
-macOS framing: Tier 0 already rides the build matrix's three
-cells, and Tier 2 is the display-bound tier that stays macOS-only
-for MVR (headless Linux would need `xvfb`), carried as followup
-work rather than an MVR gate. The only residual runtime risk MVR
-knowingly carries is the *display-bound* Linux path (a real window
-under `xvfb`), which is explicitly a followup, not the
-daemon-level Primer chain that G16 rates Blocker.
+macOS framing, but the two tiers ride different mechanisms and it
+is worth being precise about which: the **per-PR** Tier 0 build
+smoke runs on `macos-14` alone (each Tier 1 cell builds its own
+platform's package, as noted above), while the pre-existing
+`familiar-release.yml` build *matrix* that fires on dispatch/tag is
+the thing that already exercises all three build cells. Tier 2 is
+the display-bound tier that stays macOS-only for MVR (headless
+Linux would need `xvfb`), carried as followup work rather than an
+MVR gate.
+
+Because Tier 2 stays macOS-only, the Linux x64 GUI launch ships
+with **no CI launch evidence at all**, and that residual is not
+merely a generic display-bound gap: G4 identifies Linux as the
+*more* fragile launch path of the three, because the
+`chrome-sandbox` setuid workaround (or the userns fallback G4
+now flags) is a **known**, previously-identified failure mode, not
+a speculative one, and the phased plan only *documents* that setup
+step in the README rather than exercising the launched Linux
+`.app` under CI. A broken Linux GUI launch would still fail the
+Linux MVR exit criterion. MVR therefore knowingly carries this as
+an **acknowledged Blocker-adjacent risk on the Linux launch path**,
+mitigated only by documentation until a Linux Tier 2 (under
+`xvfb`) lands in followups; it is deliberately not downgraded to a
+generic display-bound residual, because the failure mode is a
+named one.
 
 ### Where this lands in the plan
 
@@ -794,7 +871,7 @@ release workflow and a nightly schedule, so they sit in
 followups.
 The yarn-vendoring precondition (hazard 1) is a blocking
 dependency that should land before the smoke is gated, so a flake
-in CI infrastructure is not charged to the familiar smoke.
+in CI infrastructure is not charged to the Familiar smoke.
 
 ## Phased plan
 
@@ -804,8 +881,8 @@ The exit criterion is: a user on macOS arm64 (the maintainer's
 primary platform) downloads a `.dmg`, double-clicks, drags
 Familiar to Applications, launches it, fills in their LLM
 provider details, and exchanges messages with `lal`.
-No developer tooling is touched on the user's machine — with one
-acknowledged, documented exception, the macOS Gatekeeper `xattr`
+No developer tooling is touched on the user's machine, with one
+acknowledged, documented exception: the macOS Gatekeeper `xattr`
 workaround (G2).
 
 Because the MVR ship list now includes Linux x64, the exit
@@ -831,13 +908,13 @@ exceptions.
 | Bundled Node pin advanced from v20.18.1 to a current LTS (now v22.22.3) | G5 | done (2026-05) |
 | Rename the Familiar shell log to `familiar-shell.log`; document log locations and state directory in the package README, including which log (`familiar-shell.log` vs `endo.log`) covers which failure class | G10, G13 | day |
 | Document the Linux `chrome-sandbox` suid setup in the README | G4 | day |
-| Document the `127.0.0.1:8920` collision case in the README, and surface a daemon-start-failure dialog naming the cause and log path | G9 | day |
+| Document the `127.0.0.1:8920` collision case in the README, and surface a daemon-start-failure dialog naming the cause and log path (the dialog is new UI/IPC, not a doc task) | G9 | day to multi-day |
 | Surface the macOS Gatekeeper `xattr` workaround at the point of friction (GitHub release/download page, and ideally the DMG background image), not only the repo README | G2 | day |
 | Confirm icon assets resolve on every target platform | G7 | day |
 
 The MVR coverage matrix widened (per Open Question 4's
-resolution) from "macOS arm64 alone" to macOS arm64, macOS x64,
-and Linux x64.
+resolution, in the Open questions section below) from "macOS arm64
+alone" to macOS arm64, macOS x64, and Linux x64.
 macOS arm64 remains the maintainer's primary platform and the
 one that exercises every interesting code path in the build
 pipeline; the other two ride the same CI shape.
