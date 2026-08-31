@@ -17,6 +17,16 @@ It explicitly stops at the SES boundary; the per-`package.json`
 propagation through `@endo/compartment-mapper` is deferred to this
 design.
 
+**Landing-order dependency.** This design is a sibling of, and depends
+on, [SES Import Attributes](./ses-import-attributes.md), which landed
+on `llm` via PR #248. This document is based on a revision of `llm`
+that already includes that design, so every one of the cross-references
+below into `ses-import-attributes.md` resolves against the same base a
+reviewer or builder reads this design on. That covers each cited
+primitive (`EMPTY_ATTRIBUTES`, the arity rule, `modulesWithAttributes`,
+the JSON-tuple memo key) and every section anchor. The design
+registry in [`designs/README.md`](./README.md) carries both rows.
+
 `@endo/compartment-mapper` is the package that turns a Node-style
 application's package graph into a single, replayable archive
 (typically a `tar.gz`) containing every module in the graph plus a
@@ -79,9 +89,16 @@ Out of scope:
 - The SES surface itself: parser, normalization, memo key, `ImportHook`
   signature, `modulesWithAttributes` option.
   All in [SES Import Attributes](./ses-import-attributes.md).
-- Any host-defined attribute key beyond `type`.
-  The TC39 proposal leaves these to the host; this design propagates
-  whatever the SES normalization accepts but interprets none of it.
+- Any host-defined attribute *semantics* beyond selecting the parser
+  the graph already carries.
+  The TC39 proposal leaves attribute meaning to the host. This design
+  propagates whatever the SES normalization accepts and interprets none
+  of it, with one bounded exception that is *selection*, not
+  interpretation: it may route an import to a parser the graph already
+  registers for that language (for example, a `with { type: 'json' }`
+  import to the existing JSON parser). It defines no new attribute keys,
+  no new source shapes, and no bespoke decoding of its own; the
+  `link.js` and archive-read walkthroughs below stay within this bound.
 - A new `package.json` condition that keys on attribute values
   (a `with-type-json` condition or similar).
   Today's conditions (`import`, `require`, `node`, `browser`,
@@ -184,31 +201,61 @@ This design adds an optional `imports` field to
 `FileModuleConfiguration` (and a parallel field on
 `CompartmentModuleConfiguration`) so the archive can name each
 import's resolved specifier *and* its attribute bag.
+The new *persisted* field is deliberately named `imports`, distinct
+from the existing *in-memory* `resolvedImports` map above; the two are
+adjacent concepts (persisted vs. execution-side) and are not meant to
+be the same field. A future pass may converge the two names once the
+bundler (`## Open questions` § 3) also becomes attribute-aware and its
+`resolvedImports` shape has to reconcile with this schema field; until
+then they stay separate, and this paragraph is the note that says so.
+
 The extended shape carries the attributes alongside the resolved
-specifier:
+specifier. The in-memory record, carried during the map and link legs:
 
 ```ts
+// In-memory only, during the map and link legs.
 type ResolvedImport = {
   specifier: string;
-  attributes?: Record<string, string>;
+  attributes?: Record<string, string>; // undefined === EMPTY_ATTRIBUTES
 };
 
 type ResolvedImports = Record<string /* import specifier */, ResolvedImport>;
 ```
 
-Legacy collapse on the descriptor.
-When the attributes bag is empty, the `attributes` field is *omitted*
-from the JSON-serialized form rather than serialized as `{}`.
-A reader recovering a descriptor without an `attributes` field
-constructs `EMPTY_ATTRIBUTES` for it, matching the SES sentinel.
-This keeps archives produced from purely-JavaScript graphs byte-
-identical to today's output and keeps the schema migration backward
-compatible.
+**One canonical persisted form.**
+`ResolvedImport` has exactly one serialized shape, the same union
+`## Compartment-map JSON schema` records for the `imports` field, so
+the two sections describe one value, not two competing wire shapes:
 
-In-memory shape during the map and link legs is symmetric: an
-attribute-free import carries `attributes: undefined` on the
-in-memory record and the JSON serializer omits the field when
-serializing.
+```ts
+// Persisted (JSON) form of a single resolved import.
+type PersistedImport =
+  | string // legacy collapse: an attribute-free resolved specifier
+  | { specifier: string; attributes: Record<string, string> };
+```
+
+The map from `ResolvedImport` to `PersistedImport` is total and lives
+in exactly one place, the serializer:
+
+- An attribute-free import (`attributes` absent, i.e.
+  `EMPTY_ATTRIBUTES`) serializes as the **bare resolved-specifier
+  string**, never as `{ specifier }` and never as
+  `{ specifier, attributes: {} }`. A reader recovering a bare string
+  reconstructs `EMPTY_ATTRIBUTES` for it, matching the SES sentinel.
+- An attribute-bearing import serializes as the object arm, whose
+  `attributes` bag is non-empty by construction (the empty bag never
+  reaches the object arm).
+
+Byte-identity for legacy graphs falls out of this one rule at two
+scales: a compartment with **no** attribute-bearing import omits the
+`imports` field entirely (so a purely-JavaScript archive is
+byte-identical to today's, which records no `imports` field at all),
+and within a *mixed* compartment that does carry the field, each
+attribute-free sibling is a bare string identical to how a
+specifier-only entry would otherwise read. The union is therefore
+observed only inside a compartment that already contains at least one
+attribute-bearing import; that is the single case the `## Test plan`'s
+"JSON contract: bare-string vs. object form" entry exercises.
 
 ## `infer-exports.js` and `package.json` conditions
 
@@ -253,12 +300,51 @@ A consumer that does `import policy from
 then sees the package's declared attribute set propagate through to
 the synthetic `importHook` invocation at runtime.
 
-This is the minimum hook the package author needs to ship a content-
-typed export today without forcing every caller to spell the
+**Precedence when both surfaces speak.**
+Two independent surfaces can now declare attributes for the same
+import: the import site's own `with { ... }` clause and the
+package-declared `withAttributes` companion on the matched
+`exports`/`imports` entry. The rule is:
+
+- When the import site supplies no `with` key, the package-declared
+  `withAttributes` set applies as the default (the worked example
+  above).
+- When both are present, the merge is **per key** and the **import
+  site wins** every key it names. A caller who writes
+  `with { type: 'text' }` gets `text` even if the package entry
+  declares `withAttributes: { type: 'json' }`; keys the import site
+  omits are inherited from `withAttributes`.
+
+`withAttributes` is thus a *default* layer, never an override: the
+more specific, caller-supplied value beats the package default,
+matching how a caller's explicit choice already beats a package
+default everywhere else in `package.json` resolution. This is not left
+open; it is fixed here and exercised by a dedicated `## Test plan`
+conflict case.
+
+**`withAttributes` scope across sibling conditions.**
+A subpath entry may carry several condition branches (`import`,
+`require`, `browser`, user-defined) that resolve to different files.
+`withAttributes` is a non-condition sibling key that applies
+**uniformly to whichever condition wins** for that subpath entry; it
+is not itself a condition and does not vary per branch. A package that
+needs different attributes per condition splits the subpath into
+separate entries. This preserves the existing `exports` mental model:
+every *condition* sibling is still a mutually-exclusive alternative,
+and `withAttributes` is one default layered over the winner.
+
+This is the minimum surface the package author needs to ship a
+content-typed export today without forcing every caller to spell the
 attribute at the import site.
-See `## Open questions` for whether `withAttributes` is the right
-field name (alternatives include `with`, mirroring the syntax, and
-`attributes`, mirroring the SES API).
+Note that `withAttributes` is **new ground**: it has no TC39 or
+Node.js precedent. Node.js honors the import-site `with` clause but has
+no package-declared default-attribute surface; the `## References`
+"mirror Node.js" aim covers the import-site `with` semantics, not this
+companion field, which this design invents. `## Open questions` § 1
+litigates only its *name* (alternatives include `with`, mirroring the
+syntax, and `attributes`, mirroring the SES API); that a package may
+declare default import attributes at all is a deliberate new surface
+this design proposes, not inherited prior art.
 
 Pre-existing behavior is preserved.
 A `package.json` whose `exports` field uses no `withAttributes`
@@ -291,7 +377,7 @@ Under this design:
 
 - The linker partitions the per-compartment module descriptors into two
   groups based on the attribute set on each descriptor's import record:
-  empty (legacy collapse) goes to `moduleMap`, non-empty (extended)
+  empty (legacy collapse) goes to `moduleMap` while non-empty (extended)
   goes to the new `modulesWithAttributes` option from the SES sibling
   design.
 - `makeImportHook` is invoked at the same site, but the returned hook
@@ -300,12 +386,16 @@ Under this design:
   the normalized attribute object on every call, including the empty
   case.
 - The synthetic hook dispatches on `(specifier, attributes)`.
-  For a `with { type: 'json' }` import, the hook reads the resolved
-  bytes, decodes them as JSON, and returns a `VirtualModuleSource`
-  whose `execute` binds the parsed value to `default` per the SES
-  design's
+  For a `with { type: 'json' }` import, the hook *selects* the JSON
+  parser the graph already registers (the same parser today's
+  specifier-only path reaches for a `.json` module) rather than
+  implementing any bespoke decoding of its own; the resulting record
+  binds the parsed value to `default` per the SES design's
   [`## Source dispatch`](./ses-import-attributes.md#source-dispatch)
-  section.
+  section. This is parser *selection* keyed on the attribute, staying
+  inside the bound `## Scope and non-goals` draws: the hook interprets
+  no attribute semantics beyond choosing among the parsers the graph
+  already carries.
 
 `moduleMapHook` stays untouched.
 Per the SES design's
@@ -327,11 +417,11 @@ record carries non-empty attributes:
    The linker's partition step (see the table below) routes the
    attribute-bearing record to `modulesWithAttributes` at construction
    time. The SES loader resolves the extended memo key first, hits
-   the primed entry, and the `moduleMapHook` is not consulted for
+   the primed entry, and does not consult `moduleMapHook` for
    that `(specifier, attributes)` pair. The same specifier with the
    empty attribute bag continues to flow through `moduleMapHook`
    under the legacy-collapse rule.
-2. *`moduleMapHook` returns a record whose underlying source carries
+2. *A `moduleMapHook` record whose underlying source carries
    parser-emitted attributes.*
    `moduleMapHook`'s return shape is specifier-keyed by contract
    ([SES sibling](./ses-import-attributes.md#compartment-construction-priming-attribute-bearing-modules))
@@ -341,14 +431,14 @@ record carries non-empty attributes:
    substitution, not attribute-aware dispatch. A compartment that
    wants attribute-aware dynamic substitution uses
    `modulesWithAttributes` at construction time, or implements the
-   dispatch inside its `importHook` (the two-arg one).
+   dispatch inside its `importHook` (the two-argument one).
 3. *Attribute-free import whose specifier is not in
    `modulesWithAttributes`.*
    Unchanged from today: `moduleMapHook` is consulted, then
-   `moduleMap`, then the two-arg `importHook` with an empty
+   `moduleMap`, then the two-argument `importHook` with an empty
    attribute bag. The arity rule keeps the empty-bag case
    indistinguishable from today's specifier-only call from the
-   `importHook`'s point of view (a v0 single-arg hook still
+   `importHook`'s point of view (a v0 single-argument hook still
    satisfies the call).
 
 Concrete touchpoints in `link.js`:
@@ -394,14 +484,31 @@ The `ImportHookMaker` type in
 accordingly.
 The arity rule from the SES side gives existing callers a soft
 landing: a `makeImportHook` that still returns a single-argument
-hook continues to work for graphs that never use attributes (every
-import is in the legacy-collapse slot, the legacy single-arg hook
-suffices, SES does not throw the arity *TypeError*).
+hook continues to work for graphs that never use attributes; every
+import is in the legacy-collapse slot, the legacy single-argument hook
+suffices, and SES does not throw the arity *TypeError*.
 A migration-aware caller updates its hook to the two-argument shape
 to gain the ability to serve attribute-bearing imports.
 
 `makeImportNowHook` (the synchronous counterpart used for `require`-
 style call sites) gets the same widening.
+
+**Live-path upgrade diagnostic (symmetric with the archive path).**
+The soft landing above is only soft when the graph contains *no*
+attribute-bearing import. When a v0 caller's single-argument
+`makeImportHook` meets a graph that *does* carry attribute-bearing
+imports, the naive outcome is SES's internal arity `TypeError`, a
+low-level, illegible failure. This design requires `link.js` to detect
+that combination up front (a partition step that produced a non-empty
+`modulesWithAttributes` seat while the caller's hook reports
+`length === 1`) and fail with a compartment-mapper-level diagnostic
+("this graph uses import attributes; upgrade `makeImportHook` to accept
+`(specifier, attributes)`"), the live-path mirror of the archive
+read path's `assertFileCompartmentMap` upgrade message. The two
+backward-incompatible paths (live link, archive read) thus surface the
+same class of failure with the same legibility rather than leaving the
+live path to a raw SES `TypeError`. The `## Test plan` covers this case
+explicitly.
 
 ## Archive write path
 
@@ -420,8 +527,11 @@ Two changes:
    An attribute-free import serializes as a bare-string entry,
    matching the legacy-collapse rule.
 2. **Compartment-map schema version bump.**
-   The top-level `tags` array gains a sentinel (e.g.,
-   `'import-attributes-v1'`) when the archive contains any
+   The top-level `tags` array (an **existing** compartment-map field,
+   `tags: Array<string>` on the top-level schema in
+   `packages/compartment-mapper/src/types/compartment-map-schema.ts`,
+   reused here and not introduced by this design) gains a sentinel
+   (e.g., `'import-attributes-v1'`) when the archive contains any
    attribute-bearing import.
    An archive whose graph is purely JavaScript continues to write the
    pre-attributes `tags` exactly as today.
@@ -459,16 +569,18 @@ Under this design:
   calling `parse`: a `with { type: 'json' }` entry whose stored
   parser is `'json'` already does the right thing through the
   existing JSON parser, but an unrecognized attribute combination
-  raises a deferred error rather than silently falling through.
+  raises a *deferred error* (an error object returned in place of a
+  module source and thrown at first use, rather than at load time)
+  rather than silently falling through.
 
 Backward compatibility on the read side:
 
 - An archive without the `'import-attributes-v1'` tag and without any
   per-import `attributes` field reads identically to today.
-  Every import lands in the legacy-collapse slot, the SES arity rule
-  keeps the synthetic single-arg hook valid (a v0 mapper produces a
-  one-arg hook; a v1 mapper produces a two-arg hook), and the memo
-  collapses to the bare-specifier key.
+  Every import lands in the legacy-collapse slot; the SES arity rule
+  keeps the synthetic single-argument hook valid (a v0 mapper produces
+  a one-argument hook; a v1 mapper produces a two-argument hook); and
+  the memo collapses to the bare-specifier key.
 - An archive with the tag but read by an older mapper version (no
   `attributes` support in the reader) fails fast at the
   `assertFileCompartmentMap` step with a clear "this archive uses
@@ -486,6 +598,9 @@ property.
 The optional shape means an archive whose graph is purely JavaScript
 and whose author has not opted into per-import metadata still
 serializes byte-identically to today.
+The value type here is exactly the `PersistedImport` union defined in
+`## Per-import attribute record in the compartment-map descriptor`;
+this section and that one describe one canonical wire shape, not two:
 
 ```diff
  export interface FileModuleConfiguration extends BaseModuleConfiguration {
@@ -494,7 +609,8 @@ serializes byte-identically to today.
    /** in base 16, hex */
    sha512?: string;
 +  /**
-+   * Resolved imports, with optional per-import attributes.
++   * Resolved imports (the persisted `PersistedImport` union), with
++   * optional per-import attributes.
 +   * Specifier-only entries (the dominant case) serialize as a bare
 +   * string for backward compatibility; entries with non-empty
 +   * attributes serialize as { specifier, attributes }.
@@ -507,9 +623,9 @@ The mixed string-or-object value shape is a deliberate forward-
 compatibility choice: legacy entries serialized as bare strings stay
 that way, and only attribute-bearing entries upgrade to the object
 shape.
-A v0 reader sees `imports[specifier]: string` everywhere and is none
-the wiser; a v1 reader pattern-matches and recovers the attribute
-bag where present.
+A v0 reader sees `imports[specifier]: string` everywhere and needs no
+special handling; a v1 reader pattern-matches and recovers the
+attribute bag where present.
 
 ## Test plan
 
@@ -525,6 +641,12 @@ catalogue, in `packages/compartment-mapper/test/`:
   A package whose `exports` field carries a `withAttributes`
   companion propagates the attributes to the resolved import record
   and to the descriptor.
+- **Map: import-site vs. `withAttributes` precedence.**
+  Per `## infer-exports.js and package.json conditions`, an import
+  site's own `with { type: 'text' }` clause overrides a package entry
+  that declares `withAttributes: { type: 'json' }` for the same
+  subpath (the import site wins, per key), while keys the import site
+  omits are inherited from `withAttributes`.
 - **Map: empty bag omitted.**
   A graph with no attribute-bearing imports produces a compartment-
   map JSON byte-identical to the legacy form (no `attributes` field
@@ -533,6 +655,20 @@ catalogue, in `packages/compartment-mapper/test/`:
   A compartment with a mix of attribute-free and attribute-bearing
   module entries seats the former through `moduleMap` and the
   latter through `modulesWithAttributes`.
+- **Link: `modulesWithAttributes` beats `moduleMapHook` for the same
+  specifier.**
+  Per case 1 of the three-case `moduleMapHook` analysis, a specifier
+  that is both attribute-bearing and seated through `moduleMapHook`
+  resolves the primed `modulesWithAttributes` entry and never consults
+  `moduleMapHook` for that `(specifier, attributes)` pair, while the
+  same specifier with an empty attribute bag still flows through
+  `moduleMapHook`.
+- **Link: single-argument hook meets attribute-bearing graph.**
+  Per `## Implications for callers of link.js`, a v0 caller whose
+  `makeImportHook` returns a single-argument hook, linking a graph
+  that contains an attribute-bearing import, fails with the
+  compartment-mapper-level upgrade diagnostic (not a raw SES arity
+  `TypeError`).
 - **Link: two-arg synthetic importHook.**
   The hook returned by `makeImportHook` reports `length === 2` and
   receives the normalized attributes on every invocation.
@@ -543,7 +679,7 @@ catalogue, in `packages/compartment-mapper/test/`:
 - **Archive: pre-attributes archive replay.**
   An archive captured by a pre-attributes mapper (fixture committed
   as test data) loads through this design's reader without throwing,
-  and its synthetic single-arg `importHook` continues to satisfy
+  and its synthetic single-argument `importHook` continues to satisfy
   specifier-only imports.
 - **Archive: tag-mismatch diagnostic.**
   An archive with `tags: [..., 'import-attributes-v1']` read by a
@@ -563,6 +699,16 @@ catalogue, in `packages/compartment-mapper/test/`:
   per-attribute gate runs). A follow-up design that adds a
   per-attribute policy axis would replace this test with a richer
   one; until then the invariant is the contract.
+- **Bundler: attribute-bearing graph rejected.**
+  Per `## Open questions` § 3, `bundle.js` / `bundle-lite.js` reject a
+  graph that contains any attribute-bearing import with the clear
+  "bundler does not yet support import attributes" error rather than
+  silently dropping the attributes.
+- **CommonJS: `require` of an attribute-bearing module is a domain
+  error.**
+  Per `## Open questions` § 4, a CJS `require` reaching an
+  attribute-bearing module raises the documented domain error rather
+  than silently ignoring the attributes.
 
 ## Alternatives considered
 
@@ -637,7 +783,7 @@ catalogue, in `packages/compartment-mapper/test/`:
    module only with `with { type: 'json' }`, say) is plausible but
    not in v1's scope.
    The design assumes the policy gate continues to key on specifier
-   alone and attributes do not affect policy-evaluation.
+   alone and attributes do not affect policy evaluation.
 
 ## References
 
