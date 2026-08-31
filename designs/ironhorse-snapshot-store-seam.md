@@ -3127,27 +3127,101 @@ updated during the wave.
 Needs re-derivation from the current head before it is fixed or
 re-pinned.
 
-#### P2-3 — The residual persist gate has no test coverage
+Confirmed again while building the determinism scenarios, and worth
+recording precisely because of where it showed up: a cross-crank
+`f.call(o, 1)` on an ordinary GUEST function throws `TypeError` in the
+UNINTERRUPTED baseline, with no store or snapshot involved.
+So this is an engine defect the seam merely exposes, not a carry
+defect.
+The `callables` scenario routes around it deliberately, with the
+reason recorded at the code.
+
+#### P2-3 — The residual persist gate has no test coverage — FIXED
 
 `stored_unpersistable_row` is the last refuse-on-hold gate.
 Disabling it entirely leaves all 35 test binaries green, so nothing
 pins what it refuses.
 It also inspects `accessors` only — not `bound_functions[..].target`,
 not `disposable_stacks[..].records[..].method`.
-With P1-2 fixed at the source (the natives are boot-derived now, so
-`accessor_function_persists` answers true for them), widening the gate
-is no longer load-bearing for that defect, but it remains the right
-shape for the next non-persisting native to appear in a data property,
-and the gate still needs tests of its own.
+P1-2 removed those three from the class, but the class is not empty:
+a promise-resolver native is minted at runtime and travels in no
+table, and probing the three holders found the same
+unresumable-machine outcome as P1-1 —
 
-#### P2-4 — Instrument debt across the new carries
+```js
+var g; new Promise(function (res) { g = res; }); var b = g.bind(null);
+```
+
+— commits and then fails every resume with `malformed retained
+function state`, which reordering cannot fix because the resolver is
+carried by nothing.
+Fixed by widening the gate to bound-function targets and disposal
+methods, with `function_persists` extracted as the shared predicate
+(`accessor_function_persists` was already exactly it, applied to one
+holder).
+Refusing to persist keeps the machine running and tells the caller at
+once; carrying the promise cluster is the recorded lift.
+Locked both directions: a live specimen through every persist verb for
+each of the three holders, and eight controls (guest functions, boot
+natives, proxy revokers, Intl bound natives) that must stay
+persistable in the same holders.
+
+One class stays open and is recorded rather than gated: the same
+native in a PLAIN data property (`o.x = g`) resumes as a non-callable
+object — `typeof` flips `"function"` to `"object"`, and the call then
+throws `TypeError`.
+Gating that would mean scanning the whole heap for function
+references at every persist verb, so it waits on the carry.
+
+#### P2-4 — Instrument debt across the new carries — PARTLY FIXED
 
 The carries landed with locks but without instrument coverage:
 the fuzz generator populates 1 of the 8 new atoms (`dates`), the
-seven-way metamorphic determinism suite has never been extended by a
-single carry (still 5 scenarios: globals, strings, objects, free
-list, wide heap), and no carry twin asserts per-crank computrons —
-including the generator twins added in this round.
+seven-way metamorphic determinism suite had never been extended by a
+single carry (5 scenarios: globals, strings, objects, free list, wide
+heap), and no carry twin asserts per-crank computrons — including the
+generator twins added in this round.
+
+The determinism half is fixed, and it paid for itself on the first
+run.
+Six carry scenarios now suspend across crank boundaries with a
+family's state live and then observe it — language rows, the
+callability cluster, accessors and private elements, generators and
+iterator cursors, Intl and proxies, typed arrays and disposal — so
+results, per-crank computrons and final canonical bytes must agree
+across all seven variants.
+Two supporting fixes came with it: the anchored equal-symbol-set
+discipline is now ENFORCED (it was documented but unchecked, and
+violating it surfaced three layers down as a bare `TypeError`), and a
+baseline halt names its scenario and crank.
+
+Still open: the fuzz generator's seven unpopulated atoms, and
+computron assertions in the per-family carry twins.
+
+##### What it found immediately — the stale lazy chunk bound — FIXED
+
+A lazily resumed session freezes its backing's geometry at attach and
+its own checkpoints advance it, because a committed-then-clean row is
+evictable and can therefore fault again — it must verify against what
+that commit wrote, not the attach-time bytes.
+The phase-8 fix advanced the leaves and the record count for exactly
+this reason; the chunk-offset bound was missed.
+So a crank that allocates a string grows the chunk arena, the
+checkpoint commits slot rows pointing into the new bytes, and
+re-faulting one of those rows verified its offset against the
+attach-time length — reporting a healthy store as `corrupt store`, as
+a panic, on the release path too.
+No hostile input: only an eviction between a growing checkpoint and
+the next read.
+`advance_backing` takes the committed chunk length now.
+Locked twice — a focused named arm in `persist_gates.rs` and the
+seven-way agreement itself.
+
+This is the case for the instrument: five clean scenarios, eight
+graduation waves, 1200-plus green tests, and a release-path panic on
+an ordinary program sat behind all of it because no scenario had ever
+combined a non-empty side table with an adversarial residency
+schedule.
 
 #### Verified clean this round
 
