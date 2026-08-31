@@ -4,9 +4,10 @@
 |---|---|
 | **Created** | 2026-05-07 |
 | **Updated** | 2026-08-31 |
-| **Author** | kriscendobot (steward, prompted by kriskowal) |
+| **Author** | kriscendobot (prompted by kriskowal) |
 | **Status** | Not Started |
 | **Source** | Issue [endojs/endo-but-for-bots#118](https://github.com/endojs/endo-but-for-bots/issues/118) |
+| **Supersedes** | the network-facing pieces of [daemon-agent-network-identity](daemon-agent-network-identity.md) (per-agent `NETS`; `registerAgentKey`/`unregisterAgentKey`) |
 
 ## What is the Problem Being Solved?
 
@@ -88,13 +89,15 @@ The limitations of `@nets` as a singleton are:
   in which the **I**nitiator's static key is transmitted and the
   responder's static key is **K**nown to the initiator ahead of time,
   out-of-band; that out-of-band prior knowledge is what the inbound
-  routing preamble below leans on, expanded where that tradeoff is
-  discussed.)
+  routing preamble below leans on. That tradeoff is expanded below,
+  where the routing preamble is discussed.)
 - Define the cap-handoff path: how the daemon manufactures
   per-agent transports, how an agent obtains them, how they are
   revoked, and how they cohabit with mounts and other agent-held
   caps.
-- Reuse the in-guest-backend / host-side-proxy pattern from the
+- Reuse the in-guest-backend / host-side-proxy pattern (the agent
+  holds a facade while the daemon holds the real backend and proxies
+  between them; glossed in *Daemon Side: `TransportFactory`*) from the
   cross-platform sandbox work (jcorbin, `PLAN/endo_posix_sandbox.md`)
   and the agent-held + daemon-mediated pattern from the in-flight
   `Mount` reshape
@@ -168,6 +171,16 @@ because `Session`/`Listener` are remotable exos rather than a matcher
 literal; semantically the input shape of `disconnect` is exactly the
 output shape of `connect`/`listen`.
 
+The `Session`/`Listener` exos handed back do **not** carry their own
+`close()`/`disconnect()` method: teardown routes solely through the
+parent `Transports.disconnect(handle)`. This deliberately diverges from
+the lower-layer `TransportListener.close()` /
+`OcapnNoiseTransport.shutdown()` in
+`ocapn-network-transport-separation`; centralizing teardown on the
+per-agent view keeps revocation, accounting, and the
+`thisDiesIfThatDies` bookkeeping in one place rather than spelling the
+same teardown at two adjacent layers, at the cost of one extra hop.
+
 `connect`'s optional second argument, `{ hints? }`, does **not**
 duplicate the locator's own embedded connection hint (Design Decision
 #4): the locator's hint is the *default* dial target the peer
@@ -185,7 +198,9 @@ locator's hint alone.
 `list()` enumerates the transport **schemes** this agent may use
 (the direct replacement for enumerating the old `@nets` directory):
 it returns an array of scheme-name strings such as `['np',
-'tcp-netstring']`, filtered to the agent's `allowedSchemes`. It does
+'tcp-netstring']` (`np` is OCapN-Noise; the schemes are glossed in the
+list under *Daemon Side: `TransportFactory`*), filtered to the agent's
+`allowedSchemes`. It does
 not return peer `Locator`s (a peer address is supplied *to*
 `connect`, not enumerated by `list`), and `has(scheme)` is the
 membership test for the same set. This is the single return-shape
@@ -221,12 +236,12 @@ retires its own view); `revokeTransports` is the only one a *host*
 can invoke against an agent it no longer trusts. Sibling agents are
 unaffected. It is idempotent: revoking an already-revoked or
 never-provisioned petName resolves without error. (The CLI's
-per-handle `endo agent <name> transports revoke <handle>` in Design
+per-handle `endo transports revoke <handle> --as <agent>` in Design
 Decision #9 is the finer-grained, agent-facing verb and fronts
 `disconnect(handle)`, not this host method; the two share the word
 "revoke" for deliberately different granularities.)
 
-where `options` carries:
+where `provideTransports`'s `options` carries:
 
 - `allowedSchemes`: `['np', 'tcp-netstring', ...]`. The schemes the
   agent may use; defaults to the host's currently-enabled set.
@@ -259,7 +274,7 @@ than by re-formulating identity. See Design Decision #11 for
 
 The host side wraps each agent's `Transports` exo over the
 daemon's underlying network primitives.
-The wrapper is the host-side proxy in the in-guest-backend +
+The wrapper is the host-side proxy in the in-guest-backend /
 host-side-proxy pattern: the agent holds the facade, the daemon
 holds the actual netlayer instances and routes between them.
 
@@ -319,22 +334,33 @@ Ed25519 public key unencrypted, ahead of the Noise handshake, so any
 on-path observer learns *which agent, by identity,* a given inbound
 session addresses before encryption begins. This is the same
 metadata leak plaintext-SNI is known for, and it does cut against the
-scoping/isolation framing elsewhere in this design (Goal/Problem #1,
-Design Decision #3): identity-based routing that puts the identity on
-the wire is a weaker confidentiality property than one that hides it.
-The design accepts the leak deliberately, on two grounds. First, under Noise
-**IK** the initiator must already know the responder's static public
-key out-of-band to even attempt the handshake, so the preamble
-reveals to an observer only what a would-be initiator necessarily
-already possesses: it exposes no identity the protocol was keeping
-secret from a party able to connect at all. Second, the alternative
-that would hide it (trial-decryption against every local agent's
-responder key) reintroduces the O(hosted-agents) inbound cost this
-selector exists to remove, and still leaks timing. What the leak does
-*not* weaken is the scoping property Goal #1 actually asserts: an
-observer learning *whom* a session addresses does not let a guest
-*reach* a scheme or peer its `allowedSchemes`/`outboundPolicy` denies:
-routing visibility is not routing authority. Hiding the responder
+scoping/isolation framing elsewhere in this design (the *No scoping*
+limitation, Limitation #1): identity-based routing that puts the
+identity on the wire is a weaker confidentiality property than one that
+hides it.
+
+The design accepts the leak deliberately, having weighed it against the
+adversary the paragraph names first: a **passive on-path observer**.
+That observer gains something real and new. It can read, per inbound
+session, *which agent identity* is being addressed, and can correlate
+traffic to a specific identity over time, none of which it could do
+before this preamble existed. The one bound on the harm is narrow and
+applies only to an *active* party: a would-be **initiator** already had
+to know the responder's static key out-of-band to attempt Noise **IK**
+at all, so against that party the preamble reveals nothing the protocol
+was keeping secret. That bound does **not** cover the passive
+eavesdropper, who never needed the key to watch the wire; against it the
+leak is a genuine metadata exposure, accepted rather than argued away.
+What makes it acceptable is the second, independent ground: the
+alternative that would hide the identity from a passive observer
+(trial-decryption against every local agent's responder key)
+reintroduces the O(hosted-agents) inbound cost this selector exists to
+remove and still leaks timing, so hiding it is not free even in the
+alternative. What the leak does *not* weaken is the scoping property
+this design closes (Limitation #1, *No scoping*): an observer learning
+*whom* a session addresses does not let a guest *reach* a scheme or peer
+its `allowedSchemes`/`outboundPolicy` denies: routing visibility is not
+routing authority. Hiding the responder
 selector (e.g. a blinded or rendezvous-style identifier) is possible
 but is a wire-format concern owned by `ocapn-noise-network`, out of
 scope here; this design records the exposure rather than silently
@@ -373,6 +399,12 @@ flowchart TD
     F -->|"netlayer membrane"| netlayers
     netlayers -->|"@endo/ocapn membrane"| core
 ```
+
+Each edge the diagram labels *membrane* is a capability boundary: a
+CapTP/formula or netlayer interface an object reference crosses (and is
+mediated at) but that plain data does not traverse transparently.
+"Membrane" is this codebase's standing name for such a boundary; it is
+a structural label here, not a new mechanism this design introduces.
 
 The daemon retains the netlayer registry; the agent never sees it.
 The agent sees only the `Transports` exo, which decides per-call
@@ -472,9 +504,9 @@ the proxy evaluates the standing checks against that locator (the
 `loopback` scheme must be in A's `allowedSchemes`, and A's
 `outboundPolicy` must admit the sibling's connection hint) *before*
 resolving to in-process delivery; a denial rejects exactly as it
-would on the wire path. This preserves Goal #1: a guest denied a
-sibling by policy cannot reach it merely because both live on the
-same daemon.
+would on the wire path. This preserves the *No scoping* property
+(Limitation #1): a guest denied a sibling by policy cannot reach it
+merely because both live on the same daemon.
 
 The cross-daemon counterpart (two agents on different daemons,
 each holding its own Noise session over the shared wire) is
@@ -491,6 +523,23 @@ that revocation, accounting, and identity remain per-agent.
 `@nets` is not widely deployed, so there is no migration window,
 no shadowing, and no deprecation period: `@transports` replaces
 `@nets` in a single cutover, all in the one change.
+
+"Not widely deployed" justifies skipping a *migration window*, not
+skipping *coordination*. The cutover is **atomic**: everything that
+touches the old `@nets` name lands in the **same PR/commit**, so there
+is no interval in which `@transports` exists while a caller still
+reaches for `@nets`. That same-change boundary explicitly includes the
+two injection-site removals (`host.js`/`guest.js`), the four netlayer
+setup scripts, the four host-privileged chat slash-commands in
+`command-executor.js`, and the six test fixtures (all enumerated under
+*Internal Callers Move to `@transports`*), plus the three bundled
+production agents (Lal, Fae, Familiar; *Upgrade Considerations*). None
+of these surfaces may lag the cutover, because each would throw the
+moment `@nets` names nothing. If the whole set cannot land atomically
+the cutover is not taken: there is no partial-cutover state, and
+rollback is reverting the single change. This is the sequencing/
+atomicity guarantee the "not widely deployed" premise leans on, stated
+rather than assumed.
 
 #### Agents Get `@transports`, Not `@nets`
 
@@ -592,8 +641,22 @@ its policy allows.
 
 With `@transports` in place, the per-agent Ed25519 key path
 (blocked today on the singleton) becomes natural.
-This is `daemon-agent-network-identity` (M2, Not Started); the
-two designs land together.
+This design **supersedes** the network-facing pieces of
+`daemon-agent-network-identity` (Status: In Progress). That design
+enumerates four pieces of work; its two already-done pieces (locator
+construction with agent keys, its item #1, and `LOCAL_NODE` formula
+storage, item #2) are independent groundwork this design builds on
+(the `@keypair` per-agent keypairs they landed are exactly what
+`signingKeys` reuses). Its two **not-yet-done** network pieces are the
+ones `@transports` replaces, differently shaped: the per-agent `NETS`
+special name (its item #3) becomes the per-agent `Transports` view, and
+its `registerAgentKey`/`unregisterAgentKey` network-registration
+interface (item #4) is subsumed by the `TransportFactory`'s per-agent
+signing-key registration/de-registration against the shared netlayers'
+inbound demux (*Daemon Side: `TransportFactory`*). The two designs land
+together, with `@transports` as the per-agent network-identity surface
+and `daemon-agent-network-identity` thereby reduced to its completed
+keypair groundwork (see this design's **Supersedes** metadata).
 
 ### Capability Sharing Across Agents (Cross-Daemon)
 
@@ -635,10 +698,10 @@ on top of (not in lieu of) the per-daemon netlayer.
   `ocapn-network-transport-separation`).
 - `packages/ocapn-noise/`: no changes; bindings are consumed by
   the netlayer that the proxy fronts.
-- **Daemon-side OCapN-Noise netlayer, already landed, repurposed,
-  not rebuilt.** The `np` netlayer the proxy dispatches to already
-  exists as `packages/daemon/src/networks/ocapn.js` +
-  `setup-ocapn.js` (protocol `ocapn+noise+tcp`, registered at
+- `packages/daemon/src/networks/ocapn.js` + `setup-ocapn.js`
+  (**daemon-side OCapN-Noise netlayer, already landed, repurposed, not
+  rebuilt**). The `np` netlayer the proxy dispatches to already
+  exists as this pair (protocol `ocapn+noise+tcp`, registered at
   `@nets/ocapn`), landed 2026-08-25, six days before this PR's
   base. This design does **not** introduce a parallel
   `packages/ocapn-noise-network/` package; it **repurposes** the
@@ -658,11 +721,13 @@ on top of (not in lieu of) the per-daemon netlayer.
   point. The IK handshake as implemented is authoritative, and the
   `ocapn-noise-network` doc is to be reconciled to IK. Do not
   reintroduce the `np` netlayer to the XX shape.
-- `packages/cli/`: per-agent
-  `endo agent <name> transports {list,add,revoke}` verbs and the
-  `endo mkguest <child> --transports-from <parent>` delegation flag
-  (each bound to a named method, see Design Decision #9);
-  `endo nets` is retired alongside `@nets` (Design Decision #10).
+- `packages/cli/`: the per-agent transports verbs
+  `endo transports [--listeners]`, `endo listen <scheme>`, and
+  `endo revoke <handle>`, each addressed with the flat `--as <agent>`
+  option, and the `endo mkguest <child> --transports-from <parent>`
+  delegation flag (each bound to a named method, see Design Decision
+  #9). No new `@nets`-shaped CLI surface is retired, because none exists
+  today (Design Decision #10).
 
 ## Design Decisions
 
@@ -685,8 +750,8 @@ The questions raised during design review are resolved as follows
    no per-agent port quota: `listen({ port: 0 })` binds (or reuses)
    the single per-transport port, and demultiplexing to agents is
    by identity, not by port.
-   The `{ port?, host? }` argument on `listen` (and the CLI `add`'s
-   `--port`/`--host` flags) is therefore an operator hint that
+   The `{ port?, host? }` argument on `listen` (and the CLI `listen`
+   verb's `--port`/`--host` flags) is therefore an operator hint that
    configures **where the shared per-transport socket binds**, and it
    is honored only on that socket's **first** bind. A later agent's
    `listen` on an already-bound scheme registers that agent's Ed25519
@@ -697,14 +762,29 @@ The questions raised during design review are resolved as follows
    is thus first-binder-wins, shared thereafter, never a silent
    per-agent rebind.
 
-3. **Routing is on Ed25519 identity; gateway and `Transports`
-   converge.**
-   The two are not distinct ingress paths.
-   The gateway's bearer-token boundary
-   (`gateway-bearer-token-auth`) and the Noise ingress both resolve
-   to an Ed25519 identity, and routing keys on that identity in
-   both cases; the bearer token maps onto the same identity the
-   transport routes on rather than standing up a parallel scheme.
+3. **Routing is on Ed25519 identity.**
+   Inbound Noise sessions and outbound dials both route on the peer's
+   Ed25519 public key: every shared transport demultiplexes inbound
+   sessions by that key (*Daemon Side: `TransportFactory`*), the
+   locator carries it as the authoritative routing target (Design
+   Decision #4), and a delegated child forks a fresh key rather than
+   sharing its parent's (Design Decision #9).
+
+   This design does **not** unify with the daemon's *gateway* ingress
+   (the gateway is the remote-access front end an operator reaches at
+   `https://<host>/#agent=<id>`, authenticating a caller over CapTP by
+   `GatewayBootstrap.fetch(token)`). The gateway's bearer-token
+   boundary (`gateway-bearer-token-auth`) authenticates by presenting
+   an agent's **formula identifier** (an opaque 256-bit capability
+   secret, the same SSH-key/API-token authority model), which is *not*
+   an Ed25519 public key and carries no Noise-style
+   proof-of-possession. The two ingress paths therefore stay distinct:
+   `Transports` routes `np` and its sibling schemes on Ed25519
+   identity, while the gateway remains a separate bearer-secret
+   surface. An earlier revision of this decision claimed the two
+   "converge" on one identity; that claim is withdrawn as unsupported
+   by `gateway-bearer-token-auth`, which ties the token to a formula
+   identifier, not a key.
 
 4. **`connect()` accepts a public key and a connection hint from
    the locator.**
@@ -730,31 +810,30 @@ The questions raised during design review are resolved as follows
      allowHostSuffixes: ['.internal.example', 'localhost'],
      // ...or falls in any CIDR block
      allowCidrs: ['10.0.0.0/8', 'fd00::/8'],
-     // schemes this agent may dial at all
-     allowSchemes: ['np', 'tcp-netstring'],
      // default when nothing matches
      otherwise: 'deny', // 'deny' | 'allow'
    };
    ```
 
-   `connect(locator)` extracts the hint (`{ scheme, host, port }`),
-   checks `allowSchemes`, then requires a match in
-   `allowHostSuffixes` or `allowCidrs`; a miss throws under
-   `otherwise: 'deny'`.
+   `connect(locator)` extracts the hint (`{ scheme, host, port }`) and
+   requires a match in `allowHostSuffixes` or `allowCidrs`; a miss
+   throws under `otherwise: 'deny'`.
    The routing target (the Ed25519 key) is not policy-checked here:
    `outboundPolicy` gates *where on the wire* the agent may dial,
    not *whom* it may address.
 
-   `outboundPolicy.allowSchemes` and the top-level `allowedSchemes`
-   (*Capability Surface*, Daemon Side) both name schemes, and where
-   they disagree the **intersection** governs: `allowedSchemes` is the
-   outer grant fixed at provisioning, and `allowSchemes` can only
-   narrow within it, never widen past it. A scheme absent from
-   `allowedSchemes` is unusable regardless of `allowSchemes`, and
-   `updateTransportsPolicy` (Design Decision #11) rejects an
-   `allowSchemes` that names a scheme outside the standing
-   `allowedSchemes`. The two are not independent axes; the narrower
-   wins.
+   Scheme gating has a **single source of truth**: the top-level
+   `allowedSchemes` (*Capability Surface*, Daemon Side), revisable via
+   `updateTransportsPolicy` (Design Decision #11). `outboundPolicy`
+   deliberately carries **no** scheme axis of its own. An earlier
+   revision duplicated it as `outboundPolicy.allowSchemes`, but that
+   became redundant once `allowedSchemes` itself was made revisable
+   (Design Decision #11): narrowing which schemes an agent may dial is
+   now an `updateTransportsPolicy({ allowedSchemes })` call, so a second
+   independently-settable allowlist over the same axis (and the
+   precedence rule needed to reconcile the two) is removed. The scheme a
+   locator names must be in `allowedSchemes`; `outboundPolicy` governs
+   only host/CIDR.
 
 6. **An unregistered scheme throws.**
    If the agent calls `connect(npLocator)` and the daemon has no
@@ -778,36 +857,43 @@ The questions raised during design review are resolved as follows
 
 9. **The CLI is per-agent, and subagents can be created with
    delegated transports.**
-   Per-agent suffices: fold the verbs into
-   `endo agent <name> transports {list,add,revoke <handle>}`
-   rather than a top-level `endo transports`. Each verb binds to a
-   named method on the agent's `Transports` exo (*Capability
-   Surface*).
+   The verbs are flat top-level commands addressed with the
+   established `--as <agent>` option: `endo transports [--listeners]
+   --as <agent>`, `endo listen <scheme> --as <agent>`, and
+   `endo revoke <handle> --as <agent>`. Each binds to a named method on
+   the agent's `Transports` exo (*Capability Surface*).
 
-   This uses an `agent <name> transports ...` command-group prefix
-   rather than the flat `<verb> ... --as <agent>` addressing every
-   existing capability command uses (`mount`, `mktmp`, `spawn`). The
-   divergence is deliberate: `--as` names *which agent performs* a
-   single host-level verb, while `transports` is a **cohesive subgroup
-   of several verbs** (`list`/`add`/`revoke`) all scoped to one
-   agent's own `@transports` exo, so grouping them under
-   `agent <name> transports` keeps the verb set together and reads as
-   "operate on this agent's transports" rather than scattering three
-   sibling verbs across the flat namespace. The `--as`-shaped
-   delegation flag on `mkguest` (below) still follows the established
-   convention where the operation *is* a single host-level verb.
-   - `list [--listeners]` -> `list()` (enumerate the agent's allowed
-     schemes) or, with `--listeners`, enumerate the agent's
-     **outstanding listeners** by handle (see below). The bare form is
-     scheme enumeration; `--listeners` is how an operator recovers the
-     handles a later `revoke` names.
-   - `add <scheme> [--name NAME] [--port N] [--host H]` ->
-     `listen(scheme, opts)`: "adding a transport" means opening an
-     inbound **listener** on a scheme, the durable, managed counterpart
+   This reuses the CLI's one addressing convention. Every existing
+   capability command in `packages/cli/src/endo.js` is a flat
+   top-level verb that names "which agent" with `--as <agent>`
+   (`commonOptions.as`, on `mount`, `mktmp`, `spawn`, `eval`); there is
+   no `endo agent <name> ...` command group and no second-level command
+   group anywhere in the CLI. An earlier revision grouped the verbs
+   under a nested `endo agent <name> transports ...` prefix on the
+   argument that they read as a cohesive subgroup; that argument
+   applies equally to the paired verbs sibling capabilities already
+   have (`mount`/`checkin`/`checkout`) yet none of those introduced a
+   command group, so the transports verbs follow the flat convention
+   too. A user who has learned "operations take `--as <agent>`" reaches
+   transports the same way instead of a prefix that exists nowhere
+   else. The `--as`-shaped delegation flag on `mkguest` (below) follows
+   the same convention.
+   - `endo transports [--listeners] --as <agent>` -> `list()`
+     (enumerate the agent's allowed schemes) or, with `--listeners`,
+     enumerate the agent's **outstanding listeners** by handle (see
+     below). The bare form is scheme enumeration; `--listeners` is how
+     an operator recovers the handles a later `revoke` names.
+   - `endo listen <scheme> [--name NAME] [--port N] [--host H]
+     --as <agent>` -> `listen(scheme, opts)`: the verb is named
+     `listen` to map 1:1 onto the `listen()` method it fronts (an
+     earlier revision spelled it `add`, which read as "grant a scheme"
+     rather than "open a listener"; `listen` removes that ambiguity).
+     It opens an inbound **listener** on a scheme, the durable, managed
+     counterpart
      to a transient locator-driven `connect` (which the CLI does not
      surface as a verb: an outbound dial is issued by an agent from
      code with a locator in hand, not typed as a standing `transports`
-     entry). Because each CLI verb is a **separate process**, `add`
+     entry). Because each CLI verb is a **separate process**, `listen`
      cannot hand a later `revoke` an in-memory `Listener` exo: it
      instead **persists** the returned `Listener` in the agent's pet
      store under a stable handle (`--name`, defaulting to the scheme
@@ -815,9 +901,10 @@ The questions raised during design review are resolved as follows
      listeners) and prints that handle to stdout. The handle is a
      durable pet name resolvable in any later invocation, not a
      process-local reference.
-   - `revoke <handle>` -> `disconnect(handle)`: `<handle>` is the
-     durable pet name `add` printed (recoverable via `list
-     --listeners`); the CLI resolves it to the persisted `Listener` in
+   - `endo revoke <handle> --as <agent>` -> `disconnect(handle)`:
+     `<handle>` is the durable pet name `listen` printed (recoverable
+     via `endo transports --listeners`); the CLI resolves it to the
+     persisted `Listener` in
      the agent's pet store and drops that one session or listener. This
      is the fine-grained agent-facing verb, distinct from the host's
      whole-agent `revokeTransports` (see *Daemon Side*).
@@ -834,17 +921,18 @@ The questions raised during design review are resolved as follows
    policy fields narrowing (never widening) the parent's grant; the
    daemon rejects any field that exceeds the parent's. This is a
    `provideTransports` of a **new** child petName, so it does not
-   collide with the reject-on-existing rule of Decision #11. The CLI
+   collide with the reject-on-existing rule of Design Decision #11. The CLI
    spelling is a flag on the subagent-creation command
    (`endo mkguest <child> --transports-from <parent>
    [--schemes np,tcp-netstring] [--listen none|allow]
-   [--outbound <policy>]`), not the `add` verb above: `add` operates
-   on an existing agent's own view, delegation provisions a child's.
+   [--outbound <policy>]`), not the `listen` verb above: `listen`
+   operates on an existing agent's own view, delegation provisions a
+   child's.
    The delegated child gets its **own fresh** per-agent Ed25519
    identity (a distinct `Transports` capability provisioned with a
    narrowed slice of the parent's policy), not a share of the
    parent's signing key. Because routing, revocation, and demux all
-   key on Ed25519 identity (Decision #3), sharing the parent's key
+   key on Ed25519 identity (Design Decision #3), sharing the parent's key
    would collapse the child's sessions when the parent is revoked
    or `shutdown()`, violating the per-agent isolation this design
    rests on. With a forked identity the child survives parent
@@ -864,6 +952,12 @@ The questions raised during design review are resolved as follows
     included.
     The cutover (see *Replacing `@nets`*) removes `@nets`
     outright, with no deprecation window.
+    There is no `endo nets` CLI command to retire: no such command
+    exists in `packages/cli/src/endo.js` today (`@nets` was reached
+    only through the generic pet-store verbs and the host-privileged
+    `move()` sites, not a dedicated `nets` verb), so the CLI change is
+    purely the *addition* of the transports verbs above, not a
+    retirement.
 
 11. **Policy is revised without regenerating identity;
     re-`provideTransports` is a reject, not a silent re-mint.**
@@ -874,7 +968,7 @@ The questions raised during design review are resolved as follows
     mid-lifetime operation Limitation #2 ("No revocation") motivates,
     while the identity must stay put so peers keep recognizing the
     agent (and so a delegated child's identity is not disturbed by the
-    parent's, Decision #9). So the host exposes a dedicated
+    parent's, Design Decision #9). So the host exposes a dedicated
     `updateTransportsPolicy(petName, policyPatch)` that replaces the
     policy fields on an existing `Transports` in place (same formula,
     same `signingKeys`, same durable identity) and takes effect on
@@ -977,6 +1071,17 @@ Shape only:
   Host calls `revokeTransports(petName)`; agent's outstanding
   sessions fail; sibling agents unaffected.
 
+- **Integration: shared-transport-instance collection closes its
+  sessions (Garbage Collection).**
+  Two agents hold sessions over one shared transport instance; drive
+  that instance's formula to collection (cancellation/disincarnation)
+  and assert **every** session it carried is closed, so the presences
+  and promises over them are partitioned/rejected. Exercises the one
+  GC-adjacent revocation invariant this design explicitly owns
+  (*Garbage Collection*; *Cross-peer revocation propagation* under Out
+  of Scope, Future Work), the invariant the design's own prose calls
+  out but which no other test bullet covers.
+
 - **Integration: daemon restart.**
   Agent's `Transports` formula restores; signing keys
   preserved; outstanding sessions are not preserved (correct
@@ -998,11 +1103,12 @@ Shape only:
 - **Unit: `outboundPolicy` matcher (Design Decision #5).**
   Drive the matcher directly: a hint whose host matches
   `allowHostSuffixes` connects; one in an `allowCidrs` block
-  connects; a scheme absent from `allowSchemes` throws; a hint
-  matching neither suffix nor CIDR throws under `otherwise: 'deny'`
-  and connects under `otherwise: 'allow'`. Confirms the gate runs on
-  the locator's connection hint (the wire target), never on the
-  Ed25519 routing key.
+  connects; a hint matching neither suffix nor CIDR throws under
+  `otherwise: 'deny'` and connects under `otherwise: 'allow'`. Confirms
+  the gate runs on the locator's connection hint (the wire target),
+  never on the Ed25519 routing key, and carries **no** scheme axis of
+  its own (scheme gating is the top-level `allowedSchemes`, exercised
+  by the policy-update test below).
 
 - **Integration: unregistered scheme throws (Design Decision #6).**
   With no `np` netlayer registered, `connect(npLocator)` rejects;
@@ -1053,12 +1159,12 @@ Shape only:
   formulate-on-first-resolve populates `@transports` for any
   agent that lacks it and drops `@nets`.
 
-- The CLI gains per-agent
-  `endo agent <name> transports` verbs (Design Decision #9);
-  `endo nets` is **retired** together with `@nets` (Design Decision
-  #10) outright,
-  with no deprecation window (there is no migration window to
-  warn through).
+- The CLI gains the per-agent transports verbs `endo transports`,
+  `endo listen`, and `endo revoke` (each addressed with `--as <agent>`,
+  Design Decision #9). There is no `endo nets` command to retire
+  alongside `@nets`: none exists today (Design Decision #10), so this
+  is a pure addition, with no deprecation window and no migration
+  window to warn through.
 
 ## Upgrade Considerations
 
