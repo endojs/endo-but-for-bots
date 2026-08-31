@@ -3501,6 +3501,31 @@ pub(crate) fn check_image_slot_bounds(
                     set.insert(pc as u64);
                     pc = pc.saturating_add(len);
                 }
+                // A NESTED function's bytecode lives INSIDE its
+                // enclosing body's range -- a generator declaring
+                // `var h = function () {...}` owns a body that
+                // physically contains h's -- so the walk above collects
+                // h's instruction starts too, and a cursor pointing at
+                // one would enter h's code with the GENERATOR's frame.
+                // That is the same "a pc in another function body"
+                // class the sibling-body arm closes, one level down, so
+                // subtract every contained body.
+                for other in &lang.function_state.functions {
+                    if other.owner == frame.cur_func || other.segment != function.segment {
+                        continue;
+                    }
+                    let (Some(start), Some(end)) = (
+                        other.body_start,
+                        other
+                            .body_start
+                            .and_then(|s| s.checked_add(other.body_len)),
+                    ) else {
+                        continue;
+                    };
+                    if start >= body_start && end <= body_end {
+                        set.retain(|&pc| pc < start || pc >= end);
+                    }
+                }
                 e.insert(set)
             }
         };
