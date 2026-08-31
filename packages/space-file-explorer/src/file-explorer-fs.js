@@ -273,7 +273,7 @@ harden(listDirectory);
 /**
  * Classify a child cap of a Mount the same way `@endo/endo-fs`'s
  * from-mount backend does: a `lookup` method means a sub-directory
- * (sub-Mount), `text`/`streamBase64` means a file. Anything else is
+ * (sub-Mount), `text`/`stream` means a file. Anything else is
  * a non-fs cap (e.g. a git workspace) which the tree-only filesystem
  * surface would silently drop — we surface it as `'unknown'` so the
  * explorer can show it greyed-out instead of hiding it.
@@ -291,7 +291,7 @@ const probeMountChildType = async cap => {
     const methods = await E(cap).__getMethodNames__();
     const names = new Set(methods);
     if (names.has('lookup')) return 'directory';
-    if (names.has('text') || names.has('streamBase64')) return 'file';
+    if (names.has('text') || names.has('stream')) return 'file';
     if (names.has('worktree') && names.has('status') && names.has('commit')) {
       return 'git';
     }

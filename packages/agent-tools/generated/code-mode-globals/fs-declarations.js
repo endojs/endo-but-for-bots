@@ -66,7 +66,7 @@ type FilesystemStats = {
     type?: string;
 };
 type PassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<string, TReadReturn>>;
+    stream: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type BlobRef = {
@@ -180,7 +180,7 @@ type WatchFromResult = {
     watcher: NodeWatcher;
 };
 type PassableBytesWriter<TWriteReturn = undefined> = {
-    streamBase64: (synPromise: ERef<StreamNode<string, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
+    stream: (synPromise: ERef<StreamNode<string, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
 };
 type LockType = 'shared' | 'exclusive';
@@ -237,7 +237,7 @@ type MountEndoMountFile = {
     kind: () => 'file';
     list: () => Promise<never>;
     text: () => Promise<string>;
-    streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     json: () => Promise<unknown>;
     sha256: () => Promise<string>;
     size: () => Promise<bigint>;
@@ -273,7 +273,7 @@ type MountEndoMountStat = {
 };
 type MountDirectoryWriteSource = MountReadableBlobSource | MountReadableTree;
 type MountReadableBlobSource = {
-    streamBase64: (...args: any[]) => PromiseLike<unknown>;
+    stream: (...args: any[]) => PromiseLike<unknown>;
 };
 type MountReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
@@ -295,11 +295,11 @@ type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> 
     promise: null;
 };
 type MountPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<string, TReadReturn>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type MountReadableBlobView = {
-    streamBase64: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     sha256: () => Promise<string>;

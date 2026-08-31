@@ -218,7 +218,7 @@ test('bytes reader many messages', async t => {
 test('iterateBytesReader applies readReturnPattern on terminal value', async t => {
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
+      async stream(_synHead) {
         return harden({ value: 'Zg==', promise: null });
       },
       readReturnPattern() {
@@ -239,7 +239,7 @@ test('iterateBytesReader applies readReturnPattern on terminal value', async t =
 test('iterateBytesReader rejects invalid readReturnPattern on natural completion', async t => {
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
+      async stream(_synHead) {
         return harden({ value: 'not a number', promise: null });
       },
       readReturnPattern() {
@@ -266,7 +266,7 @@ test('iterateBytesReader return() drains ack chain and enforces readReturnPatter
 
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
+      async stream(_synHead) {
         return harden({ value: 'first', promise: ackPromise });
       },
       readReturnPattern() {
@@ -295,7 +295,7 @@ test('iterateBytesReader return() closes syn chain', async t => {
 
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(synHead) {
+      async stream(synHead) {
         capturedSynHead = synHead;
         resolveStreamCalled(true);
         return harden({ value: 'Zg==', promise: null });
@@ -327,7 +327,7 @@ test('iterateBytesReader throw() closes syn chain', async t => {
 
   const fakeReader = /** @type {PassableBytesReader<undefined>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(synHead) {
+      async stream(synHead) {
         capturedSynHead = synHead;
         resolveStreamCalled(true);
         return harden({ value: undefined, promise: null });
@@ -356,7 +356,7 @@ test('iterateBytesReader rejects invalid base64 and repeats the error', async t 
 
   const fakeReader = /** @type {PassableBytesReader<undefined>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
+      async stream(_synHead) {
         resolveAck(harden({ value: 'Zg==', promise: null }));
         return harden({ value: '!', promise: ackPromise });
       },

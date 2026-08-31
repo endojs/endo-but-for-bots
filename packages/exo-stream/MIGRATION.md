@@ -42,14 +42,14 @@ From `@endo/daemon/ref-reader.js` (REMOVED):
 
 | Old Function | New Function | Module | Notes |
 |---|---|---|---|
-| `makeReaderRef(readable)` | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `streamBase64()` method |
+| `makeReaderRef(readable)` | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `stream()` method |
 | `makeRefReader(readerRef)` | `iterateBytesReader(readerRef)` | `iterate-bytes-reader.js` | Synchronous; returns `AsyncIterableIterator<Uint8Array>` |
 
 #### Bytes Writers (base64 encoding over CapTP)
 
 | New Function | Module | Notes |
 |---|---|---|
-| `bytesWriterFromIterator(iterator)` | `bytes-writer-from-iterator.js` | Returns `PassableBytesWriter` Exo with `streamBase64()` method |
+| `bytesWriterFromIterator(iterator)` | `bytes-writer-from-iterator.js` | Returns `PassableBytesWriter` Exo with `stream()` method |
 | `iterateBytesWriter(writerRef, options?)` | `iterate-bytes-writer.js` | Returns a local bytes writer iterator; use `next(chunk)` to send and `return()` to close |
 
 ### Key Differences

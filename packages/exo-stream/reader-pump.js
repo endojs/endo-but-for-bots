@@ -72,7 +72,7 @@ const MAX_CREDIT = 2 ** 16;
  *   const pump = makeReaderPump(base64Iterator);
  *
  *   return makeExo('HashedBytesReader', HashedBytesReaderInterface, {
- *     streamBase64: pump,
+ *     stream: pump,
  *     sha512() {
  *       return hash;
  *     },

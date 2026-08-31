@@ -43,7 +43,7 @@ const text = await blob.text();
 
 The returned remotable conforms to `ReadableTreeInterface`
 (`has`, `list`, `lookup`); leaf blobs conform to
-`ReadableBlobInterface` (`streamBase64`, `text`, `json`).
+`ReadableBlobInterface` (`stream`, `text`, `json`).
 
 ## API
 

@@ -79,7 +79,7 @@ test('LocalBlob exposes only the rich public ReadableBlob Exo surface', async t 
     'json',
     'sha256',
     'size',
-    'streamBase64',
+    'stream',
     'text',
     'textRange',
   ]);

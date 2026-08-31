@@ -85,10 +85,10 @@ const makeMockMount = () => {
       async text() {
         return fromUtf8(node.content);
       },
-      // Mirrors the real `EndoMountFile.streamBase64(synPromise)`: an
+      // Mirrors the real `EndoMountFile.stream(synPromise)`: an
       // `@endo/exo-stream` reader pump over the whole content, base64
       // encoded. The `synPromise` argument drives the flow-control chain.
-      streamBase64(synPromise) {
+      stream(synPromise) {
         async function* contentBytes() {
           yield node.content;
         }
@@ -180,7 +180,7 @@ const makeMockMount = () => {
       },
       // Mirrors the real `EndoMount.write(path, ReadableBlob)`: the
       // value is a *remotable* reader reference (never raw bytes, which
-      // are not passable over CapTP), drained via its `streamBase64`
+      // are not passable over CapTP), drained via its `stream`
       // method and base64-decoded.
       async write(path, value) {
         const segs = segmentsOf(path);

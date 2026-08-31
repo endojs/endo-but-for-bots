@@ -106,7 +106,7 @@ export const makeLocalBlob = (
   /** @satisfies {ReadableBlobRange} */
   const localBlobMethods = {
     /** @param {ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
+    stream(synPromise) {
       if (isFull) {
         const nodeReadStream = fs.createReadStream(filePath);
         const reader = makeNodeReader(nodeReadStream);
@@ -184,7 +184,7 @@ export const makeLocalBlob = (
     },
     help: method =>
       method === undefined
-        ? 'LocalBlob: read-only handle to a host file (bytes, byteRange, text, textRange, json, sha256, size, streamBase64).'
+        ? 'LocalBlob: read-only handle to a host file (bytes, byteRange, text, textRange, json, sha256, size, stream).'
         : `No documentation for method ${method}.`,
   };
 

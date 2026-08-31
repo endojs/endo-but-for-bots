@@ -183,7 +183,7 @@ test('bytes writer fallback return when sink lacks return', async t => {
   /** @type {Promise<StreamNode<string, string | undefined>>} */
   const synHead = Promise.resolve(harden({ value: 'done', promise: null }));
   /** @type {StreamNode<undefined, string | undefined>} */
-  const ackHead = await writerRef.streamBase64(synHead);
+  const ackHead = await writerRef.stream(synHead);
 
   t.is(ackHead.promise, null);
   t.is(ackHead.value, undefined);
@@ -209,7 +209,7 @@ test('bytes writer returns completion value from sink return', async t => {
   /** @type {Promise<StreamNode<string, string>>} */
   const synHead = Promise.resolve(harden({ value: 'done', promise: null }));
   /** @type {StreamNode<undefined, string>} */
-  const ackHead = await writerRef.streamBase64(synHead);
+  const ackHead = await writerRef.stream(synHead);
 
   t.is(ackHead.promise, null);
   t.is(ackHead.value, 'done');
@@ -219,7 +219,7 @@ test('iterateBytesWriter pre-buffered send resolves before ack', async t => {
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -245,7 +245,7 @@ test('iterateBytesWriter pre-buffered send resolves before ack', async t => {
 
 test('iterateBytesWriter returns done when responder closes early', async t => {
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return harden({ value: 'closed', promise: null });
     },
     writeReturnPattern() {
@@ -266,7 +266,7 @@ test('iterateBytesWriter return() is idempotent', async t => {
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -292,7 +292,7 @@ test('iterateBytesWriter next() replays terminal result after return()', async t
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -317,7 +317,7 @@ test('iterateBytesWriter rejects ack errors and repeats the error', async t => {
   const { promise: ackPromise, reject: rejectAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -343,7 +343,7 @@ test('iterateBytesWriter rejects ack errors and repeats the error', async t => {
 
 test('iterateBytesWriter throw() is idempotent', async t => {
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return harden({ value: undefined, promise: null });
     },
     writeReturnPattern() {
@@ -362,7 +362,7 @@ test('iterateBytesWriter throw() is idempotent', async t => {
 
 test('iterateBytesWriter is async iterable', async t => {
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return harden({ value: undefined, promise: null });
     },
     writeReturnPattern() {

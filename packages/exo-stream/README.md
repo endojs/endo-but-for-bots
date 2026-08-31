@@ -15,7 +15,7 @@ In both cases, one chain carries data and the other carries flow control.
 For Readers, when the initiator calls `return(value)` to close early, the final
 synchronization node carries that argument value to the responder. If the
 responder is backed by a JavaScript iterator with a `return(value)` method, the
-responder forwards that argument and uses the iterator’s returned value as the
+responder forwards that argument and uses the iterator's returned value as the
 terminal acknowledgement. Otherwise, the responder terminates with the original
 argument value. All other synchronization values are `undefined`.
 For Writers, when the initiator closes early, the final synchronization node
@@ -33,10 +33,11 @@ for all passable values.
 Producers and consumers can rely on all values to match the desired shape,
 or the stream will break with an error.
 
-Owing to temporary limitations of CapTP, we provide specialized byte reader
-and writer utilities that haul base64 encoded data.
-We expect this facility to become unnecessary when CapTP supports passable byte
-arrays.
+The generic protocol has a single remote method, `stream()`. Specialized byte
+reader and writer adapters use that method while hauling base64-encoded data.
+Although passable byte arrays can now cross CapTP, the current marshal format
+hex-encodes them. The adapters therefore remain the one recommended byte-stream
+API until CapTP has a compact binary representation.
 
 ## Installation
 
@@ -281,8 +282,8 @@ the `stream` method on a custom Exo.
 Wrap a local `AsyncIterator<Uint8Array>` as a `PassableBytesReader` Exo.
 Bytes are automatically base64-encoded for transmission over CapTP.
 
-Uses `streamBase64()` method instead of `stream()` to allow future migration
-to direct bytes transport when CapTP supports it.
+Uses the generic `stream()` method while keeping base64 encoding internal to
+the adapter pair.
 
 **Options:**
 - `buffer` (number, default 0): Number of values to pre-pull
@@ -307,8 +308,8 @@ Wrap a local sink iterator as a `PassableBytesWriter` Exo.
 Base64 strings received from the initiator are automatically decoded to
 `Uint8Array` before being pushed to the iterator.
 
-Uses `streamBase64()` method instead of `stream()` to allow future migration
-to direct bytes transport when CapTP supports it.
+Uses the generic `stream()` method while keeping base64 encoding internal to
+the adapter pair.
 
 **Options:**
 - `buffer` (number, default 0): Number of flow-control acks to pre-send
@@ -324,14 +325,15 @@ for transmission over CapTP.
 **Options:**
 - `buffer` (number, default 0): Number of data values to pre-send before waiting for acks
 
-### Migration Path for Bytes Streams
+### Bytes transport
 
-Currently, bytes are transmitted as base64-encoded strings via `streamBase64()`.
-When CapTP and pass-style support direct binary transport, bytes-streamable
-Exos can implement the `stream()` method directly, allowing initiators to
-gracefully transition to using `iterateReader()` instead of
-`iterateBytesReader()`, and `iterateWriter()` instead of
-`iterateBytesWriter()`.
+All Exo streams now use the `stream()` method. Byte streams retain the four
+bytes-specific adapter entry points above because the adapters' base64 strings
+produce a smaller CapTP body than the hex representation currently used for a
+passable byteArray. Direct byteArray streaming also requires converting mutable
+filesystem, socket, and inflater chunks to immutable byte arrays on the send
+path. Use the bytes-specific adapters for byte streams; use `readerFromIterator`,
+`iterateReader`, `writerFromIterator`, and `iterateWriter` for other passables.
 
 ## Design
 
@@ -339,6 +341,6 @@ See [DESIGN.md](./DESIGN.md) for design documentation.
 
 ## Future Work
 
-- Support direct binary transport when CapTP supports it.
+- Revisit direct byteArray streaming when CapTP has a compact binary encoding.
 - Add help methods to Exos for usage guidance.
 - Propose protocol to OCapN working group.

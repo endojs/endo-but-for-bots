@@ -635,7 +635,7 @@ Example: writeText(["my-mount", "output.txt"], "hello")
 
 Blobs store binary content with a content-addressed hash.
 Use text() to read as a string, json() to parse as JSON,
-streamBase64() for base64 streaming, bytes() for byte streaming,
+stream() for base64 streaming, bytes() for byte streaming,
 or byteRange() / textRange() for attenuation.
 
 ## help(methodName?) -> string
@@ -654,7 +654,7 @@ Return the selected byte length.
 
 Stream all selected bytes.
 
-## streamBase64(syndicationPromise) -> Promise
+## stream(syndicationPromise) -> Promise
 
 Stream the blob content as base64 chunks, driven by the
 syndication promise (the reader-pump flow-control protocol).
@@ -773,23 +773,23 @@ Return the byte length of the tree's own manifest.
 
 Check if an entry exists at the given path.
 names: string[] - Path segments.
-Example: has("index.html") → true
-Example: has("assets", "style.css") → true
+Example: has("index.html") -> true
+Example: has("assets", "style.css") -> true
 
 ## list(...names) -> Promise<string[]>
 
 List entry names at the given path (or root).
 names: string[] - Path segments (optional, defaults to root).
-Example: list() → ["index.html", "app.js", "assets"]
-Example: list("assets") → ["style.css", "logo.png"]
+Example: list() -> ["index.html", "app.js", "assets"]
+Example: list("assets") -> ["style.css", "logo.png"]
 
 ## lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>
 
 Get the value at a name or path.
 nameOrPath: string | string[] - Name or path segments.
 Returns EndoReadable for files, ReadableTree for subdirectories.
-Example: lookup("index.html") → EndoReadable
-Example: lookup(["assets", "style.css"]) → EndoReadable
+Example: lookup("index.html") -> EndoReadable
+Example: lookup(["assets", "style.css"]) -> EndoReadable
 
 # EndoMount - Live mutable access to a filesystem directory.
 
@@ -980,7 +980,7 @@ Capture current state as an immutable readable-tree.
 
 # EndoMountFile - A file within a mounted directory.
 
-A live, host-backed file. Read it with text() / json() / streamBase64(),
+A live, host-backed file. Read it with text() / json() / stream(),
 inspect and read it with sha256() / size() / bytes(), write it with
 writeText() / append() / writeBytes(), or snapshot() it into the content
 store. kind() returns "file" and stat() returns the bigint-nanosecond metadata
@@ -1030,7 +1030,7 @@ reads bytes to find the line boundaries, so it resolves asynchronously.
 
 Read the file content as a UTF-8 string.
 
-## streamBase64(syndicationPromise) -> Promise
+## stream(syndicationPromise) -> Promise
 
 Stream the file content as base64 chunks, driven by the syndication
 promise (the reader-pump flow-control protocol).
@@ -1053,6 +1053,6 @@ Write bytes from an async iterator. Throws if read-only.
 
 ## readOnly() -> ReadableBlob
 
-Returns a structural ReadableBlob view (text, json, streamBase64, sha256,
+Returns a structural ReadableBlob view (text, json, stream, sha256,
 size, bytes) of this file. The view is a write-disabled face over the live file,
 not a snapshot. Mount-specific extensions (stat, snapshot) are not on it.

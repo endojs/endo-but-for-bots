@@ -55,7 +55,7 @@ const revokedSentinel = Symbol('mount-revoked');
 
 /**
  * Narrow a remote source after the Exo method-name check used by `write()`.
- * The runtime guard proves that a source advertising `streamBase64` is the
+ * The runtime guard proves that a source advertising `stream` is the
  * passable reader capability expected by `iterateBytesReader`.
  *
  * @param {unknown} value
@@ -63,7 +63,7 @@ const revokedSentinel = Symbol('mount-revoked');
  * @returns {asserts value is ERef<PassableBytesReader>}
  */
 const assertReadableBlobSource = (value, methodNames) => {
-  if (!methodNames.includes('streamBase64')) {
+  if (!methodNames.includes('stream')) {
     throw new TypeError('Expected a ReadableBlob source');
   }
 };
@@ -1273,7 +1273,7 @@ const makeMountExo = ctx => {
     const parent = filePowers.joinPath(target, '..');
     await filePowers.makePath(parent);
     // Detect blob-vs-tree by method names, the same shape-test
-    // `checkinTree` uses.  A `streamBase64`-bearing remotable is
+    // `checkinTree` uses.  A `stream`-bearing remotable is
     // materialised through bytes; a `list`-bearing remotable is
     // materialised recursively.
     const source =
@@ -1284,7 +1284,7 @@ const makeMountExo = ctx => {
        * }} */ (value);
     // eslint-disable-next-line no-underscore-dangle
     const methodNames = await E(source).__getMethodNames__();
-    if (methodNames.includes('streamBase64')) {
+    if (methodNames.includes('stream')) {
       if (await filePowers.isDirectory(target)) {
         throw new Error('Path is a directory');
       }
@@ -1328,7 +1328,7 @@ const makeMountExo = ctx => {
       return;
     }
     throw new Error(
-      'write() value must be a ReadableBlob or ReadableTree (no streamBase64 or list method)',
+      'write() value must be a ReadableBlob or ReadableTree (no stream or list method)',
     );
   };
 
@@ -1634,7 +1634,7 @@ const makeMountFileExo = (
     },
 
     /** @param {ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
+    stream(synPromise) {
       /** @returns {AsyncGenerator<Uint8Array>} */
       const readConfined = async function* readConfinedFile() {
         assertLive();
@@ -1812,7 +1812,7 @@ harden(makeMountFileExo);
 
 /**
  * Structural-narrowing view exposing the read-only `ReadableBlob` surface
- * (`streamBase64`, `text`, `json`) plus named digest, size, bytes, and range
+ * (`stream`, `text`, `json`) plus named digest, size, bytes, and range
  * methods over a
  * read-only mount file. This is a write-disabled *face* over a live file — it
  * delegates to the underlying file, so content changes are observed; it just
@@ -1855,9 +1855,9 @@ const makeReadableBlobView = (
 
   return makeExo('EndoMountReadableBlob', ReadableBlobRangeInterface, {
     /** @param {ERef<any>} synPromise */
-    async streamBase64(synPromise) {
+    async stream(synPromise) {
       if (isFull) {
-        return E(readOnlyFile).streamBase64(synPromise);
+        return E(readOnlyFile).stream(synPromise);
       }
       // Attenuated view: stream the selected bytes as one base64 chunk.
       const pump = makeReaderPump(
@@ -1926,7 +1926,7 @@ const makeReadableBlobView = (
     },
     help(method) {
       return method === undefined
-        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (bytes, byteRange, text, textRange, json, sha256, size, streamBase64).'
+        ? 'EndoMountReadableBlob: read-only ReadableBlob view over a live mount file (bytes, byteRange, text, textRange, json, sha256, size, stream).'
         : `No documentation for method ${q(method)}.`;
     },
   });

@@ -2017,7 +2017,7 @@ const makeDaemonCore = async (
      */
     const readableBlobMethods = {
       /** @param {ERef<unknown>} synPromise */
-      streamBase64(synPromise) {
+      stream(synPromise) {
         if (isFull) {
           const pump = makeReaderPump(
             mapReader(makeFileReader(), encodeBase64),
@@ -2460,7 +2460,7 @@ const makeDaemonCore = async (
 
   /**
    * Wrap an in-memory Uint8Array as a transient blob exo that
-   * implements the `EndoBlob` surface (sha256 / streamBase64 / text
+   * implements the `EndoBlob` surface (sha256 / stream / text
    * / json) just well enough for the worker's `makeArchive` method
    * to consume it.  The blob is not persisted in CAS — its lifetime
    * is the duration of the eventual-send.
@@ -2496,7 +2496,7 @@ const makeDaemonCore = async (
         /** @type {any} */ ({
           help: () => 'Transient in-memory blob',
           /** @param {ERef<unknown>} synPromise */
-          streamBase64(synPromise) {
+          stream(synPromise) {
             const pump = makeReaderPump(
               mapReader(
                 /** @type {any} */ ([view][Symbol.iterator]()),
