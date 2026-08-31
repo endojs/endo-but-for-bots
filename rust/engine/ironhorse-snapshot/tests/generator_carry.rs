@@ -418,3 +418,51 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
     // The honest image is untouched by all of it.
     assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
 }
+
+/// The sibling-body arm above has a one-level-down twin: a NESTED
+/// function's bytecode lives INSIDE its enclosing body's range, so a
+/// generator that declares `var h = function () {...}` owns a body
+/// that physically contains h's. Walking the outer range therefore
+/// collects h's instruction starts, and a cursor pointing at one would
+/// enter h's code with the GENERATOR's frame — the same class, one
+/// level in, and not covered by comparing against sibling rows.
+#[test]
+fn a_generator_pc_inside_a_nested_body_is_refused() {
+    let (bytecode, names) = compile(
+        "var it = 0; var t = 0; \
+         function* g() { var h = function (z) { return z + 1; }; var a = 1; yield a; yield h(a); } \
+         it = g(); t = it.next().value; t",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let image = read_machine(&bytes, &sig()).expect("read GENR");
+
+    let frame = image.generators[0].frame.as_ref().expect("suspended frame");
+    let functions = &image.function_state.functions;
+    let outer = functions
+        .iter()
+        .find(|f| f.owner == frame.cur_func)
+        .expect("the frame's function has a row");
+    let (outer_start, outer_len) = (outer.body_start.unwrap(), outer.body_len);
+    // The fixture must actually NEST — otherwise this arm proves nothing.
+    let nested = functions
+        .iter()
+        .filter(|f| f.owner != outer.owner && f.segment == outer.segment)
+        .find_map(|f| {
+            let s = f.body_start?;
+            (s >= outer_start && s + f.body_len <= outer_start + outer_len).then_some(s)
+        })
+        .expect("the fixture nests a function body inside the generator's");
+
+    let mut crafted = image.clone();
+    crafted.generators[0].frame.as_mut().unwrap().resume_pc = nested;
+    match from_snapshot_bytes(&write_machine(&crafted), &sig()) {
+        Err(SnapshotError::Corrupt("generator frame: invalid resume cursor or scope map")) => {}
+        Err(other) => panic!("refused, but not by the named gate: {other:?}"),
+        Ok(_) => panic!("a cursor inside a nested body must not restore"),
+    }
+    // The honest image still restores.
+    assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
+}

@@ -464,6 +464,12 @@ fn a_runtime_native_reached_through_any_stored_reference_refuses() {
         ("an array element", "o = [g];"),
         ("a Map value", "o = new Map(); o.set('k', g);"),
         ("a Set member", "o = new Set(); o.add(g);"),
+        // A Proxy's target and handler are raw slot INDICES in the
+        // `proxies` row, not Slots -- so a walk that inspects only
+        // Slot-bearing state misses them, even though the proxy is the
+        // only thing keeping the native reachable.
+        ("a proxy target", "o = new Proxy(g, {}); g = 0;"),
+        ("a proxy handler", "o = new Proxy({}, g); g = 0;"),
     ] {
         let m = resolver_fixture(tail);
         assert_eq!(

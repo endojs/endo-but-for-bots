@@ -8611,11 +8611,24 @@ impl Interp {
             || self.private_accessors.values().any(|d| {
                 d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
             })
+            // The raw slot-INDEX fields. Most side-table indices name
+            // objects (a brand, a home, a prototype, an iterable), which
+            // cannot be the doomed thing; these two are the ones that
+            // can name a FUNCTION, and neither is a Slot, so a walk of
+            // Slot-bearing state alone steps straight past them.
+            //
             // `BoundData` in full: the target is an index, while
             // `this_arg` and `args` are Slots the round-2 check missed.
             || self.bound_functions.values().any(|d| {
                 names_index(d.target.0) || names(&d.this_arg) || d.args.iter().any(names)
             })
+            // A Proxy over a callable: the proxy row is the only thing
+            // keeping the native reachable once the guest drops its own
+            // reference, and both slots are indices.
+            || self
+                .proxies
+                .values()
+                .any(|p| names_index(p.target.0) || names_index(p.handler.0))
             || self
                 .disposable_stacks
                 .values()
