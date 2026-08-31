@@ -31,9 +31,11 @@ Dependencies/related-designs table (see § 4 and § 5).
 A reference error (reading an undefined variable, or touching a
 still-uninitialized temporal-dead-zone (TDZ) binding) is a **bug in the
 program**, not an expected control-flow event. In Ironhorse these are
-engine-raised errors: `ironhorse-vm`'s `XS_CODE_GET_VARIABLE` ("undefined
-variable") and `XS_CODE_GET_LOCAL` ("get: not initialized yet") build a
-`Halt::Throw(...)` today (see [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md)
+engine-raised errors: `ironhorse-vm`'s `XS_CODE_GET_VARIABLE |
+XS_CODE_GET_THIS_VARIABLE` ("undefined variable") and `XS_CODE_GET_LOCAL_1 |
+XS_CODE_GET_LOCAL_2` ("get: not initialized yet") build a
+`Halt::Throw(...)` today (the literal match-arm identifiers in
+`rust/engine/ironhorse-vm/src/interp.rs`) (see [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md)
 § Prerequisite). (`Halt` is `ironhorse-vm`'s Rust enum of interpreter stop
 outcomes: the ways a running program can halt, whether an ordinary catchable
 throw, a non-recoverable resource abort, or an unsupported-operation bail.)
@@ -44,8 +46,10 @@ or far more often by accident) can swallow them:
 try { doWork(config.tiemout /* typo */); } catch (e) { retry(); }
 ```
 
-The `ReferenceError`/`undefined`-read here is a defect, but the `catch` turns it
-into a retry loop. By the time anyone notices (minutes, or many messages, later)
+Here the mistyped property access `config.tiemout` reads as `undefined` (the
+same shape a mistyped *variable* read would take, except that a bare undefined
+variable raises a `ReferenceError`); either way the defect is silent, and the
+`catch` turns it into a retry loop. By the time anyone notices (minutes, or many messages, later)
 the interpreter has unwound through the `catch`, the activation that raised the
 error is gone, and the heap has moved on. **Unwinding through a `catch` (or a
 promise rejection handler) before anyone inspects the failure destroys the single
@@ -114,9 +118,28 @@ Call a rejection **unwatched** while no handler is yet subscribed to it. Unwatch
 is a live, transient status. It should *end* the moment a handler attaches, not
 harden into a verdict.
 
+A note on vocabulary, since this document sits among siblings that spell the
+concept differently. Node, the XS oracle functions
+(`fxAddUnhandledRejection`/`fxCheckUnhandledRejections`), and the project's
+existing designs
+([ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md),
+[unhandled-rejection-display](unhandled-rejection-display.md)) all say
+**unhandled**. This document deliberately says **unwatched** instead: the same
+promise, the same phenomenon, renamed to foreground that "no handler *yet*" is a
+live, retractable status rather than a settled verdict (the whole thesis of § 2).
+Read the two as synonyms for one concept: wherever a sibling document or the XS
+substrate says "unhandled rejection," this document (and any tracker it
+recommends, see § 5 Open Question 1) says "unwatched rejection." The rename is
+intentional and is carried through even to the terminal report surface; the XS
+oracle names are kept only because they are the literal C symbols being mirrored.
+
 ### This is especially sharp over CapTP
 
-Ironhorse runs guests that speak `@endo/eventual-send` and CapTP. There, a
+Ironhorse runs guests that speak `@endo/eventual-send` and CapTP (the
+capability-transfer protocol Endo guests use to send messages between isolated
+object graphs; each such graph is a **vat**, a single-threaded event-loop
+container of objects, and the peer graph on the other end of a CapTP connection
+is the **far side**). There, a
 promise is frequently **handed off**: returned from an eventual-send (`E(x).m()`),
 passed as an argument, or resolved into another vat's reference graph. Under
 **promise pipelining**, messages are sent to a promise *before it resolves*, and
@@ -171,22 +194,39 @@ rejection-timeout heuristic is no longer the only alarm in the house for that
 class. It stops pulling its weight, and its false-positive cost stops being worth
 paying.
 
-One caveat must be stated plainly here, not left implicit in an appendix.
-Panic-on-reference-error is **opt-in and diagnostic**: a supervisor arms it for a
-suspect worker or a reproduction run. The unhandled-rejection timeout it displaces
-was **always-on**. The two therefore do *not* have the same default coverage.
-`StackOverflow` and `MeterAbort` genuinely are always-on and do close their part
-of the gap by default. But for reference errors, an unattended production worker
-on which no supervisor has armed the panic still swallows the accidental-catch bug
-exactly as it does today: neither the (unarmed) panic nor the (recommended-away)
-timeout catches it. The reference-error class is caught *precisely when armed*, not
-*covered by default*. What closes that residual gap is recommendation 3's
-report-at-terminal-boundary tracker, which is itself always-on. This document
-therefore recommends retiring the always-on timeout only in favor of an always-on
-*reporter*, not in favor of an on-demand diagnostic alone. A follow-on design or
-build job reading this section should scope that tracker (Open Question 1) as
-load-bearing, not optional; the residual coverage the recommendation promises
-depends on it.
+One caveat must be stated plainly here, not left implicit in an appendix, and it
+must not be overstated. Panic-on-reference-error is **opt-in and diagnostic**: a
+supervisor arms it for a suspect worker or a reproduction run. The
+unhandled-rejection timeout it displaces was **always-on**. The two therefore do
+*not* have the same default coverage. `StackOverflow` and `MeterAbort` genuinely
+are always-on and do close their part of the gap by default.
+
+Be precise about *what* the always-on timeout ever covered, because it is easy to
+over-claim here. The unhandled-rejection timeout fires only on **promise
+rejections**; it never observed a reference error swallowed by a *synchronous*
+`try`/`catch` at all. § 1's lead example is exactly that synchronous case
+(`try { doWork(config.tiemout); } catch (e) { retry(); }`, with no promise
+anywhere). That bug has **no** always-on net today and never did: Node's timeout could not
+see it (no promise is created), and the report-at-terminal-boundary tracker
+recommended below (recommendation 3) likewise accounts only for *rejections*, so
+it cannot see it either. For the synchronous-swallow class, the **armed panic is
+the only tool**, exactly as it is today; retiring the rejection timeout takes
+nothing away from it, because the timeout never covered it. This document does not
+claim otherwise, and a reader must not read § 2 as promising always-on coverage
+for synchronously-caught reference errors: there is none, and the recommendation
+does not create one.
+
+Where the always-on story *does* hold is the **rejection** manifestation of a
+dropped failure. There, retiring the timeout is a swap of one always-on mechanism
+for another: an always-on *reporter* (a report-at-terminal-boundary tracker,
+recommendation 3 below) replaces the always-on *escalator*, keeping visibility of
+genuinely-abandoned rejections while dropping the fatal false-positive. This
+document therefore recommends retiring the always-on timeout only in favor of that
+always-on reporter, not in favor of an on-demand diagnostic alone. A follow-on
+design or build job reading this section should scope that tracker (Open
+Question 1) as load-bearing, not optional; the residual *rejection* coverage the
+recommendation promises depends on it. The synchronous-swallow class remains,
+honestly, covered only when the panic is armed.
 
 ### Recommendation
 
@@ -195,10 +235,16 @@ behavior**, and should treat *not* carrying it forward as a concrete goal to
 reach once the panic mechanism lands, rather than inheriting Node's heuristic by
 default and then trying to tune its false-positive rate. Concretely:
 
-1. **Do not escalate an unwatched rejection to a fatal abort on a timer.** A
-   rejection with no handler *yet* is not an error condition; over CapTP it is
-   frequently the intended shape. Ironhorse must not kill a worker (or a crank)
-   because a promise has not been observed within some window.
+1. **Once the report-at-terminal-boundary tracker (item 3, Open Question 1) is
+   in place, do not escalate an unwatched rejection to a fatal abort on a timer.**
+   A rejection with no handler *yet* is not an error condition; over CapTP it is
+   frequently the intended shape. Ironhorse must not kill a worker (or a crank: a
+   single turn of a vat's event loop, processing one delivered message)
+   because a promise has not been observed within some window. The ordering
+   matters: dropping the timeout *before* the always-on reporter exists would
+   leave an unattended worker with neither alarm for genuinely-abandoned
+   rejections, strictly worse than today; build the reporter first, then retire
+   the timeout.
 
 2. **Do surface reference errors (and exhaustion) via the precise mechanisms.**
    Panic-on-reference-error catches the accidental-swallow bug at its source;
@@ -208,30 +254,41 @@ default and then trying to tune its false-positive rate. Concretely:
 3. **For genuinely-abandoned rejections, prefer *visibility* over *escalation*.**
    There is still real value in knowing that a rejection reached end-of-turn (or
    drain, or worker exit) with no handler ever attached and no outstanding
-   handoff. That is the closest an engine can honestly get to "abandoned." Be
-   honest that this *is* still an inference, not a fact, of the same shape § 2
+   handoff. That is the closest an engine can honestly get to "abandoned."
+
+   Be honest that this *is* still an inference, not a fact, of the same shape § 2
    warns against: absence-of-handler-at-a-checkpoint promoted to a verdict. A
    promise handed off to a peer that later drops it would still read as "no
    outstanding handoff visible locally" at local drain or exit. The difference
-   from Node's timer is one of degree and of consequence, not of kind. A terminal
-   boundary is the **most-deferred** checkpoint available (the promise has had
-   every earlier turn to acquire a handler), so it is the least-wrong moment to
-   look; and, crucially, the recommended response is to **report**, never to kill,
-   so a residual false positive costs a spurious diagnostic line rather than a
-   dead worker. That asymmetry (most-deferred checkpoint, non-fatal response) is
-   the whole reason report-at-terminal-boundary is defensible where
-   escalate-on-a-timer is not. The right response is to **report** it (a
-   diagnostic, a debugger panel; see § 3), the way XS (the C engine Ironhorse
+   from Node's timer is one of degree and of consequence, not of kind.
+
+   What makes report-at-terminal-boundary defensible where escalate-on-a-timer is
+   not is an asymmetry on two axes. First, a terminal boundary is the
+   **most-deferred** checkpoint available (the promise has had every earlier turn
+   to acquire a handler), so it is the least-wrong moment to look. Second, and
+   crucially, the recommended response is to **report**, never to kill, so a
+   residual false positive costs a spurious diagnostic line rather than a dead
+   worker.
+
+   The right response is to **report** it, the way XS (the C engine Ironhorse
    reimplements) accumulates unhandled rejections in a weak list and reports them
    at drain/exit (`fxAddUnhandledRejection` / `fxCheckUnhandledRejections`; see
    [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md)
-   § Ironhorse Decisions item 3), **not** to abort. The distinction the
-   recommendation draws is: *stop flagging* deferred and handed-off rejections as
-   errors, and *keep reporting*, never escalating, the residue that truly
-   reaches a terminal boundary unobserved. Rendering of such a reason should reuse
-   the project's diagnostic discipline (`passableAsJustin` / the `renderRejection`
-   helper from [unhandled-rejection-display](unhandled-rejection-display.md)), so
-   an `Error` reason is legible rather than `{}`.
+   § Ironhorse Decisions item 3), **not** to abort. Note that "report" covers two
+   distinct surfaces with different temporal shapes: a one-shot **batch** report
+   at the terminal boundary (the XS weak-list-at-drain/exit shape, the always-on
+   production diagnostic scoped by Open Question 1), and the **live, reactive**
+   debugger panel of § 3 (continuously updated, retracting an entry the instant a
+   handler attaches, scoped by Open Question 2). They serve different audiences
+   (an unattended production worker versus an interactive debugging session), and
+   the follow-on work splits them accordingly; satisfying one does not satisfy the
+   other. The distinction the recommendation draws is: *stop flagging* deferred
+   and handed-off rejections as errors, and *keep reporting*, never escalating, the
+   residue that truly reaches a terminal boundary unobserved. Rendering of such a
+   reason should reuse the project's diagnostic discipline (`passableAsJustin` /
+   the `renderRejection` helper from
+   [unhandled-rejection-display](unhandled-rejection-display.md)), so an `Error`
+   reason is legible rather than `{}`.
 
 The throughline: **reference-error panic gives the developer precise, timely
 information at the fault site; the unhandled-rejection timeout gives a coarse
@@ -262,9 +319,12 @@ instead of a coarse timeout guess.
   encoded as UI. The panel shows current unwatched status as a fact, and retracts
   it the instant the fact changes, instead of freezing a timing guess into a
   persistent accusation. Over CapTP, a rejection whose obligation was handed off
-  should likewise be distinguishable from one that is genuinely
-  local-and-unobserved, so the panel does not cry wolf over the normal
-  distributed shape (see § 5).
+  *must* be distinguishable from one that is genuinely local-and-unobserved, so
+  that the panel does not cry wolf over the normal distributed shape. This is a
+  **requirement on the panel, not yet a solved property of it**: how the panel
+  observes a handoff (and whether that is even observable from `ironhorse-vm`
+  alone) is an open question (§ 5 Open Question 4), and an implementer inherits
+  it as unresolved rather than as done.
 
 Making this state visible and live is the debugger's contribution to the same
 goal: precise, timely information over a coarse timeout.
@@ -273,10 +333,11 @@ goal: precise, timely information over a coarse timeout.
 
 | Design | Relationship |
 |---|---|
-| **`design-ironhorse-panic`** (sibling; *not yet landed*, expected at `designs/ironhorse-panic.md`) | Designs the panic mechanism this document argues *for* and reasons *about*. This document takes that mechanism as given. Whoever lands it should add the reverse cross-link here. |
+| **`design-ironhorse-panic`** (sibling; *not yet landed*, expected at `ironhorse-panic.md`) | Designs the panic mechanism this document argues *for* and reasons *about*. This document takes that mechanism as given. Whoever lands it should add the reverse cross-link here. |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | Establishes that promise-rejection tracking is **separate from** throw-time uncaught classification (§ Ironhorse Decisions item 3), that engine-raised reference errors currently build `Halt::Throw`, and that the promise-reaction throw path is unimplemented (`Halt::Unsupported("promise:handler-throw")`). The debugger panels here live alongside that design's web UI. |
 | [ironhorse-engine](ironhorse-engine.md) | Supplies the `Halt` vocabulary (`StackOverflow`, `MeterAbort`, `Throw`), the abort-to-host semantics the panic option mirrors, and the index-arena heap that makes a fault-site snapshot nearly structural. |
 | [unhandled-rejection-display](unhandled-rejection-display.md) | The diagnostic-rendering discipline (`renderRejection` / `passableAsJustin`) any rejection *report* should reuse. |
+| `packages/ses/src/error/unhandled-rejection.js` (`makeRejectionHandlers`) | **Existing prior art** for the track-retract-report-at-terminal-boundary shape Open Question 1 recommends, already wired into `lockdown()` (`unhandledRejectionTrapping: 'report'`). A follow-on tracker must reconcile with or supersede it, not treat the mechanism as unbuilt. |
 | `@endo/eventual-send`, `@endo/captp` | Establish the `E()` / promise-pipelining / handoff vocabulary § 2 relies on; a local "unhandled" check cannot see across the CapTP boundary. |
 
 ## 5. Open questions
@@ -298,6 +359,26 @@ implicit; each needs its own design or build job.
    **unhandled**, to carry forward the transient-status framing this document
    argues for (§ 2), even though the XS implementation substrate spells the oracle
    functions `fxAddUnhandledRejection`/`fxCheckUnhandledRejections`.
+
+   **Prior art to reconcile with, not start blank from.** SES already ships a
+   mechanism of exactly this shape one layer above Ironhorse:
+   `makeRejectionHandlers` in `packages/ses/src/error/unhandled-rejection.js`
+   tracks a rejection with no synchronous handler, **retracts** the tracking the
+   instant a handler attaches later (`rejectionHandledHandler`, the same "can
+   still be handled later" property § 2 argues for), and **reports, never
+   escalates**, at a terminal boundary (dropped-promise GC finalization, or
+   `processTerminationHandler` at agent-cluster termination). It is wired into
+   `lockdown()` today via `unhandledRejectionTrapping: 'report'` (the default; see
+   `packages/ses/src/error/tame-console.js`). Because Ironhorse's guests are
+   SES-shimmed, this always-on reporter may already be running above Ironhorse.
+   The follow-on `design-ironhorse-rejection-tracker` must therefore **reconcile
+   with or explicitly supersede** the SES layer, deciding what an engine-level
+   tracker adds over `makeRejectionHandlers` (e.g. creation-site attribution,
+   CapTP-handoff awareness the SES layer lacks), rather than re-deriving the
+   terminal-boundary and retraction questions as if they were unsolved. The
+   residual-gap framing in § 2 is correspondingly narrower for *rejections* than a
+   first read suggests: for the SES-shimmed rejection path, an always-on reporter
+   may already exist.
 
 2. **Data plumbing for the two debugger panels.** The pending-promises and
    unwatched-rejections panels need a live feed from `ironhorse-vm` to the web UI:
