@@ -379,6 +379,8 @@ pub struct MachineImage {
     pub private_elements: ironhorse_vm::PrivateElementSnapshot,
     /// `DISP`: explicit resource-management stacks.
     pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    /// `GENR`: synchronous generator saved activations.
+    pub generators: Vec<ironhorse_vm::GeneratorRow>,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -466,6 +468,7 @@ impl MachineImage {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            generators: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -627,6 +630,11 @@ impl MachineImage {
         disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     ) -> MachineImage {
         self.disposable_stacks = disposable_stacks;
+        self
+    }
+
+    pub fn with_generators(mut self, generators: Vec<ironhorse_vm::GeneratorRow>) -> MachineImage {
+        self.generators = generators;
         self
     }
 
@@ -2032,6 +2040,174 @@ pub(crate) fn decode_disposable_stacks(
     Ok(rows)
 }
 
+pub(crate) fn encode_generators(rows: &[ironhorse_vm::GeneratorRow]) -> Vec<u8> {
+    fn slots(v: &mut Vec<u8>, rows: &[Slot]) {
+        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+        for row in rows {
+            crate::slot_codec::encode_slot(row, v);
+        }
+    }
+    fn id_map(v: &mut Vec<u8>, rows: &[(u16, u64)]) {
+        v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+        for &(id, index) in rows {
+            v.extend_from_slice(&id.to_be_bytes());
+            v.extend_from_slice(&index.to_be_bytes());
+        }
+    }
+    fn frame(v: &mut Vec<u8>, row: &ironhorse_vm::SavedFrameRow) {
+        slots(v, &row.locals);
+        id_map(v, &row.id_map);
+        slots(v, &row.args);
+        crate::slot_codec::encode_slot(&row.this_val, v);
+        crate::slot_codec::encode_slot(&row.env, v);
+        v.extend_from_slice(&row.cur_func.to_be_bytes());
+        v.push(row.cur_target as u8);
+        v.extend_from_slice(&row.target_func.to_be_bytes());
+        v.push(row.strict as u8);
+        crate::slot_codec::encode_slot(&row.result, v);
+        slots(v, &row.stack_slice);
+        v.extend_from_slice(&(row.jumps.len() as u32).to_be_bytes());
+        for jump in &row.jumps {
+            v.extend_from_slice(&jump.target_pc.to_be_bytes());
+            v.extend_from_slice(&jump.stack_offset.to_be_bytes());
+            v.extend_from_slice(&jump.locals_len.to_be_bytes());
+            id_map(v, &jump.id_map);
+            v.extend_from_slice(&jump.call_depth_offset.to_be_bytes());
+            crate::slot_codec::encode_slot(&jump.env, v);
+            v.push(jump.flag);
+        }
+        v.extend_from_slice(&row.resume_pc.to_be_bytes());
+    }
+    let mut v = Vec::new();
+    v.extend_from_slice(&(rows.len() as u32).to_be_bytes());
+    for row in rows {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.push(row.state);
+        match &row.frame {
+            None => v.push(0),
+            Some(saved) => {
+                v.push(1);
+                frame(&mut v, saved);
+            }
+        }
+    }
+    v
+}
+
+pub(crate) fn decode_generators(
+    p: &[u8],
+) -> Result<Vec<ironhorse_vm::GeneratorRow>, SnapshotError> {
+    fn u64_value(c: &mut Cursor<'_>) -> Result<u64, SnapshotError> {
+        Ok(((c.u32()? as u64) << 32) | c.u32()? as u64)
+    }
+    fn boolean(c: &mut Cursor<'_>) -> Result<bool, SnapshotError> {
+        match c.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(SnapshotError::Corrupt("generator frame: bad boolean byte")),
+        }
+    }
+    fn slots(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<Slot>, SnapshotError> {
+        let count = c.u32()? as usize;
+        let mut rows = Vec::with_capacity(count.min(p.len() / SLOT_RECORD_BYTES));
+        for _ in 0..count {
+            rows.push(c.slot()?);
+        }
+        Ok(rows)
+    }
+    fn id_map(c: &mut Cursor<'_>, p: &[u8]) -> Result<Vec<(u16, u64)>, SnapshotError> {
+        let count = c.u32()? as usize;
+        let mut rows: Vec<(u16, u64)> = Vec::with_capacity(count.min(p.len() / 10));
+        for _ in 0..count {
+            let row = (c.u16()?, u64_value(c)?);
+            if rows.last().is_some_and(|previous| row.0 <= previous.0) {
+                return Err(SnapshotError::Corrupt(
+                    "generator frame: id map not strictly ascending",
+                ));
+            }
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+    fn frame(c: &mut Cursor<'_>, p: &[u8]) -> Result<ironhorse_vm::SavedFrameRow, SnapshotError> {
+        let locals = slots(c, p)?;
+        let frame_id_map = id_map(c, p)?;
+        let args = slots(c, p)?;
+        let this_val = c.slot()?;
+        let env = c.slot()?;
+        let cur_func = c.u32()?;
+        let cur_target = boolean(c)?;
+        let target_func = c.u32()?;
+        let strict = boolean(c)?;
+        let result = c.slot()?;
+        let stack_slice = slots(c, p)?;
+        let jump_count = c.u32()? as usize;
+        let mut jumps = Vec::with_capacity(jump_count.min(p.len() / 50));
+        for _ in 0..jump_count {
+            jumps.push(ironhorse_vm::SavedJumpRow {
+                target_pc: u64_value(c)?,
+                stack_offset: u64_value(c)?,
+                locals_len: u64_value(c)?,
+                id_map: id_map(c, p)?,
+                call_depth_offset: u64_value(c)?,
+                env: c.slot()?,
+                flag: c.u8()?,
+            });
+        }
+        Ok(ironhorse_vm::SavedFrameRow {
+            locals,
+            id_map: frame_id_map,
+            args,
+            this_val,
+            env,
+            cur_func,
+            cur_target,
+            target_func,
+            strict,
+            result,
+            stack_slice,
+            jumps,
+            resume_pc: u64_value(c)?,
+        })
+    }
+
+    let mut c = Cursor::new(p, "generators");
+    let count = c.u32()? as usize;
+    let mut rows = Vec::with_capacity(count.min(p.len() / 6));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if rows
+            .last()
+            .is_some_and(|row: &ironhorse_vm::GeneratorRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "generators: owners not strictly ascending",
+            ));
+        }
+        let state = c.u8()?;
+        if state > 2 {
+            return Err(SnapshotError::Corrupt("generators: invalid state"));
+        }
+        let saved = match c.u8()? {
+            0 => None,
+            1 => Some(frame(&mut c, p)?),
+            _ => return Err(SnapshotError::Corrupt("generators: bad frame tag")),
+        };
+        if (state == 2) != saved.is_none() {
+            return Err(SnapshotError::Corrupt(
+                "generators: state and frame disagree",
+            ));
+        }
+        rows.push(ironhorse_vm::GeneratorRow {
+            state,
+            owner,
+            frame: saved,
+        });
+    }
+    c.done()?;
+    Ok(rows)
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2722,6 +2898,7 @@ pub(crate) struct LangRows<'a> {
     pub intl_bound_functions: &'a [ironhorse_vm::IntlBoundFunctionRow],
     pub private_elements: &'a ironhorse_vm::PrivateElementSnapshot,
     pub disposable_stacks: &'a [ironhorse_vm::DisposableStackRow],
+    pub generators: &'a [ironhorse_vm::GeneratorRow],
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2739,6 +2916,7 @@ impl LangRows<'_> {
         intl_bound_functions: &[],
         private_elements: &EMPTY_PRIVATE_ELEMENTS,
         disposable_stacks: &[],
+        generators: &[],
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
@@ -3252,6 +3430,67 @@ pub(crate) fn check_image_slot_bounds(
             }
         }
     }
+    for row in lang.generators {
+        owned(row.owner)?;
+        let Some(frame) = &row.frame else {
+            continue;
+        };
+        owned(frame.cur_func)?;
+        if frame.target_func != u32::MAX {
+            owned(frame.target_func)?;
+        }
+        for slot in frame
+            .locals
+            .iter()
+            .chain(&frame.args)
+            .chain(&frame.stack_slice)
+            .chain([&frame.this_val, &frame.env, &frame.result])
+        {
+            check(slot)?;
+        }
+        let function = lang
+            .function_state
+            .functions
+            .binary_search_by_key(&frame.cur_func, |function| function.owner)
+            .ok()
+            .and_then(|index| lang.function_state.functions.get(index))
+            .ok_or(SnapshotError::Corrupt(
+                "generator frame: current function has no function row",
+            ))?;
+        let code = function
+            .segment
+            .and_then(|segment| lang.function_state.segments.get(segment as usize))
+            .ok_or(SnapshotError::Corrupt(
+                "generator frame: current function has no segment",
+            ))?;
+        if frame.resume_pc > code.len() as u64
+            || frame
+                .id_map
+                .iter()
+                .any(|&(id, index)| {
+                    id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
+                })
+        {
+            return Err(SnapshotError::Corrupt(
+                "generator frame: invalid resume cursor or scope map",
+            ));
+        }
+        for jump in &frame.jumps {
+            check(&jump.env)?;
+            if jump.flag != 1
+                || jump.target_pc > code.len() as u64
+                || jump.stack_offset > frame.stack_slice.len() as u64
+                || jump.locals_len > frame.locals.len() as u64
+                || jump.id_map.iter().any(|&(id, index)| {
+                    id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
+                })
+            {
+                return Err(SnapshotError::Corrupt(
+                    "generator frame: invalid saved handler",
+                ));
+            }
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -3467,6 +3706,9 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
             &encode_disposable_stacks(&image.disposable_stacks),
         );
     }
+    if !image.generators.is_empty() {
+        w.atom(crate::format::GENR, &encode_generators(&image.generators));
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -3646,6 +3888,10 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => decode_disposable_stacks(a.payload)?,
         None => Vec::new(),
     };
+    let generators = match r.find(crate::format::GENR) {
+        Some(a) => decode_generators(a.payload)?,
+        None => Vec::new(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -3699,6 +3945,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             intl_bound_functions: &intl_bound_functions,
             private_elements: &private_elements,
             disposable_stacks: &disposable_stacks,
+            generators: &generators,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -3740,6 +3987,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         intl_bound_functions,
         private_elements,
         disposable_stacks,
+        generators,
         arguments_brands,
         temporal,
         intl,
@@ -4122,6 +4370,7 @@ mod tests {
                 intl_bound_functions: &[],
                 private_elements: &EMPTY_PRIVATE_ELEMENTS,
                 disposable_stacks: &[],
+                generators: &[],
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -4484,6 +4733,7 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            generators: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4528,6 +4778,7 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            generators: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4653,6 +4904,7 @@ mod tests {
             intl_bound_functions: Vec::new(),
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
+            generators: Vec::new(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),

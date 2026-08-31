@@ -2841,6 +2841,25 @@ bite-checked by reverting the fix under the lock). Statuses:
   `DISP` carries pending disposal records and stack state. Resource and
   disposal-method slots join the bounds walk; malformed disposed stacks
   retaining records are refused. Eight Pending rows remain.
+- **Synchronous-generator carry (2026-08-29, schema v21 / format v10):**
+  `GENR` carries each live generator's state byte and — for the
+  suspended states — its full saved activation (`SavedFrameRow`:
+  locals, id map, arguments, receiver, environment, callee registers,
+  strictness, result, the value-stack slice, the live jump handlers,
+  and the resume pc), so a resumed `it.next()` CONTINUES the walk.
+  Decode refuses non-ascending owners, an `Executing` state byte (no
+  quiescent boundary can hold one), a frame tag outside 0/1, and a
+  state/frame disagreement (Completed ⟺ frameless); `restore_generators`
+  re-checks the same on the way in. The wiring landed marked WIP with
+  "tests and golden pins still outstanding"; the pins landed next, and
+  the twins landed after (`generator_carry.rs`: mid-walk continuation,
+  locals + sent values, unstarted start, completed-stays-done, a
+  `return()` running a pre-checkpoint `finally`, independent sibling
+  frames over one body, blob and lazy paths, and the crafted-row
+  refusals — bite-checked by neutering the restore wiring, which
+  reddens all eight continuation twins and leaves only the crafted
+  arm green). The async instance/generator rows stay honestly Pending
+  on their promise dependencies.
 
 ### External review — the fail-closed persistence boundary (2026-08-28)
 
@@ -2858,10 +2877,10 @@ bite-checked lock:
   skipping unknown atoms and silently dropping arrays, collections,
   RegExps, Intl records and cursors.
   The Date carry later advanced the write stamp to 3 for the same
-  reason. Function, proxy, accessor, Intl-bound, private-element, and
-  disposable-stack carries later advanced it through 9. The reader
-  accepts a read RANGE (`1..=9`) — older atoms
-  are a subset with the same
+  reason. Function, proxy, accessor, Intl-bound, private-element,
+  disposable-stack, and synchronous-generator carries later advanced
+  it through 10. The reader accepts a read RANGE (`1..=10`) — older
+  atoms are a subset with the same
   encodings — and refuses anything newer; the store's
   open gate checks readability rather than equality so older stores
   still open and migrate.

@@ -250,6 +250,7 @@ impl MachineSnapshot for Interp {
         .with_intl_bound_functions(tables.intl_bound_functions)
         .with_private_elements(tables.private_elements)
         .with_disposable_stacks(tables.disposable_stacks)
+        .with_generators(tables.generators)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -276,6 +277,7 @@ struct SideTableImages {
     intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     private_elements: ironhorse_vm::PrivateElementSnapshot,
     disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    generators: Vec<ironhorse_vm::GeneratorRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -386,6 +388,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let intl_bound_functions = interp.intl_bound_functions_snapshot();
     let private_elements = interp.private_elements_snapshot();
     let disposable_stacks = interp.disposable_stacks_snapshot();
+    let generators = interp.generators_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -407,6 +410,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         intl_bound_functions,
         private_elements,
         disposable_stacks,
+        generators,
     }
 }
 
@@ -438,6 +442,7 @@ fn restore_side_tables(
     intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
     private_elements: ironhorse_vm::PrivateElementSnapshot,
     disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    generators: Vec<ironhorse_vm::GeneratorRow>,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -525,6 +530,11 @@ fn restore_side_tables(
     if !interp.restore_function_state(function_state) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed retained function state",
+        ));
+    }
+    if !interp.restore_generators(generators) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed generator state",
         ));
     }
     interp.restore_arguments_brands(arguments_brands);
@@ -635,6 +645,7 @@ pub fn image_to_interp(
         image.intl_bound_functions,
         image.private_elements,
         image.disposable_stacks,
+        image.generators,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -883,6 +894,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         intl_bound_functions: tables.intl_bound_functions,
         private_elements: tables.private_elements,
         disposable_stacks: tables.disposable_stacks,
+        generators: tables.generators,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -1588,6 +1600,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.intl_bound_functions,
         small.private_elements,
         small.disposable_stacks,
+        small.generators,
         small.arguments_brands,
         small.temporal,
         small.intl,
