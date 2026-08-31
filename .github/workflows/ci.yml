@@ -267,7 +267,7 @@ jobs:
 
       - name: Detect workflow changes
         id: paths
-        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
+        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
         with:
           filters: |
             workflows:
