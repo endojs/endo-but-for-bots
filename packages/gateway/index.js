@@ -26,6 +26,7 @@ import {
   bindAddressFromEnv,
 } from './src/config.js';
 import { makeAppsNameHub } from './src/vhost.js';
+import { makeGatewayBootstrap } from './src/bootstrap.js';
 
 export {
   DEFAULT_BIND_ADDRESS,
@@ -38,6 +39,21 @@ export {
 
 export { normalizeVirtualHostName, makeAppsNameHub } from './src/vhost.js';
 
+export {
+  NONCE_DOMAIN_SEPARATION_PREFIX,
+  NONCE_BYTE_LENGTH,
+  DEFAULT_NONCE_TTL_MS,
+  hashNonceForSigning,
+  constantTimeEqual,
+  makeNonceRegistry,
+} from './src/proof-of-possession.js';
+
+export {
+  ED25519_PUBLIC_KEY_LENGTH,
+  ED25519_SIGNATURE_LENGTH,
+  makeGatewayBootstrap,
+} from './src/bootstrap.js';
+
 /** @import { GatewayConfig, BindAddress, GatewayPowers, Gateway } from './src/types.js' */
 
 const GatewayInterface = M.interface('Gateway', {
@@ -46,6 +62,7 @@ const GatewayInterface = M.interface('Gateway', {
   getBindAddress: M.call().returns(M.promise()),
   getApps: M.call().returns(M.promise()),
   getConfig: M.call().returns(M.promise()),
+  getBootstrap: M.call().returns(M.promise()),
 });
 
 /**
@@ -74,6 +91,36 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
   const resolvedBind = parseBindAddress(mergedConfig.bindAddress);
   const apps = makeAppsNameHub();
 
+  const renderBindAddress = () =>
+    `${resolvedBind.kind === 'ipv6' ? `[${resolvedBind.host}]` : resolvedBind.host}:${resolvedBind.port}`;
+
+  // The bootstrap registrar (Feature 4) is wired in iff the
+  // sockBootstrap feature toggle is on AND the caller supplied
+  // crypto + clock powers. The toggle gates the policy; the powers
+  // are the platform-bound primitives. A toggle-on but no-powers
+  // configuration is treated as a startup error because it would
+  // otherwise silently behave like toggle-off.
+  /** @type {ReturnType<typeof makeGatewayBootstrap> | undefined} */
+  let bootstrapHandle;
+  if (mergedConfig.enableFeatures.sockBootstrap) {
+    if (powers.crypto === undefined) {
+      throw makeError(
+        X`sockBootstrap requires powers.crypto; supply a CryptoPowers adapter or disable the feature toggle`,
+      );
+    }
+    if (powers.clock === undefined) {
+      throw makeError(
+        X`sockBootstrap requires powers.clock; supply a ClockPowers adapter or disable the feature toggle`,
+      );
+    }
+    bootstrapHandle = makeGatewayBootstrap({
+      crypto: powers.crypto,
+      clock: powers.clock,
+      apps,
+      getBindAddress: renderBindAddress,
+    });
+  }
+
   const exo = makeExo(
     'Gateway',
     GatewayInterface,
@@ -88,7 +135,11 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         lifecycle = 'starting';
         // The phase-1 skeleton has no network surface; later
         // phases attach the HTTP listener, the WebSocket server,
-        // the UDS bootstrap, and the OCapN relay here.
+        // the sock bootstrap listener, and the OCapN relay here.
+        // Phase 2 lands the semantic core of the bootstrap (the
+        // GatewayBootstrap exo, the nonce registry, the
+        // registration table); the actual sock listener is a
+        // follow-on PR.
         lifecycle = 'started';
       },
       async stop() {
@@ -101,13 +152,21 @@ export const makeGateway = ({ powers = {}, config: configIn = {} } = {}) => {
         lifecycle = 'stopped';
       },
       async getBindAddress() {
-        return `${resolvedBind.kind === 'ipv6' ? `[${resolvedBind.host}]` : resolvedBind.host}:${resolvedBind.port}`;
+        return renderBindAddress();
       },
       async getApps() {
         return apps;
       },
       async getConfig() {
         return mergedConfig;
+      },
+      async getBootstrap() {
+        if (bootstrapHandle === undefined) {
+          throw makeError(
+            X`Gateway bootstrap is disabled (set enableFeatures.sockBootstrap=true)`,
+          );
+        }
+        return bootstrapHandle.bootstrap;
       },
     }),
   );

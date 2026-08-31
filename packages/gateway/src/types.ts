@@ -1,3 +1,87 @@
+export type CryptoPowers = {
+  randomBytes(byteLength: number): Uint8Array;
+  sha256(input: Uint8Array): Uint8Array;
+  verifyEd25519(args: {
+    publicKey: Uint8Array;
+    message: Uint8Array;
+    signature: Uint8Array;
+  }): boolean;
+};
+
+export type ClockPowers = { now(): number };
+
+export type ChallengeIssued = {
+  nonce: Uint8Array;
+  hashedNonce: Uint8Array;
+  issuedAt: number;
+  expiresAt: number;
+};
+
+export type NonceRegistry = {
+  issue(): ChallengeIssued;
+  verifyAndConsume(args: {
+    publicKey: Uint8Array;
+    nonce: Uint8Array;
+    signature: Uint8Array;
+  }): void;
+  size(): number;
+};
+
+export type ChallengePayload = ChallengeIssued;
+
+export type WebletDescriptor = {
+  webletId: string;
+  contentTreeRoot: string;
+  hasWebSocket: boolean;
+};
+
+export type PublicKeyAddition = {
+  publicKey: Uint8Array;
+  nonce: Uint8Array;
+  signature: Uint8Array;
+};
+
+export type RegistrationArgs = PublicKeyAddition & {
+  daemon?: unknown;
+  cancelled?: Promise<unknown>;
+};
+
+export type RelayRegistrationArgs = PublicKeyAddition & {
+  relayTarget: unknown;
+};
+
+export type RegistrationEntry = {
+  publicKeys: ReadonlyArray<Uint8Array>;
+  daemon: unknown;
+  weblets: Map<string, WebletDescriptor>;
+  deregistered: boolean;
+};
+
+export type Registration = {
+  publishWeblet(descriptor: WebletDescriptor): Promise<void>;
+  unpublishWeblet(webletId: string): Promise<void>;
+  addPublicKey(addition: PublicKeyAddition): Promise<void>;
+  deregister(): Promise<void>;
+  listWeblets(): Promise<ReadonlyArray<WebletDescriptor>>;
+  listPublicKeys(): Promise<ReadonlyArray<Uint8Array>>;
+};
+
+export type GatewayBootstrap = {
+  challenge(): Promise<ChallengePayload>;
+  register(args: RegistrationArgs): Promise<Registration>;
+  registerRelay(args: RelayRegistrationArgs): Promise<Registration>;
+  getBindAddress(): Promise<string>;
+  getApps(): Promise<AppsNameHub>;
+};
+
+export type BootstrapDeps = {
+  crypto: CryptoPowers;
+  clock: ClockPowers;
+  apps: AppsNameHub;
+  getBindAddress(): string;
+  ttlMs?: number;
+};
+
 export type BindAddress = {
   /**
    * A non-empty hostname or IP literal, with no surrounding IPv6
@@ -19,7 +103,7 @@ export type FeatureToggles = {
   chatHosting: boolean;
   virtualHosting: boolean;
   gitHttp: boolean;
-  udsBootstrap: boolean;
+  sockBootstrap: boolean;
   captpRelay: boolean;
   adminDaemon: boolean;
   ocapnWebSocket: boolean;
@@ -70,9 +154,19 @@ export type AppsNameHub = {
 export type GatewayPowers = {
   /**
    * Environment-shaped map. The phase-1 skeleton uses only `env`;
-   * later phases add `net`, `fs`, `crypto`, and `time`.
+   * later phases add `net` and `fs`.
    */
   env?: { [name: string]: string | undefined };
+  /**
+   * Required when `sockBootstrap` is enabled. The bootstrap
+   * registrar needs `randomBytes`, `sha256`, and `verifyEd25519`.
+   */
+  crypto?: CryptoPowers;
+  /**
+   * Required when `sockBootstrap` is enabled. The nonce registry
+   * consumes `now()` for TTL.
+   */
+  clock?: ClockPowers;
 };
 
 export type Gateway = {
@@ -86,6 +180,14 @@ export type Gateway = {
   getBindAddress(): Promise<string>;
   getApps(): Promise<AppsNameHub>;
   getConfig(): Promise<GatewayConfig>;
+  /**
+   * Throws when `sockBootstrap` is disabled in the gateway's
+   * feature toggles. The returned exo is also the entry capability
+   * a sock listener serves to incoming CapTP connections; a
+   * process embedding the gateway in-realm calls `getBootstrap`
+   * directly.
+   */
+  getBootstrap(): Promise<GatewayBootstrap>;
 };
 
 export declare const DEFAULT_BIND_ADDRESS: string;
