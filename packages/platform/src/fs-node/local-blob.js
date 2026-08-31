@@ -1,12 +1,12 @@
 // @ts-check
 
 import fs from 'node:fs';
-import { createHash } from 'node:crypto';
 import harden from '@endo/harden';
 import { encodeBase64 } from '@endo/base64';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeNodeReader } from '@endo/stream-node';
+import { sha256 } from '@endo/sha256';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 // `LocalBlob` exposes the whole-value read surface plus the rich `ReadableBlob`
@@ -104,7 +104,7 @@ const readFileWindow = async (filePath, start, end) => {
 export const makeLocalBlob = filePath => {
   const { range, textRange } = makeBlobRangeMethods({
     readWindow: (start, end) => readFileWindow(filePath, start, end),
-    hashBytes: bytes => createHash('sha256').update(bytes).digest(),
+    hashBytes: bytes => sha256(bytes),
     label: 'LocalBlob range',
   });
   /** @satisfies {RichReadableBlob} */
@@ -130,7 +130,7 @@ export const makeLocalBlob = filePath => {
     // to match the extended `BlobRef`. Computed over the current file content.
     async getInfo() {
       const bytes = await fs.promises.readFile(filePath);
-      const hash = encodeBase64(createHash('sha256').update(bytes).digest());
+      const hash = encodeBase64(sha256(bytes));
       return harden({
         algorithm: 'sha256',
         hash,

@@ -30,13 +30,12 @@
  * the returned `Uint8Array` themselves.
  */
 
-import { createHash } from 'node:crypto';
-
 import { E } from '@endo/eventual-send';
 import { makeError, X, q } from '@endo/errors';
 import { encodeHex } from '@endo/hex';
 import { encodeBase64 } from '@endo/base64';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { sha256 } from '@endo/sha256';
 
 /**
  * @typedef {{ algorithm: string, hash: string, size: bigint }} BlobInfo
@@ -219,7 +218,7 @@ export const verifyContentAddress = (info, bytes) => {
     );
   }
   if (info.algorithm === 'sha256') {
-    const digest = createHash('sha256').update(bytes).digest();
+    const digest = sha256(bytes);
     // Producers spell the digest base64 (`BlobRef.getInfo`); the daemon store
     // spells it base64 too. Accept either the base64 or hex spelling so a
     // consumer is not wedged by an equivalent encoding of the same digest.

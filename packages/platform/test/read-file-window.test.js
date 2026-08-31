@@ -17,6 +17,8 @@
 import '@endo/init/debug.js';
 
 import test from 'ava';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import {
   readWindowToEnd,
@@ -24,8 +26,8 @@ import {
   READ_WINDOW_CHUNK_BYTES,
 } from '../src/fs-node/read-file-window.js';
 
-const utf8 = s => new TextEncoder().encode(s);
-const fromUtf8 = b => new TextDecoder().decode(b);
+const utf8 = encodeUtf8;
+const fromUtf8 = decodeUtf8;
 
 /**
  * A fake `read` seam over `data` that never returns more than `maxPerRead`

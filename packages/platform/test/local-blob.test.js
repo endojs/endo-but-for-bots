@@ -1,4 +1,5 @@
 // @ts-nocheck
+// prefer-endo-primitives-exempt: independent Node hashes and BOM-preserving decode are test oracles.
 
 /**
  * `makeLocalBlob` tests — the host-file ReadableBlob now also exposes the
@@ -36,7 +37,7 @@ const collectBytes = async readerRef => {
   return out;
 };
 
-const makeTempFile = (t, contents) => {
+const makeTemporaryFile = (t, contents) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'local-blob-'));
   t.teardown(() => fs.rmSync(dir, { recursive: true, force: true }));
   const filePath = path.join(dir, 'blob.txt');
@@ -46,7 +47,7 @@ const makeTempFile = (t, contents) => {
 
 test('LocalBlob.getInfo returns the content-address triple', async t => {
   const payload = 'hello world\n'; // 12 bytes
-  const blob = makeLocalBlob(makeTempFile(t, payload));
+  const blob = makeLocalBlob(makeTemporaryFile(t, payload));
   const info = await E(blob).getInfo();
   t.is(info.algorithm, 'sha256');
   t.is(info.size, 12n);
@@ -54,7 +55,7 @@ test('LocalBlob.getInfo returns the content-address triple', async t => {
 });
 
 test('LocalBlob.range rejects a negative or out-of-range interval with EINVAL', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'hello world\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'hello world\n'));
   // A negative endpoint must throw EINVAL (via toSafeNumber), not slip through
   // to fs.read with a negative position. Same for a negative end and an
   // over-MAX_SAFE_INTEGER bigint.
@@ -66,7 +67,7 @@ test('LocalBlob.range rejects a negative or out-of-range interval with EINVAL', 
 });
 
 test('LocalBlob.range clamps a huge endpoint to the file size (no over-allocation)', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'hi')); // 2 bytes
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'hi')); // 2 bytes
   // An endpoint far larger than the file (and far larger than is sane to
   // allocate) must clamp to the available bytes rather than allocating a
   // multi-GB buffer. `5_000_000_000` is a valid safe integer, so it passes
@@ -78,13 +79,13 @@ test('LocalBlob.range clamps a huge endpoint to the file size (no over-allocatio
 });
 
 test('LocalBlob still exposes the whole-value surface', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, '{"k":1}'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, '{"k":1}'));
   t.is(await E(blob).text(), '{"k":1}');
   t.deepEqual(await E(blob).json(), { k: 1 });
 });
 
 test('LocalBlob exposes only the rich public ReadableBlob Exo surface', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'hello world\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'hello world\n'));
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(blob).__getMethodNames__();
   t.deepEqual(methods.filter(name => !name.startsWith('__')).sort(), [
@@ -102,7 +103,7 @@ test('LocalBlob exposes only the rich public ReadableBlob Exo surface', async t 
 });
 
 test('LocalBlob.range reads a clamped byte interval', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'hello world\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'hello world\n'));
   // Assert the decoded content of the range's own read surface (production
   // output) rather than that the test helper's accumulator is a `Uint8Array`.
   t.is(
@@ -116,7 +117,7 @@ test('LocalBlob.range reads a clamped byte interval', async t => {
 });
 
 test('LocalBlob.textRange attenuates to a 0-based, end-exclusive line range', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'a\nb\nc\nd\ne\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'a\nb\nc\nd\ne\n'));
   // Lines are ['a', 'b', 'c', 'd', 'e', ''] (trailing '' after the last '\n').
   t.is(await E(await E(blob).textRange(0, 2)).text(), 'a\nb'); // first two lines
   t.is(await E(await E(blob).textRange(1, 3)).text(), 'b\nc');
@@ -126,7 +127,7 @@ test('LocalBlob.textRange attenuates to a 0-based, end-exclusive line range', as
 test('LocalBlob.textRange clamps past-the-end and handles the trailing newline', async t => {
   // Trailing '\n' means split yields a final '' element (the empty line after
   // the last newline); slicing past the end clamps rather than throwing.
-  const blob = makeLocalBlob(makeTempFile(t, 'a\nb\nc\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'a\nb\nc\n'));
   // Lines are ['a', 'b', 'c', ''].
   t.is(await E(await E(blob).textRange(2, 100)).text(), 'c\n'); // 'c' + '' joined by '\n'
   t.is(await E(await E(blob).textRange(0, 100)).text(), 'a\nb\nc\n');
@@ -135,7 +136,7 @@ test('LocalBlob.textRange clamps past-the-end and handles the trailing newline',
 });
 
 test('LocalBlob.textRange rejects a negative or non-integer line index', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'a\nb\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'a\nb\n'));
   await t.throwsAsync(() => E(blob).textRange(-1, 2), {
     message: /EINVAL/,
   });
@@ -145,7 +146,7 @@ test('LocalBlob.textRange rejects a negative or non-integer line index', async t
 });
 
 test('LocalBlob.range composes: a range of a range intersects', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'hello world\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'hello world\n'));
   const r = await E(blob).range(6n, 12n);
   t.is(await E(r).text(), 'world\n');
   const r2 = await E(r).range(0n, 3n);
@@ -153,25 +154,25 @@ test('LocalBlob.range composes: a range of a range intersects', async t => {
 });
 
 test('LocalBlob.range getInfo reports the selected size', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'hello world\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'hello world\n'));
   const r = await E(blob).range(0n, 5n);
   const info = await E(r).getInfo();
   t.is(info.size, 5n);
 });
 
 test('LocalBlob.textRange returns a ReadableBlob whose text matches', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'a\nb\nc\n'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'a\nb\nc\n'));
   t.is(await E(await E(blob).textRange(0, 2)).text(), 'a\nb');
 });
 
 test('LocalBlob.streamBase64 streams the whole file bytes', async t => {
   const payload = 'hello world\n';
-  const blob = makeLocalBlob(makeTempFile(t, payload));
+  const blob = makeLocalBlob(makeTemporaryFile(t, payload));
   t.is(fromUtf8(await collectBytes(blob)), payload);
 });
 
 test('LocalBlob.help describes the surface and rejects unknown methods', async t => {
-  const blob = makeLocalBlob(makeTempFile(t, 'x'));
+  const blob = makeLocalBlob(makeTemporaryFile(t, 'x'));
   t.regex(await E(blob).help(), /LocalBlob/);
   t.regex(await E(blob).help('nope'), /No documentation for method/);
 });
@@ -184,7 +185,7 @@ test('whole-value text() and a full-interval range().text() agree on a BOM file'
   const bom = Buffer.from([0xef, 0xbb, 0xbf]);
   const body = 'hello world\n';
   const payload = Buffer.concat([bom, Buffer.from(body, 'utf-8')]);
-  const blob = makeLocalBlob(makeTempFile(t, payload));
+  const blob = makeLocalBlob(makeTemporaryFile(t, payload));
   const whole = await E(blob).text();
   const full = await E(await E(blob).range(0n, BigInt(payload.length))).text();
   t.is(full, whole);
@@ -207,7 +208,7 @@ test('text decoding is position-independent across a BOM (window beginning on an
     bom,
     Buffer.from('def', 'utf-8'),
   ]); // 'abc' | EF BB BF | 'def' = 9 bytes; the U+FEFF begins at offset 3
-  const blob = makeLocalBlob(makeTempFile(t, interior));
+  const blob = makeLocalBlob(makeTemporaryFile(t, interior));
   const whole = await E(blob).text();
   t.is(whole, 'abc\uFEFFdef');
   // Full-interval range equals the whole value.
@@ -229,7 +230,7 @@ test('LocalBlob reads a multi-chunk file byte-exactly across window boundaries',
   for (let i = 0; i < size; i += 1) {
     bytes[i] = (i * 31 + 7) % 256;
   }
-  const blob = makeLocalBlob(makeTempFile(t, Buffer.from(bytes)));
+  const blob = makeLocalBlob(makeTemporaryFile(t, Buffer.from(bytes)));
 
   // getInfo over the whole multi-chunk file.
   const info = await E(blob).getInfo();
@@ -258,7 +259,7 @@ test('LocalBlob.textRange reads across chunk boundaries byte-exactly', async t =
     total += line.length + 1; // + LF
   }
   const text = `${lines.join('\n')}\n`;
-  const blob = makeLocalBlob(makeTempFile(t, text));
+  const blob = makeLocalBlob(makeTemporaryFile(t, text));
   t.is(await E(blob).text(), text);
   // A line window whose bytes straddle a 64 KiB boundary.
   const a = 900;

@@ -1,4 +1,5 @@
 // @ts-nocheck
+// prefer-endo-primitives-exempt: Node hashing independently checks the Endo digest path.
 /* eslint-disable import/order, no-await-in-loop */
 
 /**

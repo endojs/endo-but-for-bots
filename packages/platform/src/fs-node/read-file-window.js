@@ -2,6 +2,8 @@
 
 import harden from '@endo/harden';
 
+/** @import { FileHandle } from 'node:fs/promises' */
+
 /**
  * Raw-byte size of one windowed read. Reads loop in chunks of this size so a
  * huge requested `length` against a small (or unknown-size) source never drives
@@ -80,7 +82,7 @@ harden(readWindowToEnd);
  * `readWindowToEnd` over a `node:fs/promises` `FileHandle`: the production
  * `read` seam is `handle.read`.
  *
- * @param {import('node:fs/promises').FileHandle} handle
+ * @param {FileHandle} handle
  * @param {number} offset
  * @param {number} length
  * @param {number} [chunkBytes]

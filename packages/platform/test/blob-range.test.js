@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: independent Node hashes and BOM-preserving decode are test oracles.
 
 // Exercises the shared range-attenuation maker (`makeBlobRangeMethods`,
 // src/fs/blob-range.js) through the immutable `BlobRef` producer — the
@@ -26,7 +27,7 @@ import { makeBlobRefExo } from '../src/fs/extended/shared/blob-ref.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
-const bytesOf = str => encoder.encode(str);
+const bytesOf = text => encoder.encode(text);
 const sha256Base64 = bytes =>
   encodeBase64(createHash('sha256').update(bytes).digest());
 

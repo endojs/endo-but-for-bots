@@ -1,4 +1,5 @@
 // @ts-check
+// prefer-endo-primitives-exempt: ignoreBOM preserves an interior U+FEFF.
 /**
  * Shared range-attenuation maker for rich `ReadableBlob`s
  * (designs/readableblob-range-attenuation.md).
