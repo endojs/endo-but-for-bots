@@ -14,8 +14,8 @@ host-wide `@nets` capability.
 `packages/daemon/src/host.js` and `packages/daemon/src/guest.js` both
 inject the same `networksDirectoryId` under the special name `@nets`,
 which resolves to a daemon-singleton directory of named netlayer
-formulas (loopback, ws-relay, tcp-netstring, iroh, and — since
-2026-08-25 — a daemon-side OCapN-Noise netlayer,
+formulas (loopback, ws-relay, tcp-netstring, iroh, and, since
+2026-08-25, a daemon-side OCapN-Noise netlayer,
 `packages/daemon/src/networks/ocapn.js`, registered at `@nets/ocapn`
 by `setup-ocapn.js`).
 Every agent the daemon hosts sees the same registry, can list every
@@ -124,8 +124,8 @@ The exo presents these methods:
 ```js
 const TransportsInterface = M.interface('Transports', {
   // Discovery
-  list: M.call().returns(M.promise()),                // -> Locator[]
-  has: M.call(M.string()).returns(M.promise()),        // scheme
+  list: M.call().returns(M.promise()),                // -> string[] (available scheme names)
+  has: M.call(M.string()).returns(M.promise()),        // scheme -> boolean
 
   // Outgoing sessions
   connect: M.call(M.any())                             // Locator: ed25519 public key + connection hint
@@ -152,6 +152,17 @@ A `Session` is the same authenticated, encrypted CapTP-bearing
 session that `OcapnNetwork.connect` returns, and a `Listener`
 delivers `Session` instances over a name-changes-style follow.
 
+`list()` enumerates the transport **schemes** this agent may use
+(the direct replacement for enumerating the old `@nets` directory):
+it returns an array of scheme-name strings such as `['np',
+'tcp+syrups']`, filtered to the agent's `allowedSchemes`. It does
+not return peer `Locator`s (a peer address is supplied *to*
+`connect`, not enumerated by `list`), and `has(scheme)` is the
+membership test for the same set. This is the single return-shape
+statement for `list()`; Design Decision #10's "the host reaches
+netlayers through `@transports.list()`" refers to this same
+scheme enumeration.
+
 #### Daemon Side: `TransportFactory`
 
 `HostInterface` (`packages/daemon/src/interfaces.js`) gains:
@@ -159,18 +170,25 @@ delivers `Session` instances over a name-changes-style follow.
 ```js
 provideTransports(petName, options): Promise<Transports>
 revokeTransports(petName): Promise<void>
+registerNetwork(scheme, networkServiceId): Promise<void>
 ```
+
+`registerNetwork` is the host-privileged write side of the
+daemon-internal netlayer registry, the cutover replacement for the
+bootstrap scripts' `move(..., ['@nets', X])` (see *Netlayer
+Registration Moves to a Host-Internal Path*); it is never reachable
+from an agent's `@transports`.
 
 `revokeTransports(petName)` is the host-side, whole-agent
 kill-switch: it tears down the named agent's entire `Transports`
-view — every outstanding listener and session fails, the agent's
+view: every outstanding listener and session fails, the agent's
 per-agent signing keys are de-registered from the shared netlayers'
 inbound demux, and subsequent `connect`/`listen` calls on that
 view reject. It is the coarse counterpart to the agent-side
 `disconnect(handle)` (drops one session) and `shutdown()` (agent
 retires its own view); `revokeTransports` is the only one a *host*
 can invoke against an agent it no longer trusts. Sibling agents are
-unaffected. It is idempotent — revoking an already-revoked or
+unaffected. It is idempotent: revoking an already-revoked or
 never-provisioned petName resolves without error. (The CLI's
 per-handle `endo agent <name> transports revoke <handle>` in Design
 Decision #9 is the finer-grained, agent-facing verb and fronts
@@ -336,9 +354,11 @@ The daemon brokers internally:
 - The proxy resolves `locatorB` to a local agent and returns a
   loopback session (no Noise handshake; in-process direct cap
   forwarding).
-- For two agents on different daemons, each holds its own Noise
-  session over the underlying transport; they share the wire
-  but not the capability.
+
+The cross-daemon counterpart (two agents on different daemons,
+each holding its own Noise session over the shared wire) is
+covered under *Capability Sharing Across Agents (Cross-Daemon)*
+below.
 
 The netlayer is responsible for connection coalescing (one Noise
 socket carrying CapTP for many local-agent sessions); the
@@ -362,19 +382,59 @@ There is no dual-population and no agent-side
 #### Internal Callers Move to `@transports`
 
 The current callers of `@nets` (per `grep`, primarily test
-fixtures, `host.js:200`, and `daemon.js:4762` `makePeer`) look up
-`@transports` and call `connect(locator)` rather than listing
-nets and selecting one.
+fixtures and `manager.js:6383` `makePeer`; the daemon was renamed
+`daemon.js` -> `manager.js` in the already-landed
+`daemon-rename-to-manager` work) look up `@transports` and call
+`connect(locator)` rather than listing nets and selecting one.
 `getAllNetworkAddresses` becomes a daemon-internal helper used by
 the `TransportFactory` proxy; it is not surfaced to agents.
 
 #### `@nets` Injection Is Removed
 
-`@nets` is removed from `specialNames` in `host.js` and
-`guest.js`.
+`@nets` is removed from `specialNames` in `host.js` (the
+injection site is `host.js:499`) and `guest.js`.
 The `networksDirectoryId` parameter remains on the formulation
 path because the daemon still needs the underlying netlayer
 registry; only the agent-facing surface is removed.
+
+#### Netlayer Registration Moves to a Host-Internal Path
+
+Removing the agent-facing `@nets` name also removes the path the
+daemon's own bootstrap scripts use to *install* a netlayer today.
+The four operational setup scripts
+(`packages/daemon/src/networks/setup-{tcp,ws-relay,ocapn,iroh}.js`)
+each register a network service by moving it into the `@nets`
+directory of an agent's powers:
+`E(powers).move(['network-service-X'], ['@nets', 'X'])` under
+`--powers @agent`. This is how the `ocapn.js` netlayer this design
+repurposes gets registered (`setup-ocapn.js`). Once `@nets` names
+nothing in any pet store, that `move()` target no longer resolves,
+so registration must retarget the daemon-internal registry that the
+retained `networksDirectoryId` designates.
+
+The registry keeps a **write side** distinct from the agent-facing
+read side. `@transports.list()`/`has()` are read-only scheme
+enumeration for agents (per *Capability Surface*); installing a
+netlayer is a **host-privileged** operation, never reachable from an
+agent's `@transports`. The daemon exposes it as a host method on
+`HostInterface` alongside `provideTransports`:
+
+```js
+registerNetwork(scheme, networkServiceId): Promise<void>
+```
+
+which moves the named network service into the daemon's internal
+netlayer registry (the directory `networksDirectoryId` designates)
+under `scheme`. The setup scripts change their one `move()` call
+from `E(powers).move(['network-service-X'], ['@nets', 'X'])` to
+`E(host).registerNetwork('X', networkServiceId)` (reached through
+`@host`, which survives the cutover), so a netlayer is installed
+without any agent-visible `@nets` directory. The
+`TransportFactory` proxy then dispatches over whatever schemes the
+registry holds, and `@transports.list()` reflects the resulting set.
+Registration stays host-only: an agent can neither enumerate the
+registry's write side nor install a netlayer, only use the schemes
+its policy allows.
 
 #### Per-Agent Signing Keys
 
@@ -404,26 +464,30 @@ on top of (not in lieu of) the per-daemon netlayer.
 
 ## Affected Packages
 
-- `packages/daemon/`: `host.js`, `guest.js`, `daemon.js`,
-  `interfaces.js`, `types.d.ts`, `formula-type.js`,
-  `help-text-data.js`.
+- `packages/daemon/`: `host.js`, `guest.js`, `manager.js` (the
+  daemon core, formerly `daemon.js`), `interfaces.js`,
+  `types.d.ts`, `formula-type.js`, `help-text-data.js`, and the
+  netlayer bootstrap scripts
+  `networks/setup-{tcp,ws-relay,ocapn,iroh}.js` (retarget their
+  `move(..., ['@nets', X])` onto `registerNetwork`, see *Netlayer
+  Registration Moves to a Host-Internal Path*).
 - `packages/ocapn/`: must expose `OcapnNetwork` registration
   surface that the proxy consumes (depends on
   `ocapn-network-transport-separation`).
 - `packages/ocapn-noise/`: no changes; bindings are consumed by
   the netlayer that the proxy fronts.
-- **Daemon-side OCapN-Noise netlayer — already landed, repurposed,
+- **Daemon-side OCapN-Noise netlayer, already landed, repurposed,
   not rebuilt.** The `np` netlayer the proxy dispatches to already
   exists as `packages/daemon/src/networks/ocapn.js` +
   `setup-ocapn.js` (protocol `ocapn+noise+tcp`, registered at
-  `@nets/ocapn`), landed 2026-08-25 — six days before this PR's
+  `@nets/ocapn`), landed 2026-08-25, six days before this PR's
   base. This design does **not** introduce a parallel
   `packages/ocapn-noise-network/` package; it **repurposes** the
   landed `ocapn.js` netlayer as the shared per-daemon substrate
   that the per-agent `TransportFactory` proxy fronts. The
   implementation work is therefore wiring the proxy over the
   existing netlayer (per-agent signing-key registration/revocation,
-  identity-routed inbound demux — much of which
+  identity-routed inbound demux, much of which
   `@endo/ocapn-noise`'s `network.js` already provides via
   `addSigningKeys`/`removeSigningKeys` and its per-key `registeredKeys`
   map), not standing up a new netlayer. Where earlier references in
@@ -550,9 +614,13 @@ The questions raised during design review are resolved as follows
 
 10. **Retire `@nets`.**
     `@nets` is not kept as a host-only special name.
-    The host reaches netlayers through `@transports.list()` plus
-    the daemon-internal registry API; there is no surviving
-    directory-shaped `@nets` view for any agent, host included.
+    The host reads the available schemes through
+    `@transports.list()` and installs netlayers through the
+    host-only `registerNetwork(scheme, networkServiceId)` method
+    (the daemon-internal registry's write side, see *Netlayer
+    Registration Moves to a Host-Internal Path*); there is no
+    surviving directory-shaped `@nets` view for any agent, host
+    included.
     The cutover (see *Replacing `@nets`*) removes `@nets`
     outright, with no deprecation window.
 
