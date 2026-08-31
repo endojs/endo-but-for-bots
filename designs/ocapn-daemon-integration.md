@@ -25,8 +25,8 @@ item (a), folding PRs
 [endojs/endo-but-for-bots#111](https://github.com/endojs/endo-but-for-bots/issues/111),
 [endojs/endo-but-for-bots#112](https://github.com/endojs/endo-but-for-bots/issues/112),
 [endojs/endo-but-for-bots#113](https://github.com/endojs/endo-but-for-bots/issues/113)
-into `llm`) introduces a real, mutually
-authenticated transport family for the daemon to mediate.
+into `llm`, the repository's integration branch) introduces a real,
+mutually authenticated transport family for the daemon to mediate.
 Bringing that stack online while keeping `@nets` as the agent-facing
 surface would fix the singleton problem in the wrong layer and would
 foreclose several capabilities-discipline properties the daemon should
@@ -93,7 +93,7 @@ The limitations of `@nets` as a singleton are:
   `designs/platform-fs-daemon-integration.md`
   on `feat/platform-fs`).
 
-### Out of scope
+### Out of Scope
 
 - OCapN spec changes; the wire format and locator structure are
   governed by `ocapn-network-transport-separation` and
@@ -110,9 +110,9 @@ The limitations of `@nets` as a singleton are:
 
 ## Design
 
-### Capability surface
+### Capability Surface
 
-#### Agent side: `Transports`
+#### Agent Side: `Transports`
 
 Each agent holds a single `Transports` exo, registered in its
 pet store under the special name `@transports`.
@@ -121,18 +121,18 @@ The exo presents these methods:
 ```js
 const TransportsInterface = M.interface('Transports', {
   // Discovery
-  list: M.call().returns(M.promise()),                // → Locator[]
+  list: M.call().returns(M.promise()),                // -> Locator[]
   has: M.call(M.string()).returns(M.promise()),        // scheme
 
   // Outgoing sessions
   connect: M.call(M.any())                             // Locator: ed25519 public key + connection hint
     .optional(M.record())                              // { hints? }
-    .returns(M.promise()),                             // → Session
+    .returns(M.promise()),                             // -> Session
 
   // Incoming sessions
   listen: M.call(M.string())                           // scheme
     .optional(M.record())                              // { port?, host? }
-    .returns(M.promise()),                             // → Listener
+    .returns(M.promise()),                             // -> Listener
 
   // Lifecycle
   disconnect: M.call(M.any()).returns(M.promise()),    // handle
@@ -149,7 +149,7 @@ A `Session` is the same authenticated, encrypted CapTP-bearing
 session that `OcapnNetwork.connect` returns, and a `Listener`
 delivers `Session` instances over a name-changes-style follow.
 
-#### Daemon side: `TransportFactory`
+#### Daemon Side: `TransportFactory`
 
 `HostInterface` (`packages/daemon/src/interfaces.js`) gains:
 
@@ -159,12 +159,12 @@ provideTransports(petName, options): Promise<Transports>
 
 where `options` carries:
 
-- `allowedSchemes`: `['np', 'tcp+syrups', ...]` — the schemes the
+- `allowedSchemes`: `['np', 'tcp+syrups', ...]`. The schemes the
   agent may use; defaults to the host's currently-enabled set.
 - `signingKeys`: optional, defaults to a fresh per-agent Ed25519
   pair (see `daemon-agent-network-identity`); a host may supply
   its own keys for agents that need a stable network identity.
-- `listenPolicy`: `'none' | 'request' | 'allow'` — whether the
+- `listenPolicy`: `'none' | 'request' | 'allow'`. Whether the
   agent may open listening sockets, may request that the daemon
   open one on its behalf, or may not listen at all.
 - `outboundPolicy`: optional address allowlist or matcher.
@@ -183,33 +183,54 @@ per-agent port) and is responsible for **relaying each incoming
 session to the owning agent by the peer's Ed25519 public key**.
 Routing is on Ed25519 identity throughout: every transport must be
 able to demultiplex sessions by public key.
+
+For inbound Noise IK sessions this demultiplexing must happen
+*before* the handshake completes: the responder static key is the
+owning agent's per-agent identity, so the daemon has to select the
+correct agent's private key before it can decrypt the initiator's
+first handshake message. The transport therefore carries the
+target agent's Ed25519 public key in an unencrypted routing
+preamble ahead of the Noise handshake (an SNI-style selector); the
+daemon looks up the owning local agent and its responder key from
+that preamble and hands the session to that agent's `Transports`
+view. It does not trial-decrypt against every local agent's key,
+so inbound dispatch stays O(1) in the number of hosted agents. The
+concrete preamble framing is fixed in the implementation PR
+against the `ocapn-noise-network` netlayer (see *Affected
+Packages*).
+
 The per-agent `Transports` exo is therefore a scoped *view* over
-shared, identity-routed transport instances — it isolates
+shared, identity-routed transport instances. It isolates
 discovery, revocation, accounting, and identity per agent while
 the physical socket, port, and connection coalescing stay shared.
 
-### Layer cake
+### Layer Cake
 
-```
-Agent (worker realm)
-  ↑ holds: Transports exo (per-agent)
-       methods: connect(locator), listen(scheme), disconnect(h),
-                list(), shutdown(), help()
-─── daemon-side membrane (CapTP / formula boundary) ───
-TransportFactory exo (host-side proxy)
-  ↑ holds: ref to underlying netlayer registry
-       per-agent state: signing keys, allowed schemes,
-                        outstanding listeners, outstanding
-                        sessions, revocation handles
-─── netlayer membrane ───
-Underlying netlayer formulas (daemon singletons)
-  • OCapN-Noise (`np`) — uses `@endo/ocapn-noise` bindings
-  • TCP+Syrups (`tcp+syrups`) — uses `@endo/syrups` framing
-  • Loopback — uses in-process queues
-  • ws-relay — uses WebSocket via relay server
-─── @endo/ocapn membrane ───
-@endo/ocapn (NonceLocator, CBOR codec, OCapN core)
-@endo/ocapn-noise (Noise IK handshake, ChaCha20-Poly1305)
+```mermaid
+flowchart TD
+    subgraph agent["Agent (worker realm)"]
+        A["Transports exo (per-agent)<br/>connect(locator), listen(scheme),<br/>disconnect(h), list(), shutdown(), help()"]
+    end
+
+    subgraph host["TransportFactory exo (host-side proxy)"]
+        F["holds ref to underlying netlayer registry<br/>per-agent state: signing keys, allowed schemes,<br/>outstanding listeners, outstanding sessions,<br/>revocation handles"]
+    end
+
+    subgraph netlayers["Underlying netlayer formulas (daemon singletons)"]
+        N1["OCapN-Noise (np): @endo/ocapn-noise bindings"]
+        N2["TCP+Syrups (tcp+syrups): @endo/syrups framing"]
+        N3["Loopback: in-process queues"]
+        N4["ws-relay: WebSocket via relay server"]
+    end
+
+    subgraph core["@endo/ocapn"]
+        C1["@endo/ocapn (NonceLocator, CBOR codec, OCapN core)"]
+        C2["@endo/ocapn-noise (Noise IK handshake, ChaCha20-Poly1305)"]
+    end
+
+    A -->|"daemon-side membrane (CapTP / formula boundary)"| F
+    F -->|"netlayer membrane"| netlayers
+    netlayers -->|"@endo/ocapn membrane"| core
 ```
 
 The daemon retains the netlayer registry; the agent never sees it.
@@ -229,7 +250,7 @@ The formulation is durable (a new `Transports` formula type) so
 that the cap survives daemon restart with the same identity but
 fresh socket state.
 
-`@nets` is not provided at all — neither to new agents nor to
+`@nets` is not provided at all, neither to new agents nor to
 existing ones.
 The agent-facing surface is `@transports` outright: there is no
 `@nets`/`@transports` coexistence window.
@@ -256,7 +277,7 @@ Sibling agents are unaffected.
 The host's underlying netlayers continue to serve other
 `Transports` proxies.
 
-#### Garbage collection
+#### Garbage Collection
 
 A `Transports` proxy participates in the daemon's existing
 `thisDiesIfThatDies` chain.
@@ -266,16 +287,16 @@ Underlying netlayer formulas have no incoming reference from the
 proxy; they are pinned by the daemon's `@endo` formula and
 collected only at daemon shutdown.
 
-When a shared transport *instance* is itself collected — its
+When a shared transport *instance* is itself collected (its
 formula garbage-collected and the instance consequently
-cancelled/disincarnated — it must **close all of its sessions**,
+cancelled/disincarnated) it must **close all of its sessions**,
 so that every presence and promise carried over those sessions is
 partitioned/rejected.
 This is the one revocation invariant this design owes the wider
 session-partitioning story (see *Cross-peer revocation
 propagation* under Out of Scope, Future Work).
 
-#### Daemon restart
+#### Daemon Restart
 
 Per-agent signing keys are persisted with the `Transports`
 formula's deferred-task params so that the restored agent presents
@@ -285,7 +306,7 @@ demand.
 Listeners re-bind to their configured ports if the host policy
 permits; otherwise the agent must re-call `listen()`.
 
-### Capability sharing across agents
+### Capability Sharing Across Agents (Same-Daemon)
 
 When two agents within the same daemon need to talk over the same
 Noise session, they do not coordinate via the `Transports` exo.
@@ -310,7 +331,7 @@ that revocation, accounting, and identity remain per-agent.
 no shadowing, and no deprecation period: `@transports` replaces
 `@nets` in a single cutover, all in the one change.
 
-#### Agents get `@transports`, not `@nets`
+#### Agents Get `@transports`, Not `@nets`
 
 Add a `Transports` formula type and a `provideTransports` host
 method.
@@ -318,7 +339,7 @@ Formulation populates `@transports`; `@nets` is never injected.
 There is no dual-population and no agent-side
 `@transports`-then-`@nets` fallback probe.
 
-#### Internal callers move to `@transports`
+#### Internal Callers Move to `@transports`
 
 The current callers of `@nets` (per `grep`, primarily test
 fixtures, `host.js:200`, and `daemon.js:4762` `makePeer`) look up
@@ -327,7 +348,7 @@ nets and selecting one.
 `getAllNetworkAddresses` becomes a daemon-internal helper used by
 the `TransportFactory` proxy; it is not surfaced to agents.
 
-#### `@nets` injection is removed
+#### `@nets` Injection Is Removed
 
 `@nets` is removed from `specialNames` in `host.js` and
 `guest.js`.
@@ -335,14 +356,14 @@ The `networksDirectoryId` parameter remains on the formulation
 path because the daemon still needs the underlying netlayer
 registry; only the agent-facing surface is removed.
 
-#### Per-agent signing keys
+#### Per-Agent Signing Keys
 
 With `@transports` in place, the per-agent Ed25519 key path
 (blocked today on the singleton) becomes natural.
 This is `daemon-agent-network-identity` (M2, Not Started); the
 two designs land together.
 
-### Capability sharing across agents (cross-daemon)
+### Capability Sharing Across Agents (Cross-Daemon)
 
 Two daemons connecting over OCapN-Noise:
 
@@ -363,17 +384,24 @@ on top of (not in lieu of) the per-daemon netlayer.
 
 ## Affected Packages
 
-- `packages/daemon/` — `host.js`, `guest.js`, `daemon.js`,
+- `packages/daemon/`: `host.js`, `guest.js`, `daemon.js`,
   `interfaces.js`, `types.d.ts`, `formula-type.js`,
   `help-text-data.js`.
-- `packages/ocapn/` — must expose `OcapnNetwork` registration
+- `packages/ocapn/`: must expose `OcapnNetwork` registration
   surface that the proxy consumes (depends on
   `ocapn-network-transport-separation`).
-- `packages/ocapn-noise/` — no changes; bindings are consumed by
+- `packages/ocapn-noise/`: no changes; bindings are consumed by
   the netlayer that the proxy fronts.
 - `packages/ocapn-noise-network/` (new, per `ocapn-noise-network`
-  design) — provides the `np` netlayer the proxy dispatches to.
-- `packages/cli/` — per-agent
+  design): provides the `np` netlayer the proxy dispatches to.
+  Note that the shipped code (`packages/ocapn-noise`) and this
+  design use Noise **IK**; the `ocapn-noise-network` design doc
+  still describes Noise **XX** in places and is stale on that
+  point. The IK handshake as implemented is authoritative, and the
+  `ocapn-noise-network` doc is to be reconciled to IK before or as
+  part of building this package. Do not build the `np` netlayer to
+  the XX shape.
+- `packages/cli/`: per-agent
   `endo agent <name> transports {list,add,revoke}` verbs
   (see *Design Decisions* #9); `endo nets` is retired alongside
   `@nets` (#10).
@@ -400,8 +428,8 @@ The questions raised during design review are resolved as follows
    the single per-transport port, and demultiplexing to agents is
    by identity, not by port.
 
-3. **We route on Ed25519 identity; gateway and `Transports` are
-   flush.**
+3. **We route on Ed25519 identity; gateway and `Transports`
+   converge.**
    The two are not distinct ingress paths.
    The gateway's bearer-token boundary
    (`gateway-bearer-token-auth`) and the Noise ingress both resolve
@@ -414,7 +442,7 @@ The questions raised during design review are resolved as follows
    The locator supplies the peer's Ed25519 public key (the routing
    target) together with a connection hint (`tcp:host=...`, relay
    address, etc.).
-   `connect` takes the locator — exo or serialized string — and
+   `connect` takes the locator (exo or serialized string) and
    reads the public key and hint out of it; the public key, not the
    hint, is authoritative for routing.
 
@@ -426,9 +454,9 @@ The questions raised during design review are resolved as follows
 
    ```js
    const outboundPolicy = {
-     // allow if the hint host matches any suffix…
+     // allow if the hint host matches any suffix...
      allowHostSuffixes: ['.internal.example', 'localhost'],
-     // …or falls in any CIDR block
+     // ...or falls in any CIDR block
      allowCidrs: ['10.0.0.0/8', 'fd00::/8'],
      // schemes this agent may dial at all
      allowSchemes: ['np', 'tcp+syrups'],
@@ -441,7 +469,7 @@ The questions raised during design review are resolved as follows
    checks `allowSchemes`, then requires a match in
    `allowHostSuffixes` or `allowCidrs`; a miss throws under
    `otherwise: 'deny'`.
-   The routing target (the Ed25519 key) is not policy-checked here —
+   The routing target (the Ed25519 key) is not policy-checked here:
    `outboundPolicy` gates *where on the wire* the agent may dial,
    not *whom* it may address.
 
@@ -469,10 +497,22 @@ The questions raised during design review are resolved as follows
    `endo agent <name> transports {list,add,revoke <handle>}`
    rather than a top-level `endo transports`.
    It must be possible to create a subagent with **delegated**
-   transports — a parent agent grants a subset of its transports
+   transports: a parent agent grants a subset of its transports
    (schemes, outbound policy, listen policy) to a child at
    formulation time, so delegation is a first-class CLI and API
    operation, not just host-minted provisioning.
+   The delegated child gets its **own fresh** per-agent Ed25519
+   identity (a distinct `Transports` capability provisioned with a
+   narrowed slice of the parent's policy), not a share of the
+   parent's signing key. Because routing, revocation, and demux all
+   key on Ed25519 identity (Decision #3), sharing the parent's key
+   would collapse the child's sessions when the parent is revoked
+   or `shutdown()`, violating the per-agent isolation this design
+   rests on. With a forked identity the child survives parent
+   revocation; the parent-to-child liveness edge is instead carried
+   by the formulation `thisDiesIfThatDies` chain (see *Garbage
+   Collection*), so disincarnating the parent still cascades to the
+   child, but revoking the parent's *transports* does not.
 
 10. **Retire `@nets`.**
     `@nets` is not kept as a host-only special name.
@@ -491,7 +531,7 @@ The questions raised during design review are resolved as follows
   Concretely, `endor` should be able to benefit from transports
   implemented in Node.js workers, and this design should be
   integrated well enough to make that path available **for parity
-  testing** — the JS-worker transport is the reference the Rust
+  testing**: the JS-worker transport is the reference the Rust
   runtime is checked against, not a throwaway.
 
 - **Alternative transports (QUIC, WebTransport, Tor).**
@@ -508,7 +548,7 @@ The questions raised during design review are resolved as follows
   and partitions presences.
   Partitioning presences is not yet visible, and there are designs
   in flight to address that; this change need not carry the
-  concern — **except** for one invariant that *is* in scope: when a
+  concern, **except** for one invariant that *is* in scope: when a
   transport's formula is collected and its instance is consequently
   cancelled/disincarnated, it must **close all of its sessions**,
   so that every presence and promise carried over them is
@@ -554,6 +594,15 @@ Shape only:
   peer.
   The remote sees two distinct `OcapnLocation` designators.
 
+- **Integration: inbound identity demux (Design Decision #2).**
+  Two agents both `listen()` on the same shared per-transport
+  port. An inbound session addressed to agent A's Ed25519 key is
+  delivered only to A's `Transports` view and never to B, and a
+  session addressed to B never reaches A. Exercises the shared
+  socket / identity-routed demultiplexing that Design Decision #2
+  rests on (the inverse of the outbound "per-agent identity" case
+  above).
+
 - **Integration: revocation.**
   Host calls `revokeTransports(petName)`; agent's outstanding
   sessions fail; sibling agents unaffected.
@@ -566,7 +615,7 @@ Shape only:
 - **Integration: `@nets` is gone.**
   A formulated agent exposes `@transports` and no `@nets`;
   a lookup of `@nets` fails (there is no coexistence window to
-  test — the cutover is complete).
+  test; the cutover is complete).
 
 - **Integration: cross-agent loopback.**
   Two local agents connect via `connect(locatorOfSibling)`;
@@ -581,7 +630,7 @@ Shape only:
 - This is a breaking change to the agent-facing API.
   `@nets` becomes `@transports` with a different shape.
   Agents that look up `@nets` directly break; because this is
-  not widely deployed there is no compatibility shim — the few
+  not widely deployed there is no compatibility shim; the few
   such agents are updated to `@transports` in the same change.
 
 - The daemon's persistence format gains a new formula type
