@@ -7,7 +7,7 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
-import { idFromLocator } from '../src/locator.js';
+import { idFromLocator, parseLocator } from '../src/locator.js';
 import { makeDaemonDatabase } from '../src/manager-database-node.js';
 
 /**
@@ -29,12 +29,38 @@ import { makeDaemonDatabase } from '../src/manager-database-node.js';
  *   via `host.makeUnconfined`.
  * @property {string} netsKey         The `@nets/<key>` subdirectory
  *   the network registers at after installation.
+ * @property {string} expectedHintProtocol  The URL scheme (without the
+ *   trailing colon) that this network stamps onto the connection hints
+ *   it advertises, e.g. `ocapn+noise+tcp`. The forked-two-daemon
+ *   invite/accept round-trip asserts an invitation carries this
+ *   protocol, proving the pairing workflow selects this netlayer.
  */
 
 const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
 
-const MAX_CONFIG_DIR_LENGTH = 80;
+const MAX_CONFIG_DIRECTORY_LENGTH = 80;
 let configPathId = 0;
+
+/**
+ * Per-network `tmp/` namespace segment. The multiplayer suite registers
+ * identical test titles under every entry file (the tcp, ocapn, and
+ * ocapn-ws `invite-retention*.test.js` files all call
+ * `runMultiplayerSuite`), and AVA runs each file in its own worker
+ * process where `configPathId` restarts at 0 — so without a per-network
+ * segment every file resolves to the *same* `tmp/<title>#<id>` state
+ * dirs and, run concurrently (i.e. not under `--serial`), they race on
+ * `purge`, one file wiping another's live daemon state. `netsKey` is not
+ * enough to separate them (both ocapn specs share `netsKey: 'ocapn'`);
+ * `expectedHintProtocol` is unique per transport, so it is the stable
+ * discriminator that keys each file to its own subtree.
+ *
+ * @param {NetworkSpec} network
+ */
+const getNetworkNamespace = network =>
+  network.expectedHintProtocol
+    .replace(/[^a-zA-Z0-9-]/g, '-')
+    .toLowerCase()
+    .slice(0, MAX_CONFIG_DIRECTORY_LENGTH);
 
 const getConfigDirectoryName = (testTitle, configNumber) => {
   const cleanTitle = testTitle
@@ -43,9 +69,9 @@ const getConfigDirectoryName = (testTitle, configNumber) => {
     .slice(0, 50);
   const defaultPath = `${cleanTitle}`;
   const basePath =
-    defaultPath.length <= MAX_CONFIG_DIR_LENGTH
+    defaultPath.length <= MAX_CONFIG_DIRECTORY_LENGTH
       ? defaultPath
-      : defaultPath.slice(0, MAX_CONFIG_DIR_LENGTH);
+      : defaultPath.slice(0, MAX_CONFIG_DIRECTORY_LENGTH);
   const testId = String(configPathId).padStart(4, '0');
   const configId = String(configNumber).padStart(2, '0');
   const configSubDirectory = `${basePath}#${testId}-${configId}`;
@@ -137,7 +163,11 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const { reject: cancel, promise: cancelled } = makePromiseKit();
     cancelled.catch(() => {});
     const config = {
-      ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
+      ...makeConfig(
+        'tmp',
+        getNetworkNamespace(network),
+        getConfigDirectoryName(t.title, t.context.length),
+      ),
       gcEnabled,
     };
     await purge(config);
@@ -258,6 +288,86 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const messages = /** @type {unknown[]} */ (await E(hostB).listMessages());
     t.true(messages.length > 0, 'B received a message');
   });
+
+  // The forked-two-daemon invite/accept + capability round-trip. Two
+  // independent daemon processes (each `start()` spawns its own OS
+  // process; `@nets/<key>` is the only installed network) pair via the
+  // invite/accept workflow, and then a real capability is invoked
+  // across the resulting session. This is the milestone case: not just
+  // mail delivery or a pass-by-copy value fetch, but a remote method
+  // call with arguments whose computed result returns to the caller,
+  // and a Far reference whose identity survives the crossing — proving
+  // the OCapN edge carries pass-by-reference over the Noise session.
+  test.serial(
+    'invite/accept advertises the netlayer hint and round-trips a capability',
+    async t => {
+      const { host: hostA } = await prepareHostWithGcAndNetwork(t);
+      const { host: hostB } = await prepareHostWithGcAndNetwork(t);
+
+      // A invites; the invitation locator carries A's connection hints.
+      const invitation = await E(hostA).invite('bob');
+      const invitationLocator = await E(invitation).locate();
+
+      // The hints must advertise this netlayer's protocol, so the
+      // accepting peer routes its dial-back through the matching
+      // `@nets/<key>` network. This is the routing contract the
+      // invite/accept path depends on: `getPeerInfo` aggregates the
+      // installed networks' addresses, and the invitation embeds them.
+      const hintProtocols = parseLocator(invitationLocator).hints.map(address =>
+        new URL(address).protocol.replace(/:$/, ''),
+      );
+      t.true(
+        hintProtocols.includes(network.expectedHintProtocol),
+        `invitation advertises ${network.expectedHintProtocol}; got ${JSON.stringify(hintProtocols)}`,
+      );
+
+      // B accepts — the pairing completes and both sides learn the
+      // other's peer info (addresses + node).
+      await E(hostB).accept(invitationLocator, 'alice');
+
+      // Capability round-trip #1: A publishes a callable; B invokes a
+      // method with arguments and receives the computed result back.
+      await E(hostA).evaluate(
+        '@main',
+        'Far("Adder", { add: (a, b) => a + b })',
+        [],
+        [],
+        ['adder'],
+      );
+      const adderLocator = await E(hostA).locate('adder');
+      await E(hostB).storeLocator(['adder'], adderLocator);
+      const sum = await E(hostB).evaluate(
+        '@main',
+        'E(adder).add(2, 3)',
+        ['adder'],
+        ['adder'],
+      );
+      t.is(sum, 5, 'remote capability computed 2 + 3 = 5 over the session');
+
+      // Capability round-trip #2: a Far reference passed to a remote
+      // method and echoed back must preserve identity (pass-by-ref, not
+      // pass-by-copy) across the netlayer.
+      await E(hostA).evaluate(
+        '@main',
+        'Far("Echoer", { echo: value => value })',
+        [],
+        [],
+        ['echoer'],
+      );
+      const echoerLocator = await E(hostA).locate('echoer');
+      await E(hostB).storeLocator(['echoer'], echoerLocator);
+      const survived = await E(hostB).evaluate(
+        '@main',
+        `
+          const token = Far('Token', {});
+          E(echoer).echo(token).then(alleged => token === alleged);
+        `,
+        ['echoer'],
+        ['echoer'],
+      );
+      t.true(survived, 'Far reference identity survived the round-trip');
+    },
+  );
 
   test.serial(
     'deleting invited guest and pin collects guest formulas',
@@ -660,6 +770,7 @@ export const tcpNetwork = harden({
   listenAddress: '127.0.0.1:0',
   modulePath: 'src/networks/tcp-netstring.js',
   netsKey: 'tcp',
+  expectedHintProtocol: 'tcp+netstring+json+captp0',
 });
 
 /** @type {NetworkSpec} */
@@ -668,6 +779,7 @@ export const ocapnNetwork = harden({
   listenAddress: '127.0.0.1:0',
   modulePath: 'src/networks/ocapn.js',
   netsKey: 'ocapn',
+  expectedHintProtocol: 'ocapn+noise+tcp',
 });
 
 /**
@@ -683,4 +795,5 @@ export const ocapnWsNetwork = harden({
   listenAddress: '127.0.0.1:0',
   modulePath: 'src/networks/ocapn.js',
   netsKey: 'ocapn',
+  expectedHintProtocol: 'ocapn+noise+ws',
 });

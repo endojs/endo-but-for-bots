@@ -1,0 +1,19 @@
+demo: transport = ocapn+noise+ws
+demo: booting daemon A (inviter) ...
+demo: booting daemon B (acceptor) ...
+demo: A: invite("bob") — creating a durable invitation
+demo: A: invitation locator =
+demo:    endo://ac9b0283d39965c1fbfba35a1887e7f32dace02baefd769a776e552de73fdd7d?id=3742e8362e085e7221db862c91956c0571f09e5bd2270f23cce10dfd3ea9ea97&type=invitation&from=23633020de055b83f44529926dae5d35d6363a80898ed1dd014f3d1bbc90446c&fromNode=32f79c15937febca5428c0a7e97b403ac86631c91f8d582ccffa706082a41386&at=ocapn%2Bnoise%2Bws%3A%2F%2F127.0.0.1%3A37655%2F%3Fnode%3Dac9b0283d39965c1fbfba35a1887e7f32dace02baefd769a776e552de73fdd7d%26loc%3D%257B%2522type%2522%253A%2522ocapn-peer%2522%252C%2522network%2522%253A%2522np%2522%252C%2522transport%2522%253A%2522np%2522%252C%2522designator%2522%253A%2522f154e7ee16c8c9f51531890f8d385ed4254cc763618417038bfe2701fe8f7210%2522%252C%2522hints%2522%253A%257B%2522ws%253Aurl%2522%253A%2522ws%253A%252F%252F127.0.0.1%253A37655%2522%257D%257D
+demo: A: invitation advertises 1 connection hint(s):
+demo:    ocapn+noise+ws://127.0.0.1:37655/?node=ac9b0283d39965c1fbfba35a1887e7f32dace02baefd769a776e552de73fdd7d&loc=%7B%22type%22%3A%22ocapn-peer%22%2C%22network%22%3A%22np%22%2C%22transport%22%3A%22np%22%2C%22designator%22%3A%22f154e7ee16c8c9f51531890f8d385ed4254cc763618417038bfe2701fe8f7210%22%2C%22hints%22%3A%7B%22ws%3Aurl%22%3A%22ws%3A%2F%2F127.0.0.1%3A37655%22%7D%7D
+demo: A: ✓ hints advertise ocapn+noise+ws — pairing will route via @nets/ocapn
+demo: B: accept(<locator>, "alice") — completing the pairing
+demo: B: ✓ accepted; both daemons now hold each other's peer info
+demo: A: publish Far("Adder", { add }) as pet name "adder"
+demo: B: adopt A's adder by locator and invoke E(adder).add(2, 3)
+demo: B: ← remote result = 5
+demo: B: ✓ capability round-trip computed 2 + 3 = 5 over the Noise session
+demo: A: publish Far("Echoer", { echo }) as pet name "echoer"
+demo: B: send a fresh Far token through E(echoer).echo and check identity
+demo: B: ✓ Far reference identity preserved across the netlayer
+demo: DEMO PASSED
