@@ -38,8 +38,8 @@ document from this glossary.
   (the persistent daemon-side object the proposal becomes once its slots
   are bound, tracked in the formula graph for retention and GC).
   (`define-form.js` is a *separate* surface: the host's own from-scratch
-  proposal composer, opened by the `/define` slash command, which calls
-  `E(powers).define(source, slots)`. It is not the renderer for an
+  proposal composer, opened by the `/define` slash command; the composer
+  calls `E(powers).define(source, slots)` on submit. It is not the renderer for an
   incoming LLM proposal, and is out of scope for this design; see
   § Chat UI: rendering an incoming proposal.)
 - **Jessie**: a confined subset of JavaScript that an Endo guest can
@@ -47,9 +47,9 @@ document from this glossary.
   (The exact statement and iteration constructs Jessie admits are pinned
   against the `endojs/Jessie#127` grammar at Phase 0; see § Phased
   implementation. Earlier drafts described the confinement as "no loops
-  outside Justin expressions," which contradicted the fact that Justin is
-  a statement-free sub-language and is dropped here pending that grammar
-  check.)
+  outside Justin expressions"; that contradicted the fact that Justin is
+  a statement-free sub-language, so this document drops the phrase pending
+  that grammar check.)
   The Jessie grammar and parser live in `endojs/Jessie`.
 - **Justin**: the pure-expression sub-language of Jessie (no statements,
   no `const`/`let`, no imports, and so no loops).
@@ -113,8 +113,9 @@ When such a proposal reaches the host's inbox, the Chat UI renders it with the
 Blockly visual editor from a new `@endo/jessie-blockly` package (which
 re-exports the published `@jessie.js/parse` checker and vendors the upstream
 Blockly tooling until it publishes), so the host sees the proposal
-as a tree of labeled blocks with capability holes, edits it visually, and
-submits.
+as a tree of labeled blocks with capability holes, fills those holes
+visually (the program body itself is read-only; see § Chat UI, editing
+scope), and submits.
 The submit path is unchanged (`E(powers).endow`, producing a formula-graph
 node with the host's chosen bindings), so the rest of the system (follow-on
 use of the result, retention, GC, formula history) is untouched.
@@ -128,7 +129,7 @@ Two surfaces change to support the variant, plus the new shared package:
   right renderer.
   `options.hints` is the structurally-marked carrier for *distrusted,
   re-validated-downstream* routing data, deliberately distinct from any future
-  top-level `options` key — which is reserved for a flag that carries its own
+  top-level `options` key, which is reserved for a flag that carries its own
   independently-enforced contract, so a later author cannot reach for this
   bag to smuggle a trust-bearing option in beside a presentation hint (see
   Open Question 2).
@@ -234,9 +235,10 @@ change), so the two do not drift:
   summary:
     'Propose a reusable program, like define(), but the source must be a ' +
     'Jessie module (a confined subset of JavaScript without ambient ' +
-    'globals, eval, or new Function). The host reviews it as a visual ' +
-    'block program. Arguments: source (string), slots (object mapping ' +
-    'slot name to { label }).',
+    'globals, eval, or new Function). The host usually reviews it as a ' +
+    'visual block program, falling back to a plain source view when the ' +
+    'proposal cannot be rendered as blocks. Arguments: source (string), ' +
+    'slots (object mapping slot name to { label }).',
   params: M.splitRecord({
     source: M.string(),
     slots: M.recordOf(M.string(), M.splitRecord({ label: M.string() })),
@@ -338,16 +340,49 @@ which submit through `E(powers).endow`:
   fetches the definition's source and slots and submits via
   `E(powers).endow(messageNumber, bindings, workerName, resultName)`.
 
+**Editing scope: slot values only, not the program body.** The Blockly
+workspace lets the host inspect the proposal as blocks and fill its
+capability holes; it does **not** let the host freely recompose the program
+body. This scope is forced by the submit path, not a UI preference:
+`endow(messageNumber, bindings)` binds the host's chosen slot values to the
+**immutable stored source** at `messageNumber` and carries no channel for a
+regenerated body, so any structural edit to the block tree could never reach
+execution and would be silently discarded. The block tree is therefore a
+read-only visualization of the stored Jessie source with editable slot
+holes; a host who wants a different program body rejects the proposal and
+asks the agent for a new one (or authors a fresh proposal with
+`define-form.js`), the same reject-and-re-author path § Validation errors
+and Open Question 7 describe. Keeping edits to slot values is exactly what
+keeps every phase's "submit path unchanged" claim true, since a freely
+recomposable workspace would demand a submit channel `endow` does not have.
+
 Because the inline renderer runs inside space-chat's *confinement
 boundary* (an authority-free component, not the trusted host frame),
 embedding a DOM-heavy third-party library (Blockly) there is a materially
 different problem from dropping it into a trusted wrapper: the confined
-component has no ambient DOM/authority to hand Blockly, so Phase 3 must
-either mount the Blockly workspace in the trusted host wrapper
-(`inbox-component.js` / `endow-modal.js`) and bridge the composed
-source/slots back across the boundary, or extend the confined surface with
-exactly the capability Blockly needs. Phase 3 owns resolving this; it is
-called out in § Phased implementation, Phase 3.
+component has no ambient DOM/authority to hand Blockly. This exact
+embedding problem is already solved in the same package this design edits.
+`packages/spaces-util/src/define-form.js` documents THE MONACO HOST-NODE
+PATTERN: a live Monaco editor is real DOM that cannot enter a confined
+vnode tree (`renderConfined` strips refs and real nodes), so the editor
+lives on a persistent host `<div>` created once, controlled imperatively by
+`createMonacoEditor`, and re-parented into a confined-tree anchor slot
+(`data-editor-anchor`) after each render. That file's own comment invites
+later forms to copy the seam. Blockly's SVG workspace is structurally the
+same category of embedding as Monaco: imperative DOM ownership with its own
+focus, cursor, and key handling, not vdom-native. Phase 3's default
+approach is therefore to reuse the host-node pattern: mount the Blockly
+workspace on a persistent host node owned by the trusted wrapper
+(`inbox-component.js` / `endow-modal.js`), re-parent it into a
+`data-editor-anchor`-style slot the confined `definition` renderer exposes,
+and bridge the composed slot bindings back across the boundary. The one way
+this could fail to generalize is Blockly's drag-and-toolbox interaction
+model reaching for authority Monaco does not (for example a toolbox flyout
+mounted outside the anchored host node), so Phase 3 confirms the pattern
+covers Blockly's drag-and-toolbox surface and, only if it does not, falls
+back to extending the confined surface with exactly the capability Blockly
+needs. Phase 3 owns this; it is called out in § Phased implementation,
+Phase 3.
 
 Both branches gain a Blockly rendering path. When a `definition` message
 is tagged `language: 'jessie'` **and** re-validates via
@@ -361,17 +396,24 @@ announced as Jessie but is being shown as raw source, so the host can tell a
 routing or validation failure from a proposal that was never meant to be
 Jessie. Because that fallback drops a non-programmer host back onto exactly
 the raw-source surface this design exists to remove, the notice carries a
-first-class recovery action, not just an explanation: an **"Ask the agent to
-retry"** button that posts a structured rejection — the message number and a
-machine-readable reason code, `re-validation-failed` or `not-block-expressible`
-— to the agent as a **plain follow-up message into Lal's inbox round loop**
-(`runInboxLoop` over inbound messages in `packages/lal/agent.js`, where each
-inbound item starts a fresh round via `runOneRound`), so escalation does not
-depend on the host hand-composing a fresh natural-language ask. It is a new
-user-role turn carrying the reason code as structured content, **not** a
-synthetic `tool_result` reopening the already-completed `defineJessie` round:
-Lal's loop exposes no API to reinject a result into a closed tool call, so the
-retry is modeled as the next message the agent reads (§ Validation errors). The slot list
+first-class recovery action, not just an explanation. An **"Ask the agent to
+retry"** button posts a structured rejection (the message number and a
+machine-readable reason code, `re-validation-failed` or
+`not-block-expressible`) to the agent as a **plain inbound message in Lal's
+inbox round loop** (`runInboxLoop` over inbound messages in
+`packages/lal/agent.js`), so escalation does not depend on the host
+hand-composing a fresh natural-language ask. The mechanism is specific and
+must not be mis-implemented: the button sends a normal inbox message whose
+body carries the reason code; `runInboxLoop` notices the new inbound number
+and starts a fresh round, but it always invokes `runOneRound` with the
+**fixed generic prompt** `'You have new mail. Check your messages and respond
+appropriately.'` (`packages/lal/inbox-loop.js`), so the reason code is **not**
+threaded into `runOneRound` as an argument. The agent recovers the reason code
+by inspecting its own inbox (`listMessages` / `messageHistory`) during that
+round. This is a new user-role turn the agent reads, **not** a synthetic
+`tool_result` reopening the already-completed `defineJessie` round: Lal's loop
+exposes no API to reinject a result into a closed tool call, so the retry is
+modeled as the next message the agent reads (§ Validation errors). The slot list
 and the `endow` submit shape are unchanged (only the source-review widget
 differs), so the Blockly branch produces the same
 `{ messageNumber, bindings }` the plain path already feeds to `endow`.
@@ -390,7 +432,7 @@ been **checked against the live PR and resolves against the plan**:
 `endojs/Jessie#127` ships only `src/blocks/*` (block definitions),
 `src/generators/*` (the blocks -> source direction, one way), and
 `src/toolbox/*`, with a `test/test-data.json` of `{ block, expected-source }`
-pairs — no source -> block-tree importer anywhere, and those fixtures are
+pairs (no source -> block-tree importer anywhere), and those fixtures are
 block -> text only, not invertible. So the importer is an artifact **this design
 must build from scratch**, not vendor. § Phased implementation therefore folds
 that build into Phase 0 (which owns the `/blockly` subpath the importer lives
@@ -416,7 +458,7 @@ verbatim, since the slot model is identical; only the source editor differs.
 #### Slot blocks
 
 A slot in a `define` proposal is a named capability hole the host binds at
-submit time; in the source it appears as a free variable — the existing plain
+submit time; in the source it appears as a free variable. The existing plain
 `define` tool already works this way, its slots being free identifiers in plain
 JavaScript source that `endow` binds later.
 **Whether a bare free variable is valid Jessie at *parse* time is an unverified
@@ -444,13 +486,13 @@ Adding a slot in the slot panel adds a draggable instance of that block to the
 toolbox; removing a slot removes the toolbox entry and (with confirmation) any
 uses of the slot in the workspace.
 This keeps slots in lockstep between the visual program and the slot panel
-without a parallel free-variable analysis on the generated source, and —
-decisively — keeps a **single source of truth** for host-visible slot state (the
+without a parallel free-variable analysis on the generated source, and
+(decisively) keeps a **single source of truth** for host-visible slot state (the
 slot panel), the property the slot model turns on.
 
-The rejected alternative — surfacing slots through Blockly's built-in variable
+The rejected alternative (surfacing slots through Blockly's built-in variable
 category, so the visual UX matches `endojs/Jessie#127`'s editor for users who
-have seen Jessie tooling elsewhere — is written up in § Alternatives Considered.
+have seen Jessie tooling elsewhere) is written up in § Alternatives Considered.
 It makes Blockly's variable registry authoritative and the slot panel merely
 reflective, structurally reintroducing the two-places-of-truth duplication the
 custom block avoids (the variable registry and the host's slot-binding model
@@ -472,9 +514,12 @@ Two validation surfaces:
    ever reaches the host's inbox.
    The LLM sees the validation error as a normal `tool_result` error and
    retries.
-2. **Host-side editing** in the Blockly workspace cannot produce invalid
-   Jessie by construction: the block grammar is a subset of Jessie's, and
-   the code generator emits valid Jessie for any composable workspace.
+2. **Host-side editing** in the Blockly workspace is confined to filling
+   slot holes (§ Chat UI, editing scope), so it cannot produce invalid
+   Jessie by construction: the rendered block tree derives from valid stored
+   Jessie source, the block grammar is a subset of Jessie's, and the slot
+   blocks the host fills emit valid Jessie in whichever form precondition (c)
+   establishes.
    The exception is slot identifiers; a slot referenced in the workspace
    that has been removed from the slot panel produces a code-generation
    warning shown inline in the slot panel and blocks the submit button
@@ -549,16 +594,16 @@ and documentation in turn.
    makes Phase 0 the large phase (see the estimate), not a one-day vendoring
    pass.
    Three Phase-0 preconditions gate the rest of the plan:
-   - **(a) — RESOLVED, against the vendor path.** Whether `endojs/Jessie#127`
+   - **(a). RESOLVED, against the vendor path.** Whether `endojs/Jessie#127`
      ships the source -> block-tree importer or only the generator direction.
      Checked against the live PR: it ships `src/blocks/*`, `src/generators/*`
      (blocks -> source, one way), and `src/toolbox/*`, with a block -> text
      `test/test-data.json` (not invertible); there is **no importer**. So the
      importer is a from-scratch build, folded into this phase's estimate.
-   - **(b)** — confirm the block grammar and the `parseJessie` checker are
+   - **(b).** Confirm the block grammar and the `parseJessie` checker are
      derived from one grammar source, so the vendor step (and the from-scratch
      importer) can preserve that link.
-   - **(c)** — confirm against the real published `@jessie.js/parse` whether a
+   - **(c).** Confirm against the real published `@jessie.js/parse` whether a
      bare free variable (an unbound identifier reference) is valid Jessie at
      parse time, or whether every slot must instead be a declared import or
      parameter (§ Slot blocks). This decides the slot source-generation shape
@@ -599,6 +644,21 @@ and documentation in turn.
    daemon-side `define` implementation (the method behind `E(powers).define`,
    where `powers` is the host's `EndoGuest` facet) treats an absent `options`
    argument identically to its prior two-argument behavior.
+   Making the third argument additive is not only a call-site change; it
+   requires editing the `M.interface()` guard, which is the one file the
+   "back-compat wire-through" framing must name. The `EndoGuest` guard for
+   `define` is `define: M.call(M.string(), M.record()).returns(M.promise())`
+   at `packages/daemon/src/interfaces.js:230`, a strict two-argument guard
+   with no trailing-optional clause, so `E(powers).define(source, slots, { hints })`
+   throws a guard violation before the implementation ever runs. Phase 2 must
+   relax that guard to
+   `M.call(M.string(), M.record()).optional(M.record()).returns(M.promise())`,
+   the same `.optional(...)`-for-trailing-args idiom sibling methods in the
+   same file already use (`storeBlob` at `interfaces.js:241`, and `provideMount`),
+   and widen the implementation at `packages/daemon/src/guest.js:296`
+   (`const define = (source, slots) => mailboxDefine(source, slots)`) to accept
+   and forward the optional `options`. Both edits are prerequisites for the
+   extension to be additive rather than breaking.
    Every existing two-argument caller of `E(powers).define` continues
    to work without change, and the `definition` message carries no
    `language` tag in the absent-options case (so the Chat UI defaults to
@@ -619,7 +679,7 @@ and documentation in turn.
    `{ messageNumber, bindings }` result crosses back.
    The confinement-boundary resolution is also where the accessible mount
    point is chosen (Open Question 8).
-   Implement the single committed slot-block representation — the custom
+   Implement the single committed slot-block representation, the custom
    `jessie_slot` block (§ Slot blocks). The design commits to it directly
    rather than building both variants behind a feature flag and running a
    bake-off, because a single source of truth for slot state is the decisive
@@ -652,6 +712,14 @@ and documentation in turn.
    assert the same plain-renderer-plus-notice fallback (and the "Ask the
    agent to retry" recovery action) fires, so both named fallback paths
    (not just the forged-tag one) are regression-covered.
+   Because the retry is inbox-mediated (§ Chat UI), the retry-path fixture
+   asserts the recovery mechanism explicitly rather than just that a button
+   posts a message: the "Ask the agent to retry" action posts an inbox
+   message carrying the reason code, and the agent surfaces that reason code
+   only after inspecting its inbox (`listMessages` / `messageHistory`) in the
+   round the fixed generic "You have new mail" prompt starts, confirming the
+   reason code is retrieved from the inbox and not from any argument threaded
+   into `runOneRound`.
    Add a **slot-removal fixture**: a slot referenced in the workspace but
    removed from the slot panel blocks the submit button (§ Validation
    errors), so that submit-guard is regression-covered.
@@ -672,14 +740,14 @@ built from scratch (precondition (a) resolved against the vendor path;
 importer pass and dominates the phase.
 Phases 1 and 2 are S-sized (1 day each).
 Phase 3 is M-sized (2 days): the Blockly integration is mostly wiring plus
-the single committed slot-block representation — no two-implementation
+the single committed slot-block representation (no two-implementation
 bake-off, since Open Question 4 is settled on paper by the decisive
-single-source-of-truth axis.
+single-source-of-truth axis).
 Phase 4 is S-sized (1 day).
 
 Total estimate: L-sized, ~10 days
 (Phase 0 ~5 + Phase 1 1 + Phase 2 1 + Phase 3 2 + Phase 4 1 = ~10).
-The dominant cost is the from-scratch importer in Phase 0 — the upstream
+The dominant cost is the from-scratch importer in Phase 0: the upstream
 `endojs/Jessie#127` ships no importer to vendor, so this is not the earlier
 1-day vendoring figure; dropping the Phase-3 bake-off in favor of the
 committed custom slot block is what trims 2 days back off Phase 3.
@@ -781,7 +849,7 @@ committed custom slot block is what trims 2 days back off Phase 3.
   design would have to add). Because a single source of truth for host-visible
   slot state is the decisive property (§ Slot blocks), this loses
   unconditionally on it regardless of the consistency, round-trip-stability, or
-  implementation-size gains — which is why the design commits to the custom
+  implementation-size gains. That is why the design commits to the custom
   block directly rather than building both and running a bake-off to re-derive
   that conclusion (Open Question 4).
 
@@ -815,10 +883,10 @@ committed custom slot block is what trims 2 days back off Phase 3.
 
 ## Open Questions
 
-Most of these are now **resolved** — the per-item status says so — and are kept
+Most of these are now **resolved** (the per-item status says so) and are kept
 as a decision log rather than a list of live blockers. The genuinely open items
 are accessibility (8, which gates Phase 3) and the two deferred/tuning items (5
-and 7); the parser, extension-point, and packaging questions (1–3, 6) are
+and 7); the parser, extension-point, and packaging questions (1 to 3, and 6) are
 settled. The two upstream premises the plan leaned on have since been checked
 against the live `endojs/Jessie#127` and folded into the Phase-0 preconditions
 (§ Phased implementation, Phase 0 (a) and (c)).
@@ -848,11 +916,16 @@ against the live `endojs/Jessie#127` and folded into the Phase-0 preconditions
    The daemon-side `EndoGuest` interface change is in scope for this
    prototype; the `options.hints` sub-bag is the natural carrier for future
    *presentation/routing* hints, so the cost is paid once.
+   Concretely, that interface change is the `M.interface()` guard at
+   `packages/daemon/src/interfaces.js:230` gaining an `.optional(M.record())`
+   clause plus the matching widening of the implementation at
+   `packages/daemon/src/guest.js:296`; without both, the third argument fails
+   the guard before it reaches the method (§ Phased implementation, Phase 2).
    Scope caveat, made structural: `options.hints.language` is a routing hint
    only, not a trust boundary, which is why Open Question 6 puts the
    safety-relevant validation on the render side. The **`hints` sub-bag** is
    the shape that makes "distrusted, re-validated downstream" visible in the
-   data model — not merely a design-doc paragraph — and it is deliberately
+   data model (not merely a design-doc paragraph), and it is deliberately
    separate from any *top-level* `options` key. A future *safety-relevant* flag
    (e.g., a confinement hint) must **not** ride inside `hints` on the
    assumption that being a bag entry makes it cheap; it takes its own top-level
@@ -886,7 +959,7 @@ against the live `endojs/Jessie#127` and folded into the Phase-0 preconditions
    upstream package.
 
 4. **Slot block design (custom block vs. variable block).** Resolved
-   2026-08-31, **on paper, in favor of the custom `jessie_slot` block** —
+   2026-08-31, **on paper, in favor of the custom `jessie_slot` block**,
    superseding the earlier 2026-05-14 plan to run a build-both bake-off under
    Phase 3.
    The two candidates were: (Option 1) `jessie_slot` as a custom block keyed to
@@ -900,13 +973,13 @@ against the live `endojs/Jessie#127` and folded into the Phase-0 preconditions
    Axis (d) is **unconditionally decisive**, not a tie-breaker: Option 2 makes
    Blockly's variable registry authoritative and demotes the slot panel to a
    reflection, so it keeps two mutable places holding the same capability-hole
-   identity in sync — the exact duplication (d) exists to forbid. Because (d)
+   identity in sync, the exact duplication (d) exists to forbid. Because (d)
    is decisive and Option 2 loses on it *structurally* (independent of any
    empirical trial), no outcome on (a)/(b)/(c) can select Option 2. Building it
    anyway behind a feature flag to "confirm" a foregone result was accidental
    schedule cost (it was the reason Phase 3 was L-sized), and the earlier
-   fallback clause — "ship the standard variable approach if neither introduces
-   the duplication (d) guards against" — contradicted (d)'s own premise, since
+   fallback clause ("ship the standard variable approach if neither introduces
+   the duplication (d) guards against") contradicted (d)'s own premise, since
    Option 2 *always* introduces that duplication.
    Resolution: commit to Option 1 (the custom block) directly; drop the
    bake-off and the feature flag. Phase 3 implements the single custom-block
@@ -961,23 +1034,28 @@ against the live `endojs/Jessie#127` and folded into the Phase-0 preconditions
    usage shows how often hosts want to tweak a proposal rather than accept
    or reject it as rendered.
 
-8. **Accessibility of the Blockly review surface.** Open — **gates Phase 3.**
+8. **Accessibility of the Blockly review surface.** Open: **gates Phase 3.**
    For any `language: 'jessie'` proposal, this design *replaces* the plain
-   text/`<input>` `definition` renderer — screen-reader- and
-   keyboard-navigable by construction — with a Blockly drag-and-drop
+   text/`<input>` `definition` renderer (screen-reader- and
+   keyboard-navigable by construction) with a Blockly drag-and-drop
    workspace, a paradigm with well-known keyboard/screen-reader limitations.
    That is a real regression for exactly the "non-programmer users" this
    design targets (§ What is the Problem Being Solved?): a host who cannot
    operate Blockly non-visually has no stated path to fill slots and submit a
    Jessie proposal, because the "View source" toggle is read-only
    (§ Validation errors) and the free-text edit affordance is deferred (Open
-   Question 7) — strictly worse than today's plain renderer for those users.
+   Question 7), strictly worse than today's plain renderer for those users.
    This must be resolved before Phase 3, since it is decided at the same point
-   as the confinement-boundary mount question (§ Chat UI): the chosen mount
-   must expose an accessible path. Options include Blockly's own keyboard-nav
-   experiments, an accessible fallback that keeps the plain slot-`<input>`
-   surface available on request (so no user is forced through the visual
-   workspace), or gating the Blockly branch on an opt-in.
+   as the confinement-boundary mount question (§ Chat UI), whose default
+   resolution reuses the Monaco host-node pattern (a persistent host `<div>`
+   re-parented into a `data-editor-anchor` slot). The chosen mount must expose
+   an accessible path, and because that host node is owned by the trusted
+   wrapper rather than the confined tree, an accessible slot-`<input>` fallback
+   can share the same mount rather than needing a separate surface. Options
+   include Blockly's own keyboard-nav experiments, an accessible fallback that
+   keeps the plain slot-`<input>` surface available on request (so no user is
+   forced through the visual workspace), or gating the Blockly branch on an
+   opt-in.
    Proposed measurable Phase-3 exit criterion (following Open Question 5's
    pattern): every slot-fill-and-submit step reachable in the Blockly branch
    is also reachable keyboard-only and announced to a screen reader, verified
