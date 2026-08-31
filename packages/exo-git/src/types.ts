@@ -1,6 +1,7 @@
 // Public type surface for `@endo/exo-git`.
 
 import type { PassableReader } from '@endo/exo-stream';
+import type { ERef } from '@endo/eventual-send';
 import type { RemotableObject } from '@endo/pass-style';
 
 export type { PassableReader };
@@ -400,14 +401,10 @@ export type ReadOnlyEndoGit = {
   filesystemAt: (ref: GitRef | string) => Promise<Filesystem>;
   followRootChanges: (
     options?: FollowRootOptions,
-  ) => import('@endo/eventual-send').ERef<
-    PassableReader<GitRootChange, undefined>
-  >;
+  ) => ERef<PassableReader<GitRootChange, undefined>>;
   followLatestRoot: (
     options?: FollowRootOptions,
-  ) => import('@endo/eventual-send').ERef<
-    PassableReader<GitRootSnapshot, undefined>
-  >;
+  ) => ERef<PassableReader<GitRootSnapshot, undefined>>;
   readOnly: () => ReadOnlyEndoGit;
   /**
    * Downscope to a pre-existing sibling facet of the same Git instance.

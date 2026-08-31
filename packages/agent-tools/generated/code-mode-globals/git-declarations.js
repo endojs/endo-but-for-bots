@@ -48,6 +48,18 @@ type GitFilesystem = GitExtendedFilesystem;
 type GitFollowRootOptions = {
     cancelled?: Promise<never>;
 };
+type GitERef<T> = T | Promise<T>;
+type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
+    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
+};
+type GitRootSnapshot = {
+    type: 'snapshot';
+    revision: bigint;
+    position: GitCommitPosition | null;
+};
+type GitRootChange = GitRootSnapshot | GitRootTransition;
 type GitLogOptions = {
     maxCount?: number;
     ref?: GitRef | string;
@@ -70,8 +82,8 @@ type GitReadOnlyEndoGit = {
     stashShow: (index?: number) => Promise<string>;
     tree: (ref: GitRef | string) => Promise<GitTree>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-    followRootChanges: (options?: GitFollowRootOptions) => unknown;
-    followLatestRoot: (options?: GitFollowRootOptions) => unknown;
+    followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;
+    followLatestRoot: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootSnapshot, undefined>>;
     readOnly: () => GitReadOnlyEndoGit;
     scope: (name: 'reader') => GitReadOnlyEndoGit;
 };
@@ -114,7 +126,6 @@ type GitWorktreeEntry = {
     locked: boolean;
     prunable: boolean;
 };
-type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
     streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
@@ -122,11 +133,6 @@ type GitPassableBytesReader<TReadReturn = undefined> = {
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
     atEnd: boolean;
-};
-type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
-    stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
-    readPattern: () => unknown | undefined;
-    readReturnPattern: () => unknown | undefined;
 };
 type GitDirectoryEntry = {
     name: string;
@@ -303,6 +309,22 @@ type GitExtendedFilesystem = {
     brands: () => Promise<ReadonlySet<bigint> | readonly bigint[]>;
     help: (method?: string) => string;
 };
+type GitTreeRef = {
+    algorithm: string;
+    hash: string;
+};
+type GitRemotableFilesystem = GitFilesystem & unknown;
+type GitRootTransition = {
+    type: 'transition';
+    fromRevision: bigint;
+    toRevision: bigint;
+    position: GitCommitPosition;
+};
+type GitCommitPosition = {
+    commitOid: string;
+    tree: GitTreeRef;
+    root: GitRemotableFilesystem;
+};
 type GitStatusEntry = {
     path: string;
     index: 'clean' | 'added' | 'modified' | 'deleted' | 'renamed' | 'copied' | 'conflicted';
@@ -371,8 +393,8 @@ type GitPathEntryIssuer = GitLitePathEntryIssuer;`,
     detach: (ref: GitRef | string) => Promise<void>;
     diff: (options?: GitDiffOptions) => Promise<string>;
     filesystemAt: (ref: GitRef | string) => Promise<GitFilesystem>;
-    followLatestRoot: (options?: GitFollowRootOptions) => unknown;
-    followRootChanges: (options?: GitFollowRootOptions) => unknown;
+    followLatestRoot: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootSnapshot, undefined>>;
+    followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;
     help: (method?: string) => string;
     log: (options?: GitLogOptions) => Promise<GitCommit[]>;
     merge: (ref: GitRef | string, options?: {
