@@ -18,7 +18,8 @@ use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
     MachineSnapshot,
 };
-use ironhorse_snapshot::store::{HeapStore, MemoryStore};
+use ironhorse_snapshot::machine::MachineSnapshotError;
+use ironhorse_snapshot::store::{HeapStore, MemoryStore, StoreError};
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
@@ -252,4 +253,117 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
         consulted.get() >= 1,
         "crank 2 crossed the ORIGINAL deadline, so the host must be consulted"
     );
+}
+
+// ---------------------------------------------------------------
+// The residual persist gate (`stored_unpersistable_row`): the last
+// refuse-on-hold arm, and until now the one gate with no test of its
+// own -- disabling it entirely left every test binary green.
+//
+// It answers one question: does this machine HOLD a reference to a
+// function slot that resume cannot bring back? A native minted at
+// runtime (a promise resolver, say) sits above `boot_slot_count` and
+// travels in no table, so restore reinstates the reference without
+// its `FuncInfo`. Three structural holders can carry one, and each
+// fails differently:
+//
+//   - an ACCESSOR getter/setter: the property survives as an accessor
+//     whose getter is dead;
+//   - a BOUND function's target: restore refuses the whole machine
+//     (`malformed retained function state`) -- an honest machine that
+//     commits and can then never be resumed, which is data loss;
+//   - a DISPOSAL method on a disposable stack: `dispose()` dies on a
+//     non-callable record.
+//
+// Refusing to PERSIST is strictly better than all three: the machine
+// keeps running and the caller learns immediately. The carry (the
+// promise cluster, still Pending) is the recorded lift.
+
+fn resolver_fixture(tail: &str) -> Interp {
+    let src = format!(
+        "var g = 0; var p = 0; var o = 0; var s = 0; var b = 0; o = {{}}; \
+         p = new Promise(function (res, rej) {{ g = res; }}); {tail} 7"
+    );
+    let (b, n) = compile(&src);
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let out = m.run(&b);
+    assert!(out.completed, "fixture crank: {:?}", out.halt);
+    m
+}
+
+fn assert_every_persist_verb_refuses(m: Interp, row: &str) {
+    assert_eq!(
+        m.stored_unpersistable_row(),
+        Some(row),
+        "the gate names the holder"
+    );
+    match m.write_snapshot(&sig()) {
+        Err(MachineSnapshotError::PendingStateUnsupported { row: named }) => {
+            assert_eq!(named, row, "the blob verb refuses by the same name")
+        }
+        other => panic!("the blob verb must refuse: {other:?}"),
+    }
+    let mut store = MemoryStore::new();
+    match begin_store_session(m, &sig(), &mut store) {
+        Err((_, StoreError::PendingStateUnsupported { row: named })) => {
+            assert_eq!(named, row, "the store verb refuses by the same name")
+        }
+        Err((_, other)) => panic!("the store verb refused by the wrong gate: {other:?}"),
+        Ok(_) => panic!("the store verb must refuse"),
+    }
+    assert!(store.manifest().is_err(), "a refused begin writes nothing");
+}
+
+#[test]
+fn a_held_unpersistable_native_refuses_every_persist_verb() {
+    assert_every_persist_verb_refuses(
+        resolver_fixture("Object.defineProperty(o, 'x', { get: g });"),
+        "accessors with non-persisted native functions",
+    );
+    assert_every_persist_verb_refuses(
+        resolver_fixture("b = g.bind(null);"),
+        "bound functions with non-persisted targets",
+    );
+    assert_every_persist_verb_refuses(
+        resolver_fixture("s = new DisposableStack(); s.adopt(1, g);"),
+        "disposable stacks with non-persisted disposal methods",
+    );
+}
+
+#[test]
+fn the_persistable_function_classes_are_not_refused() {
+    // The gate must stay narrow: each of these holds a function that
+    // resume DOES bring back, in the same three holders. A gate that
+    // refused any of them would make ordinary programs unpersistable.
+    for tail in [
+        // A guest bytecode function: carried by `FUNC`.
+        "Object.defineProperty(o, 'x', { get: function () { return 1; } });",
+        "b = (function () { return 1; }).bind(null);",
+        "s = new DisposableStack(); s.adopt(1, function () {});",
+        // A boot native: below `boot_slot_count`, re-minted by a fresh
+        // boot at the same index.
+        "Object.defineProperty(o, 'x', { get: Object.keys });",
+        "b = Object.keys.bind(null);",
+        // A proxy revoker: rebuilt from the carried proxy state.
+        "var r = 0; r = Proxy.revocable({}, {}); b = r.revoke.bind(null);",
+        // An Intl bound native: carried by `IBFN`, and the case whose
+        // RESTORE ordering this round also fixed.
+        "var nf = 0; nf = new Intl.NumberFormat('en'); b = nf.format.bind(null);",
+        "var c = 0; c = new Intl.Collator('en'); \
+         Object.defineProperty(o, 'x', { get: c.compare });",
+    ] {
+        let m = resolver_fixture(tail);
+        assert_eq!(
+            m.stored_unpersistable_row(),
+            None,
+            "must stay persistable: {tail}"
+        );
+        assert!(m.write_snapshot(&sig()).is_ok(), "blob verb: {tail}");
+        let mut store = MemoryStore::new();
+        assert!(
+            begin_store_session(m, &sig(), &mut store).is_ok(),
+            "store verb: {tail}"
+        );
+    }
 }

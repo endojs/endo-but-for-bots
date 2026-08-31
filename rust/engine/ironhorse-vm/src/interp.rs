@@ -8524,7 +8524,51 @@ impl Interp {
         }) {
             return Some("accessors with non-persisted native functions");
         }
+        // A bound function's TARGET is the sharpest case: the `FUNC`
+        // row travels, names a target no table carries, and
+        // `restore_function_state` then refuses the whole machine as
+        // `malformed retained function state` -- so an honest machine
+        // COMMITS and can never be resumed again. Refusing to persist
+        // keeps it running instead. (`nf.format.bind(null)` is not
+        // this: an `IBFN` target persists, and its restore ORDERING is
+        // fixed separately.)
+        if self.bound_functions.iter().any(|(owner, data)| {
+            !self.slots.is_free_index(*owner) && !self.function_persists(data.target)
+        }) {
+            return Some("bound functions with non-persisted targets");
+        }
+        // A disposal method reaches its holder the same way and dies
+        // at `dispose()` on a non-callable record.
+        if self.disposable_stacks.iter().any(|(owner, data)| {
+            !self.slots.is_free_index(*owner)
+                && data
+                    .records
+                    .iter()
+                    .any(|record| !self.accessor_function_persists(Some(record.method)))
+        }) {
+            return Some("disposable stacks with non-persisted disposal methods");
+        }
         None
+    }
+
+    /// Whether a function SLOT survives resume: it is a boot native (a
+    /// fresh boot re-mints it at the same index), a proxy revoker or an
+    /// Intl bound native (rebuilt from carried state), or a guest
+    /// bytecode function (carried by `FUNC`). Anything else is a native
+    /// minted at runtime, which travels in no table -- restore
+    /// reinstates the reference without its `FuncInfo`.
+    fn function_persists(&self, function: crate::value::SlotIndex) -> bool {
+        if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
+            return true;
+        }
+        if self.collator_compare_functions.contains_key(&function)
+            || self.number_format_bound_functions.contains_key(&function)
+        {
+            return true;
+        }
+        self.functions
+            .get(&function)
+            .is_some_and(|info| info.native.is_none() && info.method.is_none())
     }
 
     /// Whether an `accessors` entry is exactly a boot
@@ -9139,17 +9183,7 @@ impl Interp {
         else {
             return value.is_none();
         };
-        if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
-            return true;
-        }
-        if self.collator_compare_functions.contains_key(&function)
-            || self.number_format_bound_functions.contains_key(&function)
-        {
-            return true;
-        }
-        self.functions
-            .get(&function)
-            .is_some_and(|info| info.native.is_none() && info.method.is_none())
+        self.function_persists(function)
     }
 
     /// Snapshot guest accessor getter/setter mappings. Exact boot seeds are
