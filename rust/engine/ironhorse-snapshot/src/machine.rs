@@ -1341,7 +1341,7 @@ pub fn checkpoint_to_store(
             // geometry: rows appended past the attach-time range are
             // now store-backed (evictable, re-faultable), and the
             // tail row's expected fault length is the committed one.
-            session.interp.slots.advance_backing();
+            session.interp.slots.advance_backing(batch.manifest.chunk_len);
             session.interp.chunks.advance_backing();
         }
     }
