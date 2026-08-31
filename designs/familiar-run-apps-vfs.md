@@ -18,7 +18,7 @@ Case 1 is the confined path.
 An application is hosted inside an XS worker (via `endor`) whose only
 filesystem reach is one or more `Mount` capabilities the host has handed
 it.
-Within Case 1, the design's main subject is the fully virtualized
+Within Case 1, the design's main subject is the fully virtualised
 sub-case: when the entry-point is a bare `entry.js` rather than a
 prebuilt `compartment-map.json`, the design replaces `node_modules` with
 a sqlite-backed module store and constructs the compartment map ad hoc
@@ -33,7 +33,7 @@ and where the guest-side POSIX sandbox is not yet available.
 
 ## Relationship to the four-layer `importLocation` stack
 
-Case 1's fully-virtualized sub-case is **not** new territory: it is the
+Case 1's fully-virtualised sub-case is **not** new territory: it is the
 Familiar- and guest-facing consumer of the accepted four-layer
 daemon-worker `importLocation` stack, which `designs/README.md` records
 as Not Started (accepted 2026-07-10) and whose canonical
@@ -124,7 +124,7 @@ Mechanically this is [`endo checkout`](daemon-checkin-checkout.md),
 the documented dual of `endo checkin` that "writes a `readable-tree`
 from the daemon back to the local filesystem", restricted to a
 scratch mount: eject writes to a daemon-managed scratch directory
-reclaimed by scratch GC (`## Case 2 § Shape` step 5) rather than to a
+reclaimed by scratch GC (§ Case 2 § Shape step 5) rather than to a
 caller-named persistent path, and materialises no persistent formula.
 "Eject" is used, rather than reusing "checkout" bare, only to mark
 that scratch-mount-and-GC restriction; the write mechanism is
@@ -152,7 +152,7 @@ through a hook that reads bytes from a mount, never from the host's
 real filesystem outside the mount roots.
 
 The worker's host-side adapter satisfies the `MountInterface` guard
-on both directions: the worker reads module sources by calling the
+in both directions: the worker reads module sources by calling the
 mount's `lookup` and `text()` / `streamBase64()`, and writes runtime
 output (logs, generated artifacts, persisted state) through the same
 mount surface.
@@ -176,7 +176,7 @@ module or behind a thin `MountReadOpenable` trait) is TBD and
 should be worked out alongside the case-1 implementation; the
 implementation should not assume `cap-std` covers every `Mount`.
 
-### Sub-case: fully virtualized
+### Sub-case: fully virtualised
 
 When the entry-point hint is `entry.js` (not a prebuilt
 `compartment-map.json`), the host has no `node_modules` tree to feed
@@ -248,8 +248,8 @@ The design adapts the same shape to npm's `package.json`:
   § Minimal Version Selection.
 - **Re-walk to a fixed point.** After selecting a version for each
   `(name, major)` group, the resolver re-walks the dependency graph
-  with the *selected* versions and repeats the two steps above,
-  repeating until the selection stabilizes (typically 1-2
+  with the *selected* versions and repeats the two steps above
+  until the selection stabilizes (typically 1-2
   iterations). This is step 4 ("Resolve transitively") of the
   reused algorithm in `endor-npm-registry-proxy.md` § Version
   resolution, and it is load-bearing: bumping a `(name, major)` to a
@@ -318,14 +318,21 @@ A future revision may promote `endor lock` to the default once the
 command lands and the operational ergonomics are clear.
 
 **Peer and optional policy.**
-`peerDependencies` are treated as direct dependencies of the entry
-package: the entry's `package.json` is expected to provide each
-peer (declared in its own `dependencies` or `peerDependencies`),
-and the resolver fails closed at compartment-map construction
-time if a peer is unprovided.
-This matches how `peerDependencies` are operationally satisfied in
-npm's `node_modules` (the consumer carries the dep) without
-inheriting npm's silent-deduplication semantics.
+`peerDependencies` follow the reused resolver's semantics exactly
+(`mvs-resolver.md` § JS reference implementation shape, the peer
+cross-check): a peer requirement is recorded from *every* importer
+in the transitive graph (not just the entry package) as the walk
+encounters it, and each recorded requirement is satisfied when
+*some* selected `(name, version)` in the resolved closure meets its
+range, whichever package in the closure supplied that dependency.
+A peer may therefore be satisfied transitively by any package in the
+closure (e.g. a `react` peer required by `dep-a` and provided by
+`dep-b`'s own `react` dependency), not only by the entry package's
+own `dependencies`/`peerDependencies`.
+The resolver fails closed at compartment-map construction time only
+when a recorded peer is met by no entry in the closure.
+This inherits the reused algorithm's cross-check rather than npm's
+silent-deduplication semantics.
 `optionalDependencies` are best-effort: the resolver tries to walk
 them but does not fail if the package is unavailable; the
 compartment whose require would have resolved into the optional
@@ -372,7 +379,7 @@ snapshot identity)`, not on `package.json`'s hash alone.
 `dep-b@1.0.0` declares `shared: ^2.4.0`. The `(shared, major 2)` group
 sees two ranges; their minimums are `2.1.0` and `2.4.0`, and the
 resolver selects the greatest, `2.4.0` (the highest minimum, never a
-newer patch no package mentioned). If selecting `shared@2.4.0` reveals
+newer patch that no package mentioned). If selecting `shared@2.4.0` reveals
 that `shared@2.4.0`'s own `package.json` newly declares `tiny: ^1.0.0`
 (a dependency `shared@2.1.0` did not have), the re-walk step picks
 `tiny` up on the next pass and the selection then stabilizes. Had
@@ -612,7 +619,7 @@ Alignment:
   Both read module bytes by hash; the difference is whether the
   hash comes from a mount lookup or directly from a CAS root.
 - The sqlite-backed module store (Case 1, sub-case "fully
-  virtualized") is the same sqlite the Rust side already opens
+  virtualised") is the same sqlite the Rust side already opens
   via `daemon-endo-rust-sqlite.md`.
   The schema is shared.
 - The Go-style resolver in Case 1 reuses the algorithm
@@ -761,7 +768,7 @@ the assumption that host-eject is a host-only path forever.
 > mount interface. In the confined case, the host wires up one or
 > more Mount caps and runs the app under endor against the mount
 > set; the app's only filesystem reach is the caps the host
-> passed in. In the fully-virtualized-and-confined sub-case, npm
+> passed in. In the fully-virtualised-and-confined sub-case, npm
 > packages live in a sqlite-backed module store fed from CAS, and
 > the compartment map is constructed ad hoc per run using
 > Go-style transitive dependency resolution against that store
