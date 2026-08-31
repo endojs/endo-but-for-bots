@@ -420,7 +420,7 @@ LLM-agent stack).*
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | 2026-07-16 | 2026-07-22 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
-| [ocapn-daemon-integration](ocapn-daemon-integration.md) | 2026-05-07 | 2026-05-07 | Not Started |
+| [ocapn-daemon-integration](ocapn-daemon-integration.md) | 2026-05-07 | 2026-08-31 | Not Started |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
 | [cbor-frame](cbor-frame.md) | 2026-05-04 | 2026-07-15 | Implemented (PR #288) |
 | [cbor-codec](cbor-codec.md) | 2026-07-12 | 2026-07-28 | Phase 1 implemented |

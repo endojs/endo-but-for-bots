@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-07 |
+| **Updated** | 2026-08-31 |
 | **Author** | kriscendobot (steward, prompted by kriskowal) |
 | **Status** | Not Started |
 | **Source** | Issue [endojs/endo-but-for-bots#118](https://github.com/endojs/endo-but-for-bots/issues/118) |
@@ -129,7 +130,7 @@ const TransportsInterface = M.interface('Transports', {
 
   // Outgoing sessions
   connect: M.call(M.any())                             // Locator: ed25519 public key + connection hint
-    .optional(M.record())                              // { hints? }
+    .optional(M.record())                              // { hints? } dial overrides; see below
     .returns(M.promise()),                             // -> Session
 
   // Incoming sessions
@@ -138,7 +139,7 @@ const TransportsInterface = M.interface('Transports', {
     .returns(M.promise()),                             // -> Listener
 
   // Lifecycle
-  disconnect: M.call(M.any()).returns(M.promise()),    // handle
+  disconnect: M.call(M.any()).returns(M.promise()),    // a Session or Listener (from connect/listen)
   shutdown: M.call().returns(M.promise()),
 
   help: M.call().returns(M.string()),
@@ -151,6 +152,30 @@ surface, not a host-singleton.
 A `Session` is the same authenticated, encrypted CapTP-bearing
 session that `OcapnNetwork.connect` returns, and a `Listener`
 delivers `Session` instances over a name-changes-style follow.
+
+The `handle` that `disconnect` accepts **is** a `Session` or a
+`Listener` — the very value `connect` or `listen` returned — not a
+separate opaque id. `disconnect(session)` drops that one session;
+`disconnect(listener)` stops that one listener (and, being the
+narrowest teardown, is what the CLI's per-handle `revoke` verb fronts,
+Design Decision #9). The `M.any()` guard on the parameter is only
+because `Session`/`Listener` are remotable exos rather than a matcher
+literal; semantically the input shape of `disconnect` is exactly the
+output shape of `connect`/`listen`.
+
+`connect`'s optional second argument, `{ hints? }`, does **not**
+duplicate the locator's own embedded connection hint (Design Decision
+#4): the locator's hint is the *default* dial target the peer
+advertised, and `hints` is a per-call **override/supplement** the
+caller supplies when it has better local knowledge (a specific relay
+to prefer, an alternate host:port for the same identity). Precedence
+is caller-first: a field present in `hints` overrides the same field
+read out of the locator; fields absent from `hints` fall back to the
+locator's hint. The routing target — the Ed25519 public key — is
+**never** taken from `hints`; it comes only from the locator and stays
+authoritative for routing (Design Decision #4). A caller that has
+nothing to override omits the argument entirely and dials on the
+locator's hint alone.
 
 `list()` enumerates the transport **schemes** this agent may use
 (the direct replacement for enumerating the old `@nets` directory):
@@ -169,6 +194,7 @@ scheme enumeration.
 
 ```js
 provideTransports(petName, options): Promise<Transports>
+updateTransportsPolicy(petName, policyPatch): Promise<void>
 revokeTransports(petName): Promise<void>
 registerNetwork(scheme, networkServiceId): Promise<void>
 ```
@@ -207,6 +233,16 @@ where `options` carries:
   open one on its behalf, or may not listen at all.
 - `outboundPolicy`: optional address allowlist or matcher.
 
+These fields split into two lifecycles: `signingKeys` is **durable
+identity** (persisted across restart per *Daemon Restart*, and
+deliberately preserved for delegated children per Design Decision #9),
+while `allowedSchemes`/`listenPolicy`/`outboundPolicy` are **revisable
+policy** an operator narrows or tightens mid-lifetime. Because those
+lifecycles differ, policy is revised through its own method rather
+than by re-formulating identity — see Design Decision #11 for
+`updateTransportsPolicy` and the semantics of re-calling
+`provideTransports` on an already-provisioned petName.
+
 The host side wraps each agent's `Transports` exo over the
 daemon's underlying network primitives.
 The wrapper is the host-side proxy in the in-guest-backend +
@@ -236,6 +272,33 @@ so inbound dispatch stays O(1) in the number of hosted agents. The
 concrete preamble framing is fixed in the implementation PR
 against the `ocapn-noise-network` netlayer (see *Affected
 Packages*).
+
+**Tradeoff — the routing preamble exposes the target identity in
+cleartext.** The SNI-style selector carries the target agent's
+Ed25519 public key unencrypted, ahead of the Noise handshake, so any
+on-path observer learns *which agent, by identity,* a given inbound
+session addresses before encryption begins. This is the same
+metadata leak plaintext-SNI is known for, and it does cut against the
+scoping/isolation framing elsewhere in this design (Goal/Problem #1,
+Design Decision #3): identity-based routing that puts the identity on
+the wire is a weaker confidentiality property than one that hides it.
+We accept the leak deliberately, on two grounds. First, under Noise
+**IK** the initiator must already know the responder's static public
+key out-of-band to even attempt the handshake, so the preamble
+reveals to an observer only what a would-be initiator necessarily
+already possesses — it exposes no identity the protocol was keeping
+secret from a party able to connect at all. Second, the alternative
+that would hide it (trial-decryption against every local agent's
+responder key) reintroduces the O(hosted-agents) inbound cost this
+selector exists to remove, and still leaks timing. What the leak does
+*not* weaken is the scoping property Goal #1 actually asserts: an
+observer learning *whom* a session addresses does not let a guest
+*reach* a scheme or peer its `allowedSchemes`/`outboundPolicy` denies
+— routing visibility is not routing authority. Hiding the responder
+selector (e.g. a blinded or rendezvous-style identifier) is possible
+but is a wire-format concern owned by `ocapn-noise-network`, out of
+scope here; this design records the exposure rather than silently
+trading it for the dispatch win.
 
 The per-agent `Transports` exo is therefore a scoped *view* over
 shared, identity-routed transport instances. It isolates
@@ -381,13 +444,44 @@ There is no dual-population and no agent-side
 
 #### Internal Callers Move to `@transports`
 
-The current callers of `@nets` (per `grep`, primarily test
-fixtures and `manager.js:6383` `makePeer`; the daemon was renamed
-`daemon.js` -> `manager.js` in the already-landed
-`daemon-rename-to-manager` work) look up `@transports` and call
-`connect(locator)` rather than listing nets and selecting one.
-`getAllNetworkAddresses` becomes a daemon-internal helper used by
-the `TransportFactory` proxy; it is not surfaced to agents.
+The current callers of the literal `@nets` name, from
+`grep -rn '@nets' --include=*.js packages/` (scope: every JS file
+under `packages/`, source and test) at this PR's base, are:
+
+- **Injection sites** (`host.js:499`, `guest.js:102`): the two
+  `specialNames['@nets'] = networksDirectoryId` writes removed by
+  *`@nets` Injection Is Removed* below.
+- **Netlayer bootstrap scripts** (`networks/setup-{tcp,ws-relay,
+  ocapn,iroh}.js`): the `E(powers).move(..., ['@nets', X])`
+  registrations retargeted onto `registerNetwork` (see *Netlayer
+  Registration Moves to a Host-Internal Path*).
+- **Chat slash-commands in `packages/spaces-util/src/command-executor.js`**
+  (`command-executor.js:731`, `:770`, `:803`, `:849`): four live,
+  non-test, host-privileged `E(powers).move([...], ['@nets', scheme])`
+  write sites backing the `/network`, `/network-ocapn`,
+  `/network-iroh`, and `/network-ws-relay` commands. These are the
+  same registration pattern as the setup scripts and **must retarget
+  onto `registerNetwork` in the same cutover** — with no `@nets`
+  target to `move()` into, they would otherwise throw the moment the
+  cutover lands. `packages/spaces-util/` is listed in *Affected
+  Packages* accordingly.
+- **Test fixtures** (`packages/daemon/test/{_multiplayer-suite,
+  invite-retention-ocapn,endo,ws-relay,channel-relay}.js`,
+  `packages/claude-sandbox/test/live-daemon.test.js`): updated to
+  `@transports` in the same change.
+
+Note that `manager.js` (the daemon core, formerly `daemon.js`,
+renamed in the already-landed `daemon-rename-to-manager` work)
+contains **no** literal `@nets` reference: `makePeer`
+(`manager.js:6383`) and `getAllNetworkAddresses`
+(`manager.js:6230`) take the `networksDirectoryId` id as a
+parameter and never resolve the `@nets` pet name, so they need no
+call-site edit — they already operate on the retained internal
+registry. Agent-facing callers that previously listed nets and
+selected one instead look up `@transports` and call
+`connect(locator)`; `getAllNetworkAddresses` stays a
+daemon-internal helper used by the `TransportFactory` proxy, not
+surfaced to agents.
 
 #### `@nets` Injection Is Removed
 
@@ -471,6 +565,13 @@ on top of (not in lieu of) the per-daemon netlayer.
   `networks/setup-{tcp,ws-relay,ocapn,iroh}.js` (retarget their
   `move(..., ['@nets', X])` onto `registerNetwork`, see *Netlayer
   Registration Moves to a Host-Internal Path*).
+- `packages/spaces-util/`: `src/command-executor.js` — the
+  `/network`, `/network-ocapn`, `/network-iroh`, and
+  `/network-ws-relay` chat slash-commands each do
+  `E(powers).move([...], ['@nets', scheme])` (`command-executor.js:731`,
+  `:770`, `:803`, `:849`) and retarget onto `registerNetwork` in the
+  same cutover (see *Internal Callers Move to `@transports`*); left
+  unretargeted they throw once `@nets` names nothing.
 - `packages/ocapn/`: must expose `OcapnNetwork` registration
   surface that the proxy consumes (depends on
   `ocapn-network-transport-separation`).
@@ -500,9 +601,10 @@ on top of (not in lieu of) the per-daemon netlayer.
   `ocapn-noise-network` doc is to be reconciled to IK. Do not
   reintroduce the `np` netlayer to the XX shape.
 - `packages/cli/`: per-agent
-  `endo agent <name> transports {list,add,revoke}` verbs
-  (see *Design Decisions* #9); `endo nets` is retired alongside
-  `@nets` (#10).
+  `endo agent <name> transports {list,add,revoke}` verbs and the
+  `endo mkguest <child> --transports-from <parent>` delegation flag
+  (each bound to a named method, see *Design Decisions* #9);
+  `endo nets` is retired alongside `@nets` (#10).
 
 ## Design Decisions
 
@@ -543,6 +645,9 @@ The questions raised during design review are resolved as follows
    `connect` takes the locator (exo or serialized string) and
    reads the public key and hint out of it; the public key, not the
    hint, is authoritative for routing.
+   `connect`'s optional `{ hints? }` second argument is a per-call
+   override of the locator's connection hint only (caller-first
+   precedence; see *Capability Surface*), never of the routing key.
 
 5. **`outboundPolicy` is a concrete matcher.**
    The proxy enforces `outboundPolicy` against the locator's
@@ -593,12 +698,39 @@ The questions raised during design review are resolved as follows
    delegated transports.**
    Per-agent suffices: fold the verbs into
    `endo agent <name> transports {list,add,revoke <handle>}`
-   rather than a top-level `endo transports`.
+   rather than a top-level `endo transports`. Each verb binds to a
+   named method on the agent's `Transports` exo (*Capability
+   Surface*):
+   - `list` → `list()` (enumerate the agent's allowed schemes).
+   - `add <scheme> [--port N] [--host H]` → `listen(scheme, opts)`:
+     "adding a transport" means opening an inbound **listener** on a
+     scheme, the durable, managed counterpart to a transient
+     locator-driven `connect` (which the CLI does not surface as a
+     verb — an outbound dial is issued by an agent from code with a
+     locator in hand, not typed as a standing `transports` entry).
+     The returned `Listener` is the handle a later `revoke` names.
+   - `revoke <handle>` → `disconnect(handle)` (drop one session or
+     listener; the fine-grained agent-facing verb, distinct from the
+     host's whole-agent `revokeTransports`, see *Daemon Side*).
+
    It must be possible to create a subagent with **delegated**
    transports: a parent agent grants a subset of its transports
    (schemes, outbound policy, listen policy) to a child at
    formulation time, so delegation is a first-class CLI and API
-   operation, not just host-minted provisioning.
+   operation, not just host-minted provisioning. Its **named
+   surface** is the same host method that mints any transports view —
+   `provideTransports(childPetName, { delegateFrom: parentPetName,
+   allowedSchemes, listenPolicy, outboundPolicy })` — invoked at
+   subagent formulation with `delegateFrom` naming the parent and the
+   policy fields narrowing (never widening) the parent's grant; the
+   daemon rejects any field that exceeds the parent's. This is a
+   `provideTransports` of a **new** child petName, so it does not
+   collide with the reject-on-existing rule of Decision #11. The CLI
+   spelling is a flag on the subagent-creation command
+   (`endo mkguest <child> --transports-from <parent>
+   [--schemes np,tcp+syrups] [--listen none|request|allow]
+   [--outbound <policy>]`), not the `add` verb above — `add` operates
+   on an existing agent's own view, delegation provisions a child's.
    The delegated child gets its **own fresh** per-agent Ed25519
    identity (a distinct `Transports` capability provisioned with a
    narrowed slice of the parent's policy), not a share of the
@@ -623,6 +755,33 @@ The questions raised during design review are resolved as follows
     included.
     The cutover (see *Replacing `@nets`*) removes `@nets`
     outright, with no deprecation window.
+
+11. **Policy is revised without regenerating identity;
+    re-`provideTransports` is a reject, not a silent re-mint.**
+    `provideTransports` bundles a durable identity (`signingKeys`)
+    with revisable policy (`allowedSchemes`/`listenPolicy`/
+    `outboundPolicy`), which have different natural lifecycles:
+    tightening an allowlist or narrowing a scheme grant is the exact
+    mid-lifetime operation Limitation #2 ("No revocation") motivates,
+    while the identity must stay put so peers keep recognizing the
+    agent (and so a delegated child's identity is not disturbed by the
+    parent's, Decision #9). So the host exposes a dedicated
+    `updateTransportsPolicy(petName, policyPatch)` that replaces the
+    policy fields on an existing `Transports` in place — same formula,
+    same `signingKeys`, same durable identity — and takes effect on
+    subsequent `connect`/`listen` calls (in-flight sessions already
+    admitted are not retroactively torn down; a tightening operator
+    who needs immediate teardown uses `revokeTransports`). Narrowing
+    a policy therefore never requires round-tripping the old signing
+    keys back through a re-provision. Correspondingly,
+    `provideTransports` on a petName that is **already provisioned
+    rejects** rather than replacing in place or silently minting a
+    fresh identity: it is provisioning, not update. Re-provisioning
+    from scratch is `revokeTransports(petName)` (which tears the old
+    view down, identity included) followed by a fresh
+    `provideTransports`; the two-call shape makes the identity
+    discontinuity explicit at the call site rather than hiding it
+    inside an overloaded formulate.
 
 ## Out of Scope, Future Work
 
@@ -726,6 +885,50 @@ Shape only:
 - **Integration: cross-daemon Noise.**
   Two daemons, each with one agent; A connects to B over `np`
   netlayer; CapTP message round-trips.
+
+- **Unit: `outboundPolicy` matcher (Design Decision #5).**
+  Drive the matcher directly: a hint whose host matches
+  `allowHostSuffixes` connects; one in an `allowCidrs` block
+  connects; a scheme absent from `allowSchemes` throws; a hint
+  matching neither suffix nor CIDR throws under `otherwise: 'deny'`
+  and connects under `otherwise: 'allow'`. Confirms the gate runs on
+  the locator's connection hint (the wire target), never on the
+  Ed25519 routing key.
+
+- **Integration: unregistered scheme throws (Design Decision #6).**
+  With no `np` netlayer registered, `connect(npLocator)` rejects;
+  assert no silent fallback to another scheme. Symmetrically,
+  `listen('np')` rejects.
+
+- **Integration: privilege separation of `registerNetwork`.**
+  An agent's `@transports` view exposes no way to install a
+  netlayer: assert `registerNetwork` is absent from the
+  `Transports` interface and is reachable only as a host method on
+  `@host`; a formulated agent holding only `@transports` cannot
+  enumerate or write the daemon-internal registry, only use the
+  schemes its policy allows (see *Netlayer Registration Moves to a
+  Host-Internal Path*, Design Decision #10).
+
+- **Integration: delegated subagent transports (Design Decision #9).**
+  A parent provisioned with `['np', 'tcp+syrups']` delegates via
+  `provideTransports(child, { delegateFrom: parent, allowedSchemes:
+  ['np'] })`: assert the child gets a **fresh** Ed25519 identity
+  distinct from the parent's (a remote peer sees two designators),
+  that a delegation attempting to widen beyond the parent's grant
+  (e.g. `allowedSchemes: ['np','tcp+syrups','iroh']`) is rejected,
+  and — the asymmetric liveness/revocation split — that
+  `revokeTransports(parent)` leaves the child's sessions **alive**
+  (forked identity) while disincarnating the parent agent **cascades**
+  to the child through the `thisDiesIfThatDies` chain (see *Garbage
+  Collection*).
+
+- **Integration: policy update preserves identity (Design Decision #11).**
+  `updateTransportsPolicy(agent, { allowedSchemes: ['np'] })` on an
+  agent provisioned with `['np','tcp+syrups']` narrows the grant —
+  a subsequent `connect` on `tcp+syrups` throws — while the agent's
+  Ed25519 identity is unchanged (same designator to a remote peer);
+  and `provideTransports` on the already-provisioned petName rejects
+  rather than re-minting.
 
 ## Compatibility Considerations
 
