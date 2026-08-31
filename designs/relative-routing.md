@@ -51,7 +51,7 @@ The "Shared scope tag" column uses the `<kind>:<id>` scope-tag shape defined in
 | 3 | Daemons on a host behind a shared gateway | `host:<H>` or `gateway:<G>` | Host-local socket / loopback, or gateway-local introduction |
 | 4 | Loopback / same-host (or same-process) | `host:<H>` (`process:<P>`) | `127.0.0.1` route; in-process loopback when `process:<P>` also matches |
 | 5 | Home hub on the local network | `lan:<L>` + `hub:<K>` | Direct LAN address first, then the LAN hub relay, both ranked above the public relay |
-| 6 | A gateway's children, reached through the gateway | `dest=gateway:<G>` on a `via=` hint (a *destination* marker the relay names, **not** a receiver-held `scope=` tag — see § 3) | Compound `via=<gateway-locator>` introduction hint, always kept |
+| 6 | A gateway's children, reached through the gateway | `dest=gateway:<G>` on a `via=` hint (a *destination* marker the relay names, **not** a receiver-held `scope=` tag; see § 3) | Compound `via=<gateway-locator>` introduction hint, always kept |
 
 The mechanism is deliberately open: `<kind>` is an extensible enumeration, so
 new locality kinds (a container/mount namespace, a VPN overlay, a mesh subnet)
@@ -72,7 +72,7 @@ A **scope tag** is a structured, comparable token with two fields, `kind` and
   gateway or hub public key. It is compared for equality only, never parsed.
 
 Two scope tags are equal when both `kind` and `id` are equal. The wire form is
-the string `<kind>:<id>`; it parses by splitting on the **first** colon —
+the string `<kind>:<id>`; it parses by splitting on the **first** colon.
 `<kind>` never contains a colon, and `<id>` may (a base64/hex public key can),
 so everything after the first colon is the opaque `id`. Keeping `kind` a
 first-class field (rather than re-parsing an "opaque" string at each `costOf`
@@ -129,9 +129,9 @@ The local scope is the receiver-side complement of the per-agent
 [daemon-agent-network-identity](daemon-agent-network-identity.md):
 `AgentConnectionHints` governs what a persona *advertises and requires* for
 inbound connections; the local scope governs how the connector *chooses* among
-a peer's advertised hints for outbound. `preferredTransports` — the connector's
+a peer's advertised hints for outbound. `preferredTransports`, the connector's
 own ordered list of transport schemes it prefers (`unix` before `tcp` before
-`ws-relay`, say), carried on that same `AgentConnectionHints` policy — remains
+`ws-relay`, say), carried on that same `AgentConnectionHints` policy, remains
 the tiebreaker within an equal scope rank.
 
 ### 3. Encoding: A Scope Claim on Each Hint
@@ -142,7 +142,7 @@ A hint's reachability scope is one optional field on the hint:
 scope = "<kind>:<id>"        // absent => globally reachable (e.g. a public relay)
 ```
 
-The primary substrate is the daemon's live `ConnectionHint` — the URI-string
+The primary substrate is the daemon's live `ConnectionHint`, the URI-string
 hints that ride the `@`-delimited locator path today
 (`packages/daemon/src/locator.js`, encoding per
 [daemon-locator-terminology](daemon-locator-terminology.md)). There the scope
@@ -167,8 +167,8 @@ behaves exactly as it does today, no worse, and the Noise handshake still
 gates the result (see [Security](#security)).
 
 The aspirational [ocapn-noise-network](ocapn-noise-network.md) hint form is a
-different shape — a flat `Record<string,string>` of prefixed keys (`ws:host`,
-`tcp:port`, …), not a single URI string, and no `OcapnNetwork` implementing it
+different shape, a flat `Record<string,string>` of prefixed keys (`ws:host`,
+`tcp:port`, ...), not a single URI string, and no `OcapnNetwork` implementing it
 exists yet. It has no transport-locator to hang a `#scope=` fragment on, so
 when that struct is built it carries the scope as one more flat key,
 `scope = "<kind>:<id>"`, alongside its transport keys. The two encodings differ
@@ -179,16 +179,21 @@ plugin hands it.
 
 Case 6 (reach a peer only through its gateway) uses a **compound hint** whose
 payload is the gateway's own locator plus the inner target. It carries the
-destination boundary under a distinct key, `dest=<kind>:<id>` — *not* the
-ordinary `scope=` key — precisely because its match semantics are the opposite
-of `scope=`'s:
+destination boundary under a distinct key, `dest=gateway:<id>` (*not* the
+ordinary `scope=` key), precisely because its match semantics are the opposite
+of `scope=`'s. The one destination kind this design settles is `gateway`, so the
+key is written literally as `dest=gateway:<id>` and § 4 ranks every `via=` hint
+at a fixed `gateway` cost; generalizing `dest=` to other destination boundary
+kinds (a `via=` hint bridging into a `hub:` or other boundary) is left to the
+gateway-relayed introduction follow-on (see [Open Questions](#open-questions)),
+which would also generalize the ranking to `costOf(h.dest.kind)`:
 
 ```
 via+captp0://{gatewayLocator}?target={innerFormulaAddress}#dest=gateway:9f3c...
 ```
 
 `scope=` on any ordinary hint is a receiver-side filter: keep the hint only if
-the connector *holds* that tag. `dest=` on a `via=` hint is the reverse — it
+the connector *holds* that tag. `dest=` on a `via=` hint is the reverse: it
 names the *destination* boundary the relay bridges into, a tag the connector is
 expected **not** to hold (the audience for case 6 is precisely a connector
 *outside* `gateway:<G>`). Because the two are distinct keys, `selectRoutes`
@@ -205,7 +210,7 @@ only the shared scope/encoding/filtering model it rides on.
 ### 4. Filtering and Ranking: Choosing the Route
 
 Given a locator's hints and the connector's `LocalScope`, `selectRoutes`
-returns a `ConnectionHint[]` — the bare kept hints, sorted cheapest-first. The
+returns a `ConnectionHint[]`, the bare kept hints, sorted cheapest-first. The
 `{ h, cost }` records below are an internal scratch list used only to sort;
 `cost` never crosses the return boundary (callers that want a hint's rank
 re-derive it with `costOf`, so no implementation-detail field leaks into the
@@ -231,9 +236,9 @@ selectRoutes(hints, localScope):
   return [ r.h for r in ranked sorted by r.cost ascending ]   # closest first, global last
 ```
 
-`costOf(kind)` takes a bare `<kind>` string at every call site — the via= and
+`costOf(kind)` takes a bare `<kind>` string at every call site: the via= and
 global branches pass a literal (`"gateway"`, `"global"`), the ordinary branch
-passes `h.scope.kind` — and reads a configurable **locality order**, default:
+passes `h.scope.kind`. It reads a configurable **locality order**, default:
 
 ```
 process(0) < supervisor(1) < host(2) < lan(3) < hub(4) < gateway(5) < global(6)
@@ -411,6 +416,20 @@ owner and never derived from a locator.
 - Exact mechanics of `host:<H>` and `supervisor:<S>` id distribution, the
   well-known host-local path and the spawn-handshake field, are an
   implementation follow-on, not settled here.
+- Discovery/selection race for the async-learned tags (`lan`, `hub`,
+  `gateway`). § 2 discovers these tags "as they are learned," not eagerly like
+  `process`/`host`/`supervisor`, yet `LocalScope.has` is a synchronous
+  membership test. If `selectRoutes` runs before LAN/hub/gateway discovery
+  completes, a not-yet-learned shared tag looks identical to "not shared": the
+  connector drops a cheap local hint it should have kept and falls through to
+  the costly global relay, defeating the cost half of the design's own
+  motivation for exactly cases 1 and 5, the ones that most need async
+  discovery. Resolution is deferred to implementation, but the shape is one of:
+  delay the first connection attempt for a bounded discovery window before
+  ranking; or re-run `selectRoutes` on scope-tag arrival and promote a
+  cheaper route mid-flight (racing the newly-eligible local hint against the
+  global attempt already in progress). The eagerly-discovered tags do not have
+  this race, so the socket/loopback/supervisor cases are unaffected.
 - Default policy for scope-blind peers: should a producer omit narrow-scope
   hints entirely from a locator bound for a peer of unknown scope-awareness,
   or tolerate the occasional mis-try? Leaning toward omit-when-out-of-scope
