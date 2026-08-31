@@ -30,9 +30,9 @@ is a real run of `ocapn-bootstrap-client.mjs` reaching the deployed daemon's
 RESULT {"ok":true,"swissnum":"endo-bootstrap","nodeId":"a6cd6e01…","hasGreeter":true}
 ```
 
-That exercises the whole path: **Caddy TLS on 443** → the container's published
-loopback port → the daemon's OCapN-Noise **WS** listener → **Noise IK** mutual
-auth on the location designator → **CBOR** framing → **sturdyref** →
+That exercises the whole path: **Caddy TLS on 443** -> the container's published
+loopback port -> the daemon's OCapN-Noise **WS** listener -> **Noise IK** mutual
+auth on the location designator -> **CBOR** framing -> **sturdyref** ->
 `EndoOcapnBootstrap`, which reports the node id, returns the signed
 **agent-binding** attestation, and hands back the live **`EndoGreeter`** (the
 entry to the daemon-to-daemon peer protocol — `hello`, `provide`).
@@ -42,8 +42,8 @@ entry to the daemon-to-daemon peer protocol — `hello`, `provide`).
 | File | Role |
 | --- | --- |
 | `Dockerfile` | Builds the image. `node:22-bookworm` (glibc arm64), the native toolchain (`build-essential python3 cmake pkg-config`) so `better-sqlite3` / `node-datachannel` compile if no prebuild, `corepack yarn install --immutable`. Build context is the **repo root** (the yarn workspace). |
-| `.dockerignore` | Keeps the build context lean (excludes `node_modules`, `.git`, …). Copied to the context root by the deploy script (Docker only honors a root `.dockerignore`). |
-| `daemon-ocapn-ws-boot.mjs` | Container entrypoint. Boots the real `@endo/daemon`, installs `src/networks/ocapn.js` as `@nets/ocapn` gated on `ws-listen-addr`, extracts the advertised `ocapn+noise+ws://…?loc=…` address, and writes its `OcapnLocation` to `/data/…-location.json`. Idempotent across restarts (see below). Holds PID 1 alive; SIGTERM stops the daemon cleanly. |
+| `.dockerignore` | Keeps the build context lean (excludes `node_modules`, `.git`, ...). Copied to the context root by the deploy script (Docker only honors a root `.dockerignore`). |
+| `daemon-ocapn-ws-boot.mjs` | Container entrypoint. Boots the real `@endo/daemon`, installs `src/networks/ocapn.js` as `@nets/ocapn` gated on `ws-listen-addr`, extracts the advertised `ocapn+noise+ws://...?loc=...` address, and writes its `OcapnLocation` to `/data/...-location.json`. Idempotent across restarts (see below). Holds PID 1 alive; SIGTERM stops the daemon cleanly. |
 | `ocapn-bootstrap-client.mjs` | The **local peer**. Reads the location JSON, rewrites its `ws:url` hint to the public `wss://` endpoint (`WS_URL_OVERRIDE`), opens a Noise session, fetches swissnum `endo-bootstrap`, and invokes the bootstrap. Prints a machine-readable `RESULT` line. |
 | `deploy.sh` | Phased, idempotent host deploy (via SSM): `install` a runtime, `fetch` the branch, `build` the image, `run` the container, `location` (wait for the advertised location), `caddy` (add the route); `all` chains them. |
 | `ocapn-daemon.caddy` | The `wss://minion.town/ocapn-daemon` route as folded into `minion-town.caddy`. |
@@ -59,7 +59,7 @@ entry to the daemon-to-daemon peer protocol — `hello`, `provide`).
   `127.0.0.1:8931 -> 8930` (the daemon's in-container OCapN-Noise WS listener on
   `0.0.0.0:8930`), with a named volume `endo-daemon-data:/data` persisting the
   daemon identity, pet store, and control socket.
-- **Caddy route:** `wss://minion.town/ocapn-daemon` → `reverse_proxy
+- **Caddy route:** `wss://minion.town/ocapn-daemon` -> `reverse_proxy
   127.0.0.1:8931`, added as a `handle` block in
   `/etc/caddy/conf.d/minion-town.caddy` (ungated — OCapN-over-Noise
   self-authenticates, so the oauth2-proxy login gate does not apply).
@@ -92,7 +92,7 @@ docker exec -e WS_URL_OVERRIDE=wss://minion.town/ocapn-daemon endo-pet-daemon \
   containerizing is that the native toolchain lives only inside the image — the
   host stays clean, no imperative host `apt-get`.
 - **Loopback publish `127.0.0.1:8931`** (not `8930`, which the standalone demo
-  already holds) → **container `8930`**. The daemon binds `0.0.0.0:8930` inside
+  already holds) -> **container `8930`**. The daemon binds `0.0.0.0:8930` inside
   the container; only Caddy on 443 reaches it from outside (the box's security
   group allows only 80/443 inbound).
 - **Persistent named volume `endo-daemon-data`.** Keeps the daemon's identity,

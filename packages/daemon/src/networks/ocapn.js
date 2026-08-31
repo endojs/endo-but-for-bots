@@ -83,12 +83,12 @@ const wsProtocol = 'ocapn+noise+ws';
 
 // Optional pet name under which a stored `host:port` listen address
 // is read, mirroring `tcp-netstring.js`'s `tcp-listen-addr`.
-const LISTEN_ADDR_NAME = 'ocapn-listen-addr';
+const LISTEN_ADDRESS_NAME = 'ocapn-listen-addr';
 
 // Optional pet name for the WebSocket listen address, parallel to
 // `ocapn-listen-addr`. Its presence is what enables the WS transport;
 // see the transport-gating logic in `make`.
-const WS_LISTEN_ADDR_NAME = 'ws-listen-addr';
+const WS_LISTEN_ADDRESS_NAME = 'ws-listen-addr';
 
 // Domain-separation prefix for the agent-binding signature. Mixed into
 // the signed material so a signature produced for this binding cannot
@@ -214,7 +214,7 @@ export const make = async (powers, context) => {
    * @param {'tcp' | 'ws'} scheme
    * @returns {Promise<{ configured: string, host: string, port: number } | undefined>}
    */
-  const readListenAddr = async (name, scheme) => {
+  const readListenAddress = async (name, scheme) => {
     /** @type {string} */
     let configured;
     try {
@@ -234,8 +234,8 @@ export const make = async (powers, context) => {
   // `ws-listen-addr`; a daemon may enable either or both. When neither
   // is configured we default to an ephemeral TCP listener so an
   // unconfigured daemon keeps its historical TCP-only behavior.
-  const tcpConfig = await readListenAddr(LISTEN_ADDR_NAME, 'tcp');
-  const wsConfig = await readListenAddr(WS_LISTEN_ADDR_NAME, 'ws');
+  const tcpConfig = await readListenAddress(LISTEN_ADDRESS_NAME, 'tcp');
+  const wsConfig = await readListenAddress(WS_LISTEN_ADDRESS_NAME, 'ws');
   const enableTcp = tcpConfig !== undefined || wsConfig === undefined;
   const enableWs = wsConfig !== undefined;
 
@@ -367,7 +367,7 @@ export const make = async (powers, context) => {
     // stored value parses through `new URL('tcp://...')` on restart.
     const resolvedHostPort = formatHostPort(tcpHost, boundPort);
     if (resolvedHostPort !== tcpConfig?.configured) {
-      await E(powers).storeValue(resolvedHostPort, LISTEN_ADDR_NAME);
+      await E(powers).storeValue(resolvedHostPort, LISTEN_ADDRESS_NAME);
     }
 
     const hintHost = String(localHints['tcp:host'] || tcpHost).replace(
@@ -397,7 +397,7 @@ export const make = async (powers, context) => {
       wsBoundPort,
     );
     if (resolvedWsHostPort !== wsConfig?.configured) {
-      await E(powers).storeValue(resolvedWsHostPort, WS_LISTEN_ADDR_NAME);
+      await E(powers).storeValue(resolvedWsHostPort, WS_LISTEN_ADDRESS_NAME);
     }
 
     addresses.push(

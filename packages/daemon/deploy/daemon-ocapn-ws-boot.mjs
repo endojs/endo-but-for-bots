@@ -1,3 +1,4 @@
+// spell-out-exempt: ENDO_ADDR is the daemon's established public variable.
 // Boot the full Endo Pet Daemon with the OCapN-Noise transport installed at
 // `@nets/ocapn`, listening for daemon-to-daemon peer connections over a
 // loopback WebSocket port.
@@ -26,24 +27,24 @@ import { E } from '@endo/far';
 import { makePromiseKit } from '@endo/promise-kit';
 import { start, stop, makeEndoClient } from '../index.js';
 
-const dataDir = process.env.ENDO_DATA_DIR || '/data';
+const dataDirectory = process.env.ENDO_DATA_DIRECTORY || '/data';
 const config = {
-  statePath: process.env.ENDO_STATE_PATH || path.join(dataDir, 'state'),
+  statePath: process.env.ENDO_STATE_PATH || path.join(dataDirectory, 'state'),
   ephemeralStatePath:
-    process.env.ENDO_EPHEMERAL_STATE_PATH || path.join(dataDir, 'run'),
-  sockPath: process.env.ENDO_SOCK_PATH || path.join(dataDir, 'endo.sock'),
-  cachePath: process.env.ENDO_CACHE_PATH || path.join(dataDir, 'cache'),
+    process.env.ENDO_EPHEMERAL_STATE_PATH || path.join(dataDirectory, 'run'),
+  sockPath: process.env.ENDO_SOCK_PATH || path.join(dataDirectory, 'endo.sock'),
+  cachePath: process.env.ENDO_CACHE_PATH || path.join(dataDirectory, 'cache'),
   address: process.env.ENDO_ADDR || '127.0.0.1:8920',
 };
 
 const wsListen = process.env.OCAPN_WS_LISTEN || '0.0.0.0:8930';
 const locationOut =
   process.env.OCAPN_LOCATION_OUT ||
-  path.join(dataDir, 'ocapn-daemon-location.json');
+  path.join(dataDirectory, 'ocapn-daemon-location.json');
 
 // Ensure the data dir exists (the image ships no `RUN mkdir`; a mounted volume
-// creates it, but an unmounted run or a custom ENDO_DATA_DIR may not).
-fs.mkdirSync(dataDir, { recursive: true });
+// creates it, but an unmounted run or a custom ENDO_DATA_DIRECTORY may not).
+fs.mkdirSync(dataDirectory, { recursive: true });
 
 // Remove any location file left by a prior boot on this persisted volume
 // before we advertise a fresh one. Each install mints a new session

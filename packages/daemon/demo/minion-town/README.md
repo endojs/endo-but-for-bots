@@ -25,7 +25,7 @@ The demo exercises the **exact session layer the Pet Daemon's
   added by this branch's `feat(daemon): serve and dial OCapN-Noise over
   WebSocket`),
 - Noise **IK** mutual authentication keyed on the location **designator**,
-- `@endo/ocapn` CBOR framing, locator, swissnum, sturdyref → capability
+- `@endo/ocapn` CBOR framing, locator, swissnum, sturdyref -> capability
   invocation,
 - carried on a WebSocket through **Caddy TLS on 443**, terminating at a
   **loopback** listener (the box's security group allows only 80/443 inbound —
@@ -39,7 +39,7 @@ The demo exercises the **exact session layer the Pet Daemon's
 | `ocapn-ws-client.mjs` | The **local peer**. Reads the location JSON, rewrites the `ws:url` hint to a public `wss://` endpoint (`WS_URL_OVERRIDE`), opens a Noise session, fetches a swissnum, and invokes the capability. |
 | `endo-ocapn-daemon.service` | The systemd unit as deployed on the host. |
 | `ocapn-demo.caddy` | The `/ocapn` route as folded into `minion-town.caddy`. |
-| `run-demo.sh` | Repeatable end-to-end runner (fetch location via SSM → rewrite hint → dial). |
+| `run-demo.sh` | Repeatable end-to-end runner (fetch location via SSM -> rewrite hint -> dial). |
 | `ssm.sh` | Thin `aws ssm send-command` wrapper (garden AWS creds). |
 
 ## How the daemon reached the host
@@ -57,7 +57,7 @@ it anymore — the docker unit is self-contained.)
 ## The Caddy route
 
 `wss://minion.town/ocapn` was added by folding a `handle /ocapn*` block into the
-existing `minion.town, www.minion.town { … }` site in
+existing `minion.town, www.minion.town { ... }` site in
 `/etc/caddy/conf.d/minion-town.caddy` (see `ocapn-demo.caddy`) — a `handle`, not
 a second site block, because Caddy rejects duplicate site addresses. It is
 **not** behind the oauth2-proxy `forward_auth` gate (OCapN-over-Noise
@@ -81,7 +81,7 @@ GARDEN_AWS_HOME=/home/<bot>/garden \
   `@endo/ocapn-noise` + `@endo/ocapn` session/locator machinery the daemon's
   `src/networks/ocapn.js` uses, minus the pet-store/agent/gateway lifecycle. This
   was the smallest reasonable default that proves the whole transport path
-  (Caddy 443 → loopback WS → Noise IK → CBOR → sturdyref → capability invoke)
+  (Caddy 443 -> loopback WS -> Noise IK -> CBOR -> sturdyref -> capability invoke)
   end to end without the daemon-lifecycle plumbing (background `endo` daemon,
   unix socket, `@nets/ocapn` install, live-address extraction). **To promote to
   the real Pet Daemon's bootstrap** (swissnum `endo-bootstrap`, methods
@@ -89,7 +89,7 @@ GARDEN_AWS_HOME=/home/<bot>/garden \
   `E(host).storeValue('127.0.0.1:8930','ws-listen-addr')`, install
   `src/networks/ocapn.js` as `@nets/ocapn` (`makeUnconfined` + `move` per
   `test/_multiplayer-suite.js`), then extract its advertised
-  `ocapn+noise+ws://…?loc=…` address and feed the same client (the `loc` already
+  `ocapn+noise+ws://...?loc=...` address and feed the same client (the `loc` already
   carries the designator; only the `ws:url` hint needs the same rewrite). The
   Caddy route and client are unchanged.
 - **The `ws:url` rewrite.** The daemon advertises its loopback bind

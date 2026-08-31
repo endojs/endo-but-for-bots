@@ -50,7 +50,7 @@ RUN --mount=type=cache,target=/root/.yarn/berry/cache \
 # entrypoint `mkdir -p`s the data dir at runtime, so there is no image-layer
 # `RUN mkdir` (an extra layer atop the ~900 MB install layer is expensive to
 # commit and buys nothing — VOLUME already creates the mountpoint).
-ENV ENDO_DATA_DIR=/data \
+ENV ENDO_DATA_DIRECTORY=/data \
     OCAPN_WS_LISTEN=0.0.0.0:8930 \
     OCAPN_LOCATION_OUT=/data/ocapn-daemon-location.json \
     ENDO_ADDR=127.0.0.1:8920

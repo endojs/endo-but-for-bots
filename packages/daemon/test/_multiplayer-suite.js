@@ -19,9 +19,9 @@ import { makeDaemonDatabase } from '../src/manager-database-node.js';
  * transport that conforms to the same surface.
  *
  * @typedef {object} NetworkSpec
- * @property {string} listenAddrName  Pet name under which the host
+ * @property {string} listenAddressName  Pet name under which the host
  *   stores the bound `host:port` (e.g. `tcp-listen-addr`).
- * @property {string} listenAddr      The `host:port` to advertise as
+ * @property {string} listenAddress      The `host:port` to advertise as
  *   the desired bind address. `'127.0.0.1:0'` requests an
  *   OS-assigned ephemeral port.
  * @property {string} modulePath      Path relative to `packages/daemon`
@@ -164,7 +164,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
     });
     const { host } = await makeHost(config, cancelled);
 
-    await E(host).storeValue(network.listenAddr, network.listenAddrName);
+    await E(host).storeValue(network.listenAddress, network.listenAddressName);
     const servicePath = path.join(dirname, network.modulePath);
     const serviceLocation = url.pathToFileURL(servicePath).href;
     const networkService = await E(host).makeUnconfined(
@@ -656,16 +656,16 @@ harden(runMultiplayerSuite);
 
 /** @type {NetworkSpec} */
 export const tcpNetwork = harden({
-  listenAddrName: 'tcp-listen-addr',
-  listenAddr: '127.0.0.1:0',
+  listenAddressName: 'tcp-listen-addr',
+  listenAddress: '127.0.0.1:0',
   modulePath: 'src/networks/tcp-netstring.js',
   netsKey: 'tcp',
 });
 
 /** @type {NetworkSpec} */
 export const ocapnNetwork = harden({
-  listenAddrName: 'ocapn-listen-addr',
-  listenAddr: '127.0.0.1:0',
+  listenAddressName: 'ocapn-listen-addr',
+  listenAddress: '127.0.0.1:0',
   modulePath: 'src/networks/ocapn.js',
   netsKey: 'ocapn',
 });
@@ -679,8 +679,8 @@ export const ocapnNetwork = harden({
  */
 /** @type {NetworkSpec} */
 export const ocapnWsNetwork = harden({
-  listenAddrName: 'ws-listen-addr',
-  listenAddr: '127.0.0.1:0',
+  listenAddressName: 'ws-listen-addr',
+  listenAddress: '127.0.0.1:0',
   modulePath: 'src/networks/ocapn.js',
   netsKey: 'ocapn',
 });
