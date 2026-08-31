@@ -13,7 +13,7 @@ promise handler, or engine recovery path can intercept. Ironhorse substantially
 has this already. `Halt::StackOverflow` and `Halt::MeterAbort`
 ([ironhorse-engine](ironhorse-engine.md) § Interpreter, the `Halt` enum in
 `rust/engine/ironhorse-vm/src/interp.rs`) are each documented today as "an abort
-to the host, not a catchable `RangeError`", and both descend from XS/xsnap's
+to the host, not a catchable `RangeError`," and both descend from XS/xsnap's
 `fxAbort` longjmp. This design gives the pattern one name, generalizes it over
 every uncatchable-termination source, states its relationship to the daemon's
 message-delivery model, and adds an opt-in mode — the `panic-on-reference-error`
@@ -40,12 +40,13 @@ A **crank** is the processing of one inbound delivery plus all resulting promise
 jobs until quiescence ([daemon-xs-worker-metering](daemon-xs-worker-metering.md)
 § Crank lifecycle). A crank that aborts partway through, after it has already
 sent some outbound messages but before it finishes, risks **hangover
-inconsistency**: the classic partial-failure hazard (the tradition, going back to
-the E programming language and the KeyKOS capability operating system, of treating
-a vat — a single-threaded object heap — as the unit of partial failure, so a fault
-takes down a whole vat rather than leaving it half-updated) in which a crank's intended
+inconsistency**: the classic partial-failure hazard in which a crank's intended
 effects are split, some observed by the outside world and some never applied,
-leaving peers with a view the vat never actually reached.
+leaving peers with a view the vat never actually reached. The discipline that
+avoids it is a tradition going back to the E programming language and the KeyKOS
+capability operating system — treat a vat (a single-threaded object heap) as the
+unit of partial failure, so a fault takes down a whole vat rather than leaving it
+half-updated.
 
 The clean answer is a two-part contract:
 
@@ -79,7 +80,7 @@ nothing.
 
 | `Halt` variant | Uncatchable abort-to-host today? | Panic classification |
 |---|---|---|
-| `StackOverflow(usize)` | **Yes**: its doc says "an abort to the host, not a catchable `RangeError`, a deterministic, consensus-relevant limit". XS's `fxOverflow` -> `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`. | **Already a panic.** Reclassify under the formal concept; no behavior change. |
+| `StackOverflow(usize)` | **Yes**: its doc says "an abort to the host, not a catchable `RangeError`, a deterministic, consensus-relevant limit." XS's `fxOverflow` -> `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`. | **Already a panic.** Reclassify under the formal concept; no behavior change. |
 | `MeterAbort` | **Yes**: the meter host refused more computation; XS's `XS_TOO_MUCH_COMPUTATION_EXIT` via `longjmp`. The metering design already destroys the worker on this. | **Already a panic.** Reclassify; no behavior change. |
 | `Throw(String)` | **No**: this is the JS-level throw. Empty `jumps` means it escapes every JS handler and reaches the host, but it is *catchable in principle* (a `catch` above it intercepts it). | **Not a panic.** It is the ordinary (possibly uncaught) throw. Kept distinct; see § Debugger Interaction. |
 | `Decode(String)` | **Yes**: truncated/invalid bytecode; the loader must not continue. | **Panic-adjacent.** A corrupt-input abort; group it with panics for the "terminate, do not commit" decision, though its provenance (a bad snapshot or buggy compiler) is a supervisor-level fault, not guest behavior. |
@@ -94,8 +95,8 @@ Net-new panic sources (no existing `Halt` variant, added by this design):
   accessor `panic!`s rather than returning wrong-typed memory when an index names a
   slot of the wrong kind). [ironhorse-engine](ironhorse-engine.md)
   § Minimizing `unsafe` already states the intended treatment: "a panic is a
-  crashed crank, not a compromised daemon", which the supervisor "already treats
-  as worker death". This is mechanically different from a `Halt` value (it
+  crashed crank, not a compromised daemon," which the supervisor "already treats
+  as worker death." This is mechanically different from a `Halt` value (it
   unwinds the Rust thread rather than returning) but is the *same concept* at the
   supervisor boundary. See § The Formal `Panic` Category for the seam that unifies them (a
   *seam* here is the boundary where one component's return value becomes
@@ -153,12 +154,19 @@ and adds classification, rather than collapsing them:
    open (see Open Questions: they terminate-without-commit like a panic, but their
    provenance is supervisor/harness rather than guest behavior). The `Decode |
    StepLimit` clause is written into the predicate as the leaning answer, not as a
-   closed decision; the Open Question governs it until resolved. The predicate is a pure function
+   closed decision; the Open Question governs it until resolved. Because
+   `is_panic()` returns a bare `bool`, a commit-path caller that branches on
+   today's provisional answer for these two variants gets **no compiler signal**
+   if the Open Question later flips it — unlike a new enum variant, which forces
+   every match site to be revisited. Its doc comment therefore names
+   `Decode`/`StepLimit` explicitly as *provisional, may change without a
+   type-level signal*, so any consumer written against today's answer is flagged
+   for re-audit when the question closes. The predicate is a pure function
    of the `Halt` value — it does **not** consult caller context; the "on their
    respective paths" qualifier is a fact about *where those variants arise*
    (`Decode` only on the loader path, `StepLimit` only on the un-metered fuzz
    harness, each on exactly one path in practice; see the Scope table), not a
-   branch inside the predicate. Its doc comment states this so the `(&self) ->
+   branch inside the predicate. Its doc comment states this too, so the `(&self) ->
    bool` signature is not read as context-dependent. This is the one place the
    "terminate, do not commit" set is defined.
 3. **Add one `Halt::Panic(PanicKind)` variant** for net-new sources that have no
@@ -176,10 +184,18 @@ and adds classification, rather than collapsing them:
    file/line, so `EngineFault` is as informative as `StackOverflow(usize)`'s
    overshoot; `ReferenceError { name: Option<String>, site: RaiseSite }` captures
    the offending binding/name (when known) and which raise site fired
-   (local temporal-dead-zone (TDZ), variable-lookup, or closure-TDZ read, per the
-   Coda's site inventory), so a
+   (local temporal-dead-zone (TDZ) read — reading a `let`/`const` binding in the
+   window after it is in scope but before its declaration has run, which is a
+   reference error — or variable-lookup, or closure-TDZ read, per the Coda's site
+   inventory), so a
    frozen-at-fault snapshot is self-describing rather than requiring the cause to be
-   re-derived from the program counter alone. Neither variant is payload-free.
+   re-derived from the program counter alone. The two "where" fields are
+   deliberately spelled differently: `EngineFault.location` is an *optional
+   physical source position* (`PanicLocation`, a Rust file/line the panic hook can
+   recover only sometimes), whereas `ReferenceError.site` is a *non-optional
+   categorical raise-site* (`RaiseSite`, always exactly one of the finite Coda
+   sites) — a fault's physical origin versus its known-in-advance categorical
+   origin, not an accidental naming inconsistency. Neither variant is payload-free.
    The variant is deliberately **not** named `Host`: this document uses "host"
    throughout for the surrounding-runtime call surface (`host_send_frame`,
    `host_call`, § "Host functions are messages too"), so a `PanicKind::Host` would
@@ -204,8 +220,11 @@ Note the two panic-family shapes this creates are deliberate but must not leak:
 the pre-existing sources stay flat (`Halt::StackOverflow(n)`, `Halt::MeterAbort`)
 while the net-new ones nest under `Halt::Panic(PanicKind)`, so a consumer that
 pattern-matched `Halt` directly would see the same conceptual family spelled two
-ways. The rule that keeps this from mattering: **no commit-path consumer matches
-`Halt` variant shape directly** (the *commit path* is the supervisor's
+ways. The rule that keeps this from mattering — a **convention enforced by
+`#[non_exhaustive]` plus a clippy lint, not a type-level guarantee** (the actual
+mechanism is spelled out two paragraphs below) — is that **no commit-path
+consumer matches `Halt` variant shape directly** (the *commit path* is the
+supervisor's
 release-or-discard machinery defined in § The Message Embargo Contract, where
 "commit" means a durable transcript+heap join; the forward reference is
 deliberate — the term is defined there). The "terminate, do not commit" decision
@@ -285,7 +304,7 @@ limit, so any crank that completes normally is already fully paid for and never
 needs rollback. The design states the consequence in one line: **"No embargo, no
 rollback, no buffering of outbound messages."** The single partial-effect case
 it acknowledges is hard-limit `MeterAbort` termination, and its answer is that
-this "destroys the worker anyway".
+this "destroys the worker anyway."
 
 So the literal "message embargo" of this design's premise is, for the
 **meter-exhaustion** case, *already handled* by a different and simpler
@@ -346,9 +365,9 @@ without a transcript there is no snapshot-relative record of the messages a cran
 sent and received, so a restored worker cannot replay to the pre-panic state, and
 panic recovery is unsound rather than merely unimplemented. Second, the condition
 that made deferral the right call earlier (the mechanism was net-new *and the
-daemon's behavior was unsurveyed*) is discharged by this revision's own § Where admission
-control does not reach, and what the survey found, which surveyed the live crank
-path and established there
+daemon's behavior was unsurveyed*) is discharged by this revision's own § Where
+admission control does not reach, and what the survey found. That section surveyed
+the live crank path and established there
 is *no* existing commit point to build on. That finding is exactly what promotes
 the transcript from a speculative follow-on to a named prerequisite of this
 contract. The schema below is stated as this design's proposal, still to be
@@ -399,7 +418,7 @@ schema may normalize payloads into side tables):
 
 | Record | Durable content |
 |---|---|
-| `snapshot` | Snapshot identity, engine/callback-table signature, and the last committed transcript sequence represented by the snapshot. |
+| `snapshot` | Snapshot identity, engine/callback-table signature, the `panic-on-reference-error` setting in force (§ Coda — pinned so a resume-for-replay cannot diverge from the run that produced the transcript), and the last committed transcript sequence represented by the snapshot. |
 | `crank` | Monotonic crank id, inbound-delivery sequence, starting snapshot epoch, and `started` / `committed` / `aborted` state. |
 | `event` | Ordered inbound messages, outbound messages, host-call requests, and host-call replies. Every event has a crank id and sequence number; outbound and host-effect events also have a stable idempotency key. |
 | `host_handle` | Logical handle id, the host-call event that created it, a durable reconstruction descriptor, and a **query-only** open/closed cache. The guest heap stores the logical id, never an OS file descriptor or native pointer. |
@@ -467,7 +486,7 @@ retryable. It is backend-specific, and the two backends need different mechanism
   is the CAS snapshot, *not* `HeapStore`. **CAS** here is *content-addressed
   storage*: the worker heap is suspended to an immutable, hash-named blob
   (`suspend_to_cas`) and resumed from it (`resume_shared`), so unlike the
-  store-backed `HeapStore` (a mutable SQLite row you can commit *inside* a
+  store-backed `HeapStore` (a mutable SQLite row committable *inside* a
   transaction), a CAS snapshot is an all-or-nothing blob written *outside* any
   transaction — which is exactly why its durability contract cannot be a shared
   SQLite commit and must instead be an ordering-behind-a-watermark discipline.
@@ -728,7 +747,7 @@ difference structurally:
 
 Therefore a panic needs its **own break reason and wire message**, distinct from
 `<break ... caught="...">`. The design **decides for a distinct
-`<panic kind="stack-overflow|meter-abort|reference-error|engine-fault" .../>`
+`<panic kind="stack-overflow|meter-abort|engine-fault|reference-error" .../>`
 element**, not a `reason="panic"` attribute on `<break>`. The reason is the same
 one § Alternatives Considered uses to reject an attribute-based *exception* mode:
 the xsbug parser discards unknown attributes byte by byte, so a
@@ -772,10 +791,11 @@ reference-error sites in `interp.rs` are:
 - `XS_CODE_GET_LOCAL_1`/`_2` (a read of a `let`/`const` binding in its temporal
   dead zone, interp.rs:8484) and `XS_CODE_GET_VARIABLE`/`XS_CODE_GET_THIS_VARIABLE`
   (an unresolved name, interp.rs:8536) already build a `ReferenceError` and
-  raise it through `raise_js(..)`, a **catchable** throw that unwinds the jump
-  chain, landed with the eval/undefined-variable message work (`47d5bb8c6`,
-  `97fad0abd`). The `GET_LOCAL` site's own comment states this is "a **catchable**
-  `ReferenceError` ... not an uncatchable host abort," which is exactly the
+  raise it through `raise_js(..)` — a **catchable** throw that unwinds the jump
+  chain — a routing landed with the eval/undefined-variable message work
+  (`47d5bb8c6`, `97fad0abd`). The `GET_LOCAL` site's own comment states this is "a
+  **catchable** `ReferenceError` ... not an uncatchable host abort" (emphasis
+  added), which is exactly the
   default (non-panic) behavior this Coda's option would override. These are the
   sites the option repoints.
 - `XS_CODE_GET_CLOSURE_1`/`_2` (a read of a captured `let`/`const` binding in
@@ -834,6 +854,26 @@ peek over a `flag == 2` compiler change).
   option mirrors how debug is enabled per worker
   ([daemon-debug-worker-restart](daemon-debug-worker-restart.md)'s `debug-flag`
   set before resume). A `raise` seam reads the option once per raise.
+- **Pinned across a worker's snapshot→replay lineage.** Although the option is
+  set at machine create/resume, its value is **recorded into the `snapshot`
+  transcript record** (§ Per-worker write-ahead transcript) and checked on every
+  resume-for-replay exactly as the engine/callback-table signature is. This is
+  load-bearing for the crash-consistency invariant, because replay re-executes
+  the committed guest bytecode through these same raise sites: a site that
+  *panicked* under the flag during the original run must panic identically during
+  replay, and one that *threw-and-was-caught* with the flag off must re-throw
+  identically. Otherwise a caught `ReferenceError` whose only effect was an
+  in-heap local computation — never reaching an outbound send or host call, and
+  therefore invisible to the kind/payload/order/handle mismatch detector
+  (§ Termination and Retry) — would silently replay to a *different* heap state
+  than the one the committed transcript was produced against. The supervisor
+  therefore **refuses to resume a worker for replay with a
+  `panic-on-reference-error` setting different from the run that produced its
+  committed transcript** (a mismatch against the pinned `snapshot` value is a
+  deterministic replay fault, like the engine-signature check). Toggling the flag
+  to debug a live panic starts a **new lineage** — a fresh snapshot whose
+  transcript records the new setting — never a divergent replay of an existing
+  one.
 - **Both an attached debugger and panic-on-reference-error active at once:** the
   reference-error site takes the panic path (it is not a throw), so it stops the
   world at the fault site via the panic hook (§ Debugger Interaction), *not* via
@@ -908,6 +948,32 @@ The acceptance bar this design proposes, to be filled in by the implementation:
   the same logical id or the application handles a delivery reporting the loss,
   and that a use of the broken handle does not silently succeed against a
   fabricated resource.
+
+- **Classification-discipline lint fires on a commit-path variant match.** The
+  "never match `Halt` variant shape directly outside `is_panic()`/`CrankOutcome`"
+  rule (§ The Formal `Panic` Category) is a *convention*, not a type-level
+  guarantee, and the clippy lint named there is the only thing standing between a
+  future commit-path match arm and a silent hangover-inconsistency regression.
+  Assert the lint is wired into CI and **fails the build** on a fixture that adds
+  a raw `Halt::StackOverflow` (or `Halt::Decode`) match at a commit-path site
+  bypassing `is_panic()`/`CrankOutcome`, and passes when the same decision routes
+  through the predicate. Without this case the one enforcement mechanism for a
+  load-bearing invariant ships untested.
+- **Coda: panic-on-reference-error behavior, wire message, and replay pinning.**
+  The switch is one of the design's four deliverables and touches live code today
+  (§ Status), so it earns its own cases, not only the mechanism-level bullets
+  above: (a) with the option **on**, a local TDZ read (`XS_CODE_GET_LOCAL`), an
+  unresolved-name read (`XS_CODE_GET_VARIABLE`), and a closure TDZ read
+  (`XS_CODE_GET_CLOSURE`, once routed through `raise_js`) each surface
+  `Halt::Panic(PanicKind::ReferenceError)` and are **not** intercepted by an
+  enclosing `catch`; with the option **off**, the identical sites raise a
+  catchable `ReferenceError` the `uncaughtExceptions` classifier sees normally;
+  (b) under an attached debugger with the option on, the fault emits the
+  `<panic kind="reference-error">` wire message and stops at the fault-site PC
+  even under `setExceptionBreakMode('none')`; and (c) resuming a worker for replay
+  with a `panic-on-reference-error` setting different from the one pinned in its
+  `snapshot` record is rejected as a deterministic replay fault (§ Where the
+  switch lives, and both-active behavior).
 
 Crank-consistency correctness gates the transcript's first landing; the
 performance tuning (the group-commit discipline in § Per-worker write-ahead
