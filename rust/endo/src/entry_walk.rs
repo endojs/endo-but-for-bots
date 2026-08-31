@@ -17,10 +17,10 @@
 //! verified contract `cas_is_unchanged_after_rejected_ingest`,
 //! `ingest_entry_point_run_path_matches_zip_run_path`, etc.,
 //! still hold). The CLI dispatch picks between the two: an entry
-//! whose import/require scans return no specifiers is routed to
-//! [`crate::cas_archive::ingest_entry_point`]; an entry with one
-//! or more importable bare or relative specifiers is routed to
-//! [`ingest_entry_point_with_deps`].
+//! whose import/require scans return no specifiers and no opaque dynamic
+//! import is routed to [`crate::cas_archive::ingest_entry_point`]; an entry
+//! with one or more importable specifiers, or an expression-valued
+//! `import()`, is routed to [`ingest_entry_point_with_deps`].
 //!
 //! ### Scope deviations from the design's Option B
 //!
@@ -45,12 +45,14 @@
 //! `package.json` `main`/`exports.default`/`./index.js`
 //! resolution); the design's deviation pattern from Phase 4 is
 //! re-applied here. The XS-hosted mapper bundle remains
-//! warranted whenever the dependency graph requires features
-//! that the Rust-native walk does not implement (expression-valued dynamic
-//! specifiers and the registry-table path from
-//! `designs/endor-npm-registry-proxy.md` Phase 4); those land in
-//! follow-up work and the Status section of the design records
-//! the deferral.
+//! warranted whenever the dependency graph requires features that the
+//! Rust-native walk does not implement (including the registry-table path
+//! from `designs/endor-npm-registry-proxy.md` Phase 4). For an ES module's
+//! expression-valued dynamic import, this mapper retains every enabled
+//! declared dependency even though it cannot enumerate the runtime-selected
+//! module statically; a CommonJS-parsed module's dynamic `import()` calls
+//! are not scanned at all (`scan_cjs_requires` only looks for `require()`),
+//! a pre-existing scope boundary this module does not close.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsStr;
@@ -73,8 +75,8 @@ use crate::cas_archive::{
 ///
 /// Static edges and statically analyzable dynamic `import()` edges are
 /// reported separately. A dynamic edge is analyzable when its first
-/// argument is a string literal; expression-valued specifiers remain a
-/// runtime concern.
+/// argument is a string literal; expression-valued specifiers are marked so
+/// callers can retain the package's declared dependency graph for runtime.
 ///
 /// The deduplication discipline: callers receive each unique
 /// specifier once in source-occurrence order, so a downstream
@@ -85,6 +87,10 @@ use crate::cas_archive::{
 pub struct ScannedImports {
     pub specifiers: Vec<String>,
     pub dynamic_specifiers: Vec<String>,
+    /// Whether the source contains an expression-valued `import()` whose
+    /// target cannot be discovered statically. In that case, the package's
+    /// declared dependency graph must remain available for runtime lookup.
+    pub has_opaque_dynamic_import: bool,
 }
 
 /// Source text supplied by an [`ExitModuleImportHook`].
@@ -218,6 +224,7 @@ pub fn ingest_entry_point_for_run(
             let scanned_imports = scan_static_imports(&source);
             !scanned_imports.specifiers.is_empty()
                 || !scanned_imports.dynamic_specifiers.is_empty()
+                || scanned_imports.has_opaque_dynamic_import
                 || !scan_cjs_requires(&source).is_empty()
         }
         // Preserve the CLI's existing behavior: the simple ingest path owns
@@ -739,7 +746,9 @@ pub fn scan_static_imports(source: &str) -> ScannedImports {
         i += 1;
     }
 
-    out.dynamic_specifiers = scan_dynamic_imports(source);
+    let dynamic_imports = scan_dynamic_imports_detailed(source);
+    out.dynamic_specifiers = dynamic_imports.specifiers;
+    out.has_opaque_dynamic_import = dynamic_imports.has_opaque;
     out
 }
 
@@ -1271,18 +1280,34 @@ fn scan_bound_dynamic_require_targets(source: &str) -> Vec<String> {
     specifiers
 }
 
+#[derive(Default)]
+struct DynamicImportScan {
+    specifiers: Vec<String>,
+    has_opaque: bool,
+}
+
 /// Scan an ES module for statically analyzable dynamic `import()` calls.
 ///
-/// A call is followed only when its first argument is a string literal or
-/// a substitution-free template literal. Calls with expression-valued
-/// specifiers are runtime-only and intentionally absent. Comments, strings,
-/// and template bodies are skipped so quoted source text cannot create a
-/// phantom edge.
-pub fn scan_dynamic_imports(source: &str) -> Vec<String> {
+/// A call is followed only when its first argument is a string literal or a
+/// substitution-free template literal. Expression-valued specifiers are
+/// absent from the returned list; the detailed internal scan marks their
+/// presence so the walker can retain declared dependencies. Comments,
+/// strings, regex literals, template bodies, and property calls are skipped
+/// so source text that merely resembles `import()` cannot create an edge.
+fn scan_dynamic_imports_detailed(source: &str) -> DynamicImportScan {
     let mut specifiers = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let mut has_opaque = false;
     let bytes = source.as_bytes();
     let mut index = 0usize;
+    let mut regex_allowed = true;
+    // The last byte the scanner treated as actual code, never a byte from
+    // inside a comment or string/regex literal that was skipped wholesale.
+    // The `object.import(...)` guard below reads this instead of
+    // re-scanning `source[..index]` backward, so a comment or string ending
+    // in `.` immediately before a real `import(` call can't be misread as a
+    // property access.
+    let mut last_code_byte: Option<u8> = None;
     while index < bytes.len() {
         if bytes[index] == b'/' && index + 1 < bytes.len() && bytes[index + 1] == b'/' {
             while index < bytes.len() && bytes[index] != b'\n' {
@@ -1300,9 +1325,23 @@ pub fn scan_dynamic_imports(source: &str) -> Vec<String> {
         }
         if matches!(bytes[index], b'\'' | b'"' | b'`') {
             index = skip_string_literal(bytes, index);
+            regex_allowed = false;
+            last_code_byte = Some(bytes[index - 1]);
+            continue;
+        }
+        if bytes[index] == b'/' && regex_allowed {
+            index = skip_regex_literal(bytes, index);
+            regex_allowed = false;
+            last_code_byte = Some(bytes[index - 1]);
             continue;
         }
         if matches_keyword(bytes, index, b"import") {
+            if last_code_byte == Some(b'.') {
+                index += "import".len();
+                regex_allowed = false;
+                last_code_byte = Some(b't');
+                continue;
+            }
             let mut opening_parenthesis = index + "import".len();
             while opening_parenthesis < bytes.len()
                 && bytes[opening_parenthesis].is_ascii_whitespace()
@@ -1310,6 +1349,7 @@ pub fn scan_dynamic_imports(source: &str) -> Vec<String> {
                 opening_parenthesis += 1;
             }
             if opening_parenthesis < bytes.len() && bytes[opening_parenthesis] == b'(' {
+                let mut statically_analyzable = false;
                 if let Some((specifier, argument_end)) =
                     literal_call_argument(source, opening_parenthesis)
                 {
@@ -1322,20 +1362,59 @@ pub fn scan_dynamic_imports(source: &str) -> Vec<String> {
                     // A literal followed by an operator is only the first term
                     // of an expression (`import('./' + name)`), not a static
                     // specifier. A comma is permitted for import attributes.
-                    if after_argument < bytes.len()
-                        && matches!(bytes[after_argument], b')' | b',')
-                        && seen.insert(specifier.clone())
+                    if after_argument < bytes.len() && matches!(bytes[after_argument], b')' | b',')
                     {
-                        specifiers.push(specifier);
+                        statically_analyzable = true;
+                        if seen.insert(specifier.clone()) {
+                            specifiers.push(specifier);
+                        }
                     }
                 }
+                has_opaque |= !statically_analyzable;
             }
             index += "import".len();
+            regex_allowed = false;
+            last_code_byte = Some(b't');
             continue;
+        }
+        if matches!(bytes[index], b'+' | b'-')
+            && index + 1 < bytes.len()
+            && bytes[index + 1] == bytes[index]
+        {
+            // `++`/`--` is a single token, but read byte-by-byte its first
+            // byte never satisfies `ends_value_expression` (it's neither an
+            // identifier, `)`, nor `]`), so the naive per-byte update below
+            // would always leave `regex_allowed` true afterward — wrong for
+            // the postfix form. A postfix `x++` still ends a value
+            // expression (it evaluates to `x`'s prior value), so a `/`
+            // right after it is division; left uncorrected, source like
+            // `x++ / import(y)` misreads that `/` as opening a regex
+            // literal and swallows the whole `import(y)` call as the
+            // literal's body, silently losing the opaque-import signal.
+            // A prefix `++x` does not end a value expression here, but the
+            // identifier that follows immediately re-derives the correct
+            // state before any `/` could appear, so leaving it `true` is
+            // harmless.
+            let ends_value = last_code_byte.is_some_and(ends_value_expression);
+            regex_allowed = !ends_value;
+            last_code_byte = Some(bytes[index + 1]);
+            index += 2;
+            continue;
+        }
+        if !bytes[index].is_ascii_whitespace() {
+            regex_allowed = !ends_value_expression(bytes[index]);
+            last_code_byte = Some(bytes[index]);
         }
         index += 1;
     }
-    specifiers
+    DynamicImportScan {
+        specifiers,
+        has_opaque,
+    }
+}
+
+pub fn scan_dynamic_imports(source: &str) -> Vec<String> {
+    scan_dynamic_imports_detailed(source).specifiers
 }
 
 /// Scan `source` for CommonJS `require("x")` specifiers.
@@ -2907,6 +2986,9 @@ struct Walker<'a> {
     /// package from any compartment, regardless of the importer's declared
     /// dependencies.
     common_dependency_targets: HashMap<String, PathBuf>,
+    /// Compartments whose declared dependencies have already been expanded
+    /// because one of their modules contains an opaque dynamic import.
+    opaque_dynamic_import_compartments: std::collections::HashSet<String>,
 }
 
 impl<'a> Walker<'a> {
@@ -2920,6 +3002,7 @@ impl<'a> Walker<'a> {
             enqueued_in_compartment: HashMap::new(),
             options,
             common_dependency_targets: HashMap::new(),
+            opaque_dynamic_import_compartments: std::collections::HashSet::new(),
         }
     }
 
@@ -3325,6 +3408,12 @@ impl<'a> Walker<'a> {
             "cjs" => scan_cjs_requires(source_text()?),
             "mjs" => {
                 let scanned = scan_static_imports(source_text()?);
+                if scanned.has_opaque_dynamic_import {
+                    self.include_opaque_dynamic_import_dependencies(
+                        &compartment_id,
+                        &resolution_path,
+                    )?;
+                }
                 let mut specifiers = scanned.specifiers;
                 for dynamic_specifier in scanned.dynamic_specifiers {
                     if !specifiers.contains(&dynamic_specifier) {
@@ -3349,6 +3438,52 @@ impl<'a> Walker<'a> {
             self.handle_import(&compartment_id, &resolution_path, spec)?;
         }
 
+        Ok(())
+    }
+
+    /// Retain every declared dependency that an opaque runtime `import()`
+    /// might name. Compartment-mapper builds this package graph before source
+    /// analysis, so an expression-valued import can resolve any enabled
+    /// runtime dependency even though the source scanner cannot name its
+    /// target. Optional dependencies participate only when installed, and
+    /// development dependencies remain confined to a dev-enabled entry.
+    fn include_opaque_dynamic_import_dependencies(
+        &mut self,
+        compartment_id: &str,
+        importer_path: &Path,
+    ) -> io::Result<()> {
+        if !self
+            .opaque_dynamic_import_compartments
+            .insert(compartment_id.to_string())
+        {
+            return Ok(());
+        }
+
+        let compartment = self
+            .compartments
+            .get(compartment_id)
+            .ok_or_else(|| io::Error::other(format!("missing compartment {compartment_id}")))?;
+        let compartment_root = compartment.root.clone();
+        let include_dev_dependencies = compartment.include_dev_dependencies;
+        let Ok(metadata) = load_package_metadata(&compartment_root) else {
+            // A synthetic entry has no package graph to retain.
+            return Ok(());
+        };
+
+        let mut dependency_names = metadata.runtime_dependencies;
+        dependency_names.extend(
+            metadata
+                .optional_dependencies
+                .into_iter()
+                .filter(|name| find_node_modules_package(&compartment_root, name).is_some()),
+        );
+        if include_dev_dependencies {
+            dependency_names.extend(metadata.dev_dependencies);
+        }
+
+        for dependency_name in dependency_names {
+            self.handle_import(compartment_id, importer_path, &dependency_name)?;
+        }
         Ok(())
     }
 
@@ -4497,6 +4632,40 @@ mod tests {
             scan_dynamic_imports(src),
             vec!["./literal.js", "./template.js", "./data.json"]
         );
+        let scanned = scan_static_imports(src);
+        assert!(scanned.has_opaque_dynamic_import);
+        assert!(!scan_static_imports("import('./literal.js')").has_opaque_dynamic_import);
+        assert!(
+            !scan_static_imports("const pattern = /import(specifier)/;").has_opaque_dynamic_import
+        );
+        assert!(!scan_static_imports("object.import(specifier)").has_opaque_dynamic_import);
+    }
+
+    #[test]
+    fn dynamic_import_scan_survives_a_line_comment_ending_in_a_dot() {
+        // A preceding line comment that happens to end in `.` (an ordinary
+        // sentence-ending comment, not property-access syntax) must not be
+        // misread as the `.` of `object.import(...)`: the scanner tracks
+        // only bytes it has treated as actual code, never raw bytes from a
+        // comment it already skipped over.
+        let src = "// Load the plugin.\nimport(pluginPath);";
+        assert_eq!(scan_dynamic_imports(src), Vec::<String>::new());
+        assert!(scan_static_imports(src).has_opaque_dynamic_import);
+    }
+
+    #[test]
+    fn dynamic_import_scan_survives_a_postfix_increment_before_division() {
+        // A postfix `++`/`--` ends a value expression just as much as the
+        // identifier it operates on, so a `/` right after it is division,
+        // not a regex opener. Read byte-by-byte, neither byte of `++`
+        // alone looks like the end of a value, so a naive per-byte update
+        // would leave the scanner thinking a regex can still open there —
+        // and then swallow the whole rest of the line, including a real
+        // `import(...)` call, as the "regex" literal's body.
+        let src = "x++ / import(pluginPath);\n";
+        assert!(scan_static_imports(src).has_opaque_dynamic_import);
+        let src = "x-- / import(pluginPath);\n";
+        assert!(scan_static_imports(src).has_opaque_dynamic_import);
     }
 
     #[test]
@@ -5353,6 +5522,166 @@ mod tests {
                 assert_eq!(module, "./index.js");
             }
             other => panic!("expected Link, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn opaque_dynamic_import_includes_declared_runtime_dependencies() {
+        let temporary = tempfile::tempdir().unwrap();
+        let cas = ContentStore::open(&temporary.path().join("cas")).unwrap();
+        let project = tempfile::tempdir().unwrap();
+        write_file(
+            project.path(),
+            "node_modules/app/package.json",
+            br#"{"name":"app","version":"1.0.0","type":"module","dependencies":{"dep":"1"}}"#,
+        );
+        write_file(
+            project.path(),
+            "node_modules/app/index.js",
+            br#"export const load = specifier => import(specifier);"#,
+        );
+        write_file(
+            project.path(),
+            "node_modules/dep/package.json",
+            br#"{"name":"dep","version":"1.0.0","type":"module"}"#,
+        );
+        write_file(
+            project.path(),
+            "node_modules/dep/index.js",
+            br#"export default 'declared';"#,
+        );
+        write_file(
+            project.path(),
+            "node_modules/undeclared/package.json",
+            br#"{"name":"undeclared","version":"1.0.0","type":"module"}"#,
+        );
+        write_file(
+            project.path(),
+            "node_modules/undeclared/index.js",
+            br#"export default 'undeclared';"#,
+        );
+
+        // Use the run-path dispatcher to prove an opaque import selects the
+        // walker even though it yields no statically known specifier.
+        let ingested =
+            ingest_entry_point_for_run(&cas, &project.path().join("node_modules/app/index.js"))
+                .unwrap();
+
+        let app = ingested.archive.map.compartments.get("app-v1.0.0").unwrap();
+        assert!(matches!(
+            app.modules.get("dep"),
+            Some(xsnap::archive::ModuleDescriptor::Link { compartment, module })
+                if compartment == "dep-v1.0.0" && module == "./index.js"
+        ));
+        let dep = ingested.archive.map.compartments.get("dep-v1.0.0").unwrap();
+        assert!(dep.modules.contains_key("./index.js"));
+        assert!(!ingested
+            .archive
+            .map
+            .compartments
+            .contains_key("undeclared-v1.0.0"));
+    }
+
+    #[test]
+    fn opaque_dynamic_import_respects_optional_and_dev_dependency_gates() {
+        // `include_opaque_dynamic_import_dependencies` has three declared
+        // dependency sources beyond a plain `dependencies` entry: an
+        // installed optional dependency (included), an uninstalled optional
+        // dependency (excluded), and a dev dependency (included only when
+        // `include_dev_dependencies` is set for that compartment). None of
+        // those three branches was exercised by
+        // `opaque_dynamic_import_includes_declared_runtime_dependencies`,
+        // which only covers plain `dependencies`.
+        let make_project = || {
+            let project = tempfile::tempdir().unwrap();
+            write_file(
+                project.path(),
+                "package.json",
+                br#"{
+                    "name": "app",
+                    "version": "1.0.0",
+                    "type": "module",
+                    "optionalDependencies": {
+                        "installed-optional": "1",
+                        "missing-optional": "1"
+                    },
+                    "devDependencies": { "dev-only": "1" }
+                }"#,
+            );
+            write_file(
+                project.path(),
+                "index.js",
+                br#"export const load = specifier => import(specifier);"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/installed-optional/package.json",
+                br#"{"name":"installed-optional","version":"1.0.0","type":"module"}"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/installed-optional/index.js",
+                br#"export default 'installed-optional';"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/dev-only/package.json",
+                br#"{"name":"dev-only","version":"1.0.0","type":"module"}"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/dev-only/index.js",
+                br#"export default 'dev-only';"#,
+            );
+            // `missing-optional` is deliberately never installed under
+            // `node_modules`, so the installed-check filter has something
+            // to actually filter.
+            project
+        };
+
+        // Without `dev`, the installed optional dependency is retained and
+        // both the missing optional dependency and the dev dependency are
+        // excluded.
+        {
+            let temporary = tempfile::tempdir().unwrap();
+            let cas = ContentStore::open(&temporary.path().join("cas")).unwrap();
+            let project = make_project();
+            let ingested =
+                ingest_entry_point_with_deps(&cas, &project.path().join("index.js")).unwrap();
+            let app = ingested.archive.map.compartments.get("app-v1.0.0").unwrap();
+            assert!(matches!(
+                app.modules.get("installed-optional"),
+                Some(xsnap::archive::ModuleDescriptor::Link { compartment, .. })
+                    if compartment == "installed-optional-v1.0.0"
+            ));
+            assert!(app.modules.get("missing-optional").is_none());
+            assert!(app.modules.get("dev-only").is_none());
+            assert!(!ingested
+                .archive
+                .map
+                .compartments
+                .contains_key("dev-only-v1.0.0"));
+        }
+
+        // With `dev` (compartment-mapper's `development` condition), the
+        // dev dependency is retained too.
+        {
+            let temporary = tempfile::tempdir().unwrap();
+            let cas = ContentStore::open(&temporary.path().join("cas")).unwrap();
+            let project = make_project();
+            let options = WalkOptions::new(["development".to_string()], std::iter::empty());
+            let ingested = ingest_entry_point_with_deps_with_options(
+                &cas,
+                &project.path().join("index.js"),
+                &options,
+            )
+            .unwrap();
+            let app = ingested.archive.map.compartments.get("app-v1.0.0").unwrap();
+            assert!(matches!(
+                app.modules.get("dev-only"),
+                Some(xsnap::archive::ModuleDescriptor::Link { compartment, .. })
+                    if compartment == "dev-only-v1.0.0"
+            ));
         }
     }
 
