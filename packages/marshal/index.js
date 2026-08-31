@@ -30,9 +30,6 @@ export {
   unionRankCovers,
 } from './src/rankOrder.js';
 
-// eslint-disable-next-line import/export
-export * from './src/types.js';
-
 // For compatibility, but importers of these should instead import these
 // directly from `@endo/pass-style` or (if applicable) `@endo/far`.
 // eslint-disable-next-line import/export

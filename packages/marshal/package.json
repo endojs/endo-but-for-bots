@@ -4,8 +4,12 @@
   "description": "marshal: encoding and deconding of Passable subgraphs",
   "type": "module",
   "main": "index.js",
+  "types": "index.types.d.ts",
   "exports": {
-    ".": "./index.js",
+    ".": {
+      "types": "./index.types.d.ts",
+      "default": "./index.js"
+    },
     "./tools/marshal-test-data.js": "./tools/marshal-test-data.js",
     "./tools/prepare-unicode-code-point-order.js": "./tools/prepare-unicode-code-point-order.js",
     "./tools/prepare-utf16-code-unit-order.js": "./tools/prepare-utf16-code-unit-order.js",

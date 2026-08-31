@@ -496,7 +496,7 @@ function formatTypeForSnapshot(typeDef) {
     for (const prop of properties) {
       const refs =
         prop.referencedTypes.length > 0
-          ? ` → [${prop.referencedTypes.sort().join(', ')}]`
+          ? ` -> [${prop.referencedTypes.sort().join(', ')}]`
           : '';
       const skipped = prop.name.startsWith('_') ? ' (skipped)' : '';
       lines.push(`    - ${prop.name}${refs}${skipped}`);
@@ -508,7 +508,7 @@ function formatTypeForSnapshot(typeDef) {
     for (const method of methods) {
       const refs =
         method.referencedTypes.length > 0
-          ? ` → [${method.referencedTypes.sort().join(', ')}]`
+          ? ` -> [${method.referencedTypes.sort().join(', ')}]`
           : '';
       const skipped = method.name.startsWith('_') ? ' (skipped)' : '';
       lines.push(`    - ${method.name}${refs}${skipped}`);

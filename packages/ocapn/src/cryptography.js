@@ -37,13 +37,13 @@ const sessionIdHashPrefixBytes = textEncoder.encode('prot0');
  * @property {PublicKeyId} id
  * @property {Uint8Array} bytes
  * @property {OcapnPublicKeyDescriptor} descriptor
- * @property {(msg: Uint8Array, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
+ * @property {(message: Uint8Array, sig: OcapnSignature) => void} assertSignatureValid - Throws if signature is invalid
  */
 
 /**
  * @typedef {object} OcapnKeyPair
  * @property {OcapnPublicKey} publicKey
- * @property {(msg: Uint8Array) => OcapnSignature} sign
+ * @property {(message: Uint8Array) => OcapnSignature} sign
  */
 
 /**
@@ -95,15 +95,15 @@ export const makeOcapnPublicKey = publicKeyBytes => {
     descriptor: publicKeyDescriptor,
     /**
      * Asserts that the signature is valid for the given message.
-     * @param {Uint8Array} msgBytes
+     * @param {Uint8Array} messageBytes
      * @param {OcapnSignature} ocapnSig
      * @throws {Error} If the signature is invalid
      */
-    assertSignatureValid: (msgBytes, ocapnSig) => {
+    assertSignatureValid: (messageBytes, ocapnSig) => {
       const sigBytes = ocapNSignatureToBytes(ocapnSig);
-      const msgUint8 = bytesFromImmutable(msgBytes);
+      const messageUint8 = bytesFromImmutable(messageBytes);
       const pkUint8 = bytesFromImmutable(publicKeyBytes);
-      const isValid = ed25519.verify(sigBytes, msgUint8, pkUint8);
+      const isValid = ed25519.verify(sigBytes, messageUint8, pkUint8);
       if (!isValid) {
         throw new Error('Invalid signature');
       }
@@ -120,9 +120,9 @@ export const makeOcapnKeyPairFromPrivateKey = privateKeyBytes => {
   const publicKeyBuffer = bytesToImmutable(publicKeyBytes);
   return {
     publicKey: makeOcapnPublicKey(publicKeyBuffer),
-    sign: msg => {
-      const msgBytes = bytesFromImmutable(msg);
-      const sigBytes = ed25519.sign(msgBytes, privateKeyBytes);
+    sign: message => {
+      const messageBytes = bytesFromImmutable(message);
+      const sigBytes = ed25519.sign(messageBytes, privateKeyBytes);
       return {
         type: 'sig-val',
         scheme: 'eddsa',
