@@ -14,7 +14,10 @@ host-wide `@nets` capability.
 `packages/daemon/src/host.js` and `packages/daemon/src/guest.js` both
 inject the same `networksDirectoryId` under the special name `@nets`,
 which resolves to a daemon-singleton directory of named netlayer
-formulas (loopback, ws-relay, libp2p, tcp-netstring).
+formulas (loopback, ws-relay, tcp-netstring, iroh, and — since
+2026-08-25 — a daemon-side OCapN-Noise netlayer,
+`packages/daemon/src/networks/ocapn.js`, registered at `@nets/ocapn`
+by `setup-ocapn.js`).
 Every agent the daemon hosts sees the same registry, can list every
 registered net, and can connect through every net the daemon knows
 about.
@@ -155,7 +158,24 @@ delivers `Session` instances over a name-changes-style follow.
 
 ```js
 provideTransports(petName, options): Promise<Transports>
+revokeTransports(petName): Promise<void>
 ```
+
+`revokeTransports(petName)` is the host-side, whole-agent
+kill-switch: it tears down the named agent's entire `Transports`
+view — every outstanding listener and session fails, the agent's
+per-agent signing keys are de-registered from the shared netlayers'
+inbound demux, and subsequent `connect`/`listen` calls on that
+view reject. It is the coarse counterpart to the agent-side
+`disconnect(handle)` (drops one session) and `shutdown()` (agent
+retires its own view); `revokeTransports` is the only one a *host*
+can invoke against an agent it no longer trusts. Sibling agents are
+unaffected. It is idempotent — revoking an already-revoked or
+never-provisioned petName resolves without error. (The CLI's
+per-handle `endo agent <name> transports revoke <handle>` in Design
+Decision #9 is the finer-grained, agent-facing verb and fronts
+`disconnect(handle)`, not this host method; the two share the word
+"revoke" for deliberately different granularities.)
 
 where `options` carries:
 
@@ -373,7 +393,7 @@ Two daemons connecting over OCapN-Noise:
 - The `np` netlayer either reuses an existing Noise session to
   Y (if X and Y are already connected) or initiates a new Noise
   IK handshake.
-- The session delivers a CapTP channel scoped to A↔B; other
+- The session delivers a CapTP channel scoped to A and B; other
   agents on X with their own sessions to agents on Y reuse the
   same Noise session at the wire level but hold independent
   CapTP channels at the cap level.
@@ -392,15 +412,29 @@ on top of (not in lieu of) the per-daemon netlayer.
   `ocapn-network-transport-separation`).
 - `packages/ocapn-noise/`: no changes; bindings are consumed by
   the netlayer that the proxy fronts.
-- `packages/ocapn-noise-network/` (new, per `ocapn-noise-network`
-  design): provides the `np` netlayer the proxy dispatches to.
+- **Daemon-side OCapN-Noise netlayer — already landed, repurposed,
+  not rebuilt.** The `np` netlayer the proxy dispatches to already
+  exists as `packages/daemon/src/networks/ocapn.js` +
+  `setup-ocapn.js` (protocol `ocapn+noise+tcp`, registered at
+  `@nets/ocapn`), landed 2026-08-25 — six days before this PR's
+  base. This design does **not** introduce a parallel
+  `packages/ocapn-noise-network/` package; it **repurposes** the
+  landed `ocapn.js` netlayer as the shared per-daemon substrate
+  that the per-agent `TransportFactory` proxy fronts. The
+  implementation work is therefore wiring the proxy over the
+  existing netlayer (per-agent signing-key registration/revocation,
+  identity-routed inbound demux — much of which
+  `@endo/ocapn-noise`'s `network.js` already provides via
+  `addSigningKeys`/`removeSigningKeys` and its per-key `registeredKeys`
+  map), not standing up a new netlayer. Where earlier references in
+  this doc cite `ocapn-noise-network`, they name the design that
+  motivated `ocapn.js`, not a package still to be built.
   Note that the shipped code (`packages/ocapn-noise`) and this
   design use Noise **IK**; the `ocapn-noise-network` design doc
   still describes Noise **XX** in places and is stale on that
   point. The IK handshake as implemented is authoritative, and the
-  `ocapn-noise-network` doc is to be reconciled to IK before or as
-  part of building this package. Do not build the `np` netlayer to
-  the XX shape.
+  `ocapn-noise-network` doc is to be reconciled to IK. Do not
+  reintroduce the `np` netlayer to the XX shape.
 - `packages/cli/`: per-agent
   `endo agent <name> transports {list,add,revoke}` verbs
   (see *Design Decisions* #9); `endo nets` is retired alongside
