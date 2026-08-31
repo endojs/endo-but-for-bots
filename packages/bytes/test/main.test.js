@@ -2,6 +2,8 @@ import test from '@endo/ses-ava/test.js';
 import { passStyleOf } from '@endo/pass-style';
 
 import { bytesEqual } from '../src/equals.js';
+import { compareBytes } from '../src/compare.js';
+import { constantTimeBytesEqual } from '../src/constant-time-equals.js';
 import { bytesFromText } from '../src/from-string.js';
 import { bytesToText } from '../src/to-string.js';
 import { concatBytes } from '../src/concat.js';
@@ -146,12 +148,11 @@ test('bytesEqual on bytesFromText output: same input compares equal', t => {
   t.false(bytesEqual(bytesFromText('abc'), bytesFromText('abd')));
 });
 
-test('bytesToImmutable: returns ArrayBuffer with byteArray passStyle', t => {
+test('bytesToImmutable: returns Uint8Array with byteArray passStyle', t => {
   const view = new Uint8Array([1, 2, 3, 4, 5]);
   const immutable = bytesToImmutable(view);
-  t.true(immutable instanceof ArrayBuffer);
+  t.true(immutable instanceof Uint8Array);
   t.is(immutable.byteLength, 5);
-  // @ts-expect-error passStyleOf typing infers the wrong type for ArrayBuffer.
   t.is(passStyleOf(immutable), 'byteArray');
 });
 
@@ -222,11 +223,10 @@ test('bytesToText: { fatal: false } also accepts valid UTF-8', t => {
   t.is(bytesToText(bytes, { fatal: false }), 'plain ASCII');
 });
 
-test('concatImmutables: empty input yields empty immutable buffer', t => {
+test('concatImmutables: empty input yields empty immutable Uint8Array', t => {
   const result = concatImmutables([]);
-  t.true(result instanceof ArrayBuffer);
+  t.true(result instanceof Uint8Array);
   t.is(result.byteLength, 0);
-  // @ts-expect-error passStyleOf typing infers the wrong type for ArrayBuffer.
   t.is(passStyleOf(result), 'byteArray');
 });
 
@@ -240,8 +240,27 @@ test('concatImmutables: concatenates multiple immutable buffers byte-for-byte', 
   const result = concatImmutables(parts);
   t.is(result.byteLength, 8);
   t.deepEqual([...bytesFromImmutable(result)], [1, 2, 3, 4, 5, 6, 7, 8]);
-  // @ts-expect-error passStyleOf typing infers the wrong type for ArrayBuffer.
   t.is(passStyleOf(result), 'byteArray');
+});
+
+test('byte comparisons read emulated immutable views', t => {
+  const first = bytesToImmutable(new Uint8Array([1, 2, 3]));
+  const firstAgain = bytesToImmutable(new Uint8Array([1, 2, 3]));
+  const second = bytesToImmutable(new Uint8Array([1, 2, 4]));
+
+  t.true(bytesEqual(first, firstAgain));
+  t.false(bytesEqual(first, second));
+  t.true(constantTimeBytesEqual(first, firstAgain));
+  t.false(constantTimeBytesEqual(first, second));
+  t.true(compareBytes(first, second) < 0);
+  t.true(compareBytes(second, first) > 0);
+  t.is(compareBytes(first, firstAgain), 0);
+});
+
+test('concatBytes reads emulated immutable views', t => {
+  const first = bytesToImmutable(new Uint8Array([1, 2, 3]));
+  const second = bytesToImmutable(new Uint8Array([4, 5]));
+  t.deepEqual([...concatBytes([first, second])], [1, 2, 3, 4, 5]);
 });
 
 test('concatImmutables: result is hardened', t => {

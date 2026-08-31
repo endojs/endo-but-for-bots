@@ -21,11 +21,14 @@
   },
   "type": "module",
   "exports": {
+    "./compare.js": "./compare.js",
+    "./constant-time-equals.js": "./constant-time-equals.js",
     "./equals.js": "./equals.js",
     "./from-string.js": "./from-string.js",
     "./to-string.js": "./to-string.js",
     "./concat.js": "./concat.js",
     "./concat-immutables.js": "./concat-immutables.js",
+    "./indexed.js": "./indexed.js",
     "./from-immutable.js": "./from-immutable.js",
     "./to-immutable.js": "./to-immutable.js",
     "./package.json": "./package.json"
