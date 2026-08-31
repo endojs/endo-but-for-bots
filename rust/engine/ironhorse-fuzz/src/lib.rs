@@ -2338,6 +2338,33 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `91afec2d990bc402` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189`). The 4-byte input `5c 5c 5c 34` folds into a deeply
+    /// nested `new RegExp(<pattern>, "s").source` — a 1117-byte program whose
+    /// `.source` completion value overflows the oracle's old 1024-byte capture
+    /// buffer. The pre-fix oracle truncated its own reference and the harness
+    /// read the port's correct full result as a divergence. A distinct
+    /// `.source` input of the same class as `493390fc03979205` /
+    /// `3ea435c58b4c588e`, already covered by that fix (larger 16 KiB buffer +
+    /// honest skip on overflow): the exact finding input must check clean, not
+    /// diverge.
+    #[test]
+    fn finding_91afec2d990bc402_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 1e9756cef3b0a9372ae74719ccae857a781982d0e8f656b3b506555534670419).
+        let data: &[u8] = &[0x5c, 0x5c, 0x5c, 0x34];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp `.source`
+        // whose rendered value overflows the old 1024-byte buffer.
+        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
+        assert!(prog.len() > 1024, "finding program overflows the old buffer: {}", prog.len());
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 91afec2d990bc402 must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
