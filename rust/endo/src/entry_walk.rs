@@ -47,10 +47,12 @@
 //! re-applied here. The XS-hosted mapper bundle remains
 //! warranted whenever the dependency graph requires features that the
 //! Rust-native walk does not implement (including the registry-table path
-//! from `designs/endor-npm-registry-proxy.md` Phase 4). For an
+//! from `designs/endor-npm-registry-proxy.md` Phase 4). For an ES module's
 //! expression-valued dynamic import, this mapper retains every enabled
 //! declared dependency even though it cannot enumerate the runtime-selected
-//! module statically.
+//! module statically; a CommonJS-parsed module's dynamic `import()` calls
+//! are not scanned at all (`scan_cjs_requires` only looks for `require()`),
+//! a pre-existing scope boundary this module does not close.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ffi::OsStr;
@@ -1278,6 +1280,12 @@ fn scan_bound_dynamic_require_targets(source: &str) -> Vec<String> {
     specifiers
 }
 
+#[derive(Default)]
+struct DynamicImportScan {
+    specifiers: Vec<String>,
+    has_opaque: bool,
+}
+
 /// Scan an ES module for statically analyzable dynamic `import()` calls.
 ///
 /// A call is followed only when its first argument is a string literal or a
@@ -1286,12 +1294,6 @@ fn scan_bound_dynamic_require_targets(source: &str) -> Vec<String> {
 /// presence so the walker can retain declared dependencies. Comments,
 /// strings, regex literals, template bodies, and property calls are skipped
 /// so source text that merely resembles `import()` cannot create an edge.
-#[derive(Default)]
-struct DynamicImportScan {
-    specifiers: Vec<String>,
-    has_opaque: bool,
-}
-
 fn scan_dynamic_imports_detailed(source: &str) -> DynamicImportScan {
     let mut specifiers = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -1299,6 +1301,13 @@ fn scan_dynamic_imports_detailed(source: &str) -> DynamicImportScan {
     let bytes = source.as_bytes();
     let mut index = 0usize;
     let mut regex_allowed = true;
+    // The last byte the scanner treated as actual code, never a byte from
+    // inside a comment or string/regex literal that was skipped wholesale.
+    // The `object.import(...)` guard below reads this instead of
+    // re-scanning `source[..index]` backward, so a comment or string ending
+    // in `.` immediately before a real `import(` call can't be misread as a
+    // property access.
+    let mut last_code_byte: Option<u8> = None;
     while index < bytes.len() {
         if bytes[index] == b'/' && index + 1 < bytes.len() && bytes[index + 1] == b'/' {
             while index < bytes.len() && bytes[index] != b'\n' {
@@ -1317,21 +1326,20 @@ fn scan_dynamic_imports_detailed(source: &str) -> DynamicImportScan {
         if matches!(bytes[index], b'\'' | b'"' | b'`') {
             index = skip_string_literal(bytes, index);
             regex_allowed = false;
+            last_code_byte = Some(bytes[index - 1]);
             continue;
         }
         if bytes[index] == b'/' && regex_allowed {
             index = skip_regex_literal(bytes, index);
             regex_allowed = false;
+            last_code_byte = Some(bytes[index - 1]);
             continue;
         }
         if matches_keyword(bytes, index, b"import") {
-            let previous_significant = source[..index]
-                .bytes()
-                .rev()
-                .find(|byte| !byte.is_ascii_whitespace());
-            if previous_significant == Some(b'.') {
+            if last_code_byte == Some(b'.') {
                 index += "import".len();
                 regex_allowed = false;
+                last_code_byte = Some(b't');
                 continue;
             }
             let mut opening_parenthesis = index + "import".len();
@@ -1366,10 +1374,12 @@ fn scan_dynamic_imports_detailed(source: &str) -> DynamicImportScan {
             }
             index += "import".len();
             regex_allowed = false;
+            last_code_byte = Some(b't');
             continue;
         }
         if !bytes[index].is_ascii_whitespace() {
             regex_allowed = !ends_value_expression(bytes[index]);
+            last_code_byte = Some(bytes[index]);
         }
         index += 1;
     }
@@ -4605,6 +4615,18 @@ mod tests {
             !scan_static_imports("const pattern = /import(specifier)/;").has_opaque_dynamic_import
         );
         assert!(!scan_static_imports("object.import(specifier)").has_opaque_dynamic_import);
+    }
+
+    #[test]
+    fn dynamic_import_scan_survives_a_line_comment_ending_in_a_dot() {
+        // A preceding line comment that happens to end in `.` (an ordinary
+        // sentence-ending comment, not property-access syntax) must not be
+        // misread as the `.` of `object.import(...)`: the scanner tracks
+        // only bytes it has treated as actual code, never raw bytes from a
+        // comment it already skipped over.
+        let src = "// Load the plugin.\nimport(pluginPath);";
+        assert_eq!(scan_dynamic_imports(src), Vec::<String>::new());
+        assert!(scan_static_imports(src).has_opaque_dynamic_import);
     }
 
     #[test]
