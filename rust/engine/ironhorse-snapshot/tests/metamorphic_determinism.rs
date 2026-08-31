@@ -153,7 +153,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // to 11 for the `ESTK` atom. This fixture holds no error, so
         // `ESTK` is absent from its bytes and only the `VERS` payload
         // moves on that account.
-        "9c4f0575ceca16db24bfe821b06af28de0c80c98901663e321732a93e8feb9ce",
+        // Re-pinned for format version 12, marking the promise cluster
+        // (`PRMS`). This fixture holds no promise, so the atom is
+        // absent and only the VERS payload changes.
+        "3ff87db04dc44e6096e3c16de42e83f8d78ec232be9f4a521cd8753265327b37",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -243,7 +246,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // mainline boot heap moved the page rows, and schema 22 adds
         // the (empty here) error-frames section to the small state, so
         // the small leaf, the root and the seal all move.
-        "508563ef64ca3d1bb531958dbb3f595a17e78c9aa62f7825bb397e17c06cb3a2",
+        // Re-pinned for schema 23 and format 12: the small state gains
+        // the (empty here) promise-cluster section and VERS marks
+        // `PRMS`, so the small leaf, the root and the seal all move.
+        "e44eed990c5fab722d0504341e37213df0d51a4262d56cbfc8180e3b58ab0310",
         "epoch-3 seal chain"
     );
 }

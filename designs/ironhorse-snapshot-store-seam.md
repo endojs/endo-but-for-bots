@@ -1466,10 +1466,12 @@ rather than work items.
   intact, both refusal edges are pinned, and the worker lifecycle
   test now runs a divergent crank through relink live and after
   reopen.
-  STILL OPEN in this workstream: the 8 `Pending` ledger rows
-  (generators, promises, function-dependent per-instance tables, and
-  modules — several unreachable cross-crank in the vm today regardless
-  of restore).
+  STILL OPEN in this workstream: the 3 `Pending` ledger rows —
+  `async_instances`, `async_generators`/`async_gen_run_stack`, and
+  `modules` (generators graduated in schema 21, the promise cluster
+  in schema 23; the async rows are gated meanwhile by the persist
+  gate's reaction-kind and async-generator arms, refusing by name
+  instead of dropping silently).
   The old intern gap is NOT among them: runtime string keys live in
   the NAME table and symbol keys travel in `SYMB` (id-space
   unification, 2026-08-26), so no interning gates relink or
@@ -3377,7 +3379,7 @@ The lazy-geometry dimension, which generalizes the stale
 `chunk_bound`, returned ZERO findings with a written enumeration of
 every piece of attach-frozen state.
 
-##### P1-5 — a resumed promise renders `[object Object]`
+##### P1-5 — a resumed promise renders `[object Object]` — FIXED (the promise-cluster carry)
 
 VERIFIED on the current tree, both paths, with controls:
 
@@ -3425,6 +3427,67 @@ mechanical one:
    both machines answer `[object Promise]`. Cheap, and removes the
    divergence — but it makes a machine whose promises are dead LOOK
    healthy, and `.then` still fails visibly afterwards.
+
+**Resolution (2026-08-31): option 2, the carry, chosen by the author.**
+The four rows travel as ONE atom — `PRMS`, container format 12, store
+schema 23 — because they cross-reference (a reaction indexes
+`combinators`, a resolving function indexes `promise_guards` and names
+a `promises` row), validated together the way `FUNC` bundles functions
+with segments. The design points that fell out of building it:
+
+- **Compacted-arena canonical form.** The two index arenas can hold
+  dead entries between sweeps whose `derived`/`results` slots may
+  already be freed — carrying them verbatim would trip the
+  free-owner gates on honest snapshots. The snapshot verb applies the
+  collector's own `compact_reaction_arenas` liveness rule (a guard is
+  live while a resolving pair names it; a combinator while a pending
+  `Combine` reaction does) and remaps holders onto the dense arenas.
+  Indices never surface to the guest, and the emitted encoding becomes
+  canonical: continued and resumed twins write identical clusters.
+  The decoder then refuses NON-dense reference coverage (the
+  segments-not-densely-referenced rule), an orphaned resolving
+  function or derived promise, a settled promise retaining reactions,
+  a `remaining` below the pending element reactions (drain underflow),
+  and a results accumulator with no `ARRY` row.
+- **Resolving functions rebuild like `IBFN`.** The row carries the
+  pair's `name_chunk` (the interned empty chunk — carried, not
+  re-interned, so restore mutates no arena and the blob identity
+  holds) and restore reinstates `FuncInfo` exactly as
+  `make_resolving_functions` minted it. `function_persists` gains
+  `promise_functions`, which retires the LAST guest-storable
+  runtime-minted native: the doomed set is now empty on every
+  reachable machine, and the persist-gate traversal becomes a
+  future-proofing net. `PRMS` restores before `FUNC`, so slot
+  collisions refuse two-sided (`PRMS` refuses a boot slot, `FUNC`
+  refuses a slot an earlier verb installed).
+- **Async state refuses by REACTION KIND, plus one row-level arm.**
+  An async-flavored reaction (`AsyncAwait`, `AsyncGenerator*`,
+  `FromAsync*`) names suspended machinery in still-Pending rows;
+  every resumable async-FUNCTION suspension is anchored by exactly
+  such a reaction on a live promise, so the kind arm is that row's
+  whole gate (and `from_async` needs no carry: live ⇒ refused,
+  unanchored ⇒ unreachable). An async GENERATOR is different — a
+  guest-held object whose row `.next()` consults in every state, with
+  no reaction anchor between yields — so `async_generators` gets a
+  refuse-on-hold arm of its own (the W6-9 pattern). Both new arms are
+  locked in `persist_gates.rs`; before them, this state was silently
+  DROPPED (hidden behind the promise hole this carry closes).
+- Locks: `promise_carry.rs` (eleven twins over memory/file/blob —
+  the P1 render repro, a post-resume resolver call, a pre-suspend
+  reaction, the tripped guard, the thenable second pair, mid-flight
+  `all`/`race`/`any`, `finally`, the unhandled-rejection latch, a
+  re-checkpoint), the `promises` scenario in the seven-way
+  determinism suite, five crafted-row refusal arms in
+  `crafted_row_refusals.rs`, the flipped admissions in
+  `persist_gates.rs`, a SQLite sleep-cycle scenario, and the PRMS
+  arm of the fuzz generator. Both golden pins re-pinned (format 12 /
+  schema 23).
+- Found while writing the determinism scenario, recorded not fixed:
+  `'' + p` on a promise instance halts
+  `Unsupported("to_primitive:no-primitive-result")` on a CONTINUOUS
+  machine too — an engine `to_primitive` gap over promise instances,
+  the same cross-crank-independent class as the `.call` defect
+  (P2-2), not a persistence divergence.
 
 ##### P2-5 — `SavedJumpRow.call_depth_offset` is decoded but never bounded
 

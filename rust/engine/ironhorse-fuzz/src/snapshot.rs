@@ -614,6 +614,113 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         generators.push(ironhorse_vm::GeneratorRow { state, owner, frame });
     }
 
+    // The promise cluster (`PRMS`): generated to satisfy the decoder's
+    // cross-checks -- a resolving pair per emitted guard (dense guard
+    // coverage), a `Combine` reaction naming each combinator (dense
+    // combinator coverage), derived promises with rows of their own,
+    // `remaining` covering the pending element reactions, results
+    // naming a real `ARRY` row, and NO null name chunks (the mint
+    // always interns a real empty chunk, and the bounds gate refuses
+    // the null it tolerates on other rows).
+    let mut next_owner = 0u32;
+    let mut prms_promises: Vec<ironhorse_vm::PromiseRow> = Vec::new();
+    for _ in 0..(c.byte() % 4) {
+        if next_owner >= live_cap {
+            break;
+        }
+        let owner = next_owner;
+        next_owner += 1 + (c.byte() % 3) as u32;
+        // 0 Pending / 1 Fulfilled / 2 Rejected; only Pending rows may
+        // carry reactions (settlement drains them).
+        let state = c.byte() % 3;
+        let reactions = if state == 0 {
+            (0..(c.byte() % 3) as usize)
+                .map(|_| ironhorse_vm::PromiseReactionRow {
+                    on_fulfilled: slot(&mut c),
+                    on_rejected: slot(&mut c),
+                    resolve: slot(&mut c),
+                    reject: slot(&mut c),
+                    // User / FinallyReturn; Combine rows join below so
+                    // each names a combinator that actually exists.
+                    kind: c.byte() % 2,
+                    a: 0,
+                    b: 0,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        prms_promises.push(ironhorse_vm::PromiseRow {
+            owner,
+            state,
+            result: slot(&mut c),
+            ever_handled: c.byte() % 2 == 1,
+            reactions,
+        });
+    }
+    let mut prms_combinators: Vec<ironhorse_vm::CombinatorRow> = Vec::new();
+    {
+        let pending: Vec<usize> = prms_promises
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.state == 0)
+            .map(|(i, _)| i)
+            .collect();
+        if !pending.is_empty() && !arrays.is_empty() {
+            for _ in 0..(c.byte() % 3) {
+                let ci = prms_combinators.len() as u32;
+                let host = pending[(c.byte() as usize) % pending.len()];
+                let reaction = ironhorse_vm::PromiseReactionRow {
+                    on_fulfilled: slot(&mut c),
+                    on_rejected: slot(&mut c),
+                    resolve: slot(&mut c),
+                    reject: slot(&mut c),
+                    kind: 2,
+                    a: ci,
+                    b: c.u32() % 8,
+                };
+                prms_promises[host].reactions.push(reaction);
+                prms_combinators.push(ironhorse_vm::CombinatorRow {
+                    kind: c.byte() % 4,
+                    derived: prms_promises[(c.byte() as usize) % prms_promises.len()].owner,
+                    // Exactly one pending element reaction names this
+                    // combinator, so any remaining >= 1 satisfies the
+                    // underflow gate.
+                    remaining: 1 + c.u32() % 4,
+                    results: arrays[(c.byte() as usize) % arrays.len()].owner,
+                    done: c.byte() % 2 == 0,
+                });
+            }
+        }
+    }
+    let mut prms_functions: Vec<ironhorse_vm::PromiseFnRow> = Vec::new();
+    let mut prms_guards: Vec<bool> = Vec::new();
+    if !prms_promises.is_empty() && !offs.is_empty() {
+        let mut next_fn = 0u32;
+        for _ in 0..(c.byte() % 4) {
+            if next_fn >= live_cap {
+                break;
+            }
+            let function = next_fn;
+            next_fn += 1 + (c.byte() % 3) as u32;
+            let guard = prms_guards.len() as u32;
+            prms_guards.push(c.byte() % 2 == 1);
+            prms_functions.push(ironhorse_vm::PromiseFnRow {
+                function,
+                promise: prms_promises[(c.byte() as usize) % prms_promises.len()].owner,
+                reject: c.byte() % 2 == 1,
+                guard,
+                name_chunk: pick_off(&mut c, &offs).0,
+            });
+        }
+    }
+    let promise_cluster = ironhorse_vm::PromiseClusterSnapshot {
+        promises: prms_promises,
+        functions: prms_functions,
+        guards: prms_guards,
+        combinators: prms_combinators,
+    };
+
     MachineImage::from_arenas(fuzz_snapshot_sig(), &slots, &chunks, &stack, names, keys, symbols)
         .with_meter(meter)
         .with_function_state(function_state)
@@ -625,6 +732,7 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         })
         .with_disposable_stacks(disposable_stacks)
         .with_generators(generators)
+        .with_promise_cluster(promise_cluster)
         // The typed-array family is left empty here: honest ABUF rows
         // need REAL chunk-arena extents, which this builder does not
         // model. Crafted family bytes are exercised by the byte-level
@@ -907,6 +1015,10 @@ mod tests {
         let mut saw_disposable = false;
         let mut saw_generators = false;
         let mut saw_generator_frames = false;
+        let mut saw_promises = false;
+        let mut saw_promise_reactions = false;
+        let mut saw_promise_functions = false;
+        let mut saw_combinators = false;
         for seed in 0u32..3000 {
             let buf = seed_bytes(seed, 7);
             let img = gen_machine_image(&buf);
@@ -927,6 +1039,14 @@ mod tests {
             saw_disposable |= !img.disposable_stacks.is_empty();
             saw_generators |= !img.generators.is_empty();
             saw_generator_frames |= img.generators.iter().any(|g| g.frame.is_some());
+            saw_promises |= !img.promise_cluster.promises.is_empty();
+            saw_promise_reactions |= img
+                .promise_cluster
+                .promises
+                .iter()
+                .any(|p| !p.reactions.is_empty());
+            saw_promise_functions |= !img.promise_cluster.functions.is_empty();
+            saw_combinators |= !img.promise_cluster.combinators.is_empty();
             if let Err(d) = roundtrip_image_is_invariant(&img) {
                 panic!("arena snapshot round-trip divergence at seed {seed}: {d:?}");
             }
@@ -953,6 +1073,10 @@ mod tests {
         // generator sweep that only ever emitted Completed rows would
         // leave `SavedFrameRow` unexercised while looking covered.
         assert!(saw_generator_frames, "GENR suspended-frame arm never exercised");
+        assert!(saw_promises, "side-table PRMS arm never exercised");
+        assert!(saw_promise_reactions, "PRMS reaction arm never exercised");
+        assert!(saw_promise_functions, "PRMS resolving-function arm never exercised");
+        assert!(saw_combinators, "PRMS combinator arm never exercised");
         // (`IBFN` and the typed-array family are deliberately not
         // generated -- both are cross-table dependent on state this
         // builder does not model. See the builder for the reasons.)

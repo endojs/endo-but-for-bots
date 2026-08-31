@@ -125,6 +125,10 @@ pub const PRIV: FourCc = FourCc(*b"PRIV");
 pub const DISP: FourCc = FourCc(*b"DISP");
 /// `GENR` — synchronous generator lifecycle and saved activations.
 pub const GENR: FourCc = FourCc(*b"GENR");
+/// `PRMS` — the promise cluster: per-instance settlement state and
+/// pending reactions, resolving-function links, `[[AlreadyResolved]]`
+/// guards, and combinator accumulators, cross-validated as one unit.
+pub const PRMS: FourCc = FourCc(*b"PRMS");
 
 /// The error-frame side table: the call-frame names an Error captured at
 /// CONSTRUCTION, which the `stack` accessor renders. Its own atom rather
@@ -167,11 +171,12 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// version 5 adds proxy internal slots; version 6 adds accessors;
 /// version 7 adds Intl bound-function links; version 8 adds private
 /// elements; version 9 adds disposable stacks; version 10 adds
-/// synchronous generators.
+/// synchronous generators; version 11 adds error construction frames
+/// (`ESTK`); version 12 adds the promise cluster (`PRMS`).
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 11;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 12;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in

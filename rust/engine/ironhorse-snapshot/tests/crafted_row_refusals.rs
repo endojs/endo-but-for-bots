@@ -332,3 +332,179 @@ fn non_canonical_container_encodings_are_refused() {
         other => panic!("a present-but-empty optional atom must be refused: {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------
+// The promise cluster (`PRMS`, schema 23): rows that pass structural
+// decode but lie about their cross-references. Each arm crafts one lie
+// into an honest image and expects the specific refusal, on the
+// container path — and, for the representative first arm, on the store
+// path too (the SmallState section shares the decoder, so one mirror
+// proves the sharing).
+
+/// A pending promise with a stored resolver and a user reaction — the
+/// minimal cluster with promises, functions, guards, and a reaction
+/// row to mutate.
+fn promise_fixture() -> Interp {
+    quiescent_machine(
+        "var p = 0; var res = 0; var g = 0; var t = 0; \
+         p = new Promise(function (rs, rj) { res = rs; }); \
+         p.then(function (v) { g = v; }); t = 7; t",
+    )
+}
+
+/// A mid-flight `Promise.all` over two pending elements — the minimal
+/// cluster with a live combinator row and two `Combine` reactions.
+fn combinator_fixture() -> Interp {
+    quiescent_machine(
+        "var p1 = 0; var p2 = 0; var r1 = 0; var r2 = 0; var g = 0; var t = 0; \
+         p1 = new Promise(function (rs, rj) { r1 = rs; }); \
+         p2 = new Promise(function (rs, rj) { r2 = rs; }); \
+         Promise.all([p1, p2]).then(function (v) { g = v; }); t = 7; t",
+    )
+}
+
+fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
+    let crafted = write_machine(image);
+    match from_snapshot_bytes(&crafted, &sig()) {
+        Err(SnapshotError::Corrupt(m)) if m == msg => {}
+        Err(other) => panic!("expected Corrupt({msg:?}), got {other:?}"),
+        Ok(_) => panic!("expected Corrupt({msg:?}), got an adopted machine"),
+    }
+}
+
+#[test]
+fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate() {
+    let m = promise_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| !p.reactions.is_empty())
+        .expect("the fixture holds a pending reaction");
+    row.reactions[0].kind = 3; // AsyncAwait — a still-Pending frame
+    expect_container_refusal(&image, "promise cluster: reaction kind does not resume");
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch(&image, 1, ""))
+        .expect("the raw commit models a crafted writer");
+    match validate_store(&store, &sig()) {
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "promise cluster: reaction kind does not resume",
+        ))) => {}
+        other => panic!("the store path must share the reaction-kind gate: {other:?}"),
+    }
+}
+
+#[test]
+fn a_settled_promise_retaining_reactions_is_refused() {
+    let m = promise_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| !p.reactions.is_empty())
+        .expect("a pending reaction");
+    row.state = 1; // Fulfilled — but settlement drains reactions
+    expect_container_refusal(&image, "promise cluster: settled promise retains reactions");
+}
+
+#[test]
+fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
+    let m = promise_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    assert!(!image.promise_cluster.functions.is_empty(), "resolvers persisted");
+
+    let mut oor = image.clone();
+    oor.promise_cluster.functions[0].guard = oor.promise_cluster.guards.len() as u32;
+    expect_container_refusal(&oor, "promise cluster: guard index out of range");
+
+    let mut orphan = image.clone();
+    let absent = orphan
+        .promise_cluster
+        .promises
+        .iter()
+        .map(|p| p.owner)
+        .max()
+        .unwrap()
+        + 1;
+    orphan.promise_cluster.functions[0].promise = absent;
+    expect_container_refusal(&orphan, "promise cluster: resolving function names no promise row");
+
+    // An unreferenced guard cannot come from the compacting writer.
+    let mut sparse = image.clone();
+    sparse.promise_cluster.guards.push(false);
+    expect_container_refusal(&sparse, "promise cluster: guards not densely referenced");
+
+    // A resolver's name chunk has NO null exemption: the mint always
+    // interns a real empty chunk, and reading a NULL one faults.
+    let mut null_chunk = image;
+    null_chunk.promise_cluster.functions[0].name_chunk = u32::MAX;
+    expect_container_refusal(&null_chunk, "chunk offset out of arena bounds");
+}
+
+#[test]
+fn a_crafted_combinator_row_is_refused() {
+    let m = combinator_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    assert_eq!(image.promise_cluster.combinators.len(), 1, "one live combinator");
+
+    let mut kind = image.clone();
+    kind.promise_cluster.combinators[0].kind = 4;
+    expect_container_refusal(&kind, "promise cluster: unknown combinator kind");
+
+    // An unreferenced combinator cannot come from the compacting writer.
+    let mut sparse = image.clone();
+    let extra = sparse.promise_cluster.combinators[0];
+    sparse.promise_cluster.combinators.push(extra);
+    expect_container_refusal(&sparse, "promise cluster: combinators not densely referenced");
+
+    // `remaining` below the pending element reactions would underflow
+    // at the drain (each settling element decrements it once).
+    let mut low = image.clone();
+    low.promise_cluster.combinators[0].remaining = 0;
+    expect_container_refusal(&low, "promise cluster: remaining below its pending reactions");
+
+    // The results accumulator must name an `ARRY` row — the element
+    // drain writes through the dense store (the view-names-a-buffer-row
+    // discipline). The derived promise's slot is live and in bounds,
+    // but it is a promise, not an Array.
+    let mut results = image;
+    results.promise_cluster.combinators[0].results = results.promise_cluster.combinators[0].derived;
+    expect_container_refusal(&results, "promise cluster: combinator's results Array has no row");
+}
+
+/// The two-sided collision property: `PRMS` restores its resolving
+/// functions BEFORE `FUNC` adjudicates retained state, so a cluster
+/// row crafted onto a guest function's slot is refused by `FUNC`'s
+/// collision check (and a `FUNC` row onto a boot slot by `PRMS`'s own
+/// `contains_key` refusal).
+#[test]
+fn a_resolver_crafted_onto_a_guest_function_slot_is_refused() {
+    let m = quiescent_machine(
+        "var p = 0; var res = 0; var f = 0; var t = 0; \
+         p = new Promise(function (rs, rj) { res = rs; }); \
+         f = function (x) { return x + 1; }; t = 7; t",
+    );
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let guest = image.function_state.functions[0].owner;
+    image.promise_cluster.functions[0].function = guest;
+    // Keep the rows strictly ascending after the overwrite.
+    image
+        .promise_cluster
+        .functions
+        .sort_unstable_by_key(|row| row.function);
+    image.promise_cluster.functions.dedup_by_key(|row| row.function);
+    let crafted = write_machine(&image);
+    match from_snapshot_bytes(&crafted, &sig()) {
+        Err(SnapshotError::Corrupt("side-table restore: malformed retained function state")) => {}
+        Err(other) => panic!("the FUNC collision check must refuse the crafted slot: {other:?}"),
+        Ok(_) => panic!("the FUNC collision check must refuse the crafted slot"),
+    }
+}
