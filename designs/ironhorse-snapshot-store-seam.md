@@ -3488,6 +3488,28 @@ with segments. The design points that fell out of building it:
   machine too — an engine `to_primitive` gap over promise instances,
   the same cross-crank-independent class as the `.call` defect
   (P2-2), not a persistence divergence.
+- **Post-landing review hardening** (same day): a review pass over the
+  carry commit found three crafted-container shapes the first cut
+  admitted, all fixed with locks. (1) A `Combine` reaction's ELEMENT
+  index was unbounded — `array_set_dense` grows the accumulator's
+  `length` to cover it (`u32::MAX` overflows the `i + 1` under the dev
+  profile) and the `any` aggregate walk then iterates `0..length`, a
+  billions-long loop from one crafted row; the index is now bounded
+  below the results Array's carried length (the creation preset every
+  honest index sits under), a cross-ATOM check living in the bounds
+  gate beside the results-names-a-row rule. (2) Duplicate
+  `(combinator, element)` pairs passed the `remaining >= pending`
+  gate and would count one element twice at the drain, settling the
+  combinator short of its total — pairs are now distinct. (The
+  review's underflow claim for this shape was REFUTED: each carried
+  reaction drains at most once, so decrements never exceed `pending
+  <= remaining`.) (3) An undone combinator whose derived promise row
+  was crafted SETTLED would re-settle it at the drain —
+  `settle_promise` overwrites state and result unconditionally (its
+  Pending gates live in the resolving-function and `done` paths), so
+  `!done` now requires the derived row Pending. All three re-checked
+  at the vm restore belt-and-braces, generated honestly by the fuzz
+  arm, and locked in `crafted_row_refusals.rs`.
 
 ##### P2-5 — `SavedJumpRow.call_depth_offset` is decoded but never bounded
 
