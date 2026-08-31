@@ -15,7 +15,11 @@ The design landed via PR [#153](https://github.com/endojs/endo-but-for-bots/pull
 [#128](https://github.com/endojs/endo-but-for-bots/pull/128) (which was
 closed unmerged 2026-05-14 in favor of this design's unified scheme).
 
-Implementation is in flight on the `llm` roadmap branch:
+Implementation is in flight on the `llm` roadmap branch (the fork's
+long-lived integration branch, where in-progress work lands ahead of
+upstream). The state below is a snapshot as of 2026-05-18; re-verify
+the open PRs' mergeability against current `llm` HEAD before relying on
+the Landed/Deferred split:
 
 - PR [#254](https://github.com/endojs/endo-but-for-bots/pull/254) is the
   tracking PR for the design (placeholder README note, open).
@@ -34,7 +38,8 @@ What landed in PR #283 vs. what is deferred:
   `-p <file>`/`--stdin`/`--literal <s>` for source; `-n <name-path>`
   for destination) on `endo store`. Mirrored axes on `endo cat`. New
   `endo write` and `endo read` for mount-path mutation
-  (`EndoDirectory.writeText` / `readText`).
+  (`EndoDirectory.writeText` / `readText`), with `--text`/`--json`
+  landed; `--blob` deferred (see below).
 - **Deferred.** Zip-framed tree ingest/egress
   (`endo store --tree -z`, `endo store --tree --zip --stdin`,
   `endo cat --tree -z`), blocked on `daemon-checkin-checkout`.

@@ -14,15 +14,16 @@ The design landed via PR [#162](https://github.com/endojs/endo-but-for-bots/pull
 (merged 2026-05-12) as a sibling to
 [`cli-store-verb-text-modes`](cli-store-verb-text-modes.md) (PR #153).
 
-Implementation has progressed in phases:
+Implementation has progressed in phases (re-verify any still-open
+PRs' mergeability against current `llm` HEAD before relying on the
+landed/deferred split):
 
 - PR [#204](https://github.com/endojs/endo-but-for-bots/pull/204)
-  (`feat(cli,daemon): tentative endo edit verb impl (per design #162)
-  — surfaces design gaps`, closed 2026-05-11) was the tentative
-  builder probe that surfaced 14 design gaps by reducing the design
-  to code. Twelve of those gaps are resolved inline below
-  (see "Resolved during builder dispatch"); two remain in "Open
-  Questions surfaced by builder dispatch".
+  (`feat(cli,daemon): tentative endo edit verb impl (per design #162)`,
+  closed 2026-05-11) was the tentative builder probe that surfaced
+  14 design gaps by reducing the design to code. 12 of those gaps
+  are resolved inline below (see "Resolved during builder dispatch");
+  2 remain in "Open Questions surfaced by builder dispatch."
 - The pure edit-format core landed in [#796](https://github.com/endojs/endo-but-for-bots/pull/796)
   as `packages/daemon/src/hashline.js` (one canonical module in `@endo/daemon`,
   exported for `@endo/cli` to import when CLI wiring lands — not the two
@@ -59,7 +60,7 @@ thin wrapper around the daemon-side `EndoGuest.edit` /
 surface (it holds the mount-internal lock across the
 read-validate-splice-write critical section), and the CLI exists for
 human ergonomics. See "Design framing: agent tool-calls drive the
-daemon, not the CLI" below for the framing.
+daemon, not the CLI" below for the rationale.
 
 ## What is the Problem Being Solved?
 
