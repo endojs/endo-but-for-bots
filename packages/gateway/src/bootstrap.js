@@ -23,21 +23,16 @@
  * (`__getMethodNames__`) works out of the box.
  *
  * Identifiers carried on the bootstrap wire (`publicKey`,
- * `proofOfPossession`, `nonce`, etc.) are immutable `ArrayBuffer`
- * per the `@endo/bytes` convention. Typed arrays cannot be frozen,
- * so `@endo/marshal` and `@endo/patterns` reject them as
- * non-passable; immutable `ArrayBuffer` is the canonical
- * cross-realm byte shape. The bootstrap also accepts `Uint8Array`
- * on its internal in-realm API (where the pattern checker is not
- * in the picture) so embedders that hand the bootstrap to direct
- * callers do not have to convert.
+ * `proofOfPossession`, `nonce`, etc.) use the canonical byte-array
+ * pass style: a hardened, whole-buffer `Uint8Array` backed by an
+ * immutable `ArrayBuffer`.
  */
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { encodeHex } from '@endo/hex';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { makeNonceRegistry, NONCE_BYTE_LENGTH } from './proof-of-possession.js';
 
@@ -76,51 +71,43 @@ const GatewayBootstrapInterface = M.interface('GatewayBootstrap', {
 });
 
 /**
- * Validate that a byte-shaped input is an immutable `ArrayBuffer`
- * (wire shape) or a `Uint8Array` (internal use) with the expected
- * length. Returns the input unchanged for chaining.
+ * Validate a `Uint8Array` with the expected length and return it in
+ * canonical passable form.
  *
  * @param {unknown} candidate
  * @param {string} fieldName For diagnostics.
  * @param {number} expectedLength In bytes.
- * @returns {ArrayBuffer | Uint8Array}
+ * @returns {Uint8Array}
  */
 const checkBytesLength = (candidate, fieldName, expectedLength) => {
-  if (
-    !(candidate instanceof ArrayBuffer) &&
-    !(candidate instanceof Uint8Array)
-  ) {
+  if (!(candidate instanceof Uint8Array)) {
+    throw makeError(X`${q(fieldName)} must be a Uint8Array`);
+  }
+  if (candidate.length !== expectedLength) {
     throw makeError(
-      X`${q(fieldName)} must be an immutable ArrayBuffer or Uint8Array`,
+      X`${q(fieldName)} must be ${q(expectedLength)} bytes, got ${q(candidate.length)}`,
     );
   }
-  const length =
-    candidate instanceof Uint8Array ? candidate.length : candidate.byteLength;
-  if (length !== expectedLength) {
-    throw makeError(
-      X`${q(fieldName)} must be ${q(expectedLength)} bytes, got ${q(length)}`,
-    );
-  }
-  return candidate;
+  return frozenBytes(candidate);
 };
 
 /**
  * @param {unknown} candidate
- * @returns {ArrayBuffer | Uint8Array}
+ * @returns {Uint8Array}
  */
 const checkPublicKey = candidate =>
   checkBytesLength(candidate, 'publicKey', ED25519_PUBLIC_KEY_LENGTH);
 
 /**
  * @param {unknown} candidate
- * @returns {ArrayBuffer | Uint8Array}
+ * @returns {Uint8Array}
  */
 const checkSignature = candidate =>
   checkBytesLength(candidate, 'signature', ED25519_SIGNATURE_LENGTH);
 
 /**
  * @param {unknown} candidate
- * @returns {ArrayBuffer | Uint8Array}
+ * @returns {Uint8Array}
  */
 const checkNonce = candidate =>
   checkBytesLength(candidate, 'nonce', NONCE_BYTE_LENGTH);
@@ -168,17 +155,10 @@ const checkContentTreeRoot = candidate => {
 
 /**
  * Render a public key as lowercase hex; used as a registration key.
- * Accepts either an immutable `ArrayBuffer` (wire shape) or a
- * `Uint8Array` (internal use); copies the immutable case via
- * `bytesFromImmutable` so byte indexing works either way.
- *
- * @param {ArrayBuffer | Uint8Array} bytes
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
-const publicKeyToHex = bytes => {
-  const view = bytes instanceof Uint8Array ? bytes : bytesFromImmutable(bytes);
-  return encodeHex(view);
-};
+const publicKeyToHex = bytes => encodeHex(bytes);
 
 /**
  * Create the bootstrap exo, the registration registry, and the
@@ -189,7 +169,7 @@ const publicKeyToHex = bytes => {
  * @returns {{
  *   bootstrap: GatewayBootstrap,
  *   listRegisteredPeers: () => ReadonlyArray<{
- *     publicKeys: ReadonlyArray<ArrayBuffer | Uint8Array>,
+ *     publicKeys: ReadonlyArray<Uint8Array>,
  *     weblets: ReadonlyArray<WebletDescriptor>,
  *     relayTarget?: unknown,
  *     daemon?: unknown,
@@ -321,9 +301,9 @@ export const makeGatewayBootstrap = ({
   };
 
   /**
-   * @param {ArrayBuffer | Uint8Array} publicKey
-   * @param {ArrayBuffer | Uint8Array} nonce
-   * @param {ArrayBuffer | Uint8Array} signature
+   * @param {Uint8Array} publicKey
+   * @param {Uint8Array} nonce
+   * @param {Uint8Array} signature
    * @param {{ daemon?: unknown, cancelled?: Promise<unknown>, relayTarget?: unknown }} extras
    */
   const registerInternal = (publicKey, nonce, signature, extras) => {

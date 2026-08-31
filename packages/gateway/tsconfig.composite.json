@@ -24,6 +24,9 @@
       "path": "../hex/tsconfig.composite.json"
     },
     {
+      "path": "../immutable-arraybuffer/tsconfig.composite.json"
+    },
+    {
       "path": "../patterns/tsconfig.composite.json"
     },
     {

@@ -4,6 +4,9 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 
+import { thawedBytes } from '@endo/immutable-arraybuffer';
+import { passStyleOf } from '@endo/pass-style';
+
 import {
   NONCE_DOMAIN_SEPARATION_PREFIX,
   NONCE_BYTE_LENGTH,
@@ -49,17 +52,12 @@ test('NONCE_BYTE_LENGTH is 32', t => {
 });
 
 /**
- * Spread an ArrayBuffer or Uint8Array as a number array for
- * deep-equal comparisons. An immutable `ArrayBuffer` cannot back a
- * `Uint8Array` view directly, so we `slice(0)` first to obtain a
- * mutable copy.
+ * Spread a mutable or passable byte array for deep-equal
+ * comparisons.
  *
- * @param {ArrayBuffer | Uint8Array} bytes
+ * @param {Uint8Array} bytes
  */
-const spread = bytes =>
-  bytes instanceof Uint8Array
-    ? [...bytes]
-    : [...new Uint8Array(bytes.slice(0))];
+const spread = bytes => [...thawedBytes(bytes)];
 
 test('hashNonceForSigning produces a 32-byte digest', t => {
   const crypto = makeNodeCryptoPowers();
@@ -166,6 +164,8 @@ test('issue returns a fresh 32-byte nonce', t => {
   t.is(issued.hashedNonce.byteLength, 32);
   t.is(issued.issuedAt, 1_000_000);
   t.is(issued.expiresAt, 1_000_000 + DEFAULT_NONCE_TTL_MS);
+  t.is(passStyleOf(issued.nonce), 'byteArray');
+  t.is(passStyleOf(issued.hashedNonce), 'byteArray');
 });
 
 test('issue mints distinct nonces on each call', t => {
@@ -364,6 +364,23 @@ test('verifyAndConsume rejects non-byte-shaped publicKey', t => {
           signature: new Uint8Array(64),
         }),
       ),
-    { message: /publicKey must be an immutable ArrayBuffer or Uint8Array/ },
+    { message: /publicKey must be a Uint8Array/ },
+  );
+});
+
+test('verifyAndConsume rejects a bare ArrayBuffer', t => {
+  const crypto = makeNodeCryptoPowers();
+  const clock = makeFakeClock(0);
+  const reg = makeNonceRegistry({ crypto, clock });
+  t.throws(
+    () =>
+      reg.verifyAndConsume(
+        /** @type {any} */ ({
+          publicKey: new ArrayBuffer(32),
+          nonce: new Uint8Array(32),
+          signature: new Uint8Array(64),
+        }),
+      ),
+    { message: /publicKey must be a Uint8Array/ },
   );
 });

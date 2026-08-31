@@ -1,18 +1,18 @@
 export type CryptoPowers = {
-  randomBytes(byteLength: number): ArrayBuffer;
-  sha256(input: ArrayBuffer | Uint8Array): ArrayBuffer;
+  randomBytes(byteLength: number): Uint8Array;
+  sha256(input: Uint8Array): Uint8Array;
   verifyEd25519(args: {
-    publicKey: ArrayBuffer | Uint8Array;
-    message: ArrayBuffer | Uint8Array;
-    signature: ArrayBuffer | Uint8Array;
+    publicKey: Uint8Array;
+    message: Uint8Array;
+    signature: Uint8Array;
   }): boolean;
 };
 
 export type ClockPowers = { now(): number };
 
 export type ChallengeIssued = {
-  nonce: ArrayBuffer;
-  hashedNonce: ArrayBuffer;
+  nonce: Uint8Array;
+  hashedNonce: Uint8Array;
   issuedAt: number;
   expiresAt: number;
 };
@@ -20,9 +20,9 @@ export type ChallengeIssued = {
 export type NonceRegistry = {
   issue(): ChallengeIssued;
   verifyAndConsume(args: {
-    publicKey: ArrayBuffer | Uint8Array;
-    nonce: ArrayBuffer | Uint8Array;
-    signature: ArrayBuffer | Uint8Array;
+    publicKey: Uint8Array;
+    nonce: Uint8Array;
+    signature: Uint8Array;
   }): void;
   size(): number;
 };
@@ -36,9 +36,9 @@ export type WebletDescriptor = {
 };
 
 export type PublicKeyAddition = {
-  publicKey: ArrayBuffer | Uint8Array;
-  nonce: ArrayBuffer | Uint8Array;
-  signature: ArrayBuffer | Uint8Array;
+  publicKey: Uint8Array;
+  nonce: Uint8Array;
+  signature: Uint8Array;
 };
 
 export type RegistrationArgs = PublicKeyAddition & {
@@ -51,7 +51,7 @@ export type RelayRegistrationArgs = PublicKeyAddition & {
 };
 
 export type RegistrationEntry = {
-  publicKeys: ReadonlyArray<ArrayBuffer | Uint8Array>;
+  publicKeys: ReadonlyArray<Uint8Array>;
   daemon: unknown;
   weblets: Map<string, WebletDescriptor>;
   deregistered: boolean;
@@ -63,7 +63,7 @@ export type Registration = {
   addPublicKey(addition: PublicKeyAddition): Promise<void>;
   deregister(): Promise<void>;
   listWeblets(): Promise<ReadonlyArray<WebletDescriptor>>;
-  listPublicKeys(): Promise<ReadonlyArray<ArrayBuffer | Uint8Array>>;
+  listPublicKeys(): Promise<ReadonlyArray<Uint8Array>>;
 };
 
 export type GatewayBootstrap = {

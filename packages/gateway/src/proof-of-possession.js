@@ -39,13 +39,11 @@
  * single-use; a registrant who takes too long discovers the
  * expiration at `register` time and must call `challenge` again.
  *
- * Wire shape: byte-arrays cross the exo boundary as **immutable
- * `ArrayBuffer`**, per the `@endo/bytes` convention. Typed arrays
- * (`Uint8Array`) cannot be frozen, so `@endo/marshal` and
- * `@endo/patterns` reject them as non-passable. The bootstrap
- * accepts immutable `ArrayBuffer`s on the wire and converts to
- * `Uint8Array` views internally for byte-level work (hashing,
- * signature checks).
+ * Wire shape: byte arrays cross the exo boundary as hardened,
+ * whole-buffer `Uint8Array` values backed by immutable
+ * `ArrayBuffer`s. This is the canonical `byteArray` pass style.
+ * The bootstrap copies them to mutable views for byte-level work
+ * (hashing and signature checks).
  *
  * The signature-verification primitive is supplied by the caller
  * (a Node-backed `crypto.verify` adapter for the daemon; a libsodium
@@ -56,9 +54,8 @@
 
 import { makeError, q, X } from '@endo/errors';
 import { constantTimeBytesEqual } from '@endo/bytes/constant-time-equals.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
 import { encodeHex } from '@endo/hex';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 
 /** @import { ChallengeIssued, ClockPowers, CryptoPowers, NonceRegistry } from './types.js' */
 
@@ -90,37 +87,26 @@ export const DEFAULT_NONCE_TTL_MS = 30_000;
 harden(DEFAULT_NONCE_TTL_MS);
 
 /**
- * Convert any byte-shaped input (immutable `ArrayBuffer` or
- * `Uint8Array`) to a `Uint8Array` view for byte-level work. Copies
- * when the input is an immutable buffer (which cannot back a view
- * directly).
+ * Copy a byte array to a mutable `Uint8Array` for byte-level work.
  *
- * @param {ArrayBuffer | Uint8Array} input
+ * @param {Uint8Array} input
  * @returns {Uint8Array}
  */
-const asUint8 = input => {
-  if (input instanceof Uint8Array) {
-    return input;
-  }
-  // Immutable ArrayBuffer or a plain ArrayBuffer: copy via
-  // `bytesFromImmutable` (the helper works on any ArrayBufferLike).
-  return bytesFromImmutable(input);
-};
+const asUint8Array = input => thawedBytes(input);
 
 /**
  * Hash a nonce together with the domain-separation prefix. The
  * registrant signs *this* hash, not the raw nonce.
  *
- * Accepts either an immutable `ArrayBuffer` (wire shape) or a
- * `Uint8Array` (internal use), returns an immutable `ArrayBuffer`
- * so the hash can travel back across the wire.
+ * Returns a canonical byte-array passable so the hash can travel
+ * back across the wire.
  *
- * @param {ArrayBuffer | Uint8Array} nonce
+ * @param {Uint8Array} nonce
  * @param {CryptoPowers} crypto
- * @returns {ArrayBuffer}
+ * @returns {Uint8Array}
  */
 export const hashNonceForSigning = (nonce, crypto) => {
-  const view = asUint8(nonce);
+  const view = asUint8Array(nonce);
   if (view.length !== NONCE_BYTE_LENGTH) {
     throw makeError(
       X`Nonce must be ${q(NONCE_BYTE_LENGTH)} bytes, got ${q(view.length)}`,
@@ -131,33 +117,26 @@ export const hashNonceForSigning = (nonce, crypto) => {
   combined.set(prefix, 0);
   combined.set(view, prefix.length);
   const hashed = crypto.sha256(combined);
-  // The crypto adapter is expected to return an immutable buffer.
-  // If a caller wires up a non-immutable adapter we coerce here
-  // so the rest of the code does not have to special-case.
-  if (hashed instanceof Uint8Array) {
-    return bytesToImmutable(hashed);
-  }
-  return hashed;
+  // Canonicalize even if a caller wires up an adapter that returns
+  // a mutable Uint8Array.
+  return frozenBytes(hashed);
 };
 harden(hashNonceForSigning);
 
 /**
  * Compare two byte-shaped inputs in constant time. Returns `true`
  * iff they have the same length and the same bytes. Accepts
- * immutable `ArrayBuffer` or `Uint8Array`.
+ * mutable or passable `Uint8Array` values.
  *
- * @param {ArrayBuffer | Uint8Array} a
- * @param {ArrayBuffer | Uint8Array} b
+ * @param {Uint8Array} a
+ * @param {Uint8Array} b
  * @returns {boolean}
  */
 export const constantTimeEqual = (a, b) => {
-  if (
-    !(a instanceof Uint8Array || a instanceof ArrayBuffer) ||
-    !(b instanceof Uint8Array || b instanceof ArrayBuffer)
-  ) {
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) {
     return false;
   }
-  return constantTimeBytesEqual(asUint8(a), asUint8(b));
+  return constantTimeBytesEqual(asUint8Array(a), asUint8Array(b));
 };
 harden(constantTimeEqual);
 
@@ -226,7 +205,7 @@ export const makeNonceRegistry = ({
     issue() {
       sweep();
       const rawNonce = crypto.randomBytes(NONCE_BYTE_LENGTH);
-      const nonceView = asUint8(rawNonce);
+      const nonceView = asUint8Array(rawNonce);
       if (nonceView.length !== NONCE_BYTE_LENGTH) {
         throw makeError(
           X`CryptoPowers.randomBytes must return ${q(NONCE_BYTE_LENGTH)} bytes`,
@@ -235,13 +214,10 @@ export const makeNonceRegistry = ({
       const hashedNonce = hashNonceForSigning(nonceView, crypto);
       const issuedAt = clock.now();
       const expiresAt = issuedAt + ttlMs;
-      pending.set(encodeHex(asUint8(hashedNonce)), expiresAt);
-      // Return immutable buffers so the caller can pass the result
-      // straight back across the wire.
-      const nonceOut =
-        rawNonce instanceof ArrayBuffer
-          ? rawNonce
-          : bytesToImmutable(nonceView);
+      pending.set(encodeHex(hashedNonce), expiresAt);
+      // Return a passable byte array so the caller can pass the
+      // result straight back across the wire.
+      const nonceOut = frozenBytes(nonceView);
       return harden({
         nonce: nonceOut,
         hashedNonce,
@@ -251,36 +227,26 @@ export const makeNonceRegistry = ({
     },
     /**
      * @param {object} args
-     * @param {ArrayBuffer | Uint8Array} args.publicKey
-     * @param {ArrayBuffer | Uint8Array} args.nonce
-     * @param {ArrayBuffer | Uint8Array} args.signature
+     * @param {Uint8Array} args.publicKey
+     * @param {Uint8Array} args.nonce
+     * @param {Uint8Array} args.signature
      */
     verifyAndConsume({ publicKey, nonce, signature }) {
-      if (!(
-        publicKey instanceof ArrayBuffer || publicKey instanceof Uint8Array
-      )) {
-        throw makeError(
-          X`publicKey must be an immutable ArrayBuffer or Uint8Array`,
-        );
+      if (!(publicKey instanceof Uint8Array)) {
+        throw makeError(X`publicKey must be a Uint8Array`);
       }
-      if (!(nonce instanceof ArrayBuffer || nonce instanceof Uint8Array)) {
-        throw makeError(
-          X`nonce must be an immutable ArrayBuffer or Uint8Array`,
-        );
+      if (!(nonce instanceof Uint8Array)) {
+        throw makeError(X`nonce must be a Uint8Array`);
       }
-      if (!(
-        signature instanceof ArrayBuffer || signature instanceof Uint8Array
-      )) {
-        throw makeError(
-          X`signature must be an immutable ArrayBuffer or Uint8Array`,
-        );
+      if (!(signature instanceof Uint8Array)) {
+        throw makeError(X`signature must be a Uint8Array`);
       }
       // Re-derive the hashed nonce the caller would have signed and
       // look it up in the pending table. If the caller submitted
       // a wrong-length nonce, this throws before we reach the
       // expiration check, which is the right precedence.
       const hashedNonce = hashNonceForSigning(nonce, crypto);
-      const key = encodeHex(asUint8(hashedNonce));
+      const key = encodeHex(hashedNonce);
       const expiresAt = pending.get(key);
       if (expiresAt === undefined) {
         // Either never-issued or already-consumed; both are

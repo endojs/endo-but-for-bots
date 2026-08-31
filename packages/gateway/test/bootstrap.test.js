@@ -5,7 +5,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import { E } from '@endo/far';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import {
@@ -20,8 +20,8 @@ import {
 } from '../src/node-crypto-powers.js';
 
 /**
- * Helper: build an immutable ArrayBuffer of the given length and
- * fill byte. Tests use this to construct invalid-length inputs.
+ * Helper: build a passable byte array of the given length and fill
+ * byte. Tests use this to construct invalid-length inputs.
  *
  * @param {number} length
  * @param {number} [fill]
@@ -29,7 +29,7 @@ import {
 const immutableBytesOf = (length, fill = 0) => {
   const u = new Uint8Array(length);
   u.fill(fill);
-  return bytesToImmutable(u);
+  return frozenBytes(u);
 };
 
 /**

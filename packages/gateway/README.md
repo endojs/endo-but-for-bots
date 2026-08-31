@@ -203,10 +203,9 @@ await E(registration).publishWeblet({
 });
 ```
 
-Byte fields on the wire are immutable `ArrayBuffer` per the
-`@endo/bytes` convention. Typed arrays cannot be frozen and so are
-not passable; immutable `ArrayBuffer` is the canonical cross-realm
-byte shape.
+Byte fields on the wire use the canonical byte-array pass style: a
+hardened, whole-buffer `Uint8Array` backed by an immutable
+`ArrayBuffer`.
 
 ## Tests
 

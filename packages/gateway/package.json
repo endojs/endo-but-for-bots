@@ -55,11 +55,13 @@
     "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/hex": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@types/node": "^26.2.0",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
