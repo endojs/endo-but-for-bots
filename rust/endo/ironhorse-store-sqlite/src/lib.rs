@@ -1260,6 +1260,90 @@ mod tests {
         assert_eq!(store.manifest().unwrap().epoch, 2);
     }
 
+    /// Exercise rollback after mutation has actually started. The trigger
+    /// fires on `small_state`, after pages, extents, leaf hashes, free rows,
+    /// and both edge tables have been updated inside the transaction.
+    #[test]
+    fn sql_abort_after_row_mutation_rolls_back_and_forces_a_cold_retry() {
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prior = store.manifest().unwrap();
+        let prior_image = store_to_image(&store).unwrap();
+        let prior_counts: Vec<i64> = [
+            "slot_pages",
+            "chunk_exts",
+            "free_segs",
+            "leaf_hashes",
+            "page_edges",
+            "edge_pairs",
+            "small_state",
+            "meta",
+        ]
+        .iter()
+        .map(|table| {
+            store
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        })
+        .collect();
+
+        assert!(m.run(&PROG_B).completed);
+        let image2 = m.snapshot_image(&sig());
+        let batch2 = image_to_batch(&image2, 2, &prior.seal);
+
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER abort_late_commit
+                 BEFORE UPDATE ON small_state
+                 BEGIN SELECT RAISE(ABORT, 'late commit failure'); END;",
+            )
+            .unwrap();
+        match store.commit(&batch2) {
+            Err(StoreError::Io(msg)) => {
+                assert!(msg.contains("late commit failure"), "named SQL failure: {msg}")
+            }
+            other => panic!("late SQL abort must refuse the commit: {other:?}"),
+        }
+
+        assert!(store.root_cache.is_none(), "a failed mutation drops the advanced cache");
+        assert_eq!(store.manifest().unwrap(), prior, "manifest stayed at the previous epoch");
+        assert_eq!(store_to_image(&store).unwrap(), prior_image, "all sealed content rolled back");
+        for (table, count) in [
+            "slot_pages",
+            "chunk_exts",
+            "free_segs",
+            "leaf_hashes",
+            "page_edges",
+            "edge_pairs",
+            "small_state",
+            "meta",
+        ]
+        .iter()
+        .zip(prior_counts)
+        {
+            let after: i64 = store
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(after, count, "{table} row set rolled back");
+        }
+        validate_store(&store, &sig()).expect("the previous epoch still validates");
+        drop(resume_from_store(&store, &sig()).expect("the previous epoch still resumes"));
+
+        store
+            .conn
+            .execute_batch("DROP TRIGGER abort_late_commit")
+            .unwrap();
+        store.commit(&batch2).expect("the honest retry succeeds through the cold path");
+        assert_eq!(store.manifest().unwrap().epoch, 2);
+        assert!(store.root_cache.is_some(), "the durable retry re-arms the cache");
+    }
+
     #[test]
     fn empty_store_reports_empty() {
         let store = SqliteHeapStore::open_in_memory().unwrap();
