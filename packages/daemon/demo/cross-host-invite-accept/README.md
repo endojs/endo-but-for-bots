@@ -1,4 +1,4 @@
-# Cross-host Pet-Daemon ↔ Pet-Daemon invite/accept over `wss://` + Noise (M5)
+# Cross-host Pet-Daemon <-> Pet-Daemon invite/accept over `wss://` + Noise (M5)
 
 This demo closes the literal M5 goal: **two real Endo Pet Daemons on different
 hosts** pairing through the **invite/accept workflow** over `wss://` + Noise IK +
@@ -100,7 +100,7 @@ used to be noted here: it performs the same cross-host pairing with the shipped
 **`endo` CLI binaries on both hosts**. On minion, `endo invite <guest>` (the CLI
 finds the daemon's control socket at `/data/endo.sock` via `ENDO_SOCK`, reached
 with `docker exec` over SSM); locally, `endo start`, then `endo store` /
-`endo make --UNCONFINED src/networks/ocapn.js` / `endo mv … '@nets/ocapn'` to
+`endo make --UNCONFINED src/networks/ocapn.js` / `endo mv ... '@nets/ocapn'` to
 install the network, `endo accept` to redeem the (hint-rewritten) invitation,
 and `endo send` / `endo inbox` to round-trip messages in **both directions**
 over the single wss+Noise session the local side dialed. The only non-CLI step

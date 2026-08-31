@@ -62,7 +62,7 @@ no client-side rewrite needed. The image predates `ocapn-tcp-server.mjs`, so the
 unit bind-mounts the script from `/opt/ocapn-demo/` over its in-tree path
 (which also gives it the in-image `node_modules` resolution).
 
-Live cross-host transcript (garden container → `minion.town:8929`):
+Live cross-host transcript (garden container -> `minion.town:8929`):
 [`transcript-tcp-cross-host.txt`](transcript-tcp-cross-host.txt).
 With this, the cross-host capability round-trip is proven over **both** OCapN.md
 transports — WebSocket/HTTP (through Caddy TLS) and TCP+CBOR (direct).
