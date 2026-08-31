@@ -127,29 +127,29 @@ Components:
 OpenCode's TUI lives in
 [`packages/opencode/src/cli/cmd/tui/`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui);
 the routes are at
-[`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuiroutes/session/index.tsx).
+[`packages/opencode/src/cli/cmd/tui/routes/session/index.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui/routes/session/index.tsx).
 The components worth borrowing:
 
 - **Dialog pattern** for permission requests / model selection /
   agent selection: see
-  [`packages/opencode/src/cli/cmd/tui/component/dialog-agent.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuicomponent/dialog-agent.tsx)
+  [`packages/opencode/src/cli/cmd/tui/component/dialog-agent.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui/component/dialog-agent.tsx)
   and
-  [`dialog-model.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuicomponent/dialog-model.tsx).
+  [`dialog-model.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui/component/dialog-model.tsx).
   Endo's analogue is the `add-space-modal.js` / `endow-modal.js`
   family; the dialogs above show the shape we want: a single
   full-screen overlay with a filterable list and a single
   confirm-or-cancel.
 - **Sidebar with collapsible sections**:
-  [`packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuiroutes/session/sidebar.tsx)
+  [`packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx)
   shows the structure (sections for messages, files, branches);
   the chat space's sidebar borrows the section-collapse keyboard
   shortcuts.
 - **Todo rendering**:
-  [`packages/opencode/src/cli/cmd/tui/component/todo-item.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuicomponent/todo-item.tsx)
+  [`packages/opencode/src/cli/cmd/tui/component/todo-item.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui/component/todo-item.tsx)
   is the OpenCode renderer for a todo row; the markup translates
   almost line-for-line to a Chat component.
 - **Permission inline prompt**:
-  [`packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tuiroutes/session/permission.tsx)
+  [`packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx`](https://github.com/anomalyco/opencode/tree/d59d9966/packages/opencode/src/cli/cmd/tui/routes/session/permission.tsx)
   shows how OpenCode interrupts the transcript with a permission
   request and waits for an allow / deny / always click. Endo's
   [`daemon-form-request`](daemon-form-request.md) is the existing
@@ -176,6 +176,13 @@ bindings:
 
 The existing chat-bar `enter` semantics are preserved; the new
 bindings are scoped to when the focus is *not* in the chat bar.
+
+Note for implementation: the status bar doubles as an action trigger
+(`g s` above), but the § Layout mockup renders it as plain read-only
+text. When this phase lands, give the focused/actionable status bar a
+visible affordance distinct from a read-only status line (focus ring,
+underline, or a chevron), so a user who has not memorized the keymap can
+discover that the region is interactive.
 
 ### Composition with other designs
 

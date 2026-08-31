@@ -80,11 +80,20 @@ included) answers `request(prompt)`. The divergence is deliberate and
 carries meaning: `request` is the single-prompt / single-reply verb,
 whereas `deliberate` denotes a different reply cardinality: a fan-out
 to `N` members returning one *aggregated verdict* envelope, with an
-`options` bag selecting members and deadlines. To keep a caller who
-only knows the guest verb from needing new vocabulary, the panel also
-answers `request(prompt)` as an alias that delegates to `deliberate`
-with default members; `deliberate` is the richer entry point for
-callers that want to choose members or read the aggregate shape.
+`options` bag selecting members and deadlines. The panel deliberately
+does **not** alias `request` to `deliberate`. The two return different
+reply shapes — `request` a single reply, `deliberate` an aggregate
+`{ members, agreed, verdicts }` envelope — so a caller that reaches a
+guest through the uniform `request(prompt)` contract must get the
+single-reply shape every other guest returns, not an aggregation
+envelope smuggled under the same verb. A generic caller (the ACP
+adapter, or any code composing against the plain-guest verb) therefore
+special-cases a panel-shaped guest and calls `deliberate` explicitly;
+the distinct verb name is the signal that the reply cardinality differs.
+Aliasing the two would complect the uniform guest-request contract with
+the panel's fan-out aggregation — the same "hidden, unadvertised
+precondition" trap [`endopen-acp-server`](endopen-acp-server.md) Design
+Decision 9 names and rejects.
 
 ### Chat UX: the panel widget
 
@@ -122,9 +131,10 @@ underlying execution is genuinely concurrent.
 
 The panel is an agent module. Its `make(powers)` entry point
 receives:
-- `provideGuest`: the host-constructed, attenuated guest-creation facet
-  (not the host's own `provideGuest`; see § Permission / capability
-  story) used to formulate panel members on demand.
+- `guestFacet`: the host-constructed, attenuated guest-creation facet
+  (deliberately *not* named `provideGuest`, since it is not the host's
+  own `provideGuest`; see § Permission / capability story) used to
+  formulate panel members on demand.
 - `inbox` / `submit`: standard guest plumbing for parent communication.
 - `Timer`: for per-member deadlines ([endoclaw-timer](endoclaw-timer.md)).
 - a `Lal` or `Fae` provider capability (Fae is Lal's sibling
@@ -138,20 +148,16 @@ API (sketch):
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-export const make = ({ provideGuest, inbox, Timer }) =>
+export const make = ({ guestFacet, inbox, Timer }) =>
   makeExo(
     'Panel',
     M.interface('Panel', {
+      // No `request` alias: a panel's reply shape (an aggregate
+      // envelope) differs from the plain-guest `request` contract, so
+      // callers reach it through the distinctly named `deliberate`.
       deliberate: M.call(M.string()).optional(M.record()).returns(M.promise()),
-      // guest-verb alias: request(prompt) === deliberate(prompt, {})
-      request: M.call(M.string()).returns(M.promise()),
     }),
     {
-      // Alias so a caller that only knows the ordinary guest verb can
-      // still prompt a panel; delegates to deliberate with defaults.
-      request(prompt) {
-        return this.deliberate(prompt, {});
-      },
       async deliberate(prompt, options = {}) {
         const memberNames = options.members ?? ['assessor', 'stylist', 'archivist'];
         const deadline = options.deadlineMs ?? 60_000;
@@ -160,14 +166,28 @@ export const make = ({ provideGuest, inbox, Timer }) =>
         // worker) so the deliberation below is genuinely parallel rather
         // than interleaved on one event loop.
         const members = await Promise.all(
-          memberNames.map((name) => E(provideGuest).provideGuest(name)),
+          memberNames.map((name) => E(guestFacet).provideGuest(name)),
         );
         const settled = await Promise.allSettled(
           members.map(async (member) => {
+            let timedOut = false;
             const reply = await Promise.race([
               E(member).request(prompt),
-              E(Timer).delay(deadline).then(() => { throw Error('panel-member-timeout'); }),
-            ]);
+              E(Timer).delay(deadline).then(() => {
+                timedOut = true;
+                throw Error('panel-member-timeout');
+              }),
+            ]).finally(() => {
+              // Promise.race only stops the panel *waiting* on the loser;
+              // it does not stop the member's in-flight work. On timeout
+              // cancel the member, so a timed-out branch cannot keep
+              // running (and, if it holds an LLM capability, keep burning
+              // tokens). cancel() is the deterministic-stop verb every
+              // guest agent module implements (endopen-acp-server §
+              // Design Decision 9); dismissing the member guest is the
+              // fallback when it is ephemeral.
+              if (timedOut) E(member).cancel('panel-member-timeout');
+            });
             return reply;
           }),
         );
@@ -193,7 +213,7 @@ This parallelism is not automatic, though: a guest's eval path falls
 back to a shared main worker when no distinct worker is named
 (`packages/daemon/src/guest.js`, the `workerName` / `mainWorkerId`
 path), so the panel must formulate each member in its own worker rather
-than co-locating them.
+than co-locating it.
 When it does, the concurrency is the "falls out of Endo trivially" the
 maintainer named; when it does not, the members share one worker and the
 panel is mechanically no better off than OpenCode's single-process
@@ -257,8 +277,9 @@ This is a strong validation of the shape.
 
 1. **Daemon-level panel agent module**
    (`packages/lal/panel.js` or a new `packages/panel/`):
-   the `Panel` exo, the `deliberate` method (plus the `request` alias),
-   the per-member timeout, the aggregation function.
+   the `Panel` exo, the `deliberate` method (no `request` alias — see
+   § Concept), the per-member timeout **and its cancel-the-loser step**,
+   the concurrency bound, the aggregation function.
    This phase also includes the **host-side attenuated guest-creation
    facet** the panel depends on: a scoped maker on the host interface
    that formulates panel members bounded by the panel parent's
@@ -284,7 +305,7 @@ This is a strong validation of the shape.
    **Size: M.**
    Cross-references [daemon-retention-paths](daemon-retention-paths.md).
 
-Total: 3 to 4 weeks for phases 1-3; phase 4 is independent.
+Total: 3 to 4 weeks for Phases 1-3; Phase 4 is independent.
 
 ## Dependencies
 
@@ -300,12 +321,23 @@ Total: 3 to 4 weeks for phases 1-3; phase 4 is independent.
 
 - **Member identity**:
   do panel members survive the panel?
-  Default proposal: yes, members are durable guests addressable by
-  pet-name;
-  the panel is a coordinator, not an owner.
-  Alternative: panel-scoped ephemeral members that get GC'd with the panel.
-  The first is more useful for repeat deliberations;
-  the second is more hygienic.
+  Default proposal (resolved): **panel-scoped ephemeral members**,
+  re-formulated (or re-attenuated from the current panel parent's
+  authority) on each `deliberate` call and GC'd with the panel.
+  This keeps the § Permission / capability story invariant — "the panel
+  cannot escalate beyond the parent's own authority" — true for *every*
+  invocation: because a member's capability set is re-derived from the
+  authority of the parent driving *this* call, a later, lower-authority
+  panel parent never inherits a member still holding capabilities an
+  earlier, higher-authority parent granted.
+  Durable, pet-name-addressable members reused across calls remain an
+  *explicit* opt-in, permitted only when each reuse is guarded by a
+  narrower-or-equal-authority check (the reused member's held
+  capabilities must fall within the reusing parent's authority); absent
+  that check, reuse is forbidden, since it would silently widen a weaker
+  parent's reach. So the trade-off the earlier draft weighed
+  (durable-and-reusable vs. hygienic) now folds in this authority
+  consequence, not GC hygiene alone.
 - **Aggregation strategy**:
   does the panel apply a tally / majority / LLM-aggregation,
   or simply hand back all member verdicts?
@@ -319,10 +351,25 @@ Total: 3 to 4 weeks for phases 1-3; phase 4 is independent.
   the final aggregated `value` is a separate trailing message.
 - **Concurrency bound**:
   is there a daemon-level cap on the number of concurrent panel members?
-  Proposal: no hard cap;
-  rely on the formula-store back-pressure (worker provisioning fails
-  gracefully when out of slots).
-  Document the practical cap based on observed worker memory.
+  Note first that the daemon has **no** worker-pool cap or
+  worker-provisioning back-pressure today — the only `back-pressure`
+  marker in `packages/daemon/src/*.js` is an unrelated
+  `// TODO Respect back-pressure signal` on accepting network
+  connections — so "worker provisioning fails gracefully when out of
+  slots" is *not* a property this design can lean on as written; without
+  a bound, an unbounded fan-out (compounded by orphaned timed-out
+  members before the cancel-the-loser step above frees their workers)
+  would silently degrade to members sharing one worker, the exact
+  OpenCode-parity failure this design exists to avoid.
+  Resolution: the panel enforces its **own** explicit
+  `options.maxConcurrent` bound (default a small N, e.g. 8) in
+  `deliberate` by chunking the fan-out, so member creation never outruns
+  worker capacity regardless of daemon-level provisioning; the
+  cancel-the-loser step frees a timed-out member's worker promptly so
+  the bound is not consumed by orphans.
+  Document the practical cap based on observed worker memory, and treat
+  the exhaustion path as a Verification item (below), not an assumed
+  graceful degradation.
 
 ## Design Decisions
 
@@ -365,6 +412,18 @@ its own worker (see § Daemon: the panel agent module):
 - **Capability containment.** A test grants a member no `Shell` and
   asserts it cannot invoke one, confirming the structural (not
   list-based) permission story of § Permission / capability story.
+- **Timeout cancels the loser.** A test dispatches a panel whose member
+  blocks past the per-member deadline; after the deadline fires the test
+  asserts the member's in-flight work actually *stops* — its `cancel()`
+  was invoked and it makes no further progress / releases its held LLM
+  capability — not merely that the panel stopped waiting on it. This
+  distinguishes a genuine cancel from `Promise.race`'s wait-only
+  semantics.
+- **Exhaustion path.** A test requests more members than
+  `options.maxConcurrent` (or more than the available workers) and
+  asserts the panel *bounds* the fan-out (chunking to the cap) and still
+  returns an aggregate verdict, rather than silently degrading to
+  members sharing one worker.
 
 ## Related Designs
 

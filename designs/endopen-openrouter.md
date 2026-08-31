@@ -39,7 +39,7 @@ registry.
 
 ## Design
 
-### Phase 1: Drop-in OpenRouter provider (minimal)
+### Phase 1: Drop-in OpenRouter Provider (minimal)
 
 Add `packages/lal/providers/openrouter.js`:
 
@@ -227,7 +227,7 @@ gate it behind Phase 2
 |-------|---------------------------------------|------|------------------------------------------|
 | 1     | OpenRouter provider file + heuristic  | S    | ~80 LOC, no breaking change              |
 | 2     | Provider registry refactor            | M    | Pre-work for Bedrock / Groq / xAI later  |
-| 3     | Form-based provider config            | M    | Depends on phase 2; UX improvement       |
+| 3     | Form-based provider config            | M    | Depends on Phase 2; UX improvement       |
 
 Total: 2-3 weeks if all three land in sequence; Phase 1 alone is 1
 day.

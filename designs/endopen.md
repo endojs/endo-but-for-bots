@@ -76,6 +76,10 @@ the `parent_id` column;
 see `session.ts` lines 1 through 1011 in the citation index);
 all sessions share one OS process and one permission service.
 Endo isolates *guests*, formula-typed entities in a durable graph.
+A *formula* is the load-bearing term here: a typed durable entry in
+that graph, keyed by its 256-bit formula ID and incarnated on demand
+(the full definition is in § Persistence and Session Model below, and in
+[daemon-256-bit-identifiers](daemon-256-bit-identifiers.md)).
 Endo's daemon enumerates 30 formula types in
 [`packages/daemon/src/formula-type.js`](../packages/daemon/src/formula-type.js)
 lines 6 through 37 (one of which is `guest`, the type covering this case).
@@ -95,7 +99,7 @@ the formula identity story and
 the capability-graph story).
 Concurrent execution needs no experimental flag in Endo, though genuine
 parallelism still depends on pinning each guest to its own worker rather
-than co-locating them on the shared main worker.
+than co-locating it on the shared main worker.
 OpenCode, by contrast, gates background execution behind an experimental
 flag entirely: `background: true` is reachable only under
 `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`
@@ -108,7 +112,7 @@ worker-pinning mechanics.
 
 ## Feature-by-Feature Mapping
 
-### LLM provider surface
+### LLM Provider Surface
 
 | OpenCode Provider              | Endo Equivalent (today)            | Status                                            |
 |--------------------------------|------------------------------------|---------------------------------------------------|
@@ -184,7 +188,7 @@ which capabilities to expose to its LLM client.
 The two-layer pattern (capability + tool wrapper that calls the
 capability) is documented in [`daemon-agent-tools`](daemon-agent-tools.md).
 
-### Subagents and concurrent execution
+### Subagents and Concurrent Execution
 
 | OpenCode Feature                                         | Endo Equivalent                                  | Status                                          |
 |----------------------------------------------------------|--------------------------------------------------|-------------------------------------------------|
@@ -230,7 +234,7 @@ See [endopen-concurrent-subagents](endopen-concurrent-subagents.md)
 for the UX surface that exposes this advantage and the host-mediated
 guest-creation machinery it depends on.
 
-### UX surface: the TUI question
+### UX Surface: the TUI Question
 
 | OpenCode Surface                | Endo Equivalent                          | Status                                        |
 |---------------------------------|------------------------------------------|-----------------------------------------------|
@@ -255,7 +259,7 @@ this design proposes a complementary browser-side opencode-shaped space
 that ships before the Rust port.
 See [endopen-tui-shell](endopen-tui-shell.md) for the surface.
 
-### Plugin / skill / MCP ecosystem
+### Plugin / Skill / MCP Ecosystem
 
 | OpenCode Feature                  | Endo Equivalent                                   | Status                                       |
 |-----------------------------------|---------------------------------------------------|----------------------------------------------|
@@ -289,7 +293,7 @@ writing an ACP adapter for the daemon would let Zed (and other ACP clients)
 drive Endo as if it were OpenCode, without losing Endo's capability story.
 See [endopen-acp-server](endopen-acp-server.md).
 
-### Permission model
+### Permission Model
 
 OpenCode's permission model is a flat ruleset of triples
 (`permission name`, `pattern`, `action`) where `action` is one of
@@ -315,7 +319,7 @@ could render which capabilities a given guest holds, with revoke
 buttons that disincarnate the capability via the caretaker pattern
 already designed in [daemon-capability-filesystem](daemon-capability-filesystem.md).
 
-### Persistence and session model
+### Persistence and Session Model
 
 OpenCode's session model is row-oriented SQLite:
 
@@ -352,7 +356,7 @@ The two models are not in conflict
 (Endo has inbox-history per guest which is the analogue of a session);
 the difference is whether persistence is a database or a graph of formulae.
 
-### Client/server and protocol surfaces
+### Client/Server and Protocol Surfaces
 
 OpenCode has three external protocol surfaces:
 

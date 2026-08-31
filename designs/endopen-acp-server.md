@@ -215,8 +215,8 @@ explicitly and auditably; it is never implicit in the ACP request.
 
 The key insight: ACP "sessions" are ephemeral references to durable
 Endo guests. Closing an ACP session does **not** delete the guest;
-the next `session/list` on the next adapter run shows them under
-their pet names, and `session/resume` re-attaches. This is the right
+the next `session/list` on the next adapter run shows it under
+its pet name, and `session/resume` re-attaches. This is the right
 default for a capability-graph store; OpenCode's session model
 (rows that disappear when archived) is the wrong default here.
 
@@ -280,7 +280,7 @@ This is a different feature (consuming MCP tools, not exposing
 Endo's tools as MCP). It composes naturally with the
 [trust-on-first-bind](trust-on-first-bind.md) capability-policy
 pattern. Listed as out of scope for this design's first cut;
-deserves a `endopen-mcp-client.md` follow-up if prioritized.
+deserves an `endopen-mcp-client.md` follow-up if prioritized.
 
 ## Phased Implementation
 
@@ -290,11 +290,11 @@ deserves a `endopen-mcp-client.md` follow-up if prioritized.
 | 2     | Streaming `session/update` notifications                        | M    | ~300 LOC; subscribes to guest inbox  |
 | 3     | Permission routing through form-request                         | M    | ~250 LOC; user-in-the-loop story     |
 | 4     | `session/load` / `session/resume` / formula-ID persistence      | S-M  | ~200 LOC; per-adapter SQLite or simple JSON store |
-| 5     | `session/cancel`, `session/fork`, `session/list`                | M    | ~300 LOC; depends on guest API extensions |
+| 5     | `session/cancel`, `session/fork`, `session/list`                | M    | ~300 LOC adapter + new guest-agent-surface work: request-interruption `cancel()` and transcript+grant `fork()` (~100-150 LOC host facet, Decision 9) — neither exists today |
 | 6     | `endo acp` CLI verb                                             | S    | ~80 LOC                              |
 | 7     | Optional `permission.auto` mode                                 | S    | ~50 LOC                              |
 
-Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
+Total: 4-5 weeks for Phases 1-6; Phase 7 is a follow-on toggle.
 
 ## Dependencies
 
@@ -371,35 +371,50 @@ Total: 4-5 weeks for phases 1-6; phase 7 is a follow-on toggle.
    method name with different semantics depending on which agent module
    happens to back the guest, a hidden, unadvertised precondition and
    the least-surprise trap. Instead the guest agent interface *requires*
-   `cancel()` and `fork()` (trivially satisfiable), so each protocol
-   method has one meaning. If a future guest kind genuinely cannot fork,
-   the adapter advertises the missing capability to the client (at
-   `initialize` / `session/new`) rather than degrading silently.
+   `cancel()` and `fork()`, so each protocol method has one meaning.
+   These are **new guest-agent-surface work, not already-satisfied
+   primitives**: neither exists on the guest agent interface today
+   (`grep -rn "\bfork(" packages/daemon/src/guest.js packages/lal
+   packages/genie` returns nothing), and the daemon's existing
+   `cancel(petNameOrPath, reason?)` is formula-store *value release*,
+   not interruption of an in-flight LLM request — the semantics
+   `session/cancel` actually needs. `fork()` is heavier still: copying a
+   guest's transcript *and* capability grants into a child guest is the
+   same host-mediated attenuated-creation plumbing the sibling
+   [`endopen-concurrent-subagents`](endopen-concurrent-subagents.md)
+   prices as a Size-M ~100-150 LOC host facet, not a shim. This work is
+   scoped into Phase 5 (the `session/cancel` / `session/fork` phase,
+   which already flags "depends on guest API extensions"); its estimate
+   folds in the request-interruption `cancel()` and the transcript+grant
+   `fork()` rather than treating them as free. If a future guest kind
+   genuinely cannot fork, the adapter advertises the missing capability
+   to the client (at `initialize` / `session/new`) rather than degrading
+   silently.
 
 ## Verification
 
 Each phase lands with checks that make its load-bearing claims
 falsifiable:
 
-- **Capability preservation (phases 1, 3).** A conformance test drives
+- **Capability preservation (Phases 1, 3).** A conformance test drives
   the adapter with an ACP client that requests a tool the session's
   guest was not endowed with (e.g. `Shell` when only `Mount` / `Lal`
   were granted) and asserts the request is refused structurally, never
   auto-approved. A second test asserts a permission request surfaces as
   a form-request and blocks until answered.
-- **Credential hygiene (phases 1, 4).** A test asserts that a formula ID
+- **Credential hygiene (Phases 1, 4).** A test asserts that a formula ID
   observed via `session/list` cannot be used as the `authenticate`
   bearer token, and that a minted session token authenticates exactly
   one guest and is revocable without renaming the guest.
-- **cwd containment (phases 1, 3).** A test opens a `session/new` whose
+- **cwd containment (Phases 1, 3).** A test opens a `session/new` whose
   `cwd` lies outside the guest agent's parent `Mount` and asserts the
   adapter neither widens the mount silently nor grants host-filesystem
   access: the request either surfaces a form-request grant or fails with
   an ACP error.
-- **Session durability (phases 4, 5).** A test closes an ACP session,
+- **Session durability (Phases 4, 5).** A test closes an ACP session,
   restarts the adapter, and asserts `session/list` still shows the guest
   and `session/resume` re-attaches.
-- **No silent degradation (phase 5).** A test asserts every guest agent
+- **No silent degradation (Phase 5).** A test asserts every guest agent
   module the adapter can back implements `cancel()` and `fork()`, so no
   `session/cancel` / `session/fork` call falls into a best-effort path.
 
