@@ -39,22 +39,13 @@ export const httpDeclarations = harden({
     help: () => string;
 };
 type HttpPassableBytesReader<TReadReturn = undefined> = {
-    stream: (synPromise: HttpERef<HttpStreamNode<HttpPassable, TReadReturn>>) => Promise<HttpStreamNode<Uint8Array, TReadReturn>>;
-    readReturnPattern: () => HttpPattern | undefined;
+    stream: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<Uint8Array, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
-type HttpPassableCap = Promise<any> | HttpRemotableObject | unknown;
-type HttpAtom = undefined | null | boolean | number | bigint | string | Uint8Array | symbol;
-type HttpContainer<PC = unknown, E = unknown> = {} | {} | {};
-type HttpERef<T = unknown> = PromiseLike<T> | T;
+type HttpERef<T> = T | Promise<T>;
 type HttpStreamNode<Y = undefined, R = undefined> = HttpStreamYieldNode<Y, R> | {
     value: R;
     promise: null;
-};
-type HttpPassable<PC = HttpPassableCap, E = Error> = void | HttpAtom | HttpContainer<PC, E> | PC | E;
-type HttpPattern = Exclude<HttpPassable, Error | Promise<any>>;
-type HttpRemotableObject<I = string> = {
-    [PASS_STYLE]: 'remotable';
-    [Symbol.toStringTag]: I;
 };
 type HttpStreamYieldNode<Y = unknown, R = undefined> = {
     value: Y;

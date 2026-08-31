@@ -28,7 +28,7 @@
 
 export const fsDeclarations = harden({
   filesystem: {
-    aux: `type ERef<T = unknown> = PromiseLike<T> | T;
+    aux: `type ERef<T> = T | Promise<T>;
 type Directory = {
     getQid: () => Qid<'directory'>;
     getStat: () => Promise<NodeStat>;
@@ -66,8 +66,8 @@ type FilesystemStats = {
     type?: string;
 };
 type PassableBytesReader<TReadReturn = undefined> = {
-    stream: (synPromise: ERef<StreamNode<Passable, TReadReturn>>) => Promise<StreamNode<Uint8Array, TReadReturn>>;
-    readReturnPattern: () => Pattern | undefined;
+    stream: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<Uint8Array, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
 };
 type BlobRef = {
     sha256: () => Promise<string>;
@@ -83,10 +83,10 @@ type DirectoryPage = {
     entries: DirectoryEntry[];
     atEnd: boolean;
 };
-type PassableReader<TRead = Passable, TReadReturn = Passable> = {
+type PassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: ERef<StreamNode<undefined, TReadReturn>>) => Promise<StreamNode<TRead, TReadReturn>>;
-    readPattern: () => Pattern | undefined;
-    readReturnPattern: () => Pattern | undefined;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type DirectoryEntry = {
     name: string;
@@ -181,7 +181,7 @@ type WatchFromResult = {
 };
 type PassableBytesWriter<TWriteReturn = undefined> = {
     stream: (synPromise: ERef<StreamNode<Uint8Array, TWriteReturn>>) => Promise<StreamNode<undefined, TWriteReturn>>;
-    writeReturnPattern: () => Pattern | undefined;
+    writeReturnPattern: () => unknown | undefined;
 };
 type LockType = 'shared' | 'exclusive';
 type LockOpts = {
@@ -198,18 +198,9 @@ type LockState = {
     start: bigint;
     length: bigint;
 };
-type PassableCap = Promise<any> | RemotableObject | unknown;
-type Atom = undefined | null | boolean | number | bigint | string | Uint8Array | symbol;
-type Container<PC = unknown, E = unknown> = {} | {} | {};
 type StreamNode<Y = undefined, R = undefined> = StreamYieldNode<Y, R> | {
     value: R;
     promise: null;
-};
-type Passable<PC = PassableCap, E = Error> = void | Atom | Container<PC, E> | PC | E;
-type Pattern = Exclude<Passable, Error | Promise<any>>;
-type RemotableObject<I = string> = {
-    [PASS_STYLE]: 'remotable';
-    [Symbol.toStringTag]: I;
 };
 type NodeKind = 'file' | 'directory';
 type StreamYieldNode<Y = unknown, R = undefined> = {
@@ -226,10 +217,10 @@ type StreamYieldNode<Y = unknown, R = undefined> = {
   },
   workspace: {
     aux: `type MountEndoMountEntry = MountPathEntry;
-type MountPassableReader<TRead = MountPassable, TReadReturn = MountPassable> = {
+type MountPassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: MountERef<MountStreamNode<undefined, TReadReturn>>) => Promise<MountStreamNode<TRead, TReadReturn>>;
-    readPattern: () => MountPattern | undefined;
-    readReturnPattern: () => MountPattern | undefined;
+    readPattern: () => unknown | undefined;
+    readReturnPattern: () => unknown | undefined;
 };
 type MountNameChange = {
     add: string;
@@ -246,7 +237,7 @@ type MountEndoMountFile = {
     kind: () => 'file';
     list: () => Promise<never>;
     text: () => Promise<string>;
-    stream: (synPromise: MountERef<MountStreamNode<MountPassable, MountPassable>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     json: () => Promise<unknown>;
     sha256: () => Promise<string>;
     size: () => Promise<bigint>;
@@ -257,7 +248,7 @@ type MountEndoMountFile = {
     append: (content: string) => Promise<void>;
     writeBytes: (readableRef: MountERef<MountPassableBytesReader>) => Promise<void>;
     stat: () => Promise<MountEndoMountStat>;
-    snapshot: () => Promise<MountFarRef<MountEndoReadable>>;
+    snapshot: () => Promise<unknown>;
     readOnly: () => MountReadableBlobView;
     help: (method?: string) => string;
 };
@@ -281,7 +272,6 @@ type MountEndoMountStat = {
     atime: bigint;
 };
 type MountDirectoryWriteSource = MountReadableBlobSource | MountReadableTree;
-type MountCallable = (...args: any[]) => any;
 type MountReadableBlobSource = {
     stream: (...args: any[]) => PromiseLike<unknown>;
 };
@@ -299,7 +289,7 @@ type MountPathEntry = {
     child: (name: string) => MountPathEntry;
     help: (method?: string) => string;
 };
-type MountERef<T = unknown> = PromiseLike<T> | T;
+type MountERef<T> = T | Promise<T>;
 type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> | {
     value: R;
     promise: null;
@@ -321,23 +311,12 @@ type MountEndoReadable = {
     help: (method?: string) => string;
 };
 type MountReadableBlobView = {
-    stream: (synPromise: MountERef<MountStreamNode<MountPassable, MountPassable>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     getInfo: () => Promise<MountBlobInfo>;
     fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
     help: (method?: string) => string;
-};
-type MountDataOnly<T = unknown> = Omit<T, {
-    [P in keyof T]: T[P] extends MountCallable ? P : never;
-}[keyof T]>;
-type MountPassableCap = Promise<any> | MountRemotableObject | unknown;
-type MountAtom = undefined | null | boolean | number | bigint | string | Uint8Array | symbol;
-type MountContainer<PC = unknown, E = unknown> = {} | {} | {};
-type MountPattern = Exclude<MountPassable, Error | Promise<any>>;
-type MountRemotableObject<I = string> = {
-    [PASS_STYLE]: 'remotable';
-    [Symbol.toStringTag]: I;
 };
 type MountTreeEntry = {
     path: string[];
