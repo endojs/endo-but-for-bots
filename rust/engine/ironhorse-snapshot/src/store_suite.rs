@@ -50,14 +50,19 @@ struct Baseline {
     final_blob: Vec<u8>,
 }
 
-fn run_baseline(compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline {
+fn run_baseline(scenario: &str, compiled: &[(Vec<u8>, Vec<String>)]) -> Baseline {
     let mut m = Interp::new();
     m.link_intrinsics(&compiled[0].1);
     let mut results = Vec::new();
     let mut computrons = Vec::new();
-    for (bytecode, _) in compiled {
+    for (i, (bytecode, _)) in compiled.iter().enumerate() {
         let o = m.run(bytecode);
-        assert!(o.completed, "baseline crank completes (halt: {:?})", o.halt);
+        assert!(
+            o.completed,
+            "{scenario} baseline crank {} completes (halt: {:?})",
+            i + 1,
+            o.halt
+        );
         results.push(o.result);
         computrons.push(o.computrons);
     }
@@ -259,7 +264,7 @@ fn metamorphic<S: HeapStore + 'static>(
     cranks: &[&str],
 ) {
     let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
-    let baseline = run_baseline(&compiled);
+    let baseline = run_baseline(scenario, &compiled);
 
     let (r, c, b) = run_blob(&compiled);
     assert_agrees("blob", scenario, &baseline, &r, &c, &b);
@@ -290,6 +295,54 @@ fn metamorphic<S: HeapStore + 'static>(
 ///
 /// Fixtures follow the anchored equal-symbol-set discipline (every
 /// crank of a scenario uses the same program-symbol set).
+/// A carry scenario. Every crank of a scenario must reference the same
+/// program-symbol SET (the suite's anchored discipline: the baseline
+/// links intrinsics once, from crank 1's names, and runs the rest
+/// unrelinked, so a name first seen in crank 2 resolves to nothing).
+/// Setup and observation naturally use different members, so each
+/// crank carries the same dead `if (0)` mention block ahead of its
+/// own body -- compiling interns those names without executing
+/// anything, and the block is identical in every variant, so it
+/// cannot itself introduce a divergence.
+fn carry<S: HeapStore + 'static>(
+    fresh: &mut dyn FnMut() -> S,
+    scenario: &str,
+    mentions: &str,
+    cranks: &[&str],
+) {
+    let bodies: Vec<String> = cranks
+        .iter()
+        .map(|body| {
+            format!(
+                // Declarations WITHOUT initializers: `var x;` on an
+                // existing global leaves it alone, so the same
+                // preamble can open every crank of the scenario.
+                "var b; var box; var buf; var c; var d; var dv; \
+                 var f; var g; var i; var it; var m; var mi; \
+                 var n; var nf; var o; var p; var re; var s; \
+                 var t; var ta; var C; \
+                 if (0) {{ (function (a, k, v) {{ return a + k + v; }}); {mentions} }} {body}"
+            )
+        })
+        .collect();
+    let cranks: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    // Enforce the discipline rather than letting it surface as a
+    // baffling `TypeError` three layers down: symbol ids are
+    // POSITIONAL, so one name interned by only some cranks shifts
+    // every id after it and the unrelinked baseline resolves garbage.
+    let anchor = compile(cranks[0]).1;
+    for (i, crank) in cranks.iter().enumerate().skip(1) {
+        let names = compile(crank).1;
+        assert_eq!(
+            names, anchor,
+            "{scenario} crank {} must intern exactly crank 1's program symbols, in order \
+             (add the ones it is missing to the scenario's mention block)",
+            i + 1
+        );
+    }
+    metamorphic(fresh, scenario, &cranks);
+}
+
 pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
     metamorphic(&mut fresh, "globals", &["var x = 5;", "x = x + 1;", "x + 10"]);
     metamorphic(
@@ -315,6 +368,95 @@ pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
             "o.a; o.c; o.d; delete o.b;",
             "o.a; o.b; o.c; o.d = 4;",
             "o.b; o.a + o.c + o.d",
+        ],
+    );
+    // The GRADUATED side-table carries. Until these landed the suite
+    // proved determinism only over globals, strings, plain objects and
+    // the free list -- every scenario's machine held an EMPTY side
+    // table, so no carry was ever exercised across the residency
+    // schedules, and a carry that decoded differently under a lazy
+    // fault, or metered differently after a mid-scenario checkpoint,
+    // would have agreed with itself in every twin and still diverged
+    // here. Each scenario suspends across a crank boundary with the
+    // family's state live, then OBSERVES it, so results, per-crank
+    // computrons and final canonical bytes all have to agree seven
+    // ways.
+    carry(
+        &mut fresh,
+        "language-rows",
+        "re.exec('').index; re.lastIndex; box.valueOf(); d.getTime(); \
+         new Number(0); new Date(0);",
+        &[
+            "re = /a(b+)c/g; box = new Number(41); d = new Date(86400000); re.lastIndex",
+            "t = re.exec('xabbc').index; re.lastIndex",
+            "t = re.lastIndex + box.valueOf() + d.getTime(); t",
+        ],
+    );
+    carry(
+        &mut fresh,
+        "callables",
+        // No `f.call(o, 1)` here: a cross-crank `.call` on a guest
+        // function is a defect this branch tracks separately (it
+        // throws in the UNINTERRUPTED baseline too), and a determinism
+        // scenario must not be the place it is discovered.
+        "f.bind(o, 0); o.k;",
+        &[
+            "f = function (a) { return a + this.k; }; o = { k: 10 }; b = f.bind(o, 5); o.k",
+            "t = b(); o.k = 20; t",
+            "t = b() + o.k; t",
+        ],
+    );
+    carry(
+        &mut fresh,
+        "accessors-and-private",
+        // The dead class is what interns the PRIVATE name `#n`, which
+        // only a class body can spell.
+        "i.n; new C(); \
+         (class { #n = 0; get n() { return this.#n; } set n(v) { this.#n = v; } });",
+        &[
+            "C = class { #n = 3; get n() { return this.#n; } set n(v) { this.#n = v; } }; \
+             i = new C(); i.n",
+            "t = i.n; i.n = i.n + 4; t",
+            "t = i.n; t",
+        ],
+    );
+    carry(
+        &mut fresh,
+        "generators-and-iterators",
+        "it.next().value; it.next().done; new Map(); m.set('a', 0); m.entries(); \
+         mi.next().value[0];",
+        &[
+            "g = function* () { var a = 1; yield a; yield a + 1; yield a + 2; }; \
+             it = g(); m = new Map(); m.set('a', 1); m.set('b', 2); mi = m.entries(); \
+             t = it.next().value; t",
+            "t = it.next().value + mi.next().value[1]; t",
+            "t = it.next().value + mi.next().value[1] + (it.next().done ? 100 : 0); t",
+        ],
+    );
+    carry(
+        &mut fresh,
+        "intl-and-proxy",
+        "nf.format(0); c.compare('a', 'a'); p.v; new Proxy({ v: 0 }, { get: null }); \
+         new Intl.NumberFormat('en', { style: 'percent' }); new Intl.Collator('en');",
+        &[
+            "nf = new Intl.NumberFormat('en', { style: 'percent' }); \
+             c = new Intl.Collator('en'); \
+             p = new Proxy({ v: 1 }, { get: function (o, k) { return o[k] * 3; } }); p.v",
+            "t = nf.format(0.5) + ':' + c.compare('a', 'b'); t",
+            "t = t + ':' + p.v + ':' + nf.format(0.25); t",
+        ],
+    );
+    carry(
+        &mut fresh,
+        "typed-arrays-and-disposal",
+        "new ArrayBuffer(1); new Uint16Array(buf, 0, 1); new DataView(buf, 0, 1); \
+         new DisposableStack(); s.defer(null); s.dispose(); dv.getUint8(0);",
+        &[
+            "buf = new ArrayBuffer(16); ta = new Uint16Array(buf, 2, 4); \
+             dv = new DataView(buf, 0, 8); ta[0] = 513; n = 0; \
+             s = new DisposableStack(); s.defer(function () { n = 9; }); ta[0]",
+            "t = ta[0] + dv.getUint8(2); ta[1] = ta[0] + 1; t",
+            "s.dispose(); t = t + ta[1] + n; t",
         ],
     );
     // A heap spanning several pages and extents, so lazy runs genuinely
