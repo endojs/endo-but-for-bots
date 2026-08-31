@@ -734,11 +734,20 @@ impl SlotArena {
     /// re-faultable, marked resident: they live in memory), and the
     /// tail page's expected fault length tracks the committed row
     /// rather than the attach-time one. No-op on a detached arena.
-    pub fn advance_backing(&mut self) {
+    ///
+    /// `chunk_bound` is the committed chunk-arena length, and moves for
+    /// the same reason the leaves do: a crank that allocates a string
+    /// grows the chunk arena, the checkpoint commits slot rows
+    /// referencing the new bytes, and those rows are clean — so they
+    /// are evictable and CAN fault again. Verified against the
+    /// attach-time length instead, such a re-fault reports a perfectly
+    /// healthy store as corrupt.
+    pub fn advance_backing(&mut self, chunk_bound: u64) {
         let count = self.capacity();
         let pages = count.div_ceil(SLOTS_PER_PAGE) as usize;
         if let Some(backing) = &mut self.lazy {
             backing.snapshot_count = count;
+            backing.chunk_bound = chunk_bound;
             while backing.resident.len() < pages {
                 backing.resident.push(Cell::new(true));
             }

@@ -367,3 +367,72 @@ fn the_persistable_function_classes_are_not_refused() {
         );
     }
 }
+
+/// Phase 8's evict/re-fault discipline, the half the leaves fix
+/// missed. A lazily resumed session freezes its backing's geometry at
+/// attach; its own checkpoints then advance it, because a
+/// committed-then-clean row is EVICTABLE and can therefore fault
+/// again, and must verify against what that commit wrote rather than
+/// the attach-time bytes. The leaves and the record count both
+/// advanced there; the chunk-offset bound did not.
+///
+/// So a crank that allocates a string grows the chunk arena, the
+/// checkpoint commits slot rows pointing into the new bytes, and
+/// re-faulting one of those rows verified its offset against the
+/// attach-time length -- reporting a perfectly healthy store as
+/// `corrupt store` (a panic, on the release path too). It needs no
+/// hostile input, only an eviction between a growing checkpoint and
+/// the next read.
+#[test]
+fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
+    use ironhorse_snapshot::machine::resume_from_store_lazy;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let cranks = [
+        "var s = 0; var t = 0; s = 'seed';",
+        "var s; var t; s = s + '-grown-past-the-attach-time-chunk-arena-length'; s",
+        "var s; var t; t = s; t",
+    ];
+    let compiled: Vec<_> = cranks.iter().map(|c| compile(c)).collect();
+
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let mut m = Interp::new();
+    m.link_intrinsics(&compiled[0].1);
+    assert!(m.run(&compiled[0].0).completed, "crank 1");
+    drop(
+        begin_store_session(m, &sig(), &mut *store.borrow_mut())
+            .map_err(|(_, e)| e)
+            .expect("begin"),
+    );
+
+    let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    let attach_len = store.borrow().manifest().expect("manifest").chunk_len;
+
+    // The growing crank, then the session's own checkpoint.
+    assert!(session.machine_mut().run(&compiled[1].0).completed, "crank 2");
+    checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+    let grown_len = store.borrow().manifest().expect("manifest").chunk_len;
+    assert!(
+        grown_len > attach_len,
+        "the fixture must actually grow the chunk arena ({attach_len} -> {grown_len})"
+    );
+
+    // Throw the just-committed, now-clean rows away and read them back.
+    // Pre-fix this panicked: `out-of-arena chunk offset ... corrupt store`.
+    let pages = session.machine().slots.capacity().div_ceil(256);
+    let mut evicted = 0;
+    for page in 0..pages {
+        evicted += session.machine().slots.evict_page(page) as u32;
+    }
+    assert!(evicted > 0, "the arm's premise: something was evictable");
+
+    let out = session.machine_mut().run(&compiled[2].0);
+    assert!(out.completed, "crank 3 after the evict sweep: {:?}", out.halt);
+    assert_eq!(
+        out.result, "seed-grown-past-the-attach-time-chunk-arena-length",
+        "the re-faulted string is intact"
+    );
+    checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
+        .expect("checkpoint after the re-faults");
+}
