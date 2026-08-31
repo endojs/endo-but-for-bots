@@ -666,10 +666,18 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             .filter(|(_, p)| p.state == 0)
             .map(|(i, _)| i)
             .collect();
-        if !pending.is_empty() && !arrays.is_empty() {
+        // The results Array must have a POSITIVE carried length (the
+        // element index is bounded below it), and an undone
+        // combinator's derived promise must be PENDING — drawing the
+        // derived from the pending list satisfies the gate for either
+        // `done` value, an honest shape either way.
+        let sized: Vec<&ironhorse_snapshot::image::ArrayImage> =
+            arrays.iter().filter(|a| a.length > 0).collect();
+        if !pending.is_empty() && !sized.is_empty() {
             for _ in 0..(c.byte() % 3) {
                 let ci = prms_combinators.len() as u32;
                 let host = pending[(c.byte() as usize) % pending.len()];
+                let results = sized[(c.byte() as usize) % sized.len()];
                 let reaction = ironhorse_vm::PromiseReactionRow {
                     on_fulfilled: slot(&mut c),
                     on_rejected: slot(&mut c),
@@ -677,17 +685,17 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                     reject: slot(&mut c),
                     kind: 2,
                     a: ci,
-                    b: c.u32() % 8,
+                    b: c.u32() % results.length,
                 };
                 prms_promises[host].reactions.push(reaction);
                 prms_combinators.push(ironhorse_vm::CombinatorRow {
                     kind: c.byte() % 4,
-                    derived: prms_promises[(c.byte() as usize) % prms_promises.len()].owner,
+                    derived: prms_promises[pending[(c.byte() as usize) % pending.len()]].owner,
                     // Exactly one pending element reaction names this
                     // combinator, so any remaining >= 1 satisfies the
                     // underflow gate.
                     remaining: 1 + c.u32() % 4,
-                    results: arrays[(c.byte() as usize) % arrays.len()].owner,
+                    results: results.owner,
                     done: c.byte() % 2 == 0,
                 });
             }

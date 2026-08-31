@@ -9942,11 +9942,31 @@ impl Interp {
     pub fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
         let owners: std::collections::BTreeSet<u32> =
             snap.promises.iter().map(|row| row.owner).collect();
+        let state_of = |owner: u32| -> Option<u8> {
+            snap.promises
+                .binary_search_by_key(&owner, |row| row.owner)
+                .ok()
+                .map(|i| snap.promises[i].state)
+        };
+        // Per-combinator results-Array length, for the element-index
+        // bound below (the bulk side tables restore before this verb,
+        // so the rows are in hand). An undone combinator's derived must
+        // still be PENDING — `done` latches exactly its settlement, and
+        // the drain's `settle_promise` overwrites unconditionally.
+        let mut results_lengths = Vec::with_capacity(snap.combinators.len());
         for c in &snap.combinators {
-            if c.kind > 3 || !owners.contains(&c.derived) {
+            if c.kind > 3
+                || !owners.contains(&c.derived)
+                || (!c.done && state_of(c.derived) != Some(0))
+            {
                 return false;
             }
+            match self.arrays.get(&crate::value::SlotIndex(c.results)) {
+                Some(data) => results_lengths.push(data.length),
+                None => return false,
+            }
         }
+        let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
         for row in &snap.promises {
             let state = match row.state {
                 0 => PromiseState::Pending,
@@ -9967,12 +9987,23 @@ impl Interp {
                     let kind = match r.kind {
                         0 => ReactionKind::User,
                         1 => ReactionKind::FinallyReturn,
-                        2 if (r.a as usize) < snap.combinators.len() => {
+                        // The element index must sit inside the results
+                        // Array's carried length (the creation preset —
+                        // `array_set_dense` would grow past it and the
+                        // `any` aggregate walk iterates `0..length`),
+                        // and each `(combinator, element)` pair appears
+                        // at most once (a duplicate would count one
+                        // element twice at the drain).
+                        2 if (r.a as usize) < snap.combinators.len()
+                            && r.b < results_lengths[r.a as usize]
+                            && elem_seen.insert((r.a, r.b)) =>
+                        {
                             ReactionKind::Combine(r.a, r.b)
                         }
                         // The async-flavored kinds name machinery no
                         // atom carries yet; the decoder refuses them
-                        // and so does this verb.
+                        // and so does this verb — as it does the
+                        // crafted `Combine` shapes above.
                         _ => return None,
                     };
                     Some(PromiseReaction {

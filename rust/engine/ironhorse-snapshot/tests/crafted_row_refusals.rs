@@ -508,3 +508,75 @@ fn a_resolver_crafted_onto_a_guest_function_slot_is_refused() {
         Ok(_) => panic!("the FUNC collision check must refuse the crafted slot"),
     }
 }
+
+/// The review-round hardening over the freshly landed cluster: three
+/// more shapes that pass structural decode but lie about the drain's
+/// invariants. Each is refused by name.
+#[test]
+fn a_crafted_combine_element_shape_is_refused() {
+    let m = combinator_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+
+    // An element index at or past the results Array's carried length:
+    // `array_set_dense` would grow the accumulator past any honest
+    // shape (and the `any` aggregate walk iterates `0..length`).
+    let mut oor = image.clone();
+    let r = oor
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 2)
+        .expect("a pending element reaction");
+    r.b = u32::MAX;
+    expect_container_refusal(&oor, "promise cluster: element index outside the results Array");
+
+    // A duplicate (combinator, element) pair: draining both counts one
+    // element twice, settling the combinator short of its total.
+    let mut dup = image;
+    let mut bs: Vec<&mut u32> = dup
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .filter(|r| r.kind == 2)
+        .map(|r| &mut r.b)
+        .collect();
+    assert!(bs.len() >= 2, "the fixture holds two element reactions");
+    *bs[0] = 0;
+    *bs[1] = 0;
+    expect_container_refusal(&dup, "promise cluster: duplicate element reaction");
+}
+
+#[test]
+fn an_undone_combinator_with_a_settled_derived_promise_is_refused() {
+    // No `.then` on the combinator, so the derived promise carries no
+    // reactions and the settled-retains-reactions gate stays out of
+    // the way — isolating the done/derived-state cross-check.
+    let m = quiescent_machine(
+        "var p1 = 0; var p2 = 0; var r1 = 0; var r2 = 0; var all = 0; var t = 0; \
+         p1 = new Promise(function (rs, rj) { r1 = rs; }); \
+         p2 = new Promise(function (rs, rj) { r2 = rs; }); \
+         all = Promise.all([p1, p2]); t = 7; t",
+    );
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let derived = image.promise_cluster.combinators[0].derived;
+    assert!(
+        !image.promise_cluster.combinators[0].done,
+        "the fixture's combinator is mid-flight"
+    );
+    let row = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .find(|p| p.owner == derived)
+        .expect("the derived promise's row");
+    row.state = 1; // Fulfilled — but `done` never latched, so the
+                   // drain would RE-settle it.
+    expect_container_refusal(
+        &image,
+        "promise cluster: undone combinator's derived promise is settled",
+    );
+}

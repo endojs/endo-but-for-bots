@@ -2477,6 +2477,12 @@ pub(crate) fn decode_promise_cluster(
     // The cross-references, all four tables now in hand.
     let owners: std::collections::BTreeSet<u32> =
         promises.iter().map(|row| row.owner).collect();
+    let state_of = |owner: u32| -> Option<u8> {
+        promises
+            .binary_search_by_key(&owner, |row| row.owner)
+            .ok()
+            .map(|i| promises[i].state)
+    };
     let mut guard_referenced = vec![false; guards.len()];
     for row in &functions {
         if !owners.contains(&row.promise) {
@@ -2499,6 +2505,7 @@ pub(crate) fn decode_promise_cluster(
         ));
     }
     let mut comb_pending = vec![0u32; combinators.len()];
+    let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
     for r in promises.iter().flat_map(|row| row.reactions.iter()) {
         if r.kind == 2 {
             match comb_pending.get_mut(r.a as usize) {
@@ -2508,6 +2515,16 @@ pub(crate) fn decode_promise_cluster(
                         "promise cluster: combinator index out of range",
                     ))
                 }
+            }
+            // One reaction per element: the combinator registers each
+            // element index exactly once at creation, so a duplicate
+            // `(combinator, element)` pair can only be crafted — and
+            // draining both would count one element twice, settling
+            // the combinator short of its real total.
+            if !elem_seen.insert((r.a, r.b)) {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: duplicate element reaction",
+                ));
             }
         }
     }
@@ -2520,6 +2537,17 @@ pub(crate) fn decode_promise_cluster(
         if !owners.contains(&row.derived) {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: combinator's derived promise has no row",
+            ));
+        }
+        // An undone combinator has not settled its derived promise yet
+        // — that is the one thing `done` latches — so an undone row
+        // whose derived is already settled can only be crafted, and
+        // the drain would RE-settle it: `settle_promise` overwrites
+        // state and result unconditionally (its Pending gates live in
+        // the resolving-function and `done` paths, not here).
+        if !row.done && state_of(row.derived) != Some(0) {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: undone combinator's derived promise is settled",
             ));
         }
         // kind byte 2 is Race, which never decrements `remaining`.
@@ -3942,15 +3970,40 @@ pub(crate) fn check_image_slot_bounds(
             return Err(OOC);
         }
     }
+    let mut results_lengths = Vec::with_capacity(lang.promise_cluster.combinators.len());
     for row in &lang.promise_cluster.combinators {
         owned(row.derived)?;
         owned(row.results)?;
-        if arrays
-            .binary_search_by_key(&row.results, |a| a.owner)
-            .is_err()
-        {
+        let Ok(k) = arrays.binary_search_by_key(&row.results, |a| a.owner) else {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: combinator's results Array has no row",
+            ));
+        };
+        results_lengths.push(arrays[k].length);
+    }
+    // A `Combine` reaction's element index writes the results Array at
+    // the drain (`array_set_dense` grows `length` to cover it) — and on
+    // the `any` path the AggregateError builder then iterates
+    // `0..length`. The combinator presets `length` to its ELEMENT COUNT
+    // at creation and every honest element index sits below it, so an
+    // index at or past the row's carried length can only be crafted:
+    // unchecked, it resumes a machine whose accumulator no execution
+    // produces (and a huge one turns the aggregate walk into a
+    // billions-long loop). This is a cross-ATOM check, so it lives here
+    // beside the results-names-a-row gate, not in the atom decoder.
+    for r in lang
+        .promise_cluster
+        .promises
+        .iter()
+        .flat_map(|row| row.reactions.iter())
+    {
+        if r.kind == 2
+            && results_lengths
+                .get(r.a as usize)
+                .is_none_or(|len| r.b >= *len)
+        {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: element index outside the results Array",
             ));
         }
     }
