@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 21;
+pub const STORE_SCHEMA_VERSION: u32 = 22;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1381,7 +1381,7 @@ impl SmallState {
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 28] = [
+        let sections: [Vec<u8>; 29] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1413,6 +1413,7 @@ impl SmallState {
             crate::image::encode_private_elements(&self.private_elements),
             crate::image::encode_disposable_stacks(&self.disposable_stacks),
             crate::image::encode_generators(&self.generators),
+            crate::image::encode_error_frames(&self.errors),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1473,7 +1474,7 @@ impl SmallState {
         // Schema-9 section (the error-data row), same empty-section
         // rule: the 8→9 migration appends exactly this.
         let errors_bytes = section("small state errors section")?;
-        let errors = if errors_bytes.is_empty() {
+        let mut errors = if errors_bytes.is_empty() {
             Vec::new()
         } else {
             crate::image::decode_errors(errors_bytes)?
@@ -1625,7 +1626,25 @@ impl SmallState {
         } else {
             crate::image::decode_generators(generator_bytes).map_err(StoreError::Snapshot)?
         };
-        // Same exact-consumption rule as the manifest: twenty-eight
+        // Schema-22 error CONSTRUCTION frames. Their own section for
+        // the same reason they get their own atom: appending one
+        // section is the migration this ladder already knows how to
+        // do, where widening the schema-9 error rows would have been a
+        // rewrite of a section in the middle.
+        let error_frames_bytes = section("small state error-frames section")?;
+        if !error_frames_bytes.is_empty() {
+            for (owner, frames) in crate::image::decode_error_frames(error_frames_bytes)
+                .map_err(StoreError::Snapshot)?
+            {
+                let Some(row) = errors.iter_mut().find(|e| e.owner == owner) else {
+                    return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                        "error-frame side table: owner has no error row",
+                    )));
+                };
+                row.frames = frames;
+            }
+        }
+        // Same exact-consumption rule as the manifest: twenty-nine
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -2027,6 +2046,7 @@ pub fn migrate_store(
             18 => migrate_v18_to_v19(store)?,
             19 => migrate_v19_to_v20(store)?,
             20 => migrate_v20_to_v21(store)?,
+            21 => migrate_v21_to_v22(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2505,6 +2525,35 @@ fn migrate_v19_to_v20(store: &mut dyn HeapStore) -> Result<(), StoreError> {
 }
 
 /// 20 → 21: synchronous generator activations join the small state.
+/// Schema 21 -> 22: append the (empty) error-frames section. Content
+/// preserving -- a v21 store's errors carried no frames, and an empty
+/// section decodes to exactly that.
+fn migrate_v21_to_v22(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 22;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     let mut manifest = store.manifest()?;
     let small = store.read_small_state()?;

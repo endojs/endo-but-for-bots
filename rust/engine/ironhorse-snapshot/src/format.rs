@@ -125,6 +125,12 @@ pub const PRIV: FourCc = FourCc(*b"PRIV");
 pub const DISP: FourCc = FourCc(*b"DISP");
 /// `GENR` — synchronous generator lifecycle and saved activations.
 pub const GENR: FourCc = FourCc(*b"GENR");
+
+/// The error-frame side table: the call-frame names an Error captured at
+/// CONSTRUCTION, which the `stack` accessor renders. Its own atom rather
+/// than wider `ERRD` rows, so an older container stays an
+/// encoding-identical subset and the read range keeps its meaning.
+pub const ESTK: FourCc = FourCc(*b"ESTK");
 /// `NFLR` — the installed-names floor (wave-6 W6-7): the id ceiling at
 /// or below which partial install passes leave bindings alone. Four
 /// big-endian bytes. Emitted only when it differs from the name-table
@@ -165,7 +171,7 @@ pub const IRONHORSE_MAGIC: [u8; 4] = *b"IRON";
 /// The reader accepts
 /// [`IRONHORSE_FORMAT_VERSION_MIN_READ`]`..=`this and refuses anything
 /// newer.
-pub const IRONHORSE_FORMAT_VERSION: u32 = 10;
+pub const IRONHORSE_FORMAT_VERSION: u32 = 11;
 
 /// The oldest format version this reader still decodes. Version-1
 /// containers predate the version-2 stamp; every version-1 writer in
