@@ -2133,6 +2133,37 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `7277b0fc4a72d8d6` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
+    /// `3f f7 de` folds into
+    /// `((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))`,
+    /// i.e. `X * X` where `X = ~ToInt32((~2071986176)^2)`. In IEEE-754 doubles
+    /// the inner product `(-2071986177)^2` rounds to `4293126717679075328`,
+    /// whose `ToInt32` is `-150994944`, so `X = 150994943` and the program's
+    /// value is `150994943^2`, the exactly-representable double
+    /// `22799472811573248`. XS's `fx_dtoa` prints that exact 17-digit integer,
+    /// whereas ironhorse — like V8/Node and ECMA-262 §6.1.6.1.20's shortest-
+    /// round-tripping rule — prints `22799472811573250`. Both parse to the
+    /// identical double, so the engines agree on the value and diverge only on
+    /// decimal spelling; the same class as `284de587e16bce32` /
+    /// `d99d263fcf6ca7a7` / `5c29667cc15d6d93` / `7289e31013d074ec` /
+    /// `783be6e6106bad98`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_7277b0fc4a72d8d6_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 0792c486c29a77190658d061a90fc215ba1777bce94464d104c93a508dc0d08b).
+        let data: &[u8] = &[0x3f, 0xf7, 0xde];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7277b0fc4a72d8d6 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
