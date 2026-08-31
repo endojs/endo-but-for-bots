@@ -4,11 +4,10 @@ import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import harden from '@endo/harden';
 import { encodeBase64 } from '@endo/base64';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import { makeExo } from '@endo/exo';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
-import { mapReader } from '@endo/stream';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeNodeReader } from '@endo/stream-node';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 // `LocalBlob` exposes the whole-value read surface plus the rich `ReadableBlob`
 // content-address + attenuation surface (`getInfo` / `range` / `textRange`) so
@@ -114,18 +113,19 @@ export const makeLocalBlob = filePath => {
     streamBase64(synPromise) {
       const nodeReadStream = fs.createReadStream(filePath);
       const reader = makeNodeReader(nodeReadStream);
-      const pump = makeReaderPump(mapReader(reader, encodeBase64));
-      return pump(/** @type {any} */ (synPromise));
+      return bytesReaderFromIterator(reader).streamBase64(
+        /** @type {any} */ (synPromise),
+      );
     },
-    // Decode via `bytesToText` (the same UTF-8 path the derived ranges use)
+    // Decode via `decodeUtf8` (the same UTF-8 path the derived ranges use)
     // rather than `readFile(path, 'utf-8')`: Node's string decode retains a
     // leading BOM while the `TextDecoder` the range path uses strips it, so the
     // two diverged on a BOM'd file and `range(0n, size).text()` no longer
     // equaled the whole-value `text()`. Reading bytes and decoding through one
     // shared path restores that attenuation identity.
-    text: async () => bytesToText(await fs.promises.readFile(filePath)),
+    text: async () => decodeUtf8(await fs.promises.readFile(filePath)),
     json: async () =>
-      JSON.parse(bytesToText(await fs.promises.readFile(filePath))),
+      JSON.parse(decodeUtf8(await fs.promises.readFile(filePath))),
     // The `{ algorithm, hash, size }` content-address triple. `hash` is base64
     // to match the extended `BlobRef`. Computed over the current file content.
     async getInfo() {

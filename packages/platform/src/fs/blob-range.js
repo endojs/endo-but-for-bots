@@ -21,8 +21,8 @@
  * time (see `textRange` below). The claim is byte windows without streaming the
  * whole file, not line windows.
  *
- * A derived `streamBase64` reads the selection in bounded sub-windows
- * (`BASE64_CHUNK_RAW_BYTES` at a time) rather than buffering the whole
+ * A derived `streamBase64` reads the selection in bounded byte sub-windows
+ * (`BYTE_STREAM_CHUNK_SIZE` at a time) rather than buffering the whole
  * selection, so a narrowing of authority never widens the memory bound of the
  * read it derives from (`range(0n, huge).streamBase64()` streams; it does not
  * allocate the whole window). The whole-selection reads `text` / `json` /
@@ -46,10 +46,10 @@
 
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
-import { bytesToText } from '@endo/bytes/to-string.js';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makeError, q, X } from '@endo/errors';
 import harden from '@endo/harden';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 import { RichReadableBlobInterface } from './interfaces.js';
 
@@ -59,12 +59,10 @@ import { RichReadableBlobInterface } from './interfaces.js';
 const MAX_SAFE_INTEGER = BigInt(Number.MAX_SAFE_INTEGER);
 const LF = 0x0a;
 
-// Raw-byte size of one `streamBase64` chunk. A multiple of 3 so each full chunk
-// base64-encodes with no interior padding and concatenated chunk encodings
-// decode to the original bytes (only the final, possibly short, chunk carries
-// padding). Shared with the `BlobRef` producer (which chunks its already
-// in-memory bytes) so the constant lives in exactly one module.
-export const BASE64_CHUNK_RAW_BYTES = 48 * 1024;
+// Bound for byte chunks handed to the shared `PassableBytesReader` adapter.
+// Shared with the `BlobRef` producer (which chunks its already in-memory bytes)
+// so both ReadableBlob implementations have the same per-frame bound.
+export const BYTE_STREAM_CHUNK_SIZE = 48 * 1024;
 
 /**
  * Validate a `bigint` byte offset argument (`range`'s `start` / `end`): must be
@@ -129,7 +127,7 @@ const minBigInt = (a, b) => (a < b ? a : b);
 // always the exact slice of the whole value's text — including a window that
 // begins on an interior U+FEFF — and the documented identity
 // `range(0n, size).text() === text()` holds on every producer. A default
-// `TextDecoder` (used by `bytesToText`) strips a leading BOM regardless of the
+// `TextDecoder` (used by `decodeUtf8`) strips a leading BOM regardless of the
 // selection's absolute offset, so a non-zero-offset window needs a decoder that
 // keeps it (`ignoreBOM: true`). See designs/readableblob-range-attenuation.md
 // § Text ranges.
@@ -146,39 +144,35 @@ const bomPreservingTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true });
  */
 const decodeSelectionText = (bytes, selectionStart) =>
   selectionStart === 0n
-    ? bytesToText(bytes)
+    ? decodeUtf8(bytes)
     : bomPreservingTextDecoder.decode(bytes);
 
 /**
- * Yield the base64 encoding of an already-materialized `Uint8Array` in
- * fixed-size raw chunks (`BASE64_CHUNK_RAW_BYTES`). The shared buffer-chunker
- * for producers whose bytes are already fully in memory (`BlobRef`); the
- * maker's own derived `streamBase64` reads incrementally instead (see
- * `streamWindowBase64`), so it does not use this.
+ * Yield an already-materialized `Uint8Array` in fixed-size byte chunks. The
+ * shared chunker for producers whose bytes are already fully in memory
+ * (`BlobRef`); the maker's own derived stream reads incrementally instead (see
+ * `streamByteWindow`), so it does not use this.
  *
  * @param {Uint8Array} bytes
  */
-export async function* encodeBase64Chunks(bytes) {
+export async function* chunkBytes(bytes) {
   for (
     let offset = 0;
     offset < bytes.length;
-    offset += BASE64_CHUNK_RAW_BYTES
+    offset += BYTE_STREAM_CHUNK_SIZE
   ) {
-    const end = Math.min(offset + BASE64_CHUNK_RAW_BYTES, bytes.length);
-    yield encodeBase64(bytes.subarray(offset, end));
+    const end = Math.min(offset + BYTE_STREAM_CHUNK_SIZE, bytes.length);
+    yield bytes.subarray(offset, end);
   }
 }
 
 /**
- * Yield the base64 encoding of the absolute byte interval `[start, end)` of
- * `readWindow`'s source, reading it in bounded `BASE64_CHUNK_RAW_BYTES`
- * sub-windows so an attenuated `streamBase64` never buffers more than one chunk
- * at a time. Each non-final sub-window is exactly `BASE64_CHUNK_RAW_BYTES` bytes
- * (a multiple of 3), so its base64 has no interior padding and the concatenated
- * chunk encodings decode to the original bytes; only the final, short chunk
- * carries padding. A read that returns fewer bytes than requested signals
+ * Yield the absolute byte interval `[start, end)` of `readWindow`'s source in
+ * bounded sub-windows so an attenuated stream never buffers more than one chunk
+ * at a time. A read that returns fewer bytes than requested signals
  * end-of-content (the `readWindow` contract clamps at end-of-content), which
- * ends the stream.
+ * ends the stream. The public `streamBase64` method delegates these byte arrays
+ * to `bytesReaderFromIterator`, which owns the wire encoding contract.
  *
  * The reads are *lazy*: the first `readWindow` call happens on the generator's
  * first advance, so a consumer that obtains the stream but never iterates it
@@ -188,19 +182,17 @@ export async function* encodeBase64Chunks(bytes) {
  * @param {bigint} start
  * @param {bigint | undefined} end
  */
-async function* streamWindowBase64(source, start, end) {
+async function* streamByteWindow(source, start, end) {
   await null;
   const { readWindow, streamBytes } = source;
   if (streamBytes !== undefined) {
     // A source-native stream amortizes setup/materialization over the entire
-    // range read. `copyByteWindow` rechunks it at the base64-safe bound and
+    // range read. `copyByteWindow` rechunks it at the byte-stream bound and
     // gives every chunk a fresh backing buffer.
-    for await (const bytes of copyByteWindow(streamBytes(), start, end)) {
-      yield encodeBase64(bytes);
-    }
+    yield* copyByteWindow(streamBytes(), start, end);
     return;
   }
-  const chunk = BigInt(BASE64_CHUNK_RAW_BYTES);
+  const chunk = BigInt(BYTE_STREAM_CHUNK_SIZE);
   let position = start;
   for (;;) {
     if (end !== undefined && position >= end) {
@@ -228,11 +220,10 @@ async function* streamWindowBase64(source, start, end) {
     if (bytes.length === 0) {
       return;
     }
-    yield encodeBase64(bytes);
+    yield bytes;
     position += BigInt(bytes.length);
     if (BigInt(bytes.length) < requested) {
-      // Short read: the source ended within this sub-window. The chunk just
-      // yielded is the terminal (padding-bearing) one.
+      // Short read: the source ended within this sub-window.
       return;
     }
   }
@@ -240,11 +231,9 @@ async function* streamWindowBase64(source, start, end) {
 
 /**
  * Select `[start, end)` from a whole-source byte stream and yield copied,
- * fixed-size chunks. Every full chunk is `BASE64_CHUNK_RAW_BYTES` bytes (a
- * multiple of three), so callers may concatenate their base64 encodings
- * without interior padding. No yielded `Uint8Array` shares its backing buffer
- * with a source chunk, including when the source is a Node `Buffer` whose
- * `.slice()` would otherwise retain the whole allocation.
+ * fixed-size chunks. No yielded `Uint8Array` shares its backing buffer with a
+ * source chunk, including when the source is a Node `Buffer` whose `.slice()`
+ * would otherwise retain the whole allocation.
  *
  * @param {AsyncIterable<Uint8Array>} source
  * @param {bigint} start
@@ -252,7 +241,7 @@ async function* streamWindowBase64(source, start, end) {
  */
 export async function* copyByteWindow(source, start, end) {
   let sourcePosition = 0n;
-  let output = new Uint8Array(BASE64_CHUNK_RAW_BYTES);
+  let output = new Uint8Array(BYTE_STREAM_CHUNK_SIZE);
   let outputLength = 0;
 
   for await (const sourceChunk of source) {
@@ -287,7 +276,7 @@ export async function* copyByteWindow(source, start, end) {
         selectionPosition += copyLength;
         if (outputLength === output.length) {
           yield output;
-          output = new Uint8Array(BASE64_CHUNK_RAW_BYTES);
+          output = new Uint8Array(BYTE_STREAM_CHUNK_SIZE);
           outputLength = 0;
         }
       }
@@ -433,11 +422,11 @@ const makeAttenuatedBlob = (source, absoluteStart, absoluteEnd) => {
       // Read the selection in bounded sub-windows rather than buffering the
       // whole selection: an attenuated `streamBase64` must not exceed the
       // memory bound of the read it derives from. The window read is deferred
-      // into the generator (`streamWindowBase64` is lazy), so a consumer that
+      // into the generator (`streamByteWindow` is lazy), so a consumer that
       // never iterates leaves no unobserved rejection.
-      return makeReaderPump(
-        streamWindowBase64(source, absoluteStart, absoluteEnd),
-      )(/** @type {any} */ (synPromise));
+      return bytesReaderFromIterator(
+        streamByteWindow(source, absoluteStart, absoluteEnd),
+      ).streamBase64(/** @type {any} */ (synPromise));
     },
     async text() {
       return decodeSelectionText(await readSelectedBytes(), absoluteStart);

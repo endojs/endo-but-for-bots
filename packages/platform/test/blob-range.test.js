@@ -18,7 +18,7 @@ import { encodeBase64 } from '@endo/base64';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import {
-  BASE64_CHUNK_RAW_BYTES,
+  BYTE_STREAM_CHUNK_SIZE,
   copyByteWindow,
   makeBlobRangeMethods,
 } from '../src/fs/blob-range.js';
@@ -71,7 +71,7 @@ test('copyByteWindow never retains the unattenuated backing buffer', async t => 
 });
 
 test('derived stream reuses one source stream across multiple windows', async t => {
-  const backing = new Uint8Array(BASE64_CHUNK_RAW_BYTES * 3 + 17);
+  const backing = new Uint8Array(BYTE_STREAM_CHUNK_SIZE * 3 + 17);
   for (let index = 0; index < backing.length; index += 1) {
     backing[index] = index % 251;
   }
@@ -256,8 +256,8 @@ test('streamBase64 of a range yields exactly the selected bytes', async t => {
 });
 
 test('streamBase64 of a range spans multiple base64 chunks byte-exactly', async t => {
-  // Pin the derived range's windowed `streamBase64` (`streamWindowBase64`,
-  // BASE64_CHUNK_RAW_BYTES = 48 KiB per sub-window): the whole existing corpus
+  // Pin the derived range's windowed `streamBase64` (`streamByteWindow`,
+  // BYTE_STREAM_CHUNK_SIZE = 48 KiB per sub-window): the whole existing corpus
   // fits in one chunk, so a >1-chunk round-trip was never exercised. Drive
   // ~130 KB — a non-multiple of the chunk size and of 3 — through a range's
   // `streamBase64` and assert byte-exact decode.
@@ -316,8 +316,8 @@ test('composing nested open-ended ranges clamps an overflowing composed bound', 
 test('streamBase64 of a near-MAX_SAFE open-ended range drains to empty', async t => {
   // Regression for the fuzzer-caught divergence: a producer WITHOUT a
   // `streamBytes` primitive (BlobRef here) derives `streamBase64` through
-  // `streamWindowBase64`'s scalar-read loop. On an open-ended range whose start
-  // sits within one `BASE64_CHUNK_RAW_BYTES` (48 KiB) of MAX_SAFE_INTEGER — a
+  // `streamByteWindow`'s scalar-read loop. On an open-ended range whose start
+  // sits within one `BYTE_STREAM_CHUNK_SIZE` (48 KiB) of MAX_SAFE_INTEGER — a
   // documented valid empty attenuation, e.g. `range(MAX_SAFE)` — the per-window
   // `end` (position + chunk) overflowed MAX_SAFE_INTEGER and `readWindow`
   // rejected it with a bare EINVAL, so `streamBase64` threw while `text()`,

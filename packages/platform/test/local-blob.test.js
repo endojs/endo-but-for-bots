@@ -220,7 +220,7 @@ test('text decoding is position-independent across a BOM (window beginning on an
 
 test('LocalBlob reads a multi-chunk file byte-exactly across window boundaries', async t => {
   // READ_CHUNK_BYTES = 64 KiB per `readFileWindow` disk read and
-  // BASE64_CHUNK_RAW_BYTES = 48 KiB per `streamBase64` sub-window, so ~130 KB
+  // BYTE_STREAM_CHUNK_SIZE = 48 KiB per `streamBase64` sub-window, so ~130 KB
   // spans several of each. The rest of the suite fits inside one chunk, so a
   // range / textRange / streamBase64 that crosses a chunk boundary was never
   // exercised (the missing multi-chunk LocalBlob regression the panel found).

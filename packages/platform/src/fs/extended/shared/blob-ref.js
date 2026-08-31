@@ -16,11 +16,11 @@
 import { makeExo } from '@endo/exo';
 import { encodeBase64 } from '@endo/base64';
 import { sha256 } from '@endo/sha256';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { q } from '@endo/errors';
 
 import { BlobRefInterface } from '../type-guards.js';
-import { makeBlobRangeMethods, encodeBase64Chunks } from '../../blob-range.js';
+import { makeBlobRangeMethods, chunkBytes } from '../../blob-range.js';
 import { toSafeNumber } from './helpers.js';
 
 /** @import { BlobInfo, BlobRef } from '../types.js' */
@@ -102,7 +102,7 @@ export const makeBlobRefExo = (bytes, help, infoOverride) => {
     },
     /** @param {unknown} synPromise */
     streamBase64(synPromise) {
-      return makeReaderPump(encodeBase64Chunks(captured))(
+      return bytesReaderFromIterator(chunkBytes(captured)).streamBase64(
         /** @type {any} */ (synPromise),
       );
     },

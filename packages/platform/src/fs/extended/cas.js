@@ -143,7 +143,7 @@ harden(makeMemoryCas);
  * constant — NOT derived from the sender-advertised `getInfo().size` — so a
  * remote that lies about its size cannot enlarge the per-frame `M.string()`
  * allocation the consumer will accept. Every producer in this codebase chunks
- * `streamBase64` at 48 KiB of raw bytes (`BASE64_CHUNK_RAW_BYTES`), which
+ * `streamBase64` at 48 KiB of raw bytes (`BYTE_STREAM_CHUNK_SIZE`), which
  * base64-expands to ~64 KiB; 256 KiB leaves generous headroom for a one-shot
  * frame while still bounding a single hostile frame. A payload larger than one
  * frame arrives as many bounded frames, exactly as the streaming protocol
