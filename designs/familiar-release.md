@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-12 |
-| **Updated** | 2026-08-31 (round-4 panel fixes: cross-referenced G4's Severity to the Blocker-adjacent elevation in Platform coverage, gave G4's Linux `chrome-sandbox` remediation point-of-friction delivery matching G2 plus a pre-tag manual Linux launch backstop, flagged the unverified-through-real-UI MVR exit-criterion residual with acknowledged-risk discipline, repointed G14/G16 builder-pass cross-references from Followups to the MVR table, added the missing G7 icon-projection Followups row, added a macOS x64 end-state sentence, and cleared copyeditor/pedant grammar and spelling nits (`follow-on` to `followup`, `in-scope` to `in scope`, `un-caught` to `uncaught`). Round-3 fixes: applied the per-gap disposition schema to all 16 gaps and dropped the redundant `MVR resolution` label, disambiguated per-PR Tier 0/Tier 1 build dependencies and widened the CI path filter to the chat renderer, reframed the residual Linux launch risk, made forward references to Open questions explicit, removed the remaining prose em-dashes, and normalized `followup`/`Familiar` spelling) |
+| **Updated** | 2026-08-31 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Source** | Issue [#229](https://github.com/endojs/endo-but-for-bots/issues/229) |
@@ -131,10 +131,8 @@ behavior, target behavior, and rough effort.
 
 ## Gaps
 
-The gaps span build prerequisites, runtime prerequisites,
-distribution and trust, and first-run experience; they are
-numbered G1 through G16 below in audit order rather than grouped
-under those category headings.
+The gaps are numbered G1 through G16 below in audit order rather
+than grouped under category headings.
 
 Each gap's per-item block is the single source of truth for that
 gap's status. Every one of G1 through G16 carries a `**Severity:**`
@@ -147,6 +145,15 @@ it. The `MVR: minimum to ship`, `Followups`, and `Out of scope for
 this release` tables in the Phased plan are **derived views** for
 scanning by phase, not independent records: on any scope change,
 edit the per-gap block first and reconcile the summary tables to it.
+
+The `**Effort:**` lines below sometimes name a **builder pass**, a
+**designer pass**, or a **gardener pass**. These are dispatches to
+the automated fleet that carries this design's follow-on work, not
+distinct human milestones: a builder pass writes and lands the
+implementation, a designer pass produces a companion design for an
+under-specified area, and a gardener pass stands up recurring
+automation. Where a line reads "builder-dispatched," the work is
+scoped for such a dispatch rather than assumed to be hand-done.
 
 ### G1. Uncommitted bundles directory and a mandatory build
 
@@ -185,8 +192,10 @@ workflow is authored.
 **Severity:** Blocker (intrinsic impact: a non-developer cannot launch
 the unsigned app without the workaround below).
 **MVR disposition:** Deferred, with a documented workaround.
-**Resolved by:** the maintainer's 2026-05-19 review pass, recorded in
-full under [Open questions](#open-questions) below.
+**Resolved by:** the maintainer's 2026-05-19 review pass, which
+deferred notarization for MVR and shipped the documented `xattr`
+workaround; the signing-identity setup that pass stages is recorded
+under [Open questions](#open-questions) Q2 below.
 (The `**Severity:**` line records intrinsic impact only; the
 `**MVR disposition:**` and `**Resolved by:**` lines carry the scope
 decision and its provenance, kept as separate fields throughout the
@@ -260,33 +269,47 @@ script change to add `signtool` invocation under
 
 ### G4. Linux distribution shape
 
-**Severity:** Important (Linux). The intrinsic-impact rating is
-Important, but note that the *launch-path* risk this gap describes
-is elevated downstream: [Platform coverage of the runtime
+**Severity:** Important (Linux).
+**MVR disposition:** Ship the existing `.zip` plus README; Flatpak
+chosen for followups, other formats deferred.
+**Resolved by:** the 2026-05-19 review pass.
+**Note:** the intrinsic-impact rating above is Important, but the
+*launch-path* risk this gap describes is elevated downstream:
+[Platform coverage of the runtime
 tiers](#platform-coverage-of-the-runtime-tiers) characterizes the
 same `chrome-sandbox`/userns failure mode as an "acknowledged
 Blocker-adjacent risk on the Linux launch path" precisely because
 it is a named, previously-identified failure mode rather than a
-generic display-bound residual. A reader triaging by G4's Severity
+generic display-bound residual. A reader triaging by the Severity
 line alone should carry that elevation, not stop at "Important".
-**MVR disposition:** Ship the existing `.zip` plus README; Flatpak
-chosen for followups, other formats deferred.
-**Resolved by:** the 2026-05-19 review pass.
 **Current:** `make-distributables.mjs` emits a `.zip`.
 A Linux user who unzips it gets a directory of files including
 the `Familiar` ELF binary, `chrome-sandbox` (which must have
 `chmod 4755` applied and be chowned to root for Chromium's suid
 sandbox to work, otherwise Electron falls back to `--no-sandbox`
 or refuses to launch), and a tree of Chromium runtime files.
-Whether the suid setup is actually required depends on the host:
-most current distros ship unprivileged user-namespace support
-(the kernel default on recent lines), which lets Chromium sandbox
-without the setuid helper and without root at all.
-The README documentation must verify, per target distro, whether
-the userns path already works before presenting the setuid
+Whether the suid setup is actually required depends on the host,
+and the host landscape is not uniform. Recent upstream kernels
+enable unprivileged user namespaces by default (`CONFIG_USER_NS`),
+which in principle lets Chromium sandbox without the setuid helper
+and without root; but several major desktop distributions restrict
+unprivileged userns above the kernel layer regardless of that
+default. Ubuntu 23.10 and later (including the 24.04 LTS most
+early adopters will run) mediate unprivileged userns through
+AppArmor, so a raw extracted binary with no registered AppArmor
+profile (exactly the `.zip`-and-unzip shape this design ships)
+hits `clone(CLONE_NEWUSER): Operation not permitted` and still
+needs either the setuid `chown root` helper or `--no-sandbox`;
+Debian has historically shipped `kernel.unprivileged_userns_clone=0`
+for the same reason. So "the kernel default on recent lines" is a
+true statement about upstream `CONFIG_USER_NS`, but it is not the
+same claim as "works out of the box on a desktop install."
+The README documentation must therefore verify, per target distro,
+whether the userns path already works before presenting the setuid
 `chown root` step as an unavoidable requirement, so the
 "needs `sudo`" framing is not overstated where the kernel already
-provides the sandbox.
+provides the sandbox, while stating plainly that on Ubuntu, the
+most likely target, the setuid path is the expected one.
 **Target:** Ship a Flatpak manifest, with documentation for the
 chrome-sandbox setup.
 A separate builder pass will propose the Flatpak pipeline (see
@@ -308,10 +331,13 @@ Because the Linux launch path ships with no CI launch evidence at
 MVR (Tier 2 stays macOS-only; see [Platform coverage of the
 runtime tiers](#platform-coverage-of-the-runtime-tiers)), MVR also
 carries a cheap human backstop for this Blocker-adjacent risk: the
-release engineer manually launches the built Linux `.app` once and
-confirms it reaches the converse-with-`lal` end state before
-tagging a release, until a Linux Tier 2 GUI smoke (under `xvfb`)
-lands in followups and replaces the manual step.
+release engineer manually launches the built Linux `.app` once on
+**Ubuntu** (the distro whose AppArmor userns mediation makes it the
+most likely to exercise the `chrome-sandbox` failure path above,
+per the Current section) and confirms it reaches the
+converse-with-`lal` end state before tagging a release, until a
+Linux Tier 2 GUI smoke (under `xvfb`) lands in followups and
+replaces the manual step.
 **Effort:** Day for the README plus the point-of-friction
 download-page note and the pre-tag manual launch check; week for the
 Flatpak manifest (builder-dispatched).
@@ -434,7 +460,7 @@ case and joins the running daemon.
 Because the audience will not consult logs or a README to
 diagnose a blank or failed launch, MVR also surfaces the failure
 in-app: a daemon that fails to start shows a dialog naming the
-cause (e.g. "port `8920` already in use") and the log-file path,
+cause (e.g., "port `8920` already in use") and the log-file path,
 rather than silently presenting a dead window.
 This dialog is new UI/IPC work (a failure surface wired to
 daemon-start-failure detection), not a documentation task, and its
@@ -513,6 +539,24 @@ review pass; treated as an informal maintainer confirmation rather
 than a CI-verified claim, unlike the "What works today (assumed)"
 list and G16, which name their verification mechanism).
 The followup "test connection" button is deferred.
+
+One error-visibility residual is worth naming with the same
+acknowledged-risk discipline this plan applies to the daemon-start
+failure (G9) and the Linux launch path: the single most probable
+failure at the MVR exit criterion is a *first turn* that fails
+because the user mistyped the provider host, token, or model, and
+MVR ships no pre-flight validation for it (the deferred "test
+connection" button is exactly what would catch a bad credential
+before the first send). At MVR a bad credential therefore surfaces
+only as a failed turn in the Chat transcript, and no CI tier drives
+a failed turn through the rendered UI (Tier 1's assertions cover the
+success path for both provider shapes; see the mock-gateway table),
+so there is no verified claim that the failure renders legibly. MVR
+knowingly carries this as an **acknowledged residual on the
+credential-entry path**, in the same class as the Linux-launch and
+real-UI exit-criterion residuals; closing it means the followup
+"test connection" pre-flight plus a Tier-1 assertion for a failed
+turn, not an MVR gate.
 **Effort:** Zero for MVR; day for the followup test button if
 revisited.
 
@@ -534,7 +578,7 @@ shipped by us.
 A followup constrains outbound HTTP to the user-configured
 LLM host plus a documented allowlist; this is the
 [`endoclaw-network-fetch`](endoclaw-network-fetch.md) work
-already on the M1 milestone.
+already on Milestone 1.
 **Effort:** Zero for MVR; tracked under the existing design.
 
 ### G13. Telemetry, crash reporting, and error logs
@@ -879,9 +923,9 @@ runners** (`macos-14` arm64, `macos-13` x64, `ubuntu-latest`
 x64), so the Blocker G16 assertions gate on every platform the MVR
 ships. Tier 0 (build smoke) and Tier 2 (GUI launch) keep their
 macOS framing, but the two tiers ride different mechanisms and it
-is worth being precise about which: the **per-PR** Tier 0 build
+is worth being precise about which. The **per-PR** Tier 0 build
 smoke runs on `macos-14` alone (each Tier 1 cell builds its own
-platform's package, as noted above), while the pre-existing
+platform's package, as noted above). The pre-existing
 `familiar-release.yml` build *matrix* that fires on dispatch/tag is
 the thing that already exercises all three build cells. Tier 2 is
 the display-bound tier that stays macOS-only for MVR (headless
@@ -930,8 +974,8 @@ workaround (G2).
 macOS x64 (the third MVR-shipped platform) reaches the same
 end state by the same `.dmg` path as arm64, riding the identical
 CI and packaging shape; it is not called out separately below only
-because it introduces no exception the arm64 path does not already
-carry.
+because every exception it introduces, the arm64 path already
+carries.
 
 Because the MVR ship list now includes Linux x64, the exit
 criterion has a parallel Linux form: a user on Linux x64 downloads
@@ -953,10 +997,10 @@ exceptions.
 | Verify the Primer-into-CAS path in a packaged-build smoke test (Tier 1, gated per-PR across all three MVR runners) | G16 | day |
 | Aggregate third-party LICENSE notices into the bundle | G14 | day |
 | Document Node version pin policy in the package README | G5 | day |
-| Bundled Node pin advanced from v20.18.1 to a current LTS (now v22.22.3) | G5 | done (2026-05) |
+| Advance the bundled Node pin from v20.18.1 to a current LTS (now v22.22.3) | G5 | done (2026-05) |
 | Rename the Familiar shell log to `familiar-shell.log`; document log locations and state directory in the package README, including which log (`familiar-shell.log` vs `endo.log`) covers which failure class | G10, G13 | day |
 | Document the Linux `chrome-sandbox` suid setup, and surface it at the point of friction (the GitHub release/download page next to the Linux `.zip`), not only the README | G4 | day |
-| Pre-tag manual Linux `.app` launch check (release engineer confirms the built Linux artifact reaches the converse-with-`lal` end state), backstopping the Blocker-adjacent Linux launch risk until Linux Tier 2 lands | G4 | per release |
+| Manually launch the built Linux `.app` on Ubuntu before each tag (release engineer confirms it reaches the converse-with-`lal` end state), backstopping the Blocker-adjacent Linux launch risk until Linux Tier 2 lands | G4 | per release |
 | Document the `127.0.0.1:8920` collision case in the README, and surface a daemon-start-failure dialog naming the cause and log path (the dialog is new UI/IPC, not a doc task) | G9 | day to multi-day |
 | Surface the macOS Gatekeeper `xattr` workaround at the point of friction (GitHub release/download page, and ideally the DMG background image), not only the repo README | G2 | day |
 | Confirm icon assets resolve on every target platform | G7 | day |
