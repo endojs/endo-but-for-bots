@@ -138,7 +138,15 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // This fixture holds none, so only VERS changes.
         // Re-pinned for format version 10, marking synchronous generator
         // activations. This fixture holds none, so only VERS changes.
-        "50e953e320771e3f133b2f2e3880932443086a462303b11b253e6df123a42c76",
+        // Re-pinned 2026-08-31 for a boot-heap CONTENT move, the same
+        // class as the four mainline re-pins above and not a format
+        // change: three `@@iterator` natives that used to be minted
+        // during `link_intrinsics` are minted in `create_intrinsics`
+        // now, so they land below `boot_slot_count` and a fresh boot
+        // re-derives them. Above the floor they were carried by no
+        // table and resume silently lost their callability
+        // (`boot_native_identity.rs`).
+        "fd0cc8c5c8c7ead6c9d0db539960c515ae52e30141cefae84fa3fb2dfd1f4835",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -220,7 +228,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // disposable stacks and VERS marks `DISP`.
         // Re-pinned for schema 21 and format 10: the small state gains
         // synchronous generator activations and VERS marks `GENR`.
-        "0072f072e3b8d56bd378badb1abaac80223f3d55799b997faf96d3d00ba12527",
+        // Re-pinned 2026-08-31 with the blob, for the same boot-heap
+        // content move: three link-time `@@iterator` mints became boot
+        // mints, so the page rows carrying the boot heap moved and the
+        // root and seal move with them. Schema and format unchanged.
+        "637202d7cb7d6a9a5ae1bb58cd04c74d2ad2e7534557a0af8f7a7c59c0c65eb9",
         "epoch-3 seal chain"
     );
 }
