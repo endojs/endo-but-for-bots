@@ -1797,6 +1797,7 @@ __metadata:
     "@endo/stream-node": "workspace:^"
     "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     commander: "npm:^15.0.0"

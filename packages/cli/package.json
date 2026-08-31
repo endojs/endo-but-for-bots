@@ -52,6 +52,7 @@
   },
   "devDependencies": {
     "@endo/stream": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "eslint": "catalog:dev",

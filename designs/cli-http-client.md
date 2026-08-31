@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-09 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-08-29 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Proposed |
+| **Status** | Phase 1 (`endo http mk`) landed on the policy client |
 | **Source** | PR #144 review id 4256844646 (`CHANGES_REQUESTED`) |
 | **Supersedes (in part)** | [endoclaw-network-fetch](endoclaw-network-fetch.md) |
 | **Superseded (in part) by** | [endo-fetch](endo-fetch.md) |
@@ -21,6 +21,157 @@
 > `cancellation: Promise<never>` analysis remain normative, and the
 > `endo http` verb tree survives as the eventual user surface sketched in
 > [endo-fetch](endo-fetch.md).
+
+## Landed CLI surface (Phase 1)
+
+**Reconciling the two supersession claims in `designs/README.md`.** Phase 1 is a
+deliberate stop-gap on the policy-based `provideHttpClient` wiring that is live
+today. The [endo-fetch](endo-fetch.md) migration is planned but has not landed;
+it can later replace the packaging beneath the stable `endo http mk` verb tree.
+
+The first `endo http` verb, `mk`, has landed on top of the HTTP client that
+now lives on the daemon, **not** on the controller/client formula pair this
+document originally proposed. That pair — `http-controller` +
+`http-client` formulas, `formulateHttpClient(allowedOrigins, ...)`, and a host
+`makeHttpClient(controllerName, clientName, allowedOrigins)` mint returning two
+named facets — no longer exists. The superseding implementation
+(`@endo/exo-http-client`'s `makeHttpClientAndControl` over `@endo/http-confine`,
+plus the daemon's policy-based `http-client` formula) mints **one** client from
+a single policy and retains its control facet host-side in a WeakMap, reachable
+through `getHttpClientControl(client)` rather than through a separately named
+controller capability. The host method is:
+
+```
+provideHttpClient(name, policy) -> HttpClient
+```
+
+where `policy` is a plain record — `{ allowedOrigins, maxRequestsPerMinute?,
+maxResponseBytes?, policyMode? }` — validated and frozen into the formula at
+provision time by the daemon's `normalizeHttpClientPolicy`.
+
+The landed verb is therefore a **policy front-end** over that one call:
+
+```
+endo http mk <name> --origin <origin> [--origin <origin>...]
+  [--max-requests-per-minute <n>] [--max-response-bytes <n>]
+  [--policy-mode strict|tofu-auto [--acknowledge-unbounded]] [--as <agent>]
+```
+
+`mk` assembles the policy record from its flags (`--origin` is required and
+repeatable; the guard knobs are omitted from the record when unset so the daemon
+applies its own defaults), calls `provideHttpClient(name, policy)`, and prints
+the single pet name it registered. It validates each flag's lexical shape
+locally and reports by flag name — origins are normalized to their canonical
+serialization (so a browser-copied trailing slash, explicit default port, or
+mixed-case host is accepted, while a path, query, fragment, or userinfo is
+refused rather than silently widened to the whole host). Default-ignorable
+Unicode code points are refused before WHATWG host normalization can silently
+remove them. The numeric guards must be positive integers, and `--policy-mode`
+must be one of the admissible modes, while the daemon's
+`normalizeHttpClientPolicy` stays the authority on policy *semantics*. The origin
+allowlist the design carries over from PR #144 is expressed directly by
+`--origin`; the SSRF and flooding defenses (`redirect: 'manual'`, the
+per-response byte cap, the sliding-window rate limit) are enforced by the
+confinement layer the client is built on, so they need no separate CLI plumbing
+at this phase.
+
+On success, `mk` echoes the locally-normalized origin allowlist, policy mode,
+request-rate cap, and response-byte cap on stderr. The resource bounds are the
+explicit flag values or the daemon's documented defaults (60 requests/minute
+and 1 MiB per response), not a daemon read-back.
+
+**`--policy-mode strict` vs `tofu-auto`.** Under `strict` (the default) the
+allowlist is the confinement bound: only the listed origins are reachable. Under
+`tofu-auto` the exo auto-allows any first-seen origin
+(`packages/exo-http-client/src/http-client.js` `decide()` returns `allow` for an
+unlisted target), so `--origin` becomes a pre-seed rather than a bound and the
+allowlist no longer confines outbound reach. (This Phase-1 `tofu-auto` is a
+distinct, narrower mechanism from the trust-on-first-bind addendum further down,
+which pins an IP/TLS identity rather than converting the allowlist into a
+write-once log of origins.) Because Phase 1
+ships no `inspect`/`revoke` verb, an operator using `tofu-auto` cannot yet see
+what got auto-pinned or undo it. Because that grant is unbounded and unrevocable
+in Phase 1, `mk` refuses `--policy-mode tofu-auto` unless the operator also
+passes `--acknowledge-unbounded`; the widening is named on the `--policy-mode`
+help line itself, not only here.
+
+**The `--acknowledge-unbounded` gate is CLI-only UX friction, not an
+authorization boundary.** It is enforced entirely in `mk`'s local action and is
+**not** threaded into the policy record `provideHttpClient` persists:
+`makeHttpClientPolicy` never emits an `acknowledgedUnbounded` bit, and the
+daemon's `normalizeHttpClientPolicy` (unmodified by Phase 1) accepts
+`policyMode: 'tofu-auto'` with no acknowledgment field. Any caller that reaches
+`provideHttpClient` directly — a script, a future GUI, a REPL against the host
+agent — mints the unbounded `tofu-auto` grant with no record that the widening
+was ever acknowledged. The gate advises the operator at the CLI; it does not
+gate the capability at its minting boundary, and the persisted formula carries no
+evidence of acknowledgment. Making acknowledgment a real, recorded precondition
+of the mint (a host-method `acknowledgedUnbounded` bit the daemon requires and
+stores) is deferred to the phase that lands the `inspect`/`revoke` verbs, where
+the persisted-policy surface is being reworked anyway.
+
+**Re-`mk` on an existing name rebinds it.** `provideHttpClient` always
+formulates and stores under the name, so `mk` on a name that already denotes a
+client rebinds it to the new client. The rebind drops the old name's reference;
+the daemon's `storeIdentifier` then calls `removeEdgeIfUnreferenced` on the
+prior formula, so the previous client is *collected* — not silently retained —
+unless another edge still holds it (for example it was granted to a guest under
+another name), in which case it survives that rebind and the phase-2
+mutate/revoke verbs are the intended way to retire it. This matches the sibling
+`provide*` mints.
+
+**On the verb spelling.** `mk` is the frozen Phase-1 spelling for this verb — an
+`mk`-family sibling of `mkhost` / `mkguest` / `mkdir` / `mktmp`. The
+placeholder-pending-namer caveats elsewhere in this document predate this
+landing; the namer dispatch may still rename the later `allow`/`deny`/`revoke`/
+`inspect` verbs, but `endo http mk` is what shipped. The separate
+metering/fees/rate-limiting/retry/circuit-breaking follow-up that PR #286's
+approval directed is out of scope here and tracked on its own design track (the
+HTTP adapter pipeline,
+[endojs/endo-but-for-bots#992](https://github.com/endojs/endo-but-for-bots/pull/992));
+the guard knobs `mk` exposes (`--max-requests-per-minute`, `--max-response-bytes`)
+are the confinement floor, not that metering surface.
+
+**Known limitation: the Phase-1 client cannot yet complete a real request; the
+#286 `http-confine` inert-response-snapshot fix is not carried here.**
+PR #286 changed `packages/http-confine/src/http-confine.js` to return an inert
+response snapshot instead of the live platform `Response`, dodging an undici
+`Cannot assign to read only property 'Symbol(headers map sorted)'` that fires
+when `harden()` freezes the live `Headers`. That change is **not** on `llm`, and
+this PR does not carry it — so on `llm`, a real dial-out through the minted
+client still crashes. `@endo/exo-http-client` does not avoid the crash by
+snapshotting headers: under the daemon's SES lockdown, `http-confine`'s
+`request()` returns
+`freeze({ response, ... })` where `freeze` is `harden` (`http-confine.js` binds
+`freeze = typeof harden === 'function' ? harden : Object.freeze`), so it
+**deep-hardens the live undici `Response`** before anything reads it —
+independent of CapTP, which never enters that object. `exo-http-client`'s
+`headersToRecord` (`src/http-client.js`) then iterates the now-frozen `Headers`
+and throws, because undici's `Headers` iterator mutates an internal sorted-map
+cache on read. So Phase 1's client can mint and register, but cannot complete an
+outbound request against a real platform `fetch` until #286's inert
+header-snapshot (or an equivalent snapshot before `freeze`) lands.
+
+Every existing suite is green only because each test injects a **stub** `fetch`
+whose `headers` is a plain record — no test ever hardens a platform `Response`,
+and none of the new `endo http mk` tests dial out (they mint a client but never
+issue a request), so the crash path is exercised by no test here. That is a
+coverage gap, not a refutation: the crash is real on the live path. The
+inert-response-snapshot fix is a Node/undici parity fix that should land
+separately on its own merits with a reproduction; this note is its durable
+record, and the changeset states the Phase-1 limitation for release readers.
+(CI matrixes Node 22.x and 24.18.0, and `packages/cli` supports
+`^20.17.0 || >=22.9.0`.)
+
+Consequences for the rest of this document: the **controller/client facet split
+and method placement remain the normative model** for where policy-mutation vs
+use-the-policy authority sits, but the concrete surface differs from the
+placeholder tables below — there is one addressable client name (not a
+controller name plus a client name), and the mutate/revoke authority is the
+WeakMap-held control facet reached via `getHttpClientControl`, which the later
+`allow` / `deny` / `revoke` / `inspect` verbs will drive. The mint signature,
+formula-type, and `makeHttpClient` sketches further down are retained only as
+historical design context.
 
 ## What is the Problem Being Solved?
 
@@ -452,15 +603,10 @@ facet owns each knob:
 The host trusts the controller it minted; the guest trusts the client
 the host hands it; nothing else is trusted by default.
 
-The unresolved question of how to handle "this client may need to
-talk to a peer whose certificate / origin we have not seen before,
-and we want to learn it on first contact" is addressed in a separate
-sibling design.
-A `trust-on-first-bind` addendum is being authored in parallel; this
-design forward-links to it from this section once the addendum's PR
-opens.
-
-> Forward link to addendum: pending PR for `designs/http-client-trust-on-first-bind.md` (slug placeholder pending the parallel designer dispatch).
+The question of how to handle "this client may need to talk to a peer whose
+certificate / origin we have not seen before, and we want to learn it on first
+contact" is addressed by the sibling
+[trust-on-first-bind](trust-on-first-bind.md) design.
 
 The addendum will own the policy-mode question; this design's
 allowlist remains the strict-by-default mode.
@@ -619,8 +765,8 @@ tables and called out where they appear.
 
 ## Out of scope, future work
 
-- Trust-on-first-bind policy mode: separate design (sibling, in
-  flight).
+- Trust-on-first-bind policy mode: separate sibling design, now landed as
+  [trust-on-first-bind](trust-on-first-bind.md).
 - Shared origin-allowlist parser between this design and PR #106
   (browser exo): noted in PR #144's body as future consolidation
   work; remains future work.
@@ -638,7 +784,7 @@ tables and called out where they appear.
 |---|---|
 | [endoclaw-network-fetch](endoclaw-network-fetch.md) | Parent; this design replaces its CLI surface and cap-split section. |
 | [daemon-agent-tools](daemon-agent-tools.md) | Sibling agent-capability design; the http client is one such tool. |
-| `designs/http-client-trust-on-first-bind.md` (forthcoming) | Sibling; owns the trust-mode question deferred from this design. |
+| [trust-on-first-bind](trust-on-first-bind.md) | Sibling; owns the trust-mode question deferred from this design. |
 
 ## Prompt
 

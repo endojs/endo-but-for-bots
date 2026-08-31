@@ -16,6 +16,12 @@ import {
   collectDeniedSegment,
   resolveDeniedSegments,
 } from './denied-segments.js';
+import {
+  collectHttpOrigin,
+  httpMkArgumentsFromOptions,
+  parsePolicyModeFlag,
+  parsePositiveIntegerFlag,
+} from './http-mk-policy.js';
 
 const packageDescriptorPath = url.fileURLToPath(
   new URL('../package.json', import.meta.url),
@@ -796,6 +802,51 @@ export const main = async rawArgs => {
       return cancelCommand({ name, agentNames, reason });
     });
 
+  // `endo http <verb>` subcommand tree per designs/cli-http-client.md, riding
+  // the daemon HTTP client (`provideHttpClient(name, policy)` over
+  // @endo/exo-http-client / @endo/http-confine).
+  const http = program
+    .command('http')
+    .description('HTTP client capabilities (confined outbound fetch)');
+
+  http
+    .command('mk <name>')
+    .description(
+      'mint a confined HTTP client capability under an origin-allowlist policy',
+    )
+    .option(...commonOptions.as)
+    .option(
+      '--origin <origin>',
+      'Allowed origin (scheme://host[:port]; http: or https:); repeat for more',
+      collectHttpOrigin,
+    )
+    .option(
+      '--max-requests-per-minute <n>',
+      'Cap the client to at most <n> requests per minute',
+      parsePositiveIntegerFlag('--max-requests-per-minute'),
+    )
+    .option(
+      '--max-response-bytes <n>',
+      'Cap each response body at <n> bytes',
+      parsePositiveIntegerFlag('--max-response-bytes'),
+    )
+    .option(
+      '--policy-mode <mode>',
+      'strict (default) confines to --origin; tofu-auto AUTO-ALLOWS any ' +
+        'first-seen origin, so --origin only pre-seeds and the allowlist ' +
+        'stops bounding outbound reach',
+      parsePolicyModeFlag,
+    )
+    .option(
+      '--acknowledge-unbounded',
+      'required with --policy-mode tofu-auto: confirm you accept an unbounded ' +
+        'outbound capability that Phase 1 ships no verb to inspect or revoke',
+    )
+    .action(async (name, options) => {
+      const { httpMk } = await import('./commands/http-mk.js');
+      return httpMk(httpMkArgumentsFromOptions(name, options));
+    });
+
   const where = program
     .command('where')
     .option('-j,--json', 'Output as JOSN rather than simple text')
@@ -1045,6 +1096,11 @@ export const main = async rawArgs => {
     {
       title: 'Agents',
       commands: ['mkhost', 'mkguest', 'invite', 'accept'],
+    },
+
+    {
+      title: 'Network',
+      commands: ['http'],
     },
 
     {
