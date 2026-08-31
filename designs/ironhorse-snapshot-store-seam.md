@@ -3366,6 +3366,107 @@ predates this branch and is unreachable from hand-written 262 sources,
 whose results are short, but it is a real latent gap in a differential
 comparator.
 
+#### Round-3 adversarial review: three findings, open
+
+A five-dimension adversarial pass (each finding handed to an
+independent skeptic prompted to REFUTE it) returned three survivors.
+Four were refuted, two of them correctly — the nested-body PC gap and
+the proxy raw-slot gap had already been fixed by the time the
+verifiers read the tree.
+The lazy-geometry dimension, which generalizes the stale
+`chunk_bound`, returned ZERO findings with a written enumeration of
+every piece of attach-frozen state.
+
+##### P1-5 — a resumed promise renders `[object Object]`
+
+VERIFIED on the current tree, both paths, with controls:
+
+```
+                    continuous          resumed (blob and store)
+Promise.resolve(1)  "[object Promise]"  "[object Object]"
+(async fn)()        "[object Promise]"  "[object Object]"
+new Error('boom')   "Error: boom"       "Error: boom"        (ERRD carried)
+new Map()           "[object Map]"      "[object Map]"       (COLL carried)
+```
+
+`Interp::render` answers `[object Promise]` from an arm keyed on the
+`promises` table, which is a Pending row and travels nowhere. After
+resume the instance is an ordinary object still chained to
+`%Promise.prototype%`, and no `@@toStringTag` is installed there, so
+render falls through to `[object Object]`.
+Nothing refuses: quiescence covers the microtask QUEUE
+(`promise_jobs`), not retained promise OBJECTS, and the persist
+traversal only asks about function slots.
+
+This is the same mechanism and outcome the W6-9 table classified
+SILENT-WRONG for "Error as completion value (render)" — the finding
+that drove the ERRD carry. The W6-9 probe exercised promises only
+through `.then`, which is guarded by a `this` check and so reads as
+visible-fail; the render path was never probed.
+
+Guest-visible surfaces agree (`typeof`, `instanceof`,
+`Object.prototype.toString`), so the divergence is confined to the
+host boundary — but that boundary is the machine's answer to its
+embedder.
+
+Three options, and the choice is a product decision rather than a
+mechanical one:
+
+1. **Fail closed** — refuse to persist a heap retaining a promise, the
+   interim this branch used for the four silent-wrong rows before they
+   graduated. MEASURED: within this project's own corpus it refuses
+   only the persist-gate fixtures that construct a promise to obtain a
+   resolver; the determinism suite, every carry twin and the SQLite
+   lifecycle are untouched. Real-world reach is wider — a worker that
+   retains any async result promise could never checkpoint.
+2. **Carry the promise cluster** — the recorded lift, and the largest
+   remaining one (four Pending rows).
+3. **Make render prototype-keyed** rather than side-table-keyed, so
+   both machines answer `[object Promise]`. Cheap, and removes the
+   divergence — but it makes a machine whose promises are dead LOOK
+   healthy, and `.then` still fails visibly afterwards.
+
+##### P2-5 — `SavedJumpRow.call_depth_offset` is decoded but never bounded
+
+`check_image_slot_bounds` bounds four of the row's five numbers;
+`call_depth_offset` is absent, and restore does
+`call_depth: return_depth + jump.call_depth_offset` unchecked.
+A crafted value panics with `attempt to add with overflow` under the
+dev profile — an anonymous arithmetic panic rather than one of the
+crate's named refusals — and a large-but-non-overflowing value
+mis-scopes a resumed handler.
+
+Same struct and same class as the resume-cursor gap fixed earlier this
+round. NOT fixed here because the honest bound is not obvious: the
+offset is a call-stack INDEX (`call_depth: self.call_stack.len()`),
+and the frame records no depth of its own to bound it against.
+Inventing a constant would be exactly the unsubstantiated numeric
+narrowing the repo's conventions warn against. The minimal correct
+step is a checked add at the restore site, turning the panic into a
+named refusal; the mis-scoping half needs a real bound.
+
+##### P3-2 — the atom reader has no canonical-form gate
+
+`write_machine` emits each side-table atom only when its table is
+non-empty, but `read_machine` accepts a present-but-EMPTY atom, so
+`write_machine(read_machine(b)) != b` for such a container. Same for a
+duplicate atom and trailing bytes after the envelope.
+
+No wrong answers and no panic — the restored machine is correct. What
+breaks is byte identity, and with it the CAS key: one logical machine
+gets unboundedly many container encodings.
+
+The project already ruled this exact class a defect for `NFLR` ("an
+explicit one can only be crafted, and accepting it re-canonicalizes on
+the next write"), so the precedent points one way; it is recorded
+rather than fixed only because it touches all twenty-one atoms.
+
+##### Recorded but not verified
+
+One crafted-input finding was dropped by the per-dimension cap:
+`SmallState::decode` and `peek_cost_table_version` compute a section
+end with an unchecked `i + len` from a full-u32 decoded length.
+
 #### Verified clean this round
 
 GC visitation over the new atoms; the decode and bounds gates for
