@@ -124,15 +124,10 @@ use Disposition::{DurableExclude, Exercise, PendingExclude};
 /// change that silently re-excludes a graduated fixture drops below this
 /// floor and fails [`exercised_fixtures_match_node_golden`].
 ///
-/// Correction: Increment 4 graduated `dynamic-import-esm` on a golden that
-/// was stale versus the node oracle (it dropped the `dep` compartment the
-/// oracle links for a package with an opaque dynamic import). The committed
-/// golden now reflects the node oracle (it includes `dep`, and the compartment
-/// mapper's `test/fixture-parity.test.js` asserts that match on Node.js), but
-/// endor's walker does not yet link that dependency, so the fixture stays
-/// `PendingExclude` until the opaque-dynamic-import dependency-inclusion
-/// capability lands, and the honest floor is 31, not 32.
-const EXERCISED_FLOOR: usize = 31;
+/// Increment 8 restores `dynamic-import-esm` after the walker learned to retain
+/// every declared runtime dependency that an opaque `import(specifier)` may
+/// name, returning the ratchet to 32 exercised fixtures.
+const EXERCISED_FLOOR: usize = 32;
 
 /// Every `fixtures-*` directory under
 /// `packages/compartment-mapper/test`, each accounted for exactly
@@ -209,18 +204,8 @@ const MANIFEST: &[(&str, Disposition)] = &[
     ),
     (
         "fixtures-dynamic-import-esm",
-        // Reclassified from Exercise: the reference compartment-mapper links
-        // *all* of a package's declared runtime dependencies once the package
-        // contains a non-statically-analyzable dynamic `import(specifier)`
-        // (here `app` declares `dep` and imports an opaque runtime-computed
-        // specifier). The committed golden now records that node behaviour (it
-        // includes the `dep` compartment, per the node oracle and the
-        // compartment mapper's `fixture-parity.test.js`), but the endor walker
-        // does not yet link that dependency, so `dep` is dropped from its
-        // output. Pending the opaque-dynamic-import dependency-inclusion
-        // capability rather than pinned to a stale golden that masked the gap.
-        PendingExclude {
-            capability: "opaque-dynamic-import declared-dependency inclusion (Group B follow-up)",
+        Exercise {
+            entry: "node_modules/app/index.js",
         },
     ),
     (
