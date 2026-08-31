@@ -415,6 +415,19 @@ fn generator_pcs_outside_the_owning_body_are_refused() {
     }
     expect(&short, HANDLER);
 
+    // A saved handler's `call_depth_offset` must be ZERO. That is not a
+    // chosen bound: a generator suspends at a `yield` in its own body,
+    // so every call it made has returned and every saved handler
+    // belongs to that same activation. Restore adds it to the return
+    // depth unchecked, so a crafted value is an arithmetic panic under
+    // the dev profile and an impossibly-scoped handler otherwise.
+    let mut deep = with_handler.clone();
+    deep.generators[0].frame.as_mut().unwrap().jumps[0].call_depth_offset = 1;
+    expect(&deep, HANDLER);
+    let mut overflow = with_handler.clone();
+    overflow.generators[0].frame.as_mut().unwrap().jumps[0].call_depth_offset = u64::MAX;
+    expect(&overflow, HANDLER);
+
     // The honest image is untouched by all of it.
     assert!(from_snapshot_bytes(&write_machine(&image), &sig()).is_ok());
 }

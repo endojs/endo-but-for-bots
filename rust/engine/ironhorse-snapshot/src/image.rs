@@ -3621,7 +3621,22 @@ pub(crate) fn check_image_slot_bounds(
             // against -- not by the frame's current locals. A shorter
             // `locals_len` with an index in between passed the frame's
             // bound and then misresolved a name on the way out.
+            // `call_depth_offset` is the fifth attacker-controlled number
+            // on this row and the only one the gate used to skip, while
+            // restore computes `return_depth + jump.call_depth_offset`
+            // unchecked -- an arithmetic panic on a crafted value under
+            // the dev profile, and a handler scoped to an impossible
+            // call depth otherwise.
+            //
+            // The structural bound is exact, not a chosen constant: a
+            // generator suspends at a `yield` in its OWN body, so every
+            // call it made has returned and every saved handler belongs
+            // to that same activation. The offset is therefore always
+            // zero. Measured across five shapes -- a bare yield, a
+            // yield inside try/finally, a nested try, a yield after a
+            // call returns, and `yield*` delegation -- all emit 0.
             if jump.flag != 1
+                || jump.call_depth_offset != 0
                 || !starts.contains(&jump.target_pc)
                 || jump.stack_offset > frame.stack_slice.len() as u64
                 || jump.locals_len > frame.locals.len() as u64
@@ -3878,6 +3893,19 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
 /// This low-level API returns a mutable plain-data model for tooling and
 /// crafted-input tests. Machine adoption uses [`read_validated_machine`], whose
 /// private wrapper prevents mutation between this validation and restore.
+/// An optional side-table atom the writer emits only when its table is
+/// NON-EMPTY. A present-but-empty one can therefore only be crafted,
+/// and accepting it would re-canonicalize on the next write -- the same
+/// rule the `NFLR` floor already enforces, and the reason it matters is
+/// the same: one logical machine must have exactly one container
+/// encoding, or its SHA-256 CAS key is not an identity.
+fn present_and_non_empty<T>(rows: Vec<T>, what: &'static str) -> Result<Vec<T>, SnapshotError> {
+    if rows.is_empty() {
+        return Err(SnapshotError::Corrupt(what));
+    }
+    Ok(rows)
+}
+
 pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage, SnapshotError> {
     let r = AtomReader::parse(buf)?;
 
@@ -3959,19 +3987,19 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
     // side-table-free container), exactly mirroring the writer's
     // emit-only-when-non-empty rule.
     let arrays = match r.find(crate::format::ARRY) {
-        Some(a) => decode_arrays(a.payload)?,
+        Some(a) => present_and_non_empty(decode_arrays(a.payload)?, "ARRY atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let collections = match r.find(crate::format::COLL) {
-        Some(a) => decode_collections(a.payload)?,
+        Some(a) => present_and_non_empty(decode_collections(a.payload)?, "COLL atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let registry = match r.find(crate::format::REGY) {
-        Some(a) => decode_registry(a.payload)?,
+        Some(a) => present_and_non_empty(decode_registry(a.payload)?, "REGY atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let mut errors = match r.find(crate::format::ERRD) {
-        Some(a) => decode_errors(a.payload)?,
+        Some(a) => present_and_non_empty(decode_errors(a.payload)?, "ERRD atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     // Join the frames back onto their rows. An owner naming no `ERRD`
@@ -3988,27 +4016,27 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         }
     }
     let buffers = match r.find(crate::format::ABUF) {
-        Some(a) => decode_buffers(a.payload)?,
+        Some(a) => present_and_non_empty(decode_buffers(a.payload)?, "ABUF atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let typed_arrays = match r.find(crate::format::TARR) {
-        Some(a) => decode_typed_arrays(a.payload)?,
+        Some(a) => present_and_non_empty(decode_typed_arrays(a.payload)?, "TARR atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let data_views = match r.find(crate::format::DVIW) {
-        Some(a) => decode_data_views(a.payload)?,
+        Some(a) => present_and_non_empty(decode_data_views(a.payload)?, "DVIW atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let wrappers = match r.find(crate::format::WRAP) {
-        Some(a) => decode_wrappers(a.payload)?,
+        Some(a) => present_and_non_empty(decode_wrappers(a.payload)?, "WRAP atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let regexps = match r.find(crate::format::REGX) {
-        Some(a) => decode_regexps(a.payload)?,
+        Some(a) => present_and_non_empty(decode_regexps(a.payload)?, "REGX atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let arguments_brands = match r.find(crate::format::ARGB) {
-        Some(a) => decode_arguments_brands(a.payload)?,
+        Some(a) => present_and_non_empty(decode_arguments_brands(a.payload)?, "ARGB atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let temporal = match r.find(crate::format::TMPR) {
@@ -4020,11 +4048,11 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => IntlTables::default(),
     };
     let iterators = match r.find(crate::format::ITER) {
-        Some(a) => decode_iterators(a.payload)?,
+        Some(a) => present_and_non_empty(decode_iterators(a.payload)?, "ITER atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let dates = match r.find(crate::format::DATE) {
-        Some(a) => decode_dates(a.payload)?,
+        Some(a) => present_and_non_empty(decode_dates(a.payload)?, "DATE atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let function_state = match r.find(crate::format::FUNC) {
@@ -4036,11 +4064,11 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => ironhorse_vm::ProxyStateSnapshot::default(),
     };
     let accessors = match r.find(crate::format::ACCS) {
-        Some(a) => decode_accessors(a.payload)?,
+        Some(a) => present_and_non_empty(decode_accessors(a.payload)?, "ACCS atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let intl_bound_functions = match r.find(crate::format::IBFN) {
-        Some(a) => decode_intl_bound_functions(a.payload)?,
+        Some(a) => present_and_non_empty(decode_intl_bound_functions(a.payload)?, "IBFN atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let private_elements = match r.find(crate::format::PRIV) {
@@ -4048,11 +4076,11 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => ironhorse_vm::PrivateElementSnapshot::default(),
     };
     let disposable_stacks = match r.find(crate::format::DISP) {
-        Some(a) => decode_disposable_stacks(a.payload)?,
+        Some(a) => present_and_non_empty(decode_disposable_stacks(a.payload)?, "DISP atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let generators = match r.find(crate::format::GENR) {
-        Some(a) => decode_generators(a.payload)?,
+        Some(a) => present_and_non_empty(decode_generators(a.payload)?, "GENR atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
     let name_floor = match r.find(crate::format::NFLR) {
