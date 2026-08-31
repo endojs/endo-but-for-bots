@@ -73,9 +73,7 @@ const WORKSPACE_GUARDS = harden({
   DaemonMount: /** @type {InterfaceGuard} */ (MountInterface),
   EndoMountFile: /** @type {InterfaceGuard} */ (MountFileInterface),
   EndoMountEntry: /** @type {InterfaceGuard} */ (MountEntryInterface),
-  ReadableBlobView: /** @type {InterfaceGuard} */ (
-    RichReadableBlobInterface
-  ),
+  ReadableBlobView: /** @type {InterfaceGuard} */ (RichReadableBlobInterface),
   ReadableTreeView: /** @type {InterfaceGuard} */ (ReadableTreeInterface),
 });
 
@@ -348,10 +346,10 @@ test('Git declarations define every reachable custom filesystem alias', t => {
   }
   t.true(declared.size > 0);
   t.true(declared.has('GitFilesystemStats'));
-  t.false(declared.has('GitBlobInfo'));
+  t.true(declared.has('GitBlobInfo'));
   const text = declarationText(gitDeclarations.git);
   t.true(text.includes('statfs: () => Promise<GitFilesystemStats>'));
-  t.true(text.includes('getInfo: () => {\n'));
+  t.true(text.includes('getInfo: () => Promise<GitBlobInfo>;'));
   t.false(text.includes("import('@endo/platform"));
 });
 
@@ -532,6 +530,7 @@ test('workspace declaration reaches the mount surface transitively', t => {
 });
 
 test('workspace declaration names mount result records and path conventions', t => {
+  const { aux } = fsDeclarations.workspace;
   const text = declarationText(fsDeclarations.workspace);
   for (const shape of [
     "kind: () => 'directory';",
@@ -576,9 +575,9 @@ test('workspace declaration names mount result records and path conventions', t 
   t.deepEqual(unknownResults, [
     'json: () => Promise<unknown>;',
     'snapshot: () => Promise<unknown>;',
-    'streamBase64: (synPromise: unknown) => Promise<unknown>;',
-    'json: () => Promise<unknown>;',
     'lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;',
+    'json: () => Promise<unknown>;',
+    'streamBase64: (synPromise: unknown) => Promise<unknown>;',
   ]);
   // The sole `: any` is the structural `ReadableBlobSource` variadic; no
   // concrete result type leaks `any`.
