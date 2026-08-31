@@ -89,7 +89,7 @@ test('zip preserves a deeply nested entry', async t => {
   t.is(new TextDecoder().decode(await reread.get('a/b/c/d/e.txt')), 'deep');
 });
 
-test('zip drains a multi-chunk streamBase64 across base64 group boundaries', async t => {
+test('zip drains a multi-chunk stream across base64 group boundaries', async t => {
   // The `@endo/exo-unzip` blob producer chunks at 48 KiB raw to keep
   // CapTP frames small; this test feeds it a payload large enough to
   // span multiple chunks and itself not a multiple of 3 bytes, so the
@@ -131,13 +131,13 @@ test('zip discovers the kind protocol once for a mount subtree', async t => {
       // eslint-disable-next-line no-underscore-dangle
       __getMethodNames__() {
         calls.introspection += 1;
-        return ['__getMethodNames__', 'kind', 'streamBase64'];
+        return ['__getMethodNames__', 'kind', 'stream'];
       },
       kind() {
         calls.kind += 1;
         return 'file';
       },
-      streamBase64(synPromise) {
+      stream(synPromise) {
         async function* contentBytes() {
           yield encodeBase64(content);
         }

@@ -39,7 +39,7 @@ export const httpDeclarations = harden({
     help: () => string;
 };
 type HttpPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<string, TReadReturn>>;
+    stream: (synPromise: HttpERef<HttpStreamNode<unknown, TReadReturn>>) => Promise<HttpStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
 type HttpERef<T> = T | Promise<T>;

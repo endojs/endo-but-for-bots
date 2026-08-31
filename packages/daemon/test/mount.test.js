@@ -699,7 +699,7 @@ test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', 
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
-  // A remotable that has neither `streamBase64` nor `list` — the
+  // A remotable that has neither `stream` nor `list` — the
   // duck-typing branch falls through to the explicit reject.
   const RandoInterface = M.interface('Rando', {
     nothing: M.call().returns(M.string()),
@@ -745,7 +745,7 @@ test('write rejects writing a ReadableBlob to an existing directory target', asy
   fs.mkdirSync(path.join(rootPath, 'occupied'));
 
   // bytesReaderFromIterator returns a PassableBytesReader Exo whose
-  // `streamBase64(synPromise)` is the new-protocol stream method.  The
+  // `stream(synPromise)` is the new-protocol stream method.  The
   // is-a-directory check in mount.write fires before any iteration.
   const blob = bytesReaderFromIterator([new Uint8Array(0)]);
   await t.throwsAsync(() => E(mount).write(['occupied'], blob), {
@@ -774,7 +774,7 @@ test('copy of a file onto itself preserves its content (same-inode write)', asyn
 
 test('write of a live file handle onto its own backing path preserves content', async t => {
   // The direct form: write(name, lookup(name)). The looked-up handle's
-  // streamBase64 reads the same path the writer targets.
+  // stream reads the same path the writer targets.
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['b.txt'], 'still here');
@@ -1048,7 +1048,7 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (file)).__getMethodNames__();
   // The view-of-a-file is a ReadableBlob, not an EndoMountFile.
-  t.true(methods.includes('streamBase64'));
+  t.true(methods.includes('stream'));
   t.true(methods.includes('text'));
   t.false(methods.includes('writeText'), 'attenuated, not full file');
 });

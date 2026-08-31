@@ -28,13 +28,13 @@ const zipOf = entries => {
 };
 
 /**
- * Drain a blob's `streamBase64` reader into the underlying bytes via
+ * Drain a blob's `stream` reader into the underlying bytes via
  * the platform's syn/ack reader-pump protocol. `iterateBytesReader`
- * initiates the stream (calling `streamBase64(synHead)`) and yields
+ * initiates the stream (calling `stream(synHead)`) and yields
  * each ack chunk base64-DECODED to a `Uint8Array`; we concatenate the
  * decoded byte chunks. Matches `@endo/exo-zip`'s `drainBytes`.
  *
- * @param {any} blob A blob exo exposing `streamBase64`.
+ * @param {any} blob A blob exo exposing `stream`.
  * @returns {Promise<Uint8Array>}
  */
 const drainBytes = async blob => {
@@ -85,7 +85,7 @@ test('lookup resolves a deep path in a single call', async t => {
   t.is(await /** @type {any} */ (blob).text(), 'deep');
 });
 
-test('streamBase64 decodes to original bytes', async t => {
+test('stream decodes to original bytes', async t => {
   const original = new Uint8Array([0, 1, 2, 3, 0xff, 0xfe, 0xfd]);
   const bytes = zipOf({ 'binary.dat': original });
   const tree = unzip(bytes);
@@ -94,7 +94,7 @@ test('streamBase64 decodes to original bytes', async t => {
   t.deepEqual([...round], [...original]);
 });
 
-test('streamBase64 streams multiple chunks that reconstruct the bytes exactly', async t => {
+test('stream streams multiple chunks that reconstruct the bytes exactly', async t => {
   // The producer chunks at 48 KiB raw boundaries to keep CapTP frames
   // small. Construct a payload that crosses two such boundaries and is
   // itself not a multiple of 3 bytes, so the multi-chunk streaming path
@@ -297,7 +297,7 @@ test('exo conforms to __getMethodNames__ for CapTP discovery', async t => {
   const blob = await tree.lookup('leaf.txt');
   // eslint-disable-next-line no-underscore-dangle
   const blobMethods = /** @type {any} */ (blob).__getMethodNames__();
-  t.true(blobMethods.includes('streamBase64'));
+  t.true(blobMethods.includes('stream'));
   t.true(blobMethods.includes('text'));
   t.true(blobMethods.includes('json'));
   // The blob does not have `list`, so the discrimination logic in

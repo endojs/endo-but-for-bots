@@ -24,16 +24,16 @@ try {
 } catch {}
 
 /**
- * Drain a blob's `streamBase64` reader into the underlying bytes.
+ * Drain a blob's `stream` reader into the underlying bytes.
  *
  * The blob conforms to the platform's syn/ack reader-pump protocol
- * (`@endo/platform`'s `ReadableBlobInterface`): `streamBase64(synHead)`
+ * (`@endo/platform`'s `ReadableBlobInterface`): `stream(synHead)`
  * returns a `StreamNode` chain, which `iterateBytesReader` consumes —
  * base64-DECODING each ack chunk to a `Uint8Array` before yielding it.
  * Each chunk is decoded independently, so there is no interior-padding
  * concern; we simply concatenate the decoded byte chunks.
  *
- * @param {unknown} blobRef A remotable exposing `streamBase64`.
+ * @param {unknown} blobRef A remotable exposing `stream`.
  * @returns {Promise<Uint8Array>}
  */
 const drainBytes = async blobRef => {
@@ -103,7 +103,7 @@ const walkTree = async (
   // async `set()` because the configured compressor (`deflate`,
   // when injected) is itself async; the legacy sync `write()` only
   // works for STORE. `node` IS the reader — `iterateBytesReader`
-  // initiates the stream by calling its `streamBase64` method.
+  // initiates the stream by calling its `stream` method.
   if (pathSegments.length === 0) {
     throw new Error('zip: cannot serialize a bare blob without a path');
   }
@@ -127,7 +127,7 @@ harden(walkTree);
  * than duck-typing, mirroring `@endo/platform`'s `checkoutTree`.
  *
  * The factory is async because both `list`/`lookup` (potentially
- * over CapTP) and the `streamBase64` drain are async; the
+ * over CapTP) and the `stream` drain are async; the
  * underlying `ZipWriter.snapshot()` call is synchronous.
  *
  * @param {unknown} tree A readable-tree exo (local or remote)

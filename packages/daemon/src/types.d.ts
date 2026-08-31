@@ -1227,7 +1227,7 @@ export type RequestFn = (
 ) => Promise<unknown>;
 
 export interface EndoReadable {
-  streamBase64(
+  stream(
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
@@ -1280,7 +1280,7 @@ export type BlobInfo = {
  * write-disabled face over a live file.
  */
 export interface ReadableBlobView {
-  streamBase64(
+  stream(
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
   text(): Promise<string>;
@@ -1330,7 +1330,7 @@ export interface EndoMountFile {
    */
   list(): Promise<never>;
   text(): Promise<string>;
-  streamBase64(
+  stream(
     synPromise: ERef<StreamNode<Passable, Passable>>,
   ): Promise<StreamNode<string, undefined>>;
   json(): Promise<unknown>;

@@ -73,15 +73,15 @@ hand "a directory" to a peer across a CapTP boundary.
 | Concern | Existing | This package |
 |---|---|---|
 | Live FS access | `@endo/daemon` `Mount` (`packages/daemon/src/mount.js`): `has`, `list`, `lookup`, `readText`, `writeText`, `makeDirectory`, `remove`, `move`, ... | Typed `Directory` / `File` subtypes; explicit `open()` separation; eager qid on every Node |
-| Immutable snapshot | `@endo/daemon` `ReadableTree`: `has`, `list`, `lookup` over a content-addressed snapshot | `Node.snapshot() → BlobRef` returns a content-addressed handle anyone holding the bytes can fetch |
-| File-shaped capability | `@endo/daemon` `MountFile`: `text`, `streamBase64`, `json`, `writeText`, `writeBytes`, `readOnly` | `File.open(flags) → OpenFile`; range reads, range writes, fsync, locks, watches |
-| Byte streaming over CapTP | `@endo/exo-stream`: `PassableBytesReader` / `PassableBytesWriter`, base64 over the wire (until CapTP gains native binary) | Consumed; not replaced |
+| Immutable snapshot | `@endo/daemon` `ReadableTree`: `has`, `list`, `lookup` over a content-addressed snapshot | `Node.snapshot() -> BlobRef` returns a content-addressed handle anyone holding the bytes can fetch |
+| File-shaped capability | `@endo/daemon` `MountFile`: `text`, `stream`, `json`, `writeText`, `writeBytes`, `readOnly` | `File.open(flags) -> OpenFile`; range reads, range writes, fsync, locks, watches |
+| Byte streaming over CapTP | `@endo/exo-stream`: `PassableBytesReader` / `PassableBytesWriter`, base64 over the generic stream protocol | Consumed; not replaced |
 | Interface guards | `@endo/patterns` `M.interface(...)` | Same pattern; PascalCase interface names |
 | Iteration over CapTP | `@endo/daemon`'s `makeIteratorRef`, `@endo/exo-stream`'s reader/writer pairs | Subscriptions, directory listings, range reads all use these |
 
 `Mount` is a good local FS surface but was not designed for cross-
 daemon use: each `lookup` is one round trip, and binary I/O goes
-through `text()` (UTF-8 only) or `streamBase64()` (no offsets, no
+through `text()` (UTF-8 only) or `stream()` (no offsets, no
 length, no random access). `@endo/endo-fs` is what `Mount` would
 look like redesigned around CapTP cost.
 
@@ -102,9 +102,9 @@ endo-fs guards stay separate:
 
 | Concept | `@endo/platform/fs` | `@endo/endo-fs` |
 |---|---|---|
-| `Directory` shape | Path-array verbs from a single root: `has(...path)`, `list(...path)`, `lookup(path)`, `write(path, blob)`, `move(src, dst)`, `copy(src, dst)`, `makeDirectory(path)`. No subtype carved out for the directory cap itself. | One-step verbs on a cap: `lookup(name) → Directory \| File`, `mkdir(name)`, `create(name)`, `unlink(name)`, `rename(name, newParent, newName)`. Pipelinable `E(dir).lookup(a).lookup(b)…` chains. |
-| `File` shape | Whole-blob ops: `text()`, `json()`, `streamBase64()`, `writeText(s)`, `writeBytes(blob)`, `append(s)`, `readOnly()`, `snapshot()`. | `open(opts) → OpenFile` for range I/O (`read(offset, length)`, `write(offset)`, `truncate`, `fsync`, `lock`), `snapshot() → BlobRef`, `watch()`, `xattrs()`. |
-| Snapshot model | `SnapshotBlob` / `SnapshotTree` carry an explicit `sha256()` and live in a separate `SnapshotStore` cap. | `Node.snapshot() → BlobRef` with `getInfo() → { algorithm, hash, size }`. CAS-cached reads are a separate composition layer (`withCachedReads`, ROADMAP §2.2). |
+| `Directory` shape | Path-array verbs from a single root: `has(...path)`, `list(...path)`, `lookup(path)`, `write(path, blob)`, `move(src, dst)`, `copy(src, dst)`, `makeDirectory(path)`. No subtype carved out for the directory cap itself. | One-step verbs on a cap: `lookup(name) -> Directory \| File`, `mkdir(name)`, `create(name)`, `unlink(name)`, `rename(name, newParent, newName)`. Pipelinable `E(dir).lookup(a).lookup(b)...` chains. |
+| `File` shape | Whole-blob ops: `text()`, `json()`, `stream()`, `writeText(s)`, `writeBytes(blob)`, `append(s)`, `readOnly()`, `snapshot()`. | `open(opts) -> OpenFile` for range I/O (`read(offset, length)`, `write(offset)`, `truncate`, `fsync`, `lock`), `snapshot() -> BlobRef`, `watch()`, `xattrs()`. |
+| Snapshot model | `SnapshotBlob` / `SnapshotTree` carry an explicit `sha256()` and live in a separate `SnapshotStore` cap. | `Node.snapshot() -> BlobRef` with `getInfo() -> { algorithm, hash, size }`. CAS-cached reads are a separate composition layer (`withCachedReads`, ROADMAP §2.2). |
 | Identity / qid | None; identity is the sha256 of a snapshot. | Eager `qid = { type, pathId, version }` on every live `Directory` / `File` (cf. §4.10). |
 
 Both packages depend on `@endo/exo`, `@endo/patterns`, and
@@ -121,7 +121,7 @@ a unified guard.
 ## 3. Design principles
 
 The remote object graph is rich. A protocol translator (9P, NFS,
-FUSE) is a thin local adapter that maintains a `fid → cap` table and
+FUSE) is a thin local adapter that maintains a `fid -> cap` table and
 converts each protocol message into one or more (often pipelined)
 calls. Two ideas do most of the work:
 
@@ -131,7 +131,7 @@ calls. Two ideas do most of the work:
    dropping the cap.
 
 2. **Pipelining collapses message sequences into a single round
-   trip.** Where 9P does `Twalk → Rwalk → Tlopen → Rlopen → Tread →
+   trip.** Where 9P does `Twalk -> Rwalk -> Tlopen -> Rlopen -> Tread ->
    Rread`, the translator does `E(dir).lookup(n).open(flags).read(off,
    len)` — three pipelined calls that arrive at the peer as one
    batch and produce one batch back.
@@ -185,7 +185,7 @@ This section is normative. Method signatures use Endo conventions:
 - `Node` is documentation, not an interface. Each of `Directory`
   and `File` has its own `M.interface` guard that includes the
   "Node base" methods (§4.2) plus its subtype-specific ones.
-- Every interface includes a `help() → string` per Endo convention.
+- Every interface includes a `help() -> string` per Endo convention.
 
 See §11 for the design's provenance.
 
@@ -573,12 +573,12 @@ RTT cost — that part belongs to the caller's pipelining.
 `Stream<Bytes>` and `Sink<Bytes>` in §4 are typed-passable
 abstractions. The current realisation:
 
-- **`Stream<Bytes>` → `PassableBytesReader`** from
+- **`Stream<Bytes>` -> `PassableBytesReader`** from
   `@endo/exo-stream/bytes-reader-from-iterator.js`. Producer wraps an
   `AsyncIterator<Uint8Array>`; over the wire, bytes are base64-
   encoded (a CapTP limitation today; will become native binary when
   CapTP supports it).
-- **`Sink<Bytes>` → `PassableBytesWriter`** from
+- **`Sink<Bytes>` -> `PassableBytesWriter`** from
   `@endo/exo-stream/bytes-writer-from-iterator.js`. Consumer wraps
   an `AsyncIterator<Uint8Array>` (a pipe-writer end); the producer
   side pushes chunks.
@@ -716,12 +716,12 @@ A CoW filesystem is composed of two participants:
 `Directory.lookup(name)` on the composed view consults the layer
 first:
 
-- The layer holds a **whiteout** for `name` → return `ENOENT`.
-- The layer holds an **entry** for `name` → return the layer's
+- The layer holds a **whiteout** for `name` -> return `ENOENT`.
+- The layer holds an **entry** for `name` -> return the layer's
   cap.
-- The layer is marked **opaque** at this directory → ignore the
+- The layer is marked **opaque** at this directory -> ignore the
   backing entirely (used to fully replace a directory's children).
-- Otherwise → fall through to the backing's `lookup(name)`.
+- Otherwise -> fall through to the backing's `lookup(name)`.
 
 `Directory.list()`'s `Cursor` (§4.5) on a composed view yields
 entries from both sides, applying whiteouts. The merge is shallow
@@ -746,7 +746,7 @@ The interface doesn't see them.
 
 The layer is itself a `Filesystem` (same interface), with the
 additional operations in §8.5. Composition is N-ary: a stack of
-N layers behaves like (((L₁ ∘ L₂) ∘ L₃) … ∘ Lₙ). Docker-style
+N layers behaves like (((L₁ ∘ L₂) ∘ L₃) ... ∘ Lₙ). Docker-style
 image stacks fall out without special-casing.
 
 ### 8.5 Layer-specific operations: diff and apply
@@ -970,7 +970,7 @@ Items below are open unless marked otherwise.
 | F2 — Reference exos backed by a powers object | **Done** |
 | F3 — Disk-backed `Filesystem` over `node:fs/promises` (§8.3) | **Done** (factory caplet is follow-up) |
 | F4 — In-memory `Filesystem` for tests (§8.2) | **Done** |
-| F5 — `from-mount.js` adapter (project `@endo/daemon` `Mount` → `Filesystem`); ship `'surface'` first (stateless, simplest) | **Done** (`'surface'` default; dedup/reject deferred) |
+| F5 — `from-mount.js` adapter (project `@endo/daemon` `Mount` -> `Filesystem`); ship `'surface'` first (stateless, simplest) | **Done** (`'surface'` default; dedup/reject deferred) |
 | F6 — `from-readable-tree.js` adapter (with eager `BlobRef`s) | Open |
 | F7 — `Node.watch()` events backed by `chokidar` or kernel inotify | **Done** (in-memory dispatch + disk-side via `node:fs.watch`) |
 | F8 — Lock implementation (advisory, in-process for v1) | **Done** |
@@ -1002,10 +1002,10 @@ substantive questions that have to be answered before the cap
 shape is settled:
 
 - **String targets vs cap targets for symlinks.** POSIX-shaped
-  `target() → string` keeps the wire-compatible POSIX semantics
+  `target() -> string` keeps the wire-compatible POSIX semantics
   (target is a path the resolver re-walks at lookup time, dangling
   symlinks are normal, target may resolve into a different mount).
-  ocap-shaped `target() → Node` gives you a graph filesystem
+  ocap-shaped `target() -> Node` gives you a graph filesystem
   (target is a live cap, no resolver indirection, no dangling).
   Mixing the two on one interface is muddy; pick one. The cap-
   shaped form needs a brand check (see below) to keep same-
@@ -1046,7 +1046,7 @@ shape is settled:
   pretending they're something else.
 - **Hard links across composition.** A composed CoW where the
   backing is a `LinuxFs` and the layer is a base FS: hard links
-  from the backing become … what in the composed view? They're
+  from the backing become ... what in the composed view? They're
   not representable in base FS. Probably the composed FS exposes
   them only when projected through a `LinuxFs` view, and
   presents the backing-link entries as ordinary `File`s in the
@@ -1108,7 +1108,7 @@ Remaining open questions:
 | Whiteout encoding | `LayerOp.kind: 'whiteout'` is wire-level. The in-memory representation inside a writable layer is implementation-internal — overlayfs uses char-dev(0,0), but nothing forces that on us. Probably a tagged record. |
 | Where do `apply` errors land? | `apply(target)` may fail partway through (target rejects a `set-attrs`, runs out of space, etc.). v1: surface the error and leave target in a partial state. v2: `apply` returns a sub-cap with `commit()` / `rollback()` for transactional groups. Connects to F12. |
 | `compose` over a `compose` | Composition is associative on paper. Implementations should not require multi-layer stacks to be a flat list — `compose(compose(L₁, B), L₂)` should behave like `compose(L₂, compose(L₁, B))` from a caller's perspective, modulo the qid-stability choice above. |
-| `PosixFs` cap surface | §4.9 lists what `PosixFs` adds (POSIX `Attrs` fields, `chmod`, `chown`, `system.*`/`trusted.*`/`security.*` xattrs, structured POSIX ACLs). Open: is `PosixFs` a single cap that takes `Node`s as arguments (`posixAttrs(node)`, `chmod(node, ...)`), or a `PosixNode` sub-cap per Node (`Node.posix() → PosixNode \| null`)? The former is more compact; the latter is more ocap-pure (each node carries its own authority). |
+| `PosixFs` cap surface | §4.9 lists what `PosixFs` adds (POSIX `Attrs` fields, `chmod`, `chown`, `system.*`/`trusted.*`/`security.*` xattrs, structured POSIX ACLs). Open: is `PosixFs` a single cap that takes `Node`s as arguments (`posixAttrs(node)`, `chmod(node, ...)`), or a `PosixNode` sub-cap per Node (`Node.posix() -> PosixNode \| null`)? The former is more compact; the latter is more ocap-pure (each node carries its own authority). |
 | LinuxFs open questions | See §9.1 — symlink target shape (string vs cap), same-FS brand check, `asFilesystem()` projection of symlink-bearing directories, hard links across composition, symlinks crossing compose boundaries. |
 | Cycle detection — eager or lazy? | §8.6 specifies eager: `bind` / `namespace` / `compose` check at construction time and reject configurations whose participants' tag sets overlap. Open: should it ALSO detect lazily at traversal time, in case a composed FS gets re-introduced later via some other channel (a remote FS handed back over CapTP, say)? Eager-only is simpler and covers the obvious cases; the lazy version costs every `lookup` a tag-set check forever. Provisional answer: eager-only, and document that adversarial cap-passing patterns can defeat it. |
 | `from-mount.js` (F5) and Mount-with-hard-links | Resolved: the adapter takes a config option for behaviour, defaulting to the simplest implementation for v1. `{ hardLinks: 'surface' }` (v1 default) — present each path as its own `File` cap with no inode-tracking; stateless adapter that honestly admits its base view isn't a strict tree where the backing has links. `{ hardLinks: 'dedup' }` — track inodes, pick one canonical path, hide the rest; more state but preserves the tree invariant. `{ hardLinks: 'reject' }` — error at `lookup` time when an inode-with-multiple-paths is encountered, useful when the caller demands the tree property hold strictly. `{ hardLinks: 'surface' }` ships first because it's stateless and matches what a caller wanting `PosixFs` on the same adapter would expect anyway. |
@@ -1135,16 +1135,16 @@ method calls are involved. Three pipelining tools matter:
    an argument position without an intermediate await of their
    own. `Directory.rename(name, M.await(M.remotable('Directory')),
    name)` and `Layer.apply(M.await(M.remotable('Filesystem')))`
-   use this — a `lookup → rename` becomes one round-trip
+   use this — a `lookup -> rename` becomes one round-trip
    instead of two.
 
 `test/pipelined-rtt.test.js` and the `PATTERN:` tests in
 `test/optimal-querying.test.js` pin all three behaviours.
 
 **Where this leaves "N method invocations":** it's a bandwidth
-concern (header bytes × N), not a latency concern, as long as
+concern (header bytes x N), not a latency concern, as long as
 the calls don't have control-flow dependencies on each other's
-results. A hypothetical `Directory.batchLookup(names[]) → Node[]`
+results. A hypothetical `Directory.batchLookup(names[]) -> Node[]`
 would save bandwidth, not round-trips.
 
 **The genuinely-blocking round-trip patterns are control-flow
@@ -1183,10 +1183,10 @@ weaknesses once the cost framework is applied:
   calls pipeline. Bandwidth only.
 - **"lookup-then-rename is two round-trips"**: `M.await` in the
   `rename` guard collapses this to one. The PATTERN test
-  `M.await pipelines lookup → rename to one round-trip` pins it.
+  `M.await pipelines lookup -> rename to one round-trip` pins it.
 - **"`getQid()` / `BlobRef.getInfo()` is one round-trip"**: callers
   always need the sync field alongside the call that produced the
-  cap (lookup → discriminate, snapshot → fetch, etc.); pipelining
+  cap (lookup -> discriminate, snapshot -> fetch, etc.); pipelining
   the getter into the same batch costs zero incremental RTT.
   `cached-fs.js`'s `resolveNodeWithQid` and the `withCachedReads`
   read path are the realisations. There's no scenario where a

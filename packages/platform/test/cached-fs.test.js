@@ -15,7 +15,7 @@
  *
  *   - **Cache miss** — first read of a file. The transcript shows
  *     `snapshot` + `getInfo` + `read` issued in one batch, then the
- *     background cache populate (`fetch` + `streamBase64`). The
+ *     background cache populate (`fetch` + `stream`). The
  *     speculative `read`'s bytes flow to the caller; the
  *     populating `fetch` runs after the caller has already received
  *     the response.
@@ -26,7 +26,7 @@
  *     speculative read **never flow** (`@endo/exo-stream` is
  *     pull-based; the wrapper returns a different reader and the
  *     speculative one is GC'd unused). Concrete assertion: the
- *     hit-side transcript carries no `streamBase64` CTP_CALL.
+ *     hit-side transcript carries no `stream` CTP_CALL.
  *
  *   - **No extra RTT** — by the time the caller's `await` resolves,
  *     the wire has carried exactly one `read` round-trip and the
@@ -182,19 +182,28 @@ test('withCachedReads: hit returns cached bytes without flowing the speculative 
   t.true(hitMethods.includes('getInfo'));
   t.true(hitMethods.includes('read'));
 
-  // The hit signature: the speculative read's PassableBytesReader
-  // is never iterated, so no `streamBase64` CALL ever crosses the
-  // wire. This is what makes the cache hit a real win — the bytes
+  // The hit signature: the speculative read's PassableBytesReader is never
+  // iterated, so no `stream` call crosses the wire before the wrapper starts
+  // its independent watch subscription. The watch event reader now uses the
+  // same generic method name, so calls after `watch` do not identify byte
+  // traffic. This is what makes the cache hit a real win — the bytes
   // themselves never travel.
+  const watchIndex = hitTraffic.findIndex(
+    event => event.type === 'CTP_CALL' && event.method === 'watch',
+  );
+  const preWatchTraffic =
+    watchIndex < 0 ? hitTraffic : hitTraffic.slice(0, watchIndex);
   t.is(
-    hitMethods.filter(m => m === 'streamBase64').length,
+    preWatchTraffic.filter(
+      event => event.type === 'CTP_CALL' && event.method === 'stream',
+    ).length,
     0,
-    "speculative reader is GC'd unused; no streamBase64 on the wire",
+    "speculative reader is GC'd unused; no byte stream on the wire",
   );
 
   t.snapshot(
     hitTraffic,
-    'hit transcript: snapshot + getInfo + speculative read, no streamBase64',
+    'hit transcript: snapshot + getInfo + speculative read, no stream',
   );
 });
 
@@ -244,10 +253,10 @@ test('withCachedReads: subsequent reads of different ranges of the same file all
   await settle(5);
 
   // Range reads after the priming should all be hits — no
-  // `streamBase64` should travel.
+  // `stream` should travel.
   const subsequent = transcript.slice(primedEnd);
   const streamCalls = subsequent.filter(
-    e => e.type === 'CTP_CALL' && e.method === 'streamBase64',
+    e => e.type === 'CTP_CALL' && e.method === 'stream',
   );
   t.is(
     streamCalls.length,

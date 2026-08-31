@@ -34,7 +34,7 @@ export const blobFromBytes = bytesOrPromise => {
   const bytes = () => Promise.resolve(bytesOrPromise);
   return makeExo('Blob', ReadableBlobInterface, {
     /** @param {unknown} synHead */
-    streamBase64: synHead =>
+    stream: synHead =>
       makeReaderPump(base64Chunks(bytes()))(/** @type {any} */ (synHead)),
     text: () => bytes().then(decodeUtf8),
     json: () =>
@@ -42,7 +42,7 @@ export const blobFromBytes = bytesOrPromise => {
     /** @param {string} [method] */
     help: method =>
       method === undefined
-        ? 'Blob: read-only bytes (streamBase64, text, json).'
+        ? 'Blob: read-only bytes (stream, text, json).'
         : `No documentation for method ${method}.`,
   });
 };
