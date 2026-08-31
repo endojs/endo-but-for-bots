@@ -228,3 +228,50 @@ fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
         Ok(_) => panic!("a crafted resume cursor must not validate"),
     }
 }
+
+/// The `SIGN` gate covers the boot-derived slot layout, not only the
+/// host callback table (see `Signature`). Adoption boots a fresh
+/// machine and then replaces its arenas with the image's, so the
+/// boot-derived maps keyed by slot index survive from the CURRENT
+/// boot — a container written under a different boot layout would
+/// attach this build's boot metadata to the image's unrelated slots,
+/// silently, and nothing else would catch it: `boot_slot_count` is not
+/// serialized and `VERS` versions the wire schema rather than the heap.
+///
+/// So the refusal must happen BEFORE adoption, on every path. This
+/// pins that, and pins it for a container that is otherwise entirely
+/// well formed — same version, same atoms, same everything but the
+/// signature the writer stamped.
+#[test]
+fn a_container_from_a_foreign_boot_layout_is_refused() {
+    let m = quiescent_machine("var t = 0; t = 41 + 1; t");
+    // A different engine build: same wire schema, different boot layout,
+    // therefore a different signature.
+    let other_build = Signature::new("ironhorse-worker-v1-boot2");
+    let bytes = m.write_snapshot(&other_build).expect("the other build writes");
+
+    // Sanity: the bytes are honest under their OWN signature, so the
+    // refusal below is about the signature and nothing else.
+    from_snapshot_bytes(&bytes, &other_build).expect("honest under its own signature");
+
+    match from_snapshot_bytes(&bytes, &sig()) {
+        Err(SnapshotError::SignatureMismatch { expected, found }) => {
+            assert_eq!(expected, sig());
+            assert_eq!(found, other_build);
+        }
+        Err(other) => panic!("refused, but not by the signature gate: {other:?}"),
+        Ok(_) => panic!("a container from a foreign boot layout must not adopt"),
+    }
+
+    // And the store path refuses at open, likewise before adoption.
+    let mut store = MemoryStore::new();
+    let image = read_machine(&bytes, &other_build).expect("reads under its own signature");
+    store
+        .commit(&image_to_batch(&image, 1, ""))
+        .expect("the raw commit models the other build's writer");
+    match validate_store(&store, &sig()) {
+        Err(StoreError::Snapshot(SnapshotError::SignatureMismatch { .. })) => {}
+        Err(other) => panic!("store refused, but not by the signature gate: {other:?}"),
+        Ok(_) => panic!("a store from a foreign boot layout must not validate"),
+    }
+}
