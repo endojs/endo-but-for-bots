@@ -186,3 +186,45 @@ fn an_explicit_full_name_floor_is_refused_as_non_canonical() {
         Ok(_) => panic!("a non-canonical explicit floor must not validate"),
     }
 }
+
+/// The store mirror of the generator resume-cursor gate: the shared
+/// bounds gate runs for both resume paths, so a raw-committed store
+/// carrying a cursor at the segment end must be refused by
+/// `validate_store` exactly as the container read refuses it. The
+/// container arms (segment end, body end, an operand byte, a sibling
+/// body's instruction start, and the saved-handler equivalents) live in
+/// `generator_carry.rs`.
+#[test]
+fn a_generator_resume_cursor_outside_its_body_is_refused_at_store_validation() {
+    let m = quiescent_machine(
+        "var it = 0; var t = 0; \
+         function* g() { var a = 11; yield a; yield a + 1; } \
+         it = g(); t = it.next().value; t",
+    );
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    assert_eq!(image.generators.len(), 1, "the fixture persisted its generator");
+
+    let owner = image.generators[0].frame.as_ref().unwrap().cur_func;
+    let segment = image
+        .function_state
+        .functions
+        .iter()
+        .find(|f| f.owner == owner)
+        .and_then(|f| f.segment)
+        .expect("the frame's function owns a segment");
+    let past_the_body = image.function_state.segments[segment as usize].len() as u64;
+    image.generators[0].frame.as_mut().unwrap().resume_pc = past_the_body;
+
+    let mut store = MemoryStore::new();
+    store
+        .commit(&image_to_batch(&image, 1, ""))
+        .expect("the raw commit models a crafted writer");
+    match validate_store(&store, &sig()) {
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "generator frame: invalid resume cursor or scope map",
+        ))) => {}
+        Err(other) => panic!("store refused, but not by the named gate: {other:?}"),
+        Ok(_) => panic!("a crafted resume cursor must not validate"),
+    }
+}

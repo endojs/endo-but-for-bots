@@ -3430,6 +3430,8 @@ pub(crate) fn check_image_slot_bounds(
             }
         }
     }
+    let mut body_starts: std::collections::HashMap<u32, std::collections::BTreeSet<u64>> =
+        std::collections::HashMap::new();
     for row in lang.generators {
         owned(row.owner)?;
         let Some(frame) = &row.frame else {
@@ -3463,7 +3465,46 @@ pub(crate) fn check_image_slot_bounds(
             .ok_or(SnapshotError::Corrupt(
                 "generator frame: current function has no segment",
             ))?;
-        if frame.resume_pc > code.len() as u64
+        // A segment holds every function its crank compiled, so a
+        // segment-wide bound is far too loose for a resume cursor: it
+        // admits the segment end, a byte inside an instruction's
+        // operand or payload, and a perfectly valid instruction start
+        // belonging to a DIFFERENT body. Each of those enters dispatch
+        // at a pc the generator never suspended at. The cursor and
+        // every saved-handler target must instead be an instruction
+        // START within `cur_func`'s OWN `[body_start, body_end)` --
+        // the same walk the function-state gate above already proved
+        // sizes cleanly to its end. Memoized per function because a
+        // crafted image may name one large body from arbitrarily many
+        // generator rows.
+        let starts = match body_starts.entry(frame.cur_func) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => {
+                let Some(body_start) = function.body_start else {
+                    return Err(SnapshotError::Corrupt(
+                        "generator frame: current function has no body",
+                    ));
+                };
+                let Some(body_end) = body_start.checked_add(function.body_len) else {
+                    return Err(SnapshotError::Corrupt(
+                        "generator frame: current function has no body",
+                    ));
+                };
+                let mut set = std::collections::BTreeSet::new();
+                let mut pc = body_start as usize;
+                while pc < body_end as usize {
+                    let Some(len) = ironhorse_vm::instruction_len(code, pc) else {
+                        return Err(SnapshotError::Corrupt(
+                            "generator frame: malformed body bytecode",
+                        ));
+                    };
+                    set.insert(pc as u64);
+                    pc = pc.saturating_add(len);
+                }
+                e.insert(set)
+            }
+        };
+        if !starts.contains(&frame.resume_pc)
             || frame
                 .id_map
                 .iter()
@@ -3477,12 +3518,17 @@ pub(crate) fn check_image_slot_bounds(
         }
         for jump in &frame.jumps {
             check(&jump.env)?;
+            // The handler's `id_map` is bounded by the handler's OWN
+            // `locals_len` -- the length its resumed `catch` resolves
+            // against -- not by the frame's current locals. A shorter
+            // `locals_len` with an index in between passed the frame's
+            // bound and then misresolved a name on the way out.
             if jump.flag != 1
-                || jump.target_pc > code.len() as u64
+                || !starts.contains(&jump.target_pc)
                 || jump.stack_offset > frame.stack_slice.len() as u64
                 || jump.locals_len > frame.locals.len() as u64
                 || jump.id_map.iter().any(|&(id, index)| {
-                    id == 0 || id as usize > names_len || index >= frame.locals.len() as u64
+                    id == 0 || id as usize > names_len || index >= jump.locals_len
                 })
             {
                 return Err(SnapshotError::Corrupt(
