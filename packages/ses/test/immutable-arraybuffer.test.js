@@ -52,3 +52,16 @@ test('ses: emulated freezable view mutator methods still throw after lockdown', 
   t.throws(() => view.sort(), { instanceOf: TypeError });
   t.throws(() => view.copyWithin(0, 1), { instanceOf: TypeError });
 });
+test('ses: emulated DataView remains readable, hardened, and read-only after lockdown', t => {
+  const source = new ArrayBuffer(8);
+  new DataView(source).setFloat64(0, Math.PI);
+  const immutable = source.sliceToImmutable();
+  const view = harden(new DataView(immutable));
+
+  t.true(isFrozen(view));
+  t.is(Object.prototype.toString.call(view), '[object DataView]');
+  t.is(view.buffer, immutable);
+  t.is(view.getFloat64(0), Math.PI);
+  t.throws(() => view.setUint8(0, 0), { instanceOf: TypeError });
+  t.throws(() => view.setFloat64(0, 0), { instanceOf: TypeError });
+});
