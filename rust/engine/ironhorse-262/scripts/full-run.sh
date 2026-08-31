@@ -303,7 +303,13 @@ run_one_batch() {
       # the handler a no-op until a real timer PID exists.
       timer=""
       trap '[ -n "$timer" ] && kill "$timer" 2>/dev/null; exit 0' TERM INT
-      sleep "${IRONHORSE_262_BATCH_TIMEOUT:-180}" & timer=$!
+      # 900s default: with the oracle's 64Ki value stack the generated
+      # RegExp/property-escapes batches actually execute (each case builds a
+      # ~1.1M-code-point subject and runs three regexes on BOTH engines,
+      # ~4-8s/case, ~100 cases/batch), so 180s quarantined ~400 real
+      # verdicts as worker-failed:status-143. The bound still catches an
+      # unmetered hang — one case cannot hold a worker past the batch cap.
+      sleep "${IRONHORSE_262_BATCH_TIMEOUT:-900}" & timer=$!
       wait "$timer" || exit 0
       kill -TERM "$worker" 2>/dev/null || exit 0
       sleep "${IRONHORSE_262_KILL_GRACE:-30}" & timer=$!

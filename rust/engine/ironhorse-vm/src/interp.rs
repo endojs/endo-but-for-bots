@@ -2492,6 +2492,21 @@ pub enum NativeMethod {
     /// `/source/flags` literal string, read through the `source`/`flags`
     /// getters.
     RegExpToString,
+    /// `RegExp.prototype.compile(...)` (`fx_RegExp_prototype_compile`): XS's
+    /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
+    /// recompilation, arguments ignored — so the mirror returns `this` as-is.
+    RegExpCompile,
+    /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an
+    /// error instance, `name[: message]` plus one `\n at <fn> ()` line per
+    /// construction-time frame; `undefined` for a non-error object; a
+    /// TypeError for a non-object `this`.
+    ErrorStackGetter,
+    /// `set Error.prototype.stack` (`fx_Error_prototype_set_stack`): defines
+    /// an own `{value, writable, enumerable, configurable}` `stack` property
+    /// on `this` unconditionally (no string check — `mxDefineID`), with a
+    /// TypeError for a non-object `this`, a missing argument, or a refused
+    /// define (a frozen receiver, a rejecting proxy trap).
+    ErrorStackSetter,
     /// `String.prototype.match(regexp)` (`fx_String_prototype_match`): coerce
     /// the receiver to string, the argument to a RegExp, and dispatch to the
     /// matcher — the non-global path returns `exec`'s result; the global path
@@ -3034,6 +3049,12 @@ struct IterState {
 struct ErrorInfo {
     name: &'static str,
     message: Option<String>,
+    /// The call-frame names captured at construction (innermost first,
+    /// ending with the empty program frame), the way XS records the frame
+    /// chain `fx_Error_prototype_get_stack` renders as `\n at <name> ()`
+    /// lines in the oracle shim (which compiles from buffers, so frames
+    /// carry no file:line ids).
+    frames: Vec<String>,
 }
 
 /// Exact, immutable Temporal records.  Keeping these independent from the
@@ -4198,6 +4219,20 @@ pub struct Interp {
     /// keeping non-`constructor` programs (and the exact-metering corpus)
     /// byte-identical.
     constructor_id: Option<u16>,
+    /// The `%Error.prototype%` `stack` accessor pair awaiting link-time
+    /// install: `(error_proto, getter, setter)`. Installed (guarded on the
+    /// program naming `Error`, for metering neutrality elsewhere) beside
+    /// the `proto_accessors` in `link_intrinsics`.
+    error_stack_accessor: Option<(
+        crate::value::SlotIndex,
+        crate::value::SlotIndex,
+        crate::value::SlotIndex,
+    )>,
+    /// The program-symbol id of `prototype`, when the program names it —
+    /// gates installing a constructor function's own `prototype` property
+    /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
+    /// the `prototype.constructor` back-reference.
+    prototype_key_id: Option<u16>,
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
@@ -4811,6 +4846,8 @@ impl Interp {
             from_async: Vec::new(),
             then_id: None,
             constructor_id: None,
+            error_stack_accessor: None,
+            prototype_key_id: None,
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
             last_index_id: None,
@@ -5542,6 +5579,7 @@ impl Interp {
             ("exec", NativeMethod::RegExpExec),
             ("test", NativeMethod::RegExpTest),
             ("toString", NativeMethod::RegExpToString),
+            ("compile", NativeMethod::RegExpCompile),
         ] {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.regexp_proto, name, mf));
@@ -5695,6 +5733,12 @@ impl Interp {
             .push((error_proto, "name", "Error".to_string()));
         self.proto_data
             .push((error_proto, "message", String::new()));
+        // `%Error.prototype%`'s `stack` host accessor pair
+        // (`fxNextHostAccessorProperty` in `fxBuildError`), installed at
+        // link time beside the other native accessors.
+        let stack_getter = self.alloc_named_method(NativeMethod::ErrorStackGetter, "get stack", 0);
+        let stack_setter = self.alloc_named_method(NativeMethod::ErrorStackSetter, "set stack", 1);
+        self.error_stack_accessor = Some((error_proto, stack_getter, stack_setter));
         for (_, native) in Native::intrinsics() {
             if matches!(
                 native,
@@ -6569,9 +6613,25 @@ impl Interp {
         self.functions.get(&f).and_then(|fi| fi.method)
     }
 
-    /// The `.prototype` object of a constructor instance, if it is one.
+    /// The `.prototype` object of a constructor instance, if it is one. A
+    /// guest may reassign a plain constructor function's writable own
+    /// `prototype` property, so the own slot (when the program names
+    /// `prototype` — see [`Self::prototype_key_id`]) outranks the boot-time
+    /// [`Self::ctor_prototype`] record; a reassignment to a non-object means
+    /// instances chain to `%Object.prototype%` (`fxGetPrototypeFromConstructor`).
     #[inline]
     fn prototype_of(&self, ctor: crate::value::SlotIndex) -> Option<crate::value::SlotIndex> {
+        if let Some(pid) = self.prototype_key_id {
+            if let Some(p) = self.find_property(ctor, pid) {
+                let s = self.slots.get(p);
+                if s.kind == Kind::Reference {
+                    if let Payload::Reference(r) = s.value {
+                        return Some(r);
+                    }
+                }
+                return None;
+            }
+        }
         self.ctor_prototype.get(&ctor).copied()
     }
 
@@ -6896,7 +6956,12 @@ impl Interp {
             // atom for the name). It is an XS boot default key, so assigning
             // its program-local id here is unmetered.
             let mid = if mname == "prototype" {
-                Some(self.intern_key(mname))
+                let pid = self.intern_key(mname);
+                // The canonical `prototype` key id (a boot default key,
+                // present whether or not the program names it statically) —
+                // the id `install_own_function_prototype`/`prototype_of` use.
+                self.prototype_key_id = Some(pid);
+                Some(pid)
             } else if let Some(&id) = self.symbol_ids.get(mname) {
                 Some(id)
             } else if proto == self.intl_object && self.symbol_ids.contains_key("Intl") {
@@ -6975,6 +7040,36 @@ impl Interp {
             }
         }
         self.proto_accessors = accessors;
+        // `%Error.prototype%.stack` {get, set} (`XS_DONT_ENUM_FLAG` only —
+        // enumerable: false, configurable: true), installed when the program
+        // names `Error` so every other program's metering stays untouched;
+        // the `stack` key is force-interned unmetered (an XS boot default
+        // key, reachable reflectively by string).
+        if let Some((proto, getter, setter)) = self.error_stack_accessor {
+            let names_error_family = [
+                "Error",
+                "EvalError",
+                "RangeError",
+                "ReferenceError",
+                "SyntaxError",
+                "TypeError",
+                "URIError",
+                "AggregateError",
+                "SuppressedError",
+                "stack",
+            ]
+            .iter()
+            .any(|n| self.symbol_ids.contains_key(*n));
+            if names_error_family {
+                let sid = self.intern_key_unmetered("stack");
+                self.set_own_accessor_unmetered(
+                    proto,
+                    sid,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    Some(Slot::of(Kind::Reference, Payload::Reference(setter))),
+                );
+            }
+        }
         // Native numeric data properties (`Math.PI` &co.): bound as own
         // properties of their owner under the program-local id, unmetered.
         let vdata = std::mem::take(&mut self.proto_value_data);
@@ -7621,15 +7716,37 @@ impl Interp {
     /// slots) — 536 raw total against the pin. Initialized undefined; a
     /// following `SET_VARIABLE` assigns and meters its own built-in step.
     fn materialize_global_property(&mut self, id: u16) -> crate::value::SlotIndex {
-        self.tick_property_create();
+        self.tick_property_create(id);
         self.create_global_property(id, (Kind::Undefined, Payload::None))
     }
 
     /// Meter one new own-property allocation: the property `fxNewSlot`
     /// ([`crate::meter::SLOT_ALLOCATION_METERING`]) plus the measured
     /// [`PROPERTY_CREATE_REMAINDER`], 536 raw total against the pin.
+    ///
+    /// The remainder is dominated by the interned-key `fxFindKey` →
+    /// `fxNewSlot`/`fxNewChunk` allocation, which XS pays only for an atom
+    /// **missing** its boot name table. A key that is one of XS's boot
+    /// default keys (`gxIDStrings` — `toString`, `valueOf`, …) is
+    /// pre-interned at machine creation, so creating a property under it
+    /// costs only the property slot — measured against the pin as exactly
+    /// 256 (the `Test262Error.prototype.toString = …` harness store).
     #[inline]
-    fn tick_property_create(&mut self) {
+    fn tick_property_create(&mut self, id: u16) {
+        self.meter.tick_slot_alloc();
+        let name = self.id_name(id);
+        if !self.default_keys.contains(name.as_str()) {
+            self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
+        }
+    }
+
+    /// The pre-discount flat form of [`Self::tick_property_create`], for the
+    /// internal materializations (the legacy `caller`/`arguments` own
+    /// properties a function define installs through `instance_put`) whose
+    /// costs are folded into calibrated cluster constants measured with this
+    /// flat charge — discounting them would unbalance those clusters.
+    #[inline]
+    fn tick_property_create_flat(&mut self) {
         self.meter.tick_slot_alloc();
         self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
     }
@@ -7966,6 +8083,31 @@ impl Interp {
             }
             _ => slot_to_ecma_string(s),
         }
+    }
+
+    /// Render an uncaught thrown value the way XS's host boundary does
+    /// (`fxToString` on the exception): a thrown user object runs its guest
+    /// `toString` (sta.js's `Test262Error` carries one), so the abort value
+    /// matches the oracle's rendering of the same failure. Engine-built
+    /// native errors (in `error_data`) keep the static render — their
+    /// `Error.prototype.toString` shape is already mirrored — and any
+    /// failure inside the guest coercion falls back to the static render.
+    fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
+        if let Payload::Reference(r) = v.value {
+            if v.kind == Kind::Reference && !self.error_data.contains_key(&r) {
+                if let Ok(prim) = self.to_primitive(code, v, true) {
+                    if prim.kind == Kind::String {
+                        if let Payload::String(off) = prim.value {
+                            return self.str_text(off);
+                        }
+                    }
+                    if prim.kind != Kind::Reference {
+                        return self.render(&prim);
+                    }
+                }
+            }
+        }
+        self.render(&v)
     }
 
     /// The string value of an instance's `Symbol.toStringTag` (own or
@@ -9013,7 +9155,24 @@ impl Interp {
                         let iterator = match self.call_primitive_method(code, method, iterable, &[])
                         {
                             Ok(iterator) if iterator.kind == Kind::Reference => iterator,
-                            Ok(_) => return self.catchable_type_error(),
+                            Ok(_) => {
+                                // GetIterator step 3 (`fxGetIterator`'s
+                                // "iterator: not an object"), raised in-frame
+                                // so a `try` in the SAME activation — a
+                                // generator body around `yield*` — observes it
+                                // (a returned halt would skip that handler).
+                                let error = self.internal_error(
+                                    "TypeError",
+                                    "iterator: not an object".into(),
+                                );
+                                pc = dispatch_result!(
+                                    self.raise_js(error),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                continue;
+                            }
                             Err(halt) => return halt,
                         };
                         self.push(iterator);
@@ -9074,7 +9233,19 @@ impl Interp {
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             self.push(iterable);
                         }
-                        _ => return self.catchable_type_error(),
+                        _ => {
+                            // No iterator protocol at all: XS reaches the
+                            // call of the absent `Symbol.iterator` method
+                            // (`fxCallInstance`'s "call: not a function"),
+                            // raised in-frame so an enclosing `try` in the
+                            // same activation observes it.
+                            let error = self.internal_error(
+                                "TypeError",
+                                "call: not a function".into(),
+                            );
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
                     }
                     pc += size as usize;
                 }
@@ -10009,6 +10180,12 @@ impl Interp {
                 XS_CODE_CONSTRUCTOR_FUNCTION | XS_CODE_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_function(name);
+                    // Only `constructor_function` carries XS's
+                    // `fxDefaultFunctionPrototype` own `prototype` property;
+                    // plain `function` (a method shape) has none.
+                    if op == XS_CODE_CONSTRUCTOR_FUNCTION {
+                        self.install_own_function_prototype(f);
+                    }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10023,6 +10200,10 @@ impl Interp {
                 XS_CODE_GENERATOR_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_generator_function(name);
+                    // A generator function carries the same own `prototype`
+                    // slot (`fxDefaultFunctionPrototype` over the generator
+                    // prototype object it re-chained).
+                    self.install_own_function_prototype(f);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10042,6 +10223,7 @@ impl Interp {
                 XS_CODE_ASYNC_GENERATOR_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_async_generator_function(name);
+                    self.install_own_function_prototype(f);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -11293,6 +11475,14 @@ impl Interp {
                         return Halt::Unsupported("get_super:no-home");
                     }
                     let base = self.instance_prototype(home);
+                    // GetValue on a super reference performs ToObject on the
+                    // home prototype; a null [[Prototype]] is a TypeError
+                    // (ECMA-262 6.2.5.5), raised at use, after key evaluation.
+                    if base.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let value = dispatch_result!(
                         self.ordinary_get(code, base, id, receiver),
                         pc,
@@ -11319,6 +11509,13 @@ impl Interp {
                         _ => return Halt::Unsupported("get_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    // A computed super reference defers the null-base
+                    // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
+                    if super_ref.next.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let value = dispatch_result!(
                         self.ordinary_get(code, super_ref.next, id, receiver),
                         pc,
@@ -11341,6 +11538,14 @@ impl Interp {
                         return Halt::Unsupported("set_super:no-home");
                     }
                     let base = self.instance_prototype(home);
+                    // PutValue on a super reference performs ToObject on the
+                    // home prototype; a null [[Prototype]] is a TypeError
+                    // (ECMA-262 6.2.5.6), raised after the RHS has evaluated.
+                    if base.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, base, id, value, receiver),
                         pc,
@@ -11373,6 +11578,14 @@ impl Interp {
                         _ => return Halt::Unsupported("set_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    // A computed super reference defers the null-base
+                    // TypeError to PutValue (ECMA-262 6.2.5.6 via ToObject),
+                    // after both the key and the RHS have evaluated.
+                    if super_ref.next.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, super_ref.next, id, value, receiver),
                         pc,
@@ -11782,7 +11995,8 @@ impl Interp {
                                 }
                                 None => {
                                     self.meter_host_escape();
-                                    return Halt::Throw(self.render(&v));
+                                    let text = self.render_uncaught(code, v);
+                                    return Halt::Throw(text);
                                 }
                             }
                         }
@@ -12417,7 +12631,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            return Halt::Throw(self.render(&v));
+                            let text = self.render_uncaught(code, v);
+                            return Halt::Throw(text);
                         }
                     }
                 }
@@ -12439,7 +12654,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            return Halt::Throw(self.render(&v));
+                            let text = self.render_uncaught(code, v);
+                            return Halt::Throw(text);
                         }
                     }
                 }
@@ -12615,6 +12831,25 @@ impl Interp {
         }
         self.ctor_prototype.insert(f, proto);
         f
+    }
+
+    /// Install a constructor function's own `prototype` data property
+    /// (`fxDefaultFunctionPrototype`'s `{writable, enumerable: false,
+    /// configurable: false}` slot) pointing at its [`Self::ctor_prototype`]
+    /// object, so `T.prototype` reads, `T.prototype.m = …` augmentation, and
+    /// `T.prototype = …` reassignment all resolve the SAME object `new T()`
+    /// chains instances to. Gated on the program naming `prototype` (like the
+    /// `prototype.constructor` back-reference), unmetered on both sides.
+    fn install_own_function_prototype(&mut self, f: crate::value::SlotIndex) {
+
+        if let (Some(pid), Some(&proto)) = (self.prototype_key_id, self.ctor_prototype.get(&f)) {
+            self.set_own_unmetered_with_flag(
+                f,
+                pid,
+                Slot::of(Kind::Reference, Payload::Reference(proto)),
+                XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+            );
+        }
     }
 
     /// Define a generator function (`XS_CODE_GENERATOR_FUNCTION` →
@@ -16754,6 +16989,61 @@ impl Interp {
         Ok(self.regexp_exec_inner(inst, arg0)?.0)
     }
 
+    /// Spell the subject for the matcher's NUL-terminated walk the way an XS
+    /// string is stored: an embedded U+0000 becomes the overlong pair `C0 80`
+    /// (modified UTF-8), so the walk never sees a bare NUL byte and treats it
+    /// as end-of-subject. Well-formed UTF-8 never contains `C0`, so every
+    /// `C0 80` pair in the result is one this spelling introduced.
+    fn regexp_subject_bytes(text: &str) -> Vec<u8> {
+        let bytes = text.as_bytes();
+        if !bytes.contains(&0) {
+            return bytes.to_vec();
+        }
+        let mut out = Vec::with_capacity(bytes.len() + 8);
+        for &b in bytes {
+            if b == 0 {
+                out.extend_from_slice(&[0xC0, 0x80]);
+            } else {
+                out.push(b);
+            }
+        }
+        out
+    }
+
+    /// Invert [`Self::regexp_subject_bytes`] on a matched slice before the
+    /// standard UTF-8 decode (a bare `C0 80` would otherwise decode lossily).
+    fn regexp_piece_bytes(piece: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(piece.len());
+        let mut i = 0;
+        while i < piece.len() {
+            if piece[i] == 0xC0 && piece.get(i + 1) == Some(&0x80) {
+                out.push(0);
+                i += 2;
+            } else {
+                out.push(piece[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// Count the `C0 80` pairs introduced by [`Self::regexp_subject_bytes`]
+    /// strictly before byte offset `end`, the correction from a byte offset in
+    /// the spelled subject back to the code-unit offset XS reports.
+    fn regexp_nul_pairs_before(subject: &[u8], end: usize) -> i32 {
+        let mut pairs = 0;
+        let mut i = 0;
+        while i + 1 < end.min(subject.len()) {
+            if subject[i] == 0xC0 && subject[i + 1] == 0x80 {
+                pairs += 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        pairs
+    }
+
     /// The `exec` body, returning `(result, Some(match_start))` on a match so
     /// the String-side `search`/`match` methods (which drive the full `exec`,
     /// as XS's `fxExecuteRegExp` does) can read the match position without
@@ -16767,8 +17057,9 @@ impl Interp {
         self.meter.tick_raw(REGEXP_EXEC_FRAME_METERING);
         let subject_slot = self.to_string_slot_metered(arg0);
         let subject = match subject_slot.value {
-            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space.
-            Payload::String(off) => self.str_text(off).into_bytes(),
+            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space,
+            // with U+0000 spelled `C0 80` the way an XS string stores it.
+            Payload::String(off) => Self::regexp_subject_bytes(&self.str_text(off)),
             _ => Vec::new(),
         };
         // The declared named groups, one entry per UNIQUE name in name-slot
@@ -16793,7 +17084,10 @@ impl Interp {
         self.meter.tick_raw(
             REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
         );
-        let match_start = captures[0].0;
+        // Correct the reported match position for any `C0 80` NUL pairs the
+        // subject spelling introduced before it (one code unit each to XS).
+        let match_start =
+            captures[0].0 - Self::regexp_nul_pairs_before(&subject, captures[0].0.max(0) as usize);
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
         let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
@@ -16804,8 +17098,9 @@ impl Interp {
             // `resultItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
             let slot = if from >= 0 {
-                let piece = &subject[from as usize..to as usize];
-                self.new_string_metered(piece)
+                let piece =
+                    Self::regexp_piece_bytes(&subject[from as usize..to as usize]);
+                self.new_string_metered(&piece)
             } else {
                 Slot::undefined()
             };
@@ -19480,6 +19775,7 @@ impl Interp {
             ErrorInfo {
                 name: "AggregateError",
                 message: None,
+                frames: self.capture_error_frames(),
             },
         );
         let n = errors.len() as u64;
@@ -19514,6 +19810,25 @@ impl Interp {
     /// (under the program's relinked ids) so guest reads resolve — both
     /// unmetered, mirroring XS where `name` is the inherited prototype value
     /// and the property slot cost is folded into the measured constants.
+    /// The frame-name chain an error captures at construction (XS's
+    /// `fxCaptureErrorStack` recording): the current activation's function
+    /// name, each suspended caller's, then the empty program frame. A
+    /// non-function level (the program scope) contributes nothing beyond
+    /// the final empty frame.
+    fn capture_error_frames(&self) -> Vec<String> {
+        let mut frames = Vec::new();
+        if let Some(fi) = self.functions.get(&self.cur_func) {
+            frames.push(fi.name.clone());
+        }
+        for state in self.call_stack.iter().rev() {
+            if let Some(fi) = self.functions.get(&state.cur_func) {
+                frames.push(fi.name.clone());
+            }
+        }
+        frames.push(String::new());
+        frames
+    }
+
     fn build_error(&mut self, name: &'static str, base: usize, argc: usize) -> Slot {
         // Base object cost, exactly as the native `Object` constructor
         // (`tick_builtin` + `fxNewObject`), plus the error-instance extra.
@@ -19553,6 +19868,7 @@ impl Interp {
             ErrorInfo {
                 name,
                 message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
         // An own `message` property only when a message argument was given
@@ -19651,6 +19967,7 @@ impl Interp {
             ErrorInfo {
                 name: "SuppressedError",
                 message: None,
+                frames: self.capture_error_frames(),
             },
         );
         for (name, value) in [("error", error), ("suppressed", suppressed)] {
@@ -19727,6 +20044,7 @@ impl Interp {
             ErrorInfo {
                 name: "AggregateError",
                 message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
         if let Some(text) = message {
@@ -25183,6 +25501,71 @@ impl Interp {
                 };
                 self.regexp_test(inst, arg0)?
             }
+            NativeMethod::RegExpCompile => this,
+            NativeMethod::ErrorStackGetter => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                match self.error_data.get(&inst).cloned() {
+                    None => Slot::undefined(),
+                    Some(info) => {
+                        // `name`/`message` are read live off the instance
+                        // (`mxGetID`), so a post-construction rename shows.
+                        let mut text = match self.name_id.map(|id| self.instance_get(inst, id)) {
+                            Some(v) if v.kind != Kind::Undefined => self.render(&v),
+                            _ => info.name.to_string(),
+                        };
+                        let message = match self.symbol_ids.get("message").copied() {
+                            Some(id) => {
+                                let v = self.instance_get(inst, id);
+                                if v.kind == Kind::Undefined {
+                                    None
+                                } else {
+                                    Some(self.render(&v))
+                                }
+                            }
+                            None => info.message.clone(),
+                        };
+                        if let Some(m) = message {
+                            if !m.is_empty() {
+                                text.push_str(": ");
+                                text.push_str(&m);
+                            }
+                        }
+                        for frame in &info.frames {
+                            text.push_str("\n at");
+                            if !frame.is_empty() {
+                                text.push(' ');
+                                text.push_str(frame);
+                            }
+                            text.push_str(" ()");
+                        }
+                        self.new_string_metered(text.as_bytes())
+                    }
+                }
+            }
+            NativeMethod::ErrorStackSetter => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                if argc < 1 {
+                    return Err(self.catchable_type_error());
+                }
+                let id = self.intern_key("stack");
+                let desc = OrdinaryDescriptor {
+                    value: Some(arg0),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                if !self.mop_define_own_property(code, inst, id, desc)? {
+                    return Err(self.catchable_type_error());
+                }
+                Slot::undefined()
+            }
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => r,
@@ -25351,6 +25734,9 @@ impl Interp {
                     return Ok(Slot::boolean(true));
                 }
                 if !self.instance_extensible(inst) {
+                    return Ok(Slot::boolean(false));
+                }
+                if self.prototype_chain_would_cycle(inst, new_proto) {
                     return Ok(Slot::boolean(false));
                 }
                 // Store the new prototype in the instance slot's payload
@@ -32325,7 +32711,7 @@ impl Interp {
                 // `globalThis.x = value` or its computed equivalent.
                 self.global_props.insert(id, index);
             }
-            self.tick_property_create();
+            self.tick_property_create(id);
             return true;
         }
 
@@ -32898,6 +33284,29 @@ impl Interp {
     }
 
     /// `O.[[SetPrototypeOf]](V)` — `proto` is `Reference`/`Null`.
+    /// OrdinarySetPrototypeOf's cycle refusal (ECMA-262 10.1.2 step 8):
+    /// walk the ordinary prototype chain from the proposed prototype;
+    /// reaching `inst` would close a cycle. A proxy in the chain ends the
+    /// walk without failure — its `[[GetPrototypeOf]]` is not the ordinary
+    /// one, so the spec's loop stops there.
+    fn prototype_chain_would_cycle(
+        &self,
+        inst: crate::value::SlotIndex,
+        new_proto: crate::value::SlotIndex,
+    ) -> bool {
+        let mut p = new_proto;
+        while !p.is_null() {
+            if p == inst {
+                return true;
+            }
+            if self.proxies.contains_key(&p) {
+                return false;
+            }
+            p = self.instance_prototype(p);
+        }
+        false
+    }
+
     fn mop_set_prototype(
         &mut self,
         code: &[u8],
@@ -32920,6 +33329,9 @@ impl Interp {
             return Ok(true);
         }
         if !self.instance_extensible(inst) {
+            return Ok(false);
+        }
+        if self.prototype_chain_would_cycle(inst, new_proto) {
             return Ok(false);
         }
         let slot = self.slots.get_mut(inst);
@@ -34276,7 +34688,7 @@ impl Interp {
             s.value = value.value;
             false
         } else {
-            self.tick_property_create(); // fxNewSlot + property-table growth (536)
+            self.tick_property_create_flat(); // fxNewSlot + property-table growth (536)
             if inst == self.global_obj {
                 // A new own property of the global object — a `globalThis.x = 1`
                 // (or computed `globalThis["x"] = 1`) creating a binding — is a

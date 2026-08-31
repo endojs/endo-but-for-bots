@@ -93,7 +93,7 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
 
     assert_eq!(
         hex_sha256(&session.machine().write_snapshot(&sig)),
-        "d34c62fc6ac11563e01c14e0a2316a846e872f0a2368f0ec931243772dc733ea",
+        "d628873464ae2e6f7a1773d2a3cefb829c4f3202c54e94293f1fdcb59968daba",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -116,10 +116,17 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // Map/Set iterator-prototype boot state, then for the Iterator constructor
     // and helper-method prototype surface, and then for the async-generator
     // constructor/prototype metadata, and then for the generator-family
-    // Symbol.toStringTag properties.
+    // Symbol.toStringTag properties. Re-pinned once more for two XS-parity
+    // boot-state changes that grew the canonical heap: constructors now
+    // install a real `.prototype` own property at boot (XS's
+    // fxDefaultFunctionPrototype), and the `%Error.prototype%` `stack`
+    // accessor's `stack` key is force-interned unmetered at link time as an
+    // XS boot default. Both are MACHINE-STATE changes; the seven-way
+    // metamorphic tests above still pass, so the new bytes remain
+    // deterministic and cross-host stable.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "051dd9e307c776855e9812734a4d8f97286c96c365d28f166fdc4f80f172f34b",
+        "69da8025749a56e8b4c0026ee5a2ba5788d11f2ddb3ecc56a0590721a58629db",
         "epoch-3 seal chain"
     );
 }

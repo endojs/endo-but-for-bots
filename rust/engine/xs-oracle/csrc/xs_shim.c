@@ -193,13 +193,21 @@ void fxLoadModule(txMachine *the, txSlot *module, txID moduleID)
 	}
 }
 
-/* Mirrors DEFAULT_CREATION in rust/endo/xsnap/src/lib.rs. */
+/* Mirrors DEFAULT_CREATION in rust/endo/xsnap/src/lib.rs, EXCEPT
+ * stackCount: the tc39 generated corpora (RegExp/property-escapes,
+ * CharacterClassEscapes, identifier start/part sweeps) drive the harness
+ * idiom `String.fromCodePoint.apply(null, <10000 code points>)`, which
+ * needs one value-stack slot per argument. Production xsnap's 4096 slots
+ * abort those cases (`oracle-host-stack-limit` non-results, ~470 in the
+ * full sweep); 64Ki slots (1 MiB) lets the oracle host them and certify
+ * real verdicts. Stack capacity is host geometry, not language semantics
+ * or metering: computron counts do not depend on it. */
 static txCreation gEndorCreation = {
 	128 * 1024, /* initialChunkSize */
 	64 * 1024,  /* incrementalChunkSize */
 	8192,       /* initialHeapCount */
 	4096,       /* incrementalHeapCount */
-	4096,       /* stackCount */
+	64 * 1024,  /* stackCount */
 	2048,       /* initialKeyCount */
 	512,        /* incrementalKeyCount */
 	127,        /* nameModulo */
