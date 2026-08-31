@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-14 |
-| **Updated** | 2026-05-15 |
+| **Updated** | 2026-08-31 |
 | **Author** | Designer (prompted) |
 | **Status** | Proposed |
 
@@ -35,19 +35,26 @@ Three observable problems follow.
    level. The transform then wraps the body in an arrow IIFE
    ([packages/module-source/src/transform-analyze.js line 100](../packages/module-source/src/transform-analyze.js#L100)):
    `({imports,liveVar,onceVar,import,importMeta})=>(function(){'use
-   strict'; ... })()`. The inner IIFE is **not async**, so the parser later
-   refuses the `await` inside it. SES users today see a syntax error from
-   the second-pass evaluation of the functor, not from the user's source.
+   strict'; ... })()`. This wrapper is the module's *functor*: the
+   per-module function `ModuleSource` emits, which the linker invokes to run
+   the module body with its imports/exports plumbing bound. The inner IIFE
+   is **not async**, so the parser later refuses the `await` inside it. SES
+   users today see a syntax error from the second-pass evaluation of the
+   functor, not from the user's source.
 2. **No execute contract for async modules.** Even if the functor were
    async, `makeModuleInstance` returns `execute` that ignores its return
    value. The linker would treat the still-pending promise as "done" and
    surface uninitialized bindings to downstream importers.
 3. **No cycle invariant.** 262's cyclic-module-records algorithm names a
-   distinct `[[CycleRoot]]` for an importer that reaches a member of an
-   async cycle. SES has no such bookkeeping today; the present linker
-   memoizes by full specifier and trusts the depth-first walk to settle
-   exports before any importer reads them. That trust fails when any
-   member of the cycle is async.
+   distinct `[[CycleRoot]]` — the module whose evaluation is the entry
+   point into a strongly-connected component of the module graph — for an
+   importer that reaches a member of an async cycle. SES has no such
+   bookkeeping today; the present linker memoizes by full specifier and
+   trusts the depth-first walk to settle exports before any importer reads
+   them. That trust fails when any member of the cycle is async. (This
+   design deliberately does **not** reintroduce a `[[CycleRoot]]` field;
+   [Module-instance contract](#module-instance-contract) shows why the same
+   disambiguation falls out of two simpler invariants.)
 
 The aim of this design is to support TLA per the 262 cyclic-module-records
 algorithm in the SES shim *and* in the module-source precompilation pipeline,
@@ -66,17 +73,31 @@ In scope:
   promise settles when, and only when, the module's body has completed (in
   the sync case, immediately; in the async case, when the body's implicit
   promise resolves).
-- Linker bookkeeping for `[[AsyncParentModules]]`, the
-  `gatherAsyncParentCompletions` walk, and `[[CycleRoot]]` selection.
-- `compartment.import(...)` returns the existing
-  `[[TopLevelCapability]]`-shaped promise that already gates dynamic import
-  ([packages/ses/src/compartment.js line 435](../packages/ses/src/compartment.js#L435));
-  the contract becomes: the promise settles *after* TLA in the
-  imported subgraph resolves, where today it settles synchronously after a
-  `link`+`execute` round-trip.
-- `compartment.importNow(...)` stays synchronous and **rejects any module
-  reachable from the importNow root whose `[[Async]]` is true**, with a
-  diagnostic naming the offending specifier.
+- Linker bookkeeping for `[[AsyncParentModules]]` and the
+  `gatherAsyncParentCompletions` walk. (SES deliberately omits 262's
+  `[[CycleRoot]]` selection; see
+  [Module-instance contract](#module-instance-contract) for why the same
+  disambiguation falls out of simpler invariants.)
+- The `compartment.import(...)` contract
+  ([packages/ses/src/compartment.js line 176](../packages/ses/src/compartment.js#L176)):
+  its returned promise gains a new `[[TopLevelCapability]]` this design
+  introduces. The public `import` method has no deferred-capability object
+  today — its promise is an ordinary `async` function's return value chained
+  through `load`+`execute` (the `[[TopLevelCapability]]`-shaped object at
+  [compartment.js line 435](../packages/ses/src/compartment.js#L435) is the
+  separate `compartmentImport` endowment that gates a module body's
+  *dynamic* `import()`, not the public method). The contract becomes: the
+  promise settles *after* TLA in the imported subgraph resolves, where today
+  it settles synchronously after a `link`+`execute` round-trip.
+- The `compartment.importNow(...)` contract: stays synchronous and
+  **rejects any module reachable from the importNow root whose
+  `asyncEvaluation` is true** — the dynamic flag, which per
+  [Module-instance contract](#module-instance-contract) is also true for a
+  purely-sync module that transitively imports an async dep (test row 6),
+  not only a module that is itself `[[Async]]` — with a diagnostic naming
+  the offending specifier. `asyncEvaluation`, not the static `[[Async]]`
+  flag, is the authoritative guard predicate here and in the
+  [importNow guard](#compartmentimportnow-guard) section.
 - A module-source-level signal: the analyzer flags `__moduleIsAsync__:
   true` on the source record when the body contains a top-level
   `AwaitExpression` outside any nested function or class.
@@ -132,9 +153,17 @@ the Design section before returning to this table is fine. The terms:
 - `[[TopLevelCapability]]` is the deferred-promise pair the
   `compartment.import` promise resolves through when the async body
   completes; on the instance, `topLevelCapability`. Same section.
+- `DFS` is depth-first search/order — the traversal order the linker
+  walks the module graph in (rows 7 and 9).
+- `SCC` is a strongly-connected component — a maximal set of modules
+  mutually reachable through import cycles (row 10). Expanded again at
+  first Design use in [Module-instance contract](#module-instance-contract).
+- `TDZ` is the temporal dead zone — the window in which a binding is
+  declared but not yet initialized, so an access throws a `ReferenceError`
+  (row 11).
 
-The seventeen rows below are framed as the implementation's
-acceptance criteria. test262's TLA directory is the canonical
+The eighteen rows below (rows 1–17 plus the inserted sub-row `12a`) are
+framed as the implementation's acceptance criteria. test262's TLA directory is the canonical
 upstream; if a future test262 addition catches a regression these
 rows do not, a follow-up adds the row (or imports the test262
 fixture directly through the shim's transliteration harness).
@@ -155,6 +184,7 @@ fixture directly through the shim's transliteration harness).
 | 12 | `await import(specifier)` from a sync module: dynamic import resolves to the namespace, sync module remains sync | `dynamic-import-resolution.js` | Dynamic import is *not* TLA; it uses the existing `compartmentImport` path |
 | 12a | Dynamic import of a still-suspended async module from inside another async module's await window | `dynamic-import-of-waiting-module.js` (test262) | The dynamic-import promise settles on the target's `topLevelCapability`, not eagerly; the caller resumes after the target's body completes |
 | 13 | `compartment.importNow` of an async module: synchronous rejection | new, SES-only | The shim guards importNow against async deps reachable through static or live `import` |
+| 13a | `compartment.importNow` of a *purely-sync* root that transitively imports an async dep: synchronous rejection | new, SES-only | The guard tests the reachable graph's `asyncEvaluation` (true on the sync root itself via the row-6 propagation), not the root's own static `[[Async]]` flag, so the transitive case is rejected too — the direct case (row 13) is not the only one |
 | 14 | Pre-compiled module source with `__moduleIsAsync__: true` round-trips through bundle-source and import-bundle, executing with the same TLA semantics | new, SES-only | The async flag survives the bundle/extract round trip; see [Bundle-source coupling](#bundle-source-coupling) |
 | 15 | Pre-compiled non-async module with no TLA stays synchronous: `[[AsyncEvaluation]]` never flips to true; the `compartment.import` promise still resolves, but the import-now path works | new, SES-only regression | No regression for the 99%-of-modules-are-sync case |
 | 16 | Syntax: `await` at module top level outside any function is accepted | test262 `syntax/` directory (sampled: `if-block-await-expr-identifier.js` and siblings) | The module-source transform accepts the source; the functor is async |
@@ -208,6 +238,27 @@ ava analogue. Those are recast as direct ava `t.is` / `t.throws`
 calls; the spec assertion is preserved, the harness is rewritten.
 
 ## Design
+
+> **A note on the implementation citations below.** The Prompt requires
+> this design to be implementable on `actual/master` (upstream endo's
+> master branch), but the concrete file paths and line numbers cited in
+> this section are against the bots-fork tree (`llm`) this document lands
+> in, where the fixtures and harness live. The **spec-level algorithm**
+> (the `[[AsyncEvaluation]]` / `[[PendingAsyncDependencies]]` /
+> `[[AsyncParentModules]]` bookkeeping in `module-instance.js` and
+> `module-link.js`) ports directly — those files match master. The
+> **module-source citations do not**: `transform-source.js` (cited under
+> Static analysis) does not exist on `actual/master` at all;
+> `babel-plugin.js` — the file the single `AwaitExpression` visitor is
+> added to — is substantially rewritten between fork and master (~1000
+> lines differ); and the sync-vs-async IIFE/functor emission that this
+> section attributes to `transform-analyze.js` lives, on master, in a
+> separate `functor.js` (`buildFunctorSource`) that the fork's layout does
+> not have. An implementer working on `actual/master` must map each
+> module-source citation onto that tree — add the visitor to master's
+> `babel-plugin.js`, and emit the `async` functor from master's
+> `functor.js`/`buildFunctorSource` — rather than following the
+> fork-relative paths verbatim.
 
 ### Static analysis: detect async at parse time
 
@@ -289,14 +340,31 @@ coupling are SES-only).
   exportsProxy,         // unchanged
   notifiers,            // unchanged
   execute: () => undefined | Promise<undefined>,
-  asyncEvaluation: boolean,   // new; the [[AsyncEvaluation]] field
+  asyncEvaluation: boolean,   // new; the [[AsyncEvaluation]] field.
+                              // STATIC identity: set once at link time and
+                              // never cleared — "this module's evaluation
+                              // is asynchronous", not "still running".
+  evaluationFulfilled: boolean, // new; TIME-varying: false until this
+                              // module's body has completed and its
+                              // topLevelCapability has settled, then true.
+                              // Distinguished from asyncEvaluation on
+                              // purpose (see re-link note below).
   topLevelCapability:         // new; settled by ExecuteAsyncModule
     | undefined
     | { promise: Promise<undefined>, resolve, reject },
   asyncParentModules: Array<ModuleInstance>, // new; reverse edges
-  pendingAsyncDependencies: number,          // new
+  pendingAsyncDependencies: number,          // new; counts only deps whose
+                              // evaluationFulfilled is still false
 }
 ```
+
+The split between `asyncEvaluation` (static identity, set once) and
+`evaluationFulfilled` (time-varying, flips when the body completes) is
+load-bearing, not cosmetic: `pendingAsyncDependencies` counts only deps
+that are *still pending* (`evaluationFulfilled === false`). Keying the
+count on the static flag alone would mis-count a shared async dep that has
+already fulfilled — see [Linker bookkeeping](#linker-bookkeeping) step 2
+and [open question 4](#open-questions) for the re-link case this prevents.
 
 This omits 262's `[[CycleRoot]]` field on purpose. The 262 algorithm
 names a per-module `[[CycleRoot]]` to disambiguate which
@@ -309,10 +377,13 @@ falls out of two simpler invariants here:
    `topLevelCapability`.
 2. `asyncParentModules` is the reverse-edge set; cyclic edges are
    present in that set just like non-cyclic edges. When any member of
-   the SCC fulfills, `AsyncModuleExecutionFulfilled` walks the
-   reverse edges, decrements `pendingAsyncDependencies` on each
-   reached parent, and settles the parent's capability when its
-   pending count reaches zero. The walk is correct on cyclic graphs
+   the SCC fulfills, `AsyncModuleExecutionFulfilled` sets that member's
+   `evaluationFulfilled = true`, walks the reverse edges, decrements
+   `pendingAsyncDependencies` on each reached parent, and settles the
+   parent's capability when its pending count reaches zero. The
+   `evaluationFulfilled` marker is what lets a *later* re-link
+   distinguish an already-settled shared dep from a still-pending one
+   (Linker bookkeeping step 2). The walk is correct on cyclic graphs
    without a named SCC root because the only piece of state that
    needs to be uniform across the SCC is "did this member's body
    fulfill," which is observable on the member directly.
@@ -340,6 +411,13 @@ function as today, returning `undefined`. The `Promise<undefined>` shape
 only materializes when the linker has actually walked across an async
 boundary.
 
+`asyncEvaluation` is the single source of truth for "is this execution
+synchronous"; `execute()`'s `undefined | Promise<undefined>` return shape
+is a *derived* consequence of it, not a second independent signal. Every
+call site that decides whether to `await` `execute()`'s result gates on
+`asyncEvaluation` (the linker is the sole caller today); nothing should
+re-derive syncness from the return type, so the two can never drift.
+
 ### Linker bookkeeping
 
 `link()` ([packages/ses/src/module-link.js](../packages/ses/src/module-link.js)) gains a second pass that walks the linked instance graph in DFS
@@ -348,8 +426,20 @@ post-order. For each instance:
 1. If its source has `__moduleIsAsync__: true`, set `asyncEvaluation =
    true` and allocate `topLevelCapability`.
 2. For each linked import target, if the target's `asyncEvaluation` is
-   true, push `this` onto the target's `asyncParentModules` and
-   increment `this.pendingAsyncDependencies`.
+   true **and the target has not already fulfilled**
+   (`target.evaluationFulfilled === false`), push `this` onto the target's
+   `asyncParentModules` and increment `this.pendingAsyncDependencies`. An
+   async target that has *already* fulfilled on a prior evaluation
+   contributes no pending edge: its exports are settled, so it links as an
+   ordinary settled dependency and never has cause to decrement a counter
+   again. (Gating on the static `asyncEvaluation` alone would be the re-link
+   deadlock of [open question 4](#open-questions): the new parent would
+   increment for a dep whose one fulfillment event already fired, so the
+   decrement never comes and the parent's capability hangs forever.) Each
+   `link()` pass **rebuilds** `pendingAsyncDependencies` from the freshly
+   walked dependency set and appends only the reverse edges for this pass's
+   still-pending deps, rather than monotonically accumulating across
+   re-links.
 3. After the pass: if `pendingAsyncDependencies > 0` and the instance
    itself is not `[[Async]]`, set `asyncEvaluation = true` and allocate
    the capability anyway. This is the row-6 case.
@@ -363,6 +453,11 @@ capabilities in the order the bodies complete, which is the order the
 spec requires.
 
 ### Evaluation procedure (the InnerModuleEvaluation analogue)
+
+In the sequence below, **Root** is the importer the user named in
+`compartment.import(spec)`, and **Async dep** (**Dep**) is any
+transitively-reached module whose `asyncEvaluation` is true. Reading those
+two labels first keeps the diagram legible.
 
 ```mermaid
 sequenceDiagram
@@ -388,10 +483,7 @@ sequenceDiagram
   Root-->>User: resolved namespace
 ```
 
-The Root module is the importer the user named in
-`compartment.import(spec)`; the Async dep is any transitively-reached
-module whose `asyncEvaluation` is true. The
-`topLevelCapability.promise` is the same promise the user holds via
+The `topLevelCapability.promise` is the same promise the user holds via
 `compartment.import`; its resolution is what the User actor observes
 as "the import resolved." The `pendingAsyncDependencies` field on Root
 is non-zero between the dep registering and `AsyncModuleExecutionFulfilled`
@@ -427,10 +519,27 @@ This is a SES-shim-specific contract; XS / native Compartments may
 expose a different shape. The diagnostic names the *first* async
 specifier encountered in DFS order, not all of them; users iterate.
 
+The specifier is attacker-influenced content, so the diagnostic should be
+built with SES's `assert` machinery rather than the plain
+`TypeError('...')` string interpolation the literal form above suggests:
+
+```js
+makeError(X`Cannot importNow because module ${q(specifier)} is async (top-level await)`);
+```
+
+This matches the `importHook`-needed message in `module-load.js`, where
+`q()` safely delimits a comparably dynamic value.
+
 ### Bundle-source coupling
 
 `bundle-source` precompiles module sources into a static record at
-build time. The `__moduleIsAsync__: true` flag must round-trip through:
+build time, in one of several output formats: `endoZipBase64` (a
+hash-addressed zip archive of per-module records, decoded at load),
+`endoScript` (a single self-contained script that concatenates every
+module's synchronous functor into one evaluable program), and
+`nestedEvaluate` / `getExport` (bundles that embed each module functor
+for individual invocation at runtime). The `__moduleIsAsync__: true` flag
+must round-trip through each:
 
 - `endoZipBase64`: the bundle's per-module record JSON gains the field.
 - `endoScript`: a single-script bundle whose root or any transitively
@@ -443,23 +552,28 @@ build time. The `__moduleIsAsync__: true` flag must round-trip through:
   module functors; the async-IIFE shape works because each functor is
   invoked through `compartmentImport`'s async machinery at runtime.
 
-Separately from the bundle-source emit path, the
-[`@endo/check-bundle`](../packages/check-bundle) policy boundary is
-the load-time gate. The bundle checker rejects any bundle whose
-compartment-map carries an unrecognized property on the theory that
-the property may imply different runtime semantics. A TLA-bearing
-bundle is distinguished by a new module-language designator
-(`pre-mjs-async-json` or similar, alongside today's
-`pre-mjs-json`); an unmodified check-bundle on a host that has not
-been upgraded for TLA support rejects such bundles by construction.
+Separately from the bundle-source emit path, a load-time policy gate
+sits in `@endo/compartment-mapper`, **not** `@endo/check-bundle`: the
+per-module `parserForLanguage[module.parser]` lookup (e.g. in
+`import-archive-lite.js`) rejects any compartment-map whose per-module
+language/parser designator is unrecognized, on the theory that an
+unknown designator may imply different runtime semantics.
+(`@endo/check-bundle` validates only the bundle's *top-level*
+`moduleFormat` against a closed enum and delegates archive hash
+verification to compartment-mapper's `parseArchive`; it does not gate the
+per-module `parser` field, so it is not the load-bearing surface here.) A
+TLA-bearing bundle is distinguished by a new module-language designator
+(`pre-mjs-async-json` or similar, alongside today's `pre-mjs-json`); an
+unmodified compartment-mapper on a host that has not been upgraded for TLA
+support rejects such bundles by construction.
 This composes cleanly with the Agoric chain's upgrade pattern: until
-the chain's check-bundle is taught about the new language
+the chain's compartment-mapper is taught about the new language
 designator, TLA-bearing bundles are refused at load time, regardless
 of whether the SES shim on the chain is itself TLA-capable. The
-sibling change to check-bundle (adding the designator to the
-allowlist) is out of scope for this design but is the policy half of
-the bundle-source coupling described above. See open question 3 for
-the bundle-source-format alternative.
+sibling change (adding the designator to compartment-mapper's
+`parserForLanguage` map) is out of scope for this design but is the
+policy half of the bundle-source coupling described above. See open
+question 3 for the bundle-source-format alternative.
 
 ### Backward compatibility
 
@@ -506,40 +620,60 @@ the bundle-source-format alternative.
    module" becomes a distinct user-visible condition rather than a
    shim-only restriction. Track when the proposal advances; revisit
    the diagnostic shape then.
-3. **Bundle-source format coverage and check-bundle gating.** The
+3. **Bundle-source format coverage and load-time language gating.** The
    `endoScript`-format error in the bundle-source-coupling section is
    the load-bearing rejection at bundle time. A second rejection
-   surface lives in `@endo/check-bundle`: the bundle checker rejects
-   any bundle whose compartment-map contains an unrecognized property
-   on the theory that such a property may imply different runtime
-   semantics. A new module-language designator (for example
-   `pre-mjs-async-json` alongside today's `pre-mjs-json`) is the same
-   kind of unrecognized property, so an unmodified check-bundle on an
-   old Agoric chain rejects a TLA-bearing bundle by construction.
-   This is the right composition point with the Agoric chain (and any
-   other host that consumes endo bundles through check-bundle) and
-   lets the chain upgrade in lockstep with TLA support: until a host's
-   check-bundle is taught about the new language designator, it
-   refuses to load such bundles. The design adopts this:
-   bundle-source emits the new language designator only when the
-   bundle actually contains TLA, and the design assumes a sibling
-   change to check-bundle adds the designator to the allowlist when
-   the host is upgraded. The bundle-source-coupling section above is
-   the runtime-format surface; check-bundle is the policy surface.
-   The remaining open question: should `bundle-source` silently fall
-   back to `endoZipBase64` for sources that would otherwise be
-   `endoScript`-bundled with TLA present, or surface the rejection at
-   bundle time? The draft prefers the explicit error so the build
-   manifests are reproducible.
-4. **Re-link with new edges.** A `compartment.import` call that
-   re-enters the same compartment for a fresh root specifier today
-   reuses memoized instances. The bookkeeping above is one-shot per
-   instance: `asyncParentModules` accumulates as new parents discover
-   the instance via fresh import paths, and `pendingAsyncDependencies`
-   counts re-derive on re-link from the freshly-walked dependency set.
-   No spec-level invariant should be broken by re-link, but the
-   accumulation discipline (clear or rebuild on re-link, vs. monotonic
-   append) is worth pinning in the implementation.
+   surface lives in `@endo/compartment-mapper`: the per-module
+   `parserForLanguage[module.parser]` lookup rejects any compartment-map
+   whose per-module language designator is unrecognized, on the theory
+   that such a designator may imply different runtime semantics. (This is
+   *not* `@endo/check-bundle`, which validates only the bundle's
+   top-level `moduleFormat` and delegates archive hashing to
+   compartment-mapper's `parseArchive`.) A new module-language designator
+   (for example `pre-mjs-async-json` alongside today's `pre-mjs-json`) is
+   the same kind of unrecognized designator, so an unmodified
+   compartment-mapper on an old Agoric chain rejects a TLA-bearing bundle
+   by construction. This is the right composition point with the Agoric
+   chain (and any other host that consumes endo bundles through
+   compartment-mapper) and lets the chain upgrade in lockstep with TLA
+   support: until a host's compartment-mapper is taught about the new
+   language designator, it refuses to load such bundles. The design
+   adopts this: bundle-source emits the new language designator only when
+   the bundle actually contains TLA, and the design assumes a sibling
+   change adds the designator to compartment-mapper's `parserForLanguage`
+   map when the host is upgraded. The bundle-source-coupling section
+   above is the runtime-format surface; compartment-mapper's
+   language-parser table is the policy surface. The remaining open
+   question: should `bundle-source` silently fall back to `endoZipBase64`
+   for sources that would otherwise be `endoScript`-bundled with TLA
+   present, or surface the rejection at bundle time? The draft prefers
+   the explicit error so the build manifests are reproducible.
+4. **Re-link with new edges — resolved at design level, not left to
+   implementation.** A `compartment.import` call that re-enters the same
+   compartment for a fresh root specifier reuses memoized instances. An
+   earlier draft treated the re-link bookkeeping as a one-shot per
+   instance whose accumulation discipline was "worth pinning in the
+   implementation" — but that framing hides a deadlock. If a *second*
+   root shares an async dep that has **already fulfilled** on the first
+   import, keying Linker step 2 on the static `asyncEvaluation` flag alone
+   would increment the new parent's `pendingAsyncDependencies` for that
+   dep, yet the matching decrement event (`AsyncModuleExecutionFulfilled`
+   walking `asyncParentModules`) fired in the past — before this parent
+   existed — and never fires again. The new parent's `topLevelCapability`
+   would then hang forever: a permanent deadlock, not a bookkeeping nicety.
+   The module-instance state model therefore distinguishes **identity**
+   (`asyncEvaluation`, static, set once) from **time**
+   (`evaluationFulfilled`, flipped when the body completes). Linker step 2
+   increments only for a dep that is async **and still pending**
+   (`evaluationFulfilled === false`); an already-fulfilled shared dep links
+   as a settled ordinary dependency and adds no phantom edge. Each
+   `link()` pass rebuilds `pendingAsyncDependencies` from the freshly
+   walked dependency set and appends only this pass's still-pending reverse
+   edges (rebuild, not monotonic append), so stale edges from a prior link
+   cannot leak in either. What remains genuinely open is narrower: whether
+   to garbage-collect `asyncParentModules` entries for parents that have
+   themselves been discarded between imports (a memory-hygiene question,
+   not a correctness one).
 
 ## Prompt
 
