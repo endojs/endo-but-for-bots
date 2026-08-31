@@ -7,20 +7,32 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
-Name, formalize, and extend the **panic**: an uncatchable, unrecoverable
-termination of a vat/worker that no JavaScript `try`/`catch`, promise handler,
-or engine recovery path can intercept. Ironhorse substantially has this already.
-`Halt::StackOverflow` and `Halt::MeterAbort`
+This design names, formalizes, and extends the **panic**: an uncatchable,
+unrecoverable termination of a vat/worker that no JavaScript `try`/`catch`,
+promise handler, or engine recovery path can intercept. Ironhorse substantially
+has this already. `Halt::StackOverflow` and `Halt::MeterAbort`
 ([ironhorse-engine](ironhorse-engine.md) § Interpreter, the `Halt` enum in
 `rust/engine/ironhorse-vm/src/interp.rs`) are each documented today as "an abort
 to the host, not a catchable `RangeError`", and both descend from XS/xsnap's
 `fxAbort` longjmp. This design gives the pattern one name, generalizes it over
 every uncatchable-termination source, states its relationship to the daemon's
-message-delivery model, and adds an opt-in mode (the Coda) that turns selected
+message-delivery model, and adds an opt-in mode — the `panic-on-reference-error`
+configuration option, framed as **the Coda** below — that turns selected
 reference errors into panics for post-mortem debugging. (A worker hosts exactly
 one vat in the current daemon, so "vat" and "worker" are used interchangeably
 throughout; the one-database-per-worker isolation claim below rests on that 1:1
 relationship.)
+
+**Status and vocabulary (read first).** "The daemon" throughout is the endo
+daemon; **Endor** is its Rust runtime that hosts the Ironhorse engine (see
+[ironhorse-engine](ironhorse-engine.md) § Endor integration). Ironhorse is
+**prospective, not the live delivery-path engine**: the production daemon still
+runs C-XS through the `xsnap` crate, and the `-e ironhorse` engine-selection
+integration is incomplete (roadmap stage 8/9). Only the Coda's reference-error
+classification and the net-new FFI-abort guard (§ Scope: What Is Already a
+Panic) touch code the live daemon runs today; the `Machine`-seam `CrankOutcome`
+and the per-worker transcript land with that integration. Weigh every claim
+below against this status.
 
 ## What Is the Problem Being Solved?
 
@@ -67,10 +79,10 @@ nothing.
 |---|---|---|
 | `StackOverflow(usize)` | **Yes**: its doc says "an abort to the host, not a catchable `RangeError`, a deterministic, consensus-relevant limit". XS's `fxOverflow` -> `fxAbort(XS_JAVASCRIPT_STACK_OVERFLOW_EXIT)`. | **Already a panic.** Reclassify under the formal concept; no behavior change. |
 | `MeterAbort` | **Yes**: the meter host refused more computation; XS's `XS_TOO_MUCH_COMPUTATION_EXIT` via `longjmp`. The metering design already destroys the worker on this. | **Already a panic.** Reclassify; no behavior change. |
-| `Throw(String)` | No: this is the JS-level throw. Empty `jumps` means it escapes every JS handler and reaches the host, but it is *catchable in principle* (a `catch` above it intercepts it). | **Not a panic.** It is the ordinary (possibly uncaught) throw. Kept distinct; see § Debugger interaction. |
-| `Decode(String)` | Yes: truncated/invalid bytecode; the loader must not continue. | **Panic-adjacent.** A corrupt-input abort; group it with panics for the "terminate, do not commit" decision, though its provenance (a bad snapshot or buggy compiler) is a supervisor-level fault, not guest behavior. |
-| `StepLimit(u64)` | Yes, but only on the un-metered fuzz path (never on `Interp::run`). | **Panic-adjacent (harness only).** Not reachable in production; grouped for completeness. |
-| `Yield`/`Await`/`Return` | No: normal control-flow suspension/completion. | **Not panics.** |
+| `Throw(String)` | **No**: this is the JS-level throw. Empty `jumps` means it escapes every JS handler and reaches the host, but it is *catchable in principle* (a `catch` above it intercepts it). | **Not a panic.** It is the ordinary (possibly uncaught) throw. Kept distinct; see § Debugger Interaction. |
+| `Decode(String)` | **Yes**: truncated/invalid bytecode; the loader must not continue. | **Panic-adjacent.** A corrupt-input abort; group it with panics for the "terminate, do not commit" decision, though its provenance (a bad snapshot or buggy compiler) is a supervisor-level fault, not guest behavior. |
+| `StepLimit(u64)` | **Yes**, but only on the un-metered fuzz path (never on `Interp::run`). | **Panic-adjacent (harness only).** Not reachable in production; grouped for completeness. |
+| `Yield`/`Await`/`Return` | **No**: normal control-flow suspension/completion. | **Not panics.** |
 
 Net-new panic sources (no existing `Halt` variant, added by this design):
 
@@ -80,7 +92,7 @@ Net-new panic sources (no existing `Halt` variant, added by this design):
   crashed crank, not a compromised daemon", which the supervisor "already treats
   as worker death". This is mechanically different from a `Halt` value (it
   unwinds the Rust thread rather than returning) but is the *same concept* at the
-  supervisor boundary. See § Formal category for the seam that unifies them (a
+  supervisor boundary. See § The Formal `Panic` Category for the seam that unifies them (a
   *seam* here is the boundary where one component's return value becomes
   another's input or decision: in this design, where the interpreter's `Halt`
   becomes the supervisor's commit/discard decision).
@@ -122,7 +134,7 @@ transcript and embargo, transcript-aware host calls, and the Coda.
 The requirement is one concept that answers a single supervisor question at the
 crank boundary: *did this delivery terminate the vat uncatchably, so its effects
 must be discarded rather than committed?* Three shapes were considered (see
-§ Alternatives). The recommendation keeps the rich diagnostic `Halt` variants
+§ Alternatives Considered). The recommendation keeps the rich diagnostic `Halt` variants
 and adds classification, rather than collapsing them:
 
 1. **Keep the informative variants.** `StackOverflow(usize)` carries the slot
@@ -131,14 +143,21 @@ and adds classification, rather than collapsing them:
    diagnostics the supervisor and debugger need.
 2. **Add a grouping predicate** on `Halt`:
    `fn is_panic(&self) -> bool`, true for `StackOverflow | MeterAbort |
-   Panic(_)` (and, on their respective paths, `Decode | StepLimit`). This is the
-   one place the "terminate, do not commit" set is defined.
+   Panic(_)`, and also for `Decode | StepLimit`. The predicate is a pure function
+   of the `Halt` value — it does **not** consult caller context; the "on their
+   respective paths" qualifier is a fact about *where those variants arise*
+   (`Decode` only on the loader path, `StepLimit` only on the un-metered fuzz
+   harness, each on exactly one path in practice; see the Scope table), not a
+   branch inside the predicate. Its doc comment states this so the `(&self) ->
+   bool` signature is not read as context-dependent. This is the one place the
+   "terminate, do not commit" set is defined.
 3. **Add one `Halt::Panic(PanicKind)` variant** for net-new sources that have no
    existing variant: `PanicKind::EngineFault` (a caught Rust panic, converted into
    this `Halt` at the thread/FFI boundary so the supervisor sees a value rather
    than a process abort; the `catch_unwind`/panic-hook wrap this requires for the
-   live C-XS glue, which has none today, is surveyed in § Scope's "already-live
-   FFI abort hazard") and `PanicKind::ReferenceError` (the Coda). Extensible.
+   live C-XS glue, which has none today, is surveyed under § Scope: What Is
+   Already a Panic, "The already-live FFI abort hazard") and
+   `PanicKind::ReferenceError` (the Coda). Extensible.
    The variant is deliberately **not** named `Host`: this document uses "host"
    throughout for the surrounding-runtime call surface (`host_send_frame`,
    `host_call`, § "Host functions are messages too"), so a `PanicKind::Host` would
@@ -157,12 +176,29 @@ the pre-existing sources stay flat (`Halt::StackOverflow(n)`, `Halt::MeterAbort`
 while the net-new ones nest under `Halt::Panic(PanicKind)`, so a consumer that
 pattern-matched `Halt` directly would see the same conceptual family spelled two
 ways. The rule that keeps this from mattering: **no commit-path consumer matches
-`Halt` variant shape directly**. The "terminate, do not commit" decision routes
-through `is_panic()` (item 2) and the classification routes through `CrankOutcome`
-(item 4). The flat-vs-nested asymmetry is retained only to preserve the existing
-variants' rich diagnostics and never reaches the commit decision, which is why
-`Decode`/`StepLimit` are *not* folded into `PanicKind` even though they are
-panic-adjacent.
+`Halt` variant shape directly** (the *commit path* is the supervisor's
+release-or-discard machinery defined in § The Message Embargo Contract, where
+"commit" means a durable transcript+heap join; the forward reference is
+deliberate — the term is defined there). The "terminate, do not commit" decision
+routes through `is_panic()` (item 2) and the classification routes through
+`CrankOutcome` (item 4). The flat-vs-nested asymmetry is retained only to
+preserve the existing variants' rich diagnostics and never reaches the commit
+decision, which is why `Decode`/`StepLimit` are *not* folded into `PanicKind`
+even though they are panic-adjacent.
+
+This does leave the "match on `Halt` shape only via `is_panic()`/`CrankOutcome`,
+never on the variant directly" rule as a **convention, not a type-enforced
+guarantee** — `Halt::StackOverflow` and `Halt::Panic(_)` remain equally
+matchable from any call site. The design accepts the asymmetry (folding
+`StackOverflow`/`MeterAbort` into `PanicKind` would churn every existing site
+for no behavior change), so the convention is enforced two ways rather than by
+representation: (a) `Halt` is exported `#[non_exhaustive]`, forcing every
+external match to carry a wildcard arm and blocking any consumer from
+exhaustively enumerating variant shapes as its commit predicate; and (b) a
+clippy lint (`disallowed-methods`-style deny on direct `Halt` matches outside
+`is_panic`/`describe_halt`) flags any commit-path site that reaches for a variant
+instead of the predicate. Unifying the representation is recorded as the
+should-fix alternative in § Alternatives Considered rather than adopted here.
 
 ```mermaid
 graph TD
@@ -200,8 +236,8 @@ the point where an Ironhorse `Halt::Panic` and the XS `"terminated"` meter repor
 ## The Message Embargo Contract
 
 This is the part that must be grounded in the daemon's *real* current behavior,
-because the daemon deliberately chose a mechanism the naive reading of "embargo"
-would reinvent.
+because the daemon deliberately chose a mechanism **different from** the one the
+naive reading of "embargo" would reinvent.
 
 ### What the daemon does today: admission control, not embargo
 
@@ -276,14 +312,48 @@ without a transcript there is no snapshot-relative record of the messages a cran
 sent and received, so a restored worker cannot replay to the pre-panic state, and
 panic recovery is unsound rather than merely unimplemented. Second, the condition
 that made deferral right before (the mechanism was net-new *and the daemon's
-behavior was unsurveyed*) is discharged by this revision's own § "Where admission
-control does not reach," which surveyed the live crank path and established there
+behavior was unsurveyed*) is discharged by this revision's own § Where admission
+control does not reach, and what the survey found, which surveyed the live crank
+path and established there
 is *no* existing commit point to build on. That finding is exactly what promotes
 the transcript from a speculative follow-on to a named prerequisite of this
 contract. The schema below is stated as this design's proposal, still to be
 validated against the daemon when the implementation lands; the residual "which
 backend owns the joint commit" question is carried explicitly (below and in Open
 Questions), not asserted as settled.
+
+**Why revive a mechanism heavier than the one already rejected as too complex.**
+This must be met head-on, because the transcript is strictly *bigger* than the
+per-crank embargo buffer the metering design rejected: it adds durable IO on the
+send path, a replay/dedup protocol, and a host-handle reconstruction contract on
+top of "buffering + crank delimiters." The coverage gap (§ Where admission
+control does not reach) explains why *some* mechanism beyond admission control is
+needed; it does not by itself justify *this* mechanism's complexity. Three things
+do. First, **the complexity is not additive — most of it is already mandatory for
+recovery.** The metering design rejected embargo as a *pure buffering* feature
+whose only job was discard-on-abort; measured against that job alone, buffering
+plus delimiters was indeed too much. But panic *recovery* (restore-snapshot +
+replay-to-pre-panic + re-deliver) independently requires a durable,
+snapshot-relative record of the messages a crank sent and received — that is the
+transcript, and the maintainer's own review named it a soundness prerequisite.
+Once the transcript must exist for replay, the embargo is *not new code at all*:
+it is the same pending-rows-until-commit discipline the transcript already needs,
+read for its discard-on-abort effect. The heavy parts (durable IO, dedup, handle
+reconstruction) are recovery's cost, which the rejected embargo did not carry and
+could not amortize. Second, **the rejected embargo had a cheaper substitute for
+its whole scope; this mechanism does not.** Admission control fully replaced the
+embargo *for meter exhaustion*, which was the embargo's entire original target —
+so the rejection traded a complex mechanism for a simpler one with equal
+coverage. Here there is no simpler substitute: pre-payment is about budget and is
+structurally silent on a well-budgeted stack overflow, Rust panic, or
+reference-error panic. Rejecting this mechanism does not fall back to a cheaper
+one; it falls back to *no recovery*. Third, **the pure-buffering objection is
+directly retired** — the transcript pays its send-path cost per crank under group
+commit (§ below), not per frame, so the "buffering in the bridge layer" hot-path
+concern that sank the earlier proposal is bounded and named rather than left
+open. The honest summary: this is not the rejected embargo made bigger for the
+same job; it is the recovery substrate the maintainer required, from which the
+embargo falls out for free.
 
 Each endor worker (a worker running under Endor, the endo daemon's Rust runtime
 that hosts the Ironhorse engine; see [ironhorse-engine](ironhorse-engine.md)
@@ -298,7 +368,23 @@ schema may normalize payloads into side tables):
 | `snapshot` | Snapshot identity, engine/callback-table signature, and the last committed transcript sequence represented by the snapshot. |
 | `crank` | Monotonic crank id, inbound-delivery sequence, starting snapshot epoch, and `started` / `committed` / `aborted` state. |
 | `event` | Ordered inbound messages, outbound messages, host-call requests, and host-call replies. Every event has a crank id and sequence number; outbound and host-effect events also have a stable idempotency key. |
-| `host_handle` | Logical handle id, the host-call event that created it, a durable reconstruction descriptor, and open/closed state. The guest heap stores the logical id, never an OS file descriptor or native pointer. |
+| `host_handle` | Logical handle id, the host-call event that created it, a durable reconstruction descriptor, and a **query-only** open/closed cache. The guest heap stores the logical id, never an OS file descriptor or native pointer. |
+
+**The event log is authoritative for handle state; the `open/closed` field is a
+derived cache the log always overrides.** A handle's open/closed status is a fold
+over its `event` stream (the creating host call opens it; a later `close` event
+closes it), so it is not an independent fact and must not be maintained by a
+second, separately-committed write. The `host_handle.open/closed` field exists
+only to answer "is this handle open?" without rescanning the log on every query;
+it is refreshed in the *same* transaction that appends the state-changing event
+(never in a second transaction), and on any disagreement — including recovery
+after a crash between two writes — replay recomputes it from the event stream and
+overwrites the cache. There is therefore no torn-write window in which the field
+and the log can durably disagree: a crash before the shared commit loses both the
+event and the cache update together; after it, both are present. An
+implementation that would rather not carry the cache at all may drop the field
+and compute open/closed on read — the design treats the field as an optimization,
+not a source of truth.
 
 The worker supervisor is the only writer. Its crank protocol is:
 
@@ -338,7 +424,7 @@ retryable. It is backend-specific, and the two backends need different mechanism
   `ATTACH` the transcript database onto the heap-store connection and commit both
   in a single transaction, or run an explicit two-phase commit (prepare both,
   then commit both) keyed on the crank id. This is a *prospective* backend
-  (§ Formal category: the store-backed `Machine` seam is not yet on the daemon's
+  (§ The Formal `Panic` Category: the store-backed `Machine` seam is not yet on the daemon's
   delivery path); the mechanism is named here so the invariant is buildable, not
   assumed.
 - **Production XS/CAS path**: the backend the survey above is actually grounded
@@ -360,16 +446,67 @@ WAL checkpointing is lifecycle maintenance, not the logical crank commit.
 The durability this buys is not free: routing every outbound send and every
 transcript-aware host call through a WAL-durable SQLite commit (with an fsync
 before an outbound frame is released) replaces today's direct, unbuffered pipe
-write in `worker_io.rs`. That is a real latency/throughput regression on the
-send path, accepted here as the cost of retryability; quantifying it (and
-choosing batch/group-commit policy for cranks that emit many frames) is deferred
-to the follow-on implementation's benchmarking rather than asserted at design
-time.
+write in `worker_io.rs`. The order of magnitude is the load-bearing fact and can
+be stated now without a benchmark: today's send is an in-process channel/pipe
+`write` — on the order of **~1 µs**. A commit that is durable against process
+death requires an fsync, whose floor is a storage-device flush — on the order of
+**~1-10 ms** on rotational or conservatively-configured media, and **~0.1-1 ms**
+on SSD/NVMe. That is a **~100x-1000x** regression *on the durability step*, per
+committing crank, if applied naively one fsync per outbound frame. That gap is
+too large to pay per frame, so the mitigation is **not optional and is named
+here, not deferred**: commit is **per crank, not per frame** (step 3 already
+batches every pending event of a crank into one transaction and one fsync), and
+across concurrent cranks the supervisor uses **group commit** (WAL + a short
+coalescing window, the standard `PRAGMA synchronous=NORMAL` + batched-fsync
+discipline) so N cranks emitting frames in the same window amortize onto one
+device flush. With per-crank + group commit the amortized cost is one fsync per
+crank-batch, not per frame — the regression the send path actually pays is the
+fsync-vs-pipe gap divided by frames-per-batch. What is genuinely left to the
+follow-on's benchmarking is only the *tuning* (coalescing-window width, whether
+`synchronous=NORMAL` on WAL meets the crash-consistency invariant below or
+`FULL` is required, batch-size caps), not whether a mitigation exists or which
+one — those are settled here.
 
 This contract supersedes admission control only where admission control is
 insufficient. Pre-payment remains the quota gate. The transcript and embargo
 cover stack overflow, host failure, Rust panic, reference-error panic, and
 restart, none of which pre-payment makes atomic.
+
+**Which termination paths the embargo includes.** Because step 2 routes *every*
+`sendFrame`/`issueCommand`/`sendRawFrame` into pending rows with no per-source
+carve-out, and step 4 discards those rows on *any* non-`Committed` outcome, the
+embargo's coverage follows mechanically from `CrankOutcome`, not from the panic
+source. The design commits to one answer, tabulated so no reader has to
+reconcile it from scattered prose:
+
+| Termination path | `CrankOutcome` | Outbound embargoed & discarded on abort? |
+|---|---|---|
+| Normal quiescence | `Committed` | N/A — released after commit |
+| `Throw` (uncaught) | `Uncaught` | **Yes** — discarded (worker still dies; no partial commit) |
+| `StackOverflow` | `Panicked` | **Yes** |
+| `MeterAbort` (hard limit) | `Panicked` | **Yes** |
+| Rust `EngineFault` | `Panicked` | **Yes** |
+| `ReferenceError` (Coda) | `Panicked` | **Yes** |
+| `Decode` / `StepLimit` | `Panicked` | **Yes** |
+
+**`MeterAbort` is explicitly *included*.** This resolves an apparent tension with
+the metering design, which "tolerates" a hard-limit abort's already-sent messages
+as a leak "nobody cares about." That tolerance was a property of the
+admission-control-*only* world, where **no embargo existed**: with no buffer,
+`MeterAbort`'s mid-crank sends had already hit the wire and could not be recalled,
+so the metering design rationally declined to build a recall mechanism for a
+runaway it treats as non-retryable anyway. Once this transcript exists, those
+sends are *pending rows*, not wire traffic, so discarding them is free and
+uniform — there is no reason to special-case `MeterAbort` back out of the embargo
+and reintroduce a leak the mechanism now trivially prevents. Folding `MeterAbort`
+in **strengthens** the metering design's guarantee (leaked-messages become
+no-leak) without contradicting its "terminate, don't auto-retry" stance: whether
+a `MeterAbort` crank is *retried* is still the metering design's call
+(§ What "fixed" means in practice, and the Open Question below), and the default
+remains "treat as a runaway, don't retry." The embargo only guarantees that *if*
+it is retried after a config change, it retries against a clean snapshot with no
+escaped effects — which is exactly what the § What "fixed" means in practice
+`MeterAbort` row already assumes.
 
 ### Host functions are messages too
 
@@ -460,7 +597,7 @@ mechanisms**. `ironhorse-vm`'s `Halt` values reach only direct
 `Machine::evaluate`/`eval` callers (rendered by `describe_halt` into
 `EvalOutcome` in `rust/endo/src/ironhorse_engine.rs`); they do not reach the
 supervisor, because `ironhorse_engine` is not on the delivery path. The
-`CrankOutcome` seam (§ Formal category) is where the two are joined: it is the
+`CrankOutcome` seam (§ The Formal `Panic` Category) is where the two are joined: it is the
 point at which an Ironhorse `Halt::Panic` becomes the same supervisor-visible
 worker-death that the XS `"terminated"` meter report is today.
 
@@ -504,12 +641,20 @@ difference structurally:
   a throw and must not flow through the exception-break classifier.
 
 Therefore a panic needs its **own break reason and wire message**, distinct from
-`<break ... caught="...">`. Recommendation: a distinct
-`<panic kind="stack-overflow|meter-abort|reference-error|engine-fault" .../>` echo (or a
-`reason="panic"` attribute on `<break>`), reported on the always-fatal path and
-never gated by `setExceptionBreakMode`. The exception-break modes (`none`,
-`uncaught`, `all`) govern **throws**; they say nothing about panics, and a panic
-must surface even under `setExceptionBreakMode('none')`.
+`<break ... caught="...">`. The design **decides for a distinct
+`<panic kind="stack-overflow|meter-abort|reference-error|engine-fault" .../>`
+element**, not a `reason="panic"` attribute on `<break>`. The reason is the same
+one § Alternatives Considered uses to reject an attribute-based *exception* mode:
+the xsbug parser discards unknown attributes byte by byte, so a
+`reason="panic"` attribute would silently degrade to a plain `<break>` on any
+consumer that has not been taught the attribute — a panic misread as an ordinary
+break — whereas a new element degrades to a visibly-unrecognized message that a
+consumer cannot mistake for a break. Choosing the attribute here after rejecting
+it there would be inconsistent; the same failure mode applies. The `<panic>`
+echo is reported on the always-fatal path and is never gated by
+`setExceptionBreakMode`. The exception-break modes (`none`, `uncaught`, `all`)
+govern **throws**; they say nothing about panics, and a panic must surface even
+under `setExceptionBreakMode('none')`.
 
 ### Should a panic be debuggable? Yes: stop the world at the panic site
 
@@ -521,7 +666,7 @@ before the worker-death teardown discards it. The interaction with
 fourth exception mode. Concretely:
 
 - **No debugger attached:** a panic tears the worker down immediately per
-  § Termination and retry (discard, die, retry).
+  § Termination and Retry (discard, die, retry).
 - **Debugger attached:** the panic hook stops the machine at the panic site and
   emits the `<panic>` wire message; the developer can inspect frames and take a
   snapshot (a snapshot here captures the machine *at the fault*, which is exactly
@@ -534,8 +679,8 @@ fourth exception mode. Concretely:
 
 ## Coda: An Option to Panic on Reference Errors
 
-Propose an Ironhorse **configuration option, off by default**, under which an
-engine-raised **reference error** panics instead of throwing. The engine-raised
+This design proposes an Ironhorse **configuration option, off by default**,
+under which an engine-raised **reference error** panics instead of throwing. The engine-raised
 reference-error sites in `interp.rs` are:
 
 - `XS_CODE_GET_LOCAL_1`/`_2` (a read of a `let`/`const` binding in its temporal
@@ -605,7 +750,7 @@ peek over a `flag == 2` compiler change).
   set before resume). A `raise` seam reads the option once per raise.
 - **Both an attached debugger and panic-on-reference-error active at once:** the
   reference-error site takes the panic path (it is not a throw), so it stops the
-  world at the fault site via the panic hook (§ Debugger interaction), *not* via
+  world at the fault site via the panic hook (§ Debugger Interaction), *not* via
   the exception-break classifier. This is strictly the intended behavior: the
   developer wants to freeze at the exact reference-error PC before any unwind,
   and the panic path delivers exactly that. The `uncaughtExceptions`
@@ -613,12 +758,69 @@ peek over a `flag == 2` compiler change).
   they are no longer throws. Turn the option off and the same errors revert to
   catchable throws that the uncaught classifier sees normally.
 
+## Verification
+
+The transcript's **load-bearing crash-consistency invariant** — *a committed heap
+epoch can never name an uncommitted transcript suffix, or vice versa*
+(§ Per-worker write-ahead transcript) — is a correctness property, not a
+performance one, and the design owes a test strategy for it in the shape its
+SQLite-backed sibling designs already set (e.g.
+[ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md)'s metamorphic
+agreement suite and multi-wave adversarial review of its commit correctness).
+The acceptance bar this design proposes, to be filled in by the implementation:
+
+- **Crash-injection matrix over the commit sequence.** For each backend
+  discipline (store-backed `ATTACH`/2PC and XS/CAS watermark ordering), inject a
+  process kill at every ordering point of a committing crank — after WAL append
+  but before the commit fsync; after the transcript commit but before the CAS
+  snapshot record; after the snapshot record but before compaction; between the
+  two phases of the 2PC — and assert on restart that replay reaches exactly one
+  of {pre-crank state, post-crank state}, never a torn state naming an
+  uncommitted suffix and never a leaked outbound frame from an aborted crank.
+  A deterministic fault-injection harness (a seam that fails the Nth fsync/write)
+  makes this a unit-level suite, not a stochastic soak.
+- **Metamorphic equivalence: replay == live.** Running a delivery sequence live
+  and re-deriving it by snapshot-restore + transcript-replay must yield
+  byte-identical heap state and the identical outbound-frame sequence
+  (duplicate-suppressed). This is the transcript analogue of the snapshot-store
+  seam's agreement suite and directly exercises the handle-reconstruction path
+  (§ Host functions are messages too): a replayed handle must re-seat and produce
+  the recorded reply stream.
+- **Idempotency / duplicate-suppression property.** For the crash-after-send,
+  before-ack window (step 3), assert a receiver discards the re-sent frame by its
+  stable event sequence, so at-least-once release is observed exactly-once.
+- **Embargo coverage assertions.** One case per row of the "Which termination
+  paths the embargo includes" table in § The Message Embargo Contract: drive a
+  crank to each `CrankOutcome` and
+  assert (a) `Committed` releases the outbound set in sequence order and (b) every
+  non-`Committed` outcome — `MeterAbort` explicitly included — leaves zero
+  outbound frames observable outside the vat.
+
+Crank-consistency correctness gates the transcript's first landing; the
+performance tuning (the group-commit discipline in § Per-worker write-ahead
+transcript) is a separate, later bar and does not block the correctness suite.
+
 ## Alternatives Considered
 
 - **A single opaque `Halt::Panic` replacing `StackOverflow`/`MeterAbort`.**
   Rejected: destroys the per-source diagnostics (overshoot count, meter refusal,
   decode message) the supervisor and debugger need. Classification over retained
   variants is strictly more informative at negligible cost.
+- **Fold `StackOverflow`/`MeterAbort` into `PanicKind` (retaining their
+  payloads), unifying the flat and nested shapes.** A genuine middle ground
+  between the opaque-collapse above and the retained-flat-variants recommendation:
+  it *keeps* the per-source payloads (as `PanicKind::StackOverflow(usize)` etc.)
+  while giving the panic family one representational shape, which would make the
+  "never match `Halt` variant shape directly" discipline (§ The Formal `Panic`
+  Category) unnecessary rather than convention-enforced — the decomplector's
+  preferred structural fix. Not adopted for the **first** landing because it
+  churns every existing `StackOverflow`/`MeterAbort` match site for no behavior
+  change, conflicting with the "reclassify, no behavior change" goal for the
+  pre-existing variants; the design instead enforces the discipline with
+  `#[non_exhaustive]` plus a lint (§ The Formal `Panic` Category). Recorded here
+  as the standing should-fix refactor to prefer once the classification has
+  landed and the churn is a deliberate cleanup rather than coupled to this
+  design.
 - **Admission control without a transcript or embargo.** Rejected: pre-paying
   the meter prevents quota exhaustion in an admitted crank but does not make a
   stack overflow, Rust panic, reference-error panic, or host effect atomic.
@@ -663,6 +865,19 @@ peek over a `flag == 2` compiler change).
   interpreter-side classification earlier is fine, but the supervisor cannot act
   on a panic until that seam exists. To be filed as a dependency note on the
   integration work rather than blocking this design.
+- How should a **SQLite I/O failure inside a transcript write** be disposed? The
+  transcript's synchronous writes (step 2) are inserted into the same
+  `extern "C"` send-callback bodies whose Rust panics the FFI guard converts to
+  `PanicKind::EngineFault` (§ Scope: What Is Already a Panic). But an I/O error
+  from the transcript commit itself is neither a guest fault nor a Rust logic bug
+  — a full disk or a failed fsync means the *durability substrate* failed, and
+  discarding-and-retrying the crank cannot help because the retry writes to the
+  same broken store. Candidate dispositions: a distinct non-retryable `Halt`
+  (a `PanicKind::TranscriptFault` that halts the worker for operator
+  intervention rather than offering retry), a snapshot barrier (as for a
+  non-idempotent host effect, § Host functions are messages too), or fail-stop of
+  the whole daemon if the store is shared. Left open pending the implementation's
+  survey of which failures are recoverable in place.
 
 ## Dependencies
 
