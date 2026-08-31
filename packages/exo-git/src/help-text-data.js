@@ -96,7 +96,7 @@ export const helpTextEntries = harden([
       '': 'GitBlob - A read-only view of one Git blob object.\n\nA GitBlob is content-addressed and immutable: it is pinned to the blob\nobject id it was minted for, so later ref movement never changes its bytes.\nIt provides whole-value convenience reads together with the range-I/O\nsurface used by content-addressed readers.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("fetch") returns documentation for the fetch method',
       stream:
-        "stream(syndicationPromise) -> Promise\nStream the blob's bytes as base64-encoded chunks.\nThe syndication promise drives the reader-pump flow-control protocol.",
+        "stream(syndicationPromise) -> Promise\nStream the blob's bytes as immutable byte-array chunks.\nThe syndication promise drives the reader-pump flow-control protocol.",
       text: 'text() -> Promise<string>\nRead the complete blob as UTF-8 text.',
       json: 'json() -> Promise<unknown>\nRead the complete blob as UTF-8 text and parse it as JSON.',
       getInfo:

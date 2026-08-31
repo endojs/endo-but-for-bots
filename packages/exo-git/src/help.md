@@ -260,7 +260,7 @@ Get documentation for this interface or a specific method.
 
 ## stream(syndicationPromise) -> Promise
 
-Stream the blob's bytes as base64-encoded chunks.
+Stream the blob's bytes as immutable byte-array chunks.
 The syndication promise drives the reader-pump flow-control protocol.
 
 ## text() -> Promise<string>

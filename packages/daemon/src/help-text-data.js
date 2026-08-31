@@ -173,7 +173,7 @@ export const helpTextEntries = harden([
       fetch:
         'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) without\nstreaming the whole blob. offset and length are bigints;\nthe range is clamped at end-of-content.',
       stream:
-        'stream(syndicationPromise) -> Promise\nStream the blob content as base64 chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
+        'stream(syndicationPromise) -> Promise\nStream the blob content as immutable byte-array chunks, driven by the\nsyndication promise (the reader-pump flow-control protocol).\nUse for large files to avoid loading everything into memory.',
       text: 'text() -> Promise<string>\nRead the entire blob as a UTF-8 string.',
       json: 'json() -> Promise<any>\nRead and parse the blob as JSON.',
     },
@@ -267,7 +267,7 @@ export const helpTextEntries = harden([
         'fetch(offset, length) -> Promise<PassableBytesReader>\nRead the byte range [offset, offset + length) of the live file without\nstreaming the whole thing. offset and length are bigints; the range is\nclamped at end-of-content.',
       text: 'text() -> Promise<string>\nRead the file content as a UTF-8 string.',
       stream:
-        'stream(syndicationPromise) -> Promise\nStream the file content as base64 chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
+        'stream(syndicationPromise) -> Promise\nStream the file content as immutable byte-array chunks, driven by the syndication\npromise (the reader-pump flow-control protocol).',
       json: 'json() -> Promise<any>\nRead and parse the file as JSON.',
       writeText:
         'writeText(content) -> Promise<void>\nWrite a string to the file. Throws if read-only.',

@@ -1293,6 +1293,25 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
       found.declaration.typeParameters !== undefined &&
       found.declaration.typeParameters.length > 0
     ) {
+      // Array aliases contribute only JavaScript's ambient Array methods,
+      // which are already understood by a prompt type such as `T[]`. A
+      // pass-style container interface extends `CopyArray<T>` only to state
+      // assignability; it contributes no capability members to flatten.
+      const aliasType = ts.isTypeAliasDeclaration(found.declaration)
+        ? found.declaration.type
+        : undefined;
+      const isArrayAlias =
+        aliasType !== undefined &&
+        (ts.isArrayTypeNode(aliasType) ||
+          (ts.isTypeOperatorNode(aliasType) &&
+            aliasType.operator === ts.SyntaxKind.ReadonlyKeyword &&
+            ts.isArrayTypeNode(aliasType.type)));
+      const isPassByCopyContainer =
+        found.fileName.includes('/pass-style/src/types.d.ts') &&
+        new Set(['CopyArray', 'CopyRecord', 'CopyTagged']).has(name);
+      if (isArrayAlias || isPassByCopyContainer) {
+        return new Map();
+      }
       throw new Error(
         `cannot flatten extends ${name}: a generic base's type arguments are not substituted`,
       );

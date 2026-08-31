@@ -212,6 +212,16 @@ test('a generic base fails rather than printing an unsubstituted parameter', t =
   );
 });
 
+test('a generic array alias base contributes no capability members', t => {
+  const ir = extract(`
+    type CopyArray<T> = readonly T[];
+    export interface Root extends CopyArray<string> {
+      kind(): 'sequence';
+    }
+  `);
+  t.deepEqual(ir.members, [{ name: 'kind', signature: "() => 'sequence'" }]);
+});
+
 test('a type reference outside the @endo namespace still collapses', t => {
   const ir = extract(`
     import type { Dirent } from 'node:fs';

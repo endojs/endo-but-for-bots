@@ -593,7 +593,7 @@ the range is clamped at end-of-content.
 
 ## stream(syndicationPromise) -> Promise
 
-Stream the blob content as base64 chunks, driven by the
+Stream the blob content as immutable byte-array chunks, driven by the
 syndication promise (the reader-pump flow-control protocol).
 Use for large files to avoid loading everything into memory.
 
@@ -873,7 +873,7 @@ Read the file content as a UTF-8 string.
 
 ## stream(syndicationPromise) -> Promise
 
-Stream the file content as base64 chunks, driven by the syndication
+Stream the file content as immutable byte-array chunks, driven by the syndication
 promise (the reader-pump flow-control protocol).
 
 ## json() -> Promise<any>

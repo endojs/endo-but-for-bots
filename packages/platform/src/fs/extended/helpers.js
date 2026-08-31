@@ -51,7 +51,7 @@ harden(walk);
 
 /**
  * Drain a `PassableBytesReader` into a single `Uint8Array`. The
- * reader's chunks are base64-decoded by `iterateBytesReader` from
+ * reader's chunks are thawed by `iterateBytesReader` from
  * `@endo/exo-stream`.
  *
  * @param {object} reader  PassableBytesReader cap

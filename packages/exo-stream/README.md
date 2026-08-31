@@ -34,10 +34,9 @@ Producers and consumers can rely on all values to match the desired shape,
 or the stream will break with an error.
 
 The generic protocol has a single remote method, `stream()`. Specialized byte
-reader and writer adapters use that method while hauling base64-encoded data.
-Although passable byte arrays can now cross CapTP, the current marshal format
-hex-encodes them. The adapters therefore remain the one recommended byte-stream
-API until CapTP has a compact binary representation.
+reader and writer adapters use that method with passable immutable byte arrays.
+They are the recommended byte-stream API because they copy mutable local chunks
+into passable values on send and restore mutable chunks on receipt.
 
 ## Installation
 
@@ -280,10 +279,8 @@ the `stream` method on a custom Exo.
 #### `bytesReaderFromIterator(bytesIterator, options?)`
 
 Wrap a local `AsyncIterator<Uint8Array>` as a `PassableBytesReader` Exo.
-Bytes are automatically base64-encoded for transmission over CapTP.
-
-Uses the generic `stream()` method while keeping base64 encoding internal to
-the adapter pair.
+Mutable chunks are copied into passable immutable byte arrays and transmitted
+with the generic `stream()` method.
 
 **Options:**
 - `buffer` (number, default 0): Number of values to pre-pull
@@ -293,23 +290,20 @@ the adapter pair.
 
 Convert a remote `PassableBytesReader` reference to a local
 `AsyncIterableIterator<Uint8Array>`.
-Base64 strings are automatically decoded to bytes.
+Passable byte arrays are copied into mutable local chunks.
 
 **Options:**
 - `buffer` (number, default 0): Number of values to pre-synchronize
 - `readReturnPattern` (Pattern): Pattern to validate TReadReturn
-- `stringLengthLimit` (number): Maximum base64 string length per chunk
+- `byteLengthLimit` (number): Maximum byte length per chunk
 
 ### Bytes Writer Modules
 
 #### `bytesWriterFromIterator(iterator, options?)`
 
 Wrap a local sink iterator as a `PassableBytesWriter` Exo.
-Base64 strings received from the initiator are automatically decoded to
-`Uint8Array` before being pushed to the iterator.
-
-Uses the generic `stream()` method while keeping base64 encoding internal to
-the adapter pair.
+Passable byte arrays received from the initiator are copied to mutable
+`Uint8Array` chunks before being pushed to the iterator.
 
 **Options:**
 - `buffer` (number, default 0): Number of flow-control acks to pre-send
@@ -319,21 +313,19 @@ the adapter pair.
 
 Create a local bytes writer iterator that sends `Uint8Array` values to a remote
 `PassableBytesWriter` (initiator side). Use `writer.next(chunk)` to push values
-and `writer.return()` to close the stream. Bytes are automatically base64-encoded
-for transmission over CapTP.
+and `writer.return()` to close the stream. Mutable chunks are copied into
+passable immutable byte arrays for transmission over CapTP.
 
 **Options:**
 - `buffer` (number, default 0): Number of data values to pre-send before waiting for acks
 
 ### Bytes transport
 
-All Exo streams now use the `stream()` method. Byte streams retain the four
-bytes-specific adapter entry points above because the adapters' base64 strings
-produce a smaller CapTP body than the hex representation currently used for a
-passable byteArray. Direct byteArray streaming also requires converting mutable
-filesystem, socket, and inflater chunks to immutable byte arrays on the send
-path. Use the bytes-specific adapters for byte streams; use `readerFromIterator`,
-`iterateReader`, `writerFromIterator`, and `iterateWriter` for other passables.
+All Exo streams use the `stream()` method and byte streams carry passable
+byteArray values directly. The four bytes-specific adapters are the one
+recommended byte API: producer-side adapters freeze mutable chunks and
+consumer-side adapters thaw them. Use the generic reader and writer adapters
+for other passables or already-passable byte arrays.
 
 ## Design
 
@@ -341,6 +333,6 @@ See [DESIGN.md](./DESIGN.md) for design documentation.
 
 ## Future Work
 
-- Revisit direct byteArray streaming when CapTP has a compact binary encoding.
+- Add a compact marshal representation for byteArray values.
 - Add help methods to Exos for usage guidance.
 - Propose protocol to OCapN working group.

@@ -81,14 +81,14 @@ mirrored in data flow direction.
 
 | Module | Function | Role |
 |--------|----------|------|
-| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (base64 encoding). |
-| `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: converts remote `PassableBytesReader` to local `AsyncIterableIterator<Uint8Array>` (base64 decoding). |
+| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: copies mutable chunks to passable byte arrays. |
+| `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: copies passable byte arrays to mutable local chunks. |
 
 ### Bytes Writer Modules
 
 | Module | Function | Role |
 |--------|----------|------|
-| `bytes-writer-from-iterator.js` | `bytesWriterFromIterator(iterator, options?)` | Responder: wraps local sink iterator as `PassableBytesWriter` Exo (base64 decoding on receive). |
+| `bytes-writer-from-iterator.js` | `bytesWriterFromIterator(iterator, options?)` | Responder: thaws passable byte arrays before writing to the local sink. |
 | `iterate-bytes-writer.js` | `iterateBytesWriter(bytesWriterRef, options?)` | Initiator: returns a local bytes writer iterator that sends `Uint8Array` via `next(value)`. |
 
 ## Protocol Flow
@@ -182,14 +182,14 @@ argument value. The acknowledgement chain carries `undefined` (flow control):
 
 1. **Responder** (`bytesReaderFromIterator`):
    - Takes `AsyncIterator<Uint8Array>`
-   - Encodes each chunk to base64
+   - Freezes each mutable chunk into a passable byte array
    - Creates Exo with `stream()` method
 
 2. **Initiator** (`iterateBytesReader`):
    - Creates synchronize chain
    - Calls `stream(synHead)` to get acknowledge chain head
    - Sends synchronizes to induce production
-   - Decodes base64 to Uint8Array
+   - Thaws each passable byte array to a mutable Uint8Array
 
 3. **Transmission over CapTP**:
    - Synchronizes flow: initiator -> responder (via synchronize promise chain)
@@ -200,17 +200,17 @@ argument value. The acknowledgement chain carries `undefined` (flow control):
 
 1. **Initiator** (`iterateBytesWriter`):
    - Returns a local bytes writer iterator
-   - Encodes each chunk to base64
-   - Sends base64 strings on the synchronize chain via `next(value)`
+   - Freezes each mutable chunk into a passable byte array
+   - Sends byte arrays on the synchronize chain via `next(value)`
 
 2. **Responder** (`bytesWriterFromIterator`):
    - Creates Exo with `stream()` method
-   - Receives base64 strings on the synchronize chain
-   - Decodes base64 to Uint8Array
-   - Pushes decoded bytes to local sink iterator
+   - Receives passable byte arrays on the synchronize chain
+   - Thaws them to mutable Uint8Arrays
+   - Pushes mutable bytes to the local sink iterator
 
 3. **Transmission over CapTP**:
-   - Synchronizes flow: initiator -> responder (base64 strings via synchronize promise chain)
+   - Synchronizes flow: initiator -> responder (byte arrays via synchronize promise chain)
    - Acknowledges flow: responder -> initiator (flow control via acknowledge promise chain)
    - CapTP transmits resolved nodes opportunistically
 
@@ -236,17 +236,15 @@ without waiting for the acknowledge chain to resolve first, avoiding datalock.
 The method-surface migration is complete: every reader and writer now uses the
 single `stream()` method. The former bytes-only method was removed.
 
-The value-representation migration is deliberately deferred. A passable
-`byteArray` is a frozen `Uint8Array` backed by an immutable `ArrayBuffer`, so a
-mutable filesystem, socket, or inflater chunk must first be copied with
-`frozenBytes` (or transferred when the producer can relinquish a whole backing
-buffer). CapTP's current marshal format then hex-encodes the byteArray, producing
-two wire characters per byte. The bytes adapters instead encode mutable chunks
-as base64 strings, producing about four characters per three bytes and restoring
-mutable `Uint8Array` chunks on receipt.
+The value-representation migration is also complete. A passable `byteArray` is
+a frozen `Uint8Array` backed by an immutable `ArrayBuffer`. Producer adapters
+therefore call `frozenBytes`; consumer adapters call `thawedBytes`. Transfer can
+avoid the send-side copy only when a producer owns and relinquishes a whole
+backing buffer, which common filesystem, socket, and inflater APIs do not
+guarantee.
 
-Consequently the four bytes-specific modules remain the one recommended way to
-stream bytes. They are protocol adapters over `stream()`, not a second remote
-protocol. Replacing them with `readerFromIterator` / `iterateReader` or
-`writerFromIterator` / `iterateWriter` should wait until CapTP supplies a compact
-binary representation; pass-style support alone is not that representation.
+The four bytes-specific modules remain the one recommended way to stream bytes.
+They own the mutable/passable boundary over the generic `stream()` protocol;
+they are not a second remote protocol. The current marshal hex representation
+is larger and slower than the retired transitional representation, so compact
+byteArray marshalling and ownership-aware transfer remain performance work.

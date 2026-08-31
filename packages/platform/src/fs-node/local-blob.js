@@ -5,9 +5,7 @@ import { createHash } from 'node:crypto';
 import harden from '@endo/harden';
 import { encodeBase64 } from '@endo/base64';
 import { makeExo } from '@endo/exo';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { mapReader } from '@endo/stream';
 import { makeNodeReader } from '@endo/stream-node';
 
 // `LocalBlob` exposes the whole-value read surface plus the richer `BlobRef`
@@ -73,7 +71,7 @@ const bytesFromRange = bytes => {
 
 /**
  * Creates a ReadableBlob Exo from a local file.
- * Streams file content as base64 via @endo/stream-node.
+ * Streams file content as passable immutable byte arrays.
  *
  * @param {string} filePath
  * @returns {ReadableBlobRangeRead}
@@ -85,8 +83,9 @@ export const makeLocalBlob = filePath => {
     stream(synPromise) {
       const nodeReadStream = fs.createReadStream(filePath);
       const reader = makeNodeReader(nodeReadStream);
-      const pump = makeReaderPump(mapReader(reader, encodeBase64));
-      return pump(/** @type {any} */ (synPromise));
+      return bytesReaderFromIterator(reader).stream(
+        /** @type {any} */ (synPromise),
+      );
     },
     text: () => fs.promises.readFile(filePath, 'utf-8'),
     json: async () => JSON.parse(await fs.promises.readFile(filePath, 'utf-8')),

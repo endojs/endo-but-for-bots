@@ -13,14 +13,14 @@ From `@endo/daemon/reader-ref.js` (REMOVED):
 - `makeIteratorRef(iterable)` to `FarRef<Reader<T>>` -
   Wrap local iterator as remote reference
 - `makeReaderRef(readable)` to `FarRef<Reader<string>>` -
-  Wrap local bytes iterator, encode to base64
+  Wrap local bytes iterator as passable byte arrays
   (now `PassableBytesReader`)
 
 From `@endo/daemon/ref-reader.js` (REMOVED):
 - `makeRefIterator(iteratorRef)` to `AsyncIterableIterator<T>` -
   Wrap remote iterator as local
 - `makeRefReader(readerRef)` to `AsyncIterableIterator<Uint8Array>` -
-  Wrap remote bytes iterator, decode from base64
+  Wrap remote passable byte arrays as mutable local chunks
 
 ### New API in `@endo/exo-stream`
 
@@ -38,14 +38,14 @@ From `@endo/daemon/ref-reader.js` (REMOVED):
 | `writerFromIterator(iterator)` | `writer-from-iterator.js` | Returns `PassableWriter` Exo with `stream()` method |
 | `iterateWriter(writerRef, options?)` | `iterate-writer.js` | Returns a local writer iterator; use `next(value)` to send and `return()` to close |
 
-#### Bytes Readers (base64 encoding over CapTP)
+#### Bytes Readers (passable byte arrays over CapTP)
 
 | Old Function | New Function | Module | Notes |
 |---|---|---|---|
 | `makeReaderRef(readable)` | `bytesReaderFromIterator(readable)` | `bytes-reader-from-iterator.js` | Returns `PassableBytesReader` with `stream()` method |
 | `makeRefReader(readerRef)` | `iterateBytesReader(readerRef)` | `iterate-bytes-reader.js` | Synchronous; returns `AsyncIterableIterator<Uint8Array>` |
 
-#### Bytes Writers (base64 encoding over CapTP)
+#### Bytes Writers (passable byte arrays over CapTP)
 
 | New Function | Module | Notes |
 |---|---|---|

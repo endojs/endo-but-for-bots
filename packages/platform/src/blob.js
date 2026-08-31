@@ -1,27 +1,22 @@
 // @ts-check
 
-import { encodeBase64 } from '@endo/base64';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { makeExo } from '@endo/exo';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import harden from '@endo/harden';
 
 import { ReadableBlobInterface } from './fs/interfaces.js';
 
-const BASE64_CHUNK_RAW_BYTES = 48 * 1024;
+const CHUNK_BYTES = 48 * 1024;
 
 /**
  * @param {Uint8Array | Promise<Uint8Array>} bytesOrPromise
  */
-async function* base64Chunks(bytesOrPromise) {
+async function* byteChunks(bytesOrPromise) {
   const bytes = await bytesOrPromise;
-  for (
-    let offset = 0;
-    offset < bytes.length;
-    offset += BASE64_CHUNK_RAW_BYTES
-  ) {
-    const end = Math.min(offset + BASE64_CHUNK_RAW_BYTES, bytes.length);
-    yield encodeBase64(bytes.subarray(offset, end));
+  for (let offset = 0; offset < bytes.length; offset += CHUNK_BYTES) {
+    const end = Math.min(offset + CHUNK_BYTES, bytes.length);
+    yield bytes.subarray(offset, end);
   }
 }
 
@@ -35,7 +30,9 @@ export const blobFromBytes = bytesOrPromise => {
   return makeExo('Blob', ReadableBlobInterface, {
     /** @param {unknown} synHead */
     stream: synHead =>
-      makeReaderPump(base64Chunks(bytes()))(/** @type {any} */ (synHead)),
+      bytesReaderFromIterator(byteChunks(bytes())).stream(
+        /** @type {any} */ (synHead),
+      ),
     text: () => bytes().then(decodeUtf8),
     json: () =>
       bytes().then(resolvedBytes => JSON.parse(decodeUtf8(resolvedBytes))),

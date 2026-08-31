@@ -305,7 +305,7 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
   });
 });
 
-test('revocation: a base64 file stream refuses on a revoked mount', async t => {
+test('revocation: a byte-array file stream refuses on a revoked mount', async t => {
   const rootPath = makeTemporaryRoot(t);
   const { mount, control } = makeRevocableMount({
     rootPath,

@@ -180,7 +180,7 @@ test('bytes writer fallback return when sink lacks return', async t => {
     bytesWriterFromIterator(sink)
   );
 
-  /** @type {Promise<StreamNode<string, string | undefined>>} */
+  /** @type {Promise<StreamNode<Uint8Array, string | undefined>>} */
   const synHead = Promise.resolve(harden({ value: 'done', promise: null }));
   /** @type {StreamNode<undefined, string | undefined>} */
   const ackHead = await writerRef.stream(synHead);
@@ -206,7 +206,7 @@ test('bytes writer returns completion value from sink return', async t => {
     bytesWriterFromIterator(sink)
   );
 
-  /** @type {Promise<StreamNode<string, string>>} */
+  /** @type {Promise<StreamNode<Uint8Array, string>>} */
   const synHead = Promise.resolve(harden({ value: 'done', promise: null }));
   /** @type {StreamNode<undefined, string>} */
   const ackHead = await writerRef.stream(synHead);

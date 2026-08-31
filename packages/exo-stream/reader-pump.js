@@ -32,11 +32,11 @@ const { freeze } = Object;
  * import { makeExo } from '@endo/exo';
  * import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
  * import { mapReader } from '@endo/stream';
- * import { encodeBase64 } from '@endo/base64';
+ * import { frozenBytes } from '@endo/immutable-arraybuffer';
  *
  * const makeHashedBytesReader = (bytesIterator, hash) => {
- *   const base64Iterator = mapReader(bytesIterator, encodeBase64);
- *   const pump = makeReaderPump(base64Iterator);
+ *   const passableIterator = mapReader(bytesIterator, frozenBytes);
+ *   const pump = makeReaderPump(passableIterator);
  *
  *   return makeExo('HashedBytesReader', HashedBytesReaderInterface, {
  *     stream: pump,

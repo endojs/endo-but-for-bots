@@ -459,7 +459,7 @@ test('filesystem declaration remains available to local seam helpers', t => {
   const { filesystem } = fsDeclarations;
   const text = declarationText(filesystem);
   t.true(filesystem.body.startsWith('{'));
-  t.true(text.includes('type ERef<T> = T | Promise<T>;'));
+  t.true(text.includes('type ERef<T = unknown> = PromiseLike<T> | T;'));
   t.true(text.includes('type Directory = {'));
   t.true(text.includes('lookup:'));
   t.true(text.includes('write:'));

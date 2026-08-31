@@ -152,26 +152,26 @@ export interface ReaderIterator<
 
 /**
  * A passable bytes reader reference.
- * Uses the generic stream() protocol with base64 strings on the wire.
+ * Uses the generic stream() protocol with passable immutable byte arrays.
  * The final synchronization node carries the argument value passed to the
  * initiator's return(value) call when closing early; if the responder is backed
  * by a JavaScript iterator with a return(value) method, it may replace that
  * argument with its own return value. All other synchronization values are flow
  * control (`undefined`).
- * Yields base64-encoded strings (decoded to Uint8Array by initiator).
+ * Yields immutable Uint8Arrays (copied to mutable Uint8Arrays by initiator).
  */
 export interface PassableBytesReader<TReadReturn extends Passable = undefined> {
   stream(
     synPromise: ERef<StreamNode<Passable, TReadReturn>>,
-  ): Promise<StreamNode<string, TReadReturn>>;
+  ): Promise<StreamNode<Uint8Array, TReadReturn>>;
   /** Pattern for TReadReturn */
   readReturnPattern(): Pattern | undefined;
 }
 
 /**
  * A passable bytes writer reference.
- * Uses the generic stream() protocol with base64 strings on the wire.
- * Receives base64-encoded strings (encoded from Uint8Array by initiator).
+ * Uses the generic stream() protocol with passable immutable byte arrays.
+ * Receives immutable Uint8Arrays copied from the initiator's mutable chunks.
  * When the initiator calls `return(value)` to close early, the final syn node
  * carries that argument value. If the responder is backed by a JavaScript
  * iterator with a `return(value)` method, it forwards the argument and uses the
@@ -182,7 +182,7 @@ export interface PassableBytesWriter<
   TWriteReturn extends Passable = undefined,
 > {
   stream(
-    synPromise: ERef<StreamNode<string, TWriteReturn>>,
+    synPromise: ERef<StreamNode<Uint8Array, TWriteReturn>>,
   ): Promise<StreamNode<undefined, TWriteReturn>>;
   /** Pattern for TWriteReturn */
   writeReturnPattern(): Pattern | undefined;
@@ -230,7 +230,7 @@ export interface WriterPumpOptions {
 
 /**
  * Options for bytesReaderFromIterator.
- * TRead is fixed to Uint8Array (transmitted as base64 string).
+ * TRead is fixed to Uint8Array (transmitted as a passable byte array).
  */
 export interface MakeBytesReaderOptions<
   TReadReturn extends Passable = undefined,
@@ -363,18 +363,16 @@ export interface IterateBytesReaderOptions<
   /** Pattern for TReadReturn (return value) */
   readReturnPattern?: Pattern;
   /**
-   * Maximum length for base64-encoded chunks in characters.
+   * Maximum byte length for each chunk.
    * The default is 100,000 (from @endo/patterns default limits).
    * Increase this for large payloads like bundles.
-   * Note: base64 encoding increases size by ~33%, so a 75KB binary payload
-   * becomes ~100KB of base64 text.
    */
-  stringLengthLimit?: number;
+  byteLengthLimit?: number;
 }
 
 /**
  * Options for bytesWriterFromIterator.
- * TWrite is fixed to Uint8Array (transmitted as base64 string).
+ * TWrite is fixed to Uint8Array (transmitted as a passable byte array).
  */
 export interface MakeBytesWriterOptions<
   TWriteReturn extends Passable = undefined,

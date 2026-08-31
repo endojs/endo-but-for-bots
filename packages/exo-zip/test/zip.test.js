@@ -2,7 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { ZipReader } from '@endo/zip/reader.js';
 import { inflate } from '@endo/zip/inflate.js';
 import { unzip } from '@endo/exo-unzip';
@@ -10,8 +10,6 @@ import { unzip } from '@endo/exo-unzip';
 import { zip } from '../index.js';
 
 const textEncoder = new TextEncoder();
-
-const encodeBase64 = bytes => btoa(String.fromCharCode(...bytes));
 
 // `zip()` emits DEFLATE entries on hosts with `CompressionStream`
 // (the project's full Node 18+ matrix and modern browsers); the
@@ -89,7 +87,7 @@ test('zip preserves a deeply nested entry', async t => {
   t.is(new TextDecoder().decode(await reread.get('a/b/c/d/e.txt')), 'deep');
 });
 
-test('zip drains a multi-chunk stream across base64 group boundaries', async t => {
+test('zip drains a multi-chunk byte-array stream', async t => {
   // The `@endo/exo-unzip` blob producer chunks at 48 KiB raw to keep
   // CapTP frames small; this test feeds it a payload large enough to
   // span multiple chunks and itself not a multiple of 3 bytes, so the
@@ -139,9 +137,9 @@ test('zip discovers the kind protocol once for a mount subtree', async t => {
       },
       stream(synPromise) {
         async function* contentBytes() {
-          yield encodeBase64(content);
+          yield content;
         }
-        return makeReaderPump(contentBytes())(synPromise);
+        return bytesReaderFromIterator(contentBytes()).stream(synPromise);
       },
     });
   const file = makeFile(textEncoder.encode('content'));

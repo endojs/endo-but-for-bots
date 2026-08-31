@@ -1,7 +1,7 @@
 // @ts-check
 
 import { makeExo } from '@endo/exo';
-import { decodeBase64 } from '@endo/base64';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 
 import { PassableBytesWriterInterface } from './type-guards.js';
 import { makeWriterPump } from './writer-pump.js';
@@ -16,19 +16,17 @@ import { asyncIterate } from './async-iterate.js';
  * (Responder/Consumer side).
  *
  * This is the Consumer for a bytes Writer: it wraps a local sink iterator and
- * receives base64-encoded values from the remote Initiator/Producer, decoding
- * them to Uint8Array before pushing to the local iterator.
+ * receives immutable byte arrays from the remote Initiator/Producer and copies
+ * them into mutable Uint8Arrays before pushing to the local iterator.
  *
- * Bytes are automatically base64-decoded on receipt from CapTP.
  * Uses the generic stream() protocol. The bytes-specific helpers remain the
- * canonical adapters because CapTP currently marshals byteArray values as hex,
- * which is larger and slower than the base64 representation used here.
+ * canonical adapters because they own the passability boundary.
  *
  * The interface implies Uint8Array writes (no writePattern method).
  * Only writeReturnPattern can be customized.
  *
  * The writer uses bidirectional promise chains for flow control:
- * - Initiator sends synchronizations (base64 strings) via the synchronization chain.
+ * - Initiator sends synchronizations (immutable bytes) via the synchronization chain.
  *   When the initiator calls `return(value)` to close early, the final syn node
  *   carries that argument value. If the responder is backed by a JavaScript
  *   iterator with a `return(value)` method, it forwards the argument and uses the
@@ -44,15 +42,12 @@ import { asyncIterate } from './async-iterate.js';
 export const bytesWriterFromIterator = (iterator, options = {}) => {
   const { buffer = 0, writeReturnPattern } = options;
 
-  // Create a decoding adapter that intercepts the writer pump's pushes.
-  // The writer pump will push base64 strings; we decode to Uint8Array
-  // before forwarding to the real sink iterator.
+  // Copy passable immutable bytes into mutable local chunks before forwarding.
   const sinkIterator = asyncIterate(iterator);
-  const decodingIterator = {
-    /** @param {string} base64Value */
-    async next(base64Value) {
-      const bytes = decodeBase64(base64Value);
-      return sinkIterator.next(bytes);
+  const thawingIterator = {
+    /** @param {Uint8Array} bytes */
+    async next(bytes) {
+      return sinkIterator.next(thawedBytes(bytes));
     },
     /** @param {TWriteReturn} [value] */
     async return(value) {
@@ -66,7 +61,7 @@ export const bytesWriterFromIterator = (iterator, options = {}) => {
     },
   };
 
-  const pump = makeWriterPump(decodingIterator, { buffer });
+  const pump = makeWriterPump(thawingIterator, { buffer });
 
   return /** @type {PassableBytesWriter<TWriteReturn>} */ (
     /** @type {unknown} */ (
