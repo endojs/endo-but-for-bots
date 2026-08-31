@@ -46,9 +46,9 @@ import { withCachedReads } from '@endo/platform/fs/extended/cached-fs.js';
  */
 
 // Read/write in bounded chunks so a single `@endo/exo-stream`
-// frame never exceeds its base64 length guard.
+// frame never exceeds its byteArray length guard.
 const CHUNK_BYTES = 256 * 1024;
-const BYTE_FRAME_LIMIT = CHUNK_BYTES * 2;
+const BYTE_FRAME_LIMIT = CHUNK_BYTES;
 
 // Files larger than this are not previewed in full.
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
