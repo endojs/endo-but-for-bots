@@ -1377,6 +1377,30 @@ fn scan_dynamic_imports_detailed(source: &str) -> DynamicImportScan {
             last_code_byte = Some(b't');
             continue;
         }
+        if matches!(bytes[index], b'+' | b'-')
+            && index + 1 < bytes.len()
+            && bytes[index + 1] == bytes[index]
+        {
+            // `++`/`--` is a single token, but read byte-by-byte its first
+            // byte never satisfies `ends_value_expression` (it's neither an
+            // identifier, `)`, nor `]`), so the naive per-byte update below
+            // would always leave `regex_allowed` true afterward — wrong for
+            // the postfix form. A postfix `x++` still ends a value
+            // expression (it evaluates to `x`'s prior value), so a `/`
+            // right after it is division; left uncorrected, source like
+            // `x++ / import(y)` misreads that `/` as opening a regex
+            // literal and swallows the whole `import(y)` call as the
+            // literal's body, silently losing the opaque-import signal.
+            // A prefix `++x` does not end a value expression here, but the
+            // identifier that follows immediately re-derives the correct
+            // state before any `/` could appear, so leaving it `true` is
+            // harmless.
+            let ends_value = last_code_byte.is_some_and(ends_value_expression);
+            regex_allowed = !ends_value;
+            last_code_byte = Some(bytes[index + 1]);
+            index += 2;
+            continue;
+        }
         if !bytes[index].is_ascii_whitespace() {
             regex_allowed = !ends_value_expression(bytes[index]);
             last_code_byte = Some(bytes[index]);
@@ -4630,6 +4654,21 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_import_scan_survives_a_postfix_increment_before_division() {
+        // A postfix `++`/`--` ends a value expression just as much as the
+        // identifier it operates on, so a `/` right after it is division,
+        // not a regex opener. Read byte-by-byte, neither byte of `++`
+        // alone looks like the end of a value, so a naive per-byte update
+        // would leave the scanner thinking a regex can still open there —
+        // and then swallow the whole rest of the line, including a real
+        // `import(...)` call, as the "regex" literal's body.
+        let src = "x++ / import(pluginPath);\n";
+        assert!(scan_static_imports(src).has_opaque_dynamic_import);
+        let src = "x-- / import(pluginPath);\n";
+        assert!(scan_static_imports(src).has_opaque_dynamic_import);
+    }
+
+    #[test]
     fn scan_deduplicates() {
         let src = r#"
             import { a } from "dup";
@@ -5541,6 +5580,109 @@ mod tests {
             .map
             .compartments
             .contains_key("undeclared-v1.0.0"));
+    }
+
+    #[test]
+    fn opaque_dynamic_import_respects_optional_and_dev_dependency_gates() {
+        // `include_opaque_dynamic_import_dependencies` has three declared
+        // dependency sources beyond a plain `dependencies` entry: an
+        // installed optional dependency (included), an uninstalled optional
+        // dependency (excluded), and a dev dependency (included only when
+        // `include_dev_dependencies` is set for that compartment). None of
+        // those three branches was exercised by
+        // `opaque_dynamic_import_includes_declared_runtime_dependencies`,
+        // which only covers plain `dependencies`.
+        let make_project = || {
+            let project = tempfile::tempdir().unwrap();
+            write_file(
+                project.path(),
+                "package.json",
+                br#"{
+                    "name": "app",
+                    "version": "1.0.0",
+                    "type": "module",
+                    "optionalDependencies": {
+                        "installed-optional": "1",
+                        "missing-optional": "1"
+                    },
+                    "devDependencies": { "dev-only": "1" }
+                }"#,
+            );
+            write_file(
+                project.path(),
+                "index.js",
+                br#"export const load = specifier => import(specifier);"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/installed-optional/package.json",
+                br#"{"name":"installed-optional","version":"1.0.0","type":"module"}"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/installed-optional/index.js",
+                br#"export default 'installed-optional';"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/dev-only/package.json",
+                br#"{"name":"dev-only","version":"1.0.0","type":"module"}"#,
+            );
+            write_file(
+                project.path(),
+                "node_modules/dev-only/index.js",
+                br#"export default 'dev-only';"#,
+            );
+            // `missing-optional` is deliberately never installed under
+            // `node_modules`, so the installed-check filter has something
+            // to actually filter.
+            project
+        };
+
+        // Without `dev`, the installed optional dependency is retained and
+        // both the missing optional dependency and the dev dependency are
+        // excluded.
+        {
+            let temporary = tempfile::tempdir().unwrap();
+            let cas = ContentStore::open(&temporary.path().join("cas")).unwrap();
+            let project = make_project();
+            let ingested =
+                ingest_entry_point_with_deps(&cas, &project.path().join("index.js")).unwrap();
+            let app = ingested.archive.map.compartments.get("app-v1.0.0").unwrap();
+            assert!(matches!(
+                app.modules.get("installed-optional"),
+                Some(xsnap::archive::ModuleDescriptor::Link { compartment, .. })
+                    if compartment == "installed-optional-v1.0.0"
+            ));
+            assert!(app.modules.get("missing-optional").is_none());
+            assert!(app.modules.get("dev-only").is_none());
+            assert!(!ingested
+                .archive
+                .map
+                .compartments
+                .contains_key("dev-only-v1.0.0"));
+        }
+
+        // With `dev` (compartment-mapper's `development` condition), the
+        // dev dependency is retained too.
+        {
+            let temporary = tempfile::tempdir().unwrap();
+            let cas = ContentStore::open(&temporary.path().join("cas")).unwrap();
+            let project = make_project();
+            let options = WalkOptions::new(["development".to_string()], std::iter::empty());
+            let ingested = ingest_entry_point_with_deps_with_options(
+                &cas,
+                &project.path().join("index.js"),
+                &options,
+            )
+            .unwrap();
+            let app = ingested.archive.map.compartments.get("app-v1.0.0").unwrap();
+            assert!(matches!(
+                app.modules.get("dev-only"),
+                Some(xsnap::archive::ModuleDescriptor::Link { compartment, .. })
+                    if compartment == "dev-only-v1.0.0"
+            ));
+        }
     }
 
     #[test]
