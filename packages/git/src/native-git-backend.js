@@ -3602,7 +3602,7 @@ export const makeNativeGitBackend = ({
 
     resolveRoot,
 
-    async *watchRoot({ cancelled, after }) {
+    async *followRoot({ cancelled, after }) {
       let previous = after;
       let stopped = false;
       /** @type {(() => void) | undefined} */

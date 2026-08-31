@@ -191,8 +191,8 @@ import {
  * @property {() => Promise<{ treeOid: string, commitOid: string, treeAlgorithm: string } | null>} resolveRoot
  *   Resolve the repository's currently published root. An unborn repository
  *   returns null.
- * @property {(options: { cancelled: Promise<never>, after: { treeOid: string, commitOid: string, treeAlgorithm: string } | null }) => AsyncIterable<{ treeOid: string, commitOid: string, treeAlgorithm: string } | null>} watchRoot
- *   Watch the published root through a backend-owned mechanism. The native
+ * @property {(options: { cancelled: Promise<never>, after: { treeOid: string, commitOid: string, treeAlgorithm: string } | null }) => AsyncIterable<{ treeOid: string, commitOid: string, treeAlgorithm: string } | null>} followRoot
+ *   Follow the published root through a backend-owned mechanism. The native
  *   backend initially implements this seam by polling; a future fs watcher can
  *   replace that mechanism without changing the public follower.
  * @property {(treeOid: string) => Promise<readonly GitTreeEntryRecord[]>} lsTree
@@ -1117,7 +1117,7 @@ const startRootWatcher = state => {
         });
   rootTracker.watching = (async () => {
     try {
-      for await (const resolved of state.backend.watchRoot({
+      for await (const resolved of state.backend.followRoot({
         cancelled: /** @type {Promise<never>} */ (stopped),
         after,
       })) {
@@ -1588,8 +1588,8 @@ export const makeNotYetImplementedBackend = () => {
     remotePush: async () => fail('remotePush'),
     resolveTree: async () => fail('resolveTree'),
     resolveRoot: async () => fail('resolveRoot'),
-    watchRoot: () => {
-      fail('watchRoot');
+    followRoot: () => {
+      fail('followRoot');
       return /** @type {AsyncIterable<null>} */ ({
         async *[Symbol.asyncIterator]() {
           yield* [];

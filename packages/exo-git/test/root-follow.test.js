@@ -72,7 +72,7 @@ const makeHarness = () => {
           yield* [];
         },
       }),
-    watchRoot: ({ cancelled }) =>
+    followRoot: ({ cancelled }) =>
       harden({
         async *[Symbol.asyncIterator]() {
           for (;;) {

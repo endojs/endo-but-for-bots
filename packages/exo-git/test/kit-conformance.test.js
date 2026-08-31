@@ -130,7 +130,7 @@ const makeFakeBackend = (worktreeRemove = async () => undefined) =>
         treeAlgorithm: 'git-sha1-tree',
       };
     },
-    watchRoot({ cancelled }) {
+    followRoot({ cancelled }) {
       return harden({
         async *[Symbol.asyncIterator]() {
           try {
