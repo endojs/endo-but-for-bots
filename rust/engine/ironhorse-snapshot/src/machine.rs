@@ -251,6 +251,7 @@ impl MachineSnapshot for Interp {
         .with_private_elements(tables.private_elements)
         .with_disposable_stacks(tables.disposable_stacks)
         .with_generators(tables.generators)
+        .with_promise_cluster(tables.promise_cluster)
         .with_name_floor(self.installed_names_floor())
     }
 }
@@ -278,6 +279,7 @@ struct SideTableImages {
     private_elements: ironhorse_vm::PrivateElementSnapshot,
     disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     generators: Vec<ironhorse_vm::GeneratorRow>,
+    promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -390,6 +392,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
     let private_elements = interp.private_elements_snapshot();
     let disposable_stacks = interp.disposable_stacks_snapshot();
     let generators = interp.generators_snapshot();
+    let promise_cluster = interp.promise_cluster_snapshot();
     SideTableImages {
         arrays,
         collections,
@@ -412,6 +415,7 @@ fn side_tables_of(interp: &Interp) -> SideTableImages {
         private_elements,
         disposable_stacks,
         generators,
+        promise_cluster,
     }
 }
 
@@ -444,6 +448,7 @@ fn restore_side_tables(
     private_elements: ironhorse_vm::PrivateElementSnapshot,
     disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     generators: Vec<ironhorse_vm::GeneratorRow>,
+    promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
     arguments_brands: Vec<u32>,
     temporal: crate::image::TemporalImage,
     intl: ironhorse_vm::IntlTables,
@@ -550,6 +555,18 @@ fn restore_side_tables(
     if !interp.restore_intl_bound_functions(intl_bound_functions) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed Intl bound-function state",
+        ));
+    }
+    // The promise cluster (schema 23) installs its resolving-function
+    // natives BEFORE the retained function state for the same reason
+    // `IBFN` does: a guest `.bind()` over a resolving function emits a
+    // `FUNC` bound row whose target is a `PRMS` slot, which the
+    // retained-state adjudication must find already installed. The
+    // collision checks stay two-sided: this verb refuses a slot boot
+    // already minted, and `FUNC` refuses one an earlier verb installed.
+    if !interp.restore_promise_cluster(promise_cluster) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed promise cluster",
         ));
     }
     if !interp.restore_function_state(function_state) {
@@ -659,6 +676,7 @@ pub fn image_to_interp(
         image.private_elements,
         image.disposable_stacks,
         image.generators,
+        image.promise_cluster,
         image.arguments_brands,
         image.temporal,
         image.intl,
@@ -908,6 +926,7 @@ fn small_state_of(interp: &Interp) -> SmallState {
         private_elements: tables.private_elements,
         disposable_stacks: tables.disposable_stacks,
         generators: tables.generators,
+        promise_cluster: tables.promise_cluster,
         arguments_brands: tables.arguments_brands,
         temporal: tables.temporal,
         intl: tables.intl,
@@ -1614,6 +1633,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.private_elements,
         small.disposable_stacks,
         small.generators,
+        small.promise_cluster,
         small.arguments_brands,
         small.temporal,
         small.intl,

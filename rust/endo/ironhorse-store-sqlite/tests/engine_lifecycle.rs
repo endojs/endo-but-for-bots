@@ -508,3 +508,23 @@ fn boot_minted_iterator_natives_survive_sqlite_sleep_cycles() {
     );
     assert_eq!(last, "2");
 }
+
+#[test]
+fn the_promise_cluster_survives_sqlite_sleep_cycles() {
+    // The SQLite arm of the schema-23 promise-cluster carry: a pending
+    // promise with a stored resolver and a user reaction crosses two
+    // close/reopen cycles, settles in the middle crank through the
+    // restored resolver, and the late observation reads the value the
+    // pre-sleep reaction computed.
+    let last = carry_scenario(
+        "carry-promises",
+        "new Promise(function (a, b) { a(b); }); Promise.resolve(0); q.then(null);",
+        &[
+            "q = new Promise(function (a, b) { f = a; }); \
+             q.then(function (v) { g = v + 1; }); g = 0; t = 7;",
+            "f(41); t = typeof f; t",
+            "t = g; t",
+        ],
+    );
+    assert_eq!(last, "42");
+}

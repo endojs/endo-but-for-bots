@@ -4830,6 +4830,111 @@ pub struct GeneratorRow {
     pub frame: Option<SavedFrameRow>,
 }
 
+/// One registered reaction of a pending [`PromiseRow`] (the serialized
+/// [`PromiseReaction`]). The four handler/capability slots are ordinary
+/// value slots; `kind` is the reaction's drain behavior:
+///
+/// | byte | kind | `a` | `b` |
+/// |------|------|-----|-----|
+/// | 0 | `User` | — | — |
+/// | 1 | `FinallyReturn` | — | — |
+/// | 2 | `Combine` | combinator index | element index |
+/// | 3–10 | the async-flavored kinds | | |
+///
+/// Bytes 3–10 (`AsyncAwait`, the three `AsyncGenerator*`s, the four
+/// `FromAsync*`s) name suspended async machinery whose instance rows
+/// are still Pending in the snapshot ledger, so the persist gate
+/// refuses a machine holding one
+/// ([`Interp::stored_unpersistable_row`]) and the decoder refuses the
+/// byte — the encoding is total so the refusal lives at the boundary,
+/// not in a lossy encoder.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PromiseReactionRow {
+    pub on_fulfilled: Slot,
+    pub on_rejected: Slot,
+    pub resolve: Slot,
+    pub reject: Slot,
+    pub kind: u8,
+    pub a: u32,
+    pub b: u32,
+}
+
+/// One promise instance's settlement state (the serialized
+/// [`PromiseData`]): status, result, pending reactions, and the
+/// unhandled-rejection latch [`Interp::has_unhandled_rejection`] reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PromiseRow {
+    pub owner: u32,
+    /// 0 = Pending, 1 = Fulfilled, 2 = Rejected. A settled row carries
+    /// no reactions (settlement drains them into the job queue, and the
+    /// quiescence gate requires that queue empty).
+    pub state: u8,
+    pub result: Slot,
+    pub ever_handled: bool,
+    pub reactions: Vec<PromiseReactionRow>,
+}
+
+/// One resolve/reject function's bound data (the serialized
+/// [`PromiseFnData`] plus the `FuncInfo` fields restore rebuilds —
+/// mirroring [`IntlBoundFunctionRow`], the other runtime-minted native
+/// population that travels outside `FUNC`).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PromiseFnRow {
+    pub function: u32,
+    pub promise: u32,
+    /// `false` = the resolve function, `true` = the reject function.
+    pub reject: bool,
+    /// Index into [`PromiseClusterSnapshot::guards`], the pair's shared
+    /// `[[AlreadyResolved]]` boolean.
+    pub guard: u32,
+    /// The interned empty-name chunk `make_resolving_functions` gave the
+    /// pair. Carried (not re-interned) so restore mutates no arena.
+    pub name_chunk: u32,
+}
+
+/// One `Promise.all`/`allSettled`/`race`/`any` shared accumulator (the
+/// serialized [`CombinatorState`]).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CombinatorRow {
+    /// 0 = All, 1 = AllSettled, 2 = Race, 3 = Any.
+    pub kind: u8,
+    pub derived: u32,
+    pub remaining: u32,
+    pub results: u32,
+    pub done: bool,
+}
+
+/// The atomic promise cluster: the four side tables whose rows
+/// cross-reference each other (a reaction indexes `combinators`, a
+/// resolving function indexes `guards` and names a `promises` row), so
+/// they travel — and are validated — together, exactly as `FUNC`
+/// bundles functions with their segments.
+///
+/// The two index arenas are emitted in COMPACTED form: the snapshot
+/// verb applies the same liveness rule as the collector's
+/// `compact_reaction_arenas` (a guard is live while a resolving pair
+/// names it; a combinator while a pending `Combine` reaction does) and
+/// remaps the holders onto the dense arenas. Indices never surface to
+/// the guest, so the normalization is invisible — and it makes the
+/// encoding canonical: a continued machine and its resumed twin emit
+/// byte-identical clusters even before the continued one's next sweep.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PromiseClusterSnapshot {
+    pub promises: Vec<PromiseRow>,
+    pub functions: Vec<PromiseFnRow>,
+    pub guards: Vec<bool>,
+    pub combinators: Vec<CombinatorRow>,
+}
+
+impl PromiseClusterSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.promises.is_empty()
+            && self.functions.is_empty()
+            && self.guards.is_empty()
+            && self.combinators.is_empty()
+    }
+}
+
 /// A suspended activation: the caller's scope and resume point, saved by
 /// `run` and restored by `end` (XS's `mxFrame->value.frame.{code,scope}`
 /// plus the environment the frame aliases). The value stack is shared and
@@ -8537,6 +8642,49 @@ impl Interp {
     }
 
     fn stored_unpersistable_row_inner(&self, dirty_heap_only: bool) -> Option<&'static str> {
+        // A pending reaction whose KIND names suspended async machinery
+        // (an `await`'s resumption, an async generator's, an
+        // `Array.fromAsync` step) points at instance rows the image
+        // does not carry yet (`async_instances`/`async_generators`/
+        // `from_async` are still Pending in the ledger). Every
+        // RESUMABLE async suspension is anchored by exactly such a
+        // reaction on a live promise — an unanchored instance is
+        // unreachable and swept — so refusing by kind here is the whole
+        // gate for those rows, checked before the doomed-set early
+        // return below because it is independent of function slots. The
+        // side tables are walked in full in both variants, as below.
+        let async_reaction = self
+            .promises
+            .values()
+            .flat_map(|p| p.reactions.iter())
+            .any(|r| {
+                !matches!(
+                    r.kind,
+                    ReactionKind::User | ReactionKind::FinallyReturn | ReactionKind::Combine(_, _)
+                )
+            });
+        if async_reaction {
+            return Some("a promise reaction that would resume a non-persisted async frame");
+        }
+        // The still-Pending `async_generators` row, refused ON HOLD by
+        // the W6-9 rule while its atom is unbuilt. Unlike an async
+        // FUNCTION — whose every resumable suspension is anchored by a
+        // reaction the arm above refuses, and whose completed record
+        // nothing consults again — an async GENERATOR is a guest-held
+        // object whose row `.next()`/`.return()`/`.throw()` consult in
+        // EVERY state: suspended-between-yields it is resumable with no
+        // reaction anchor, and even completed it must keep answering
+        // done results. A resumed instance that lost the row degrades
+        // to a plain object — the silent-wrong class. Free-listed
+        // owners are skipped, as everywhere.
+        if self
+            .async_generators
+            .keys()
+            .any(|owner| !self.slots.is_free_index(*owner))
+        {
+            return Some("an async generator whose state does not yet persist");
+        }
+
         // Enumerating HOLDERS cannot be complete: every carried row adds
         // one, and the round-2 widening proved it by covering
         // `BoundData.target` while `this_arg` and `args` — the same
@@ -8634,7 +8782,22 @@ impl Interp {
                 .values()
                 .flat_map(|d| d.records.iter())
                 .any(|r| names(&r.resource) || names(&r.method))
-            || self.wrapper_data.values().any(names);
+            || self.wrapper_data.values().any(names)
+            // The promise cluster's Slot-bearing state: a settlement
+            // result and a reaction's handler/capability slots can all
+            // hold function references. The cluster's raw INDEX fields
+            // (a resolving function's promise, a combinator's derived
+            // promise and results Array) name instances that are never
+            // function slots, so the Slot walk covers it.
+            || self.promises.values().any(|p| {
+                names(&p.result)
+                    || p.reactions.iter().any(|r| {
+                        names(&r.on_fulfilled)
+                            || names(&r.on_rejected)
+                            || names(&r.resolve)
+                            || names(&r.reject)
+                    })
+            });
         if side_hit {
             return Some("a stored reference to a non-persisted native function");
         }
@@ -8659,17 +8822,19 @@ impl Interp {
     }
 
     /// Whether a function SLOT survives resume: it is a boot native (a
-    /// fresh boot re-mints it at the same index), a proxy revoker or an
-    /// Intl bound native (rebuilt from carried state), or a guest
-    /// bytecode function (carried by `FUNC`). Anything else is a native
-    /// minted at runtime, which travels in no table -- restore
-    /// reinstates the reference without its `FuncInfo`.
+    /// fresh boot re-mints it at the same index), a proxy revoker, an
+    /// Intl bound native, or a promise resolving function (each rebuilt
+    /// from carried state), or a guest bytecode function (carried by
+    /// `FUNC`). Anything else is a native minted at runtime, which
+    /// travels in no table -- restore reinstates the reference without
+    /// its `FuncInfo`.
     fn function_persists(&self, function: crate::value::SlotIndex) -> bool {
         if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
             return true;
         }
         if self.collator_compare_functions.contains_key(&function)
             || self.number_format_bound_functions.contains_key(&function)
+            || self.promise_functions.contains_key(&function)
         {
             return true;
         }
@@ -9632,6 +9797,253 @@ impl Interp {
             self.generators
                 .insert(crate::value::SlotIndex(row.owner), GeneratorData { state, frame });
         }
+        true
+    }
+
+    /// Quiescent snapshot of the promise cluster (ledger rows
+    /// `Promises`/`PromiseFunctions`/`PromiseGuards`/`Combinators`, the
+    /// `PRMS` atom). Promise and resolving-function rows ascend by
+    /// owner slot; the two index arenas are emitted COMPACTED (see
+    /// [`PromiseClusterSnapshot`]) so the encoding is canonical and
+    /// every emitted entry is provably live. Free-listed owners are
+    /// skipped, as everywhere: a swept instance's stale row names
+    /// nothing.
+    ///
+    /// Async-flavored reactions serialize by kind byte like everything
+    /// else — the persist gate refuses the machine before an honest
+    /// writer can reach this verb with one, and the decoder refuses the
+    /// byte from a dishonest one.
+    pub fn promise_cluster_snapshot(&self) -> PromiseClusterSnapshot {
+        let mut promises: Vec<(crate::value::SlotIndex, &PromiseData)> = self
+            .promises
+            .iter()
+            .filter(|(owner, _)| !self.slots.is_free_index(**owner))
+            .map(|(owner, data)| (*owner, data))
+            .collect();
+        promises.sort_unstable_by_key(|(owner, _)| owner.0);
+        let mut functions: Vec<(crate::value::SlotIndex, &PromiseFnData)> = self
+            .promise_functions
+            .iter()
+            .filter(|(owner, _)| !self.slots.is_free_index(**owner))
+            .map(|(owner, data)| (*owner, data))
+            .collect();
+        functions.sort_unstable_by_key(|(owner, _)| owner.0);
+
+        // The live-index sets, exactly `compact_reaction_arenas`' rule
+        // over the rows being emitted (the job queue, its other holder,
+        // is empty at every persistable boundary).
+        let live_guards: std::collections::BTreeSet<usize> =
+            functions.iter().map(|(_, d)| d.guard).collect();
+        let live_comb: std::collections::BTreeSet<u32> = promises
+            .iter()
+            .flat_map(|(_, p)| p.reactions.iter())
+            .filter_map(|r| match r.kind {
+                ReactionKind::Combine(ci, _) => Some(ci),
+                _ => None,
+            })
+            .collect();
+        let guard_map: std::collections::HashMap<usize, u32> = live_guards
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let comb_map: std::collections::HashMap<u32, u32> = live_comb
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+
+        PromiseClusterSnapshot {
+            promises: promises
+                .into_iter()
+                .map(|(owner, data)| PromiseRow {
+                    owner: owner.0,
+                    state: match data.state {
+                        PromiseState::Pending => 0,
+                        PromiseState::Fulfilled => 1,
+                        PromiseState::Rejected => 2,
+                    },
+                    result: data.result,
+                    ever_handled: data.ever_handled,
+                    reactions: data
+                        .reactions
+                        .iter()
+                        .map(|r| {
+                            let (kind, a, b) = match r.kind {
+                                ReactionKind::User => (0, 0, 0),
+                                ReactionKind::FinallyReturn => (1, 0, 0),
+                                ReactionKind::Combine(ci, elem) => (2, comb_map[&ci], elem),
+                                ReactionKind::AsyncAwait(i) => (3, i.0, 0),
+                                ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
+                                ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
+                                ReactionKind::AsyncGeneratorReturn(i) => (6, i.0, 0),
+                                ReactionKind::FromAsyncNext(fa) => (7, fa, 0),
+                                ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
+                                ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
+                                ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
+                            };
+                            PromiseReactionRow {
+                                on_fulfilled: r.on_fulfilled,
+                                on_rejected: r.on_rejected,
+                                resolve: r.resolve,
+                                reject: r.reject,
+                                kind,
+                                a,
+                                b,
+                            }
+                        })
+                        .collect(),
+                })
+                .collect(),
+            functions: functions
+                .into_iter()
+                .map(|(owner, data)| PromiseFnRow {
+                    function: owner.0,
+                    promise: data.promise.0,
+                    reject: data.reject,
+                    guard: guard_map[&data.guard],
+                    name_chunk: self.functions[&owner].name_chunk.0,
+                })
+                .collect(),
+            guards: live_guards
+                .iter()
+                .map(|&old| self.promise_guards[old])
+                .collect(),
+            combinators: live_comb
+                .iter()
+                .map(|&old| {
+                    let c = &self.combinators[old as usize];
+                    CombinatorRow {
+                        kind: match c.kind {
+                            CombinatorKind::All => 0,
+                            CombinatorKind::AllSettled => 1,
+                            CombinatorKind::Race => 2,
+                            CombinatorKind::Any => 3,
+                        },
+                        derived: c.derived.0,
+                        remaining: c.remaining,
+                        results: c.results.0,
+                        done: c.done,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Restore a validated promise cluster onto a fresh boot machine.
+    /// Rebuilds each resolving function's `FuncInfo` exactly as
+    /// [`Self::make_resolving_functions`] minted it — the same
+    /// resurrect-the-native pattern as
+    /// [`Self::restore_intl_bound_functions`] — and refuses a function
+    /// slot boot already owns (the reverse collision, a cluster row at
+    /// a guest function's slot, is refused by `restore_function_state`
+    /// running after this verb). The cross-checks the decoder already
+    /// proved are re-validated belt-and-braces, as everywhere.
+    pub fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
+        let owners: std::collections::BTreeSet<u32> =
+            snap.promises.iter().map(|row| row.owner).collect();
+        for c in &snap.combinators {
+            if c.kind > 3 || !owners.contains(&c.derived) {
+                return false;
+            }
+        }
+        for row in &snap.promises {
+            let state = match row.state {
+                0 => PromiseState::Pending,
+                1 => PromiseState::Fulfilled,
+                2 => PromiseState::Rejected,
+                _ => return false,
+            };
+            // Settlement drains reactions into the job queue, and the
+            // quiescence gate requires that queue empty — a settled row
+            // that still holds reactions cannot be honest.
+            if state != PromiseState::Pending && !row.reactions.is_empty() {
+                return false;
+            }
+            let reactions: Option<Vec<PromiseReaction>> = row
+                .reactions
+                .iter()
+                .map(|r| {
+                    let kind = match r.kind {
+                        0 => ReactionKind::User,
+                        1 => ReactionKind::FinallyReturn,
+                        2 if (r.a as usize) < snap.combinators.len() => {
+                            ReactionKind::Combine(r.a, r.b)
+                        }
+                        // The async-flavored kinds name machinery no
+                        // atom carries yet; the decoder refuses them
+                        // and so does this verb.
+                        _ => return None,
+                    };
+                    Some(PromiseReaction {
+                        on_fulfilled: r.on_fulfilled,
+                        on_rejected: r.on_rejected,
+                        resolve: r.resolve,
+                        reject: r.reject,
+                        kind,
+                    })
+                })
+                .collect();
+            let Some(reactions) = reactions else {
+                return false;
+            };
+            self.promises.insert(
+                crate::value::SlotIndex(row.owner),
+                PromiseData {
+                    state,
+                    result: row.result,
+                    reactions,
+                    ever_handled: row.ever_handled,
+                },
+            );
+        }
+        for row in &snap.functions {
+            let function = crate::value::SlotIndex(row.function);
+            if self.functions.contains_key(&function)
+                || row.guard as usize >= snap.guards.len()
+                || !owners.contains(&row.promise)
+            {
+                return false;
+            }
+            self.functions.insert(
+                function,
+                FuncInfo {
+                    method: Some(if row.reject {
+                        NativeMethod::PromiseRejectFunction
+                    } else {
+                        NativeMethod::PromiseResolveFunction
+                    }),
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    arity: 1,
+                    ..FuncInfo::default()
+                },
+            );
+            self.promise_functions.insert(
+                function,
+                PromiseFnData {
+                    promise: crate::value::SlotIndex(row.promise),
+                    reject: row.reject,
+                    guard: row.guard as usize,
+                },
+            );
+        }
+        self.promise_guards = snap.guards;
+        self.combinators = snap
+            .combinators
+            .iter()
+            .map(|c| CombinatorState {
+                kind: match c.kind {
+                    0 => CombinatorKind::All,
+                    1 => CombinatorKind::AllSettled,
+                    2 => CombinatorKind::Race,
+                    _ => CombinatorKind::Any,
+                },
+                derived: crate::value::SlotIndex(c.derived),
+                remaining: c.remaining,
+                results: crate::value::SlotIndex(c.results),
+                done: c.done,
+            })
+            .collect();
         true
     }
 

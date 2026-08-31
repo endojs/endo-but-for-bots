@@ -214,6 +214,7 @@ fn incremental_batch(
         private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
         disposable_stacks: Vec::new(),
         generators: Vec::new(),
+        promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
         arguments_brands: Vec::new(),
         temporal: ironhorse_snapshot::image::TemporalImage::default(),
         intl: ironhorse_vm::IntlTables::default(),

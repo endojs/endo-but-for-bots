@@ -389,6 +389,10 @@ pub struct MachineImage {
     pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     /// `GENR`: synchronous generator saved activations.
     pub generators: Vec<ironhorse_vm::GeneratorRow>,
+    /// `PRMS`: the promise cluster — settlement state, resolving
+    /// functions, `[[AlreadyResolved]]` guards, and combinator
+    /// accumulators, validated as one unit (the rows cross-reference).
+    pub promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
     /// `ARGB`: the arguments-exotic brand owners, ascending.
     pub arguments_brands: Vec<u32>,
     /// `TMPR`: the four Temporal record tables (ledger).
@@ -477,6 +481,7 @@ impl MachineImage {
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
+            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -643,6 +648,14 @@ impl MachineImage {
 
     pub fn with_generators(mut self, generators: Vec<ironhorse_vm::GeneratorRow>) -> MachineImage {
         self.generators = generators;
+        self
+    }
+
+    pub fn with_promise_cluster(
+        mut self,
+        promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+    ) -> MachineImage {
+        self.promise_cluster = promise_cluster;
         self
     }
 
@@ -2281,6 +2294,249 @@ pub(crate) fn decode_generators(
     Ok(rows)
 }
 
+/// Encode the promise cluster (the `PRMS` payload / small-state
+/// promise section): four `u32`-counted lists in the fixed order
+/// promises, resolving functions, guards, combinators. See
+/// [`ironhorse_vm::PromiseClusterSnapshot`] for the row shapes and the
+/// compacted-arena canonical form.
+pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(&(c.promises.len() as u32).to_be_bytes());
+    for row in &c.promises {
+        v.extend_from_slice(&row.owner.to_be_bytes());
+        v.push(row.state);
+        crate::slot_codec::encode_slot(&row.result, &mut v);
+        v.push(row.ever_handled as u8);
+        v.extend_from_slice(&(row.reactions.len() as u32).to_be_bytes());
+        for r in &row.reactions {
+            crate::slot_codec::encode_slot(&r.on_fulfilled, &mut v);
+            crate::slot_codec::encode_slot(&r.on_rejected, &mut v);
+            crate::slot_codec::encode_slot(&r.resolve, &mut v);
+            crate::slot_codec::encode_slot(&r.reject, &mut v);
+            v.push(r.kind);
+            v.extend_from_slice(&r.a.to_be_bytes());
+            v.extend_from_slice(&r.b.to_be_bytes());
+        }
+    }
+    v.extend_from_slice(&(c.functions.len() as u32).to_be_bytes());
+    for row in &c.functions {
+        v.extend_from_slice(&row.function.to_be_bytes());
+        v.extend_from_slice(&row.promise.to_be_bytes());
+        v.push(row.reject as u8);
+        v.extend_from_slice(&row.guard.to_be_bytes());
+        v.extend_from_slice(&row.name_chunk.to_be_bytes());
+    }
+    v.extend_from_slice(&(c.guards.len() as u32).to_be_bytes());
+    for &g in &c.guards {
+        v.push(g as u8);
+    }
+    v.extend_from_slice(&(c.combinators.len() as u32).to_be_bytes());
+    for row in &c.combinators {
+        v.push(row.kind);
+        v.extend_from_slice(&row.derived.to_be_bytes());
+        v.extend_from_slice(&row.remaining.to_be_bytes());
+        v.extend_from_slice(&row.results.to_be_bytes());
+        v.push(row.done as u8);
+    }
+    v
+}
+
+/// Decode and CROSS-VALIDATE the promise cluster. Beyond the per-field
+/// gates (state and kind bytes past their enums, non-boolean booleans),
+/// the rows prove their cross-references against each other, the
+/// discipline every compound atom follows (a view names a buffer row, a
+/// generator frame names a function row):
+///
+/// - an async-flavored reaction kind (bytes 3–10) is refused by name —
+///   it would resume machinery no atom carries, and the persist gate
+///   refuses the machine before an honest writer can emit one;
+/// - a settled promise carries no reactions (settlement drains them,
+///   and quiescence requires the job queue empty);
+/// - a `Combine` reaction indexes a combinator row; a resolving
+///   function indexes a guard and names a promise row; a combinator's
+///   derived promise names a promise row;
+/// - both arenas are DENSELY referenced (the writer emits the
+///   compacted form, so an unreferenced entry can only be crafted —
+///   the segments-not-densely-referenced rule);
+/// - a live (`!done`, non-`Race`) combinator's `remaining` covers its
+///   pending element reactions — each drain decrements it once, so a
+///   smaller count would underflow at resume.
+pub(crate) fn decode_promise_cluster(
+    p: &[u8],
+) -> Result<ironhorse_vm::PromiseClusterSnapshot, SnapshotError> {
+    let mut c = Cursor::new(p, "promise cluster");
+    let boolean = |c: &mut Cursor<'_>| -> Result<bool, SnapshotError> {
+        match c.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(SnapshotError::Corrupt("promise cluster: bad boolean byte")),
+        }
+    };
+    let count = c.u32()? as usize;
+    let mut promises: Vec<ironhorse_vm::PromiseRow> =
+        Vec::with_capacity(count.min(p.len() / (SLOT_RECORD_BYTES + 10)));
+    for _ in 0..count {
+        let owner = c.u32()?;
+        if promises
+            .last()
+            .is_some_and(|row: &ironhorse_vm::PromiseRow| owner <= row.owner)
+        {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: owners not strictly ascending",
+            ));
+        }
+        let state = c.u8()?;
+        if state > 2 {
+            return Err(SnapshotError::Corrupt("promise cluster: invalid state"));
+        }
+        let result = c.slot()?;
+        let ever_handled = boolean(&mut c)?;
+        let reaction_count = c.u32()? as usize;
+        if state != 0 && reaction_count != 0 {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: settled promise retains reactions",
+            ));
+        }
+        let mut reactions =
+            Vec::with_capacity(reaction_count.min(p.len() / (4 * SLOT_RECORD_BYTES + 9)));
+        for _ in 0..reaction_count {
+            let on_fulfilled = c.slot()?;
+            let on_rejected = c.slot()?;
+            let resolve = c.slot()?;
+            let reject = c.slot()?;
+            let kind = c.u8()?;
+            if kind > 2 {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: reaction kind does not resume",
+                ));
+            }
+            reactions.push(ironhorse_vm::PromiseReactionRow {
+                on_fulfilled,
+                on_rejected,
+                resolve,
+                reject,
+                kind,
+                a: c.u32()?,
+                b: c.u32()?,
+            });
+        }
+        promises.push(ironhorse_vm::PromiseRow {
+            owner,
+            state,
+            result,
+            ever_handled,
+            reactions,
+        });
+    }
+    let count = c.u32()? as usize;
+    let mut functions: Vec<ironhorse_vm::PromiseFnRow> =
+        Vec::with_capacity(count.min(p.len() / 17));
+    for _ in 0..count {
+        let function = c.u32()?;
+        if functions
+            .last()
+            .is_some_and(|row: &ironhorse_vm::PromiseFnRow| function <= row.function)
+        {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: functions not strictly ascending",
+            ));
+        }
+        functions.push(ironhorse_vm::PromiseFnRow {
+            function,
+            promise: c.u32()?,
+            reject: boolean(&mut c)?,
+            guard: c.u32()?,
+            name_chunk: c.u32()?,
+        });
+    }
+    let count = c.u32()? as usize;
+    let mut guards = Vec::with_capacity(count.min(p.len()));
+    for _ in 0..count {
+        guards.push(boolean(&mut c)?);
+    }
+    let count = c.u32()? as usize;
+    let mut combinators: Vec<ironhorse_vm::CombinatorRow> =
+        Vec::with_capacity(count.min(p.len() / 14));
+    for _ in 0..count {
+        let kind = c.u8()?;
+        if kind > 3 {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: unknown combinator kind",
+            ));
+        }
+        combinators.push(ironhorse_vm::CombinatorRow {
+            kind,
+            derived: c.u32()?,
+            remaining: c.u32()?,
+            results: c.u32()?,
+            done: boolean(&mut c)?,
+        });
+    }
+    c.done()?;
+
+    // The cross-references, all four tables now in hand.
+    let owners: std::collections::BTreeSet<u32> =
+        promises.iter().map(|row| row.owner).collect();
+    let mut guard_referenced = vec![false; guards.len()];
+    for row in &functions {
+        if !owners.contains(&row.promise) {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: resolving function names no promise row",
+            ));
+        }
+        match guard_referenced.get_mut(row.guard as usize) {
+            Some(seen) => *seen = true,
+            None => {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: guard index out of range",
+                ))
+            }
+        }
+    }
+    if !guard_referenced.iter().all(|seen| *seen) {
+        return Err(SnapshotError::Corrupt(
+            "promise cluster: guards not densely referenced",
+        ));
+    }
+    let mut comb_pending = vec![0u32; combinators.len()];
+    for r in promises.iter().flat_map(|row| row.reactions.iter()) {
+        if r.kind == 2 {
+            match comb_pending.get_mut(r.a as usize) {
+                Some(n) => *n += 1,
+                None => {
+                    return Err(SnapshotError::Corrupt(
+                        "promise cluster: combinator index out of range",
+                    ))
+                }
+            }
+        }
+    }
+    for (row, &pending) in combinators.iter().zip(&comb_pending) {
+        if pending == 0 {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: combinators not densely referenced",
+            ));
+        }
+        if !owners.contains(&row.derived) {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: combinator's derived promise has no row",
+            ));
+        }
+        // kind byte 2 is Race, which never decrements `remaining`.
+        if row.kind != 2 && !row.done && row.remaining < pending {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: remaining below its pending reactions",
+            ));
+        }
+    }
+    Ok(ironhorse_vm::PromiseClusterSnapshot {
+        promises,
+        functions,
+        guards,
+        combinators,
+    })
+}
+
 /// Encode the arguments-exotic brand owners (the `ARGB` payload /
 /// small-state arguments section): a `u32` count then ascending owners.
 pub(crate) fn encode_arguments_brands(owners: &[u32]) -> Vec<u8> {
@@ -2972,6 +3228,7 @@ pub(crate) struct LangRows<'a> {
     pub private_elements: &'a ironhorse_vm::PrivateElementSnapshot,
     pub disposable_stacks: &'a [ironhorse_vm::DisposableStackRow],
     pub generators: &'a [ironhorse_vm::GeneratorRow],
+    pub promise_cluster: &'a ironhorse_vm::PromiseClusterSnapshot,
     pub arguments_brands: &'a [u32],
     pub temporal: &'a TemporalImage,
     pub intl: &'a IntlTables,
@@ -2990,11 +3247,20 @@ impl LangRows<'_> {
         private_elements: &EMPTY_PRIVATE_ELEMENTS,
         disposable_stacks: &[],
         generators: &[],
+        promise_cluster: &EMPTY_PROMISE_CLUSTER,
         arguments_brands: &[],
         temporal: &EMPTY_TEMPORAL,
         intl: &EMPTY_INTL,
     };
 }
+
+static EMPTY_PROMISE_CLUSTER: ironhorse_vm::PromiseClusterSnapshot =
+    ironhorse_vm::PromiseClusterSnapshot {
+        promises: Vec::new(),
+        functions: Vec::new(),
+        guards: Vec::new(),
+        combinators: Vec::new(),
+    };
 
 static EMPTY_TEMPORAL: TemporalImage = TemporalImage {
     instants: Vec::new(),
@@ -3650,6 +3916,44 @@ pub(crate) fn check_image_slot_bounds(
             }
         }
     }
+    // The promise cluster: owners, settlement results, and reaction
+    // slots bounded like every sibling's; a resolving function's name
+    // chunk ranged like a function row's — with NO null exemption,
+    // because `make_resolving_functions` always interns a real empty
+    // chunk and reading a NULL one faults. A combinator's results
+    // Array must name an `ARRY` row (the element drain writes through
+    // the dense store), the view-names-a-buffer-row discipline; its
+    // derived promise was proved against the promise rows at decode.
+    for row in &lang.promise_cluster.promises {
+        owned(row.owner)?;
+        check(&row.result)?;
+        for r in &row.reactions {
+            check(&r.on_fulfilled)?;
+            check(&r.on_rejected)?;
+            check(&r.resolve)?;
+            check(&r.reject)?;
+        }
+    }
+    for row in &lang.promise_cluster.functions {
+        owned(row.function)?;
+        owned(row.promise)?;
+        let offset = row.name_chunk as usize;
+        if offset < CHUNK_HEADER || offset > chunk_len {
+            return Err(OOC);
+        }
+    }
+    for row in &lang.promise_cluster.combinators {
+        owned(row.derived)?;
+        owned(row.results)?;
+        if arrays
+            .binary_search_by_key(&row.results, |a| a.owner)
+            .is_err()
+        {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: combinator's results Array has no row",
+            ));
+        }
+    }
     for &o in lang.arguments_brands {
         owned(o)?;
     }
@@ -3874,6 +4178,12 @@ pub fn write_machine(image: &MachineImage) -> Vec<u8> {
     if !image.generators.is_empty() {
         w.atom(crate::format::GENR, &encode_generators(&image.generators));
     }
+    if !image.promise_cluster.is_empty() {
+        w.atom(
+            crate::format::PRMS,
+            &encode_promise_cluster(&image.promise_cluster),
+        );
+    }
     // The installed-names floor: `Some` only when it differs from the
     // name-table length (`with_name_floor` canonicalizes), so machines
     // whose floor sits at the table stay byte-stable with every
@@ -4083,6 +4393,18 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         Some(a) => present_and_non_empty(decode_generators(a.payload)?, "GENR atom present but empty; the writer omits it")?,
         None => Vec::new(),
     };
+    let promise_cluster = match r.find(crate::format::PRMS) {
+        Some(a) => {
+            let cluster = decode_promise_cluster(a.payload)?;
+            if cluster.is_empty() {
+                return Err(SnapshotError::Corrupt(
+                    "PRMS atom present but empty; the writer omits it",
+                ));
+            }
+            cluster
+        }
+        None => ironhorse_vm::PromiseClusterSnapshot::default(),
+    };
     let name_floor = match r.find(crate::format::NFLR) {
         Some(a) => {
             if a.payload.len() != 4 {
@@ -4137,6 +4459,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
             private_elements: &private_elements,
             disposable_stacks: &disposable_stacks,
             generators: &generators,
+            promise_cluster: &promise_cluster,
             arguments_brands: &arguments_brands,
             temporal: &temporal,
             intl: &intl,
@@ -4179,6 +4502,7 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         private_elements,
         disposable_stacks,
         generators,
+        promise_cluster,
         arguments_brands,
         temporal,
         intl,
@@ -4564,6 +4888,7 @@ mod tests {
                 private_elements: &EMPTY_PRIVATE_ELEMENTS,
                 disposable_stacks: &[],
                 generators: &[],
+                promise_cluster: &EMPTY_PROMISE_CLUSTER,
                 arguments_brands: &[],
                 temporal: &EMPTY_TEMPORAL,
                 intl,
@@ -4927,6 +5252,7 @@ mod tests {
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
+            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -4972,6 +5298,7 @@ mod tests {
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
+            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),
@@ -5098,6 +5425,7 @@ mod tests {
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
+            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: TemporalImage::default(),
             intl: IntlTables::default(),

@@ -101,7 +101,11 @@
 //! - `deleted_fn_meta` — per-function deleted-`length`/-`name` marks
 //!   (`Functions`, Serialized in `FUNC`).
 //! - `from_async` — `Array.fromAsync` accumulation state (`Combinators`,
-//!   Pending).
+//!   Serialized — but this satellite does NOT travel with it: a LIVE
+//!   entry is anchored by a `FromAsync*` reaction on a live promise,
+//!   which the persist gate refuses by kind, and an unanchored entry is
+//!   unreachable (the next arena compaction drops it), so a resume that
+//!   rebuilds the table empty is observationally exact.
 //! - `regexp_last_names` — the last-match named-group scratch (a global
 //!   `Vec<i32>`, not slot-keyed): per-crank match state consumed by the
 //!   legacy result accessors within the crank; its primary row
@@ -529,11 +533,26 @@ impl SideTable {
             SideTable::TypedArrays => ("typed_arrays", Serialized),
             SideTable::DataViews => ("data_views", Serialized),
             SideTable::Iterators => ("iterators", Serialized),
-            SideTable::Promises => ("promises", Pending),
-            SideTable::PromiseFunctions => ("promise_functions", Pending),
-            SideTable::PromiseGuards => ("promise_guards", Pending),
+            // The promise cluster (`PRMS`, store schema 23): the four
+            // rows travel and validate as ONE unit because they
+            // cross-reference (a reaction indexes `combinators`, a
+            // resolving function indexes `promise_guards` and names a
+            // `promises` row). The two index arenas are emitted in the
+            // collector's COMPACTED form, so the encoding is canonical
+            // and every entry provably live. Resolving-function
+            // `FuncInfo`s rebuild at restore exactly as
+            // `make_resolving_functions` minted them (the `IBFN`
+            // pattern). An ASYNC-flavored reaction kind (an `await`'s
+            // resumption, an async generator's, `Array.fromAsync`)
+            // still refuses at the persist gate by KIND — those
+            // instance rows remain Pending below, and every resumable
+            // async suspension is anchored by exactly such a reaction.
+            // Locks: the `promise_carry.rs` twins.
+            SideTable::Promises => ("promises", Serialized),
+            SideTable::PromiseFunctions => ("promise_functions", Serialized),
+            SideTable::PromiseGuards => ("promise_guards", Serialized),
             SideTable::PromiseJobs => ("promise_jobs", EmptyAtBoundary),
-            SideTable::Combinators => ("combinators", Pending),
+            SideTable::Combinators => ("combinators", Serialized),
             SideTable::Generators => ("generators", Serialized),
             SideTable::GenRunStack => ("gen_run_stack", EmptyAtBoundary),
             SideTable::AsyncInstances => ("async_instances", Pending),
@@ -781,7 +800,7 @@ mod tests {
     #[test]
     fn pending_is_derived_from_ledger() {
         let pending = SideTable::pending();
-        assert_eq!(pending.len(), 7, "the design's Remaining ledger count");
+        assert_eq!(pending.len(), 3, "the design's Remaining ledger count");
         // The rich per-instance tables are still pending.
         assert!(!pending.contains(&SideTable::Functions));
         assert!(!pending.contains(&SideTable::BoundFunctions));
@@ -832,6 +851,16 @@ mod tests {
         assert!(!pending.contains(&SideTable::Iterators));
         // Schema 14 carries the mainline's pure-data Date table.
         assert!(!pending.contains(&SideTable::Dates));
+        // The schema-23 promise-cluster carry (`PRMS`): the four
+        // cross-referencing rows graduated together; what remains
+        // pending is the async machinery their gate refuses by
+        // reaction kind.
+        assert!(!pending.contains(&SideTable::Promises));
+        assert!(!pending.contains(&SideTable::PromiseFunctions));
+        assert!(!pending.contains(&SideTable::PromiseGuards));
+        assert!(!pending.contains(&SideTable::Combinators));
+        assert!(pending.contains(&SideTable::AsyncInstances));
+        assert!(pending.contains(&SideTable::Modules));
         // The quiescence-gated run stacks, call chain, catch chain, and
         // microtask queue are EmptyAtBoundary, not pending: no atom is
         // ever needed for state the gates prove empty.

@@ -435,6 +435,28 @@ pub fn metamorphic_suite<S: HeapStore + 'static>(mut fresh: impl FnMut() -> S) {
     );
     carry(
         &mut fresh,
+        "promises",
+        // The schema-23 cluster live across every crank boundary: a
+        // pending promise with a stored resolver and a user reaction, a
+        // mid-flight `Promise.all`, and a settled promise observed
+        // late. Settlements land in different cranks so the reaction
+        // rows, the guard, and the combinator's remaining count all
+        // travel mid-flight through every residency schedule.
+        "new Promise(function (rs, rj) { rs(rj); }); Promise.resolve(0); \
+         Promise.all([p]); p.then(null, null);",
+        &[
+            "p = new Promise(function (rs, rj) { f = rs; }); \
+             p.then(function (v) { g = v + 1; }); \
+             Promise.all([p, new Promise(function (rs, rj) { d = rs; })]) \
+               .then(function (v) { b = v[0] + '+' + v[1]; }); \
+             o = 0; Promise.resolve(5).then(function (v) { o = v; }); o",
+            "f(41); t = '' + o; t",
+            "d(8); t = g; t",
+            "t = g + ':' + o + ':' + b; t",
+        ],
+    );
+    carry(
+        &mut fresh,
         "intl-and-proxy",
         "nf.format(0); c.compare('a', 'a'); p.v; new Proxy({ v: 0 }, { get: null }); \
          new Intl.NumberFormat('en', { style: 'percent' }); new Intl.Collator('en');",

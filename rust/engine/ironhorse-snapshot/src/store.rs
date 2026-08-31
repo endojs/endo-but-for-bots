@@ -86,7 +86,7 @@ pub use ironhorse_vm::{CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
 /// sections EMPTY (a pure 12-byte suffix; a v6-era machine had
 /// nothing persisted in them by definition) and restamps the root for
 /// the changed small leaf.
-pub const STORE_SCHEMA_VERSION: u32 = 22;
+pub const STORE_SCHEMA_VERSION: u32 = 23;
 /// The oldest schema [`migrate_store`] can upgrade in place. Decode
 /// accepts the whole supported range; validation refuses an
 /// un-migrated older store with [`StoreError::NeedsMigration`], and
@@ -1341,6 +1341,8 @@ pub struct SmallState {
     pub disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
     /// Synchronous generator saved activations (schema 21; `GENR`).
     pub generators: Vec<ironhorse_vm::GeneratorRow>,
+    /// The promise cluster (schema 23; `PRMS`).
+    pub promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
     /// The arguments-exotic brand owners (schema 11; the `ARGB` encoding).
     pub arguments_brands: Vec<u32>,
     /// The Temporal record tables (schema 11; the `TMPR` encoding).
@@ -1373,15 +1375,16 @@ impl SmallState {
     /// since schema 15, and proxy state since schema 16, whose
     /// migrations append their empty sections the same; accessors join
     /// in schema 17, Intl bound functions in schema 18, and private
-    /// elements in schema 19, disposable stacks in schema 20, and
-    /// synchronous generators in schema 21
+    /// elements in schema 19, disposable stacks in schema 20,
+    /// synchronous generators in schema 21, error frames in schema 22,
+    /// and the promise cluster in schema 23 the same
     /// way). Since store schema v4 the free-list section is
     /// always EMPTY in stored small state — the list lives in
     /// dirty-diffed segment rows (phase 9) — but the section slot
     /// stays so the layout is stable; the atom container path still
     /// carries the list via the image, not this encoding.
     pub fn encode(&self) -> Vec<u8> {
-        let sections: [Vec<u8>; 29] = [
+        let sections: [Vec<u8>; 30] = [
             encode_stack(&self.stack),
             encode_u32s(&[]),
             encode_strings(&self.keys),
@@ -1414,6 +1417,7 @@ impl SmallState {
             crate::image::encode_disposable_stacks(&self.disposable_stacks),
             crate::image::encode_generators(&self.generators),
             crate::image::encode_error_frames(&self.errors),
+            crate::image::encode_promise_cluster(&self.promise_cluster),
         ];
         let mut v = Vec::new();
         for s in sections {
@@ -1644,7 +1648,14 @@ impl SmallState {
                 row.frames = frames;
             }
         }
-        // Same exact-consumption rule as the manifest: twenty-nine
+        // Schema-23 promise cluster, same empty-section migration rule.
+        let promise_bytes = section("small state promise section")?;
+        let promise_cluster = if promise_bytes.is_empty() {
+            ironhorse_vm::PromiseClusterSnapshot::default()
+        } else {
+            crate::image::decode_promise_cluster(promise_bytes).map_err(StoreError::Snapshot)?
+        };
+        // Same exact-consumption rule as the manifest: thirty
         // sections and nothing after them, or the small state fails
         // closed.
         if i != p.len() {
@@ -1676,6 +1687,7 @@ impl SmallState {
             private_elements,
             disposable_stacks,
             generators,
+            promise_cluster,
             arguments_brands,
             temporal,
             intl,
@@ -2047,6 +2059,7 @@ pub fn migrate_store(
             19 => migrate_v19_to_v20(store)?,
             20 => migrate_v20_to_v21(store)?,
             21 => migrate_v21_to_v22(store)?,
+            22 => migrate_v22_to_v23(store)?,
             _ => {
                 return Err(StoreError::Snapshot(SnapshotError::Corrupt(
                     "unsupported store schema version",
@@ -2580,6 +2593,36 @@ fn migrate_v20_to_v21(store: &mut dyn HeapStore) -> Result<(), StoreError> {
     store.replace_manifest_and_small_for_migration(&manifest, &new_small)
 }
 
+/// Schema 22 -> 23: append the (empty) promise-cluster section.
+/// Content preserving -- a v22 store's persist gate refused any
+/// machine holding promise state a resume would lose, so the section
+/// it never wrote decodes to exactly the empty cluster it enforced.
+fn migrate_v22_to_v23(store: &mut dyn HeapStore) -> Result<(), StoreError> {
+    let mut manifest = store.manifest()?;
+    let small = store.read_small_state()?;
+    let (pages, exts) = store.leaf_hashes()?;
+    let frees = store.free_leaf_hashes()?;
+    let edges = store.page_edges()?;
+    let old = compute_root(&leaf_hash(LEAF_SMALL, 0, &small), &pages, &exts, &frees, &edges);
+    if old != manifest.root {
+        return Err(StoreError::BaselineMismatch {
+            expected: old,
+            found: manifest.root.clone(),
+        });
+    }
+    let mut new_small = small;
+    new_small.extend_from_slice(&[0u8; 4]);
+    manifest.store_schema = 23;
+    manifest.root = compute_root(
+        &leaf_hash(LEAF_SMALL, 0, &new_small),
+        &pages,
+        &exts,
+        &frees,
+        &edges,
+    );
+    store.replace_manifest_and_small_for_migration(&manifest, &new_small)
+}
+
 /// The epoch discipline every [`HeapStore::commit`] enforces: the first
 /// commit into an empty store is epoch 1; every later commit advances
 /// the stored epoch by exactly one. Anything else is a replayed or
@@ -2728,6 +2771,7 @@ pub fn image_to_batch(image: &MachineImage, epoch: u64, prev_seal: &str) -> Chec
         private_elements: image.private_elements.clone(),
         disposable_stacks: image.disposable_stacks.clone(),
         generators: image.generators.clone(),
+        promise_cluster: image.promise_cluster.clone(),
         arguments_brands: image.arguments_brands.clone(),
         temporal: image.temporal.clone(),
         intl: image.intl.clone(),
@@ -2949,6 +2993,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
             private_elements: &small.private_elements,
             disposable_stacks: &small.disposable_stacks,
             generators: &small.generators,
+            promise_cluster: &small.promise_cluster,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -2992,6 +3037,7 @@ pub fn store_to_image(store: &dyn HeapStore) -> Result<MachineImage, StoreError>
         private_elements: small.private_elements,
         disposable_stacks: small.disposable_stacks,
         generators: small.generators,
+        promise_cluster: small.promise_cluster,
         arguments_brands: small.arguments_brands,
         temporal: small.temporal,
         intl: small.intl,
@@ -3289,6 +3335,7 @@ pub fn validate_store(
             private_elements: &small.private_elements,
             disposable_stacks: &small.disposable_stacks,
             generators: &small.generators,
+            promise_cluster: &small.promise_cluster,
             arguments_brands: &small.arguments_brands,
             temporal: &small.temporal,
             intl: &small.intl,
@@ -3678,6 +3725,7 @@ mod tests {
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
+            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),
@@ -3717,6 +3765,7 @@ mod tests {
             private_elements: ironhorse_vm::PrivateElementSnapshot::default(),
             disposable_stacks: Vec::new(),
             generators: Vec::new(),
+            promise_cluster: ironhorse_vm::PromiseClusterSnapshot::default(),
             arguments_brands: Vec::new(),
             temporal: crate::image::TemporalImage::default(),
             intl: ironhorse_vm::IntlTables::default(),

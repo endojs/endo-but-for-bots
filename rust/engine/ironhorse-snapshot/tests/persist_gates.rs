@@ -256,28 +256,25 @@ fn a_resumed_machine_reattaches_without_moving_the_meter_deadline() {
 }
 
 // ---------------------------------------------------------------
-// The residual persist gate (`stored_unpersistable_row`): the last
-// refuse-on-hold arm, and until now the one gate with no test of its
-// own -- disabling it entirely left every test binary green.
+// The residual persist gate (`stored_unpersistable_row`): the
+// refuse-on-hold arms, and until wave 6 the one gate with no test of
+// its own -- disabling it entirely left every test binary green.
 //
-// It answers one question: does this machine HOLD a reference to a
-// function slot that resume cannot bring back? A native minted at
-// runtime (a promise resolver, say) sits above `boot_slot_count` and
-// travels in no table, so restore reinstates the reference without
-// its `FuncInfo`. Three structural holders can carry one, and each
-// fails differently:
+// Its traversal half answers one question: does this machine HOLD a
+// reference to a function slot that resume cannot bring back? Since
+// the promise-cluster carry (`PRMS`, schema 23) retired the LAST
+// guest-storable runtime mint -- the promise resolver, whose
+// `FuncInfo` restore now rebuilds -- every reachable machine's doomed
+// set is EMPTY and the traversal is a future-proofing net: a NEW
+// runtime `alloc_method` mint that escapes to the guest re-arms it,
+// and the fixtures below (which mint resolvers into every holder
+// shape the traversal walks) become its regression bed.
 //
-//   - an ACCESSOR getter/setter: the property survives as an accessor
-//     whose getter is dead;
-//   - a BOUND function's target: restore refuses the whole machine
-//     (`malformed retained function state`) -- an honest machine that
-//     commits and can then never be resumed, which is data loss;
-//   - a DISPOSAL method on a disposable stack: `dispose()` dies on a
-//     non-callable record.
-//
-// Refusing to PERSIST is strictly better than all three: the machine
-// keeps running and the caller learns immediately. The carry (the
-// promise cluster, still Pending) is the recorded lift.
+// The refuse-on-hold arms that remain are the ASYNC ones: a promise
+// reaction whose kind would resume a still-Pending async frame, and a
+// live async generator (a guest-held object whose row `.next()`
+// consults in every state). Both refuse by name until their atoms
+// land -- the recorded lift.
 
 fn resolver_fixture(tail: &str) -> Interp {
     let src = format!(
@@ -315,18 +312,61 @@ fn assert_every_persist_verb_refuses(m: Interp, row: &str) {
     assert!(store.manifest().is_err(), "a refused begin writes nothing");
 }
 
+/// The three holder shapes the gate REFUSED before the promise-cluster
+/// carry: a resolver as an accessor getter, as a bound target, and as
+/// a disposal method. All three persist now — `PRMS` rebuilds the
+/// resolver's `FuncInfo`, so each holder resumes callable instead of
+/// dead. (The deep behavioral twin for a stored resolver lives in
+/// `promise_carry.rs`.)
 #[test]
-fn a_held_unpersistable_native_refuses_every_persist_verb() {
-    const ROW: &str = "a stored reference to a non-persisted native function";
-    assert_every_persist_verb_refuses(
-        resolver_fixture("Object.defineProperty(o, 'x', { get: g });"),
-        ROW,
+fn a_held_resolver_persists_in_every_former_refusal_holder() {
+    for tail in [
+        "Object.defineProperty(o, 'x', { get: g });",
+        "b = g.bind(null);",
+        "s = new DisposableStack(); s.adopt(1, g);",
+    ] {
+        let m = resolver_fixture(tail);
+        assert_eq!(m.stored_unpersistable_row(), None, "now persists: {tail}");
+        assert!(m.write_snapshot(&sig()).is_ok(), "blob verb: {tail}");
+        let mut store = MemoryStore::new();
+        assert!(
+            begin_store_session(m, &sig(), &mut store).is_ok(),
+            "store verb: {tail}"
+        );
+    }
+}
+
+/// The refuse-on-hold arms that REMAIN: async machinery whose instance
+/// rows are still Pending. An `await` suspension is anchored by its
+/// reaction on the awaited promise; an async generator is a guest-held
+/// object whose row every `.next()` consults. Each refuses by name,
+/// on every verb, writing nothing.
+#[test]
+fn a_pending_await_refuses_every_persist_verb() {
+    let (b, n) = compile(
+        "var p = 0; var t = 0; \
+         p = (async function () { await new Promise(function (rs, rj) {}); })(); t = 7; t",
     );
-    assert_every_persist_verb_refuses(resolver_fixture("b = g.bind(null);"), ROW);
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let out = m.run(&b);
+    assert!(out.completed, "fixture crank: {:?}", out.halt);
     assert_every_persist_verb_refuses(
-        resolver_fixture("s = new DisposableStack(); s.adopt(1, g);"),
-        ROW,
+        m,
+        "a promise reaction that would resume a non-persisted async frame",
     );
+}
+
+#[test]
+fn a_live_async_generator_refuses_every_persist_verb() {
+    let (b, n) = compile(
+        "var ag = 0; var t = 0; ag = (async function* () { yield 1; })(); t = 7; t",
+    );
+    let mut m = Interp::new();
+    m.link_intrinsics(&n);
+    let out = m.run(&b);
+    assert!(out.completed, "fixture crank: {:?}", out.halt);
+    assert_every_persist_verb_refuses(m, "an async generator whose state does not yet persist");
 }
 
 #[test]
@@ -334,11 +374,12 @@ fn the_persistable_function_classes_are_not_refused() {
     // The gate must stay narrow: each of these holds a function that
     // resume DOES bring back, in the same three holders. A gate that
     // refused any of them would make ordinary programs unpersistable.
-    // Every tail ends by DROPPING the resolver. That is what makes these
-    // controls: the machine still MINTED a runtime native, so the doomed
-    // set is non-empty and the traversal runs in full -- it just finds
-    // nothing stored. Minting is not storing (the wave-5 lesson, which
-    // the intern gate learned the expensive way).
+    // Every tail still ends by DROPPING the resolver — before the
+    // promise-cluster carry that made these the sharper controls (a
+    // non-empty doomed set whose traversal finds nothing stored); the
+    // resolver itself persists now, so the drop is inert, but the
+    // fixtures keep minting one so a regression that ejects resolvers
+    // from `function_persists` re-fails here first.
     for tail in [
         // A guest bytecode function: carried by `FUNC`.
         "Object.defineProperty(o, 'x', { get: function () { return 1; } });",
@@ -443,19 +484,18 @@ fn a_refault_after_a_growing_checkpoint_verifies_against_the_committed_arena() {
 /// Enumerating HOLDERS cannot be complete: every carried row adds one.
 /// The round-2 gate inspected accessors, `bound_functions[..].target`,
 /// and disposal methods -- so a non-persisting runtime native reached
-/// the store through any other stored reference, and in particular
-/// through the two halves of `BoundData` the target check does not
-/// touch. Both of these persisted and resumed non-callable:
+/// the store through any other stored reference. The gate traverses
+/// the persisted state now instead of enumerating holders, so it is
+/// complete by construction rather than by memory.
 ///
-///   - a plain global holding a promise resolver;
-///   - a resolver captured as a bound ARGUMENT, whose target is an
-///     ordinary persistable guest function.
-///
-/// The gate traverses the persisted state now instead of enumerating
-/// holders, so it is complete by construction rather than by memory.
+/// Since the promise-cluster carry the resolver these fixtures mint
+/// PERSISTS, so every holder shape the traversal walks now ADMITS —
+/// and each must resume with the resolver still callable, which is
+/// what makes these the traversal's regression bed: a future runtime
+/// mint that escapes into any of these holders re-arms the refusal,
+/// and a `function_persists` regression fails the admissions below.
 #[test]
-fn a_runtime_native_reached_through_any_stored_reference_refuses() {
-    const ROW: &str = "a stored reference to a non-persisted native function";
+fn a_resolver_reached_through_any_stored_reference_persists() {
     for (name, tail) in [
         ("a plain global", "g = g;"),
         ("a plain property", "o = {}; o.x = g;"),
@@ -465,28 +505,31 @@ fn a_runtime_native_reached_through_any_stored_reference_refuses() {
         ("a Map value", "o = new Map(); o.set('k', g);"),
         ("a Set member", "o = new Set(); o.add(g);"),
         // A Proxy's target and handler are raw slot INDICES in the
-        // `proxies` row, not Slots -- so a walk that inspects only
-        // Slot-bearing state misses them, even though the proxy is the
-        // only thing keeping the native reachable.
+        // `proxies` row, not Slots -- the traversal walks them
+        // specially, and the restored proxy must find its resolver
+        // target callable again.
         ("a proxy target", "o = new Proxy(g, {}); g = 0;"),
         ("a proxy handler", "o = new Proxy({}, g); g = 0;"),
     ] {
         let m = resolver_fixture(tail);
         assert_eq!(
             m.stored_unpersistable_row(),
-            Some(ROW),
-            "the gate must refuse a resolver held as {name}"
+            None,
+            "a resolver held as {name} persists now"
         );
-        match m.write_snapshot(&sig()) {
-            Err(MachineSnapshotError::PendingStateUnsupported { row }) => assert_eq!(row, ROW),
-            other => panic!("the blob verb must refuse {name}: {other:?}"),
-        }
+        let bytes = m
+            .write_snapshot(&sig())
+            .unwrap_or_else(|e| panic!("blob verb must admit {name}: {e:?}"));
+        from_snapshot_bytes(&bytes, &sig())
+            .unwrap_or_else(|e| panic!("blob resume must accept {name}: {e:?}"));
         let mut store = MemoryStore::new();
-        match begin_store_session(m, &sig(), &mut store) {
-            Err((_, StoreError::PendingStateUnsupported { row })) => assert_eq!(row, ROW),
-            Err((_, other)) => panic!("wrong gate for {name}: {other:?}"),
-            Ok(_) => panic!("the store verb must refuse {name}"),
-        }
+        drop(
+            begin_store_session(resolver_fixture(tail), &sig(), &mut store)
+                .map_err(|(_, e)| e)
+                .unwrap_or_else(|e| panic!("store verb must admit {name}: {e:?}")),
+        );
+        resume_from_store(&store, &sig())
+            .unwrap_or_else(|e| panic!("store resume must accept {name}: {e:?}"));
     }
 }
 
