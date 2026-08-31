@@ -1393,6 +1393,7 @@ __metadata:
     "@endo/far": "workspace:^"
     "@endo/git": "workspace:^"
     "@endo/host-spawner": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
     "@endo/pass-style": "workspace:^"
