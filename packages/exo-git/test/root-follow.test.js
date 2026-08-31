@@ -9,7 +9,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { makeGit, makeNotYetImplementedBackend } from '../src/index.js';
 
-/** @import { GitRootSnapshot, GitRootTransition } from '../src/types.js' */
+/** @import { GitRootSnapshot, GitRootTransition, ReadWriteEndoGit } from '../src/types.js' */
 
 const TREE_A = 'a'.repeat(40);
 const TREE_B = 'b'.repeat(40);
@@ -23,7 +23,7 @@ const within = (promise, label) =>
   ]);
 
 /**
- * @returns {{ git: import('../src/types.js').ReadWriteEndoGit, advanceExternally: (treeOid: string) => void, failExternally: (error: Error) => void }}
+ * @returns {{ git: ReadWriteEndoGit, advanceExternally: (treeOid: string) => void, failExternally: (error: Error) => void }}
  */
 const makeHarness = () => {
   /** @type {{ treeOid: string, commitOid: string, treeAlgorithm: string } | null} */
