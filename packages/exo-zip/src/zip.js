@@ -99,7 +99,7 @@ const walkTree = async (
     }
     return;
   }
-  // Leaf blob: drain the base64 reader and write the entry. Use the
+  // Leaf blob: drain the byteArray reader and write the entry. Use the
   // async `set()` because the configured compressor (`deflate`,
   // when injected) is itself async; the legacy sync `write()` only
   // works for STORE. `node` IS the reader — `iterateBytesReader`
