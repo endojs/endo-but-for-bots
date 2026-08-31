@@ -9967,6 +9967,33 @@ impl Interp {
             }
         }
         let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
+        // A `User`/`FinallyReturn` reaction's capability must be one
+        // resolving pair (the decoder's rule, re-proved here): both
+        // slots reference cluster rows naming one promise and one
+        // guard with opposite polarity.
+        let fn_pair_ok = |resolve: &Slot, reject: &Slot| -> bool {
+            let row_of = |slot: &Slot| -> Option<&PromiseFnRow> {
+                if slot.kind != Kind::Reference {
+                    return None;
+                }
+                match slot.value {
+                    Payload::Reference(r) => snap
+                        .functions
+                        .binary_search_by_key(&r.0, |row| row.function)
+                        .ok()
+                        .map(|i| &snap.functions[i]),
+                    _ => None,
+                }
+            };
+            matches!(
+                (row_of(resolve), row_of(reject)),
+                (Some(res), Some(rej))
+                    if !res.reject
+                        && rej.reject
+                        && res.promise == rej.promise
+                        && res.guard == rej.guard
+            )
+        };
         for row in &snap.promises {
             let state = match row.state {
                 0 => PromiseState::Pending,
@@ -9985,17 +10012,21 @@ impl Interp {
                 .iter()
                 .map(|r| {
                     let kind = match r.kind {
-                        0 => ReactionKind::User,
-                        1 => ReactionKind::FinallyReturn,
+                        0 if fn_pair_ok(&r.resolve, &r.reject) => ReactionKind::User,
+                        1 if fn_pair_ok(&r.resolve, &r.reject) => ReactionKind::FinallyReturn,
                         // The element index must sit inside the results
                         // Array's carried length (the creation preset —
                         // `array_set_dense` would grow past it and the
                         // `any` aggregate walk iterates `0..length`),
-                        // and each `(combinator, element)` pair appears
-                        // at most once (a duplicate would count one
-                        // element twice at the drain).
+                        // each `(combinator, element)` pair appears at
+                        // most once (a duplicate would count one
+                        // element twice at the drain), and a native
+                        // element reaction carries NO capability slots.
                         2 if (r.a as usize) < snap.combinators.len()
                             && r.b < results_lengths[r.a as usize]
+                            && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                .iter()
+                                .all(|slot| slot.kind == Kind::Undefined)
                             && elem_seen.insert((r.a, r.b)) =>
                         {
                             ReactionKind::Combine(r.a, r.b)
@@ -10003,7 +10034,7 @@ impl Interp {
                         // The async-flavored kinds name machinery no
                         // atom carries yet; the decoder refuses them
                         // and so does this verb — as it does the
-                        // crafted `Combine` shapes above.
+                        // crafted shapes above.
                         _ => return None,
                     };
                     Some(PromiseReaction {
@@ -10028,13 +10059,26 @@ impl Interp {
                 },
             );
         }
+        // Guard coherence, the decoder's rule re-proved: one resolving
+        // pair (or its surviving half) per guard, one promise per pair.
+        let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; snap.guards.len()];
         for row in &snap.functions {
             let function = crate::value::SlotIndex(row.function);
-            if self.functions.contains_key(&function)
-                || row.guard as usize >= snap.guards.len()
-                || !owners.contains(&row.promise)
-            {
+            if self.functions.contains_key(&function) || !owners.contains(&row.promise) {
                 return false;
+            }
+            let Some(entry) = guard_rows.get_mut(row.guard as usize) else {
+                return false;
+            };
+            let polarity = 1u8 << (row.reject as u8);
+            match entry {
+                None => *entry = Some((row.promise, polarity)),
+                Some((promise, mask)) => {
+                    if *promise != row.promise || *mask & polarity != 0 {
+                        return false;
+                    }
+                    *mask |= polarity;
+                }
             }
             self.functions.insert(
                 function,

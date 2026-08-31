@@ -3510,6 +3510,45 @@ with segments. The design points that fell out of building it:
   `!done` now requires the derived row Pending. All three re-checked
   at the vm restore belt-and-braces, generated honestly by the fuzz
   arm, and locked in `crafted_row_refusals.rs`.
+- **Second hardening wave** (Sol review relayed on the PR, four
+  findings, three confirmed and one refuted with a counterexample):
+  - CONFIRMED, the capability graph: a `User`/`FinallyReturn`
+    reaction's capability is always one `new_promise_capability`
+    pair, and the drain recovers the DERIVED promise through
+    `resolve` alone — so a cross-wired capability silently settled
+    whatever promise the crafted slot bound, and an arbitrary slot
+    halted `promise:job-bad-capability` at the drain instead of
+    refusing at the boundary. The decoder now requires both
+    capability slots to reference cluster rows forming one pair (one
+    promise, one guard, opposite polarity), a `Combine` reaction to
+    carry NO capability (all four slots undefined — its payload is
+    its kind), and each guard to be shared by exactly one pair (a
+    swept singleton half stays honest; two rows must be the pair).
+  - REFUTED, `remaining == pending` exactly: the review argued an
+    empty job queue at quiescence forces equality, but a swept
+    never-settleable element — an unreachable element promise whose
+    row (and pending reaction) the collector prunes while the
+    combinator's `remaining` stands — leaves an honest machine at
+    `remaining > pending`, and the resumed behavior (the combinator
+    never settles) is exactly the continued machine's. `>=` stays.
+  - CONFIRMED, the canonical atom GRAMMAR: `find` is order-blind and
+    skips unknown tags, so a reordered container or one carrying a
+    junk-tagged atom was a second accepted encoding of the same
+    machine. `read_machine` now requires the atom sequence to be an
+    in-order subsequence of the writer's emission order
+    (`format::CANONICAL_ATOM_ORDER`) with no foreign tags — checked
+    after the `VERS` range gate, so a newer format still refuses by
+    VERSION and the grammar refusal is reserved for the crafted.
+  - CONFIRMED (narrowly), a present-but-empty `ESTK`: a zero
+    row-COUNT payload decoded to an empty list and was accepted (the
+    per-row empty frame LIST was already refused); the atom now
+    follows the same present-and-non-empty rule as every optional
+    atom.
+  All confirmed fixes are re-proved at the vm restore where they
+  apply, generated honestly by the fuzz arm (resolving functions now
+  mint as PAIRS there, and reactions reference them), and locked in
+  `crafted_row_refusals.rs`; reader-only changes, so both golden pins
+  stand.
 
 ##### P2-5 — `SavedJumpRow.call_depth_offset` is decoded but never bounded
 

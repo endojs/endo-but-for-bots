@@ -319,17 +319,81 @@ fn non_canonical_container_encodings_are_refused() {
 
     // (3) A present-but-empty optional atom. Use a machine with NO
     // arrays, so the writer omits `ARRY` and the spliced empty one is
-    // the only occurrence — isolating emptiness from duplication.
+    // the only occurrence — isolating emptiness from duplication. The
+    // splice lands at `ARRY`'s CANONICAL position (after the ten fixed
+    // atoms) so the order gate stays out of the way and the emptiness
+    // gate is what refuses.
     let plain = quiescent_machine("var t = 0; t = 41 + 1; t");
     let plain_bytes = plain.write_snapshot(&sig()).expect("writes");
+    // Walk the ten fixed atoms (VERS..METR) to find the insert offset.
+    let mut at = 8usize;
+    for _ in 0..10 {
+        let size = u32::from_be_bytes([
+            plain_bytes[at],
+            plain_bytes[at + 1],
+            plain_bytes[at + 2],
+            plain_bytes[at + 3],
+        ]) as usize;
+        at += size;
+    }
     let mut empty = plain_bytes.clone();
-    empty.splice(8..8, atom.iter().copied());
+    empty.splice(at..at, atom.iter().copied());
     let grown =
         (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 12).to_be_bytes();
     empty[0..4].copy_from_slice(&grown);
     match read_machine(&empty, &sig()) {
         Err(SnapshotError::Corrupt(msg)) if msg.contains("present but empty") => {}
         other => panic!("a present-but-empty optional atom must be refused: {other:?}"),
+    }
+
+    // (4) The canonical GRAMMAR (review follow-up): an unknown tag —
+    // even unique and well-formed — and an out-of-order real atom are
+    // both second encodings of the same machine (`find` is order-blind
+    // and skips foreign tags; rewriting drops or reorders them).
+    let mut junk_atom = Vec::new();
+    junk_atom.extend_from_slice(&12u32.to_be_bytes());
+    junk_atom.extend_from_slice(b"JNKA");
+    junk_atom.extend_from_slice(&0u32.to_be_bytes());
+    let mut junk = plain_bytes.clone();
+    junk.splice(at..at, junk_atom.iter().copied());
+    let grown = (u32::from_be_bytes([junk[0], junk[1], junk[2], junk[3]]) + 12).to_be_bytes();
+    junk[0..4].copy_from_slice(&grown);
+    match read_machine(&junk, &sig()) {
+        Err(SnapshotError::Corrupt("container atoms out of canonical order or unknown")) => {}
+        other => panic!("an unknown atom tag must be refused: {other:?}"),
+    }
+    // Out of order: the honest empty-optional splice from (3), placed
+    // BEFORE the fixed atoms instead of after them.
+    let mut misordered = plain_bytes.clone();
+    misordered.splice(8..8, atom.iter().copied());
+    let grown = (u32::from_be_bytes([
+        misordered[0],
+        misordered[1],
+        misordered[2],
+        misordered[3],
+    ]) + 12)
+        .to_be_bytes();
+    misordered[0..4].copy_from_slice(&grown);
+    match read_machine(&misordered, &sig()) {
+        Err(SnapshotError::Corrupt("container atoms out of canonical order or unknown")) => {}
+        other => panic!("an out-of-order atom must be refused: {other:?}"),
+    }
+
+    // (5) A present-but-empty `ESTK` (zero row count) — the same
+    // omission rule as every optional atom; spliced in canonical
+    // position (after the fixed atoms, before `NFLR`), on a machine
+    // with no errors at all.
+    let mut estk_atom = Vec::new();
+    estk_atom.extend_from_slice(&12u32.to_be_bytes());
+    estk_atom.extend_from_slice(b"ESTK");
+    estk_atom.extend_from_slice(&0u32.to_be_bytes());
+    let mut estk = plain_bytes.clone();
+    estk.splice(at..at, estk_atom.iter().copied());
+    let grown = (u32::from_be_bytes([estk[0], estk[1], estk[2], estk[3]]) + 12).to_be_bytes();
+    estk[0..4].copy_from_slice(&grown);
+    match read_machine(&estk, &sig()) {
+        Err(SnapshotError::Corrupt("ESTK atom present but empty; the writer omits it")) => {}
+        other => panic!("a present-but-empty ESTK must be refused: {other:?}"),
     }
 }
 
@@ -578,5 +642,86 @@ fn an_undone_combinator_with_a_settled_derived_promise_is_refused() {
     expect_container_refusal(
         &image,
         "promise cluster: undone combinator's derived promise is settled",
+    );
+}
+
+/// The capability-graph review round: a `User`/`FinallyReturn`
+/// reaction's capability must be ONE resolving pair (the drain
+/// recovers the derived promise through `resolve` alone, so a
+/// cross-wired capability silently settles whatever the crafted slot
+/// binds); a `Combine` reaction carries no capability at all; and a
+/// guard belongs to exactly one pair.
+#[test]
+fn a_crafted_reaction_capability_is_refused() {
+    use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+    let m = promise_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    fn reaction_of(
+        img: &mut ironhorse_snapshot::image::MachineImage,
+    ) -> &mut ironhorse_vm::PromiseReactionRow {
+        img.promise_cluster
+            .promises
+            .iter_mut()
+            .flat_map(|p| p.reactions.iter_mut())
+            .find(|r| r.kind == 0)
+            .expect("the fixture holds a user reaction")
+    }
+
+    // (a) A capability slot that names no resolving function.
+    let mut hollow = image.clone();
+    reaction_of(&mut hollow).resolve = Slot::undefined();
+    expect_container_refusal(
+        &hollow,
+        "promise cluster: reaction capability names no resolving function",
+    );
+
+    // (b) Two references that are not one pair (here: the resolve half
+    // twice, a polarity clash; a mixed-pair splice fails the same way
+    // on promise or guard).
+    let mut mismatched = image.clone();
+    let r = reaction_of(&mut mismatched);
+    r.reject = r.resolve;
+    expect_container_refusal(
+        &mismatched,
+        "promise cluster: reaction capability is not one resolving pair",
+    );
+
+    // (c) A guard spliced across two pairs: the fixture mints one pair
+    // for `p` and one for the `.then` derived, so re-pointing a later
+    // row's guard at the earlier pair's spans two promises.
+    let mut spanned = image.clone();
+    let first_guard = spanned.promise_cluster.functions[0].guard;
+    let victim = spanned
+        .promise_cluster
+        .functions
+        .iter_mut()
+        .find(|row| row.guard != first_guard)
+        .expect("the fixture mints two pairs");
+    victim.guard = first_guard;
+    expect_container_refusal(
+        &spanned,
+        "promise cluster: guard not shared by one resolving pair",
+    );
+
+    // (d) A `Combine` reaction carrying a capability slot.
+    let mc = combinator_fixture();
+    let bytes = mc.write_snapshot(&sig()).expect("writes");
+    let mut loaded = read_machine(&bytes, &sig()).expect("reads");
+    let capability = Slot::of(
+        Kind::Reference,
+        Payload::Reference(SlotIndex(loaded.promise_cluster.functions[0].function)),
+    );
+    loaded
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 2)
+        .expect("a pending element reaction")
+        .resolve = capability;
+    expect_container_refusal(
+        &loaded,
+        "promise cluster: combinator reaction carries capability slots",
     );
 }

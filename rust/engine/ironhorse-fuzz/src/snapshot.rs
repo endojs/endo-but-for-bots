@@ -631,31 +631,16 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
         let owner = next_owner;
         next_owner += 1 + (c.byte() % 3) as u32;
         // 0 Pending / 1 Fulfilled / 2 Rejected; only Pending rows may
-        // carry reactions (settlement drains them).
+        // carry reactions (settlement drains them) — and a reaction's
+        // capability must reference a resolving PAIR, so reactions
+        // join below once the pair rows exist.
         let state = c.byte() % 3;
-        let reactions = if state == 0 {
-            (0..(c.byte() % 3) as usize)
-                .map(|_| ironhorse_vm::PromiseReactionRow {
-                    on_fulfilled: slot(&mut c),
-                    on_rejected: slot(&mut c),
-                    resolve: slot(&mut c),
-                    reject: slot(&mut c),
-                    // User / FinallyReturn; Combine rows join below so
-                    // each names a combinator that actually exists.
-                    kind: c.byte() % 2,
-                    a: 0,
-                    b: 0,
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
         prms_promises.push(ironhorse_vm::PromiseRow {
             owner,
             state,
             result: slot(&mut c),
             ever_handled: c.byte() % 2 == 1,
-            reactions,
+            reactions: Vec::new(),
         });
     }
     let mut prms_combinators: Vec<ironhorse_vm::CombinatorRow> = Vec::new();
@@ -678,11 +663,13 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 let ci = prms_combinators.len() as u32;
                 let host = pending[(c.byte() as usize) % pending.len()];
                 let results = sized[(c.byte() as usize) % sized.len()];
+                // A native element reaction carries NO capability —
+                // the decoder refuses populated slots on one.
                 let reaction = ironhorse_vm::PromiseReactionRow {
-                    on_fulfilled: slot(&mut c),
-                    on_rejected: slot(&mut c),
-                    resolve: slot(&mut c),
-                    reject: slot(&mut c),
+                    on_fulfilled: ironhorse_vm::Slot::undefined(),
+                    on_rejected: ironhorse_vm::Slot::undefined(),
+                    resolve: ironhorse_vm::Slot::undefined(),
+                    reject: ironhorse_vm::Slot::undefined(),
                     kind: 2,
                     a: ci,
                     b: c.u32() % results.length,
@@ -701,25 +688,68 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             }
         }
     }
+    // Resolving functions come as PAIRS — one guard, one promise,
+    // opposite polarity — exactly `fxPushPromiseFunctions`' mint (the
+    // guard-coherence gate refuses anything else; a swept singleton
+    // half is also honest but a pair exercises more of the codec).
     let mut prms_functions: Vec<ironhorse_vm::PromiseFnRow> = Vec::new();
     let mut prms_guards: Vec<bool> = Vec::new();
+    let mut pairs: Vec<(u32, u32)> = Vec::new();
     if !prms_promises.is_empty() && !offs.is_empty() {
         let mut next_fn = 0u32;
         for _ in 0..(c.byte() % 4) {
-            if next_fn >= live_cap {
+            let resolve_fn = next_fn;
+            let reject_fn = next_fn + 1 + (c.byte() % 3) as u32;
+            next_fn = reject_fn + 1 + (c.byte() % 3) as u32;
+            if reject_fn >= live_cap {
                 break;
             }
-            let function = next_fn;
-            next_fn += 1 + (c.byte() % 3) as u32;
             let guard = prms_guards.len() as u32;
             prms_guards.push(c.byte() % 2 == 1);
-            prms_functions.push(ironhorse_vm::PromiseFnRow {
-                function,
-                promise: prms_promises[(c.byte() as usize) % prms_promises.len()].owner,
-                reject: c.byte() % 2 == 1,
-                guard,
-                name_chunk: pick_off(&mut c, &offs).0,
-            });
+            let promise = prms_promises[(c.byte() as usize) % prms_promises.len()].owner;
+            let name_chunk = pick_off(&mut c, &offs).0;
+            for (function, reject) in [(resolve_fn, false), (reject_fn, true)] {
+                prms_functions.push(ironhorse_vm::PromiseFnRow {
+                    function,
+                    promise,
+                    reject,
+                    guard,
+                    name_chunk,
+                });
+            }
+            pairs.push((resolve_fn, reject_fn));
+        }
+    }
+    // User / FinallyReturn reactions on pending rows, each capability
+    // a reference pair to one minted resolving pair (the shape every
+    // honest `.then`/`finally`/adoption registration has).
+    {
+        let pending: Vec<usize> = prms_promises
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.state == 0)
+            .map(|(i, _)| i)
+            .collect();
+        if !pending.is_empty() && !pairs.is_empty() {
+            for _ in 0..(c.byte() % 3) {
+                let host = pending[(c.byte() as usize) % pending.len()];
+                let (resolve_fn, reject_fn) = pairs[(c.byte() as usize) % pairs.len()];
+                let fn_ref = |f: u32| {
+                    Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(SlotIndex(f)),
+                    )
+                };
+                prms_promises[host].reactions.push(ironhorse_vm::PromiseReactionRow {
+                    on_fulfilled: slot(&mut c),
+                    on_rejected: slot(&mut c),
+                    resolve: fn_ref(resolve_fn),
+                    reject: fn_ref(reject_fn),
+                    kind: c.byte() % 2,
+                    a: 0,
+                    b: 0,
+                });
+            }
         }
     }
     let promise_cluster = ironhorse_vm::PromiseClusterSnapshot {
