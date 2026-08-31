@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-12 |
-| **Updated** | 2026-08-31 (round-3 panel fixes: applied the per-gap disposition schema to all 16 gaps and dropped the redundant `MVR resolution` label, disambiguated per-PR Tier 0/Tier 1 build dependencies and widened the CI path filter to the chat renderer, reframed the residual Linux launch risk, made forward references to Open questions explicit, removed the remaining prose em-dashes, and normalized `followup`/`Familiar` spelling) |
+| **Updated** | 2026-08-31 (round-4 panel fixes: cross-referenced G4's Severity to the Blocker-adjacent elevation in Platform coverage, gave G4's Linux `chrome-sandbox` remediation point-of-friction delivery matching G2 plus a pre-tag manual Linux launch backstop, flagged the unverified-through-real-UI MVR exit-criterion residual with acknowledged-risk discipline, repointed G14/G16 builder-pass cross-references from Followups to the MVR table, added the missing G7 icon-projection Followups row, added a macOS x64 end-state sentence, and cleared copyeditor/pedant grammar and spelling nits (`follow-on` to `followup`, `in-scope` to `in scope`, `un-caught` to `uncaught`). Round-3 fixes: applied the per-gap disposition schema to all 16 gaps and dropped the redundant `MVR resolution` label, disambiguated per-PR Tier 0/Tier 1 build dependencies and widened the CI path filter to the chat renderer, reframed the residual Linux launch risk, made forward references to Open questions explicit, removed the remaining prose em-dashes, and normalized `followup`/`Familiar` spelling) |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 | **Source** | Issue [#229](https://github.com/endojs/endo-but-for-bots/issues/229) |
@@ -196,8 +196,8 @@ decision folded into the severity rating.)
 `@electron/packager` without `osxSign` or `osxNotarize` options.
 A user who downloads the resulting `.dmg` from a browser is
 greeted with Gatekeeper's "this app is damaged" or "cannot verify
-the developer" dialog and must `xattr -d com.apple.quarantine`
-the bundle by hand.
+the developer" dialog and must run `xattr -d com.apple.quarantine`
+on the bundle by hand.
 A non-developer will not do this and will assume the app is
 broken.
 **Target:** The build eventually runs `osxSign` with a Developer ID
@@ -260,7 +260,15 @@ script change to add `signtool` invocation under
 
 ### G4. Linux distribution shape
 
-**Severity:** Important (Linux).
+**Severity:** Important (Linux). The intrinsic-impact rating is
+Important, but note that the *launch-path* risk this gap describes
+is elevated downstream: [Platform coverage of the runtime
+tiers](#platform-coverage-of-the-runtime-tiers) characterizes the
+same `chrome-sandbox`/userns failure mode as an "acknowledged
+Blocker-adjacent risk on the Linux launch path" precisely because
+it is a named, previously-identified failure mode rather than a
+generic display-bound residual. A reader triaging by G4's Severity
+line alone should carry that elevation, not stop at "Important".
 **MVR disposition:** Ship the existing `.zip` plus README; Flatpak
 chosen for followups, other formats deferred.
 **Resolved by:** the 2026-05-19 review pass.
@@ -288,8 +296,25 @@ The other packaging systems (`.AppImage`, `.deb`, `.rpm`,
 The MVR position can defer downstream packaging and
 ship the existing `.zip` plus a brief README; the followups
 phase ships Flatpak.
-**Effort:** Day for the README; week for the Flatpak manifest
-(builder-dispatched).
+Because this is a launch-blocking OS-gate remediation of the same
+class the design escalates for macOS Gatekeeper (G2), the
+`chrome-sandbox` setup instruction must be delivered *at the point
+of friction* the same way, not only in `packages/familiar/README.md`:
+it must appear on the GitHub release / download page next to the
+Linux `.zip` artifact the user actually fetches, so a user who
+unzips and double-clicks without ever opening a README still meets
+the workaround where the sandbox failure happens.
+Because the Linux launch path ships with no CI launch evidence at
+MVR (Tier 2 stays macOS-only; see [Platform coverage of the
+runtime tiers](#platform-coverage-of-the-runtime-tiers)), MVR also
+carries a cheap human backstop for this Blocker-adjacent risk: the
+release engineer manually launches the built Linux `.app` once and
+confirms it reaches the converse-with-`lal` end state before
+tagging a release, until a Linux Tier 2 GUI smoke (under `xvfb`)
+lands in followups and replaces the manual step.
+**Effort:** Day for the README plus the point-of-friction
+download-page note and the pre-tag manual launch check; week for the
+Flatpak manifest (builder-dispatched).
 
 ### G5. Bundled Node binary version pin policy
 
@@ -435,7 +460,7 @@ embedded per-site web views, each otherwise served from its own
 HTTP port) through the shared Gateway rather than a
 Familiar-terminated HTTP port, the per-port weblet variant is
 dropped as part of the same change:
-the Familiar weblet story collapses to a single flavor,
+the Familiar weblet story collapses to a single flavor, namely
 Familiar iframe weblets served through the custom protocol
 scheme (`localhttp://`) and HTTP virtual-host proxy on the
 shared gateway, per
@@ -557,8 +582,8 @@ included in the bundles via an `oss-attribution-generator`
 or `license-checker` step in `make-distributables.mjs`, and
 ship the result as `LICENSE.third-party.txt` next to the
 binary.
-A builder pass implements the aggregation step (see the Followups
-section below).
+A builder pass implements the aggregation step (an MVR item; see
+the `MVR: minimum to ship` table in the Phased plan below).
 **Effort:** Day (builder-dispatched).
 
 ### G15. macOS arm64 vs x64 build matrix
@@ -597,8 +622,8 @@ under a clean state directory, exercise the form, submit
 config, observe the Primer tree appearing in the host
 namespace and the worker loop receiving a `primer`
 reference.
-A builder pass adds the tests for this flow (see the Followups
-section below).
+A builder pass adds the tests for this flow (an MVR item; see the
+`MVR: minimum to ship` table in the Phased plan below).
 The concrete CI mechanism (tiers, assertions, mock gateway, and
 macOS-runner hazards) is in the
 [Verifying the assumed-working chain in CI (macOS)](#verifying-the-assumed-working-chain-in-ci-macos)
@@ -753,6 +778,24 @@ Tier 2 is slower and more display-dependent, so it runs on
 `familiar-release.yml` after `make` and on a nightly schedule,
 not on the per-PR gate, until its flake rate is measured.
 
+One residual is worth naming explicitly, with the same
+acknowledged-risk discipline this plan applies to the Linux launch
+path below: no tier drives the literal MVR exit criterion ("fills
+in their LLM provider details, and exchanges messages with `lal`")
+through the *rendered Chat UI*. Tier 1 exercises the exit criterion
+over the daemon's CapTP API as a deliberate stand-in for the Chat
+form-fill-and-send (so the assertion stays headless and
+deterministic), and Tier 2 asserts only that the window opens, the
+renderer reaches its `localhttp://` ready state, and the navigation
+guard holds; it never drives a keystroke or a send through the
+Chat surface. The form-fill-and-send path through the real renderer
+is therefore covered by CapTP-level equivalence plus the
+maintainer's informal hands-on confirmation (as with G11), not by a
+CI real-UI assertion. Closing it fully means driving the Chat
+renderer with Playwright inside Tier 2 (type into the form, submit,
+assert a reply renders); that is followup work carried alongside
+the Linux Tier 2 GUI smoke, not an MVR gate.
+
 ### The mock LLM gateway
 
 The form provisioning
@@ -772,12 +815,12 @@ registry providers (Anthropic, OpenAI, and the like, which carry a
 real auth token) and the `ollama/<id>` case, which uses a distinct
 auth-token sentinel (the literal `'ollama'` fallback rather than a
 user key); and "point it at Ollama" is one of the three provider
-shapes G12 names as in-scope. So the Tier-1 smoke parametrizes the
+shapes G12 names as in scope. So the Tier-1 smoke parametrizes the
 mock gateway over **both** shapes: one run drives a
 registry-provider model with a bearer token, and one drives an
 `ollama/<id>` model exercising the sentinel-token branch. Covering
 only the registry path would let a regression in the Ollama
-auth-token handling ship un-caught by the gated smoke.
+auth-token handling ship uncaught by the gated smoke.
 
 ### macOS-runner hazards the plan must design around
 
@@ -817,7 +860,7 @@ naive smoke flaky or unusable.
 The maintainer asked for the plan "specifically on the macOS
 environment," so the tiers above are written against macOS
 runners. But Open Question 4's resolution (see Open questions,
-below) widened the MVR ship list to three first-class targets,
+below) widened the MVR ship list to three first-class targets:
 macOS arm64, macOS x64, and **Linux x64**, and G16 (the
 Primer-into-CAS path) is rated **Blocker**. A Blocker whose
 runtime verification runs on only one of three shipped platforms
@@ -847,7 +890,7 @@ MVR gate.
 
 Because Tier 2 stays macOS-only, the Linux x64 GUI launch ships
 with **no CI launch evidence at all**, and that residual is not
-merely a generic display-bound gap: G4 identifies Linux as the
+merely a generic display-bound gap. G4 identifies Linux as the
 *more* fragile launch path of the three, because the
 `chrome-sandbox` setuid workaround (or the userns fallback G4
 now flags) is a **known**, previously-identified failure mode, not
@@ -884,16 +927,21 @@ provider details, and exchanges messages with `lal`.
 No developer tooling is touched on the user's machine, with one
 acknowledged, documented exception: the macOS Gatekeeper `xattr`
 workaround (G2).
+macOS x64 (the third MVR-shipped platform) reaches the same
+end state by the same `.dmg` path as arm64, riding the identical
+CI and packaging shape; it is not called out separately below only
+because it introduces no exception the arm64 path does not already
+carry.
 
 Because the MVR ship list now includes Linux x64, the exit
 criterion has a parallel Linux form: a user on Linux x64 downloads
 the `.zip`, unpacks it, and reaches the same converse-with-`lal`
 end state. That path carries its **own** acknowledged exception to
 the "no developer tooling" premise, and a more invasive one than
-the macOS `xattr` case: the `chrome-sandbox` binary must be
-`chmod 4755` and `chown root` for Chromium's suid sandbox (G4),
-which needs `sudo`/root rather than a single Finder-adjacent
-terminal command. Like the macOS exception it is a deliberate,
+the macOS `xattr` case: the `chrome-sandbox` binary must have
+`chmod 4755` applied and be chowned to root for Chromium's suid
+sandbox (G4), which needs `sudo`/root rather than a single
+Finder-adjacent terminal command. Like the macOS exception it is a deliberate,
 explicitly-acknowledged deviation the README documents, not an
 oversight; it is called out here so the Linux path is not read as
 premise-clean when it is in fact the sharper of the two
@@ -907,7 +955,8 @@ exceptions.
 | Document Node version pin policy in the package README | G5 | day |
 | Bundled Node pin advanced from v20.18.1 to a current LTS (now v22.22.3) | G5 | done (2026-05) |
 | Rename the Familiar shell log to `familiar-shell.log`; document log locations and state directory in the package README, including which log (`familiar-shell.log` vs `endo.log`) covers which failure class | G10, G13 | day |
-| Document the Linux `chrome-sandbox` suid setup in the README | G4 | day |
+| Document the Linux `chrome-sandbox` suid setup, and surface it at the point of friction (the GitHub release/download page next to the Linux `.zip`), not only the README | G4 | day |
+| Pre-tag manual Linux `.app` launch check (release engineer confirms the built Linux artifact reaches the converse-with-`lal` end state), backstopping the Blocker-adjacent Linux launch risk until Linux Tier 2 lands | G4 | per release |
 | Document the `127.0.0.1:8920` collision case in the README, and surface a daemon-start-failure dialog naming the cause and log path (the dialog is new UI/IPC, not a doc task) | G9 | day to multi-day |
 | Surface the macOS Gatekeeper `xattr` workaround at the point of friction (GitHub release/download page, and ideally the DMG background image), not only the repo README | G2 | day |
 | Confirm icon assets resolve on every target platform | G7 | day |
@@ -927,6 +976,7 @@ Windows is out of scope for MVR (G3).
 | Item | Resolves | Effort |
 |---|---|---|
 | Flatpak manifest for Linux | G4 | week |
+| Icon-projection automation (project the `.icns`/`.ico`/`.png` sets from the source icon; the per-platform confirm itself is the MVR item) | G7 | day |
 | First-run "test connection" on the LLM config form | G11 | day |
 | Consolidated stop/purge via CapTP from Electron main (reviewable material; consolidation deferred past MVR) | G8 | day |
 | OS-assigned gateway port to dodge collisions with developer daemons | G9 | day |
@@ -974,7 +1024,7 @@ answers are recorded inline below.
 1. **Distribution channel.**
    *Resolution (2026-05-19):* Post artifacts as GitHub releases on
    `endojs/endo-but-for-bots`.
-   This implies two follow-on processes that are out of scope for
+   This implies two followup processes that are out of scope for
    the release pipeline itself but on the roadmap for the surrounding
    project: a ferrying process to copy the release artifacts to the
    `endojs/endo` repository, and a process for proposing a PR on
@@ -996,7 +1046,7 @@ answers are recorded inline below.
    It is distributed only as a downloadable artifact (per question
    1).
    Whether the `"version"` field bumps from `0.1.0` to a richer
-   identifier on the first downloadable build is a follow-on
+   identifier on the first downloadable build is a followup
    versioning question for the release engineer to decide; the
    important constraint is that no npm publish step is added.
 
