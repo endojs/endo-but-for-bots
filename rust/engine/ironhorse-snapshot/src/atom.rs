@@ -65,6 +65,17 @@ pub enum AtomError {
     BadLength,
     /// The outer envelope's FourCC is not `XS_M`.
     NotContainer(FourCc),
+    /// Bytes follow the declared `XS_M` envelope. The writer emits the
+    /// envelope and nothing else, so a trailing tail can only be
+    /// crafted or torn -- and accepting it would give one logical
+    /// machine unboundedly many container encodings, and so unboundedly
+    /// many CAS keys.
+    TrailingBytes,
+    /// The same tag appears twice. The grammar has at most one of each
+    /// top-level atom and `find` would silently take the first, so a
+    /// duplicate is both non-canonical and a way to hide a payload
+    /// behind one the reader prefers.
+    DuplicateAtom(FourCc),
 }
 
 /// A borrowed view of one parsed atom.
@@ -123,7 +134,18 @@ impl<'a> AtomReader<'a> {
         if tag != crate::format::XS_M {
             return Err(AtomError::NotContainer(tag));
         }
+        // EXACT consumption: the envelope is the whole container.
+        if size != buf.len() {
+            return Err(AtomError::TrailingBytes);
+        }
         let atoms = parse_atoms(&buf[ATOM_HEADER..size])?;
+        // At most one of each tag, so `find`'s first-match is also the
+        // only match and the encoding is canonical.
+        for (i, a) in atoms.iter().enumerate() {
+            if atoms[..i].iter().any(|b| b.tag == a.tag) {
+                return Err(AtomError::DuplicateAtom(a.tag));
+            }
+        }
         Ok(AtomReader { atoms })
     }
 

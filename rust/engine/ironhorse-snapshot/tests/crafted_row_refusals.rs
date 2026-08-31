@@ -275,3 +275,60 @@ fn a_container_from_a_foreign_boot_layout_is_refused() {
         Ok(_) => panic!("a store from a foreign boot layout must not validate"),
     }
 }
+
+/// Canonical interchange: one logical machine must have exactly ONE
+/// container encoding, or its SHA-256 is not an identity and the CAS
+/// key is not a key. Three shapes broke that, all accepted before:
+/// bytes after the declared `XS_M` envelope, a duplicate atom (which
+/// `find` silently resolved to the first), and an optional side-table
+/// atom present but EMPTY where the writer omits it entirely.
+///
+/// None of them produced a wrong answer — which is exactly why they
+/// needed a gate rather than a test of behavior. The `NFLR` floor
+/// already enforced this rule for itself; these extend it to the
+/// envelope and the twenty-one optional atoms.
+#[test]
+fn non_canonical_container_encodings_are_refused() {
+    let m = quiescent_machine("var a = 0; a = [1, 2, 3]; a.length");
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    read_machine(&bytes, &sig()).expect("the honest container reads");
+
+    // (1) A trailing tail after the envelope.
+    let mut tail = bytes.clone();
+    tail.extend_from_slice(b"\x00\x00\x00\x08JUNK");
+    match read_machine(&tail, &sig()) {
+        Err(SnapshotError::Atom(_)) => {}
+        other => panic!("bytes after the envelope must be refused: {other:?}"),
+    }
+
+    // (2) A duplicate atom. Splice a second, well-formed but EMPTY
+    // `ARRY` in after the envelope header; the honest one is already
+    // present, so this is a duplicate whichever the reader prefers.
+    let mut dup = bytes.clone();
+    let mut atom = Vec::new();
+    atom.extend_from_slice(&12u32.to_be_bytes());
+    atom.extend_from_slice(b"ARRY");
+    atom.extend_from_slice(&0u32.to_be_bytes());
+    dup.splice(8..8, atom.iter().copied());
+    let grown = (u32::from_be_bytes([dup[0], dup[1], dup[2], dup[3]]) + 12).to_be_bytes();
+    dup[0..4].copy_from_slice(&grown);
+    match read_machine(&dup, &sig()) {
+        Err(SnapshotError::Atom(_)) => {}
+        other => panic!("a duplicate atom must be refused: {other:?}"),
+    }
+
+    // (3) A present-but-empty optional atom. Use a machine with NO
+    // arrays, so the writer omits `ARRY` and the spliced empty one is
+    // the only occurrence — isolating emptiness from duplication.
+    let plain = quiescent_machine("var t = 0; t = 41 + 1; t");
+    let plain_bytes = plain.write_snapshot(&sig()).expect("writes");
+    let mut empty = plain_bytes.clone();
+    empty.splice(8..8, atom.iter().copied());
+    let grown =
+        (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 12).to_be_bytes();
+    empty[0..4].copy_from_slice(&grown);
+    match read_machine(&empty, &sig()) {
+        Err(SnapshotError::Corrupt(msg)) if msg.contains("present but empty") => {}
+        other => panic!("a present-but-empty optional atom must be refused: {other:?}"),
+    }
+}
