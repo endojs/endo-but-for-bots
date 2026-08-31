@@ -2,6 +2,8 @@
 /* eslint no-bitwise: ["off"] */
 /* global globalThis */
 
+import { toIndexableUint8Array } from '@endo/bytes/indexed.js';
+
 import { alphabet64, padding } from './common.js';
 
 // Capture `Reflect.apply` once at module load; we prefer it to
@@ -9,6 +11,7 @@ import { alphabet64, padding } from './common.js';
 // primordial, so a tampered `Function.prototype.call` cannot redirect
 // the dispatched native intrinsic invocation.
 const { apply } = Reflect;
+const { isView } = ArrayBuffer;
 
 /**
  * Pure-JavaScript base64 encoder, exported for benchmarking and for
@@ -27,10 +30,18 @@ const { apply } = Reflect;
  * This function is exported from this *file* for use in benchmarking,
  * but is not part of the *module*'s public API.
  *
- * @param {Uint8Array} data
+ * Accepts a `Uint8Array` (the byteArray passable form): a plain mutable one,
+ * a genuine frozen view over an immutable `ArrayBuffer`, or an emulated
+ * `@endo/immutable-arraybuffer` wrapper (`ArrayBuffer.isView === false`, so
+ * `bytes[i]` reads `undefined`). The emulated wrapper is first thawed into a
+ * mutable `Uint8Array` so the integer-indexed read below sees the real bytes
+ * rather than silently encoding all zeros.
+ *
+ * @param {Uint8Array} input
  * @returns {string} base64 encoding
  */
-export const jsEncodeBase64 = data => {
+export const jsEncodeBase64 = input => {
+  const data = toIndexableUint8Array(input);
   // A cursory benchmark shows that string concatenation is about 25% faster
   // than building an array and joining it in v8, in 2020, for strings of about
   // 100 long.
@@ -107,20 +118,48 @@ const xsEncodeBase64 = (() => {
   return xsEncodeBase64;
 })();
 
+// Select the fastest available encoder for genuine, natively-readable
+// `Uint8Array` inputs: the TC39 intrinsic first, then the legacy XS binding.
+/** @type {typeof jsEncodeBase64 | undefined} */
+const fastEncodeBase64 = (() => {
+  if (nativeToBase64 !== undefined) return nativeEncodeBase64;
+  if (xsEncodeBase64 !== undefined) return xsEncodeBase64;
+  return undefined;
+})();
+
 /**
  * Encodes bytes into a Base64 string, as specified in
  * https://tools.ietf.org/html/rfc4648#section-4.
  *
+ * Accepts a `Uint8Array` (the byteArray passable form): a plain mutable one,
+ * a genuine frozen view over an immutable `ArrayBuffer`, or an emulated
+ * `@endo/immutable-arraybuffer` wrapper.
+ *
  * Dispatches to the native `Uint8Array.prototype.toBase64` intrinsic
- * when available (stage-4 TC39 proposal-arraybuffer-base64).
- * Otherwise falls through to the legacy `globalThis.Base64.encode` XS
- * binding, and finally to the pure-JavaScript `jsEncodeBase64`.
+ * (stage-4 TC39 proposal-arraybuffer-base64), or the legacy
+ * `globalThis.Base64.encode` XS binding, when one is available *and* the
+ * input is a genuine `Uint8Array` view (`ArrayBuffer.isView === true`) —
+ * whose bytes the native intrinsic can read directly, whether the backing
+ * buffer is mutable or a genuine immutable buffer. An emulated
+ * `@endo/immutable-arraybuffer` wrapper is a plain object
+ * (`isView(wrapper) === false`)
+ * whose bytes native C++ cannot read through the shim's proxy, so it falls
+ * through to the pure-JavaScript `jsEncodeBase64`, which thaws it first.
+ * `isView` is the committed
+ * genuine-vs-emulated distinguisher (issue #573); consulting it (rather than
+ * `.buffer.immutable`) keeps the native fast path for genuine immutable views.
  *
  * @type {typeof jsEncodeBase64}
  */
 export const encodeBase64 = (() => {
-  if (nativeToBase64 !== undefined) return nativeEncodeBase64;
-  if (xsEncodeBase64 !== undefined) return xsEncodeBase64;
-  return jsEncodeBase64;
+  if (fastEncodeBase64 === undefined) {
+    return jsEncodeBase64;
+  }
+  return bytes => {
+    if (bytes instanceof Uint8Array && isView(bytes)) {
+      return fastEncodeBase64(bytes);
+    }
+    return jsEncodeBase64(bytes);
+  };
 })();
 Object.freeze(encodeBase64);

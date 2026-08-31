@@ -39,6 +39,9 @@
     "lint:types": "tsc",
     "test": "ava"
   },
+  "dependencies": {
+    "@endo/bytes": "workspace:^"
+  },
   "devDependencies": {
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
