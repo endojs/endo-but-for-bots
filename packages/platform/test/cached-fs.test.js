@@ -137,8 +137,30 @@ test('withCachedReads: miss serves speculative read in one RTT batch, populates 
     `speculative read in pipelined batch, got ${callsBefore.join(', ')}`,
   );
 
+  // The full-blob stream and watcher subscription are independent. The raw
+  // byte-reader adapter can let the stream return settle on either side of the
+  // watcher `events` call, so canonicalize that pair without dropping either
+  // event from the transcript.
+  const streamCall = transcript.find(
+    event => event.type === 'CTP_CALL' && event.method === 'streamBase64',
+  );
+  const stableTranscript = [...transcript];
+  if (streamCall?.questionID !== undefined) {
+    const streamReturnAt = stableTranscript.findIndex(
+      event =>
+        event.type === 'CTP_RETURN' && event.answerID === streamCall.questionID,
+    );
+    const eventsCallAt = stableTranscript.findIndex(
+      event => event.type === 'CTP_CALL' && event.method === 'events',
+    );
+    if (streamReturnAt > eventsCallAt && eventsCallAt >= 0) {
+      const [streamReturn] = stableTranscript.splice(streamReturnAt, 1);
+      stableTranscript.splice(eventsCallAt, 0, streamReturn);
+    }
+  }
+
   t.snapshot(
-    transcript,
+    stableTranscript,
     'miss transcript: speculative read + background populate',
   );
 });

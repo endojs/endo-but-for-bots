@@ -98,15 +98,17 @@ export const helpTextEntries = harden([
     'GitBlob',
     {
       '': 'GitBlob - A read-only view of one Git blob object.\n\nA GitBlob is content-addressed and immutable: it is pinned to the blob\nobject id it was minted for, so later ref movement never changes its bytes.\nIt provides whole-value convenience reads together with the range-I/O\nsurface used by content-addressed readers.',
-      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("fetch") returns documentation for the fetch method',
+      help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("range") returns documentation for byte-range attenuation',
       streamBase64:
         "streamBase64(syndicationPromise) -> Promise\nStream the blob's bytes as base64-encoded chunks.\nThe syndication promise drives the reader-pump flow-control protocol.",
       text: 'text() -> Promise<string>\nRead the complete blob as UTF-8 text.',
       json: 'json() -> Promise<unknown>\nRead the complete blob as UTF-8 text and parse it as JSON.',
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nGet the blob\'s content-address identity and byte length.\nThe result carries `algorithm` ("sha256"), a base64 `hash`, and `size` as a\nbigint.',
-      fetch:
-        'fetch(offset, length) -> Promise<PassableBytesReader>\nRead a byte window from the blob.\nThe range is `[offset, offset + length)`, clamped at end of file.',
+      range:
+        'range(start, end?) -> Promise<ReadableBlob>\nAttenuate the blob to the half-open byte interval `[start, end)`.\nOmitting `end` selects through end of content, and bounds clamp there.',
+      textRange:
+        'textRange(startLine, endLine) -> Promise<ReadableBlob>\nAttenuate the blob to zero-based, end-exclusive lines.\nLine bounds clamp at the end of the blob.',
     },
   ],
   [
