@@ -19,8 +19,8 @@ it),
 cyclic-module-records algorithm — [[AsyncEvaluation]] /
 [[PendingAsyncDependencies]] / [[AsyncParentModules]] on the module instance, an
 async-IIFE wrapper in the module-source transform, and bundle-source coupling
-with a sibling `@endo/check-bundle` policy gate; the synchronous fast path is
-preserved; extreme low priority, unscheduled),
+with a sibling compartment-mapper `parserForLanguage` gate; the synchronous fast
+path is preserved; Low priority, unscheduled),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -1731,7 +1731,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
 | familiar-app-ui-hosting | M | 4-5 days | 8 | App UI manifest + sandbox tiers over the existing weblet substrate (1.2x bump) |
-| ses-top-level-await | L | 1.5-3 weeks | — | Adds [[AsyncEvaluation]] / [[PendingAsyncDependencies]] / [[AsyncParentModules]] to the SES module instance, an async-IIFE wrapper in the `@endo/module-source` transform, bundle-source coupling, and a sibling `@endo/check-bundle` policy gate. Synchronous fast path preserved. Out-of-milestone; extreme low priority, no roadmap pull (revived 2026-09-01, PR #249). (L size; 1.5x bump already applied per calibration round.) |
+| ses-top-level-await | L | 1.5-3 weeks | — | Adds [[AsyncEvaluation]] / [[PendingAsyncDependencies]] / [[AsyncParentModules]] to the SES module instance, an async-IIFE wrapper in the `@endo/module-source` transform, bundle-source coupling, and a sibling compartment-mapper `parserForLanguage` gate. Synchronous fast path preserved. Out-of-milestone; Low priority, no roadmap pull (revived 2026-09-01, PR #249). (L size; 1.5x bump already applied per calibration round.) |
 
 #### Summary by Milestone
 
@@ -1852,7 +1852,7 @@ it explicitly because the hosted-Gateway-service is the north star.*
 
 ### Unscheduled Platform Designs
 
-These designs sit outside the M0-M6 milestone trajectory because they
+These designs sit outside the M0–M6 milestone trajectory because they
 target platform substrates (SES shim, module-source pipeline,
 bundle-source format) on a longer horizon than the agent-experience
 roadmap requires. They are queued for a future builder and do not
@@ -1860,7 +1860,7 @@ affect the milestone critical path.
 
 | Design | Priority | Rationale |
 |--------|----------|-----------|
-| ses-top-level-await | **extreme low** | Adds top-level-await (TLA) to the SES shim and the `@endo/module-source` pipeline per 262's cyclic-module-records algorithm. The synchronous fast path is preserved for the 99% of modules that do not use TLA; the design's scope is the new async-evaluation path only. No near-term roadmap pull. The design's load-bearing implementation surfaces are SES, `@endo/module-source`, `@endo/bundle-source`, and a sibling change in `@endo/check-bundle` for the policy gate. See the [bundle-source coupling section](ses-top-level-await.md#bundle-source-coupling) for the check-bundle composition with the Agoric chain's upgrade pattern. Size: L (architectural, multi-package). |
+| ses-top-level-await | **Low** | Adds top-level-await (TLA) to the SES shim and the `@endo/module-source` pipeline per 262's cyclic-module-records algorithm. The synchronous fast path is preserved for the 99% of modules that do not use TLA; the design's scope is the new async-evaluation path only. No near-term roadmap pull. The design's load-bearing implementation surfaces are SES, `@endo/module-source`, `@endo/bundle-source`, and a sibling change in `@endo/compartment-mapper` for the load-time language-designator gate. See the [bundle-source coupling section](ses-top-level-await.md#bundle-source-coupling) for the compartment-mapper composition with the Agoric chain's upgrade pattern. Size: L (architectural, multi-package). |
 
 ### Strategic Early Items
 
