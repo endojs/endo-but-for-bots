@@ -3079,6 +3079,27 @@ build, boot layout needs to be a versioned axis — the `SIGN`
 callback-table signature is the natural place, since it already exists
 to mean "this container was written by a compatible engine".
 
+**Answered (2026-08-31), and implemented.** Store-backed workers and
+exported containers ARE intended to survive daemon replacement and
+compatible engine upgrades — close/reopen, migration, archival and
+sharing all make same-build-only compatibility insufficient. So boot
+layout is part of engine compatibility, `SIGN` is the fail-closed gate,
+and `VERS` stays the wire-schema discriminator.
+
+`Signature`'s contract now says so explicitly: it covers the host
+callback table AND every boot-derived `SlotIndex` layout, with the
+mechanism recorded (adoption boots a fresh machine and replaces its
+arenas, so boot-derived maps keyed by slot index survive from the
+current boot; `boot_slot_count` is not serialized and `VERS` versions
+the atom set rather than the heap those atoms describe). While the
+branch is unreleased a boot-layout change is taken as a golden-pin
+content re-pin; at release the signature moves with it.
+
+Locked by `a_container_from_a_foreign_boot_layout_is_refused`: a
+container that is well formed in every other respect — same version,
+same atoms — is refused BEFORE adoption on the container path and at
+open on the store path.
+
 #### P1-3 — Generator PCs are validated against the segment, not the body — FIXED
 
 `image.rs:3466-3491` checks only `frame.resume_pc > code.len()` and

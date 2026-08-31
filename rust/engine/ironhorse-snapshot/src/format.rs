@@ -282,14 +282,38 @@ pub enum VersionError {
     UnsupportedEndian(u8),
 }
 
-/// The host callback-table signature (`SIGN`). Identifies the
-/// callback-table version a snapshot was written against. The table is
-/// **append-only**: new host functions are added at the end, existing
-/// indices never change, and any layout change bumps the signature (per
-/// `designs/daemon-xs-worker-snapshot.md` § Callback table binding). A
-/// reader whose signature differs from the snapshot's refuses the read,
-/// exactly as `fxReadSnapshot` does — a callback-index would otherwise
-/// bind to the wrong host function.
+/// The ENGINE-COMPATIBILITY signature (`SIGN`). Identifies the engine
+/// build a snapshot was written against, and gates adoption fail-closed:
+/// a reader whose signature differs from the snapshot's refuses the read
+/// before any restore runs, exactly as `fxReadSnapshot` does.
+///
+/// It covers two layouts, and a change to EITHER must bump it:
+///
+/// 1. **The host callback table.** Append-only: new host functions are
+///    added at the end and existing indices never change (per
+///    `designs/daemon-xs-worker-snapshot.md` § Callback table binding).
+///    A callback index would otherwise bind to the wrong host function.
+///
+/// 2. **The boot-derived `SlotIndex` layout** — every slot
+///    `create_intrinsics` allocates below `boot_slot_count`. Adoption
+///    boots a fresh machine and then REPLACES its arenas with the
+///    image's, so the boot-derived maps keyed by slot index (`functions`
+///    above all, and every `*_proto` field) survive from the CURRENT
+///    boot rather than being rebuilt from the snapshot. A container
+///    written under a different boot layout would therefore attach this
+///    build's boot metadata to the image's unrelated slots — silently.
+///    Nothing else catches it: `boot_slot_count` is not serialized, and
+///    `VERS` versions the WIRE SCHEMA (the atom set), not the heap the
+///    atoms describe.
+///
+/// Store-backed workers and exported containers are expected to survive
+/// daemon replacement and compatible engine upgrades, so "same build
+/// only" is not an acceptable contract; this is what makes the
+/// cross-build promise checkable. While this branch is unreleased and
+/// every container is regenerated, a boot-layout change is taken as a
+/// golden-pin content re-pin; at release the signature must move with
+/// it. Locked by
+/// `crafted_row_refusals::a_container_from_a_foreign_boot_layout_is_refused`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Signature(pub String);
 
