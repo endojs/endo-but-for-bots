@@ -43,7 +43,7 @@
     "source-map": "^0.8.0",
     "ts-node-pack": "^0.3.5",
     "tsd": "catalog:dev",
-    "turbo": "^2.10.10",
+    "turbo": "^2.10.11",
     "type-coverage": "^2.30.1",
     "typedoc": "^0.28.20",
     "typedoc-plugin-mermaid": "^1.12.0",

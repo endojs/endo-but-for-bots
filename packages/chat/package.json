@@ -88,7 +88,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "happy-dom": "^20.11.2",
+    "happy-dom": "^20.11.6",
     "typescript": "catalog:dev",
     "vite": "^6.0.0"
   },
