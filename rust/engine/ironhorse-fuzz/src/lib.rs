@@ -1539,6 +1539,55 @@ pub struct Divergence {
     pub detail: String,
 }
 
+/// Whether two completion result strings denote the same guest value.
+///
+/// Byte-identical strings agree. Beyond that, a **Number** completion is
+/// compared by its IEEE-754 double rather than its decimal spelling. XS's
+/// `fx_dtoa` renders some large integer-valued doubles in a non-shortest,
+/// exact-integer form — finding `d99d263fcf6ca7a7` reproduced
+/// `327155712 * ((327155712 * (729808896 % 603979776)) % 729808896)`, whose
+/// value is the exactly-representable double `57632001481506816`, which XS
+/// prints verbatim (17 digits). ironhorse — like V8/SpiderMonkey and
+/// ECMA-262 §6.1.6.1.20's "k is as small as possible" — prints the *shortest*
+/// round-tripping decimal, `57632001481506820` (16 digits). Both spellings
+/// parse back to the identical double, so the two engines computed the same
+/// value and disagree only on rendering; forcing byte-identity would make
+/// ironhorse reproduce XS's non-shortest, non-conformant rendering.
+///
+/// Comparing the parsed doubles suppresses that spurious spelling divergence
+/// while still flagging every genuine value divergence: two *different*
+/// doubles never share a parse (a decimal string parses to exactly one
+/// nearest double), so `a.to_bits() == b.to_bits()` fails the moment the
+/// engines actually computed different numbers.
+fn results_agree(oracle: &str, ironhorse: &str) -> bool {
+    if oracle == ironhorse {
+        return true;
+    }
+    match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
+        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
+        _ => false,
+    }
+}
+
+/// Parse a completion string as the ECMAScript `String()` of a finite
+/// Number, or `None` when it is not a plain decimal Number spelling — so
+/// `"Infinity"`, `"NaN"`, booleans, and string results fall through to the
+/// byte comparison in [`results_agree`] (and `Infinity`/`NaN` already match
+/// byte-for-byte anyway). The character allow-list is what keeps Rust's
+/// float parser from accepting `inf`/`nan`/`infinity`, which JS never prints.
+fn as_ecma_number(s: &str) -> Option<f64> {
+    if s.is_empty() {
+        return None;
+    }
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
+    {
+        return None;
+    }
+    s.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
 /// Target 1 body: run `source` on both engines, returning `Err` on any
 /// completion / result / computron divergence. `Ok(())` also covers the
 /// legitimate "ironhorse reached an opcode outside the stage-1 subset" case
@@ -1566,7 +1615,7 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
         });
     }
     if oracle.completed {
-        if oracle.result != ironhorse.result {
+        if !results_agree(&oracle.result, &ironhorse.result) {
             return Err(Divergence {
                 source: source.to_string(),
                 detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
@@ -1601,6 +1650,16 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
     if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
         return Ok(());
     }
+    // The oracle captures the completion value into a fixed-size buffer; when
+    // the value is longer than that buffer, `oracle.result` is a truncated
+    // prefix and cannot be compared against the port's full result without a
+    // spurious divergence (finding 493390fc03979205: a deeply nested regexp
+    // whose `.toString()` exceeds the buffer). The oracle cannot faithfully
+    // represent this result, so skip honestly, exactly like an out-of-subset
+    // program — never report the truncation as a port defect.
+    if oracle.result_truncated {
+        return Ok(());
+    }
     if oracle.completed != ironhorse.completed {
         return Err(Divergence {
             source: source.to_string(),
@@ -1611,7 +1670,7 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
         });
     }
     if oracle.completed {
-        if oracle.result != ironhorse.result {
+        if !results_agree(&oracle.result, &ironhorse.result) {
             return Err(Divergence {
                 source: source.to_string(),
                 detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
@@ -1645,6 +1704,13 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
     if let ironhorse_vm::Halt::Unsupported(_) = ironhorse.halt {
         return Ok(());
     }
+    // A completion value longer than the oracle's fixed capture buffer is a
+    // truncated prefix on the oracle side; comparing it against the port's
+    // full result would be a spurious divergence, so skip honestly (see
+    // `differential_check_with_symbols`, finding 493390fc03979205).
+    if oracle.result_truncated {
+        return Ok(());
+    }
     if oracle.completed != ironhorse.completed {
         return Err(Divergence {
             source: source.to_string(),
@@ -1654,7 +1720,7 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
             ),
         });
     }
-    if oracle.completed && oracle.result != ironhorse.result {
+    if oracle.completed && !results_agree(&oracle.result, &ironhorse.result) {
         return Err(Divergence {
             source: source.to_string(),
             detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
@@ -1817,6 +1883,487 @@ pub fn compile_differential_check(source: &str) -> CompileFuzzOutcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression for continuous-fuzz finding `66facfd52ae8c673` (target
+    /// `differential_source`). The exact 3-byte minimized input folds into
+    /// arithmetic whose result is the exactly representable double
+    /// `51298825763029616`. XS renders that exact integer while ironhorse uses
+    /// the shorter round-tripping decimal `51298825763029620`; both strings
+    /// parse to the same `f64`. This is the same oracle-rendering class as
+    /// finding `d99d263fcf6ca7a7`, so the numeric `results_agree` comparison
+    /// must suppress the false divergence.
+    #[test]
+    fn finding_66facfd52ae8c673_large_integer_dtoa_agrees() {
+        let data: &[u8] = include_bytes!(
+            "../tests/fixtures/finding-66facfd52ae8c673.input.bin"
+        );
+        assert_eq!(
+            data.len(),
+            3,
+            "the minimized finding remains exactly three bytes"
+        );
+
+        let program = gen_program(data);
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(divergence) => panic!(
+                "finding 66facfd52ae8c673 must not diverge: {:?}",
+                divergence
+            ),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `d99d263fcf6ca7a7` (target
+    /// `differential_source`). The 5-byte input `2d 57 27 48 86` folds into
+    /// `((729808896 && …) * ((… * (729808896 % 603979776)) % 729808896))`,
+    /// whose value is the exactly-representable double `57632001481506816`.
+    /// XS's `fx_dtoa` prints that double verbatim as its 17-digit exact
+    /// integer, whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's
+    /// shortest-round-tripping rule — prints the 16-digit `57632001481506820`.
+    /// Both denote the identical double, so the engines agree on the value and
+    /// diverge only on decimal spelling; the differential check must not read
+    /// that as a finding.
+    #[test]
+    fn finding_d99d263fcf6ca7a7_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 749f2021f82cf2664d886690b5e87184f084e600df531f9ab232e3f64e09a4f9).
+        let data: &[u8] = &[0x2d, 0x57, 0x27, 0x48, 0x86];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer arithmetic whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding d99d263fcf6ca7a7 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `314f811064b8febb` (target
+    /// `differential_source`). The 5-byte input `75 6c 74 7b 2d` (`"ult{-"`)
+    /// folds into the *division* chain
+    /// `(377487360 / (377487360 / (377487360 / (-5 / 981467136))))`, whose
+    /// value is the exactly-representable double `0xc370740000000000`. XS's
+    /// `fx_dtoa` renders that double as the 17-digit `-74098287619080190`,
+    /// whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's
+    /// shortest-round-tripping rule — prints `-74098287619080200`. Both parse
+    /// back to the identical double, so the engines agree on the value and
+    /// diverge only on decimal spelling; the same class as `d99d263fcf6ca7a7`,
+    /// already suppressed by the numeric `results_agree` comparison — reached
+    /// here through division rather than a product. The differential check must
+    /// not read this as a finding.
+    #[test]
+    fn finding_314f811064b8febb_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 4f6dc01326c7629a715a037a135e47010efe913a121ae02b43846601c850a1a5).
+        let data: &[u8] = &[0x75, 0x6c, 0x74, 0x7b, 0x2d];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-magnitude division chain whose value overflows 2^53.
+        assert!(prog.contains('/'), "finding program is a division chain: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 314f811064b8febb must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `5c29667cc15d6d93` (target
+    /// `differential_source`). The 5-byte input `e1 1b dc dc dc` folds into
+    /// `((-(-(-226492416))) * (-(-(-226492416))))`, i.e. `226492416^2` where
+    /// `226492416 = 27 * 2^23`, whose value is the exactly-representable double
+    /// `729 * 2^46` = `51298814505517056`. XS's `fx_dtoa` prints that double
+    /// verbatim as its 17-digit exact integer, whereas ironhorse — like V8 and
+    /// ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
+    /// `51298814505517060`. Both denote the identical double, so the engines
+    /// agree on the value and diverge only on decimal spelling; the same class
+    /// as `d99d263fcf6ca7a7`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_5c29667cc15d6d93_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 203db557fe4893accc7f29b36e0fc723551a7494f0c33a65e809ec88045449e2).
+        let data: &[u8] = &[0xe1, 0x1b, 0xdc, 0xdc, 0xdc];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 5c29667cc15d6d93 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `67a52af412f03a7b` (target
+    /// `differential_source`). The exact 3-byte minimized input folds into
+    /// `(226492416 * 226492416)`, whose exactly representable double value is
+    /// `51298814505517056`. XS prints that exact integer while ironhorse emits
+    /// the shortest round-tripping `51298814505517060`; the numeric
+    /// `results_agree` comparison must recognize that both spellings denote
+    /// the identical Number.
+    #[test]
+    fn finding_67a52af412f03a7b_large_integer_dtoa_agrees() {
+        let data = include_bytes!(
+            "../../ironhorse-vm/tests/fixtures/finding-67a52af412f03a7b-input.bin"
+        );
+        let program = gen_program(data);
+        assert_eq!(program, "(226492416 * 226492416)");
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(divergence) => {
+                panic!("finding 67a52af412f03a7b must not diverge: {:?}", divergence)
+            }
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `7289e31013d074ec` (target
+    /// `differential_source`). The 4-byte input `d8 7f 33 ba` folds into
+    /// `((~(~(1560281088 * true))) * ((~(1560281088 * true)) << ((~true) << (true << true))))`,
+    /// where `1560281088 = 186 * 2^23` (the generator's "larger integer" atom).
+    /// In ToInt32 arithmetic the left factor is `1560281088`, the outer shift is
+    /// by `24`, the right factor is `(~1560281088) << 24 = -16777216`, and the
+    /// product is `-(93 * 2^48)` = `-26177172834091008`, an exactly-representable
+    /// double whose magnitude overflows 2^53. XS's `fx_dtoa` prints that double
+    /// verbatim as its 17-digit exact integer, whereas ironhorse — like V8 and
+    /// ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
+    /// `-26177172834091010`. Both denote the identical double, so the engines
+    /// agree on the value and diverge only on decimal spelling; the same class
+    /// as `d99d263fcf6ca7a7` / `5c29667cc15d6d93`, already suppressed by the
+    /// numeric `results_agree` comparison. The differential check must not read
+    /// this as a finding.
+    #[test]
+    fn finding_7289e31013d074ec_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 6abb2fe734124222bc19e12518fa968a59f254edea3c9ed262414cb4637c736f).
+        let data: &[u8] = &[0xd8, 0x7f, 0x33, 0xba];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7289e31013d074ec must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `783be6e6106bad98` (target
+    /// `differential_source`). The 6-byte input `00 00 66 69 27 44` folds into
+    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712)))
+    /// + (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
+    /// right operand; the outer `!(...)` is `false` → `0`) to the single product
+    /// `(~570425344) * (327155712 + 1) = -570425345 * 327155713`. Its exact value
+    /// `-186617910456745985` overflows 2^53 and rounds to the double
+    /// `-186617910456745984`. XS's `fx_dtoa` renders a non-shortest 17-digit form
+    /// (`-186617910456745980`) while ironhorse — like V8 and ECMA-262
+    /// §6.1.6.1.20's shortest-round-tripping rule — renders `-186617910456746000`.
+    /// Both denote the identical double; the same class as `5c29667cc15d6d93` and
+    /// `d99d263fcf6ca7a7`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_783be6e6106bad98_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 95c5064e49e6c191f7f9b8be24270555d12b04c226cbc72c01406e024ff39008).
+        let data: &[u8] = &[0x00, 0x00, 0x66, 0x69, 0x27, 0x44];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 783be6e6106bad98 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `284de587e16bce32` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 9-byte input
+    /// `00 fc 00 01 b1 5d 00 00 00` folds into
+    /// `(((~(true && true)) - ((780140544 - true) * (true + true))) * (…same…))`,
+    /// i.e. the square of `-2 - (780140543 * 2) = -1560281088`. In IEEE-754
+    /// doubles that is `1560281088^2 = (186 * 2^23)^2 = 8649 * 2^48`, the
+    /// exactly-representable double whose real value is `2434477073570463744`.
+    /// XS's `fx_dtoa` prints that double verbatim as its 19-digit exact integer,
+    /// whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's shortest-round-
+    /// tripping rule — prints `2434477073570464000`. Both denote the identical
+    /// double, so the engines agree on the value and diverge only on decimal
+    /// spelling; the same class as `d99d263fcf6ca7a7` / `5c29667cc15d6d93` /
+    /// `7289e31013d074ec` / `783be6e6106bad98`, already suppressed by the
+    /// numeric `results_agree` comparison. The differential check must not read
+    /// this as a finding.
+    #[test]
+    fn finding_284de587e16bce32_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 05b1ea60cf0ed92291daeb24a160652baaa07e231d88d84f48548d261b517c33).
+        let data: &[u8] = &[0x00, 0xfc, 0x00, 0x01, 0xb1, 0x5d, 0x00, 0x00, 0x00];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 284de587e16bce32 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `7152c1a9960a0688` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 8-byte input
+    /// `27 79 00 00 00 57 2d 08` folds into the arithmetic program
+    /// `((((1015021568 / true) * (377487360 + -89)) + (-(true + 377487360))) ||
+    /// 1015021568)`, i.e. `1015021568 * 377487271 - 377487361`, whose IEEE-754
+    /// double is `8'315'...` — precisely the exactly-representable double whose
+    /// real value is `383157721332973568` (bits `0x439544ffab840000`). XS's
+    /// `fx_dtoa` renders it in a non-shortest 18-digit form
+    /// (`383157721332973570`), while ironhorse — like V8 and ECMA-262
+    /// §6.1.6.1.20's shortest-round-tripping rule — renders `383157721332973600`.
+    /// Both spellings parse back to the identical double, so the engines agree on
+    /// the value and diverge only on decimal spelling; the same class as
+    /// `d99d263fcf6ca7a7` / `5c29667cc15d6d93` / `7289e31013d074ec` /
+    /// `783be6e6106bad98` / `284de587e16bce32`, already suppressed by the numeric
+    /// `results_agree` comparison. The differential check must not read this as a
+    /// finding.
+    #[test]
+    fn finding_7152c1a9960a0688_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // f8b5e31e69a227500b3733aebdfffee49512debf2bb863c825991a4435652bc1).
+        let data: &[u8] = &[0x27, 0x79, 0x00, 0x00, 0x00, 0x57, 0x2d, 0x08];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program is
+        // the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7152c1a9960a0688 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `7277b0fc4a72d8d6` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
+    /// `3f f7 de` folds into
+    /// `((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))`,
+    /// i.e. `X * X` where `X = ~ToInt32((~2071986176)^2)`. In IEEE-754 doubles
+    /// the inner product `(-2071986177)^2` rounds to `4293126717679075328`,
+    /// whose `ToInt32` is `-150994944`, so `X = 150994943` and the program's
+    /// value is `150994943^2`, the exactly-representable double
+    /// `22799472811573248`. XS's `fx_dtoa` prints that exact 17-digit integer,
+    /// whereas ironhorse — like V8/Node and ECMA-262 §6.1.6.1.20's shortest-
+    /// round-tripping rule — prints `22799472811573250`. Both parse to the
+    /// identical double, so the engines agree on the value and diverge only on
+    /// decimal spelling; the same class as `284de587e16bce32` /
+    /// `d99d263fcf6ca7a7` / `5c29667cc15d6d93` / `7289e31013d074ec` /
+    /// `783be6e6106bad98`, already suppressed by the numeric `results_agree`
+    /// comparison. The differential check must not read this as a finding.
+    #[test]
+    fn finding_7277b0fc4a72d8d6_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 0792c486c29a77190658d061a90fc215ba1777bce94464d104c93a508dc0d08b).
+        let data: &[u8] = &[0x3f, 0xf7, 0xde];
+        let prog = gen_program(data);
+        // Confirm we are still exercising the finding: the generated program
+        // is the large-integer product whose value overflows 2^53.
+        assert!(prog.contains('*'), "finding program is a product: {}", prog);
+        match differential_check(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 7277b0fc4a72d8d6 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
+    /// whose `.source` completion value is a 1955-byte string — longer than the
+    /// oracle's old 1024-byte capture buffer, so the pre-fix oracle truncated
+    /// its own reference to 1023 bytes and the harness read the port's correct
+    /// full result as a divergence. A distinct input of the same class as
+    /// `493390fc03979205` / `3ea435c58b4c588e` (there `.toString()`, here the
+    /// `.source` accessor), already covered by that fix (larger buffer + honest
+    /// skip on overflow): the exact finding input must check clean, not diverge.
+    #[test]
+    fn finding_a136f9038a1001fb_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // d3bc62680a221ff9518c4aad6b03787bded65b75091e3b1dd34b1451e7a5835c).
+        let data: &[u8] = &[0x2c, 0x2c, 0x2c, 0xd4, 0x88];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp `.source`
+        // accessor whose rendered pattern overflows the old 1023-byte buffer.
+        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding a136f9038a1001fb must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `ab889c8f6184c60d` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// exact 4-byte input folds into a deeply nested
+    /// `new RegExp(<pattern>, "s").source` whose completion value is a
+    /// 1216-byte string — longer than the oracle's old 1024-byte capture
+    /// buffer, so the pre-fix oracle truncated its own reference to 1023 bytes
+    /// and the harness read the port's correct full result as a divergence.
+    /// This is a distinct `.source` input of the same class as
+    /// `493390fc03979205`, already covered by that finding's causal fix (larger
+    /// buffer + honest skip on overflow). The exact input must check clean.
+    #[test]
+    fn finding_ab889c8f6184c60d_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // e31b5a31b37ce02cba6b665098b0d9844e248e95e89f252910a4ec2660412e07).
+        let data =
+            include_bytes!("../tests/fixtures/finding-ab889c8f6184c60d.input.bin");
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp `.source`
+        // accessor whose rendered pattern overflows the old 1023-byte buffer.
+        assert!(
+            prog.ends_with(".source"),
+            "finding program is a RegExp.source: {}",
+            prog
+        );
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding ab889c8f6184c60d must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `2276f4edebdcb3bb` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// exact 5-byte input folds into a deeply nested `RegExp.source` program
+    /// whose 1312-byte completion value overflowed the oracle's old 1024-byte
+    /// capture buffer. The oracle returned a truncated prefix and the harness
+    /// mistook the port's correct full result for a divergence. The causal
+    /// oracle fix from same-class finding `493390fc03979205` (larger buffer
+    /// plus an honest skip on overflow) must keep this distinct input clean.
+    #[test]
+    fn finding_2276f4edebdcb3bb_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 4f0d6ca037b3a7536fa8e0595f92fd251fbd6aa459d916652f87a3e9f7ad111e).
+        let data =
+            include_bytes!("../tests/fixtures/finding-2276f4edebdcb3bb.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.ends_with(".source"),
+            "finding program must exercise RegExp.source"
+        );
+        match differential_check_with_symbols(&program) {
+            Ok(()) => {}
+            Err(divergence) => {
+                panic!("finding 2276f4edebdcb3bb must not diverge: {divergence:?}")
+            }
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `6f0b586a80019097` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// exact 5-byte input folds into a deeply nested `RegExp.source` program
+    /// whose 1160-byte completion value overflowed the oracle's old 1024-byte
+    /// capture buffer. The oracle returned a truncated prefix and the harness
+    /// mistook the port's correct full result for a divergence. The causal
+    /// oracle fix from same-class finding `493390fc03979205` (larger buffer
+    /// plus an honest skip on overflow) must keep this distinct input clean.
+    #[test]
+    fn finding_6f0b586a80019097_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 7637ee2cbd7ed3fbb4ceb06ff0e8fc37f4e64308a503b6f8bb388e2fbf965497).
+        let data =
+            include_bytes!("../tests/fixtures/finding-6f0b586a80019097.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.ends_with(".source"),
+            "finding program must exercise RegExp.source"
+        );
+        match differential_check_with_symbols(&program) {
+            Ok(()) => {}
+            Err(divergence) => {
+                panic!("finding 6f0b586a80019097 must not diverge: {divergence:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn results_agree_on_equal_doubles_spelled_differently() {
+        // The finding's two renderings of the same double.
+        assert!(results_agree("57632001481506816", "57632001481506820"));
+        // A genuine value divergence is still caught.
+        assert!(!results_agree("57632001481506816", "57632001481506824"));
+        assert!(!results_agree("3", "4"));
+        // Non-numeric completions compare byte-for-byte.
+        assert!(results_agree("true", "true"));
+        assert!(!results_agree("true", "false"));
+        assert!(!results_agree("Infinity", "1e999"));
+        // `Infinity`/`NaN` are not parsed as numbers (they match as strings).
+        assert!(as_ecma_number("Infinity").is_none());
+        assert!(as_ecma_number("NaN").is_none());
+        assert!(as_ecma_number("").is_none());
+    }
+
+    /// Regression for continuous-fuzz finding `493390fc03979205` (target
+    /// `differential_regexp_surface`). The 4-byte input folds into a deeply
+    /// nested `new RegExp(<pattern>, "s").toString()` whose completion value is
+    /// 1099 bytes — longer than the oracle's old 1024-byte capture buffer. The
+    /// oracle truncated its own reference to 1023 bytes and the harness read
+    /// the port's correct full result as a divergence. With the oracle fix
+    /// (larger buffer + honest skip on overflow) the exact finding input must
+    /// check clean, not diverge.
+    #[test]
+    fn finding_493390fc03979205_long_regexp_tostring_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 450a95b7db1bd744fc94f63a2842714b4e8bf996f97d589fb8aeef172dabbcf7).
+        let data: &[u8] = &[0x08, 0x74, 0x74, 0x2a];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp.toString()
+        // whose rendered source overflows the old 1023-byte buffer.
+        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 493390fc03979205 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `3ea435c58b4c588e` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
+    /// 4-byte input folds into a deeply nested
+    /// `new RegExp(<pattern>, "s").toString()` whose completion value is 1128
+    /// bytes — longer than the oracle's old 1024-byte capture buffer, so the
+    /// pre-fix oracle truncated its own reference to 1023 bytes and the harness
+    /// read the port's correct full result as a divergence. A distinct input
+    /// of the same class as `493390fc03979205`, already covered by that fix
+    /// (larger buffer + honest skip on overflow): the exact finding input must
+    /// check clean, not diverge.
+    #[test]
+    fn finding_3ea435c58b4c588e_regexp_tostring_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 9df4e2b4ff1278d84c09d3caad69d47b90401dae21573f6d581a7085716e1638).
+        let data: &[u8] = &[0x8c, 0x8c, 0x8c, 0xa2];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp.toString()
+        // whose rendered source overflows the old 1023-byte buffer.
+        assert!(prog.contains(".toString()"), "finding program is a RegExp.toString(): {}", prog);
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 3ea435c58b4c588e must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `91afec2d990bc402` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189`). The 4-byte input `5c 5c 5c 34` folds into a deeply
+    /// nested `new RegExp(<pattern>, "s").source` — a 1117-byte program whose
+    /// `.source` completion value overflows the oracle's old 1024-byte capture
+    /// buffer. The pre-fix oracle truncated its own reference and the harness
+    /// read the port's correct full result as a divergence. A distinct
+    /// `.source` input of the same class as `493390fc03979205` /
+    /// `3ea435c58b4c588e`, already covered by that fix (larger 16 KiB buffer +
+    /// honest skip on overflow): the exact finding input must check clean, not
+    /// diverge.
+    #[test]
+    fn finding_91afec2d990bc402_regexp_source_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 1e9756cef3b0a9372ae74719ccae857a781982d0e8f656b3b506555534670419).
+        let data: &[u8] = &[0x5c, 0x5c, 0x5c, 0x34];
+        let prog = gen_stage3b_regexp_program(data);
+        // Confirm we are still exercising the finding: a RegExp `.source`
+        // whose rendered value overflows the old 1024-byte buffer.
+        assert!(prog.ends_with(".source"), "finding program is a RegExp.source: {}", prog);
+        assert!(prog.len() > 1024, "finding program overflows the old buffer: {}", prog.len());
+        match differential_check_with_symbols(&prog) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 91afec2d990bc402 must not diverge: {:?}", d),
+        }
+    }
 
     #[test]
     fn generated_programs_agree_with_oracle() {

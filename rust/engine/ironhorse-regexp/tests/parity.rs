@@ -90,7 +90,7 @@ fn check(case: Case) -> Result<bool, String> {
                 ));
             }
             // The metering bar: per-step match meter, bit-exact.
-            if outcome.match_meter_raw != oracle.match_meter_raw as u64 {
+            if outcome.match_meter_raw != oracle.match_meter_raw {
                 return Err(format!(
                     "/{}/{} on {:?}@{}: match meter ironhorse={} oracle={}",
                     pattern, flags, subject, start, outcome.match_meter_raw, oracle.match_meter_raw

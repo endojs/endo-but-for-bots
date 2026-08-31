@@ -250,6 +250,7 @@ version = "0.0.1"
 dependencies = [
  "icu_normalizer",
  "icu_segmenter",
+ "ironhorse-compile",
  "ironhorse-regexp",
 ]
 

@@ -31,7 +31,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define ENDOR_RESULT_MAX 1024
+#define ENDOR_RESULT_MAX 16384
 #define ENDOR_ERROR_MAX 256
 
 typedef struct {
@@ -44,6 +44,12 @@ typedef struct {
 	txU4 ok;         /* 1 = completed normally, 0 = threw / parse error */
 	char result[ENDOR_RESULT_MAX]; /* completion value coerced to String() */
 	char error[ENDOR_ERROR_MAX];   /* message when ok == 0 */
+	/* True byte length of the coerced completion value BEFORE the copy
+	 * into the fixed `result` buffer. When this exceeds ENDOR_RESULT_MAX-1
+	 * the stored `result` is a truncated prefix, so a caller comparing it
+	 * against the port must not read a divergence from the truncation — the
+	 * differential check skips such a case honestly (finding 493390fc0397). */
+	txU4 result_len;
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
@@ -347,6 +353,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			{
 				txString s = result->value.string;
 				if (s) {
+					out->result_len = (txU4)c_strlen(s);
 					strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
 					out->result[ENDOR_RESULT_MAX - 1] = 0;
 				}
@@ -692,6 +699,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 				fxGetID(the, fxID(the, "result"));
 				fxToString(the, the->stack);
 				if (the->stack->value.string) {
+					out->result_len = (txU4)c_strlen(the->stack->value.string);
 					strncpy(out->result, the->stack->value.string,
 						ENDOR_RESULT_MAX - 1);
 					out->result[ENDOR_RESULT_MAX - 1] = 0;
@@ -758,10 +766,17 @@ typedef struct {
 	txU4 capture_count; /* code[1]: total captures incl. whole match (index 0) */
 	txU4 name_count;    /* code[2] */
 	txS4 captures[2 * ENDOR_MAX_CAPTURES]; /* from,to pairs, byte offsets, -1 unset */
-	txU4 compile_computrons; /* compile meter >> 16 */
-	txU4 compile_meter_raw;
-	txU4 match_computrons;   /* match meter >> 16 */
-	txU4 match_meter_raw;
+	/* The meter is XS's own `meterIndex`, a txU8 (xsAll.h). A match over a
+	 * pathological empty-matchable pattern can dispatch well over 65536
+	 * steps, so the raw 16.16 meter exceeds 2^32; these fields therefore
+	 * carry the full 64-bit value. A narrower field silently wrapped it
+	 * (finding 5d122a6fc10babd9: a false differential_regexp divergence
+	 * where the port's un-truncated u64 meter disagreed only with the
+	 * shim's wrapped 32-bit copy). */
+	txU8 compile_computrons; /* compile meter >> 16 */
+	txU8 compile_meter_raw;
+	txU8 match_computrons;   /* match meter >> 16 */
+	txU8 match_meter_raw;
 	char error[ENDOR_ERROR_MAX]; /* compile error message when ok == 0 */
 } EndorRegExpResult;
 
@@ -799,7 +814,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 			}
 			else {
 				out->ok = 1;
-				out->compile_meter_raw = (txU4)the->meterIndex;
+				out->compile_meter_raw = (txU8)the->meterIndex;
 				out->compile_computrons = the->meterIndex >> 16;
 
 				captureCount = code[1];
@@ -815,7 +830,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 				the->meterIndex = 0;
 				out->matched = fxMatchRegExp(the, code, data,
 					(txString)subject, start) ? 1 : 0;
-				out->match_meter_raw = (txU4)the->meterIndex;
+				out->match_meter_raw = (txU8)the->meterIndex;
 				out->match_computrons = the->meterIndex >> 16;
 
 				before = captureCount;

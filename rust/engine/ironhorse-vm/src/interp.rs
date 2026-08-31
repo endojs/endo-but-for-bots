@@ -9683,8 +9683,17 @@ impl Interp {
                                 }
                             } else if Some(id) == g.source {
                                 self.meter.tick_raw(REGEXP_GETTER_METERING);
-                                let (bytes, _alloc) = self.regexp_source_bytes(inst);
-                                self.new_string_metered(&bytes)
+                                let (bytes, allocated) = self.regexp_source_bytes(inst);
+                                if allocated {
+                                    self.new_string_metered(&bytes)
+                                } else {
+                                    // XS returns the constructor's existing
+                                    // source key when no escaping is needed;
+                                    // materialize the equivalent primitive in
+                                    // our arena without charging a new chunk.
+                                    let offset = self.alloc_str_text(&bytes);
+                                    Slot::of(Kind::String, Payload::String(offset))
+                                }
                             } else if Some(id) == g.flags {
                                 self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
                                 let flags = self.regexps[&inst].flags.clone();
