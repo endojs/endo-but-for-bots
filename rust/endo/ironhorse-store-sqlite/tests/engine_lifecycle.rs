@@ -17,20 +17,11 @@
 //!
 //! Fixture discipline: each scenario asserts its baseline completion
 //! against a literal expected value first, so a fixture the engine
-//! cannot yet run (or a symbol-numbering mismatch between cranks)
-//! fails loudly at the baseline, never as a store-attributed
-//! divergence. Cross-crank symbol resolution follows the blessed
-//! pattern of `ironhorse-snapshot/tests/restore_side_tables.rs`
-//! (`link_intrinsics` on the first crank's names; restores re-derive
-//! the linkage) with one refinement this suite discovered and locks:
-//! program-symbol ids coincide across independently compiled cranks
-//! only when every crank uses **exactly the same symbol set**, so each
-//! crank anchors otherwise-unused names with no-op mentions (`var n;`
-//! re-declarations, which do not clobber, and `o.x;` property reads).
-//! A live closure or generator held **across** a suspend is
-//! deliberately absent — those side tables are the ledger's enumerated
-//! `Pending` remainder, not covered snapshot state (the honest
-//! narrower contract).
+//! cannot yet run fails loudly at the baseline, never as a store-attributed
+//! divergence. The first crank installs the realm's symbols with
+//! `link_intrinsics`; every later independently compiled crank passes through
+//! `relink_crank`, the production boundary that maps its local symbol ids into
+//! the retained realm and keeps its function bytecode alive.
 
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, resume_from_store, MachineSnapshot,
@@ -66,8 +57,15 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     let mut baseline = Interp::new();
     baseline.link_intrinsics(&compiled[0].1);
     let mut baseline_outcomes = Vec::new();
-    for (i, (bytecode, _)) in compiled.iter().enumerate() {
-        let outcome = baseline.run(bytecode);
+    for (i, (bytecode, names)) in compiled.iter().enumerate() {
+        let runnable = if i == 0 {
+            bytecode.clone()
+        } else {
+            baseline
+                .relink_crank(bytecode, names)
+                .expect("baseline crank relinks")
+        };
+        let outcome = baseline.run(&runnable);
         assert!(
             outcome.completed,
             "[{name}] baseline crank {} completes (halt: {:?})",
@@ -87,7 +85,10 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     let mut m0 = Interp::new();
     m0.link_intrinsics(&compiled[0].1);
     let outcome = m0.run(&compiled[0].0);
-    assert_eq!(outcome.result, baseline_outcomes[0].result, "[{name}] crank 1 result");
+    assert_eq!(
+        outcome.result, baseline_outcomes[0].result,
+        "[{name}] crank 1 result"
+    );
     let mut session = begin_store_session(m0, &sig(), &mut store)
         .map_err(|(_, e)| e)
         .expect("begin session");
@@ -97,7 +98,7 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         "[{name}] store equals live machine after the full write"
     );
 
-    for (i, (bytecode, _)) in compiled.iter().enumerate().skip(1) {
+    for (i, (bytecode, names)) in compiled.iter().enumerate().skip(1) {
         // Sleep: drop the machine, close the database fully.
         drop(session);
         store.close().expect("full close");
@@ -105,8 +106,16 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
         // Wake: reopen, resume, run the next crank.
         store = SqliteHeapStore::open(&path).unwrap();
         session = resume_from_store(&store, &sig()).expect("resumes");
-        let outcome = session.machine_mut().run(bytecode);
-        assert!(outcome.completed, "[{name}] resumed crank {} completes", i + 1);
+        let runnable = session
+            .machine_mut()
+            .relink_crank(bytecode, names)
+            .expect("resumed crank relinks");
+        let outcome = session.machine_mut().run(&runnable);
+        assert!(
+            outcome.completed,
+            "[{name}] resumed crank {} completes",
+            i + 1
+        );
         assert_eq!(
             outcome.result,
             baseline_outcomes[i].result,
@@ -135,7 +144,9 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     // the blob the baseline machine itself writes.
     assert_eq!(
         export_to_container(&store).unwrap(),
-        baseline.write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        baseline
+            .write_snapshot(&sig())
+            .expect("quiescent machine snapshots"),
         "[{name}] final store export byte-equals the never-suspended machine's blob"
     );
 
@@ -157,12 +168,7 @@ fn globals_survive_sqlite_sleep_cycles() {
 fn strings_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "strings",
-        &[
-            "var s = 'seed';",
-            "s = s + '-grow';",
-            "s = s + s;",
-            "s",
-        ],
+        &["var s = 'seed';", "s = s + '-grow';", "s = s + s;", "s"],
     );
     assert_eq!(last, "seed-growseed-grow");
 }
@@ -230,6 +236,33 @@ fn closure_results_survive_sqlite_sleep_cycles() {
         ],
     );
     assert_eq!(last, "43");
+}
+
+/// Arrow-specific function metadata and closure-environment captures survive
+/// a full SQLite close/reopen cycle. This covers all three lexical bindings
+/// stored by `STORE_ARROW`: `this`, `new.target`, and the method home object
+/// used by `super`.
+#[test]
+fn arrow_lexical_captures_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "arrow-captures",
+        &[
+            "var receiver = { x: 7, make() { return () => this.x; } }; \
+             var heldThis = receiver.make(); \
+             var F = function () { return () => new.target; }; \
+             var heldTarget = new F(); \
+             var base = { x: 3 }; \
+             var object = { m() { return () => super.x; } }; \
+             Object.setPrototypeOf(object, base); \
+             var heldSuper = object.m();",
+            "var receiver; receiver.x; receiver.make; \
+             var heldThis; var F; var heldTarget; \
+             var base; base.x; var object; object.m; Object.setPrototypeOf; \
+             var heldSuper; \
+             heldThis() + ':' + (heldTarget() === F) + ':' + heldSuper()",
+        ],
+    );
+    assert_eq!(last, "7:true:3");
 }
 
 /// A heap wide enough to span many slot pages: thousands of
