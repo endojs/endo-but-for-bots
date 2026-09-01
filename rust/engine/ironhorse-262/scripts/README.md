@@ -9,9 +9,10 @@ emits a stable machine-readable `report.json` plus a self-contained static
 **Axes this sweep does not exercise.** Every run this automation produces is a
 non-hardened run: `ses_mode` is `none`, so no `lockdown()` / `Compartment` cases
 run and the SES (Hardened JavaScript) axis is **not** measured — the report's
-lede discloses this beside the strict-mode gap. Strict-mode executions are
-likewise not implemented. Both are named where the report makes its headline
-claim, not only in a provenance row.
+lede discloses this where it makes its headline claim, not only in a provenance
+row. Script cases execute every sloppy/strict variant selected by their Test262
+flags; the report separately counts any strict variant omitted by explicit
+policy.
 
 ## One command
 
@@ -73,8 +74,9 @@ gitignored `rust/engine/target/`.
   provenance timestamps intentionally differ between runs.
 - **Honest coverage.** Discovery walks the authoritative `test/**` case trees,
   including `annexB/` and `intl402/`. It excludes non-authoritative `staging/`,
-  harness support files, and module cases, all named in the report lede;
-  an unsupported language feature surfaces as a named `unsupported` gap, never
+  harness support files, all named in the report lede. Synchronous single-file
+  module cases run; loader-dependent module shapes surface as named gaps. An
+  unsupported language feature surfaces as a named `unsupported` gap, never
   hidden. The report distinguishes a genuine **Ironhorse failure** (a
   bar-forbidden divergence) and an **unsupported** language gap from an
   **infrastructure** non-result (oracle/harness), the split the maintainer asked

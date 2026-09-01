@@ -23,10 +23,11 @@ use crate::expectations::{Mode, Outcome};
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
 use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun, IronhorseCompile};
-use ironhorse_vm::Halt;
+use ironhorse_vm::{Halt, RunOutcome};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The ironhorse not-yet-implemented feature skip list — the analogue of
 /// `xst262.c`'s 13-entry `gxFeatures`. A test whose frontmatter `features:`
@@ -244,8 +245,8 @@ pub enum Verdict {
     /// the oracle; negative: the expected-type abort). The report's covered
     /// tally.
     Covered,
-    /// Skipped before running — a declared-unimplemented feature, a
-    /// structural shape (`module`) or an unavailable SES mode. The report's
+    /// Skipped before running — a declared-unimplemented feature, an
+    /// unavailable host shape, or an unavailable SES mode. The report's
     /// `skip:` section (xst's feature/flag skips).
     PreSkip(String),
     /// Skipped after attempting the run, named by the exact opcode / value /
@@ -294,8 +295,8 @@ fn effective_skip_features(cfg: &Config) -> HashSet<String> {
 /// Strict-mode selection from a case's `flags` — ironhorse's mirror of
 /// `xst262.c`'s default two-run (sloppy then strict) with the `onlyStrict` /
 /// `noStrict` / `raw` selectors. Returns `(run_sloppy, run_strict,
-/// only_strict)`. `module` is handled as a structural pre-skip before this
-/// is consulted.
+/// only_strict)`. Module-goal cases use their own single execution mode before
+/// this is consulted.
 pub fn strict_mode_status(flags: &[String]) -> (bool, bool, bool) {
     let has = |name: &str| flags.iter().any(|f| f == name);
     if has("onlyStrict") {
@@ -542,9 +543,25 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // The pinned official Moddable XS build has no ECMA-402
                     // host at all. Ironhorse can therefore execute Intl cases,
                     // but this exact oracle cannot certify their values. Keep
-                    // the host-only exclusion precise: any other oracle throw
-                    // remains an over-acceptance failure.
+                    // the host-only exclusion precise.
                     Verdict::RunSkip("oracle-host-missing-intl".into())
+                } else if oracle_fails_const_assignment_test(run) {
+                    // The generated const-assignment cases execute their
+                    // official assertion on both engines. Ironhorse completes
+                    // after observing the required TypeError; pinned XS throws
+                    // the harness's Test262Error. Keep this exact oracle gap
+                    // from forcing Ironhorse to reproduce the reference
+                    // engine's failing behavior.
+                    Verdict::RunSkip("oracle-xs-const-assignment".into())
+                } else if oracle_loses_with_reference(run) {
+                    // Pinned XS re-resolves a `with` reference at PutValue
+                    // after a getter/RHS deletes the property, then throws a
+                    // ReferenceError. ECMA-262 retains the Reference produced
+                    // by evaluating the LHS; the official cases complete on
+                    // Ironhorse. Keep that exact oracle defect from becoming a
+                    // false over-acceptance while preserving all other runtime
+                    // ReferenceError divergences as failures.
+                    Verdict::RunSkip("oracle-xs-with-reference".into())
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -603,6 +620,31 @@ fn oracle_missing_temporal(run: &DualRun) -> bool {
     run.oracle_parsed
         && run.source.contains("Temporal")
         && (!run.result_agrees || run.oracle_error.contains("Temporal: undefined variable"))
+}
+
+/// The pinned XS failure on the generated destructuring/for-of const-assignment
+/// corpus. Restrict the Test262Error exclusion to the exact frontmatter phrase
+/// shared by those cases; an arbitrary oracle Test262Error remains a gating
+/// failure because it may expose Ironhorse skipping or misexecuting assertions.
+fn oracle_fails_const_assignment_test(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run
+            .source
+            .contains("assignment target should obey `const` semantics.")
+}
+
+/// The pinned XS `with`-environment PutValue defect exercised by the ES5
+/// `*_A5_T4` family: evaluation resolves `x` against the object environment,
+/// then the RHS/getter deletes `scope.x`; PutValue must still use the original
+/// Reference, but XS re-resolves and throws. The exact error plus both source
+/// ingredients make this substantially narrower than a generic ReferenceError
+/// oracle exclusion.
+fn oracle_loses_with_reference(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.oracle_error == "ReferenceError: set x: undefined property"
+        && run.source.contains("with (")
+        && run.source.contains("delete")
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -801,7 +843,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // complete executions of the applicable phase; accepted modules proceed
     // to the explicitly named linker/evaluator boundary below.
     if fm.flags.iter().any(|f| f == "module") {
-        return run_module_case(cfg, src, &fm);
+        return run_module_case(cfg, harness_dir, src, &fm);
     }
     // `CanBlockIsFalse` marks the `$262.agent`/Atomics blocking-agent tests,
     // which need a threading story ironhorse does not have — a named structural
@@ -943,11 +985,12 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
 /// makes parse-negative coverage a genuine XS differential rather than a
 /// frontmatter-based relabel.
 ///
-/// Static resolution and evaluation remain separate, honestly named run
-/// skips.  In particular, compiling a positive module is never called
-/// "covered": fixture loading, namespace creation, top-level-await ordering,
-/// and dynamic import must all execute before that claim is available.
-fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
+/// Synchronous, single-file modules execute end-to-end after the compile
+/// differential succeeds. Loader-dependent shapes remain honestly named run
+/// skips: static imports/re-exports, dynamic import, `import.meta`, and
+/// top-level await need graph/linker or asynchronous host support before they
+/// can contribute coverage.
+fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter) -> CaseResult {
     let oracle = match xs_oracle::compile_module(src) {
         Some(outcome) => outcome,
         None => {
@@ -1021,7 +1064,11 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
             if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
                 Verdict::RunSkip("module:compiler-byte-divergence".into())
             } else {
-                Verdict::RunSkip("module:evaluation".into())
+                let assembled = match assemble(harness_dir, src, fm) {
+                    Ok(source) => source,
+                    Err(reason) => return preskip(&reason),
+                };
+                run_accepted_module(cfg, fm, &assembled)
             }
         }
         Ok(Ok(_)) if cfg.oracle => {
@@ -1045,6 +1092,181 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
         strict_skipped: false,
         computron_gap: false,
     }
+}
+
+/// Monotonic suffix for per-case module-oracle directories. Bounded runner
+/// workers can overlap after a timeout, so process id alone is not unique.
+static MODULE_ORACLE_RUN: AtomicU64 = AtomicU64::new(0);
+
+/// Execute a module on an interpreter retained long enough to observe the same
+/// `globalThis.result` value the XS module oracle exposes. The module envelope
+/// itself completes with `undefined`; the follow-up reader is a separate crank
+/// in the same realm and is excluded from the module halt classification.
+fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
+    let names = ironhorse_vm::parse_symbols(symbols);
+    let mut machine = crate::interp_with_source_bridge(&names);
+    let mut outcome = machine.run(bytecode);
+    if !outcome.completed {
+        return outcome;
+    }
+
+    let (reader, reader_symbols) = match ironhorse_compile::compile_atoms("globalThis.result") {
+        Ok(compiled) => compiled,
+        Err(_) => {
+            outcome.completed = false;
+            outcome.halt = Halt::Unsupported("module:result-reader-compile");
+            return outcome;
+        }
+    };
+    let reader_names = ironhorse_vm::parse_symbols(&reader_symbols);
+    let reader = match machine.relink_crank(&reader, &reader_names) {
+        Ok(reader) => reader,
+        Err(_) => {
+            outcome.completed = false;
+            outcome.halt = Halt::Unsupported("module:result-reader-link");
+            return outcome;
+        }
+    };
+    let observed = machine.run(&reader);
+    if observed.completed {
+        outcome.result = observed.result;
+    } else {
+        outcome.completed = false;
+        outcome.halt = observed.halt;
+    }
+    outcome
+}
+
+/// Materialize one source as `main.mjs`, run it through the pinned XS module
+/// loader, and remove only the file/directory created here. The unique suffix
+/// avoids sharing filesystem state between bounded case workers.
+fn run_oracle_single_module(source: &str) -> Result<xs_oracle::ModuleRunOutcome, String> {
+    let dir = loop {
+        let serial = MODULE_ORACLE_RUN.fetch_add(1, Ordering::Relaxed);
+        let candidate = std::env::temp_dir().join(format!(
+            "ironhorse-262-module-{}-{serial}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("oracle-module-temp:{error}")),
+        }
+    };
+    let main = dir.join("main.mjs");
+    if let Err(error) = std::fs::write(&main, source) {
+        let _ = std::fs::remove_dir(&dir);
+        return Err(format!("oracle-module-write:{error}"));
+    }
+    let outcome = xs_oracle::run_module_dir(&dir, "main.mjs");
+    let _ = std::fs::remove_file(&main);
+    let _ = std::fs::remove_dir(&dir);
+    outcome.ok_or_else(|| "oracle-machine-error".into())
+}
+
+/// Convert the executable module pair into the runner's existing four-valued
+/// differential record so positive and runtime-negative verdict rules stay
+/// identical to Script-goal cases. Module-oracle metering includes parsing and
+/// linking, so it remains diagnostic and never arms the exact-meter gate.
+fn module_dual_run(
+    source: &str,
+    bytecode: Vec<u8>,
+    oracle: xs_oracle::ModuleRunOutcome,
+    ironhorse: RunOutcome,
+) -> DualRun {
+    let agreement = match (oracle.completed, ironhorse.completed) {
+        (true, true) => Agreement::BothComplete,
+        (false, false) => Agreement::BothAbort,
+        (false, true) => Agreement::IronhorseOnlyComplete,
+        (true, false) => Agreement::OracleOnlyComplete,
+    };
+    let ironhorse_error = match &ironhorse.halt {
+        Halt::Throw(error) => error.clone(),
+        _ => String::new(),
+    };
+    DualRun {
+        source: source.into(),
+        agreement,
+        result_agrees: oracle.completed && ironhorse.completed && oracle.result == ironhorse.result,
+        oracle_result: oracle.result,
+        ironhorse_result: ironhorse.result,
+        computrons_agree: false,
+        oracle_computrons: oracle.computrons,
+        ironhorse_computrons: ironhorse.computrons,
+        error_agrees: !oracle.completed
+            && !ironhorse.completed
+            && matches!(ironhorse.halt, Halt::Throw(_))
+            && oracle.error == ironhorse_error,
+        oracle_error: oracle.error,
+        ironhorse_error,
+        oracle_meter_raw: oracle.meter_raw as u64,
+        ironhorse_meter_raw: ironhorse.meter_raw,
+        ironhorse_dispatched: ironhorse.dispatched,
+        ironhorse_halt: ironhorse.halt,
+        ironhorse_compile: IronhorseCompile::Accepted,
+        bytecode,
+        oracle_parsed: true,
+    }
+}
+
+/// Compile the exact assembled module in both front ends, run supported
+/// single-file shapes in IronHorse, and only then invoke XS for the executable
+/// differential. Running IronHorse first avoids asking the one-file oracle
+/// fixture to resolve imports that this tranche deliberately does not claim.
+fn run_accepted_module(cfg: &Config, fm: &Frontmatter, source: &str) -> Verdict {
+    let (bytecode, symbols) = match ironhorse_compile::compile_module_atoms(source) {
+        Ok(compiled) => compiled,
+        Err(error)
+            if matches!(
+                error.kind,
+                ironhorse_compile::parser::ParseErrorKind::Unsupported
+            ) =>
+        {
+            return Verdict::RunSkip("compiler-unimplemented:module-harness".into())
+        }
+        Err(_) => return Verdict::RunSkip("module:harness-compiler-rejected".into()),
+    };
+    if cfg.oracle {
+        let oracle_compile = match xs_oracle::compile_module(source) {
+            Some(compiled) => compiled,
+            None => return Verdict::RunSkip("oracle-machine-error".into()),
+        };
+        if !oracle_compile.compiled {
+            return Verdict::RunSkip("module:harness-oracle-rejected".into());
+        }
+        if bytecode != oracle_compile.bytecode || symbols != oracle_compile.symbols {
+            return Verdict::RunSkip("module:harness-byte-divergence".into());
+        }
+    }
+
+    let ironhorse = run_ironhorse_module(&bytecode, &symbols);
+    match &ironhorse.halt {
+        Halt::Unsupported(op) => {
+            return Verdict::RunSkip(format!("unsupported-opcode:{op}"));
+        }
+        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        _ => {}
+    }
+
+    let oracle = if cfg.oracle {
+        match run_oracle_single_module(source) {
+            Ok(outcome) => outcome,
+            Err(reason) => return Verdict::RunSkip(reason),
+        }
+    } else {
+        xs_oracle::ModuleRunOutcome {
+            completed: ironhorse.completed,
+            result: ironhorse.result.clone(),
+            error: match &ironhorse.halt {
+                Halt::Throw(error) => error.clone(),
+                _ => String::new(),
+            },
+            computrons: ironhorse.computrons,
+            meter_raw: ironhorse.meter_raw as u32,
+        }
+    };
+    let run = module_dual_run(source, bytecode, oracle, ironhorse);
+    verdict_for(cfg, &run, fm, false)
 }
 
 /// Run one `async`-flagged case: prepend the [`ASYNC_PRELUDE`] to the standard
@@ -1572,12 +1794,19 @@ mod tests {
     }
 
     #[test]
-    fn accepted_module_reaches_named_evaluation_boundary() {
-        let source = "/*---\nflags: [module]\n---*/\nexport const value = 1;";
+    fn accepted_single_file_module_executes_end_to_end() {
+        let source = "/*---\nflags: [module, raw]\n---*/\nexport const value = 1;";
+        let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(result.verdict, Verdict::Covered);
+    }
+
+    #[test]
+    fn loader_dependent_module_keeps_named_boundary() {
+        let source = "/*---\nflags: [module, raw]\n---*/\nimport './fixture.js';";
         let result = run_case(&Config::default(), Path::new("."), source);
         assert_eq!(
             result.verdict,
-            Verdict::RunSkip("module:evaluation".into())
+            Verdict::RunSkip("unsupported-opcode:module:static-linking".into())
         );
     }
 
@@ -1850,14 +2079,65 @@ mod tests {
             );
         }
 
-        for error in [
-            "ReferenceError: another missing binding",
-            "Test262Error: Expected a RangeError but got a TypeError",
-        ] {
+        for error in ["ReferenceError: another missing binding"] {
             let run = synthetic_ironhorse_only_complete(true, error);
             assert!(!oracle_missing_intl(&run));
-            assert!(matches!(evaluate_positive(&cfg, &run, false), Verdict::Fail(_)));
+            assert!(matches!(
+                evaluate_positive(&cfg, &run, false),
+                Verdict::Fail(_)
+            ));
         }
+    }
+
+    #[test]
+    fn oracle_const_assignment_failure_is_a_precise_exclusion() {
+        let cfg = Config::default();
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a RangeError but got a TypeError",
+        );
+        run.source =
+            "description: The assignment target should obey `const` semantics.".to_string();
+        assert!(oracle_fails_const_assignment_test(&run));
+        assert_eq!(
+            evaluate_positive(&cfg, &run, false),
+            Verdict::RunSkip("oracle-xs-const-assignment".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-const-assignment"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source.clear();
+        assert!(!oracle_fails_const_assignment_test(&run));
+        assert!(matches!(
+            evaluate_positive(&cfg, &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_with_reference_deletion_bug_is_a_precise_exclusion() {
+        let source = "var scope = {x: 1}; with (scope) { (function() { \
+            'use strict'; x = (delete scope.x, 2); })(); } \
+            if (scope.x !== 2) { throw new Error('wrong'); }";
+        let run = dual_run(source).expect("oracle machine");
+        assert!(oracle_loses_with_reference(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-with-reference".into())
+        );
+
+        let ordinary =
+            synthetic_ironhorse_only_complete(true, "ReferenceError: set x: undefined property");
+        assert!(!oracle_loses_with_reference(&ordinary));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &ordinary, false),
+            Verdict::Fail(_)
+        ));
     }
 
     #[test]

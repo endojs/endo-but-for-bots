@@ -824,6 +824,19 @@ honest interpreter skips `module:dynamic-import` / `module:import-meta`, and
 to a true module dual-run against this new oracle authority is the follow-up the
 seam now unblocks.
 
+**Update (synchronous single-file Module-goal execution).** That follow-up is
+now landed. `ironhorse-vm` executes the compiler's `TRANSFER`/`MODULE` envelope,
+runs module declaration initialization before the strict evaluator body, and
+wires both functions to shared lexical cells so local and exported bindings
+preserve TDZ, mutability, and const assignment semantics. `endot-ih` assembles
+the standard Test262 harness as a Module goal, requires byte-identical module
+compilation against XS, and dual-runs supported single-file modules through
+`xs_oracle::run_module_dir`. The authoritative `language/module-code` slice is
+**181 covered, 0 failed of 534**. Loader-dependent static imports/re-exports,
+top-level await, dynamic `import()`, and `import.meta` remain exact named gaps;
+the graph oracle tests above continue to define the authority for the next
+linker tranche.
+
 The stage-4b **compartment** child (3/5) grows the stage-1 `Compartment.evaluate`
 seam into the full **native `Compartment`** the SES suites probe
 (`ironhorse_vm::compartment`, `xsModule.c`'s compartment half): **per-compartment

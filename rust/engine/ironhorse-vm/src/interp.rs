@@ -11690,21 +11690,56 @@ impl Interp {
                 // WITHOUT popping (the compiler emits an explicit POP
                 // when the value is not wanted). `PULL_LOCAL` is the
                 // popping variant.
-                XS_CODE_VAR_LOCAL_1
-                | XS_CODE_VAR_LOCAL_2
-                | XS_CODE_LET_LOCAL_1
-                | XS_CODE_LET_LOCAL_2
-                | XS_CODE_CONST_LOCAL_1
-                | XS_CODE_CONST_LOCAL_2
-                | XS_CODE_SET_LOCAL_1
-                | XS_CODE_SET_LOCAL_2 => {
+                XS_CODE_VAR_LOCAL_1 | XS_CODE_VAR_LOCAL_2 | XS_CODE_LET_LOCAL_1
+                | XS_CODE_LET_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
+                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    self.set_local(k, top);
+                    pc += size as usize;
+                }
+                XS_CODE_CONST_LOCAL_1 | XS_CODE_CONST_LOCAL_2 => {
+                    let k = self.local_operand(op, code, pc);
+                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    self.set_local(k, top);
+                    if let Some(index) = self.local_index(k) {
+                        self.locals[index].flag |= XS_DONT_SET_FLAG;
+                    }
+                    pc += size as usize;
+                }
+                XS_CODE_SET_LOCAL_1 | XS_CODE_SET_LOCAL_2 => {
+                    let k = self.local_operand(op, code, pc);
+                    let immutable = self
+                        .local_index(k)
+                        .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
+                    if immutable {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(
+                            self.raise_js(error),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        continue;
+                    }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.set_local(k, top);
                     pc += size as usize;
                 }
                 XS_CODE_PULL_LOCAL_1 | XS_CODE_PULL_LOCAL_2 => {
                     let k = self.local_operand(op, code, pc);
+                    let immutable = self
+                        .local_index(k)
+                        .is_some_and(|index| self.locals[index].flag & XS_DONT_SET_FLAG != 0);
+                    if immutable {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(
+                            self.raise_js(error),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        continue;
+                    }
                     let v = self.pop();
                     self.set_local(k, v);
                     pc += size as usize;
@@ -13403,8 +13438,15 @@ impl Interp {
                 // `store` opcodes append captured closure cells to it, then
                 // a `pop` discards it. (For a non-capturing function no
                 // `store` follows and the `pop` discards the env directly.)
-                XS_CODE_FUNCTION_ENVIRONMENT => {
+                XS_CODE_FUNCTION_ENVIRONMENT | XS_CODE_ENVIRONMENT => {
                     let env = self.new_environment();
+                    // Plain `environment` captures no surrounding dynamic
+                    // environment (`fxNewEnvironmentInstance(the, NULL)`),
+                    // whereas `function_environment` chains to the current
+                    // with/eval environment.
+                    if op == XS_CODE_ENVIRONMENT {
+                        self.slots.get_mut(env).value = Payload::None;
+                    }
                     // The function is the current top; record its captured
                     // environment before pushing the env reference.
                     if let Some(&Slot {
@@ -14108,7 +14150,14 @@ impl Interp {
                         Some(cell) => {
                             let s = self.slots.get(cell);
                             if s.kind == Kind::Uninitialized {
-                                return Halt::Throw("get closure: not initialized yet".into());
+                                let error = self.build_error("ReferenceError", 0, 0);
+                                pc = dispatch_result!(
+                                    self.raise_js(error),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                continue;
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
@@ -14123,15 +14172,33 @@ impl Interp {
                 // (xsRun.c:LET_CLOSURE/CONST_CLOSURE) initialize a
                 // `let`/`const` binding's cell exactly as `set_closure`
                 // writes it; the const "already initialized" guard and the
-                // DONT_SET/DONT_ENUM flags do not fire in the covered
-                // single-assignment grammar and are metering-neutral.
+                // DONT_SET/DONT_ENUM flags are stamped by CONST_CLOSURE below;
+                // a later SET_CLOSURE must enforce the immutable binding with
+                // a catchable TypeError.
                 XS_CODE_VAR_CLOSURE_1
                 | XS_CODE_VAR_CLOSURE_2
-                | XS_CODE_SET_CLOSURE_1
-                | XS_CODE_SET_CLOSURE_2
                 | XS_CODE_LET_CLOSURE_1
                 | XS_CODE_LET_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
+                    let top = *self.stack.last().unwrap_or(&Slot::undefined());
+                    self.write_closure_cell(k, top);
+                    pc += op.size() as usize;
+                }
+                XS_CODE_SET_CLOSURE_1 | XS_CODE_SET_CLOSURE_2 => {
+                    let k = self.closure_index(op, code, pc);
+                    let immutable = self
+                        .closure_cell(k)
+                        .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
+                    if immutable {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(
+                            self.raise_js(error),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        continue;
+                    }
                     let top = *self.stack.last().unwrap_or(&Slot::undefined());
                     self.write_closure_cell(k, top);
                     pc += op.size() as usize;
@@ -14187,6 +14254,19 @@ impl Interp {
                 // `pull_closure #k`: pop and write the shared cell.
                 XS_CODE_PULL_CLOSURE_1 | XS_CODE_PULL_CLOSURE_2 => {
                     let k = self.closure_index(op, code, pc);
+                    let immutable = self
+                        .closure_cell(k)
+                        .is_some_and(|cell| self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0);
+                    if immutable {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(
+                            self.raise_js(error),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        continue;
+                    }
                     let v = self.pop();
                     self.write_closure_cell(k, v);
                     pc += op.size() as usize;
@@ -16074,6 +16154,113 @@ impl Interp {
                         self.set_local(selector_index, Slot::integer(0));
                     }
                     self.exception = Slot::undefined();
+                    pc += size as usize;
+                }
+
+                // A compiled Module-goal unit ends in a small loader envelope:
+                // `[initialize, execute, ...transfers, count]; module flags`.
+                // `TRANSFER` first condenses each transfer's stack operands to
+                // one record. For a single hosted module, local/export-only
+                // transfers need no cross-module wiring—the functions already
+                // share their closure cells—so a Boolean marker is sufficient.
+                // An import/re-export carries a source string and remains a
+                // named static-linking boundary until the filesystem loader is
+                // connected to the bytecode interpreter.
+                XS_CODE_TRANSFER | XS_CODE_TRANSFER_JSON => {
+                    let count = match self.pop().value {
+                        Payload::Integer(n) if n >= 3 => n as usize,
+                        _ => return Halt::Unsupported("module:transfer-shape"),
+                    };
+                    let start = match self.stack.len().checked_sub(count) {
+                        Some(start) => start,
+                        None => return Halt::Unsupported("module:transfer-stack"),
+                    };
+                    let imported = self.stack[start + 1].kind == Kind::String;
+                    let local_id = match self.stack[start].value {
+                        Payload::At(id, _) => id,
+                        _ => crate::value::XS_NO_ID,
+                    };
+                    self.stack.truncate(start);
+                    self.push(Slot::of(
+                        Kind::At,
+                        Payload::At(local_id, u32::from(imported)),
+                    ));
+                    pc += size as usize;
+                }
+                XS_CODE_MODULE => {
+                    let flags = code.get(pc + 1).copied().unwrap_or_default();
+                    if flags & 32 != 0 {
+                        return Halt::Unsupported("module:dynamic-import");
+                    }
+                    if flags & 64 != 0 {
+                        return Halt::Unsupported("module:import-meta");
+                    }
+                    let count = match self.pop().value {
+                        Payload::Integer(n) if n >= 2 => n as usize,
+                        _ => return Halt::Unsupported("module:envelope-shape"),
+                    };
+                    let start = match self.stack.len().checked_sub(count) {
+                        Some(start) => start,
+                        None => return Halt::Unsupported("module:envelope-stack"),
+                    };
+                    let initialize = self.stack[start];
+                    let execute = self.stack[start + 1];
+                    let transfers = self.stack[start + 2..].to_vec();
+                    if transfers.iter().any(|transfer| {
+                        matches!(transfer.value, Payload::At(_, imported) if imported != 0)
+                    }) {
+                        return Halt::Unsupported("module:static-linking");
+                    }
+                    let execute_function = match execute.value {
+                        Payload::Reference(function) if execute.kind == Kind::Reference => function,
+                        _ => return Halt::Unsupported("module:execute-function"),
+                    };
+                    if self.functions[&execute_function].body_start.is_none() {
+                        return Halt::Unsupported("module:execute-body");
+                    }
+                    if self.instance_prototype(execute_function) == self.async_function_proto {
+                        return Halt::Unsupported("module:top-level-await");
+                    }
+                    let execute_environment = self.functions[&execute_function].closures;
+                    let initialize_function = match initialize.value {
+                        Payload::Reference(function) if initialize.kind == Kind::Reference => {
+                            Some(function)
+                        }
+                        _ => None,
+                    };
+                    let initialize_environment = initialize_function
+                        .map(|function| self.functions[&function].closures)
+                        .unwrap_or(crate::value::SlotIndex::NULL);
+                    for transfer in &transfers {
+                        let Payload::At(local_id, _) = transfer.value else {
+                            return Halt::Unsupported("module:transfer-record");
+                        };
+                        if local_id == crate::value::XS_NO_ID {
+                            continue;
+                        }
+                        self.meter.tick_slot_alloc();
+                        let cell = self.slots.alloc(Slot::uninitialized());
+                        if !initialize_environment.is_null() {
+                            self.append_module_closure(initialize_environment, local_id, cell);
+                        }
+                        self.append_module_closure(execute_environment, local_id, cell);
+                    }
+                    self.stack.truncate(start);
+                    if initialize_function.is_some() {
+                        if let Err(halt) =
+                            self.run_callback(code, initialize, Slot::undefined(), &[])
+                        {
+                            return halt;
+                        }
+                    }
+                    if let Err(halt) = self.run_callback(code, execute, Slot::undefined(), &[]) {
+                        return halt;
+                    }
+                    // `fxPrepareModule` returns a module instance to the host
+                    // loader. The test262 execution boundary observes only the
+                    // body completion/throw; an opaque undefined placeholder is
+                    // sufficient until namespace objects are wired here.
+                    self.push(Slot::undefined());
                     pc += size as usize;
                 }
 
@@ -35166,6 +35353,23 @@ impl Interp {
             tail = next;
         }
         self.slots.get_mut(tail).next = index;
+    }
+
+    /// Attach a module binding's shared heap cell to an initializer or
+    /// evaluator closure environment. Module initializer/evaluator functions
+    /// are compiled independently, but their `retrieve` opcodes must resolve
+    /// the same lexical cell for each transfer record.
+    fn append_module_closure(
+        &mut self,
+        env: crate::value::SlotIndex,
+        id: u16,
+        cell: crate::value::SlotIndex,
+    ) {
+        self.append_environment_capture(
+            env,
+            id,
+            Slot::of(Kind::Closure, Payload::Reference(cell)),
+        );
     }
 
     /// `XS_CODE_BEGIN_SLOPPY`'s `this` binding: an `undefined`/`null` `this`

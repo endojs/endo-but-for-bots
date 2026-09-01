@@ -12,16 +12,13 @@
 //! resolve/load hooks — the same loader moddable's `xst -m` uses — against
 //! a per-case directory the test materializes.
 //!
-//! These are **oracle-reference** regressions, not dual-runs: the
-//! ironhorse-vm interpreter does not yet execute module bytecode
-//! (`interp.rs` self-names `XS_CODE_IMPORT`/`XS_CODE_IMPORT_META` as the
-//! honest skips `module:dynamic-import` / `module:import-meta`, and
-//! `module.rs` is a standalone semantic model not wired to bytecode). This
-//! file therefore certifies the oracle *authority* the ironhorse side will
-//! be diffed against once it gains module execution; until then a positive
-//! module case is still never called "covered" (see `xst.rs`
-//! `run_module_case`). The byte-identity module gate over
-//! `corpora-modules/*.js` remains `compile_diff.rs`'s
+//! These remain **oracle-reference** graph regressions rather than graph
+//! dual-runs. IronHorse now executes synchronous single-file module bytecode
+//! through `xst.rs::run_module_case`, while static linking, top-level await,
+//! dynamic import, and `import.meta` stay explicitly named boundaries until
+//! the filesystem graph loader is connected to the interpreter. This file
+//! certifies the XS authority for that next graph tranche. The byte-identity
+//! module gate over `corpora-modules/*.js` remains `compile_diff.rs`'s
 //! `module_corpora_byte_identity_no_divergence`.
 
 use std::fs;
