@@ -3433,6 +3433,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/spaces-util": "workspace:^"
     "@endo/workflow": "workspace:^"
     eslint: "catalog:dev"
     preact: "npm:^10.29.2"
@@ -15808,7 +15809,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"preact@npm:^10.29.8":
+"preact@npm:^10.29.2, preact@npm:^10.29.8":
   version: 10.29.8
   resolution: "preact@npm:10.29.8"
   peerDependencies:
