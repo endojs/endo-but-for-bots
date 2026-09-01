@@ -162,6 +162,32 @@ export const makeGitRemoteEndpoint = ({
   };
 
   /**
+   * Report whether the credential this endpoint would push with is usable,
+   * WITHOUT using it. A credential holds its material in process memory, so a
+   * daemon restart leaves the record revoked and the next push is the first
+   * thing that says so (forge issue #21). A holder can now ask first.
+   *
+   * @returns {object}
+   */
+  const credentialHealth = () => {
+    if (!requiresCredential || credentialRecord === undefined) {
+      return harden({ required: false });
+    }
+    const record = assertGitCredentialForUrl(
+      /** @type {object} */ (credential),
+      parsed.origin,
+      { allowRevoked: true },
+    );
+    return harden({
+      required: true,
+      kind: record.kind,
+      audience: record.audience,
+      available: !Object.hasOwn(record.getMaterial(), 'unavailable'),
+      revoked: record.isRevoked(),
+    });
+  };
+
+  /**
    * @param {() => void} onChange
    */
   const watchChange = onChange => {
@@ -180,6 +206,7 @@ export const makeGitRemoteEndpoint = ({
     ensureCredentialUsable,
     captureCredentialVersion,
     assertCredentialUnchanged,
+    credentialHealth,
     watchChange,
   });
 };
@@ -611,6 +638,19 @@ export const makeGitRemote = ({
     async inspect() {
       ensureLive();
       return snapshotPolicy();
+    },
+
+    /**
+     * Whether the credential this remote would push with is usable right now.
+     * Deliberately NOT part of `inspect()`: the snapshot is policy, and a test
+     * asserts it carries nothing credential-shaped. This reports health only —
+     * kind, audience, availability, revocation — never material.
+     *
+     * @returns {Promise<object>}
+     */
+    async credentialHealth() {
+      ensureLive();
+      return endpoint.credentialHealth();
     },
 
     /**

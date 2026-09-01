@@ -179,6 +179,20 @@ const RemotePolicyOptionalShape = {
   allowLocalFileTransport: M.boolean(),
 };
 
+// Credential health travels with a remote snapshot so a holder can see a dead
+// credential before a push fails on it. `required: false` is the whole record
+// for a remote that needs no credential.
+const RemoteCredentialHealthShape = M.splitRecord(
+  { required: M.boolean() },
+  {
+    kind: M.or('bearer', 'basic'),
+    audience: M.string(),
+    available: M.boolean(),
+    revoked: M.boolean(),
+  },
+  harden({}),
+);
+
 const RemoteSnapshotShape = M.splitRecord(
   { ...RemotePolicyRequiredShape, name: M.string() },
   RemotePolicyOptionalShape,
@@ -435,6 +449,7 @@ export const GitRemoteInterface = M.interface('GitRemote', {
   fetch: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
     .returns(RemoteOperationResultShape),
+  credentialHealth: M.callWhen().returns(RemoteCredentialHealthShape),
   inspect: M.callWhen().returns(RemoteSnapshotShape),
   pull: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
