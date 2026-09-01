@@ -21588,23 +21588,28 @@ impl Interp {
         Ok(sp)
     }
 
-    /// `GetMethod(separator, @@split)` for `String.prototype.split`. The
-    /// protocol is consulted only when the separator is an Object; primitive
-    /// separators proceed directly to string conversion without reading their
-    /// wrapper prototypes. Object access uses full `[[Get]]` (including
-    /// proxies and accessors). A present non-callable is returned and rejected
-    /// by [`Self::invoke_value`] with a catchable `TypeError`.
-    fn string_split_method(&mut self, code: &[u8], separator: Slot) -> Result<Slot, Halt> {
-        let Payload::Reference(inst) = separator.value else {
+    /// `GetMethod(value, @@name)` for String prototype protocols. The protocol
+    /// is consulted only when `value` is an Object; primitive arguments proceed
+    /// directly to coercion without reading their wrapper prototypes. Object
+    /// access uses full `[[Get]]` (including proxies and accessors). A present
+    /// non-callable is returned and rejected by [`Self::invoke_value`] with a
+    /// catchable `TypeError`.
+    fn string_protocol_method(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        name: &str,
+    ) -> Result<Slot, Halt> {
+        let Payload::Reference(inst) = value.value else {
             return Ok(Slot::undefined());
         };
-        if separator.kind != Kind::Reference {
+        if value.kind != Kind::Reference {
             return Ok(Slot::undefined());
         }
-        let Some(id) = self.well_known_symbol_property_id("split") else {
+        let Some(id) = self.well_known_symbol_property_id(name) else {
             return Ok(Slot::undefined());
         };
-        self.mop_get(code, inst, id, separator)
+        self.mop_get(code, inst, id, value)
     }
 
     /// ECMAScript `ToUint32`, used by the ordinary string-split limit. The
@@ -30208,21 +30213,47 @@ impl Interp {
                 };
                 self.regexp_to_string(inst)?
             }
-            // `String.prototype.{match,search}` over the matcher (via the
-            // `Symbol.match`/`Symbol.search` protocol to the RegExp workers). A
-            // non-RegExp argument (the `withoutRegexp` coerce path) and the
-            // global `match` collection are honest named skips.
+            // `String.prototype.search`: a custom `regexp[Symbol.search]` is
+            // called with the original receiver before string coercion. The
+            // intrinsic RegExp path uses the existing matcher; every other
+            // argument is converted through `RegExpCreate(regexp, undefined)`.
             NativeMethod::StringSearch => {
-                if self.string_receiver_units(this).is_none() {
-                    return Err(Halt::Unsupported("String.search:non-string-receiver"));
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error());
                 }
-                match arg0.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                        self.string_search(r, this)?
+                let search_method = self.string_protocol_method(code, arg0, "search")?;
+                if !matches!(search_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, search_method, arg0, &[this])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    match arg0.value {
+                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
+                            self.string_search(r, subject)?
+                        }
+                        _ => {
+                            let pattern = if arg0.kind == Kind::Undefined {
+                                String::new()
+                            } else {
+                                let units = self.to_string_units(code, arg0)?;
+                                String::from_utf16_lossy(&units)
+                            };
+                            let regexp = self.build_regexp(pattern, String::new())?;
+                            let Payload::Reference(inst) = regexp.value else {
+                                unreachable!()
+                            };
+                            self.string_search(inst, subject)?
+                        }
                     }
-                    _ => return Err(Halt::Unsupported("String.search:non-regexp-arg")),
                 }
             }
+            // `String.prototype.match` over the matcher (via the
+            // `Symbol.match` protocol to the RegExp worker). A non-RegExp
+            // argument and the global collection remain named gaps.
             NativeMethod::StringMatch => {
                 if self.string_receiver_units(this).is_none() {
                     return Err(Halt::Unsupported("String.match:non-string-receiver"));
@@ -30268,7 +30299,7 @@ impl Interp {
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                let split_method = self.string_split_method(code, arg0)?;
+                let split_method = self.string_protocol_method(code, arg0, "split")?;
                 if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
                     self.invoke_value(code, split_method, arg0, &[this, limit])?
                 } else {

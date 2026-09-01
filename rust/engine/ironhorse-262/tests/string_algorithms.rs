@@ -126,3 +126,34 @@ fn split_observes_custom_protocol_and_coercion_order() {
         agrees(source);
     }
 }
+
+#[test]
+fn search_constructs_regexp_from_ordinary_arguments() {
+    for source in [
+        "'ssABBABAB'.search({toString:function(){return 'AB'}})",
+        "new String('test string').search('string')",
+        "'a1b1c'.search(1)",
+        "'atrueb'.search(true)",
+        "'a42b'.search(42n)",
+        "'abc'.search(undefined)",
+        "String.prototype.search.call(12345, '34')",
+        "try { 'abc'.search(Symbol()); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn search_observes_custom_symbol_protocol() {
+    for source in [
+        "var seen=[]; var p={ [Symbol.search]:function(v){seen.push(this===p,v);return 7} }; 'abc'.search(p)+':'+seen.join(',')",
+        "var p={ [Symbol.search]:null,toString:function(){return '3'} }; 'ab3c'.search(p)",
+        "var boom={}; var p={get [Symbol.search](){throw boom}}; try{'x'.search(p);false}catch(e){e===boom}",
+        "try { 'x'.search({[Symbol.search]: 1}); false } catch (e) { e instanceof TypeError }",
+        "var called=false; Number.prototype[Symbol.search]=function(){called=true}; 'a1'.search(1)+':'+called",
+        "var recv={toString:function(){throw Error('must not coerce')}}; var p={[Symbol.search]:function(v){return v===recv}}; String.prototype.search.call(recv,p)",
+        "try { String.prototype.search.call(null, { [Symbol.search]:function(){return 1} }); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
