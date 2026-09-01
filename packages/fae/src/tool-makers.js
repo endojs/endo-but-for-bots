@@ -1219,7 +1219,17 @@ export const makeExecTool = powers => {
         '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
         '- E: eventual send — use E(ref).method() for all remote calls\n' +
         '- harden: freeze objects for safe passing\n' +
-        '- console: for logging\n\n' +
+        '- console: for logging\n' +
+        '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
+        'The code runs under SES lockdown, which surprises callers who expect a ' +
+        'normal environment:\n' +
+        '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
+        'let a capability supply one.\n' +
+        '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
+        'between polls within one call.\n' +
+        '- The result is JSON-serialized for the model. BigInts render as ' +
+        'decimal strings, so a stat() or workflow status can be returned as ' +
+        'it came. A remote capability is described by its method names.\n\n' +
         'Example — adopt a channel, join it, and post a reply:\n' +
         '```\n' +
         'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
@@ -1256,7 +1266,7 @@ export const makeExecTool = powers => {
       // code isn't rejected for its wrapping backticks.
       const source = stripCodeFence(code);
       // Wrap in an async IIFE so top-level await works
-      const wrappedSource = `(async (powers, E, harden, console) => {\n${source}\n})`;
+      const wrappedSource = `(async (powers, E, harden, console, sleep) => {\n${source}\n})`;
       const c = new Compartment({
         __options__: true,
         globals: { BigInt },
@@ -1274,7 +1284,16 @@ export const makeExecTool = powers => {
           `Could not parse the code (${message}). Send raw JavaScript in the "code" argument — no markdown fences — and check for syntax errors.`,
         );
       }
-      const result = await fn(powers, E, harden, console);
+      // The compartment has no timers, so an agent watching something change
+      // (a workflow reaching await-approval, a build finishing) could not wait
+      // inside a single call and had to spin or burn a turn per poll. `sleep`
+      // is the host's timer, handed in deliberately: it grants delay, nothing
+      // else, to code that already holds this guest's full authority.
+      const sleep = ms =>
+        new Promise(resolve => {
+          setTimeout(resolve, Math.max(0, Number(ms) || 0));
+        });
+      const result = await fn(powers, E, harden, console, sleep);
       if (result === undefined) {
         return 'done (no return value)';
       }
