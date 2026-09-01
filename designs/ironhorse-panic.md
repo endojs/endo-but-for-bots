@@ -1,9 +1,9 @@
-# Ironhorse Panic: Uncatchable Termination and the Message Embargo
+# Ironhorse Panic and the Slot Machine Recovery Boundary
 
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-08-29 |
+| **Updated** | 2026-09-01 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -21,7 +21,10 @@ the pattern one name, generalizes it over
 every uncatchable-termination source, states its relationship to the daemon's
 message-delivery model, and adds an opt-in mode (the `panic-on-reference-error`
 configuration option, framed as **the Coda** below) that turns selected
-reference errors into panics for post-mortem debugging. (A worker hosts exactly
+reference errors into panics for post-mortem debugging. The snapshot,
+transcript, and message embargo are **Slot Machine responsibilities**, not
+Ironhorse mechanisms. This design specifies them only to define the contract
+that consumes an Ironhorse panic. (A worker hosts exactly
 one vat in the current daemon, so "vat" and "worker" are used interchangeably
 throughout; the one-database-per-worker isolation claim below rests on that 1:1
 relationship.)
@@ -33,9 +36,48 @@ daemon; **Endor** is its Rust runtime that hosts the Ironhorse engine (see
 runs C-XS through the `xsnap` crate, and the `-e ironhorse` engine-selection
 integration is incomplete (roadmap stage 8/9). Only the Coda's reference-error
 classification and the net-new FFI-abort guard (§ Scope: What Is Already a
-Panic) touch code the live daemon runs today; the `Machine`-seam `CrankOutcome`
-and the per-worker transcript land with that integration. Weigh every claim
-below against this status.
+Panic) touch code the live daemon runs today. The `Machine`-seam `CrankOutcome`
+lands with the Ironhorse integration; Slot Machine consumes that outcome and
+independently supplies the per-worker snapshot, transcript, and embargo. Weigh
+every claim below against this status.
+
+## Architectural Boundary: Ironhorse and Slot Machine
+
+The boundary is deliberate: **Ironhorse reports how execution ended; Slot
+Machine decides what becomes durable and observable.** Ironhorse is the language
+engine inside a worker. Slot Machine is the worker-supervision and message layer
+around that engine. In the current tree, the latter responsibility spans the
+daemon/Endor supervisor and worker transport rather than living wholly in the
+`@endo/slots` JavaScript package.
+
+| Layer | Owns | Does not own |
+|---|---|---|
+| **Ironhorse** | Execute a delivery; enforce engine limits; classify ordinary completion, uncaught throws, and every uncatchable termination; normalize the existing `StackOverflow` and `MeterAbort` abort conditions together with new engine faults; return a diagnostic `CrankOutcome`; provide the engine primitive from which a snapshot can be taken or restored. | Choosing, persisting, or naming worker snapshots; recording a delivery transcript; deciding when outbound messages become visible; replay policy; durable commit or rollback. |
+| **Slot Machine** | Define the worker crank boundary; admit inbound messages; stage outbound messages and host calls; own worker snapshot identities and watermarks; append and replay the per-worker transcript; embargo outbound effects; atomically commit or discard a crank; terminate, restore, and re-drive a worker according to policy. | Interpreting JavaScript control flow; deciding whether a `Halt` is a panic; inspecting Ironhorse's internal `Halt` variants to reconstruct that classification. |
+
+The seam between them is a small protocol:
+
+1. Slot Machine opens a crank and gives Ironhorse transcript-aware inbound,
+   outbound, and host-call capabilities. Ironhorse cannot write directly to the
+   durable transcript or release a frame to the transport.
+2. Ironhorse runs the delivery and returns `CrankOutcome::Quiesced`,
+   `CrankOutcome::Uncaught(throw)`, or `CrankOutcome::Panicked(reason)`.
+   `Panicked` includes the existing abort conditions; Slot Machine does not need
+   a parallel list of `Halt` variants.
+3. Slot Machine alone maps `Quiesced` to its durable transcript/snapshot commit.
+   It maps every other outcome to discard of the pending crank and embargoed
+   effects. A `Panicked` outcome additionally enters Slot Machine's configured
+   terminate/restore/replay policy.
+
+For the live C-XS worker, the adapter must map the existing `fxAbort` exits to
+the same supervisor-visible `Panicked` arm. That compatibility adapter does not
+move panic classification into Slot Machine; it preserves the seam until
+Ironhorse is the live engine. Conversely, Ironhorse may expose snapshot and
+restore primitives, but Slot Machine owns when snapshots are taken, where they
+are stored, which transcript watermark they represent, and whether replay is
+safe. Every later reference to "commit," "snapshot," "transcript," "embargo,"
+or "retry" is therefore a Slot Machine action unless it explicitly describes an
+Ironhorse engine primitive.
 
 ## What Is the Problem Being Solved?
 
@@ -51,13 +93,14 @@ capability operating system: treat a vat (a single-threaded object heap) as the
 unit of partial failure, so a fault takes down a whole vat rather than leaving it
 half-updated.
 
-The clean answer is a two-part contract:
+The clean answer is a two-layer contract:
 
-1. A **panic** terminates the vat uncatchably: no in-vat code can catch it,
-   suppress it, or continue past it, so the vat cannot half-run to a state a
-   handler papered over.
-2. A **message embargo** holds a crank's outbound messages until the crank
-   commits, so a panic can **discard** them rather than releasing a partial set.
+1. **Ironhorse panic:** a panic terminates the vat uncatchably: no in-vat code
+   can catch it, suppress it, or continue past it, so the vat cannot half-run to
+   a state a handler papered over.
+2. **Slot Machine recovery:** a message embargo holds a crank's outbound
+   messages until the crank commits, so a panic can **discard** them rather than
+   releasing a partial set.
    Together these guarantee the vat dies with **no side effect escaping**, which
    makes the crank safely **retryable**: restore the worker from its last
    snapshot, replay the transcript up to but not including the panicking
@@ -68,12 +111,12 @@ Ironhorse already terminates uncatchably for two of the three natural
 engine-logic-bug panic) is the net-new source named below. (Corrupt-bytecode
 `Decode` also aborts today, but it is a supervisor-level fault, not guest
 behavior, and sits in a different provenance bucket in the table below.) What is
-missing is (a) one formal concept that
-unifies them and the net-new cases, (b) a per-worker write-ahead transcript that
-makes embargo, restart, and replay one durability contract, (c) treatment of
-host calls and their restart-sensitive handles as transcript messages, and (d)
-the debugger's treatment of a panic versus an ordinary uncaught throw. This
-design supplies all four, then adds the reference-error Coda.
+missing is (a) one formal Ironhorse concept that unifies them and the net-new
+cases, (b) a Slot Machine per-worker write-ahead transcript that makes embargo,
+restart, and replay one durability contract, (c) treatment of host calls and
+their restart-sensitive handles as transcript messages, and (d) the debugger's
+treatment of a panic versus an ordinary uncaught throw. This design supplies all
+four, then adds the reference-error Coda.
 
 ## Scope: What Is Already a Panic (The Required First Step)
 
@@ -133,10 +176,12 @@ body, and the machine-thread crank entry, converting the process abort into a
 lands, the "not a compromised daemon" guarantee holds only for the prospective
 Ironhorse `Machine` seam, not for the C-XS worker on today's delivery path.
 
-**Conclusion of the scope step:** the mechanism exists for two of three natural
-cases and needs *naming and generalizing*, not building. The genuinely new
-engineering is the formal category (small), the per-worker write-ahead
-transcript and embargo, transcript-aware host calls, and the Coda.
+**Conclusion of the scope step:** Ironhorse's mechanism exists for two of three
+natural cases and needs *naming and generalizing*, not building. Its genuinely
+new engineering is the formal category (small) and the Coda. Slot Machine's
+separate work is the per-worker write-ahead transcript and embargo plus
+transcript-aware host calls. The architectural boundary above is the contract
+between those work streams.
 
 ## The Formal `Panic` Category
 
@@ -208,7 +253,9 @@ and adds classification, rather than collapsing them:
 4. **Surface a three-way `CrankOutcome` at the `Machine` seam.** The interpreter
    keeps returning `RunOutcome { halt, .. }`; the `Machine`/supervisor seam
    ([ironhorse-engine](ironhorse-engine.md) § Endor integration) classifies each
-   `halt` into `Committed` | `Uncaught(throw)` | `Panicked(reason)`. The commit
+   `halt` into `Quiesced` | `Uncaught(throw)` | `Panicked(reason)`. `Quiesced`
+   means only that engine execution reached a successful crank boundary; it does
+   not claim that Slot Machine has committed anything. Slot Machine's commit
    decision reads only this three-way value; the `reason` carries the underlying
    `Halt` for reporting. **The `Panicked` arm is defined *by delegation*, not by a
    second enumeration:** `CrankOutcome::classify(halt)` computes `Panicked(halt)`
@@ -235,7 +282,8 @@ clippy lint, not a type-level guarantee**; the actual
 mechanism is spelled out two paragraphs below) is that **no commit-path
 consumer matches `Halt` variant shape directly** (the *commit path* is the
 supervisor's
-release-or-discard machinery defined in § The Message Embargo Contract, where
+release-or-discard machinery defined in § The Slot Machine Message Embargo
+Contract, where
 "commit" means a durable transcript+heap join; the forward reference is
 deliberate: the term is defined there). The "terminate, do not commit" decision
 routes through `is_panic()` (item 2) and the classification routes through
@@ -278,7 +326,7 @@ graph TD
     RUN --> DEC["Halt::Decode"]
     RUN --> PAN["Halt::Panic(kind)"]
     RUST["Rust panic!"] -->|catch at thread/FFI boundary| PAN
-    RET --> C["CrankOutcome::Committed"]
+    RET --> C["CrankOutcome::Quiesced"]
     THR --> U["CrankOutcome::Uncaught"]
     SO --> P["CrankOutcome::Panicked(reason)"]
     MA --> P
@@ -301,7 +349,7 @@ on the not-yet-complete `-e ironhorse` engine-selection integration
 the point where an Ironhorse `Halt::Panic` and the XS `"terminated"` meter report
 (two separate mechanisms today) become one supervisor-visible worker death.
 
-## The Message Embargo Contract
+## The Slot Machine Message Embargo Contract
 
 This is the part that must be grounded in the daemon's *real* current behavior,
 because the daemon deliberately chose a mechanism **different from** the one the
@@ -368,7 +416,7 @@ consistency nobody cares about. The moment a panic is meant to be **fixed and
 retried**, those escaped messages become exactly the hangover inconsistency the
 embargo exists to prevent, and admission control gives nothing here.
 
-### Per-worker write-ahead transcript
+### Slot Machine per-worker write-ahead transcript
 
 An earlier revision of this design deferred the embargo/crank-commit mechanics to
 a follow-on and left them an Open Question, honoring the design prompt reproduced
@@ -424,9 +472,9 @@ open. The honest summary: this is not the rejected embargo made bigger for the
 same job; it is the recovery substrate the maintainer required, from which the
 embargo falls out for free.
 
-Each endor worker (a worker running under Endor, the endo daemon's Rust runtime
-that hosts the Ironhorse engine; see [ironhorse-engine](ironhorse-engine.md)
-§ Endor integration) owns
+Slot Machine assigns each Endor worker (a worker running under Endor, the endo
+daemon's Rust runtime that hosts the Ironhorse engine; see
+[ironhorse-engine](ironhorse-engine.md) § Endor integration) its own
 `<endo-dir>/workers/<handle>/transcript.sqlite`, opened in WAL mode. A database
 per worker avoids a global writer lock between vats and confines corruption and
 recovery to one vat. The database contains four logical records (the physical
@@ -455,7 +503,7 @@ implementation that would rather not carry the cache at all may drop the field
 and compute open/closed on read: the design treats the field as an optimization,
 not a source of truth.
 
-The worker supervisor is the only writer. Its crank protocol is:
+The Slot Machine worker supervisor is the only writer. Its crank protocol is:
 
 1. In one short transaction, append the inbound delivery and a `started` crank
    row, then sync the WAL before entering the guest. The inbound message is
@@ -465,7 +513,7 @@ The worker supervisor is the only writer. Its crank protocol is:
    the same event writer, durably recording a request before invoking its host
    adapter and its reply afterward. Nothing outside the vat observes pending
    outbound rows.
-3. On `CrankOutcome::Committed`, mark every pending event and the crank committed
+3. On `CrankOutcome::Quiesced`, mark every pending event and the crank committed
    in one transaction. Only after that transaction is durable may the supervisor
    release outbound messages, in sequence order. Each released frame carries its
    stable event sequence so the receiver can discard a duplicate if the
@@ -566,14 +614,14 @@ restart, none of which pre-payment makes atomic.
 
 **Which termination paths the embargo includes.** Because step 2 routes *every*
 `sendFrame`/`issueCommand`/`sendRawFrame` into pending rows with no per-source
-carve-out, and step 4 discards those rows on *any* non-`Committed` outcome, the
+carve-out, and step 4 discards those rows on *any* non-`Quiesced` outcome, the
 embargo's coverage follows mechanically from `CrankOutcome`, not from the panic
 source. The design commits to one answer, tabulated so no reader has to
 reconcile it from scattered prose:
 
 | Termination path | `CrankOutcome` | Outbound embargoed & discarded on abort? |
 |---|---|---|
-| Normal quiescence | `Committed` | N/A (released after commit) |
+| Normal quiescence | `Quiesced` | N/A (released after Slot Machine commits) |
 | `Throw` (uncaught) | `Uncaught` | **Yes**, discarded (worker still dies; no partial commit) |
 | `StackOverflow` | `Panicked` | **Yes** |
 | `MeterAbort` (hard limit) | `Panicked` | **Yes** |
@@ -583,7 +631,7 @@ reconcile it from scattered prose:
 
 **Embargo coverage is uniform; retryability is not. Do not read the two as the
 same column.** The single "Yes, discarded" verdict this table gives every
-non-`Committed` row is a statement about *embargo coverage only*: the crank's
+non-`Quiesced` row is a statement about *embargo coverage only*: the crank's
 staged outbound rows are discarded, so no outcome leaks a partial effect. It says
 nothing about whether the crank is ever **re-driven**. Retry (restore the
 snapshot, replay the committed suffix, re-deliver) is reserved for **panics**; an
@@ -597,7 +645,8 @@ once the two axes are separated:
   retryable` (the *retryability* axis);
 - this table folds `Throw (uncaught)` into "Yes, discarded" alongside the panic
   rows (the *embargo-coverage* axis, on which they genuinely are identical);
-- § Termination and Retry's recovery diagram and § What "fixed" means in practice
+- § Slot Machine Termination and Retry's recovery diagram and § What "fixed"
+  means in practice
   are deliberately panic-scoped, because they describe the retry axis, on which
   `Throw` has no entry.
 
@@ -694,29 +743,32 @@ rejects an unclassified one, the restart rule is **auditable**: enforced by the
 registry rather than relying on each callback author to remember that native
 handles do not survive a vat restart.
 
-## Termination and Retry
+## Slot Machine Termination and Retry
 
-Retry composes the existing suspend-to-snapshot / resume-from-snapshot machinery
-of [daemon-debug-worker-restart](daemon-debug-worker-restart.md) with the new
+Slot Machine retry composes the existing suspend-to-snapshot /
+resume-from-snapshot machinery of
+[daemon-debug-worker-restart](daemon-debug-worker-restart.md) with its new
 per-worker transcript. Snapshot restore supplies the checkpoint; transcript
-replay supplies every committed crank after it.
+replay supplies every committed crank after it. Ironhorse participates only by
+restoring its engine state and executing the replayed deliveries; it neither
+selects the checkpoint nor reads the transcript.
 
 Sequence from panic to recovery:
 
 ```mermaid
 sequenceDiagram
-    participant Sup as Supervisor
-    participant W as Worker Ironhorse
-    Sup->>W: deliver message N, admission gate passed
-    W->>W: crank runs, buffers outbound
-    W-->>Sup: PANIC from StackOverflow, MeterAbort, Rust panic, or ref-error
-    Note over Sup: CrankOutcome is Panicked, so discard N outbound, no side effect escaped
-    Sup->>Sup: mark worker dead, do NOT commit crank N
-    Note over Sup: fix lands as code, config, or external condition change
-    Sup->>W: resume fresh machine from last snapshot, pre-N
-    W->>W: replay committed transcript through delivery N-1
-    W->>W: re-seat logical host handles from durable descriptors
-    Sup->>W: re-deliver message N, now succeeds
+    participant SM as Slot Machine supervisor
+    participant IH as Ironhorse worker
+    SM->>IH: deliver message N, admission gate passed
+    IH->>SM: stage outbound through supplied capability
+    IH-->>SM: CrankOutcome::Panicked(reason)
+    Note over SM: discard crank N outbound, no side effect escaped
+    SM->>SM: mark worker dead, do NOT commit crank N
+    Note over SM: fix lands as code, config, or external condition change
+    SM->>IH: restore engine state from last snapshot, pre-N
+    SM->>IH: replay committed transcript through delivery N-1
+    SM->>SM: re-seat logical host handles from durable descriptors
+    SM->>IH: re-deliver message N, now succeeds
 ```
 
 During replay, the supervisor delivers only committed inbound events after the
@@ -730,11 +782,12 @@ the named fix is present.
 
 The current daemon has only coarse snapshot suspend/resume: `handle_suspend` ->
 `Machine::suspend_to_cas` and `handle_resume` -> `resume_shared` /
-`resume_process`. Implementing the transcript adds the required suffix-replay
-loop and periodic snapshot policy to that path. A successful snapshot records
-its committed-event watermark before older events are compacted. Events for open
-logical handles remain reachable through `host_handle` reconstruction records
-even when the crank events that created them fall below the snapshot watermark.
+`resume_process`. Implementing the Slot Machine transcript adds the required
+suffix-replay loop and periodic snapshot policy to that path. A successful
+snapshot records its committed-event watermark before older events are
+compacted. Events for open logical handles remain reachable through
+`host_handle` reconstruction records even when the crank events that created
+them fall below the snapshot watermark.
 
 A second gap the survey surfaced: today the XS `XS_TOO_MUCH_COMPUTATION_EXIT`
 path and `ironhorse-vm`'s `Halt::MeterAbort` are **two separate, unjoined
@@ -811,7 +864,7 @@ before the worker-death teardown discards it. The interaction with
 fourth exception mode. Concretely:
 
 - **No debugger attached:** a panic tears the worker down immediately per
-  § Termination and Retry (discard, die, retry).
+  § Slot Machine Termination and Retry (discard, die, retry).
 - **Debugger attached:** the panic hook stops the machine at the panic site and
   emits the `<panic>` wire message; the developer can inspect frames and take a
   snapshot (a snapshot here captures the machine *at the fault*, which is exactly
@@ -906,7 +959,8 @@ peek over a `flag == 2` compiler change).
   set before resume). A `raise` seam reads the option once per raise.
 - **Pinned across a worker's snapshot->replay lineage.** Although the option is
   set at machine create/resume, its value is **recorded into the `snapshot`
-  transcript record** (§ Per-worker write-ahead transcript) and checked on every
+  transcript record** (§ Slot Machine per-worker write-ahead transcript) and
+  checked on every
   resume-for-replay exactly as the engine/callback-table signature is. This is
   load-bearing for the crash-consistency invariant, because replay re-executes
   the committed guest bytecode through these same raise sites: a site that
@@ -915,7 +969,8 @@ peek over a `flag == 2` compiler change).
   identically. Otherwise a caught `ReferenceError` whose only effect was an
   in-heap local computation (never reaching an outbound send or host call, and
   therefore invisible to the kind/payload/order/handle mismatch detector,
-  § Termination and Retry) would silently replay to a *different* heap state
+  § Slot Machine Termination and Retry) would silently replay to a *different*
+  heap state
   than the one the committed transcript was produced against. The supervisor
   therefore **refuses to resume a worker for replay with a
   `panic-on-reference-error` setting different from the run that produced its
@@ -948,7 +1003,8 @@ peek over a `flag == 2` compiler change).
 
 The transcript's **load-bearing crash-consistency invariant** (*a committed heap
 epoch can never name an uncommitted transcript suffix, or vice versa*,
-§ Per-worker write-ahead transcript) is a correctness property, not a
+§ Slot Machine per-worker write-ahead transcript) is a correctness property,
+not a
 performance one, and the design owes a test strategy for it in the shape its
 SQLite-backed sibling designs already set (for example,
 [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md)'s metamorphic
@@ -976,10 +1032,12 @@ The acceptance bar this design proposes, to be filled in by the implementation:
   before-ack window (step 3), assert a receiver discards the re-sent frame by its
   stable event sequence, so at-least-once release is observed exactly-once.
 - **Embargo coverage assertions.** One case per row of the "Which termination
-  paths the embargo includes" table in § The Message Embargo Contract: drive a
+  paths the embargo includes" table in § The Slot Machine Message Embargo
+  Contract: drive a
   crank to each `CrankOutcome` and
-  assert (a) `Committed` releases the outbound set in sequence order and (b) every
-  non-`Committed` outcome (`MeterAbort` explicitly included) leaves zero
+  assert (a) `Quiesced` lets Slot Machine commit and release the outbound set in
+  sequence order and (b) every non-`Quiesced` outcome (`MeterAbort` explicitly
+  included) leaves zero
   outbound frames observable outside the vat.
 - **FFI-abort guard: a panicking host callback becomes a per-worker
   `Panicked`, not a process abort.** § Scope: What Is Already a Panic names the
@@ -1110,7 +1168,8 @@ transcript) is a separate, later bar and does not block the correctness suite.
   store-backed `HeapStore` machine (joint commit via `ATTACH`/2PC on one SQLite
   connection) or the current production XS/CAS path (transcript-commit-then-CAS
   ordering behind a watermark)? Both commit disciplines are specified in
-  § Per-worker write-ahead transcript; which one lands first, and whether the
+  § Slot Machine per-worker write-ahead transcript; which one lands first, and
+  whether the
   design should require the ATTACH form once store-backed workers are on the
   delivery path, are left to the implementation that surveys the daemon's actual
   snapshot mechanism.
@@ -1145,7 +1204,8 @@ transcript) is a separate, later bar and does not block the correctness suite.
 - How is the **fsync cost bounded for a single busy vat**? The per-crank commit
   collapse (one fsync per crank, never per outbound frame) is settled and
   workload-independent, but the further cross-crank group-commit amortization
-  (§ Per-worker write-ahead transcript) only helps when concurrent sibling cranks
+  (§ Slot Machine per-worker write-ahead transcript) only helps when concurrent
+  sibling cranks
   land in the same coalescing window, which a single hot vat processing
   sequential deliveries does not have (its batch size is 1). That leaves one
   per-crank fsync per delivery on the lone-vat path, undiminished by group commit,
@@ -1169,11 +1229,12 @@ transcript) is a separate, later bar and does not block the correctness suite.
 | Design | Relationship |
 |---|---|
 | [ironhorse-engine](ironhorse-engine.md) | Supplies the `Halt` enum, the `StackOverflow`/`MeterAbort` abort-to-host precedent, the "a panic is a crashed crank" framing (§ Minimizing `unsafe`), and the `Machine` / `-e ironhorse` integration seam that surfaces `CrankOutcome`. This design names and generalizes what that design left as scattered `Halt` variants. |
+| [Slot Machine](../packages/slots/README.md) | Supplies the worker message layer on which the snapshot/transcript/embargo owner is built. The architectural responsibility spans this package, the daemon/Endor supervisor, and the worker transport; it is deliberately outside Ironhorse even where Ironhorse supplies the engine snapshot primitive. |
 | [daemon-xs-worker-metering](daemon-xs-worker-metering.md) | **Load-bearing.** Its admission-control decision already handles the meter-exhaustion partial-effect case and explicitly rejected a per-crank embargo; this design reconciles the panic contract with that decision rather than reinventing embargo. |
 | [daemon-debug-worker-restart](daemon-debug-worker-restart.md) | The suspend-to-snapshot / resume-from-snapshot machinery the retry path composes; the per-worker `debug-flag`-before-resume shape the Coda's construction option mirrors. |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | Supplies the throw/uncaught classifier (`jumps.is_empty()`), the `raise` engine-unwind prerequisite the Coda toggles against, and the break/report model a panic must be distinguished within. The Coda's switch lives at that design's `raise` seam. |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | The consumer contract (`<break>`/`<panic>` wire messages, `DebugSession`, `setExceptionBreakMode`) the panic break reason extends. |
-| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Supplies the per-worker SQLite `HeapStore::commit` / `CheckpointBatch` durability primitive. Its heap store is a *separate* SQLite file from the transcript, so a store-backed worker joins its heap epoch and transcript crank via `ATTACH` on one connection or an explicit two-phase commit (§ Per-worker write-ahead transcript), not a single implicit transaction. |
+| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | Supplies the Ironhorse engine primitive that Slot Machine uses to obtain or restore a worker snapshot, including the per-worker SQLite `HeapStore::commit` / `CheckpointBatch` durability primitive. Its heap store is a *separate* SQLite file from the transcript, so Slot Machine joins a store-backed worker's heap epoch and transcript crank via `ATTACH` on one connection or an explicit two-phase commit (§ Slot Machine per-worker write-ahead transcript), not a single implicit transaction. |
 | [ocapn-orthogonal-persistence](ocapn-orthogonal-persistence.md) | Supplies the landed snapshot-plus-journal-suffix, stable frame sequence, duplicate-suppression, and replay-window precedent. This design applies that recovery envelope to endor vats and extends it to host-call messages and logical handles. |
 
 ## Prompt
