@@ -196,7 +196,10 @@ git-backed project workspace under the petname "workspace" — an EndoGit
 capability. Use it via exec:
 - \`const wt = await E(workspace).worktree()\` gives the working tree, a mount you
   can write to: \`E(wt).makeFile(path, text)\`, \`E(wt).writeText(path, text)\`,
-  \`E(wt).remove(path)\`, \`E(wt).move(from, to)\`.
+  \`E(wt).remove(path)\`, \`E(wt).move(from, to)\`. A path argument is an array
+  of segments — \`E(wt).writeText(['src', 'main.js'], text)\`; a bare string is
+  a single name, and slash-joined strings are rejected. \`E(wt).entry('src/main.js')\`
+  splits a slash path into a token any path argument accepts.
 - \`E(workspace).status()\` returns \`{ entries, truncated }\`; each entry is
   copy data with \`path\`, \`index\`, and \`worktree\` fields, and \`truncated\`
   tells you whether the result was limited. \`E(workspace).diff()\` inspects
@@ -242,8 +245,12 @@ Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
 codebase you run inside. Use it to understand the capabilities you operate
 before acting through "endo". In exec, look it up and read from it:
 - \`const src = await E(powers).lookup('endo-src')\`
-- \`E(src).list()\` (optionally a sub-path) lists entries; \`E(src).readText(path)\`
-  reads a file, e.g. \`E(src).readText('packages/daemon/src/interfaces.js')\`.
+- \`E(src).list()\` lists the root; one segment per argument goes deeper:
+  \`E(src).list('packages', 'daemon')\`.
+- \`E(src).readText(path)\` reads a file. A path is an array of segments —
+  \`E(src).readText(['packages', 'daemon', 'src', 'interfaces.js'])\` — never a
+  slash-joined string. \`E(src).entry('packages/daemon/src/interfaces.js')\` is
+  the one call that splits on "/"; its token works wherever a path does.
 - It is strictly read-only — you cannot modify it. It may be absent if the
   daemon host does not have the source on disk; if a lookup fails, carry on
   without it.
