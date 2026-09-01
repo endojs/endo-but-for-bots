@@ -97,3 +97,43 @@ fn uncaught_not_callable_still_aborts_on_both() {
         "an uncaught not-callable TypeError must abort on both engines",
     );
 }
+
+#[test]
+fn caught_native_argument_validation_type_error() {
+    // The former bare `Halt::Throw("TypeError: defineProperty target")`
+    // escaped past a live handler; the raise must be catchable.
+    assert_result_agrees(
+        "function f(){ try { Object.defineProperty(true, 'foo', {}); } \
+         catch (e) { return e instanceof TypeError; } } f();",
+    );
+}
+
+#[test]
+fn caught_descriptor_validation_type_error() {
+    assert_result_agrees(
+        "function f(){ var o = {}; try { Object.defineProperty(o, 'x', { get: 1 }); } \
+         catch (e) { return e instanceof TypeError; } } f();",
+    );
+}
+
+#[test]
+fn caught_get_own_property_descriptor_null_coercion() {
+    // ToObject step 1: `null`/`undefined` receivers raise a catchable
+    // TypeError (formerly a host `Unsupported` halt).
+    assert_result_agrees(
+        "function f(){ try { Object.getOwnPropertyDescriptor(null, 'x'); } \
+         catch (e) { return e instanceof TypeError; } } f();",
+    );
+}
+
+#[test]
+fn uncaught_native_validation_type_error_aborts_on_both() {
+    let dr = dual_run("Object.defineProperty(true, 'foo', {});").expect("oracle must start");
+    assert_eq!(
+        dr.agreement,
+        Agreement::BothAbort,
+        "an uncaught native-validation TypeError must abort on both engines \
+         (ironhorse halt: {:?})",
+        dr.ironhorse_halt,
+    );
+}

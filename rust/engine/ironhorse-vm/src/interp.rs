@@ -32460,7 +32460,7 @@ impl Interp {
                             ..OrdinaryDescriptor::default()
                         };
                         if !self.mop_define_own_property(code, target, id, copied)? {
-                            return Err(self.catchable_type_error());
+                            return Err(self.catchable_type_error_msg("copy property".into()));
                         }
                     }
                     arg0
@@ -33113,7 +33113,7 @@ impl Interp {
                         unreachable!("ToObject returns a reference")
                     };
                     if !self.define_properties_from_object(code, object, descriptors)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("cannot define properties".into()));
                     }
                 }
                 Slot::of(Kind::Reference, Payload::Reference(object))
@@ -33133,7 +33133,7 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 if !self.define_properties_from_object(code, target, descriptors)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("cannot define properties".into()));
                 }
                 arg0
             }
@@ -33198,7 +33198,7 @@ impl Interp {
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
                     if !self.mop_define_own_property(code, object, id, descriptor)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("cannot define property".into()));
                     }
                     arg0
                 } else if self.typed_arrays.contains_key(&target) {
@@ -36082,7 +36082,7 @@ impl Interp {
             NativeMethod::ReflectIsExtensible => {
                 let object = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("Reflect.isExtensible target".into())),
                 };
                 Ok(Slot::boolean(self.mop_is_extensible(code, object)?))
             }
@@ -46301,24 +46301,6 @@ impl Interp {
         }
     }
 
-    /// As [`Self::catchable_type_error`], carrying a diagnostic message so
-    /// the thrown `TypeError` renders `TypeError: <message>` — XS's
-    /// `mxTypeError("...")` texts (`invalid object`, `invalid descriptor`,
-    /// `cannot coerce null to object`, …), which the oracle's
-    /// `String(exception)` reports verbatim.
-    fn catchable_type_error_msg(&mut self, message: String) -> Halt {
-        let error = self.internal_error("TypeError", message);
-        self.raise_js(error)
-    }
-
-    /// Raise a realm-local TypeError from a native helper. The dispatch loop
-    /// consumes `Resume` and continues at the catch/finally target; an uncaught
-    /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
-    fn catchable_type_error(&mut self) -> Halt {
-        let error = self.build_error("TypeError", 0, 0);
-        self.raise_js(error)
-    }
-
     /// Raise a realm-local, catchable `SyntaxError` from a native helper —
     /// the shape `new RegExp(badPattern)` throws (`fxThrowMessage` with
     /// `XS_SYNTAX_ERROR`). Like [`Self::catchable_type_error`], `try`/`catch`
@@ -51320,13 +51302,13 @@ impl Interp {
                 "writable" => out.writable = Some(to_boolean(&value)),
                 "get" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("getter is not callable".into()));
                     }
                     out.get = Some(value);
                 }
                 "set" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("setter is not callable".into()));
                     }
                     out.set = Some(value);
                 }
@@ -51334,7 +51316,7 @@ impl Interp {
             }
         }
         if out.is_accessor() && out.is_data() {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("invalid property descriptor".into()));
         }
         Ok(out)
     }
