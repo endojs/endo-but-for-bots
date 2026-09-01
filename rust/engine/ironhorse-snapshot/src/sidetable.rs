@@ -716,7 +716,8 @@ mod tests {
         const TRANSIENTS: &[&str] = &[
             "args", "this_val", "cur_func", "cur_target", "target_func",
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
-            "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
+            "resume_status", "callback_return_depth", "native_catch_jump_depth", "env",
+            "direct_eval_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",
             // Native dispatch recursion is bracketed by `dispatch_at`;
             // every return decrements it before control can reach a

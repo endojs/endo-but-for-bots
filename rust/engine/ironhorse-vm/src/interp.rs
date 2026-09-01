@@ -3694,6 +3694,11 @@ pub struct Interp {
     /// that unwound into, and completed, its caller while the nested
     /// dispatcher was still active.
     callback_return_depth: Option<usize>,
+    /// Jump-stack depth below which an engine raise must not unwind while a
+    /// native `mxTry` analogue is awaiting a callback result. A throw with no
+    /// callback-local handler escapes the nested dispatcher for the native
+    /// boundary to consume; outer JavaScript handlers remain intact.
+    native_catch_jump_depth: Option<usize>,
     meter: Meter,
     /// Cost-calibration histogram recorder (design
     /// `designs/ironhorse-meter-opcode-cost-instrumentation.md`, stage
@@ -5216,6 +5221,7 @@ impl Interp {
             result: Slot::undefined(),
             strict: false,
             callback_return_depth: None,
+            native_catch_jump_depth: None,
             meter: Meter::new(),
             cost: crate::cost::CostRecorder::default(),
             meter_host: None,
@@ -8058,6 +8064,7 @@ impl Interp {
         let saved_target_func = self.target_func;
         let saved_pending_new_target = self.pending_new_target;
         let saved_callback_return_depth = self.callback_return_depth;
+        let saved_native_catch_jump_depth = self.native_catch_jump_depth;
         let saved_frame_slots = self.frame_slots;
         let saved_eval_direct = self.eval_direct;
         let saved_direct_eval_hoist = self.direct_eval_hoist;
@@ -8071,6 +8078,7 @@ impl Interp {
         self.target_func = crate::value::SlotIndex::NULL;
         self.pending_new_target = None;
         self.callback_return_depth = None;
+        self.native_catch_jump_depth = None;
         self.frame_slots = 0;
         self.eval_direct = false;
         // The unit's declaration-instantiation hoist observes the direct/indirect
@@ -8100,6 +8108,7 @@ impl Interp {
         self.target_func = saved_target_func;
         self.pending_new_target = saved_pending_new_target;
         self.callback_return_depth = saved_callback_return_depth;
+        self.native_catch_jump_depth = saved_native_catch_jump_depth;
         self.frame_slots = saved_frame_slots;
         self.eval_direct = saved_eval_direct;
 
@@ -12316,7 +12325,20 @@ impl Interp {
                 XS_CODE_CHECK_INSTANCE => {
                     let top = self.stack.last().copied().unwrap_or_else(Slot::undefined);
                     if top.kind != Kind::Reference {
-                        return Halt::Throw("iterator result: not an object".into());
+                        let error = self.internal_error(
+                            "TypeError",
+                            "iterator result: not an object".into(),
+                        );
+                        match self.raise_js(error) {
+                            Ok(target) if self.call_stack.len() < return_depth => {
+                                return Halt::Resume(target);
+                            }
+                            Ok(target) => {
+                                pc = target;
+                                continue;
+                            }
+                            Err(halt) => return halt,
+                        }
                     }
                     pc += size as usize;
                 }
@@ -14014,7 +14036,20 @@ impl Interp {
                         Some(cell) => {
                             let s = self.slots.get(cell);
                             if s.kind == Kind::Uninitialized {
-                                return Halt::Throw("get closure: not initialized yet".into());
+                                let error = self.internal_error(
+                                    "ReferenceError",
+                                    "get closure: not initialized yet".into(),
+                                );
+                                match self.raise_js(error) {
+                                    Ok(target) if self.call_stack.len() < return_depth => {
+                                        return Halt::Resume(target);
+                                    }
+                                    Ok(target) => {
+                                        pc = target;
+                                        continue;
+                                    }
+                                    Err(halt) => return halt,
+                                }
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
@@ -16595,7 +16630,10 @@ impl Interp {
         let stack_base = self.stack.len();
         let call_depth = self.call_stack.len();
         let jump_depth = self.jumps.len();
-        match self.run_callback(code, func, this, args) {
+        let outer_native_catch = self.native_catch_jump_depth.replace(jump_depth);
+        let result = self.run_callback(code, func, this, args);
+        self.native_catch_jump_depth = outer_native_catch;
+        match result {
             Ok(value) => Ok(Ok(value)),
             Err(Halt::Throw(_)) => {
                 while self.call_stack.len() > call_depth {
@@ -21747,7 +21785,9 @@ impl Interp {
         let sb = self.stack.len();
         let cd = self.call_stack.len();
         let jd = self.jumps.len();
+        let outer_native_catch = self.native_catch_jump_depth.replace(jd);
         let r = self.call_any(code, func, this, args);
+        self.native_catch_jump_depth = outer_native_catch;
         self.from_async_try(r, sb, cd, jd)
     }
 
@@ -34636,6 +34676,17 @@ impl Interp {
     /// object instead of seeing an uncatchable host-side `Unsupported` halt.
     fn raise_js(&mut self, value: Slot) -> Result<usize, Halt> {
         self.exception = value;
+        if self
+            .native_catch_jump_depth
+            .is_some_and(|floor| self.jumps.len() <= floor)
+        {
+            // The innermost native catch owns this throw. Do not consume an
+            // outer JavaScript jump: return through the nested dispatcher so
+            // the native boundary can reject a promise or otherwise handle it.
+            self.pending_new_target = None;
+            self.meter_host_escape();
+            return Err(Halt::Throw(self.render(&value)));
+        }
         match self.unwind_to_jump() {
             Some(target) => Ok(target),
             None => {
@@ -34653,6 +34704,16 @@ impl Interp {
     /// error retains the ordinary host `Throw` result from [`Self::raise_js`].
     fn catchable_type_error(&mut self) -> Halt {
         let error = self.build_error("TypeError", 0, 0);
+        match self.raise_js(error) {
+            Ok(target) => Halt::Resume(target),
+            Err(halt) => halt,
+        }
+    }
+
+    /// As [`Self::catchable_type_error`], preserving a host diagnostic for
+    /// semantic helper paths that already distinguish their failure reason.
+    fn catchable_type_error_msg(&mut self, message: String) -> Halt {
+        let error = self.internal_error("TypeError", message);
         match self.raise_js(error) {
             Ok(target) => Halt::Resume(target),
             Err(halt) => halt,
@@ -37858,7 +37919,7 @@ impl Interp {
                     if value.kind != Kind::Undefined
                         && !matches!(value.value, Payload::Reference(function) if self.functions.contains_key(&function))
                     {
-                        return Err(Halt::Throw("TypeError: getter is not callable".into()));
+                        return Err(self.catchable_type_error_msg("getter is not callable".into()));
                     }
                     out.get = Some(value);
                 }
@@ -37866,7 +37927,7 @@ impl Interp {
                     if value.kind != Kind::Undefined
                         && !matches!(value.value, Payload::Reference(function) if self.functions.contains_key(&function))
                     {
-                        return Err(Halt::Throw("TypeError: setter is not callable".into()));
+                        return Err(self.catchable_type_error_msg("setter is not callable".into()));
                     }
                     out.set = Some(value);
                 }
@@ -37874,7 +37935,7 @@ impl Interp {
             }
         }
         if out.is_accessor() && out.is_data() {
-            return Err(Halt::Throw("TypeError: invalid property descriptor".into()));
+            return Err(self.catchable_type_error_msg("invalid property descriptor".into()));
         }
         Ok(out)
     }
@@ -42415,6 +42476,210 @@ mod tests {
         );
         assert!(!out.completed);
         assert_eq!(out.computrons, 6, "bit-exact host-escape computrons vs XS");
+    }
+
+    // ---- Engine-raised errors unwind through the jump chain --------------
+    // designs/ironhorse-debugger-recovery-and-uncaught.md § Prerequisite:
+    // engine-internal TypeError/ReferenceError must be catchable by a JS
+    // `try`/`catch`, the way XS routes them through `fxThrowMessage` →
+    // `fxJump`. These tests drive real JS source
+    // through `ironhorse-compile` (byte-identical to the XS compiler) so they
+    // exercise the exact bytecode XS emits, oracle-free.
+
+    /// Compile JS `source` to XS-identical bytecode + SYMB atoms and run it,
+    /// relinking intrinsics from the atoms exactly as the test262 harness does.
+    fn compile_and_run(source: &str) -> RunOutcome {
+        let (bytecode, symbols) =
+            ironhorse_compile::compile_atoms(source).expect("source compiles");
+        crate::run_program_with_symbols(&bytecode, &symbols)
+    }
+
+    fn compile_and_run_with_source_compiler(source: &str) -> RunOutcome {
+        struct TestCompiler;
+        impl SourceCompiler for TestCompiler {
+            fn compile_source(
+                &self,
+                source: &str,
+                strict: bool,
+            ) -> Result<CompiledSource, SourceCompileError> {
+                match ironhorse_compile::compile_atoms_with(source, strict) {
+                    Ok((bytecode, symbols)) => Ok(CompiledSource { bytecode, symbols }),
+                    Err(_) => Err(SourceCompileError::Syntax(String::new())),
+                }
+            }
+        }
+
+        let (bytecode, symbols) =
+            ironhorse_compile::compile_atoms(source).expect("source compiles");
+        let names = crate::symbols::parse_symbols(&symbols);
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&names);
+        interp.set_source_compiler(std::rc::Rc::new(TestCompiler));
+        interp.run(&bytecode)
+    }
+
+    #[test]
+    fn engine_native_type_error_cyclic_json_is_catchable() {
+        // A native-raised error (`JSON.stringify` of a cyclic value, thrown
+        // deep inside `call_native_method`) must also unwind to the catch. The
+        // full stack/scope restore `unwind_to_jump` performs is what makes
+        // catching from inside a native sound, whatever partial state it left.
+        let out =
+            compile_and_run("try { var a = []; a[0] = a; JSON.stringify(a); } catch (e) { 444 }");
+        assert_eq!(out.halt, Halt::Return, "the native TypeError is caught");
+        assert!(out.completed);
+        assert_eq!(out.result, "444");
+    }
+
+    #[test]
+    fn engine_native_type_error_cyclic_json_escapes_when_uncaught() {
+        let out = compile_and_run("var a = []; a[0] = a; JSON.stringify(a);");
+        assert_eq!(out.halt, Halt::Throw("TypeError".into()));
+        assert!(!out.completed);
+    }
+
+    #[test]
+    fn engine_type_error_call_of_non_function_is_catchable() {
+        // The design's flagship: `try { var f; f() } catch (e) {}`. Calling an
+        // uninitialized variable is an engine TypeError; it must unwind to the
+        // catch, not escape to the host.
+        let out = compile_and_run("try { var f; f(); } catch (e) { 333 }");
+        assert_eq!(out.halt, Halt::Return, "the engine TypeError is caught");
+        assert!(out.completed);
+        assert_eq!(out.result, "333", "control reached the catch clause");
+    }
+
+    #[test]
+    fn engine_type_error_call_of_non_function_escapes_when_uncaught() {
+        // Same fault with no handler: `jumps.is_empty()`, so it escapes to the
+        // host exactly as before — the uncaught side of the classifier premise.
+        let out = compile_and_run("var f; f();");
+        assert!(matches!(out.halt, Halt::Throw(_)), "no handler ⇒ escape");
+        assert!(!out.completed);
+    }
+
+    #[test]
+    fn engine_reference_error_undefined_variable_is_catchable() {
+        // Reading an unbound name is a ReferenceError raised by the variable
+        // lookup (`XS_CODE_GET_VARIABLE` miss); it must be catchable.
+        let out = compile_and_run("try { thisNameIsUnbound; } catch (e) { 222 }");
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "222");
+    }
+
+    #[test]
+    fn engine_reference_error_undefined_variable_escapes_when_uncaught() {
+        let out = compile_and_run("thisNameIsUnbound;");
+        assert!(matches!(out.halt, Halt::Throw(_)));
+        assert!(!out.completed);
+    }
+
+    #[test]
+    fn engine_reference_error_tdz_read_is_catchable() {
+        // Reading a `let` binding before its initializer runs is a temporal
+        // dead-zone ReferenceError (`XS_CODE_GET_*` on an uninitialized slot).
+        let out = compile_and_run("try { x + 1; let x = 2; } catch (e) { 111 }");
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "111");
+    }
+
+    #[test]
+    fn engine_reference_error_captured_tdz_read_is_catchable() {
+        let out = compile_and_run(
+            "try { function read() { return x; } read(); let x = 2; } catch (e) { 919 }",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "919");
+    }
+
+    #[test]
+    fn engine_iterator_result_type_error_is_catchable() {
+        let out = compile_and_run(
+            "try { var it = {}; it[Symbol.iterator] = function () { return this; }; \
+             it.next = function () { return 1; }; for (var x of it) {} } catch (e) { 939 }",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "939");
+    }
+
+    #[test]
+    fn engine_raise_crossing_callback_returns_resume_to_outer_dispatch() {
+        let out = compile_and_run(
+            "function outer() { try { [0].map(() => x); let x = 2; } \
+             catch (e) { return 555; } } outer();",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "555");
+    }
+
+    #[test]
+    fn engine_raise_crossing_dynamic_function_returns_resume_to_outer_dispatch() {
+        let out = compile_and_run_with_source_compiler(
+            "var f = Function('function read() { return x; } read(); let x = 2;'); \
+             try { f(); } catch (e) { 959 }",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "959");
+    }
+
+    #[test]
+    fn engine_raise_stops_at_promise_executor_native_catch() {
+        let out = compile_and_run(
+            "try { new Promise(function () { function read() { return x; } read(); \
+             let x = 2; }); 969; } catch (e) { 979; }",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "969");
+    }
+
+    #[test]
+    fn engine_raise_preserves_exception_for_async_rejection() {
+        let out = compile_and_run(
+            "var caught = false; async function f() { (() => x)(); let x = 2; } \
+             f().catch(e => { caught = (e === undefined); }); caught;",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "false");
+    }
+
+    #[test]
+    fn descriptor_getter_type_error_is_catchable() {
+        let out = compile_and_run(
+            "try { Object.defineProperty({}, 'x', { get: 1 }); } catch (e) { 777 }",
+        );
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "777");
+    }
+
+    #[test]
+    fn engine_raise_transits_finally_only_and_still_escapes() {
+        // A `finally` with no `catch` pushes a jump too, so the chain is not
+        // empty — the exception transits the finally (running it) and then
+        // re-escapes. Proves a finally-only `try` is NOT mistaken for a real
+        // catch: the run still aborts with the throw.
+        let out = compile_and_run("try { var f; f(); } finally { 1; }");
+        assert!(matches!(out.halt, Halt::Throw(_)), "finally-only still escapes");
+        assert!(!out.completed);
+    }
+
+    #[test]
+    fn engine_raise_transiting_finally_is_caught_by_outer_try() {
+        // The exception transits an inner finally-only `try` and is caught by
+        // the enclosing `catch` — the finally-transit + outer-catch chain.
+        let out =
+            compile_and_run("try { try { var f; f(); } finally { 1; } } catch (e) { 666 }");
+        assert_eq!(out.halt, Halt::Return);
+        assert!(out.completed);
+        assert_eq!(out.result, "666");
     }
 
     #[test]
