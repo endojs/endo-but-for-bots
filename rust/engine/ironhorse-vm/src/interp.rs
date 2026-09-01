@@ -38074,43 +38074,209 @@ impl Interp {
         self.mop_get(code, inst, id, receiver)
     }
 
-    /// `Object.fromEntries`'s `AddEntriesFromIterable` over a dense Array
-    /// iterable. Each yielded entry must be an object; its `"0"` and `"1"`
-    /// properties are read through the ordinary/exotic array-like seam and the
-    /// first is converted with `ToPropertyKey`. The result uses define
-    /// semantics, so an inherited setter cannot intercept a new own property.
-    /// A custom iterator remains a named gap because abrupt completion must
-    /// perform the full IteratorClose protocol.
+    /// `Object.fromEntries`'s `AddEntriesFromIterable`. Each yielded entry must
+    /// be an object; its `"0"` and `"1"` properties are read through the
+    /// ordinary/exotic array-like seam and the first is converted with
+    /// `ToPropertyKey`. The result uses define semantics, so an inherited
+    /// setter cannot intercept a new own property. Once an entry has been
+    /// obtained, every abrupt entry-processing completion closes the iterator;
+    /// failures while advancing the iterator itself do not.
     fn object_from_entries(&mut self, code: &[u8], iterable: Slot) -> Result<Slot, Halt> {
-        let outer = match iterable.value {
-            Payload::Reference(array)
-                if iterable.kind == Kind::Reference && self.arrays.contains_key(&array) =>
-            {
-                array
-            }
-            _ if matches!(iterable.kind, Kind::Null | Kind::Undefined) => {
-                return Err(self.catchable_type_error())
-            }
-            _ => return Err(Halt::Unsupported("Object.fromEntries:iterable")),
-        };
-        let length = self.arrays[&outer].length;
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.object_from_entries_inner(code, iterable);
+        self.jumps = saved_jumps;
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            },
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn object_from_entries_inner(
+        &mut self,
+        code: &[u8],
+        iterable: Slot,
+    ) -> Result<Result<Slot, Slot>, Halt> {
         let result = self.slots.alloc(Slot::instance(self.object_proto));
-        for index in 0..length {
-            // Array iteration visits holes as `undefined`, which then fails the
-            // entry-object check with a TypeError.
-            let entry = self.arrays[&outer]
-                .items()
-                .get(&index)
-                .copied()
-                .map(|slot| Slot::of(slot.kind, slot.value))
-                .unwrap_or_else(Slot::undefined);
+
+        if matches!(iterable.kind, Kind::Null | Kind::Undefined) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+
+        let value_id = self.intern_key("value");
+        let done_id = self.intern_key("done");
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let mut iterator_method = Slot::undefined();
+        let mut explicit_iterator_property = false;
+        if let Payload::Reference(inst) = iterable.value {
+            if iterable.kind == Kind::Reference {
+                explicit_iterator_property = self.chain_has_descriptor(inst, iterator_id);
+                iterator_method = match self
+                    .array_from_try(|this| this.mop_get(code, inst, iterator_id, iterable))?
+                {
+                    Ok(method) => method,
+                    Err(error) => return Ok(Err(error)),
+                };
+            }
+        }
+        if iterator_method.kind != Kind::Undefined
+            && iterator_method.kind != Kind::Null
+            && !self.is_callable_value(iterator_method)
+        {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+
+        let mut next_method = Slot::undefined();
+        let iterator = if iterator_method.kind != Kind::Undefined
+            && iterator_method.kind != Kind::Null
+        {
+            let iterator = match self
+                .array_from_try(|this| this.call_any(code, iterator_method, iterable, &[]))?
+            {
+                Ok(iterator) => iterator,
+                Err(error) => return Ok(Err(error)),
+            };
+            let inst = match iterator.value {
+                Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+            if !self.iterators.contains_key(&inst) {
+                let next_id = self.intern_key("next");
+                next_method = match self
+                    .array_from_try(|this| this.mop_get(code, inst, next_id, iterator))?
+                {
+                    Ok(method) if self.is_callable_value(method) => method,
+                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    Err(error) => return Ok(Err(error)),
+                };
+            }
+            Some(iterator)
+        } else if !explicit_iterator_property {
+            match iterable.value {
+                Payload::Reference(array)
+                    if iterable.kind == Kind::Reference && self.arrays.contains_key(&array) =>
+                {
+                    Some(self.make_array_iterator(array, 0))
+                }
+                Payload::String(off) if iterable.kind == Kind::String => {
+                    let content = self.str_content(off).to_vec();
+                    Some(self.make_string_iterator(content))
+                }
+                Payload::Reference(collection)
+                    if iterable.kind == Kind::Reference
+                        && self.collections.contains_key(&collection) =>
+                {
+                    let kind = match self.collections[&collection].kind {
+                        CollKind::Map => 7,
+                        CollKind::Set => 6,
+                        _ => 0,
+                    };
+                    (kind != 0).then(|| self.make_collection_iterator(collection, kind))
+                }
+                Payload::Reference(iter)
+                    if iterable.kind == Kind::Reference && self.iterators.contains_key(&iter) =>
+                {
+                    Some(iterable)
+                }
+                Payload::Reference(generator)
+                    if iterable.kind == Kind::Reference
+                        && self.generators.contains_key(&generator) =>
+                {
+                    let next_id = self.intern_key("next");
+                    next_method = match self
+                        .array_from_try(|this| this.mop_get(code, generator, next_id, iterable))?
+                    {
+                        Ok(method) if self.is_callable_value(method) => method,
+                        Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                        Err(error) => return Ok(Err(error)),
+                    };
+                    Some(iterable)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let iterator = match iterator {
+            Some(iterator) => iterator,
+            None => return Ok(Err(self.build_error("TypeError", 0, 0))),
+        };
+
+        for _ in 0..1_000_000u64 {
+            let iter_inst = match iterator.value {
+                Payload::Reference(iter_inst) => iter_inst,
+                _ => unreachable!(),
+            };
+            let step = if self.iterators.contains_key(&iter_inst) {
+                self.array_from_try(|this| this.array_iterator_next(iter_inst))?
+            } else {
+                self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
+            };
+            // IteratorStepValue failures are returned directly. The iterator
+            // has not yielded an entry yet, so AddEntriesFromIterable does not
+            // apply IteratorClose to these abrupt completions.
+            let step = match step {
+                Ok(step) => step,
+                Err(error) => return Ok(Err(error)),
+            };
+            let step_inst = match step.value {
+                Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+            let done =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, done_id, step))? {
+                    Ok(done) => done,
+                    Err(error) => return Ok(Err(error)),
+                };
+            if self.truthy(&done) {
+                return Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(result))));
+            }
+            let entry =
+                match self.array_from_try(|this| this.mop_get(code, step_inst, value_id, step))? {
+                    Ok(entry) => entry,
+                    Err(error) => return Ok(Err(error)),
+                };
             let entry_inst = match entry.value {
                 Payload::Reference(inst) if entry.kind == Kind::Reference => inst,
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.array_from_close(code, iterator, error)?;
+                    return Ok(Err(error));
+                }
             };
-            let key = self.arraylike_index(code, entry_inst, 0, entry)?;
-            let value = self.arraylike_index(code, entry_inst, 1, entry)?;
-            let id = self.to_property_id(code, key)?;
+            let key = match self
+                .array_from_try(|this| this.arraylike_index(code, entry_inst, 0, entry))?
+            {
+                Ok(key) => key,
+                Err(error) => {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    return Ok(Err(error));
+                }
+            };
+            let value = match self
+                .array_from_try(|this| this.arraylike_index(code, entry_inst, 1, entry))?
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    return Ok(Err(error));
+                }
+            };
+            let id = match self.array_from_try(|this| this.to_property_id(code, key))? {
+                Ok(id) => id,
+                Err(error) => {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    return Ok(Err(error));
+                }
+            };
             let descriptor = OrdinaryDescriptor {
                 value: Some(value),
                 writable: Some(true),
@@ -38119,10 +38285,12 @@ impl Interp {
                 ..OrdinaryDescriptor::default()
             };
             if !self.ordinary_define_own_property(result, id, descriptor) {
-                return Err(self.catchable_type_error());
+                let error = self.build_error("TypeError", 0, 0);
+                let error = self.array_from_close(code, iterator, error)?;
+                return Ok(Err(error));
             }
         }
-        Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
+        Err(Halt::StepLimit(self.n_dispatched))
     }
 
     // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---

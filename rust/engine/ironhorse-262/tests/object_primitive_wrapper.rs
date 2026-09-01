@@ -80,3 +80,43 @@ fn object_from_entries_defines_dense_array_entries() {
     assert_result_agrees("Object.fromEntries([Object('ab')]).a", "b");
     assert_result_agrees("Object.fromEntries([new String('xy')]).x", "y");
 }
+
+#[test]
+fn object_from_entries_consumes_general_iterables_in_order() {
+    assert_result_agrees(
+        "var effects=[]; var iterable={ [Symbol.iterator]: function(){ effects.push('iterator'); var n=0; return { next: function(){ effects.push('next'+n); if (n++ === 0) return {done:false,value:{get 0(){effects.push('key');return {toString:function(){effects.push('toString');return 'x'}}},get 1(){effects.push('value');return 7}}}; return {done:true} } } } }; var o=Object.fromEntries(iterable); effects.join('|')+','+o.x",
+        "iterator|next0|key|value|toString|next1,7",
+    );
+    assert_result_agrees(
+        "var entry={0:'x',1:3,get [Symbol.iterator](){throw Error('entry must not be iterated')}}; var iterable={ [Symbol.iterator]:function(){var done=false;return {next:function(){if(done)return {done:true};done=true;return {done:false,value:entry}}}}}; Object.fromEntries(iterable).x",
+        "3",
+    );
+}
+
+#[test]
+fn object_from_entries_closes_after_entry_processing_errors() {
+    assert_result_agrees(
+        "var closed=0; var iterable={ [Symbol.iterator]: function(){ return {next:function(){return {done:false,value:null}},return:function(){closed++;return {}}} } }; var caught=false; try{Object.fromEntries(iterable)}catch(e){caught=e instanceof TypeError} ''+caught+','+closed",
+        "true,1",
+    );
+    assert_result_agrees(
+        "var closed=0; var boom={}; var entry={get 0(){throw boom}}; var iterable={ [Symbol.iterator]: function(){ return {next:function(){return {done:false,value:entry}},return:function(){closed++;return {}}} } }; var caught; try{Object.fromEntries(iterable)}catch(e){caught=e===boom} ''+caught+','+closed",
+        "true,1",
+    );
+    assert_result_agrees(
+        "var closed=0; var boom={}; var entry={0:{toString:function(){throw boom}},1:4}; var iterable={ [Symbol.iterator]: function(){ return {next:function(){return {done:false,value:entry}},return:function(){closed++;return {}}} } }; var caught; try{Object.fromEntries(iterable)}catch(e){caught=e===boom} ''+caught+','+closed",
+        "true,1",
+    );
+}
+
+#[test]
+fn object_from_entries_does_not_close_iterator_step_errors() {
+    assert_result_agrees(
+        "var closed=0; var boom={}; var iterable={ [Symbol.iterator]: function(){ return {next:function(){throw boom},return:function(){closed++}} } }; var caught; try{Object.fromEntries(iterable)}catch(e){caught=e===boom} ''+caught+','+closed",
+        "true,0",
+    );
+    assert_result_agrees(
+        "var closed=0; var boom={}; var iterable={ [Symbol.iterator]: function(){ return {next:function(){return {get done(){throw boom}}},return:function(){closed++}} } }; var caught; try{Object.fromEntries(iterable)}catch(e){caught=e===boom} ''+caught+','+closed",
+        "true,0",
+    );
+}
