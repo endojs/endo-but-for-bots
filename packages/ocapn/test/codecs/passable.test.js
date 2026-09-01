@@ -244,7 +244,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual([...details.secret], [0x31, 0x32, 0x33]);
+      t.is(details.secret, '123');
     },
   },
   {
@@ -333,7 +333,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual([...details.secret], [0x34, 0x35, 0x36]);
+      t.is(details.secret, '456');
     },
   },
 ];

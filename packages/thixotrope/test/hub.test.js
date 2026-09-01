@@ -527,7 +527,7 @@ test('sturdyrefs transit the hub as opaque values', async t => {
   const returned = await E(echo).echo(sturdyRef);
   t.is(
     String(returned),
-    '[object ocapn-sturdyref]',
+    '[object SturdyRef]',
     'the round-tripped value is a sturdyref again',
   );
   t.not(returned, sturdyRef, 'a fresh reification, same pointer on the wire');

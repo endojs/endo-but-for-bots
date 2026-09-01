@@ -13,6 +13,7 @@
 
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { toIndexableUint8Array } from '@endo/bytes/indexed.js';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -322,10 +323,7 @@ export const makeDescCodecs = referenceKit => {
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      const secretBytes =
-        swissNum instanceof Uint8Array
-          ? swissNum
-          : new Uint8Array(/** @type {ArrayBuffer} */ (swissNum.slice()));
+      const secretBytes = toIndexableUint8Array(swissNum);
       // Materialize a friendly string secret only when the swiss-num is
       // strictly printable-ASCII (every byte <= 0x7f), symmetric with the
       // write path's `encodeSwissnum`, which validates the same alphabet.

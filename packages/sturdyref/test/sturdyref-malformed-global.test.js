@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis */
 // First-wins guards against a malformed pre-existing global: a value at
 // globalThis.SturdyRef that is not a { fromLocation, toLocation } namespace is
 // rejected loudly rather than silently adopted. Own file (own process) so the

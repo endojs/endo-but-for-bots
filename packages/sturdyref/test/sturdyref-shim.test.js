@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis */
 // Exercises the shim as used in a real HardenedJS realm: lockdown FIRST, then
 // the shim installs and hardens after lockdown. Each test pins one distributed
 // confinement property from the shim's spec.

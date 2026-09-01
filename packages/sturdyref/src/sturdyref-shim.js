@@ -26,8 +26,6 @@
  * call.
  */
 
-/* global globalThis */
-
 import harden from '@endo/harden';
 import { makeSturdyRef } from '@endo/pass-style';
 

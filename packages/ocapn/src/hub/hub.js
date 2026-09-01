@@ -11,7 +11,7 @@ import {
 import { makePassableCodecs } from '../codecs/passable.js';
 import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
 import { getSelectorName, makeSelector } from '../selector.js';
-import { makeSturdyRef } from '../client/sturdyrefs.js';
+import { makeSturdyRefTracker } from '../client/sturdyrefs.js';
 
 /**
  * An OCapN hub: a comms-vat-style forwarding node that is NOT a
@@ -176,6 +176,10 @@ export const makeOcapnHub = ({
   // eslint-disable-next-line no-console
   logError = (...args) => console.error('ocapn hub:', ...args),
 }) => {
+  const sturdyRefTracker = makeSturdyRefTracker({
+    get: _secret => undefined,
+  });
+
   /**
    * One reference row, namespaced by its origin session's epoch. A row
    * either backs an export (`backing: 'export'` — the object or
@@ -832,7 +836,8 @@ export const makeOcapnHub = ({
        * @param {any} location
        * @param {string | Uint8Array} secret
        */
-      makeSturdyRef: (location, secret) => makeSturdyRef(location, secret),
+      makeSturdyRef: (location, secret) =>
+        sturdyRefTracker.makeSturdyRef(location, secret),
 
       // -- write side (message TOWARD this session) --
       /** @param {any} value */

@@ -17,8 +17,6 @@ import { mapReader } from '@endo/stream';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { locationToLocationId } from '@endo/ocapn';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,

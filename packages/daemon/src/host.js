@@ -2212,44 +2212,48 @@ export const makeHostMaker = ({
     /** @type {EndoHost['sturdyRefs']} */
     const sturdyRefs = async () => {
       if (sturdyRefsExo === undefined) {
-        sturdyRefsExo = makeExo('EndoSturdyRefs', SturdyRefsInterface, {
-          /** @type {EndoSturdyRefs['provideSturdyRef']} */
-          provideSturdyRef: async (petNameOrPath, type) => {
-            const namePath = namePathFrom(petNameOrPath);
-            const id = await E(directory).identify(...namePath);
-            if (id === undefined) {
-              throw new TypeError(`Unknown pet name: ${q(petNameOrPath)}`);
-            }
-            const { grantHandle } = await mintSturdyRefGrant(
-              /** @type {FormulaIdentifier} */ (id),
-              type,
-            );
-            return grantHandle;
+        sturdyRefsExo = makeExo(
+          'EndoSturdyRefs',
+          /** @type {any} */ (SturdyRefsInterface),
+          {
+            /** @type {EndoSturdyRefs['provideSturdyRef']} */
+            provideSturdyRef: async (petNameOrPath, type) => {
+              const namePath = namePathFrom(petNameOrPath);
+              const id = await E(directory).identify(...namePath);
+              if (id === undefined) {
+                throw new TypeError(`Unknown pet name: ${q(petNameOrPath)}`);
+              }
+              const { grantHandle } = await mintSturdyRefGrant(
+                /** @type {FormulaIdentifier} */ (id),
+                type,
+              );
+              return grantHandle;
+            },
+            /** @type {EndoSturdyRefs['listSturdyRefGrants']} */
+            listSturdyRefGrants: async () => getSturdyRefGrants(),
+            /** @type {EndoSturdyRefs['revokeSturdyRefGrant']} */
+            revokeSturdyRefGrant: async grantHandle =>
+              deleteSturdyRefGrant(grantHandle),
+            /**
+             * Accept a foreign SturdyRef carried out-of-band as an `ocapn://`
+             * URI (design cut 5, "daemon as B"): internalize it to a local
+             * formula identifier and bind it under a pet name so it can be
+             * looked up, identified, and re-enlivened on demand. Host-tier only
+             * (the URI is secret-bearing); a confined guest has no `sturdyRefs`
+             * facet, so it never reaches this accept surface.
+             *
+             * @type {EndoSturdyRefs['acceptSturdyRefUri']}
+             */
+            acceptSturdyRefUri: async (uri, petName) => {
+              const id = await acceptSturdyRefUri(uri);
+              if (petName !== undefined) {
+                const { namePath } = petNamePathFrom(petName);
+                await E(directory).storeIdentifier(namePath, id);
+              }
+              return id;
+            },
           },
-          /** @type {EndoSturdyRefs['listSturdyRefGrants']} */
-          listSturdyRefGrants: async () => getSturdyRefGrants(),
-          /** @type {EndoSturdyRefs['revokeSturdyRefGrant']} */
-          revokeSturdyRefGrant: async grantHandle =>
-            deleteSturdyRefGrant(grantHandle),
-          /**
-           * Accept a foreign SturdyRef carried out-of-band as an `ocapn://`
-           * URI (design cut 5, "daemon as B"): internalize it to a local
-           * formula identifier and bind it under a pet name so it can be
-           * looked up, identified, and re-enlivened on demand. Host-tier only
-           * (the URI is secret-bearing); a confined guest has no `sturdyRefs`
-           * facet, so it never reaches this accept surface.
-           *
-           * @type {EndoSturdyRefs['acceptSturdyRefUri']}
-           */
-          acceptSturdyRefUri: async (uri, petName) => {
-            const id = await acceptSturdyRefUri(uri);
-            if (petName !== undefined) {
-              const { namePath } = petNamePathFrom(petName);
-              await E(directory).storeIdentifier(namePath, id);
-            }
-            return id;
-          },
-        });
+        );
       }
       return sturdyRefsExo;
     };
