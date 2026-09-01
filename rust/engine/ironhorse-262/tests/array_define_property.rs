@@ -114,3 +114,23 @@ fn arguments_length_remains_an_ordinary_configurable_property() {
          return '' + arguments.length + ',' + arguments.propertyIsEnumerable('length'); } f(1, 2)",
     );
 }
+
+#[test]
+fn array_iterators_re_read_exotic_length_and_elements() {
+    agrees(
+        "function f() { var it = Array.prototype.values.call(arguments); \
+         var first = it.next(); arguments.length = 0; var second = it.next(); \
+         return '' + first.value + ',' + first.done + ',' + second.value + ',' + second.done; } \
+         f(3, 4)",
+    );
+    agrees(
+        "function f() { 'use strict'; var it = Array.prototype.values.call(arguments); \
+         var first = it.next(); arguments.length = 0; var second = it.next(); \
+         return '' + first.value + ',' + first.done + ',' + second.value + ',' + second.done; } \
+         f(3, 4)",
+    );
+    agrees(
+        "var a = [1]; Object.defineProperty(a, '0', { get: function () { return 7; } }); \
+         a.values().next().value",
+    );
+}
