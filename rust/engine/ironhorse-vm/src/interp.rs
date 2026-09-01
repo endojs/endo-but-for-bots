@@ -3353,6 +3353,10 @@ pub enum Native {
     /// [`Interp::shared_buffers`]); the "shared" distinction only gates
     /// `Atomics.wait`/`notify` and `ArrayBuffer.isView`-style brand checks.
     SharedArrayBuffer,
+    /// The non-global abstract `%TypedArray%` constructor, reachable as the
+    /// `[[Prototype]]` of every concrete TypedArray constructor. Direct call
+    /// and direct construction both throw a `TypeError`.
+    TypedArrayBase,
     /// A concrete TypedArray constructor (`Uint8Array`/`Int32Array`/… —
     /// `xsDataView.c` `fx_TypedArray`). The payload indexes
     /// [`TYPED_ARRAY_TYPES`] (the element type). Its per-instance view state
@@ -3437,6 +3441,7 @@ impl Native {
             Native::Iterator => "Iterator",
             Native::ArrayBuffer => "ArrayBuffer",
             Native::SharedArrayBuffer => "SharedArrayBuffer",
+            Native::TypedArrayBase => "TypedArray",
             Native::TypedArray(i) => TYPED_ARRAY_TYPES[i as usize].name,
             Native::DataView => "DataView",
             Native::Promise => "Promise",
@@ -3481,7 +3486,8 @@ impl Native {
             | Native::Set
             | Native::WeakMap
             | Native::WeakSet
-            | Native::Iterator => 0,
+            | Native::Iterator
+            | Native::TypedArrayBase => 0,
             Native::Object
             | Native::Function
             | Native::Boolean
@@ -5500,6 +5506,29 @@ impl Interp {
         // to %Object.prototype%; each subtype's prototype chains to
         // %Error.prototype% (so `TypeError` `instanceof Error`).
         let error_proto = self.slots.alloc(Slot::instance(object_proto));
+        // The non-global abstract `%TypedArray%` constructor and its prototype
+        // are the shared intermediate links for every concrete TypedArray
+        // family. `Object.getPrototypeOf(Int8Array)` exposes the constructor;
+        // `Object.getPrototypeOf(Int8Array.prototype)` exposes the prototype.
+        let typed_array_ctor = self.slots.alloc(Slot::instance(func_proto));
+        let typed_array_name = self.alloc_str_text(b"TypedArray");
+        self.functions.insert(
+            typed_array_ctor,
+            FuncInfo {
+                native: Some(Native::TypedArrayBase),
+                name: "TypedArray".to_string(),
+                name_chunk: typed_array_name,
+                arity: Native::TypedArrayBase.arity(),
+                ..FuncInfo::default()
+            },
+        );
+        let typed_array_proto = self.slots.alloc(Slot::instance(object_proto));
+        self.ctor_prototype
+            .insert(typed_array_ctor, typed_array_proto);
+        self.proto_methods
+            .push((typed_array_proto, "constructor", typed_array_ctor));
+        self.proto_methods
+            .push((typed_array_ctor, "prototype", typed_array_proto));
         for (name, native) in Native::intrinsics() {
             let f = self.slots.alloc(Slot::instance(func_proto));
             let name_chunk = self.alloc_str_text(name.as_bytes());
@@ -5514,6 +5543,9 @@ impl Interp {
                 },
             );
             self.intrinsics.insert(name, f);
+            if matches!(native, Native::TypedArray(_)) {
+                self.slots.get_mut(f).value = Payload::Reference(typed_array_ctor);
+            }
             // Wire the constructor's `.prototype` object (the `instanceof`
             // right-hand test / the `new` this-prototype). Object and
             // Function reuse the two prototype roots; the Error base reuses
@@ -5566,16 +5598,10 @@ impl Interp {
                 // (special-cased by id, shared with ArrayBuffer). The backing
                 // store lives in `array_buffers`, marked in `shared_buffers`.
                 Native::SharedArrayBuffer => self.slots.alloc(Slot::instance(object_proto)),
-                // `%Uint8Array.prototype%` &co.: each concrete TypedArray
-                // prototype is a plain boot object chaining to
-                // %Object.prototype% (ironhorse does not model the intermediate
-                // abstract `%TypedArray.prototype%` — the `length`/`byteLength`/
-                // `byteOffset`/`buffer` accessors are special-cased by id and
-                // element access is the exotic index behavior, neither of which
-                // the prototype chain observes for the covered grammar). The
-                // per-instance view state lives in the `typed_arrays` side
-                // table.
-                Native::TypedArray(_) => self.slots.alloc(Slot::instance(object_proto)),
+                // `%Uint8Array.prototype%` &co. inherit the shared abstract
+                // `%TypedArray.prototype%`; concrete instances carry their
+                // per-view state in the `typed_arrays` side table.
+                Native::TypedArray(_) => self.slots.alloc(Slot::instance(typed_array_proto)),
                 // `%DataView.prototype%`: a plain boot object chaining to
                 // %Object.prototype%, carrying the `get*`/`set*` methods and
                 // the `byteLength`/`byteOffset`/`buffer` accessors (the latter
@@ -5618,6 +5644,9 @@ impl Interp {
                 | Native::AsyncFunction
                 | Native::AsyncGeneratorFunction => {
                     unreachable!("dynamic-function-family constructors are registered separately")
+                }
+                Native::TypedArrayBase => {
+                    unreachable!("abstract TypedArray constructor is registered separately")
                 }
             };
             self.ctor_prototype.insert(f, proto);
@@ -5730,10 +5759,8 @@ impl Interp {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.array_proto, name, mf));
         }
-        // The concrete TypedArray prototypes currently chain directly to
-        // `%Object.prototype%`, so bind each shared `%TypedArray.prototype%`
-        // method function on every concrete prototype. Reusing one function
-        // preserves the specified cross-constructor method identity.
+        // Shared `%TypedArray.prototype%` methods live on the abstract
+        // intermediate prototype and are inherited by every concrete family.
         for (name, arity, method) in [
             ("copyWithin", 2, NativeMethod::TypedArrayCopyWithin),
             ("fill", 1, NativeMethod::TypedArrayFill),
@@ -5741,13 +5768,7 @@ impl Interp {
             ("reverse", 0, NativeMethod::TypedArrayReverse),
         ] {
             let mf = self.alloc_named_method(method, name, arity);
-            for ty in TYPED_ARRAY_TYPES {
-                if let Some(&ctor) = self.intrinsics.get(ty.name) {
-                    if let Some(&proto) = self.ctor_prototype.get(&ctor) {
-                        self.proto_methods.push((proto, name, mf));
-                    }
-                }
-            }
+            self.proto_methods.push((typed_array_proto, name, mf));
         }
         // `%Array Iterator.prototype%`: a boot object chaining to
         // %Object.prototype%, carrying `next` (the iterators produced by
@@ -19544,6 +19565,12 @@ impl Interp {
             // `fx_ArrayBuffer`/`fx_SharedArrayBuffer` throws a catchable TypeError
             // when `mxTarget` is undefined (`if (mxIsUndefined(mxTarget)) mxTypeError`).
             Native::ArrayBuffer | Native::SharedArrayBuffer => {
+                return Err(self.catchable_type_error());
+            }
+            // The abstract `%TypedArray%` constructor is reachable through
+            // `Object.getPrototypeOf(Int8Array)`, but cannot itself create an
+            // instance. Both direct call and direct construction throw.
+            Native::TypedArrayBase => {
                 return Err(self.catchable_type_error());
             }
             // A concrete `<TypedArray>(...)` called WITHOUT `new` (`has_target`
@@ -44729,6 +44756,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Iterator => "native-call:Iterator",
         Native::ArrayBuffer => "native-call:ArrayBuffer",
         Native::SharedArrayBuffer => "native-call:SharedArrayBuffer",
+        Native::TypedArrayBase => "native-call:TypedArray",
         Native::TypedArray(_) => "native-call:TypedArray",
         Native::DataView => "native-call:DataView",
         Native::Promise => "native-call:Promise",

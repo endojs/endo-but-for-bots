@@ -175,7 +175,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // `%Function.prototype%` is now a callable native and its
         // `@@hasInstance` method identity is boot-minted (the symbol-keyed
         // property itself remains lazy). Format unchanged.
-        "06f43043d9ca70fd65dbc078d2bebc1e66072b037850c560dc5cb032ca5aff19",
+        // Re-pinned 2026-09-02 for the abstract `%TypedArray%` constructor
+        // and prototype added to the boot heap. Format unchanged.
+        "d106fc630e0dc8871fcdbd87f97c3ccb7f69c74db3e474c2d16df33878e0440f",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -283,7 +285,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // `%Function.prototype%` and the boot-minted identity for its lazy
         // `@@hasInstance` method move the boot page rows. Schema and format
         // remain unchanged.
-        "1a4eb6ebe9a4fea59ab425b5bb30b7d0bf4d0782305e1293a7522bb59f87ea3a",
+        // Re-pinned with the blob for the abstract `%TypedArray%` constructor
+        // and prototype boot-heap addition. Schema and format remain unchanged.
+        "32857b6f7aa497038c5e69806a406391e66be5743a28536c857d5bb5dcd670c7",
         "epoch-3 seal chain"
     );
 }
