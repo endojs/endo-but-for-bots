@@ -15445,17 +15445,12 @@ impl Interp {
                     // Answer with the metered chain walk: XS meters one
                     // `XS_CODE_METERING` per prototype level the
                     // `fxOrdinaryHasProperty` recursion descends.
-                    let own = dispatch_result!(
-                        self.object_own_property_present(code, objref, id),
+                    let (present, recursions) = dispatch_result!(
+                        self.mop_has_with_recursions(code, objref, id),
                         pc,
                         self,
                         return_depth
                     );
-                    let (present, recursions) = if own {
-                        (true, 0)
-                    } else {
-                        self.instance_has(objref, id)
-                    };
                     self.meter.tick_raw(IN_METERING);
                     self.meter.tick_code_n(recursions);
                     self.push(Slot::boolean(present));
@@ -38805,13 +38800,37 @@ impl Interp {
 
     /// `O.[[HasProperty]](P)`.
     fn mop_has(&mut self, code: &[u8], inst: crate::value::SlotIndex, id: u16) -> Result<bool, Halt> {
-        if self.proxies.contains_key(&inst) {
-            return self.proxy_has(code, inst, id);
+        Ok(self.mop_has_with_recursions(code, inst, id)?.0)
+    }
+
+    /// `O.[[HasProperty]](P)` plus the number of ordinary prototype descents
+    /// that XS meters for the `in` opcode. Each level dispatches through the
+    /// object's MOP: a Proxy in an ordinary object's prototype chain must run
+    /// its `has` trap, and an absent outer Proxy trap must forward to an inner
+    /// Proxy target rather than treating either proxy as an ordinary slot
+    /// chain. Exotic own properties are likewise checked at every level.
+    fn mop_has_with_recursions(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<(bool, u64), Halt> {
+        let mut current = inst;
+        let mut recursions = 0u64;
+        loop {
+            if self.proxies.contains_key(&current) {
+                return Ok((self.proxy_has(code, current, id)?, recursions));
+            }
+            if self.object_own_property_present(code, current, id)? {
+                return Ok((true, recursions));
+            }
+            let prototype = self.instance_prototype(current);
+            if prototype.is_null() {
+                return Ok((false, recursions));
+            }
+            current = prototype;
+            recursions += 1;
         }
-        if self.find_property(inst, id).is_none() && self.exotic_own_descriptor(inst, id).is_some() {
-            return Ok(true);
-        }
-        Ok(self.instance_has(inst, id).0)
     }
 
     /// `O.[[Get]](P, Receiver)`.
