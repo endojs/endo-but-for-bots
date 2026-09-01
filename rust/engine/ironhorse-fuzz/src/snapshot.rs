@@ -653,9 +653,15 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             .collect();
         // The results Array must have a POSITIVE carried length (the
         // element index is bounded below it), and an undone
-        // combinator's derived promise must be PENDING — drawing the
-        // derived from the pending list satisfies the gate for either
-        // `done` value, an honest shape either way.
+        // combinator's derived promise must be PENDING. A done
+        // combinator instead needs a settled derived promise: `done`
+        // latches that settlement exactly.
+        let settled: Vec<usize> = prms_promises
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.state != 0)
+            .map(|(i, _)| i)
+            .collect();
         let sized: Vec<&ironhorse_snapshot::image::ArrayImage> =
             arrays.iter().filter(|a| a.length > 0).collect();
         if !pending.is_empty() && !sized.is_empty() {
@@ -685,12 +691,16 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 } else {
                     1 + c.u32() % results.length
                 };
+                let done = !settled.is_empty() && c.byte() % 2 == 0;
+                let derived_candidates = if done { &settled } else { &pending };
                 prms_combinators.push(ironhorse_vm::CombinatorRow {
                     kind,
-                    derived: prms_promises[pending[(c.byte() as usize) % pending.len()]].owner,
+                    derived: prms_promises
+                        [derived_candidates[(c.byte() as usize) % derived_candidates.len()]]
+                    .owner,
                     remaining,
                     results: results.owner,
-                    done: c.byte() % 2 == 0,
+                    done,
                 });
             }
         }
