@@ -29161,8 +29161,14 @@ impl Interp {
             // `mxMeterSome(2)` (the result store); plus the result chunk.
             NativeMethod::ArrayMap => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("map:non-dense-array")),
+                    Some(i) if self.array_allocating_uses_default_species(i) => i,
+                    _ => {
+                        let result =
+                            self.array_generic_map_filter(code, m, this, base)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let this_arg = self
@@ -29304,8 +29310,14 @@ impl Interp {
             // `mxMeterSome`). The result chunk is sized to the kept count.
             NativeMethod::ArrayFilter => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("filter:non-dense-array")),
+                    Some(i) if self.array_allocating_uses_default_species(i) => i,
+                    _ => {
+                        let result =
+                            self.array_generic_map_filter(code, m, this, base)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let callback = arg0;
                 let this_arg = self
@@ -34357,11 +34369,16 @@ impl Interp {
             (Slot::undefined(), true, st.index)
         } else {
             // `ArrayIteratorPrototype.next` performs LengthOfArrayLike on every
-            // step. This is observable for an arguments receiver (whose
-            // ordinary, configurable `length` may change), accessors, and
-            // proxies; reading the compact ArrayData length directly made an
-            // arguments iterator ignore a truncation after its first yield.
-            let length = self.array_generic_length(code, st.iterable)?;
+            // step. A true Array's exotic length is its compact length, while
+            // an arguments receiver has an ordinary, configurable `length`
+            // that must be read through the MOP on every step.
+            let length = if self.arrays.contains_key(&st.iterable)
+                && !self.arguments_objects.contains(&st.iterable)
+            {
+                u64::from(self.arrays[&st.iterable].length)
+            } else {
+                self.array_generic_length(code, st.iterable)?
+            };
             if u64::from(st.index) < length {
                 // A yielding `next()`: the base result-object mutation cost,
                 // plus (for `values`/`entries`) the array-element read
@@ -34370,13 +34387,30 @@ impl Interp {
                 if st.kind == 0 || st.kind == 2 {
                     self.meter.tick_raw(ARRAY_ITERATOR_ELEMENT_READ);
                 }
+                let direct_element = if !self.arguments_objects.contains(&st.iterable) {
+                    self.arrays
+                        .get(&st.iterable)
+                        .and_then(|array| array.items().get(&st.index).copied())
+                        .map(|value| Slot::of(value.kind, value.value))
+                } else {
+                    None
+                };
                 let v = match st.kind {
-                    0 => self.array_generic_get(code, st.iterable, u64::from(st.index))?,
+                    0 => match direct_element {
+                        Some(value) => value,
+                        None => {
+                            self.array_generic_get(code, st.iterable, u64::from(st.index))?
+                        }
+                    },
                     1 => Slot::integer(st.index as i32),
                     _ => {
                         // entries: a fresh `[index, arr[index]]` pair array.
-                        let elem =
-                            self.array_generic_get(code, st.iterable, u64::from(st.index))?;
+                        let elem = match direct_element {
+                            Some(value) => value,
+                            None => {
+                                self.array_generic_get(code, st.iterable, u64::from(st.index))?
+                            }
+                        };
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
                         a.length = 2;
@@ -34472,20 +34506,70 @@ impl Interp {
         }
     }
 
+    /// Whether a dense allocating method may use its compact result path.
+    /// A custom/accessor `constructor`, or a `Symbol.species` override on the
+    /// resolved intrinsic Array constructor, requires the observable generic
+    /// `ArraySpeciesCreate` path.
+    fn array_allocating_uses_default_species(&self, inst: crate::value::SlotIndex) -> bool {
+        let Some(constructor_id) = self.constructor_id else {
+            return true;
+        };
+        let mut owner = inst;
+        let constructor = loop {
+            if self.proxies.contains_key(&owner) {
+                return false;
+            }
+            if let Some(property) = self.find_property(owner, constructor_id) {
+                let slot = self.slots.get(property);
+                if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                    return false;
+                }
+                break Slot::of(slot.kind, slot.value);
+            }
+            owner = self.instance_prototype(owner);
+            if owner.is_null() {
+                return true;
+            }
+        };
+        let Payload::Reference(constructor_inst) = constructor.value else {
+            return false;
+        };
+        if constructor.kind != Kind::Reference
+            || self.native_of(constructor_inst) != Some(Native::Array)
+        {
+            return false;
+        }
+        let species_id = self
+            .well_known_symbols
+            .iter()
+            .find_map(|(name, value)| (*name == "species").then_some(value.value))
+            .and_then(|value| match value {
+                Payload::Reference(descriptor) => self.symbol_key_ids.get(&descriptor).copied(),
+                _ => None,
+            });
+        let Some(species_id) = species_id else {
+            return true;
+        };
+        let mut owner = constructor_inst;
+        while !owner.is_null() {
+            if self.find_property(owner, species_id).is_some() {
+                return false;
+            }
+            owner = self.instance_prototype(owner);
+        }
+        true
+    }
+
     // ---- Generic (array-like / sparse / proxy `this`) Array.prototype path ----
     //
     // The dense fast paths in `call_native_method` operate on the internal
-    // packed representation and bail (`Halt::Unsupported("<m>:non-dense-array")`)
-    // for a receiver that is not a fully-dense array: a *sparse* array (holes),
-    // a plain array-*like* object (`{length, 0:…}`), or a `Proxy`. This block is
-    // the spec-faithful fallback for the non-allocating **read-only** methods,
-    // driven entirely through the object MOP (`mop_get`/`mop_has`) so accessors,
-    // the prototype chain (holes inherit), and proxy traps are all honored. It
-    // is confined to the read-only family (no `ArraySpeciesCreate`, so a generic
-    // receiver can never diverge on species) and matches each method's exact
-    // `HasProperty`/`Get` abstract-operation sequence (the order a Proxy test
-    // observes). A receiver kind not modeled here (a primitive lacking a wrapper
-    // object) keeps the method's original named skip.
+    // packed representation. This block is the spec-faithful fallback for a
+    // sparse Array (holes), plain array-like object (`{length, 0:…}`), Proxy,
+    // or allocating method with observable species. Reads use the object MOP
+    // (`mop_get`/`mop_has`) so accessors, inherited holes, and Proxy traps are
+    // honored; `map`/`filter` additionally use `ArraySpeciesCreate` and
+    // `CreateDataPropertyOrThrow`. An unmodeled primitive receiver keeps the
+    // method's original named skip.
 
     /// The property **id** for integer element index `k` (its canonical decimal
     /// string key), interned like any ordinary string key.
@@ -34575,6 +34659,7 @@ impl Interp {
         match m {
             NativeMethod::ArrayForEach => "forEach:non-dense-array",
             NativeMethod::ArrayMap => "map:non-dense-array",
+            NativeMethod::ArrayFilter => "filter:non-dense-array",
             NativeMethod::ArraySome | NativeMethod::ArrayEvery => "some/every:non-dense-array",
             NativeMethod::ArrayFind | NativeMethod::ArrayFindIndex => "find:non-dense-array",
             NativeMethod::ArrayFindLast | NativeMethod::ArrayFindLastIndex => {
@@ -34587,6 +34672,230 @@ impl Interp {
             NativeMethod::ArrayAt => "at:non-dense-array",
             _ => "array:non-dense-array",
         }
+    }
+
+    /// `IsArray(O)`, including transparent Proxy recursion and the revoked
+    /// Proxy `TypeError`. Arguments objects share compact indexed storage with
+    /// Arrays in IronHorse, but are not Arrays for `ArraySpeciesCreate`.
+    fn array_generic_is_array(
+        &mut self,
+        mut o: crate::value::SlotIndex,
+    ) -> Result<bool, Halt> {
+        loop {
+            if self.proxies.contains_key(&o) {
+                let (target, _) = self.proxy_target_handler(o)?;
+                o = target;
+                continue;
+            }
+            return Ok(self.arrays.contains_key(&o) && !self.arguments_objects.contains(&o));
+        }
+    }
+
+    /// `ArraySpeciesCreate(original, length)`. The default constructor creates
+    /// a compact Array; a custom `constructor[Symbol.species]` is constructed
+    /// with `length`, and must return an object. Constructor/species reads go
+    /// through the MOP so accessors and Proxies remain observable.
+    fn array_generic_species_create(
+        &mut self,
+        code: &[u8],
+        original: crate::value::SlotIndex,
+        length: u64,
+    ) -> Result<crate::value::SlotIndex, Halt> {
+        if length > u32::MAX as u64 {
+            return Err(self.catchable_range_error());
+        }
+        let mut constructor = Slot::undefined();
+        if self.array_generic_is_array(original)? {
+            let constructor_id = self.intern_key("constructor");
+            let receiver = Slot::of(Kind::Reference, Payload::Reference(original));
+            constructor = self.mop_get(code, original, constructor_id, receiver)?;
+            if constructor.kind == Kind::Reference {
+                let species_id = self
+                    .well_known_symbol_property_id("species")
+                    .ok_or(Halt::Unsupported("array-species:symbol"))?;
+                let Payload::Reference(c) = constructor.value else {
+                    unreachable!()
+                };
+                let species = self.mop_get(code, c, species_id, constructor)?;
+                constructor = if species.kind == Kind::Null
+                    || species.kind == Kind::Undefined
+                {
+                    Slot::undefined()
+                } else {
+                    species
+                };
+            }
+        }
+
+        if constructor.kind == Kind::Undefined {
+            let result = self.new_array();
+            self.arrays.get_mut(&result).unwrap().length = length as u32;
+            return Ok(result);
+        }
+        if !self.is_constructor_value(constructor) {
+            return Err(self.catchable_type_error());
+        }
+        let value = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(length as f64)],
+            constructor,
+        )?;
+        match value.value {
+            Payload::Reference(result) if value.kind == Kind::Reference => Ok(result),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    /// `CreateDataPropertyOrThrow(target, ToString(index), value)` for the
+    /// result of an allocating Array method.
+    fn array_generic_create_data_property(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        index: u64,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        if index > u32::MAX as u64 {
+            return Err(self.catchable_type_error());
+        }
+        let id = self.array_generic_index_id(index);
+        let descriptor = OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        };
+        if self.mop_define_own_property(code, target, id, descriptor)? {
+            Ok(())
+        } else {
+            Err(self.catchable_type_error())
+        }
+    }
+
+    /// For an ordinary (non-Proxy, non-integer-indexed, non-string-exotic)
+    /// prototype chain, find the next currently present integer index. `Some`
+    /// means the HasProperty scan is side-effect-free and can safely jump over
+    /// holes; `None` requests the fully observable one-by-one MOP path. The
+    /// caller recomputes after every callback, so callback mutations of the
+    /// receiver or its prototypes remain visible.
+    fn array_generic_next_present_index(
+        &self,
+        o: crate::value::SlotIndex,
+        start: u64,
+        len: u64,
+    ) -> Option<Option<u64>> {
+        let mut current = o;
+        let mut next: Option<u64> = None;
+        while !current.is_null() {
+            if self.proxies.contains_key(&current)
+                || self.typed_arrays.contains_key(&current)
+                || self.wrapper_data.get(&current).is_some_and(|value| {
+                    value.kind == Kind::String && matches!(value.value, Payload::String(_))
+                })
+            {
+                return None;
+            }
+            if let Some(array) = self.arrays.get(&current) {
+                for index in array.items().keys().copied() {
+                    let index = u64::from(index);
+                    if index >= start && index < len && next.map_or(true, |found| index < found) {
+                        next = Some(index);
+                    }
+                }
+            }
+            for property in self.own_property_slots(current) {
+                let id = self.slots.get(property).id;
+                if let Some(index) = self
+                    .string_key_name(id)
+                    .and_then(|name| string_to_index(&name))
+                    .map(u64::from)
+                {
+                    if index >= start && index < len && next.map_or(true, |found| index < found) {
+                        next = Some(index);
+                    }
+                }
+            }
+            current = self.instance_prototype(current);
+        }
+        Some(next)
+    }
+
+    /// Generic `map`/`filter` over sparse Arrays, arguments, array-like
+    /// objects, and Proxies. Both snapshot `length`, skip absent properties via
+    /// `HasProperty`, read inherited/accessor values via `Get`, and create the
+    /// result through `ArraySpeciesCreate`.
+    fn array_generic_map_filter(
+        &mut self,
+        code: &[u8],
+        m: NativeMethod,
+        this: Slot,
+        base: usize,
+    ) -> Result<Slot, Halt> {
+        let o = match this.value {
+            Payload::Reference(o) if this.kind == Kind::Reference => o,
+            _ if this.kind == Kind::Null || this.kind == Kind::Undefined => {
+                return Err(self.catchable_type_error());
+            }
+            _ => return Err(Halt::Unsupported(Self::array_generic_skip_reason(m))),
+        };
+        let callback = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let len = self.array_generic_length(code, o)?;
+        if !self.is_callable_value(callback) {
+            return Err(self.catchable_type_error());
+        }
+        // Allocating methods cannot short-circuit, so decline pathological
+        // array-like lengths before a case spends seconds walking empty keys.
+        // This remains far above the conformance fixtures' real work sets.
+        const GENERIC_ITER_CAP: u64 = 1 << 16;
+        let is_map = m == NativeMethod::ArrayMap;
+        let target = self.array_generic_species_create(code, o, if is_map { len } else { 0 })?;
+        let recv = Slot::of(Kind::Reference, Payload::Reference(o));
+        let mut to = 0u64;
+        let mut k = 0u64;
+        let mut linear_steps = 0u64;
+        while k < len {
+            let present = match self.array_generic_next_present_index(o, k, len) {
+                Some(Some(next)) => {
+                    k = next;
+                    true
+                }
+                Some(None) => break,
+                None => {
+                    if linear_steps >= GENERIC_ITER_CAP {
+                        return Err(Halt::Unsupported(Self::array_generic_skip_reason(m)));
+                    }
+                    linear_steps += 1;
+                    self.array_generic_has(code, o, k)?
+                }
+            };
+            self.meter.tick_builtin_some(1);
+            if !present {
+                k += 1;
+                continue;
+            }
+            let value = self.array_generic_get(code, o, k)?;
+            let cb_args = [value, Self::array_index_number(k), recv];
+            let selected = self.run_callback(code, callback, this_arg, &cb_args)?;
+            if is_map {
+                self.array_generic_create_data_property(code, target, k, selected)?;
+            } else if self.truthy(&selected) {
+                self.array_generic_create_data_property(code, target, to, value)?;
+                to += 1;
+            }
+            k += 1;
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(target)))
     }
 
     /// Generic fallback for the non-allocating read-only `Array.prototype`
@@ -37173,8 +37482,13 @@ impl Interp {
             // A TypedArray receiver is handled by the integer-indexed exotic
             // `[[Set]]` above and never reaches here.
             if self.arrays.contains_key(&inst) {
-                let key_id = self.intern_key(&index.to_string());
-                if self.find_property(inst, key_id).is_some() {
+                // Compact writes do not materialize a property name in XS.
+                // Look up an existing name only: interning every literal index
+                // charged a name-slot allocation and shifted exact metering.
+                let key_id = self.symbol_ids.get(&index.to_string()).copied();
+                if let Some(key_id) =
+                    key_id.filter(|id| self.find_property(inst, *id).is_some())
+                {
                     if define {
                         let descriptor = OrdinaryDescriptor {
                             value: Some(value),

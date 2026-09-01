@@ -134,3 +134,16 @@ fn array_iterators_re_read_exotic_length_and_elements() {
          a.values().next().value",
     );
 }
+
+#[test]
+fn compact_literal_indices_do_not_allocate_property_names() {
+    let source = "[1, 2, 3].flatMap(function (x) { return [x, x]; }).length";
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert!(run.result_agrees, "{run:?}");
+    assert!(
+        run.computrons_agree,
+        "compact array writes must preserve exact XS metering: oracle={} ironhorse={}",
+        run.oracle_computrons, run.ironhorse_computrons,
+    );
+}
