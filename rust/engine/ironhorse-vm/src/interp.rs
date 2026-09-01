@@ -18547,7 +18547,7 @@ impl Interp {
                             if let Some(&date) = self.dates.get(&r) {
                                 date
                             } else {
-                                let primitive = self.to_primitive(code, value, false)?;
+                                let primitive = self.to_primitive_default(code, value)?;
                                 if primitive.kind == Kind::String {
                                     let text = match primitive.value { Payload::String(o) => self.str_text(o), _ => String::new() };
                                     parse_date_string(&text).unwrap_or(f64::NAN)
@@ -41565,10 +41565,10 @@ impl Interp {
         // by identity and strict equality never coerces either side.
         if !strict {
             if a.kind == Kind::Reference && b.kind != Kind::Reference {
-                a = self.to_primitive(code, a, false)?;
+                a = self.to_primitive_default(code, a)?;
             }
             if b.kind == Kind::Reference && a.kind != Kind::Reference {
-                b = self.to_primitive(code, b, false)?;
+                b = self.to_primitive_default(code, b)?;
             }
         }
         let eq = match (a.kind, b.kind) {
@@ -41745,12 +41745,36 @@ impl Interp {
 
     /// ECMAScript `ToPrimitive`, including `@@toPrimitive` and the ordinary
     /// `valueOf`/`toString` fallback order.  The hint is `true` for string and
-    /// `false` for number/default.
+    /// `false` for number; default-hint callers use
+    /// [`Self::to_primitive_default`].
     fn to_primitive(&mut self, code: &[u8], value: Slot, string_hint: bool) -> Result<Slot, Halt> {
+        let hint = if string_hint {
+            PrimitiveHint::String
+        } else {
+            PrimitiveHint::Number
+        };
+        self.to_primitive_with_hint(code, value, hint)
+    }
+
+    /// `ToPrimitive(value)` with the ECMAScript default hint. Date objects use
+    /// the string fallback order; ordinary objects use the number order, and a
+    /// guest `@@toPrimitive` observes the literal `"default"` hint.
+    fn to_primitive_default(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+        self.to_primitive_with_hint(code, value, PrimitiveHint::Default)
+    }
+
+    fn to_primitive_with_hint(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        hint: PrimitiveHint,
+    ) -> Result<Slot, Halt> {
         let inst = match value.value {
             Payload::Reference(inst) if value.kind == Kind::Reference => inst,
             _ => return Ok(value),
         };
+        let string_hint = hint == PrimitiveHint::String
+            || (hint == PrimitiveHint::Default && self.dates.contains_key(&inst));
 
         if let Some((_, symbol)) = self
             .well_known_symbols
@@ -41766,10 +41790,10 @@ impl Interp {
                 // completion from its getter.
                 let exotic = self.mop_get(code, inst, id, value)?;
                 if exotic.kind != Kind::Undefined {
-                    let hint = if string_hint {
-                        b"string".as_slice()
-                    } else {
-                        b"number".as_slice()
+                    let hint = match hint {
+                        PrimitiveHint::Default => b"default".as_slice(),
+                        PrimitiveHint::Number => b"number".as_slice(),
+                        PrimitiveHint::String => b"string".as_slice(),
                     };
                     let off = self.alloc_str_text(hint);
                     let result = self.call_primitive_method(
@@ -41857,8 +41881,8 @@ impl Interp {
         if n < 2 {
             return Err(Halt::Unsupported("add:stack-underflow"));
         }
-        let a = self.to_primitive(code, self.stack[n - 2], false)?;
-        let b = self.to_primitive(code, self.stack[n - 1], false)?;
+        let a = self.to_primitive_default(code, self.stack[n - 2])?;
+        let b = self.to_primitive_default(code, self.stack[n - 1])?;
         // After ToPrimitive, either String selects concatenation and ToString
         // accepts a BigInt. Otherwise two BigInts add, while a BigInt mixed
         // with a Number throws the catchable TypeError from ToNumeric.
@@ -42938,6 +42962,9 @@ fn date_from_components(v: [f64; 7]) -> f64 {
 
 fn parse_date_string(text: &str) -> Option<f64> {
     let text = text.trim();
+    if text.starts_with("-000000-") {
+        return None;
+    }
     if let Some(ns) = parse_temporal_instant(text) {
         return Some(time_clip((ns / 1_000_000) as f64));
     }
@@ -44220,6 +44247,9 @@ fn civil_from_days(days: i128) -> (i64, u32, u32) {
 }
 
 fn parse_temporal_instant(text: &str) -> Option<i128> {
+    if text.starts_with("-000000-") {
+        return None;
+    }
     let t = text.find(['T','t'])?;
     let (date, mut time) = text.split_at(t); time = &time[1..];
     let mut dp = date.rsplitn(3, '-');
@@ -44639,6 +44669,13 @@ enum RelOp {
     LessEqual,
     More,
     MoreEqual,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PrimitiveHint {
+    Default,
+    Number,
+    String,
 }
 
 /// Count the `new_local` opcodes in a function body `[start, start+len)`,

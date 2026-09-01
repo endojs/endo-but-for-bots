@@ -87,3 +87,15 @@ fn search_methods_apply_is_regexp_before_to_string() {
         agrees(source);
     }
 }
+
+#[test]
+fn always_linked_primitive_methods_preserve_date_coercion() {
+    for source in [
+        "+new Date('-000000-03-31T00:45Z')",
+        "var d=new Date(0); d+d === d.toString()+d.toString()",
+        "var d=new Date(0); d+new Object() === d.toString()+'[object Object]'",
+        "var hint=''; var o={ [Symbol.toPrimitive]:function(h){hint=h;return 1} }; o+1; hint",
+    ] {
+        agrees(source);
+    }
+}
