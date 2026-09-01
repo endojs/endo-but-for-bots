@@ -20,6 +20,19 @@ fn assert_result_agrees(source: &str, expected: &str) {
     assert!(run.result_agrees, "results must agree for {source}");
 }
 
+fn assert_agrees(source: &str) {
+    let run = dual_run(source).expect("pinned XS oracle is available");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "{source}: ironhorse halt={:?}, oracle={:?}, ironhorse={:?}",
+        run.ironhorse_halt,
+        run.oracle_result,
+        run.ironhorse_result,
+    );
+    assert!(run.result_agrees, "results must agree for {source}");
+}
+
 #[test]
 fn constructor_accepts_primitive_inputs() {
     assert_result_agrees("BigInt(42)", "42");
@@ -94,10 +107,7 @@ fn object_boxes_bigints_with_realm_identity() {
         "Object.prototype.toString.call(Object(1n))",
         "[object BigInt]",
     );
-    assert_result_agrees(
-        "Object.prototype.toString.call(1n)",
-        "[object BigInt]",
-    );
+    assert_result_agrees("Object.prototype.toString.call(1n)", "[object BigInt]");
 }
 
 #[test]
@@ -126,4 +136,93 @@ fn wrapped_bigints_participate_in_numeric_coercion() {
     assert_result_agrees("Object(2n) ** 3n", "8");
     assert_result_agrees("2n ** Object(3n)", "8");
     assert_result_agrees("Object(2n) + 3n", "5");
+}
+
+#[test]
+fn width_limiting_statics_cover_signed_and_unsigned_boundaries() {
+    assert_result_agrees("BigInt.asIntN(8, 255n)", "-1");
+    assert_result_agrees("BigInt.asIntN(8, -129n)", "127");
+    assert_result_agrees("BigInt.asUintN(8, -1n)", "255");
+    assert_result_agrees(
+        "BigInt.asUintN(65, 0xabcdef0123456789abcdefn)",
+        "18528729602926038511",
+    );
+    assert_result_agrees(
+        "BigInt.asIntN(200, 0xcffffffffffffffffffffffffffffffffffffffffffffffffffn)",
+        "-1",
+    );
+}
+
+#[test]
+fn width_limiting_statics_apply_toindex_and_tobigint_in_order() {
+    assert_result_agrees("BigInt.asIntN('3.9', '10')", "2");
+    assert_result_agrees("BigInt.asUintN(true, true)", "1");
+    assert_result_agrees("BigInt.asUintN(1000, 1n)", "1");
+    assert_result_agrees(
+        "var log=''; BigInt.asIntN({valueOf:function(){log+='b';return 8}}, {valueOf:function(){log+='v';return 257n}}); log",
+        "bv",
+    );
+}
+
+#[test]
+fn width_limiting_statics_raise_catchable_errors() {
+    assert_result_agrees(
+        "try { BigInt.asIntN(-1, 0n); 'no' } catch (e) { e instanceof RangeError }",
+        "true",
+    );
+    assert_result_agrees(
+        "try { BigInt.asUintN(Infinity, 0n); 'no' } catch (e) { e instanceof RangeError }",
+        "true",
+    );
+    assert_result_agrees(
+        "try { BigInt.asIntN(8, 1); 'no' } catch (e) { e instanceof TypeError }",
+        "true",
+    );
+    assert_result_agrees(
+        "try { BigInt.asUintN(8, '1.5'); 'no' } catch (e) { e instanceof SyntaxError }",
+        "true",
+    );
+    assert_result_agrees(
+        "try { new BigInt.asIntN(8, 1n); 'no' } catch (e) { e instanceof TypeError }",
+        "true",
+    );
+}
+
+#[test]
+fn width_limiting_statics_match_oracle_across_limb_boundaries() {
+    let widths = [0, 1, 2, 7, 8, 31, 32, 33, 63, 64, 65, 127, 128, 129, 200];
+    let values = [
+        "-123456789012345678901234567890",
+        "-4294967297",
+        "-4294967296",
+        "-257",
+        "-256",
+        "-255",
+        "-129",
+        "-128",
+        "-127",
+        "-3",
+        "-2",
+        "-1",
+        "0",
+        "1",
+        "2",
+        "3",
+        "127",
+        "128",
+        "129",
+        "255",
+        "256",
+        "257",
+        "4294967295",
+        "4294967296",
+        "4294967297",
+        "123456789012345678901234567890",
+    ];
+    for width in widths {
+        for value in values {
+            assert_agrees(&format!("BigInt.asIntN({width}, {value}n)"));
+            assert_agrees(&format!("BigInt.asUintN({width}, {value}n)"));
+        }
+    }
 }
