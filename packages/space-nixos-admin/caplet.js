@@ -528,6 +528,28 @@ export const make = async (_powers, _context, options = {}) => {
    * @param {string} message
    * @param {string} id
    */
+  // An id-less status has two very different causes that look identical in
+  // the file: an applier that predates the id-echo contract, and a
+  // hand-written request that left an id-less status behind on an applier
+  // that does support it. Reading only the status makes the second case
+  // permanent - one manual apply wedges every settlement verb on the host
+  // until someone deletes a file. The outcomes directory tells them apart:
+  // only the id-echo path ever writes outcomes/<id>.json, so a single record
+  // is durable proof that this applier echoes ids and the status is merely
+  // stale.
+  const applierEchoesIds = async () => {
+    if (!outcomesDir) {
+      return false;
+    }
+    try {
+      const names = await readdir(outcomesDir);
+      return names.some(name => name.endsWith('.json'));
+    } catch {
+      // No directory (or unreadable) is not evidence of an echo.
+      return false;
+    }
+  };
+
   const driveOperation = async (action, message, id) => {
     await null;
     const deadline = Date.now() + watchLimitMs;
@@ -547,14 +569,20 @@ export const make = async (_powers, _context, options = {}) => {
       }
       // eslint-disable-next-line no-await-in-loop
       const status = await readDecisive(statusPath);
-      if (status !== undefined && status.id === undefined) {
+      if (
+        status !== undefined &&
+        status.id === undefined &&
+        // eslint-disable-next-line no-await-in-loop
+        !(await applierEchoesIds())
+      ) {
         // Refuse to submit against an applier that cannot echo ids back:
         // without the echo, a re-dispatch could not tell "done" from
         // "never ran" and this caplet would rather stop than loop.
         throw new Error(
-          'The nixos applier does not echo request ids; update ' +
-            'endo-nixos-admin.nix to the id-echo spool contract before ' +
-            'using the settlement-shaped verbs.',
+          `The nixos applier does not echo request ids: ${q(statusPath)} ` +
+            `carries no id and no outcome has ever been recorded in ` +
+            `${q(outcomesDir)}. Update endo-nixos-admin.nix to the id-echo ` +
+            'spool contract before using the settlement-shaped verbs.',
         );
       }
       if (status !== undefined && status.id === id) {

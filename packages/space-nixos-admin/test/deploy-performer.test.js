@@ -182,6 +182,26 @@ test('a duplicate in-flight dispatch attaches to the pending request', async t =
   t.true(b.ok);
 });
 
+test('a stale id-less status does not wedge an applier that does echo ids', async t => {
+  // The regression this guards: one hand-written apply leaves an id-less
+  // status behind, and every settlement verb on the host then refuses
+  // forever, blaming an applier that is in fact fine.
+  const { admin, statusPath, spoolDir, outcomesDir, processNext } =
+    await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, 'r-old_1-0.json'),
+    JSON.stringify({ id: 'r-old:1-0', phase: 'ok' }),
+    'utf8',
+  );
+  await writeFile(statusPath, JSON.stringify({ phase: 'ok' }), 'utf8');
+
+  const settled = admin.build('note', 'r-9:0-0');
+  await processNext();
+  t.true((await settled).ok);
+});
+
 test('an id-less status refuses submission instead of guessing', async t => {
   const { admin, statusPath, requestBytes, spoolDir } = await makeHarness(t);
   await mkdir(spoolDir, { recursive: true });
