@@ -201,3 +201,48 @@ fn match_collects_global_results_and_advances_empty_matches() {
         agrees(source);
     }
 }
+
+#[test]
+fn replace_handles_ordinary_string_search_and_replacement() {
+    for source in [
+        "'xxx'.replace('x', 'a')",
+        "'abc'.replace('', '-')",
+        "'abc'.replace('b', \"[$&][$`][$'][$$][$1]\")",
+        "String.prototype.replace.call(12345, '34', 'x')",
+        "var log=[]; var s={toString:function(){log.push('search');return 'b'}}; var r={toString:function(){log.push('replacement');return 'x'}}; var o={toString:function(){log.push('receiver');return 'abc'}}; String.prototype.replace.call(o,s,r)+':'+log.join(',')",
+        "var called=0; var r={toString:function(){called++;return 'x'}}; 'abc'.replace('z',r)+':'+called",
+        "try { 'abc'.replace(Symbol(), 'x'); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn replace_invokes_function_and_custom_symbol_protocol() {
+    for source in [
+        "var a; var r='abc'.replace('b',function(){'use strict';a=[this,arguments[0],arguments[1],arguments[2],arguments.length];return 'X'});r+':'+a.join(',')",
+        "var p={[Symbol.replace]:function(s,r){return (this===p)+':'+s+':'+r}}; 'abc'.replace(p,'x')",
+        "var p={[Symbol.replace]:null,toString:function(){return 'b'}}; 'abc'.replace(p,'x')",
+        "var boom={}; var p={get [Symbol.replace](){throw boom}}; try{'x'.replace(p,'y');false}catch(e){e===boom}",
+        "try { 'x'.replace({[Symbol.replace]: 1}, 'y'); false } catch (e) { e instanceof TypeError }",
+        "var called=false; Number.prototype[Symbol.replace]=function(){called=true}; 'a1'.replace(1,'x')+':'+called",
+        "var recv={toString:function(){throw Error('must not coerce')}}; var p={[Symbol.replace]:function(v,r){return v===recv&&r===9}}; String.prototype.replace.call(recv,p,9)",
+        "try { String.prototype.replace.call(null, { [Symbol.replace]:function(){return 1} }, 2); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn replace_handles_regexp_functions_and_global_collection() {
+    for source in [
+        "'abc12 def34'.replace(/([a-z]+)([0-9]+)/,function(){return arguments[2]+arguments[1]})",
+        "'123abc'.replace(/\\d/g, 'x')",
+        "'abc'.replace(/(?:)/g, '-')",
+        "'abc123def456'.replace(/([a-z]+)(\\d+)/g, '[$2:$1]')",
+        "var seen=[]; 'a1b22'.replace(/(\\d+)/g,function(m,c,p,s){seen.push(m,c,p,s);return '#'});seen.join('|')",
+        "var r=/a/g;r.lastIndex=2;var s='aba'.replace(r,'x');s+':'+r.lastIndex",
+    ] {
+        agrees(source);
+    }
+}

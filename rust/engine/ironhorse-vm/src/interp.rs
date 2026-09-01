@@ -21321,98 +21321,208 @@ impl Interp {
         Ok(self.finish_split_array(array, matches))
     }
 
+    /// `GetSubstitution` for an ordinary string search (no captures or named
+    /// captures). Operates directly on UTF-16 code units so lone surrogates are
+    /// preserved across `$&`, prefix, and suffix insertion.
+    fn string_plain_substitution(
+        subject: &[u16],
+        search: &[u16],
+        pos: usize,
+        replacement: &[u16],
+    ) -> Vec<u16> {
+        let tail = pos + search.len();
+        let mut out = Vec::with_capacity(replacement.len());
+        let mut i = 0;
+        while i < replacement.len() {
+            if replacement[i] != b'$' as u16 || i + 1 >= replacement.len() {
+                out.push(replacement[i]);
+                i += 1;
+                continue;
+            }
+            match replacement[i + 1] {
+                v if v == b'$' as u16 => out.push(b'$' as u16),
+                v if v == b'&' as u16 => out.extend_from_slice(search),
+                v if v == b'`' as u16 => out.extend_from_slice(&subject[..pos]),
+                v if v == b'\'' as u16 => out.extend_from_slice(&subject[tail..]),
+                _ => {
+                    out.push(b'$' as u16);
+                    i += 1;
+                    continue;
+                }
+            }
+            i += 2;
+        }
+        out
+    }
+
+    /// The ordinary-string branch of `String.prototype.replace`. Coercions
+    /// happen before the search, including replacement-string coercion on a
+    /// no-match path. A callable replacement receives `(matched, position,
+    /// string)` and its result is converted to a string after the call.
+    fn string_replace_plain(
+        &mut self,
+        code: &[u8],
+        subject: Slot,
+        search: Slot,
+        replacement: Slot,
+    ) -> Result<Slot, Halt> {
+        let subject_units = match subject.value {
+            Payload::String(off) => self.str_units(off),
+            _ => unreachable!("replace subject was already converted to String"),
+        };
+        let search_units = self.to_string_units(code, search)?;
+        let functional = self.is_callable_value(replacement);
+        let replacement_units = if functional {
+            None
+        } else {
+            Some(self.to_string_units(code, replacement)?)
+        };
+        let pos = if search_units.is_empty() {
+            Some(0)
+        } else if search_units.len() <= subject_units.len() {
+            subject_units
+                .windows(search_units.len())
+                .position(|window| window == search_units)
+        } else {
+            None
+        };
+        let Some(pos) = pos else {
+            return Ok(subject);
+        };
+        let replacement_units = if functional {
+            let matched = self.new_string_units(&search_units);
+            let value = self.invoke_value(
+                code,
+                replacement,
+                Slot::undefined(),
+                &[matched, Slot::number(pos as f64), subject],
+            )?;
+            self.to_string_units(code, value)?
+        } else {
+            Self::string_plain_substitution(
+                &subject_units,
+                &search_units,
+                pos,
+                replacement_units.as_deref().unwrap(),
+            )
+        };
+        let tail = pos + search_units.len();
+        let mut out = Vec::with_capacity(
+            subject_units.len() - search_units.len() + replacement_units.len(),
+        );
+        out.extend_from_slice(&subject_units[..pos]);
+        out.extend_from_slice(&replacement_units);
+        out.extend_from_slice(&subject_units[tail..]);
+        Ok(self.new_string_units(&out))
+    }
+
     /// `String.prototype.replace(regexp, replacement)` (`fx_String_prototype_
     /// replace` → `fx_RegExp_prototype_replace` via the `Symbol.replace`
-    /// protocol) for the covered case: a **non-global** RegExp and a **literal**
-    /// (no-`$`) string replacement. XS reads `flags` (the eight-property
-    /// cascade), drives one `exec`, and assembles the result from a segment
-    /// list (`pre` + replacement + `post`), each a `fxNewSlot`, into a final
-    /// `fxNewChunk`. A global flag, a function replacement, or a `$`-bearing
-    /// replacement (the substitution grammar) self-names an honest skip.
+    /// protocol). XS reads `flags` (the eight-property cascade), collects one
+    /// match or every global match, then assembles the source gaps and each
+    /// string/function substitution into a final result. Empty global matches
+    /// advance explicitly so collection always terminates.
     fn string_replace(
         &mut self,
+        code: &[u8],
         inst: crate::value::SlotIndex,
         subject: Slot,
         replacement: Slot,
     ) -> Result<Slot, Halt> {
         let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
-        if global {
-            return Err(Halt::Unsupported("String.replace:global"));
-        }
-        // A function replacement drives a callback per match — a later
-        // increment.
-        if let Payload::Reference(r) = replacement.value {
-            if self.functions.contains_key(&r) {
-                return Err(Halt::Unsupported("String.replace:function"));
-            }
-        }
+        let functional = self.is_callable_value(replacement);
         let subject_bytes = match self.string_receiver_text(subject) {
             Some(c) => c,
             None => return Err(Halt::Unsupported("String.replace:non-string-receiver")),
         };
-        // Coerce the replacement to string. A `$`-bearing replacement is
-        // expanded per `GetSubstitution` once the match is known (below).
-        let repl_bytes = self.to_string_bytes_metered(replacement);
-        let has_dollar = repl_bytes.contains(&b'$');
+        // A non-callable replacement is converted once before any match is
+        // attempted. Callable replacements are converted only after each call.
+        let repl_bytes = if functional {
+            None
+        } else {
+            let units = self.to_string_units(code, replacement)?;
+            Some(String::from_utf16_lossy(&units).into_bytes())
+        };
+        let has_named_captures = !self.regexps[&inst]
+            .program
+            .capture_group_names
+            .is_empty();
+        if has_named_captures
+            && (functional
+                || (global
+                    && repl_bytes
+                        .as_deref()
+                        .is_some_and(|bytes| bytes.windows(2).any(|w| w == b"$<"))))
+        {
+            return Err(Halt::Unsupported("String.replace:named-callback-state"));
+        }
         self.meter.tick_raw(STRING_REPLACE_FRAME_METERING);
         // `mxGetID(_flags)` (the `globalFlag` test) — the eight-property
         // cascade.
         self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
         // `fxNewInstance` for the segment list.
         self.meter.tick_slot_alloc();
-        // The single `exec`.
-        let (result, start) = self.regexp_exec_inner(inst, subject)?;
-        let assembled: Vec<u8> = match start {
-            None => {
-                // No match: the whole subject is one segment (the `former <
-                // size` tail), then assembled.
-                self.meter.tick_slot_alloc(); // the tail segment slot
-                self.meter.tick_chunk_new((subject_bytes.len() + 1) as u64); // split_aux copy
-                subject_bytes.clone()
+        if global {
+            self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
+        }
+        let mut results = Vec::new();
+        loop {
+            let (result, start) = self.regexp_exec_inner(inst, subject)?;
+            let Some(pos) = start else {
+                break;
+            };
+            let match_len = self.regexp_whole_match_len(result);
+            results.push((result, pos as usize, match_len));
+            if !global {
+                break;
             }
-            Some(pos) => {
-                // The per-match `mxGetID(_index)` + `mxGetIndex(0)` +
-                // `mxGetID(_length)` reads, plus the `for (i=1; i<c; i++)`
-                // capture-push loop (`mxGetIndex(i)` + `fxToString`) XS runs to
-                // feed the substitution — one per capture group beyond the
-                // whole match.
-                self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
-                let extra_captures = self.regexp_capture_count(result).saturating_sub(1) as u64;
-                self.meter
-                    .tick_raw(STRING_REPLACE_PER_CAPTURE * extra_captures);
-                let pos = pos as usize;
-                // Recover the whole-match length from the result array's
-                // element 0 (`[from,to)`); it is the string at index 0.
-                let match_len = self.regexp_whole_match_len(result);
-                let former = pos + match_len;
-                let mut out = Vec::new();
-                if pos > 0 {
-                    // `pre` segment (`split_aux` copy) + its slot.
-                    self.meter.tick_slot_alloc();
-                    self.meter.tick_chunk_new((pos + 1) as u64);
-                    out.extend_from_slice(&subject_bytes[..pos]);
+            if match_len == 0 {
+                self.regexps.get_mut(&inst).unwrap().last_index += 1.0;
+            }
+        }
+        if results.is_empty() {
+            return Ok(subject);
+        }
+        let mut assembled = Vec::new();
+        let mut next_source_position = 0;
+        for (result, pos, match_len) in results {
+            self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
+            let capture_count = self.regexp_capture_count(result);
+            self.meter.tick_raw(
+                STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
+            );
+            assembled.extend_from_slice(&subject_bytes[next_source_position..pos]);
+            let subst_bytes = if functional {
+                let mut args = Vec::with_capacity(capture_count + 2);
+                for i in 0..capture_count {
+                    args.push(self.array_index_slot(result, i as u32));
                 }
-                // The substitution segment: the replacement, with any `$`
-                // tokens expanded per `GetSubstitution` (`$$`, `$&`, `` $` ``,
-                // `$'`, `$n`/`$nn`, and `$<name>`), then copied + its slot.
-                let subst_bytes = if has_dollar {
-                    self.regexp_get_substitution(inst, result, &subject_bytes, pos, match_len, &repl_bytes)
+                args.push(Slot::number(pos as f64));
+                args.push(subject);
+                let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
+                let units = self.to_string_units(code, value)?;
+                String::from_utf16_lossy(&units).into_bytes()
+            } else {
+                let repl = repl_bytes.as_deref().unwrap();
+                if repl.contains(&b'$') {
+                    self.regexp_get_substitution(
+                        inst,
+                        result,
+                        &subject_bytes,
+                        pos,
+                        match_len,
+                        repl,
+                    )
                 } else {
-                    repl_bytes.clone()
-                };
-                self.meter.tick_slot_alloc();
-                self.meter.tick_chunk_new((subst_bytes.len() + 1) as u64);
-                out.extend_from_slice(&subst_bytes);
-                if former < subject_bytes.len() {
-                    // `post` segment (`split_aux` copy) + its slot.
-                    self.meter.tick_slot_alloc();
-                    self.meter
-                        .tick_chunk_new((subject_bytes.len() - former + 1) as u64);
-                    out.extend_from_slice(&subject_bytes[former..]);
+                    repl.to_vec()
                 }
-                out
-            }
-        };
+            };
+            self.meter.tick_slot_alloc();
+            self.meter.tick_chunk_new((subst_bytes.len() + 1) as u64);
+            assembled.extend_from_slice(&subst_bytes);
+            next_source_position = pos + match_len;
+        }
+        assembled.extend_from_slice(&subject_bytes[next_source_position..]);
         // The final assembly `fxNewChunk(total + 1)`.
         self.meter.tick_chunk_new((assembled.len() + 1) as u64);
         let off = self.alloc_str_text(&assembled);
@@ -30308,23 +30418,35 @@ impl Interp {
                     }
                 }
             }
-            // `String.prototype.replace` over the matcher (non-global RegExp +
-            // literal string replacement). A string pattern, a global flag, a
-            // function or `$`-bearing replacement self-name honest skips.
+            // `String.prototype.replace`: a custom `searchValue[Symbol.replace]`
+            // runs with the original receiver before string coercion. Internal
+            // RegExps use the matcher worker; every other value follows the
+            // ordinary first-string-occurrence algorithm.
             NativeMethod::StringReplace => {
-                if self.string_receiver_units(this).is_none() {
-                    return Err(Halt::Unsupported("String.replace:non-string-receiver"));
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error());
                 }
                 let repl = self
                     .stack
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                match arg0.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                        self.string_replace(r, this, repl)?
+                let replace_method = self.string_protocol_method(code, arg0, "replace")?;
+                if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    match arg0.value {
+                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
+                            self.string_replace(code, r, subject, repl)?
+                        }
+                        _ => self.string_replace_plain(code, subject, arg0, repl)?,
                     }
-                    _ => return Err(Halt::Unsupported("String.replace:non-regexp-pattern")),
                 }
             }
             // `String.prototype.split(separator[, limit])`: a custom
