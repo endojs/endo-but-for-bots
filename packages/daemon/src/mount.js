@@ -289,6 +289,39 @@ export const assertValidTreeEntryName = name => {
 harden(assertValidTreeEntryName);
 
 /**
+ * Split any slash-joined path arguments into individual segments.
+ *
+ * A directory entry can never contain '/', so a segment that holds one was
+ * always an error rather than a meaningful name. That made the interface
+ * inconsistent in a way callers hit constantly: `glob()` reports its results
+ * slash-joined and `entry()` accepts them, but feeding one of those strings
+ * straight back into `readText` or `stat` threw "Path segment must not
+ * contain '/'". Splitting here gives the whole surface one convention — both
+ * spellings mean the same path. '.', '..' and the denied-name checks still run
+ * per segment afterwards, so '..' stays clamped at the confinement root.
+ *
+ * @param {string[]} segments
+ * @returns {string[]}
+ */
+const splitPathSegments = segments => {
+  if (!segments.some(segment => typeof segment === 'string' && segment.includes('/'))) {
+    return segments;
+  }
+  const split = [];
+  for (const segment of segments) {
+    if (typeof segment === 'string' && segment.includes('/')) {
+      // An empty part comes from a leading, trailing or doubled separator and
+      // names nothing; dropping it makes 'a//b/' mean the same as ['a', 'b'].
+      split.push(...segment.split('/').filter(part => part !== ''));
+    } else {
+      split.push(segment);
+    }
+  }
+  return split;
+};
+harden(splitPathSegments);
+
+/**
  * Resolve path segments relative to a current directory, clamped to a
  * confinement root.  '.' skips, '..' pops (clamped at root).
  *
@@ -307,7 +340,7 @@ export const resolveSegments = (
   deniedSegments = undefined,
 ) => {
   let resolved = currentDir;
-  for (const segment of segments) {
+  for (const segment of splitPathSegments(segments)) {
     if (segment === '.') {
       // skip
     } else if (segment === '..') {
@@ -341,7 +374,7 @@ const normalizeSegments = (
   deniedSegments = undefined,
 ) => {
   const normalized = [...baseSegments];
-  for (const segment of segments) {
+  for (const segment of splitPathSegments(segments)) {
     if (segment === '.') {
       // skip
     } else if (segment === '..') {
@@ -639,9 +672,10 @@ const makeMountExo = ctx => {
   };
 
   /**
-   * `entry()` is the one mount API where a string is a slash-joined
-   * selector rather than a single name.  Other path-bearing convenience
-   * methods keep their existing single-name string compatibility.
+   * A string is a slash-joined selector here, as it is everywhere else on
+   * the mount surface: `normalizeSegments` splits path arguments, so this
+   * differs only in doing the split up front for the array-or-string shape
+   * `entry()` accepts.
    *
    * @param {string | readonly string[]} pathArg
    * @returns {string[]}
@@ -897,19 +931,9 @@ const makeMountExo = ctx => {
 
   const lookup = async pathArg => {
     await null;
-    let segments;
-    try {
-      segments = segmentsFromPathArg(pathArg);
-    } catch (error) {
-      if (typeof pathArg === 'string' && pathArg.includes('/')) {
-        const cause = /** @type {Error} */ (error);
-        throw new Error(
-          `${cause.message}; use an array of path segments or entry() for a slash-joined path`,
-          { cause: error },
-        );
-      }
-      throw error;
-    }
+    // A slash-joined string needs no special explanation now that path
+    // arguments are split into segments; it resolves like the array form.
+    const segments = segmentsFromPathArg(pathArg);
     return openExisting(resolveFromRoot(segments), segments);
   };
 

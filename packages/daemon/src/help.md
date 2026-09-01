@@ -752,9 +752,9 @@ Entries with symlinks escaping the mount root are excluded.
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 
 Resolve a path within the mount.
-path: string | string[] | EndoMountEntry — A string is one segment; an array
-is a sequence of segments. For a slash-joined nested path, use
-lookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).
+path: string | string[] | EndoMountEntry — Segments, either slash-joined in a
+string or as an array: lookup("dir/file.txt") and lookup(["dir", "file.txt"])
+name the same path, so a glob() result can be passed straight back in.
 Returns EndoMount for directories, EndoMountFile for files.
 
 ## readText(path) -> Promise<string>
