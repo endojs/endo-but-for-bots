@@ -753,6 +753,10 @@ mod tests {
             // property install is link-time and its side-table entry
             // rides `ACCS` like any other.
             "error_stack_accessor",
+            // The registry head is reproduced at the same boot index; its
+            // generated-site properties and template-array references travel
+            // in the ordinary slot arena rooted through that head.
+            "template_cache",
             "object_proto", "function_proto", "array_proto",
             "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
             "arraybuffer_proto", "dataview_proto", "array_iterator_proto",

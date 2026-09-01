@@ -3990,6 +3990,11 @@ pub struct Interp {
     /// instance (native and user), so `f.toString`/`f.call`/… resolve up the
     /// chain. A boot object.
     function_proto: crate::value::SlotIndex,
+    /// The realm's inaccessible tagged-template registry object. Generated
+    /// site keys are properties on this ordinary object, matching XS's
+    /// `mxRealmTemplateCache`; the object itself is a boot root and its
+    /// properties therefore travel in the ordinary heap snapshot.
+    template_cache: crate::value::SlotIndex,
     /// Each constructor instance's `.prototype` object, by slot (XS's
     /// `constructor.prototype`): the intrinsics' prototypes (wired at boot)
     /// and every user function's default prototype (wired at
@@ -5329,6 +5334,7 @@ impl Interp {
             deleted_fn_meta: std::collections::HashSet::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
+            template_cache: crate::value::SlotIndex::NULL,
             ctor_prototype: std::collections::HashMap::new(),
             private_values: std::collections::HashMap::new(),
             private_accessors: std::collections::HashMap::new(),
@@ -5491,6 +5497,7 @@ impl Interp {
             .slots
             .alloc(Slot::instance(crate::value::SlotIndex::NULL));
         self.object_proto = object_proto;
+        self.template_cache = self.slots.alloc(Slot::instance(object_proto));
         let func_proto = self.slots.alloc(Slot::instance(object_proto));
         self.function_proto = func_proto;
         let function_proto_name = self.alloc_str_text(b"");
@@ -7733,6 +7740,23 @@ impl Interp {
                 self.done_id = Some(self.intern_key("done"));
             }
         }
+        // `Array.from` and `Object.fromEntries` perform the full iterator
+        // protocol even when the guest source never spells `next`, `value`,
+        // or `done`.  Reify those boot-default names before prototype-method
+        // linking so the mandatory observable `Get(iterator, "next")` sees
+        // `%ArrayIteratorPrototype%.next` (and can also observe an own
+        // override/getter on the returned iterator).
+        if self.symbol_ids.contains_key("from") || self.symbol_ids.contains_key("fromEntries") {
+            for name in ["next", "done", "value", "return"] {
+                self.intern_key(name);
+            }
+            if self.value_id.is_none() {
+                self.value_id = Some(self.intern_key("value"));
+            }
+            if self.done_id.is_none() {
+                self.done_id = Some(self.intern_key("done"));
+            }
+        }
         // `Map.groupBy` / `Object.groupBy` drive `GetIterator(items)` from Rust,
         // reading the produced result object's `next`/`value`/`done` — even when
         // the program never spells them (e.g. `Map.groupBy([1,2,3], fn)`). Mirror
@@ -8172,7 +8196,78 @@ impl Interp {
             }
             pc += ilen;
         }
+        self.rewrite_template_site_ids(&mut out).ok()?;
         Some(out)
+    }
+
+    /// Give every newly compiled tagged-template site a fresh realm key.
+    ///
+    /// XS's compiler uses a machine-global tag counter, while IronHorse's
+    /// independently invoked compiler numbers each unit from `#0`. Ordinary
+    /// name relinking would therefore make a later crank/eval alias the first
+    /// unit's site. Rewrite only the compiler's hidden cache accesses — the
+    /// `GET_PROPERTY` immediately after `TEMPLATE_CACHE` and its paired
+    /// `SET_PROPERTY` immediately after `TEMPLATE` — so a user property whose
+    /// spelling happens to be `"#0"` keeps its normal string-key identity.
+    fn rewrite_template_site_ids(&mut self, code: &mut [u8]) -> Result<(), RelinkError> {
+        let mut site_order = Vec::<u16>::new();
+        let mut seen = std::collections::HashSet::<u16>::new();
+        let mut accesses = Vec::<(usize, u16)>::new();
+        let mut previous = None;
+        let mut pc = 0usize;
+        while pc < code.len() {
+            let op = Opcode::from_u8(code[pc]).ok_or(RelinkError::MalformedBytecode)?;
+            let ilen = crate::opcode::instruction_len(code, pc)
+                .ok_or(RelinkError::MalformedBytecode)?;
+            let cache_get = previous == Some(Opcode::XS_CODE_TEMPLATE_CACHE)
+                && op == Opcode::XS_CODE_GET_PROPERTY;
+            let cache_set = previous == Some(Opcode::XS_CODE_TEMPLATE)
+                && op == Opcode::XS_CODE_SET_PROPERTY;
+            if cache_get || cache_set {
+                let a = *code.get(pc + 1).ok_or(RelinkError::MalformedBytecode)?;
+                let b = *code.get(pc + 2).ok_or(RelinkError::MalformedBytecode)?;
+                let old = u16::from_le_bytes([a, b]);
+                if cache_get && seen.insert(old) {
+                    site_order.push(old);
+                }
+                if cache_set && !seen.contains(&old) {
+                    return Err(RelinkError::MalformedBytecode);
+                }
+                accesses.push((pc, old));
+            }
+            previous = Some(op);
+            pc += ilen;
+        }
+
+        if self.symbol_names.len().saturating_add(site_order.len())
+            >= self.next_symbol_key_id as usize
+        {
+            return Err(RelinkError::TableFull);
+        }
+        let mut sites = std::collections::HashMap::<u16, u16>::new();
+        for old in site_order {
+            // NUL keeps this internal name visually distinct in diagnostics.
+            // Absence is checked so even an adversarial earlier runtime
+            // string cannot make two sites share an id.
+            let mut nonce = self.symbol_names.len();
+            let name = loop {
+                let candidate = format!("\0ironhorse-template-site:{nonce}");
+                if !self.symbol_ids.contains_key(&candidate) {
+                    break candidate;
+                }
+                nonce = nonce
+                    .checked_add(1)
+                    .ok_or(RelinkError::TableFull)?;
+            };
+            sites.insert(old, self.append_name_key(&name));
+        }
+        for (pc, old) in accesses {
+            let fresh = *sites.get(&old).ok_or(RelinkError::MalformedBytecode)?;
+            let bytes = fresh.to_le_bytes();
+            code[pc + 1] = bytes[0];
+            code[pc + 2] = bytes[1];
+        }
+        Ok(())
     }
 
     /// The runtime source-execution bridge: compile `source` through the
@@ -8566,8 +8661,10 @@ impl Interp {
         crank_names: &[String],
     ) -> Result<Vec<u8>, RelinkError> {
         if crank_names == self.symbol_names.as_slice() {
+            let mut remapped = bytecode.to_vec();
+            self.rewrite_template_site_ids(&mut remapped)?;
             self.install_pending_intrinsics();
-            return Ok(bytecode.to_vec());
+            return Ok(remapped);
         }
         let old_len = self.symbol_names.len();
         let mut extended = self.symbol_names.clone();
@@ -8594,7 +8691,7 @@ impl Interp {
         // The old shared-counter design had to refuse extension whenever
         // a runtime-interned id was STORED; the split id space retires
         // that refusal entirely.
-        let remapped = crate::opcode::remap_ids(bytecode, |id| {
+        let mut remapped = crate::opcode::remap_ids(bytecode, |id| {
             if id == 0 {
                 // XS_NO_ID: the "no name" sentinel, never a table
                 // position.
@@ -8610,6 +8707,7 @@ impl Interp {
             // with any older above-floor backlog.
             self.bind_program_symbols(&extended);
         }
+        self.rewrite_template_site_ids(&mut remapped)?;
         self.install_pending_intrinsics();
         Ok(remapped)
     }
@@ -12593,6 +12691,24 @@ impl Interp {
                             self,
                             return_depth
                         );
+                        // Compact array elements live outside the ordinary
+                        // property chain; carry the compiler's descriptor
+                        // flags on their value slots (tagged-template cooked
+                        // and raw elements arrive non-writable and
+                        // non-configurable here).
+                        if let (
+                            Payload::Reference(inst),
+                            Payload::At(crate::value::XS_NO_ID, index),
+                        ) = (obj.value, key.value)
+                        {
+                            if let Some(item) = self
+                                .arrays
+                                .get_mut(&inst)
+                                .and_then(|array| array.items_mut().get_mut(&index))
+                            {
+                                item.flag = property_flag;
+                            }
+                        }
                     }
                     pc += 3;
                 }
@@ -13080,6 +13196,25 @@ impl Interp {
                         {
                             // `arr.length = N`: the exotic-array length accessor
                             // setter (`fxArrayLengthSetter` → `fxArraySetLength`).
+                            // Assignment must reject a non-writable property
+                            // even when `N` equals the current length; the
+                            // same-value allowance belongs only to
+                            // `DefineProperty`'s `ArraySetLength` path.
+                            if !self.array_length_writable(inst) {
+                                if self.strict {
+                                    let error = self.build_error("TypeError", 0, 0);
+                                    match self.raise_js(error) {
+                                        Ok(target) => {
+                                            pc = target;
+                                            continue;
+                                        }
+                                        Err(halt) => return halt,
+                                    }
+                                }
+                                self.push(value);
+                                pc += ilen;
+                                continue;
+                            }
                             let accepted = dispatch_result!(
                                 self.array_define_length(
                                     code,
@@ -13649,12 +13784,16 @@ impl Interp {
                             } else if let Some(index) =
                                 numeric_index.filter(|_| self.arrays.contains_key(&inst))
                             {
-                                if self.arrays[&inst].items().contains_key(&index) {
-                                    self.arrays
-                                        .get_mut(&inst)
-                                        .unwrap()
-                                        .remove_item(&index, &mut self.side_refs);
-                                    true
+                                if let Some(item) = self.arrays[&inst].items().get(&index) {
+                                    if item.flag & XS_DONT_DELETE_FLAG != 0 {
+                                        false
+                                    } else {
+                                        self.arrays
+                                            .get_mut(&inst)
+                                            .unwrap()
+                                            .remove_item(&index, &mut self.side_refs);
+                                        true
+                                    }
                                 } else {
                                     self.delete_own_property(inst, id)
                                 }
@@ -15345,6 +15484,30 @@ impl Interp {
                         continue;
                     }
                     self.push(value);
+                    pc += size as usize;
+                }
+                // The current realm's hidden template registry. The following
+                // compiler-emitted get/set-property uses the site's private
+                // key, so a repeated evaluation of the same parse node reuses
+                // its frozen template object.
+                XS_CODE_TEMPLATE_CACHE => {
+                    self.push(Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(self.template_cache),
+                    ));
+                    pc += size as usize;
+                }
+                // Freeze the compiler-created cooked/raw template pair. The
+                // cooked array remains on the stack as the tag's first
+                // argument and as the value cached by the following store.
+                XS_CODE_TEMPLATE => {
+                    let cooked = match self.stack.last().map(|slot| (slot.kind, slot.value)) {
+                        Some((Kind::Reference, Payload::Reference(cooked))) => cooked,
+                        _ => return Halt::Unsupported("template:object"),
+                    };
+                    if !self.freeze_template_object(cooked) {
+                        return Halt::Unsupported("template:raw");
+                    }
                     pc += size as usize;
                 }
                 // `this` (XS_CODE_THIS, xsRun.c:1334): push the frame's
@@ -22923,10 +23086,6 @@ impl Interp {
         if index > u32::MAX as u64 {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         }
-        if self.arrays.contains_key(&target) {
-            self.array_set_dense(target, index as u32, value);
-            return Ok(Ok(()));
-        }
         let id = self.intern_key(&index.to_string());
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
@@ -22935,6 +23094,23 @@ impl Interp {
             configurable: Some(true),
             ..OrdinaryDescriptor::default()
         };
+        if self.arrays.contains_key(&target) {
+            let index = index as u32;
+            let ordinary = self.ordinary_get_own_descriptor(target, id);
+            let compact = self.arrays[&target].items().get(&index).copied();
+            let compact_is_default = compact.is_some_and(|item| {
+                item.flag & (XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG) == 0
+            });
+            let can_create_compact = compact.is_none()
+                && ordinary.is_none()
+                && self.instance_extensible(target)
+                && (index < self.arrays[&target].length
+                    || self.array_length_writable(target));
+            if compact_is_default || can_create_compact {
+                self.array_set_dense(target, index, value);
+                return Ok(Ok(()));
+            }
+        }
         match self.array_from_try(|this| {
             this.mop_define_own_property(code, target, id, descriptor)
         })? {
@@ -22951,9 +23127,12 @@ impl Interp {
         length: u64,
     ) -> Result<Result<(), Slot>, Halt> {
         let value = Slot::number(length as f64);
-        if self.arrays.contains_key(&target) {
-            self.array_set_length(target, value);
-            return Ok(Ok(()));
+        if self.arrays.contains_key(&target) && !self.arguments_objects.contains(&target) {
+            return if self.array_length_writable(target) && self.array_set_length(target, value) {
+                Ok(Ok(()))
+            } else {
+                Ok(Err(self.build_error("TypeError", 0, 0)))
+            };
         }
         let id = self.intern_key("length");
         let receiver = Slot::of(Kind::Reference, Payload::Reference(target));
@@ -23039,16 +23218,41 @@ impl Interp {
             .well_known_symbol_property_id("iterator")
             .expect("well-known iterator symbol");
         let mut iterator_method = Slot::undefined();
-        let mut explicit_iterator_property = false;
-        if let Payload::Reference(inst) = items.value {
-            if items.kind == Kind::Reference {
-                explicit_iterator_property = self.chain_has_descriptor(inst, iterator_id);
+        match items.value {
+            Payload::Reference(inst) if items.kind == Kind::Reference => {
                 iterator_method = match self.array_from_try(|this| {
                     this.mop_get(code, inst, iterator_id, items)
                 })? {
                     Ok(method) => method,
                     Err(error) => return Ok(Err(error)),
                 };
+            }
+            // GetMethod uses GetV, so primitive values participate through
+            // their wrapper prototypes.  In particular, a primitive String
+            // must observe a replacement/getter installed on
+            // `String.prototype[@@iterator]` instead of silently selecting the
+            // engine's intrinsic string-iterator shortcut.
+            _ => {
+                let proto = match items.kind {
+                    Kind::String => self.string_proto,
+                    Kind::Integer | Kind::Number => self.number_proto,
+                    Kind::Symbol => self.symbol_proto,
+                    Kind::BigInt => self.bigint_proto,
+                    Kind::Boolean => self
+                        .intrinsics
+                        .get("Boolean")
+                        .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                        .unwrap_or(crate::value::SlotIndex::NULL),
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if !proto.is_null() {
+                    iterator_method = match self.array_from_try(|this| {
+                        this.mop_get(code, proto, iterator_id, items)
+                    })? {
+                        Ok(method) => method,
+                        Err(error) => return Ok(Err(error)),
+                    };
+                }
             }
         }
         if iterator_method.kind != Kind::Undefined
@@ -23080,60 +23284,15 @@ impl Interp {
                 Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
-            if !self.iterators.contains_key(&inst) {
-                let next_id = self.intern_key("next");
-                next_method = match self.array_from_try(|this| {
-                    this.mop_get(code, inst, next_id, iterator)
-                })? {
-                    Ok(method) if self.is_callable_value(method) => method,
-                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
-                    Err(error) => return Ok(Err(error)),
-                };
-            }
+            let next_id = self.intern_key("next");
+            next_method = match self.array_from_try(|this| {
+                this.mop_get(code, inst, next_id, iterator)
+            })? {
+                Ok(method) if self.is_callable_value(method) => method,
+                Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                Err(error) => return Ok(Err(error)),
+            };
             Some(iterator)
-        } else if !explicit_iterator_property {
-            match items.value {
-                Payload::Reference(array)
-                    if items.kind == Kind::Reference && self.arrays.contains_key(&array) =>
-                {
-                    Some(self.make_array_iterator(array, 0))
-                }
-                Payload::String(off) if items.kind == Kind::String => {
-                    let content = self.str_content(off).to_vec();
-                    Some(self.make_string_iterator(content))
-                }
-                Payload::Reference(collection)
-                    if items.kind == Kind::Reference
-                        && self.collections.contains_key(&collection) =>
-                {
-                    let kind = match self.collections[&collection].kind {
-                        CollKind::Map => 7,
-                        CollKind::Set => 6,
-                        _ => 0,
-                    };
-                    (kind != 0).then(|| self.make_collection_iterator(collection, kind))
-                }
-                Payload::Reference(iter)
-                    if items.kind == Kind::Reference && self.iterators.contains_key(&iter) =>
-                {
-                    Some(items)
-                }
-                Payload::Reference(generator)
-                    if items.kind == Kind::Reference
-                        && self.generators.contains_key(&generator) =>
-                {
-                    let next_id = self.intern_key("next");
-                    next_method = match self.array_from_try(|this| {
-                        this.mop_get(code, generator, next_id, items)
-                    })? {
-                        Ok(method) if self.is_callable_value(method) => method,
-                        Ok(_) => return Err(Halt::Unsupported("Array.from:generator-next")),
-                        Err(error) => return Ok(Err(error)),
-                    };
-                    Some(items)
-                }
-                _ => None,
-            }
         } else {
             None
         };
@@ -23151,34 +23310,26 @@ impl Interp {
                     Payload::Reference(iter) => iter,
                     _ => unreachable!(),
                 };
-                let step = if self.iterators.contains_key(&iter_inst) {
-                    self.array_from_try(|this| this.array_iterator_next(code, iter_inst))?
-                } else {
-                    self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
-                };
+                let _ = iter_inst;
+                let step = self.array_from_try(|this| {
+                    this.call_any(code, next_method, iterator, &[])
+                })?;
                 let step = match step {
                     Ok(step) => step,
-                    Err(error) => {
-                        let error = self.array_from_close(code, iterator, error)?;
-                        return Ok(Err(error));
-                    }
+                    // `IteratorStepValue` failures propagate directly. The
+                    // iterator is closed only for an abrupt completion after
+                    // a value has been obtained (mapping or element define).
+                    Err(error) => return Ok(Err(error)),
                 };
                 let step_inst = match step.value {
                     Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
-                    _ => {
-                        let error = self.build_error("TypeError", 0, 0);
-                        let error = self.array_from_close(code, iterator, error)?;
-                        return Ok(Err(error));
-                    }
+                    _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
                 };
                 let done = match self.array_from_try(|this| {
                     this.mop_get(code, step_inst, done_id, step)
                 })? {
                     Ok(done) => done,
-                    Err(error) => {
-                        let error = self.array_from_close(code, iterator, error)?;
-                        return Ok(Err(error));
-                    }
+                    Err(error) => return Ok(Err(error)),
                 };
                 if self.truthy(&done) {
                     return match self.array_from_set_length(code, target, index)? {
@@ -23193,10 +23344,7 @@ impl Interp {
                     this.mop_get(code, step_inst, value_id, step)
                 })? {
                     Ok(value) => value,
-                    Err(error) => {
-                        let error = self.array_from_close(code, iterator, error)?;
-                        return Ok(Err(error));
-                    }
+                    Err(error) => return Ok(Err(error)),
                 };
                 let value = match self
                     .array_from_map_value(code, mapfn, mapping, this_arg, value, index)?
@@ -33282,35 +33430,19 @@ impl Interp {
             // meters mxMeterSome(leading byte count) and/or mxMeterSome(kept
             // length), then allocates the result chunk.
             StringTrim | StringTrimStart | StringTrimEnd => {
-                let is_ws = |u: u16| {
-                    matches!(
-                        u,
-                        0x0009..=0x000D
-                            | 0x0020
-                            | 0x00A0
-                            | 0x1680
-                            | 0x2000..=0x200A
-                            | 0x2028
-                            | 0x2029
-                            | 0x202F
-                            | 0x205F
-                            | 0x3000
-                            | 0xFEFF
-                    )
-                };
                 let trim_start = m != StringTrimEnd;
                 let trim_end = m != StringTrimStart;
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 let mut lo = 0usize;
                 if trim_start {
-                    while lo < content.len() && is_ws(content[lo]) {
+                    while lo < content.len() && is_ecma_whitespace(content[lo] as u32) {
                         lo += 1;
                     }
                     self.meter.tick_builtin_some(lo as u64);
                 }
                 let mut hi = content.len();
                 if trim_end {
-                    while hi > lo && is_ws(content[hi - 1]) {
+                    while hi > lo && is_ecma_whitespace(content[hi - 1] as u32) {
                         hi -= 1;
                     }
                     self.meter.tick_builtin_some((hi - lo) as u64);
@@ -37831,8 +37963,12 @@ impl Interp {
                         }
                     }
                 } else if !define
-                    && (index >= self.arrays[&inst].length
-                        && !self.array_length_writable(inst)
+                    && (self.arrays[&inst]
+                        .items()
+                        .get(&index)
+                        .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
+                        || index >= self.arrays[&inst].length
+                            && !self.array_length_writable(inst)
                         || !self.instance_extensible(inst)
                             && !self.arrays[&inst].items().contains_key(&index))
                 {
@@ -37864,6 +38000,16 @@ impl Interp {
             && !self.arguments_objects.contains(&inst)
             && self.string_key_name(id).as_deref() == Some("length")
         {
+            // `ArraySetLength` is also the `DefineProperty` algorithm and
+            // therefore permits the same value on a non-writable length.
+            // Ordinary assignment must reject the write before that
+            // same-value exception is considered.
+            if !define && !self.array_length_writable(inst) {
+                if self.strict {
+                    return Err(self.catchable_type_error());
+                }
+                return Ok(());
+            }
             let accepted = self.array_define_length(
                 code,
                 inst,
@@ -37966,6 +38112,51 @@ impl Interp {
         } else {
             self.slots.get_mut(inst).flag |= XS_DONT_SET_FLAG;
         }
+    }
+
+    /// Freeze one compiler-created template array in place. Template
+    /// elements stay in the compact array table, whose `Slot::flag` carries
+    /// the same non-writable/non-configurable bits as an XS item slot; the
+    /// exotic `length` writable bit lives on the instance slot.
+    fn freeze_template_array(&mut self, inst: crate::value::SlotIndex) -> bool {
+        let Some(array) = self.arrays.get_mut(&inst) else {
+            return false;
+        };
+        self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG | XS_DONT_SET_FLAG;
+        for item in array.items_mut().values_mut() {
+            item.flag |= XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG;
+        }
+        for property in self.own_property_slots(inst) {
+            let slot = self.slots.get_mut(property);
+            slot.flag |= XS_DONT_DELETE_FLAG;
+            if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0 {
+                slot.flag |= XS_DONT_SET_FLAG;
+            }
+        }
+        true
+    }
+
+    /// `XS_CODE_TEMPLATE`: freeze the cooked array, its non-enumerable `raw`
+    /// property, and the raw array. The compiler has already created every
+    /// element with the final descriptor flags; this closes extensibility and
+    /// the two exotic `length` properties just as XS's handler does.
+    fn freeze_template_object(&mut self, cooked: crate::value::SlotIndex) -> bool {
+        let Some(raw_id) = self.symbol_ids.get("raw").copied() else {
+            return false;
+        };
+        let Some(raw_property) = self.find_property(cooked, raw_id) else {
+            return false;
+        };
+        let raw = match self.slots.get(raw_property).value {
+            Payload::Reference(raw) => raw,
+            _ => return false,
+        };
+        if !self.freeze_template_array(raw) || !self.freeze_template_array(cooked) {
+            return false;
+        }
+        let property = self.slots.get_mut(raw_property);
+        property.flag |= XS_DONT_DELETE_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG;
+        true
     }
 
     /// Set an array's `length` after the caller has performed the observable
@@ -38098,11 +38289,11 @@ impl Interp {
     }
 
     /// Array exotic `[[DefineOwnProperty]]` for an integer index. Compact
-    /// elements have the implicit `{writable,enumerable,configurable}: true`
-    /// descriptor. On the first restrictive/accessor redefinition, move that
-    /// element into the ordinary property chain so the existing descriptor,
-    /// accessor, snapshot, and GC machinery carries the full shape. The side
-    /// item is removed, making array algorithms select their generic MOP path.
+    /// elements carry data-descriptor restrictions in `Slot::flag`. On an
+    /// accessor redefinition, move that element into the ordinary property
+    /// chain so the existing descriptor, accessor, snapshot, and GC machinery
+    /// carries the full shape. The side item is removed, making array
+    /// algorithms select their generic MOP path.
     fn array_define_index(
         &mut self,
         inst: crate::value::SlotIndex,
@@ -38133,9 +38324,9 @@ impl Interp {
         if let Some(value) = self.arrays[&inst].items().get(&index).copied() {
             let current = OrdinaryDescriptor {
                 value: Some(Slot::of(value.kind, value.value)),
-                writable: Some(true),
-                enumerable: Some(true),
-                configurable: Some(true),
+                writable: Some(value.flag & XS_DONT_SET_FLAG == 0),
+                enumerable: Some(value.flag & XS_DONT_ENUM_FLAG == 0),
+                configurable: Some(value.flag & XS_DONT_DELETE_FLAG == 0),
                 ..OrdinaryDescriptor::default()
             };
             if !self.is_compatible_descriptor(true, &descriptor, Some(&current)) {
@@ -38145,7 +38336,7 @@ impl Interp {
                 .get_mut(&inst)
                 .unwrap()
                 .remove_item(&index, &mut self.side_refs);
-            self.set_own_unmetered_with_flag(inst, id, current.value.unwrap(), 0);
+            self.set_own_unmetered_with_flag(inst, id, current.value.unwrap(), value.flag);
             return self.ordinary_define_own_property(inst, id, descriptor);
         }
 
@@ -39290,16 +39481,36 @@ impl Interp {
             .well_known_symbol_property_id("iterator")
             .expect("well-known iterator symbol");
         let mut iterator_method = Slot::undefined();
-        let mut explicit_iterator_property = false;
-        if let Payload::Reference(inst) = iterable.value {
-            if iterable.kind == Kind::Reference {
-                explicit_iterator_property = self.chain_has_descriptor(inst, iterator_id);
+        match iterable.value {
+            Payload::Reference(inst) if iterable.kind == Kind::Reference => {
                 iterator_method = match self
                     .array_from_try(|this| this.mop_get(code, inst, iterator_id, iterable))?
                 {
                     Ok(method) => method,
                     Err(error) => return Ok(Err(error)),
                 };
+            }
+            _ => {
+                let proto = match iterable.kind {
+                    Kind::String => self.string_proto,
+                    Kind::Integer | Kind::Number => self.number_proto,
+                    Kind::Symbol => self.symbol_proto,
+                    Kind::BigInt => self.bigint_proto,
+                    Kind::Boolean => self
+                        .intrinsics
+                        .get("Boolean")
+                        .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                        .unwrap_or(crate::value::SlotIndex::NULL),
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if !proto.is_null() {
+                    iterator_method = match self
+                        .array_from_try(|this| this.mop_get(code, proto, iterator_id, iterable))?
+                    {
+                        Ok(method) => method,
+                        Err(error) => return Ok(Err(error)),
+                    };
+                }
             }
         }
         if iterator_method.kind != Kind::Undefined
@@ -39323,60 +39534,15 @@ impl Interp {
                 Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
                 _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
             };
-            if !self.iterators.contains_key(&inst) {
-                let next_id = self.intern_key("next");
-                next_method = match self
-                    .array_from_try(|this| this.mop_get(code, inst, next_id, iterator))?
-                {
-                    Ok(method) if self.is_callable_value(method) => method,
-                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
-                    Err(error) => return Ok(Err(error)),
-                };
-            }
+            let next_id = self.intern_key("next");
+            next_method = match self
+                .array_from_try(|this| this.mop_get(code, inst, next_id, iterator))?
+            {
+                Ok(method) if self.is_callable_value(method) => method,
+                Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                Err(error) => return Ok(Err(error)),
+            };
             Some(iterator)
-        } else if !explicit_iterator_property {
-            match iterable.value {
-                Payload::Reference(array)
-                    if iterable.kind == Kind::Reference && self.arrays.contains_key(&array) =>
-                {
-                    Some(self.make_array_iterator(array, 0))
-                }
-                Payload::String(off) if iterable.kind == Kind::String => {
-                    let content = self.str_content(off).to_vec();
-                    Some(self.make_string_iterator(content))
-                }
-                Payload::Reference(collection)
-                    if iterable.kind == Kind::Reference
-                        && self.collections.contains_key(&collection) =>
-                {
-                    let kind = match self.collections[&collection].kind {
-                        CollKind::Map => 7,
-                        CollKind::Set => 6,
-                        _ => 0,
-                    };
-                    (kind != 0).then(|| self.make_collection_iterator(collection, kind))
-                }
-                Payload::Reference(iter)
-                    if iterable.kind == Kind::Reference && self.iterators.contains_key(&iter) =>
-                {
-                    Some(iterable)
-                }
-                Payload::Reference(generator)
-                    if iterable.kind == Kind::Reference
-                        && self.generators.contains_key(&generator) =>
-                {
-                    let next_id = self.intern_key("next");
-                    next_method = match self
-                        .array_from_try(|this| this.mop_get(code, generator, next_id, iterable))?
-                    {
-                        Ok(method) if self.is_callable_value(method) => method,
-                        Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
-                        Err(error) => return Ok(Err(error)),
-                    };
-                    Some(iterable)
-                }
-                _ => None,
-            }
         } else {
             None
         };
@@ -39390,11 +39556,9 @@ impl Interp {
                 Payload::Reference(iter_inst) => iter_inst,
                 _ => unreachable!(),
             };
-            let step = if self.iterators.contains_key(&iter_inst) {
-                self.array_from_try(|this| this.array_iterator_next(code, iter_inst))?
-            } else {
-                self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
-            };
+            let _ = iter_inst;
+            let step = self
+                .array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?;
             // IteratorStepValue failures are returned directly. The iterator
             // has not yielded an entry yet, so AddEntriesFromIterable does not
             // apply IteratorClose to these abrupt completions.
@@ -39919,9 +40083,9 @@ impl Interp {
         let s = a.items().get(&idx).copied()?;
         Some(OrdinaryDescriptor {
             value: Some(Slot::of(s.kind, s.value)),
-            writable: Some(true),
-            enumerable: Some(true),
-            configurable: Some(true),
+            writable: Some(s.flag & XS_DONT_SET_FLAG == 0),
+            enumerable: Some(s.flag & XS_DONT_ENUM_FLAG == 0),
+            configurable: Some(s.flag & XS_DONT_DELETE_FLAG == 0),
             ..OrdinaryDescriptor::default()
         })
     }
@@ -39957,7 +40121,10 @@ impl Interp {
                 return Ok(false);
             }
             if let Some(index) = name.as_deref().and_then(string_to_index) {
-                if self.arrays[&inst].items().contains_key(&index) {
+                if let Some(item) = self.arrays[&inst].items().get(&index) {
+                    if item.flag & XS_DONT_DELETE_FLAG != 0 {
+                        return Ok(false);
+                    }
                     self.arrays
                         .get_mut(&inst)
                         .unwrap()
@@ -45027,8 +45194,31 @@ fn json_escape_string(units: &[u16]) -> Vec<u8> {
     out
 }
 
-/// Whether `b` is an ASCII byte XS's `fxSkipSpaces` treats as whitespace
-/// (the ECMAScript WhiteSpace + LineTerminator set, ASCII subset).
+/// Whether a Unicode scalar/code unit belongs to ECMAScript's exact
+/// WhiteSpace or LineTerminator set. In particular U+FEFF is included and
+/// U+0085 (which Rust's Unicode `trim` accepts) is not.
+fn is_ecma_whitespace(c: u32) -> bool {
+    matches!(
+        c,
+        0x0009..=0x000D
+            | 0x0020
+            | 0x00A0
+            | 0x1680
+            | 0x2000..=0x200A
+            | 0x2028
+            | 0x2029
+            | 0x202F
+            | 0x205F
+            | 0x3000
+            | 0xFEFF
+    )
+}
+
+fn trim_ecma_whitespace(source: &str) -> &str {
+    source.trim_matches(|c: char| is_ecma_whitespace(c as u32))
+}
+
+/// Whether `b` is an ASCII byte XS's `fxSkipSpaces` treats as whitespace.
 fn is_ecma_ws(b: u8) -> bool {
     matches!(b, 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20)
 }
@@ -47117,18 +47307,21 @@ fn canonical_numeric_index_string(s: &str) -> Option<f64> {
 /// Parse the String branch of `ToBigInt`, retaining only the low 64 bits a
 /// BigInt64Array/BigUint64Array element store observes.
 fn parse_bigint_string_u64(source: &str) -> Option<u64> {
-    let mut s = source.trim();
+    let mut s = trim_ecma_whitespace(source);
     if s.is_empty() {
         return Some(0);
     }
     let mut negative = false;
+    let mut explicitly_signed = false;
     if let Some(rest) = s.strip_prefix('-') {
         negative = true;
+        explicitly_signed = true;
         s = rest;
     } else if let Some(rest) = s.strip_prefix('+') {
+        explicitly_signed = true;
         s = rest;
     }
-    let (radix, digits) = if !negative && !source.trim_start().starts_with('+') {
+    let (radix, digits) = if !explicitly_signed {
         if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
             (16, rest)
         } else if let Some(rest) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
@@ -47156,7 +47349,7 @@ fn parse_bigint_string_u64(source: &str) -> Option<u64> {
 /// limbs. The accepted syntax matches [`parse_bigint_string_u64`], but retains
 /// every digit for the public `BigInt(string)` constructor.
 fn parse_bigint_string(source: &str) -> Option<(bool, Vec<u32>)> {
-    let mut s = source.trim();
+    let mut s = trim_ecma_whitespace(source);
     if s.is_empty() {
         return Some((false, vec![0]));
     }
@@ -47289,6 +47482,7 @@ impl Interp {
         roots.extend([
             self.object_proto,
             self.function_proto,
+            self.template_cache,
             self.array_proto,
             self.map_proto,
             self.set_proto,

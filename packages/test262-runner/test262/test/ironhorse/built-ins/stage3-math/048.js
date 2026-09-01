@@ -6,4 +6,4 @@ info: |
   Converted from corpora/stage3-math.js line 48.
   Source: Math.acos(0.3)
 ---*/
-assert.sameValue((Math.acos(0.3)), 1.2661036727794992);
+assert.sameValue((Math.acos(0.3)), 1.266103672779499);

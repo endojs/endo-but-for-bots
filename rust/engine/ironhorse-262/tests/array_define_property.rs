@@ -72,6 +72,17 @@ fn nonwritable_length_rejects_growth_but_allows_existing_index_updates() {
 }
 
 #[test]
+fn assignment_rejects_nonwritable_length_even_when_unchanged() {
+    agrees(
+        "'use strict'; var a=[]; Object.defineProperty(a,'length',{writable:false}); \
+         try { a.length=0; false } catch (e) { e instanceof TypeError }",
+    );
+    agrees(
+        "var a=[]; Object.defineProperty(a,'length',{writable:false}); a.length=0; a.length",
+    );
+}
+
+#[test]
 fn length_coercion_and_range_error_order_match() {
     agrees(
         "var log = ''; var value = { valueOf: function () { log += 'v'; return 2; } }; \

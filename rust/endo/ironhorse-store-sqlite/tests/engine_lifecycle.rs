@@ -585,6 +585,29 @@ fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn tagged_template_registry_survives_sqlite_sleep_cycles() {
+    // The hidden realm template registry lives in the ordinary boot heap.
+    // This exercises both halves of its contract through real full closes:
+    // a retained function's parse site keeps object identity and frozen
+    // descriptors, while a separately compiled later crank with the same
+    // source spelling receives a fresh site key.
+    let last = run_scenario(
+        "carry-tagged-template-registry",
+        &[
+            "var saved; function tag(strings){saved=saved||strings;return strings} \
+             function run(v){return tag`head${v}tail`} run(1)===saved",
+            "var s=run(2),d=Object.getOwnPropertyDescriptor(s,'0'), \
+             r=Object.getOwnPropertyDescriptor(s,'raw'); \
+             ''+(s===saved)+':'+d.writable+d.configurable+':'+ \
+             r.writable+r.enumerable+r.configurable",
+            "var other=tag`head${3}tail`; other!==saved",
+            "other!==saved",
+        ],
+    );
+    assert_eq!(last, "true");
+}
+
+#[test]
 fn the_promise_cluster_survives_sqlite_sleep_cycles() {
     // The SQLite arm of the schema-23 promise-cluster carry: a pending
     // promise with a stored resolver and a user reaction crosses two
