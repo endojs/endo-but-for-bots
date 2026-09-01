@@ -177,7 +177,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // property itself remains lazy). Format unchanged.
         // Re-pinned 2026-09-02 for the abstract `%TypedArray%` constructor
         // and prototype added to the boot heap. Format unchanged.
-        "d106fc630e0dc8871fcdbd87f97c3ccb7f69c74db3e474c2d16df33878e0440f",
+        // Re-pinned 2026-09-02 for the realm's hidden tagged-template cache
+        // object added to the boot heap. Its ordinary property chain carries
+        // cached template objects through snapshots. Format unchanged.
+        "de3fc5115c6ec513d9374b646e7b632759220e80a440d020a132b2f2645617fb",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -287,7 +290,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // remain unchanged.
         // Re-pinned with the blob for the abstract `%TypedArray%` constructor
         // and prototype boot-heap addition. Schema and format remain unchanged.
-        "32857b6f7aa497038c5e69806a406391e66be5743a28536c857d5bb5dcd670c7",
+        // Re-pinned with the blob for the tagged-template cache boot object;
+        // its new page content moves the manifest root and seal. Schema and
+        // format remain unchanged.
+        "e1ff9830c6828a551cdd711c97c1621d24cbcbea256e66f48f4ac8d512f07fbd",
         "epoch-3 seal chain"
     );
 }

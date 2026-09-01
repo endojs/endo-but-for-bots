@@ -253,6 +253,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("proto_value_data", &[Req::GcRoots], "boot value-data rows"),
     ("object_proto", &[Req::GcRoots], "boot anchor"),
     ("function_proto", &[Req::GcRoots], "boot anchor"),
+    ("template_cache", &[Req::GcRoots], "realm tagged-template cache boot anchor"),
     ("array_proto", &[Req::GcRoots], "boot anchor"),
     ("map_proto", &[Req::GcRoots], "boot anchor"),
     ("set_proto", &[Req::GcRoots], "boot anchor"),

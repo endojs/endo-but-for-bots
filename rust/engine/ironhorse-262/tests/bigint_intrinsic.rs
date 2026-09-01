@@ -64,6 +64,36 @@ fn constructor_parses_arbitrary_precision_strings() {
 }
 
 #[test]
+fn constructor_uses_ecmascript_string_integer_whitespace() {
+    assert_result_agrees("BigInt('\\uFEFF1\\u3000')", "1");
+    assert_result_agrees(
+        "BigInt('\\u0009\\u000A\\u000B\\u000C\\u000D \\u00A0\\u1680\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006\\u2007\\u2008\\u2009\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF42\\uFEFF')",
+        "42",
+    );
+    assert_result_agrees(
+        "try { BigInt('\\u0085'); false } catch (e) { e instanceof SyntaxError }",
+        "true",
+    );
+    assert_result_agrees(
+        "try { BigInt('\\u00851'); false } catch (e) { e instanceof SyntaxError }",
+        "true",
+    );
+    assert_result_agrees(
+        "try { BigInt('1\\u0085'); false } catch (e) { e instanceof SyntaxError }",
+        "true",
+    );
+}
+
+#[test]
+fn bigint_typed_arrays_use_ecmascript_string_integer_whitespace() {
+    assert_result_agrees("new BigInt64Array(['\\uFEFF1\\u3000'])[0]", "1");
+    assert_result_agrees(
+        "try { new BigInt64Array(['\\u00851']); false } catch (e) { e instanceof SyntaxError }",
+        "true",
+    );
+}
+
+#[test]
 fn constructor_coerces_objects() {
     assert_result_agrees(
         "BigInt({valueOf:function(){return '9007199254740993'}})",

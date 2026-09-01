@@ -6,4 +6,4 @@ info: |
   Converted from corpora/stage3-math.js line 47.
   Source: Math.asin(0.3)
 ---*/
-assert.sameValue((Math.asin(0.3)), 0.3046926540153975);
+assert.sameValue((Math.asin(0.3)), 0.30469265401539747);

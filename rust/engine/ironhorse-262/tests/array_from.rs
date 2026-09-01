@@ -61,6 +61,18 @@ fn custom_iterator_protocol_is_consumed() {
 }
 
 #[test]
+fn iterator_next_lookup_and_primitive_getv_are_observable() {
+    assert_oracle_result(
+        "var gets=0,it=[1,2][Symbol.iterator](),src={}; Object.defineProperty(it,'next',{get:function(){gets++;return function(){return {done:true}}}}); src[Symbol.iterator]=function(){return it}; var a=Array.from(src); gets+':'+a.length",
+        "1:0",
+    );
+    assert_oracle_result(
+        "var old=String.prototype[Symbol.iterator]; String.prototype[Symbol.iterator]=function(){var done=false;return {next:function(){if(done)return {done:true};done=true;return {value:'override',done:false}}}}; var r=Array.from('ab').join(','); String.prototype[Symbol.iterator]=old; r",
+        "override",
+    );
+}
+
+#[test]
 fn array_symbol_iterator_is_materialized() {
     assert_oracle_result(
         "var a=[4,5]; var it=a[Symbol.iterator](); var x=it.next(),xv=x.value,xd=x.done,y=it.next(),yv=y.value,z=it.next(); xv+':'+xd+':'+yv+':'+z.done",
@@ -97,6 +109,38 @@ fn abrupt_mapping_closes_iterator_and_preserves_throw() {
     assert_oracle_result(
         "var closed=0, marker={tag:9}, iterable={}; iterable[Symbol.iterator]=function(){return {next:function(){return {value:1,done:false}},return:function(){closed++;return {}}}}; var same=false; try{Array.from(iterable,function(){throw marker})}catch(e){same=e===marker} same+':'+closed",
         "true:1",
+    );
+}
+
+#[test]
+fn iterator_step_failures_do_not_close_iterator() {
+    assert_oracle_result(
+        "var closed=0, marker={tag:1}, iterable={}; iterable[Symbol.iterator]=function(){return {next:function(){throw marker},return:function(){closed++;return {}}}}; var same=false; try{Array.from(iterable)}catch(e){same=e===marker} same+':'+closed",
+        "true:0",
+    );
+    assert_oracle_result(
+        "var closed=0, marker={tag:2}, iterable={}; iterable[Symbol.iterator]=function(){return {next:function(){return {get done(){throw marker}}},return:function(){closed++;return {}}}}; var same=false; try{Array.from(iterable)}catch(e){same=e===marker} same+':'+closed",
+        "true:0",
+    );
+    assert_oracle_result(
+        "var closed=0, marker={tag:3}, iterable={}; iterable[Symbol.iterator]=function(){return {next:function(){return {done:false,get value(){throw marker}}},return:function(){closed++;return {}}}}; var same=false; try{Array.from(iterable)}catch(e){same=e===marker} same+':'+closed",
+        "true:0",
+    );
+    assert_oracle_result(
+        "var closed=0, iterable={}; iterable[Symbol.iterator]=function(){return {next:function(){return 1},return:function(){closed++;return {}}}}; var type=false; try{Array.from(iterable)}catch(e){type=e instanceof TypeError} type+':'+closed",
+        "true:0",
+    );
+}
+
+#[test]
+fn array_targets_observe_descriptor_constraints() {
+    assert_oracle_result(
+        "function C(){var a=[];Object.defineProperty(a,'length',{writable:false});return a} var closed=0,iterable={}; iterable[Symbol.iterator]=function(){var done=false;return {next:function(){if(done)return {done:true};done=true;return {value:1,done:false}},return:function(){closed++;return {}}}}; var type=false;try{Array.from.call(C,iterable)}catch(e){type=e instanceof TypeError} type+':'+closed",
+        "true:1",
+    );
+    assert_oracle_result(
+        "function C(){var a=[];Object.defineProperty(a,'length',{writable:false});return a} var closed=0,iterable={}; iterable[Symbol.iterator]=function(){return {next:function(){return {done:true}},return:function(){closed++;return {}}}}; var type=false;try{Array.from.call(C,iterable)}catch(e){type=e instanceof TypeError} type+':'+closed",
+        "true:0",
     );
 }
 

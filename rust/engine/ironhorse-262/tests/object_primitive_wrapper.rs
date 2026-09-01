@@ -120,3 +120,15 @@ fn object_from_entries_does_not_close_iterator_step_errors() {
         "true,0",
     );
 }
+
+#[test]
+fn object_from_entries_observes_next_and_primitive_iterator_lookup() {
+    assert_result_agrees(
+        "var gets=0,it=[['x',1]][Symbol.iterator](),src={}; Object.defineProperty(it,'next',{get:function(){gets++;return function(){return {done:true}}}}); src[Symbol.iterator]=function(){return it}; var o=Object.fromEntries(src); gets+','+Object.keys(o).length",
+        "1,0",
+    );
+    assert_result_agrees(
+        "var old=String.prototype[Symbol.iterator]; String.prototype[Symbol.iterator]=function(){var done=false;return {next:function(){if(done)return {done:true};done=true;return {value:['x',7],done:false}}}}; var value=Object.fromEntries('ab').x; String.prototype[Symbol.iterator]=old; value",
+        "7",
+    );
+}
