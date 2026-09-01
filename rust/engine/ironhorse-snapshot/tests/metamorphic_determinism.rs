@@ -171,7 +171,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // are now linked even when the guest source never names them,
         // so wrappers and ordinary objects coerce correctly. Format
         // unchanged.
-        "067fc05eb2f387d7da6dd48d1ba4be6dea8fd4fb4d33ff2e04159fbc9d296381",
+        // Re-pinned 2026-09-02 for a boot-heap CONTENT move:
+        // `%Function.prototype%` is now a callable native and its
+        // `@@hasInstance` method identity is boot-minted (the symbol-keyed
+        // property itself remains lazy). Format unchanged.
+        "06f43043d9ca70fd65dbc078d2bebc1e66072b037850c560dc5cb032ca5aff19",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -275,7 +279,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for the OrdinaryToPrimitive fallback
         // names now linked into every boot heap. Schema and format
         // remain unchanged.
-        "7da99f20fdfdc55f7fb67f466b27133a4cacd49d3ece2a1377ddfefa32d204fd",
+        // Re-pinned with the blob because callable
+        // `%Function.prototype%` and the boot-minted identity for its lazy
+        // `@@hasInstance` method move the boot page rows. Schema and format
+        // remain unchanged.
+        "1a4eb6ebe9a4fea59ab425b5bb30b7d0bf4d0782305e1293a7522bb59f87ea3a",
         "epoch-3 seal chain"
     );
 }

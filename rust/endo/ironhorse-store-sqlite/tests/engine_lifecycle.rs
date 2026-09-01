@@ -543,6 +543,25 @@ fn boot_minted_iterator_natives_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
+    // `%Function.prototype%` and the identity of its `@@hasInstance` method
+    // are boot-rebuilt, while the lazily installed symbol property and a
+    // guest custom handler travel through the persisted heap/symbol tables.
+    let last = carry_scenario(
+        "carry-has-instance",
+        "Function.prototype[Symbol.hasInstance]; o[Symbol.hasInstance]; \
+         inst instanceof C; inst instanceof o;",
+        &[
+            "C = function () {}; inst = new C(); o = {}; t = 7;",
+            "o[Symbol.hasInstance] = function (v) { return v === inst; }; \
+             t = typeof Function.prototype[Symbol.hasInstance]; t",
+            "t = (inst instanceof C) + ':' + (inst instanceof o); t",
+        ],
+    );
+    assert_eq!(last, "true:true");
+}
+
+#[test]
 fn the_promise_cluster_survives_sqlite_sleep_cycles() {
     // The SQLite arm of the schema-23 promise-cluster carry: a pending
     // promise with a stored resolver and a user reaction crosses two
