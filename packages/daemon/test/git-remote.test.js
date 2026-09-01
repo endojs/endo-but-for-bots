@@ -408,6 +408,43 @@ test('GitRemote requires matching credential authority for HTTPS', async t => {
   });
 });
 
+test('GitRemote reports credential health before a push fails on it', async t => {
+  const backend = harden({ ...makeNotYetImplementedBackend() });
+  const git = makeGit({ mount: makeFakeGitMount(), backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const credential = exampleCredential();
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential,
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+      pushRefspecs: [],
+    },
+  });
+
+  t.like(await E(remote).credentialHealth(), {
+    required: true,
+    available: true,
+    revoked: false,
+  });
+
+  // A daemon restart leaves the record revoked with its material gone.
+  // Before this method, the next push was the first thing that said so.
+  revokeGitCredential(credential);
+  t.like(await E(remote).credentialHealth(), {
+    required: true,
+    available: false,
+    revoked: true,
+  });
+
+  t.false(
+    JSON.stringify(await E(remote).credentialHealth()).includes('test-token'),
+  );
+});
 test('GitRemote passes HTTPS credential material to backend transport only', async t => {
   /** @type {object[]} */
   const fetchCalls = [];

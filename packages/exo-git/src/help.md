@@ -319,6 +319,19 @@ Get documentation for this interface or a specific method.
 Read the remote's name, URL, and current policy.
 Throws once the remote has been revoked.
 
+## credentialHealth() -> Promise<RemoteCredentialHealth>
+
+Report whether the credential this remote would push with is usable,
+without using it.
+A credential holds its material in process memory, so a daemon restart
+leaves the record unavailable and the next push would otherwise be the
+first thing to say so.
+`required: false` is the whole answer for a remote that needs no
+credential; otherwise the result carries `kind`, `audience`, `available`,
+and `revoked`.
+This reports health only and never the credential material, which is why
+it is separate from inspect(), whose snapshot is policy alone.
+
 ## fetch(options?) -> Promise<RemoteOperationResult>
 
 Fetch the policy's fetch refspecs from the remote.
