@@ -725,3 +725,105 @@ fn a_crafted_reaction_capability_is_refused() {
         "promise cluster: combinator reaction carries capability slots",
     );
 }
+
+/// The follow-up Sol round: `remaining` bounded by the element count
+/// (with race equality), zeroed unused reaction payloads, required
+/// current-version atoms, and the non-empty rule extended to compound
+/// optional atoms.
+#[test]
+fn a_combinator_remaining_outside_its_element_count_is_refused() {
+    let m = combinator_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+
+    // Above the count: every surviving reaction drains and the
+    // combinator stays pending forever.
+    let mut inflated = image.clone();
+    inflated.promise_cluster.combinators[0].remaining = u32::MAX;
+    expect_container_refusal(&inflated, "promise cluster: remaining outside its element count");
+
+    // A race never decrements, so its remaining must EQUAL the count.
+    let mr = quiescent_machine(
+        "var p1 = 0; var p2 = 0; var r1 = 0; var r2 = 0; var g = 0; var t = 0; \
+         p1 = new Promise(function (rs, rj) { r1 = rs; }); \
+         p2 = new Promise(function (rs, rj) { r2 = rs; }); \
+         Promise.race([p1, p2]).then(function (v) { g = v; }); t = 7; t",
+    );
+    let bytes = mr.write_snapshot(&sig()).expect("writes");
+    let mut race = read_machine(&bytes, &sig()).expect("reads");
+    assert_eq!(race.promise_cluster.combinators[0].kind, 2, "a race row");
+    race.promise_cluster.combinators[0].remaining -= 1;
+    expect_container_refusal(&race, "promise cluster: remaining outside its element count");
+}
+
+#[test]
+fn a_nonzero_unused_reaction_payload_is_refused() {
+    let m = promise_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 0)
+        .expect("a user reaction")
+        .a = 5;
+    expect_container_refusal(&image, "promise cluster: unused reaction payload not zero");
+}
+
+#[test]
+fn a_current_version_container_missing_a_fixed_atom_is_refused() {
+    // Strip `STAC` (the sixth fixed atom) out of an honest container:
+    // the reader would supply an empty stack and the next write would
+    // put the atom back — a second encoding of the same machine.
+    let m = quiescent_machine("var t = 0; t = 1; t");
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut at = 8usize;
+    for _ in 0..5 {
+        let size =
+            u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize;
+        at += size;
+    }
+    assert_eq!(&bytes[at + 4..at + 8], b"STAC", "walked to the STAC atom");
+    let stac_size =
+        u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize;
+    let mut stripped = bytes.clone();
+    stripped.drain(at..at + stac_size);
+    let shrunk = (u32::from_be_bytes([stripped[0], stripped[1], stripped[2], stripped[3]])
+        - stac_size as u32)
+        .to_be_bytes();
+    stripped[0..4].copy_from_slice(&shrunk);
+    match read_machine(&stripped, &sig()) {
+        Err(SnapshotError::Corrupt("container missing an atom its version always writes")) => {}
+        other => panic!("a stripped fixed atom must be refused: {other:?}"),
+    }
+}
+
+#[test]
+fn a_present_but_empty_compound_atom_is_refused() {
+    // A VALID empty `TMPR` encoding (four zero list counts) spliced at
+    // its canonical position — the writer omits the atom instead, so
+    // presence is a second encoding. TMPR stands in for the compound
+    // family (INTL/FUNC/PROX/PRIV share the gate).
+    let m = quiescent_machine("var t = 0; t = 1; t");
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut at = 8usize;
+    for _ in 0..10 {
+        let size =
+            u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]) as usize;
+        at += size;
+    }
+    let mut atom = Vec::new();
+    atom.extend_from_slice(&24u32.to_be_bytes());
+    atom.extend_from_slice(b"TMPR");
+    atom.extend_from_slice(&[0u8; 16]);
+    let mut empty = bytes.clone();
+    empty.splice(at..at, atom.iter().copied());
+    let grown = (u32::from_be_bytes([empty[0], empty[1], empty[2], empty[3]]) + 24).to_be_bytes();
+    empty[0..4].copy_from_slice(&grown);
+    match read_machine(&empty, &sig()) {
+        Err(SnapshotError::Corrupt("TMPR atom present but empty; the writer omits it")) => {}
+        other => panic!("a present-but-empty TMPR must be refused: {other:?}"),
+    }
+}

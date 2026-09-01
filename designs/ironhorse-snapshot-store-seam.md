@@ -3549,6 +3549,31 @@ with segments. The design points that fell out of building it:
   mint as PAIRS there, and reactions reference them), and locked in
   `crafted_row_refusals.rs`; reader-only changes, so both golden pins
   stand.
+- **Third hardening wave** (Sol follow-up, three findings, all
+  confirmed):
+  - `remaining` is bounded ABOVE by the results Array's carried
+    length — the creation preset IS the element count and the value
+    only decrements — so a crafted huge count (every reaction drains,
+    the combinator pends forever) refuses at the bounds gate beside
+    the element-index check; a `race` never decrements, so its
+    remaining must EQUAL the count. The `>= pending` floor from the
+    refuted-equality round stands beneath it.
+  - The canonical grammar closes its two residual holes: a container
+    stamped with the CURRENT format version must carry every atom the
+    current writer unconditionally emits (checked LAST, so a
+    malformed atom still refuses by its own decoder's name; older
+    versions keep their recorded leniencies — their writers no longer
+    run), and the five compound optional atoms
+    (`TMPR`/`INTL`/`FUNC`/`PROX`/`PRIV`) join the
+    present-but-empty refusal the Vec-shaped atoms and `PRMS` already
+    had.
+  - A non-`Combine` reaction's unused `a`/`b` payload must be zero
+    (the writer zeroes it; restore discards it, so any other value
+    was a second encoding).
+  Locks: the inflated and race-mismatched `remaining`, the nonzero
+  unused payload, a stripped `STAC` on a current-version container,
+  and a valid-but-empty `TMPR` splice. Reader-only again; both pins
+  stand.
 
 ##### P2-5 — `SavedJumpRow.call_depth_offset` is decoded but never bounded
 
