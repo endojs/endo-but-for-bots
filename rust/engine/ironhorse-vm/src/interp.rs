@@ -14978,24 +14978,47 @@ impl Interp {
                     pc += size as usize;
                 }
                 // `exponentiation` (XS_CODE_EXPONENTIATION, xsRun.c:3574):
-                // `a ** b` → `fx_pow(a, b)` as a number. Numeric operands
-                // only (int/number × int/number, XS's fast path); a
-                // non-numeric operand needs the ToNumeric/BigInt general
-                // path, so it self-names unsupported without disturbing the
-                // operands.
+                // ToNumeric is applied to the already-evaluated left operand
+                // first, then the right operand. This order is observable when
+                // either conversion calls a guest hook. Number operands use
+                // `fx_pow`; mixed Number/BigInt operands throw TypeError.
+                // Arbitrary-precision BigInt exponentiation remains a named
+                // gap after both conversions have run.
                 XS_CODE_EXPONENTIATION => {
                     let n = self.stack.len();
                     if n < 2 {
                         return Halt::Unsupported(op.name());
                     }
-                    let a = numeric_of(&self.stack[n - 2]);
-                    let b = numeric_of(&self.stack[n - 1]);
-                    match (a, b) {
-                        (Some(x), Some(y)) => {
-                            self.stack.truncate(n - 2);
-                            self.push(Slot::number(fx_pow(x, y)));
+                    let left = self.stack[n - 2];
+                    let right = self.stack[n - 1];
+                    let a = dispatch_result!(
+                        self.to_number_value(code, left),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    let b = dispatch_result!(
+                        self.to_number_value(code, right),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    self.stack.truncate(n - 2);
+                    match (a.kind, b.kind) {
+                        (Kind::BigInt, Kind::BigInt) => {
+                            return Halt::Unsupported(op.name())
                         }
-                        _ => return Halt::Unsupported(op.name()),
+                        (Kind::BigInt, _) | (_, Kind::BigInt) => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(
+                                self.raise_js(error),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            continue;
+                        }
+                        _ => self.push(Slot::number(fx_pow(to_number(&a), to_number(&b)))),
                     }
                     pc += size as usize;
                 }
@@ -39323,8 +39346,11 @@ impl Interp {
         Err(self.catchable_type_error())
     }
 
-    /// `ToNumber` after `ToPrimitive`, retaining XS's integer fast kind where
-    /// possible and parsing a string as one complete ECMAScript number.
+    /// `ToNumeric` after `ToPrimitive`, retaining XS's integer fast kind where
+    /// possible, preserving BigInt, parsing a string as one complete
+    /// ECMAScript number, and raising the required catchable TypeError for a
+    /// Symbol. Callers whose abstract operation is specifically `ToNumber`
+    /// reject the preserved BigInt at their boundary.
     fn to_number_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
         let primitive = self.to_primitive(code, value, false)?;
         match primitive.kind {
@@ -39338,7 +39364,7 @@ impl Interp {
             },
             Kind::Boolean | Kind::Null | Kind::Undefined => Ok(Slot::number(to_number(&primitive))),
             Kind::BigInt => Ok(primitive),
-            Kind::Symbol => Err(Halt::Unsupported("to_numeric:type-error")),
+            Kind::Symbol => Err(self.catchable_type_error()),
             _ => Err(Halt::Unsupported("to_numeric")),
         }
     }
