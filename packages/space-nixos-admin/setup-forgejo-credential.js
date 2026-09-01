@@ -15,16 +15,42 @@
 // sees `audience()` and nothing else; the password stays daemon-side and is fed
 // to git through askpass at transport time.
 //
-// Unlike the nixos-admin controller next door, this re-provisions unconditionally
-// rather than skipping when the name is already bound. Credential material is
-// daemon-process-local — a restart keeps the formula but leaves the material
-// unavailable — so re-minting is precisely the point of running on every start.
-// Re-minting rebinds the name to a fresh formula, which is why callers should
-// look the credential up when they use it instead of holding a copy.
+// Credential material is daemon-process-local: a restart keeps the formula but
+// leaves the material unavailable and the record revoked, so re-provisioning on
+// every start is the point of this setup. It ROTATES the credential when the
+// name is already bound rather than re-minting it. A GitRemote holds the
+// credential *cap*, not its name, so re-minting binds the name to a fresh
+// formula and strands every remote configured in an earlier process; the
+// stranding is invisible until the next push fails with "has been revoked".
+// Rotating restores the material in place, which brings those remotes back.
 
 import { E } from '@endo/far';
 
 const CREDENTIAL_NAME = 'forgejo-credential';
+
+/**
+ * The controller for an already-bound credential, or undefined when the name is
+ * free, holds something that is not a credential, or speaks for a different
+ * audience or kind than this host is now configured for. In each of those cases
+ * the caller should mint a fresh credential rather than rotate the old one.
+ *
+ * @param {any} agent
+ * @param {string} audience
+ */
+const existingCredentialController = async (agent, audience) => {
+  let controller;
+  try {
+    const credential = await E(agent).lookup(CREDENTIAL_NAME);
+    controller = await E(agent).getGitCredentialController(credential);
+  } catch {
+    return undefined;
+  }
+  const info = await E(controller).inspect();
+  if (info.audience !== audience || info.kind !== 'basic') {
+    return undefined;
+  }
+  return controller;
+};
 
 export const main = async agent => {
   const { env } = process;
@@ -43,6 +69,15 @@ export const main = async agent => {
   // over the same origin, so both halves of the loop agree on the audience.
   const audience = env.ENDO_FORGEJO_URL || 'http://127.0.0.1:3000';
   const username = env.ENDO_FORGEJO_USER || 'floot';
+
+  const controller = await existingCredentialController(agent, audience);
+  if (controller !== undefined) {
+    await E(controller).rotate({ username, password });
+    console.error(
+      `Forgejo credential ${CREDENTIAL_NAME} rotated for ${username} at ${audience}.`,
+    );
+    return;
+  }
 
   await E(agent).provideBasicCredential(CREDENTIAL_NAME, {
     audience,
