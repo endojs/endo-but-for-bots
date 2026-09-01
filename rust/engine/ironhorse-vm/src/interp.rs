@@ -14872,10 +14872,12 @@ impl Interp {
                         self,
                         return_depth
                     );
-                    if a.kind == Kind::BigInt {
-                        return Halt::Unsupported(op.name());
+                    if let Payload::BigInt(off) = a.value {
+                        let result = self.bigint_bit_not(off);
+                        self.push(result);
+                    } else {
+                        self.push(Slot::integer(!to_int32(to_number(&a))));
                     }
-                    self.push(Slot::integer(!to_int32(to_number(&a))));
                     pc += size as usize;
                 }
 
@@ -41369,7 +41371,23 @@ impl Interp {
         let b = self.to_number_value(code, b_value)?;
         self.stack.truncate(n - 2);
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            return Err(Halt::Unsupported("to_numeric:bigint-bitwise"));
+            let (Payload::BigInt(a_off), Payload::BigInt(b_off)) = (a.value, b.value) else {
+                return Err(self.catchable_type_error());
+            };
+            if op == BitOp::Shr {
+                // BigInt has no unsigned-right-shift operation. Both operands
+                // have nevertheless completed ToNumeric before this TypeError.
+                return Err(self.catchable_type_error());
+            }
+            let result = match op {
+                BitOp::And | BitOp::Or | BitOp::Xor => {
+                    self.bigint_bitwise(op, a_off, b_off)
+                }
+                BitOp::Shl | BitOp::Sar => self.bigint_shift(op, a_off, b_off)?,
+                BitOp::Shr => unreachable!(),
+            };
+            self.push(result);
+            return Ok(());
         }
         let ai = to_int32(to_number(&a));
         let bi = to_int32(to_number(&b));
@@ -42371,6 +42389,89 @@ impl Interp {
         } else {
             Ordering::Greater
         })
+    }
+
+    /// BigInt `&`/`|`/`^` over the spec's infinite two's-complement values.
+    /// One extra high limb preserves sign extension while the operation runs;
+    /// the result is converted back to canonical sign+magnitude form.
+    fn bigint_bitwise(
+        &mut self,
+        op: BitOp,
+        a: crate::value::ChunkOffset,
+        b: crate::value::ChunkOffset,
+    ) -> Slot {
+        let (a_negative, a_magnitude) = self.read_bigint(a);
+        let (b_negative, b_magnitude) = self.read_bigint(b);
+        let width = a_magnitude.len().max(b_magnitude.len()) + 1;
+        let a_twos = bi_to_twos_complement(a_negative, &a_magnitude, width);
+        let b_twos = bi_to_twos_complement(b_negative, &b_magnitude, width);
+        let result = a_twos
+            .into_iter()
+            .zip(b_twos)
+            .map(|(a_limb, b_limb)| match op {
+                BitOp::And => a_limb & b_limb,
+                BitOp::Or => a_limb | b_limb,
+                BitOp::Xor => a_limb ^ b_limb,
+                _ => unreachable!("only the three logical BigInt ops call this helper"),
+            })
+            .collect();
+        let (negative, magnitude) = bi_from_twos_complement(result);
+        self.make_bigint(negative, magnitude)
+    }
+
+    /// BigInt signed shifts. A negative BigInt count reverses direction. Right
+    /// shift is arithmetic (floor division by a power of two); a shift beyond
+    /// the value's bit length therefore saturates to `0n` or `-1n`. Left shifts
+    /// are bounded to keep one guest opcode from forcing an unbounded host
+    /// allocation.
+    fn bigint_shift(
+        &mut self,
+        op: BitOp,
+        value: crate::value::ChunkOffset,
+        count: crate::value::ChunkOffset,
+    ) -> Result<Slot, Halt> {
+        const MAX_BIGINT_SHIFT_RESULT_BITS: usize = 64 * 1024;
+
+        let (negative, magnitude) = self.read_bigint(value);
+        let (count_negative, count_magnitude) = self.read_bigint(count);
+        if bi_is_zero(&magnitude) {
+            return Ok(self.make_bigint(false, vec![0]));
+        }
+        let shifts_left = (op == BitOp::Shl) != count_negative;
+        let value_bits = bi_bit_length(&magnitude);
+        if shifts_left {
+            let max_shift = MAX_BIGINT_SHIFT_RESULT_BITS.saturating_sub(value_bits);
+            let shift = bi_usize_up_to(&count_magnitude, max_shift)
+                .ok_or(Halt::Unsupported("bigint-shift:result-too-large"))?;
+            return Ok(self.make_bigint(
+                negative,
+                bi_shl_bits(&magnitude, shift),
+            ));
+        }
+
+        let Some(shift) = bi_usize_up_to(&count_magnitude, value_bits) else {
+            return Ok(if negative {
+                self.make_bigint(true, vec![1])
+            } else {
+                self.make_bigint(false, vec![0])
+            });
+        };
+        let (mut shifted, discarded) = bi_shr_mag(&magnitude, shift);
+        if negative && discarded {
+            shifted = bi_add_mag(&shifted, &[1]);
+        }
+        Ok(self.make_bigint(negative, shifted))
+    }
+
+    /// BigInt bitwise complement: `~x === -x - 1n`, expressed directly over
+    /// sign+magnitude limbs to avoid constructing an intermediate BigInt.
+    fn bigint_bit_not(&mut self, value: crate::value::ChunkOffset) -> Slot {
+        let (negative, magnitude) = self.read_bigint(value);
+        if negative {
+            self.make_bigint(false, bi_sub_mag(&magnitude, &[1]))
+        } else {
+            self.make_bigint(true, bi_add_mag(&magnitude, &[1]))
+        }
     }
 }
 
@@ -44491,7 +44592,7 @@ enum ArithOp {
     Div,
     Mod,
 }
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum BitOp {
     And,
     Or,
@@ -46567,6 +46668,81 @@ fn bi_shr_one_in_place(magnitude: &mut Vec<u32>) {
     while magnitude.len() > 1 && magnitude.last() == Some(&0) {
         magnitude.pop();
     }
+}
+
+/// Convert canonical sign+magnitude into a fixed-width two's-complement limb
+/// vector. `width` includes at least one sign-extension limb.
+fn bi_to_twos_complement(negative: bool, magnitude: &[u32], width: usize) -> Vec<u32> {
+    let mut limbs = vec![0u32; width];
+    limbs[..magnitude.len()].copy_from_slice(magnitude);
+    if negative {
+        for limb in &mut limbs {
+            *limb = !*limb;
+        }
+        bi_add_one_in_place(&mut limbs);
+    }
+    limbs
+}
+
+/// Convert a fixed-width two's-complement vector back to canonical
+/// sign+magnitude.
+fn bi_from_twos_complement(mut limbs: Vec<u32>) -> (bool, Vec<u32>) {
+    let negative = limbs.last().is_some_and(|limb| limb & 0x8000_0000 != 0);
+    if negative {
+        for limb in &mut limbs {
+            *limb = !*limb;
+        }
+        bi_add_one_in_place(&mut limbs);
+    }
+    let magnitude = bi_trim(limbs);
+    (negative && !bi_is_zero(&magnitude), magnitude)
+}
+
+/// Convert a nonnegative magnitude to `usize` only when it does not exceed
+/// `maximum`; otherwise return `None` without narrowing or wrapping.
+fn bi_usize_up_to(magnitude: &[u32], maximum: usize) -> Option<usize> {
+    if usize::BITS == 32 {
+        if magnitude.len() > 1 || magnitude[0] as usize > maximum {
+            return None;
+        }
+        return Some(magnitude[0] as usize);
+    }
+    let mut value = 0usize;
+    for &limb in magnitude.iter().rev() {
+        value = value.checked_shl(32)?.checked_add(limb as usize)?;
+        if value > maximum {
+            return None;
+        }
+    }
+    Some(value)
+}
+
+/// Shift a magnitude right and report whether any discarded bit was nonzero.
+/// The latter distinguishes truncation from floor for negative BigInts.
+fn bi_shr_mag(magnitude: &[u32], bits: usize) -> (Vec<u32>, bool) {
+    if bits == 0 {
+        return (magnitude.to_vec(), false);
+    }
+    let limb_shift = bits / 32;
+    let bit_shift = bits % 32;
+    if limb_shift >= magnitude.len() {
+        return (vec![0], !bi_is_zero(magnitude));
+    }
+
+    let whole_discarded = magnitude[..limb_shift].iter().any(|&limb| limb != 0);
+    let partial_discarded = bit_shift != 0
+        && magnitude[limb_shift] & ((1u32 << bit_shift) - 1) != 0;
+    let mut shifted = Vec::with_capacity(magnitude.len() - limb_shift);
+    for i in limb_shift..magnitude.len() {
+        let low = magnitude[i] >> bit_shift;
+        let high = if bit_shift != 0 {
+            magnitude.get(i + 1).copied().unwrap_or(0) << (32 - bit_shift)
+        } else {
+            0
+        };
+        shifted.push(low | high);
+    }
+    (bi_trim(shifted), whole_discarded || partial_discarded)
 }
 
 /// Signed add of `(neg_a, a) + (neg_b, b)` → `(neg, mag)`, trimmed. A `-0`
