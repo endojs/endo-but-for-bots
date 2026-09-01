@@ -2,7 +2,7 @@
 //! [`designs/ironhorse-test262-convergence.md`] § Part 1, "Conversion
 //! mechanics and corpus retirement").
 //!
-//! This is the proof the retirement is gated on: the generated `cases/` tree
+//! This is the proof the retirement is gated on: the generated `test/ironhorse/` tree
 //! reproduces the coverage the retired `stage*_corpus()` bit-exact tests
 //! carried — **same totals** (one case per corpus line, 1:1), **zero
 //! divergence** (every case the covered grammar reaches meets the runner's
@@ -22,7 +22,8 @@ use std::path::PathBuf;
 
 /// The generated case tree, checked in beside the crate.
 fn cases_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cases")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../packages/test262-runner/test262/test/ironhorse")
 }
 
 #[test]
@@ -30,7 +31,7 @@ fn generated_cases_reproduce_corpus_coverage() {
     let cases = cases_dir();
     assert!(
         cases.is_dir(),
-        "generated cases/ tree must be checked in at {}",
+        "generated test/ironhorse/ tree must be checked in at {}",
         cases.display()
     );
 
@@ -42,21 +43,18 @@ fn generated_cases_reproduce_corpus_coverage() {
         }
     };
 
-    // The fuzz-trophies regression tree (`cases/regressions/`) is not corpus:
+    // The fuzz-trophies regression tree (`test/ironhorse/regressions/`) is not corpus:
     // it is gated separately by `regressions_dual_run.rs` and legitimately
     // carries parse-negative named skips, which would break the covered==total
     // coverage proof below. Exclude it here so this test stays a pure
     // corpus-conversion equivalence proof.
     let files: Vec<_> = collect_js(&cases)
         .into_iter()
-        .filter(|p| {
-            !p.components()
-                .any(|c| c.as_os_str() == "regressions")
-        })
+        .filter(|p| !p.components().any(|c| c.as_os_str() == "regressions"))
         .collect();
     assert!(
         !files.is_empty(),
-        "cases/ tree must contain generated cases"
+        "test/ironhorse/ tree must contain generated cases"
     );
 
     // The gate: verdict + observable agreement (default), and tighten every
@@ -111,4 +109,28 @@ fn generated_cases_reproduce_corpus_coverage() {
         "every generated corpus case must be covered end-to-end (no named skips), \
          since every corpus line was a covered, bit-exact program"
     );
+}
+
+#[test]
+fn shared_tree_cases_are_classified_for_host_selection() {
+    let cases = cases_dir();
+    let files = collect_js(&cases);
+    assert!(
+        !files.is_empty(),
+        "shared Ironhorse case tree must not be empty"
+    );
+
+    for path in files {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let frontmatter = ironhorse_262::frontmatter::parse(&source);
+        assert!(
+            frontmatter
+                .features
+                .iter()
+                .any(|feature| feature == "ironhorse-dual-run"),
+            "{} needs the ironhorse-dual-run classifier",
+            path.display()
+        );
+    }
 }

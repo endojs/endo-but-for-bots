@@ -1,7 +1,7 @@
 //! Shared corpus-case reader for the ironhorse-compile smoke tests.
 //!
 //! The curated `ironhorse-262/corpora/*.js` line files retired into the
-//! test262-shaped `ironhorse-262/cases/` tree (PR #600 convergence 2/5); each
+//! shared test262 `test/ironhorse/` tree (PR #600 convergence 2/5); each
 //! converted case preserves its original one-line corpus program verbatim in
 //! an `info: Source: <program>` frontmatter line. ironhorse-compile cannot depend
 //! on ironhorse-262 (ironhorse-262 depends on ironhorse-compile — circular), so this
@@ -11,15 +11,16 @@
 
 use std::path::{Path, PathBuf};
 
-/// The number of corpus programs the surviving `cases/` tree carries — the
+/// The number of corpus programs the surviving `test/ironhorse/` tree carries — the
 /// same count the retired `corpora/*.js` line files held. Asserted by each
 /// smoke test so a future `cases/` regression that drops or double-counts a
 /// program is caught.
 pub const CORPUS_PROGRAM_COUNT: usize = 1711;
 
-/// The `ironhorse-262/cases` directory, resolved from this crate's manifest.
+/// The shared test262 `test/ironhorse` directory, resolved from this crate's manifest.
 fn cases_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../ironhorse-262/cases")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../packages/test262-runner/test262/test/ironhorse")
 }
 
 /// The original corpus program a converted case preserves in its
@@ -55,8 +56,8 @@ fn collect_js_into(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// The corpus programs the `cases/` tree carries, as `(id, source)` pairs —
-/// `id` is the case's path relative to `cases/` (a stable, sorted name for
+/// The corpus programs the `test/ironhorse/` tree carries, as `(id, source)` pairs —
+/// `id` is the case's path relative to `test/ironhorse/` (a stable, sorted name for
 /// error messages), `source` its verbatim one-line program. Mirrors
 /// ironhorse-262's `corpora_programs()`.
 pub fn corpus_programs() -> Vec<(String, String)> {

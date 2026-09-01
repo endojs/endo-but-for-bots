@@ -15,10 +15,11 @@
 //!
 //! The bespoke per-stage corpus (`corpora/*.js` + the `stage*_corpus()`
 //! accessors) that drove bring-up has **retired** into a test262-shaped
-//! `cases/` tree: the `corpus-to-262` converter (bin) dual-runs each corpus
-//! line once and emits one standard test262 case, and `endot-ih` ([`xst`])
-//! runs that tree with the same differential (design § Part 1, "the corpus
-//! becomes test262 cases"). The coverage-equivalence proof lives in
+//! `packages/test262-runner/test262/test/ironhorse/` tree: the
+//! `corpus-to-262` converter (bin) dual-runs each corpus line once and emits
+//! one standard test262 case, and `endot-ih` ([`xst`]) runs that tree
+//! with the same differential (design § Part 1, "the corpus becomes test262
+//! cases"). The coverage-equivalence proof lives in
 //! `tests/corpus_conversion_equivalence.rs`. Whole-section runs draw from the
 //! monorepo's existing `packages/test262-runner` test262 subset and its
 //! `ses-xs-parity` feature markers -- the same tree that package uses to
@@ -101,6 +102,7 @@ fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
 }
 
 pub mod compile_diff;
+pub mod expectations;
 pub mod frontmatter;
 pub mod report;
 pub mod test262;

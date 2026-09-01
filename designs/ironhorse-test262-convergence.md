@@ -107,16 +107,14 @@ runner, two files at `48ee02d8cfe0`:
 
 ### Where the cases live and what shape they take
 
-Ironhorse's cases move to a test262-shaped tree **inside the engine
-workspace**: `rust/engine/ironhorse-262/cases/`, mirroring test262
-directory idiom (`cases/meter/…`, `cases/language/…`,
-`cases/built-ins/…`, `cases/regressions/…`). They deliberately do
-**not** move into `packages/test262-runner/test262/`: that tree is
-the shared XS↔Node parity corpus tracking upstream tc39 + Moddable +
-Hardened JavaScript sources, and salting it with engine-bring-up
-cases would pollute the parity axis the package exists to prove.
-The two trees share one *format* and one *harness include model*:
-Ironhorse cases resolve `includes:` against the same
+Ironhorse's cases live in the shared test262 tree at
+`packages/test262-runner/test262/test/ironhorse/`, mirroring test262
+directory idiom (`ironhorse/language/`, `ironhorse/built-ins/`, and
+`ironhorse/regressions/`). Host-specific `features:` annotations keep
+one corpus useful to several suites: XS and Node exclude the
+`ironhorse-dual-run` and `ironhorse-meter-*` classifiers, while Ironhorse
+selects them and applies its differential and metering checks. The cases
+resolve `includes:` against the same
 `packages/test262-runner/test262/harness/` directory (`sta.js`,
 `assert.js`, `propertyHelper.js`, `compareArray.js`, …), so a case
 that graduates upstream needs no rewriting.
@@ -206,7 +204,7 @@ shapes run in CI.
 The differential fuzz generators are **generative instruments, not
 corpus**, and stay as they are in `ironhorse-fuzz`. What migrates is
 their *output*: a divergence trophy, once minimized and fixed,
-is checked in as a test262-style case under `cases/regressions/`
+is checked in as a test262-style case under `test/ironhorse/regressions/`
 (features `ironhorse-dual-run` + the arm's name in `info:`), so every
 fuzz finding becomes a durable, portable regression test rather
 than a line in a stage corpus. The trophies ledger the engine
@@ -315,7 +313,7 @@ independently green on this PR (kept DRAFT):
    both-modes run loop, negative verdicts, oracle wiring, xst-shaped
    report. Immediately useful: it runs today's checked-in subset with
    today's covered surface, replacing `test262-language`.
-2. **Corpus conversion** — `corpus-to-262`, the `cases/` tree
+2. **Corpus conversion** — `corpus-to-262`, the `test/ironhorse/` tree
    (1,374 generated cases), coverage-equivalence proof, corpora
    retirement.
 3. **Async/`$DONE` + job-drain wiring** — after the promise/async
@@ -323,7 +321,7 @@ independently green on this PR (kept DRAFT):
 4. **Lockdown/compartment modes + third-host integration** — after
    stage 4; wires Ironhorse into `packages/test262-runner`'s
    `ses-xs-parity` axis alongside `xst` and `node`.
-5. **Fuzz-trophies regression tree** — `cases/regressions/`
+5. **Fuzz-trophies regression tree** — `test/ironhorse/regressions/`
    populated from the trophies ledger; thereafter part of the fix
    workflow.
 
@@ -340,11 +338,10 @@ build orchestration (children parked as `--orchestrated` under
    case file — the meter contract is the runner's three-assertion
    stack (result gate, determinism gate, oracle advisory), so cases
    stay portable and recalibrations (`ironhorse-meter-N`) touch no test.
-2. **Ironhorse cases live in the engine workspace
-   (`ironhorse-262/cases/`), sharing the `packages/test262-runner`
-   harness and format, not its tree.** One include model, two
-   corpora with different jobs: upstream-parity vs. engine
-   bring-up/regression; graduation upstream is a file move.
+2. **All cases live in the shared `packages/test262-runner/test262/test/`
+   tree.** The `ironhorse/` subtree retains engine bring-up and regression
+   cases. `features:` classifiers select or exclude them for each host, so
+   unsupported metering checks are skipped without maintaining another corpus.
 3. **`endot-ih` is one runner that subsumes the dual-run harness**
    — `xst`'s CLI/verdict/report shape (grounded in `xs/tools/xst.c`
    + `xst262.c` at the pin) plus the differential oracle and the

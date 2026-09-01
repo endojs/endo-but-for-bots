@@ -18,10 +18,10 @@
 //!
 //! **When an arm finds a trophy** (a minimized, fixed divergence), it lands a
 //! durable regression, not a change to a generator: a source-level divergence
-//! becomes a test262 case under `ironhorse-262/cases/regressions/` (arm named in
+//! becomes a test262 case under `test262-runner/test262/test/ironhorse/regressions/` (arm named in
 //! `info:`); a bytecode/decoder trophy keeps its lock as a Rust regression test
 //! here (e.g. `decoder_hang_is_bounded_not_infinite`). See the fix workflow in
-//! `rust/engine/README.md` and `ironhorse-262/cases/regressions/README.md`.
+//! `rust/engine/README.md` and the regression tree's `README.md`.
 
 use ironhorse_vm::{disassemble, run_program, run_program_bounded};
 
@@ -80,19 +80,39 @@ fn gen_expr(b: &mut Bytes, depth: u8) -> String {
     match b.choice(9) {
         0 => {
             let op = ["+", "-", "*", "/", "%"][b.choice(5) as usize];
-            format!("({} {} {})", gen_expr(b, depth - 1), op, gen_expr(b, depth - 1))
+            format!(
+                "({} {} {})",
+                gen_expr(b, depth - 1),
+                op,
+                gen_expr(b, depth - 1)
+            )
         }
         1 => {
             let op = ["&", "|", "^", "<<", ">>", ">>>"][b.choice(6) as usize];
-            format!("({} {} {})", gen_expr(b, depth - 1), op, gen_expr(b, depth - 1))
+            format!(
+                "({} {} {})",
+                gen_expr(b, depth - 1),
+                op,
+                gen_expr(b, depth - 1)
+            )
         }
         2 => {
             let op = ["<", "<=", ">", ">=", "===", "!==", "==", "!="][b.choice(8) as usize];
-            format!("({} {} {})", gen_expr(b, depth - 1), op, gen_expr(b, depth - 1))
+            format!(
+                "({} {} {})",
+                gen_expr(b, depth - 1),
+                op,
+                gen_expr(b, depth - 1)
+            )
         }
         3 => {
             let op = ["&&", "||"][b.choice(2) as usize];
-            format!("({} {} {})", gen_expr(b, depth - 1), op, gen_expr(b, depth - 1))
+            format!(
+                "({} {} {})",
+                gen_expr(b, depth - 1),
+                op,
+                gen_expr(b, depth - 1)
+            )
         }
         4 => format!("(-{})", gen_expr(b, depth - 1)),
         5 => format!("(!{})", gen_expr(b, depth - 1)),
@@ -218,7 +238,10 @@ fn gen_closure_program(b: &mut Bytes) -> String {
     } else {
         let x = small_int(b);
         let y = small_int(b);
-        format!("var add = function(a){{return function(c){{return a + c}}}}; add({})({})", x, y)
+        format!(
+            "var add = function(a){{return function(c){{return a + c}}}}; add({})({})",
+            x, y
+        )
     }
 }
 
@@ -255,7 +278,11 @@ pub fn gen_stage3_arrays_program(data: &[u8]) -> String {
     // A small array literal (1..=4 elements) of small ints, optionally with
     // one hole, rendered as its source text.
     let n = 1 + (b.next() % 4) as usize; // 1..=4 elements
-    let hole_at = if b.choice(2) == 0 { Some((b.next() % n as u8) as usize) } else { None };
+    let hole_at = if b.choice(2) == 0 {
+        Some((b.next() % n as u8) as usize)
+    } else {
+        None
+    };
     let mut elems: Vec<String> = Vec::with_capacity(n);
     for i in 0..n {
         if Some(i) == hole_at {
@@ -434,7 +461,13 @@ pub fn gen_stage3_array_methods_program(data: &[u8]) -> String {
             let wrapped: Vec<String> = elems
                 .iter()
                 .enumerate()
-                .map(|(i, e)| if i % 2 == 0 { format!("[{}]", e) } else { e.clone() })
+                .map(|(i, e)| {
+                    if i % 2 == 0 {
+                        format!("[{}]", e)
+                    } else {
+                        e.clone()
+                    }
+                })
                 .collect();
             format!("[{}].flat().join()", wrapped.join(","))
         }
@@ -517,9 +550,11 @@ pub fn gen_stage3_for_of_program(data: &[u8]) -> String {
 pub fn gen_stage3_string_for_of_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let n = (b.next() % 6) as usize; // 0..=5 characters
-    // Draw from a fixed ASCII alphabet so every char is a single UTF-8 byte.
+                                     // Draw from a fixed ASCII alphabet so every char is a single UTF-8 byte.
     const ALPHA: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
-    let s: String = (0..n).map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char).collect();
+    let s: String = (0..n)
+        .map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char)
+        .collect();
     match b.choice(3) {
         // Forward concatenation (reconstructs the string).
         0 => format!("var r=\"\"; for (var c of \"{}\") r=r+c; r", s),
@@ -545,7 +580,9 @@ pub fn gen_stage3_text_math_program(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
     let mk_str = |b: &mut Bytes| -> String {
         let n = (b.next() % 5) as usize; // 0..=4 characters
-        (0..n).map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char).collect()
+        (0..n)
+            .map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char)
+            .collect()
     };
     match b.choice(5) {
         // Math statics — algebraically-exact / correctly-rounded functions
@@ -632,7 +669,9 @@ pub fn gen_json_structured_program(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
     fn mk_key(b: &mut Bytes) -> String {
         let n = 1 + (b.next() % 4) as usize; // 1..=4 characters, non-empty key
-        (0..n).map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char).collect()
+        (0..n)
+            .map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char)
+            .collect()
     }
     fn mk_leaf(b: &mut Bytes) -> String {
         match b.choice(5) {
@@ -642,8 +681,9 @@ pub fn gen_json_structured_program(data: &[u8]) -> String {
             3 => "null".to_string(),
             _ => {
                 let n = (b.next() % 4) as usize;
-                let s: String =
-                    (0..n).map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char).collect();
+                let s: String = (0..n)
+                    .map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char)
+                    .collect();
                 format!("\"{}\"", s)
             }
         }
@@ -687,7 +727,9 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
     const ALPHA: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
     fn mk_word(b: &mut Bytes) -> String {
         let n = 1 + (b.next() % 5) as usize;
-        (0..n).map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char).collect()
+        (0..n)
+            .map(|_| ALPHA[(b.next() as usize) % ALPHA.len()] as char)
+            .collect()
     }
     // A JSON value string at the given remaining depth.
     fn mk_json(b: &mut Bytes, depth: u8) -> String {
@@ -748,7 +790,7 @@ pub fn gen_json_parse_program(data: &[u8]) -> String {
 pub fn gen_stage3b_promise_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let val = (b.next() % 20) as i32; // the resolution value
-    // The source promise — always fulfilled or pending (never rejected).
+                                      // The source promise — always fulfilled or pending (never rejected).
     let source = match b.choice(4) {
         0 => format!("Promise.resolve({})", val),
         1 => format!("new Promise(function(res){{res({})}})", val),
@@ -854,8 +896,16 @@ pub fn gen_stage3_spread_program(data: &[u8]) -> String {
     let n = (b.next() % 5) as usize; // 0..=4 spread elements
     let elems: Vec<String> = (0..n).map(|_| small_int(&mut b).to_string()).collect();
     let inner = format!("[{}]", elems.join(","));
-    let lead = if b.choice(2) == 0 { format!("{},", small_int(&mut b)) } else { String::new() };
-    let trail = if b.choice(2) == 0 { format!(",{}", small_int(&mut b)) } else { String::new() };
+    let lead = if b.choice(2) == 0 {
+        format!("{},", small_int(&mut b))
+    } else {
+        String::new()
+    };
+    let trail = if b.choice(2) == 0 {
+        format!(",{}", small_int(&mut b))
+    } else {
+        String::new()
+    };
     let spread = format!("[{}...{}{}]", lead, inner, trail);
     match b.choice(3) {
         0 => spread,
@@ -910,7 +960,10 @@ pub fn gen_stage3_reentrant_program(data: &[u8]) -> String {
         0 => {
             let op = ["+", "-", "*"][b.choice(3) as usize];
             let seed = small_int(&mut b);
-            format!("var s={}; {}.forEach(function(x){{s=s{}x}}); s", seed, lit, op)
+            format!(
+                "var s={}; {}.forEach(function(x){{s=s{}x}}); s",
+                seed, lit, op
+            )
         }
         // forEach: sum the indices.
         1 => format!("var s=0; {}.forEach(function(x,i){{s=s+i}}); s", lit),
@@ -967,8 +1020,8 @@ pub fn gen_stage3_collections_program(data: &[u8]) -> String {
     let mut b = Bytes::new(data);
     let is_set = b.choice(2) == 0;
     let n = (b.next() % 5) as usize; // 0..=4 distinct entries
-    // Distinct integer keys 0..n so no in-place update perturbs the count; a
-    // Map pairs each key with a small value.
+                                     // Distinct integer keys 0..n so no in-place update perturbs the count; a
+                                     // Map pairs each key with a small value.
     let ctor = if is_set { "Set" } else { "Map" };
     let mut build = format!("var c=new {}();", ctor);
     for i in 0..n {
@@ -993,7 +1046,10 @@ pub fn gen_stage3_collections_program(data: &[u8]) -> String {
         0 => {
             let op = small_op(&mut b);
             let seed = small_int(&mut b);
-            format!("{} var s={}; c.forEach(function(v){{s=s{}v;}}); s", build, seed, op)
+            format!(
+                "{} var s={}; c.forEach(function(v){{s=s{}v;}}); s",
+                build, seed, op
+            )
         }
         // forEach: count the entries.
         1 => format!("{} var k=0; c.forEach(function(){{k=k+1;}}); k", build),
@@ -1078,12 +1134,22 @@ pub fn gen_stage3_bigint_program(data: &[u8]) -> String {
         // A binary arithmetic op between two BigInt operands (same type).
         1 => {
             let op = small_op(&mut b);
-            format!("{} {} {}", bigint_operand(&mut b), op, bigint_operand(&mut b))
+            format!(
+                "{} {} {}",
+                bigint_operand(&mut b),
+                op,
+                bigint_operand(&mut b)
+            )
         }
         // Strict/loose equality or relational between two BigInt operands.
         2 => {
             let cmp = ["===", "!==", "<", ">", "<=", ">="][b.choice(6) as usize];
-            format!("{} {} {}", bigint_operand(&mut b), cmp, bigint_operand(&mut b))
+            format!(
+                "{} {} {}",
+                bigint_operand(&mut b),
+                cmp,
+                bigint_operand(&mut b)
+            )
         }
         // Loose equality of a BigInt with a Number (fxNumberToBigInt path).
         3 => {
@@ -1140,15 +1206,28 @@ pub fn gen_stage3b_binary_program(data: &[u8]) -> String {
     // excluded — their element read/write self-names until BigInt coercion
     // lands). Paired with a small element count.
     const TA: &[&str] = &[
-        "Uint8Array", "Int8Array", "Uint8ClampedArray", "Int16Array", "Uint16Array",
-        "Int32Array", "Uint32Array", "Float32Array", "Float64Array",
+        "Uint8Array",
+        "Int8Array",
+        "Uint8ClampedArray",
+        "Int16Array",
+        "Uint16Array",
+        "Int32Array",
+        "Uint32Array",
+        "Float32Array",
+        "Float64Array",
     ];
     let ta = |b: &mut Bytes| -> &'static str { TA[(b.next() as usize) % TA.len()] };
     let count = |b: &mut Bytes| -> u32 { 1 + (b.next() as u32 % 6) };
     // DataView element type methods paired with their byte width.
     const DV: &[(&str, u32)] = &[
-        ("Int8", 1), ("Uint8", 1), ("Int16", 2), ("Uint16", 2),
-        ("Int32", 4), ("Uint32", 4), ("Float32", 4), ("Float64", 8),
+        ("Int8", 1),
+        ("Uint8", 1),
+        ("Int16", 2),
+        ("Uint16", 2),
+        ("Int32", 4),
+        ("Uint32", 4),
+        ("Float32", 4),
+        ("Float64", 8),
     ];
     match b.choice(11) {
         // Construct and read the byteLength directly.
@@ -1172,7 +1251,11 @@ pub fn gen_stage3b_binary_program(data: &[u8]) -> String {
         }
         // Length-form TypedArray construct + a length/byteLength accessor.
         5 => {
-            let acc = if b.choice(2) == 0 { "length" } else { "byteLength" };
+            let acc = if b.choice(2) == 0 {
+                "length"
+            } else {
+                "byteLength"
+            };
             format!("new {}({}).{}", ta(&mut b), count(&mut b), acc)
         }
         // Element write then read at an in-bounds index.
@@ -1354,10 +1437,22 @@ pub fn gen_stage3b_fundamentals_followup_program(data: &[u8]) -> String {
             let elems: Vec<String> = (0..cnt).map(|_| n(&mut b).to_string()).collect();
             let arr = format!("[{}]", elems.join(","));
             match b.choice(4) {
-                0 => format!("function cf(a,b){{return a+b}} {}.map(cf.bind({}))", arr, bound_list),
-                1 => format!("function cf(a,b){{return a+b}} {}.forEach(cf.bind({}))", arr, bound_list),
-                2 => format!("function cf(a,b){{return b>0}} {}.filter(cf.bind({}))", arr, bound_list),
-                _ => format!("function cf(a,b){{return a+b}} {}.reduce(cf.bind({}))", arr, bound_list),
+                0 => format!(
+                    "function cf(a,b){{return a+b}} {}.map(cf.bind({}))",
+                    arr, bound_list
+                ),
+                1 => format!(
+                    "function cf(a,b){{return a+b}} {}.forEach(cf.bind({}))",
+                    arr, bound_list
+                ),
+                2 => format!(
+                    "function cf(a,b){{return b>0}} {}.filter(cf.bind({}))",
+                    arr, bound_list
+                ),
+                _ => format!(
+                    "function cf(a,b){{return a+b}} {}.reduce(cf.bind({}))",
+                    arr, bound_list
+                ),
             }
         }
         // A bind round-trip through `this`.
@@ -1618,7 +1713,10 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
         if !results_agree(&oracle.result, &ironhorse.result) {
             return Err(Divergence {
                 source: source.to_string(),
-                detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
+                detail: format!(
+                    "result: oracle={:?} ironhorse={:?}",
+                    oracle.result, ironhorse.result
+                ),
             });
         }
         if oracle.computrons != ironhorse.computrons {
@@ -1673,7 +1771,10 @@ pub fn differential_check_with_symbols(source: &str) -> Result<(), Divergence> {
         if !results_agree(&oracle.result, &ironhorse.result) {
             return Err(Divergence {
                 source: source.to_string(),
-                detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
+                detail: format!(
+                    "result: oracle={:?} ironhorse={:?}",
+                    oracle.result, ironhorse.result
+                ),
             });
         }
         if oracle.computrons != ironhorse.computrons {
@@ -1723,7 +1824,10 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
     if oracle.completed && !results_agree(&oracle.result, &ironhorse.result) {
         return Err(Divergence {
             source: source.to_string(),
-            detail: format!("result: oracle={:?} ironhorse={:?}", oracle.result, ironhorse.result),
+            detail: format!(
+                "result: oracle={:?} ironhorse={:?}",
+                oracle.result, ironhorse.result
+            ),
         });
     }
     Ok(())
@@ -2454,7 +2558,11 @@ mod tests {
         // The sweep must be real, varied coverage: a spread of distinct
         // programs, and every top-level grammar feature exercised at least
         // once.
-        assert!(distinct.len() > 30, "arrays sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 30,
+            "arrays sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, f) in features.iter().enumerate() {
             assert!(*f, "arrays grammar feature {} never generated", i);
         }
@@ -2495,7 +2603,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 30, "methods sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 30,
+            "methods sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, m) in methods.iter().enumerate() {
             assert!(*m, "array method {} never generated", i);
         }
@@ -2537,7 +2649,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 30, "iterators sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 30,
+            "iterators sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, k) in kinds.iter().enumerate() {
             assert!(*k, "iterator kind {} never generated", i);
         }
@@ -2578,7 +2694,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 20, "for-of sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 20,
+            "for-of sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, s) in shapes.iter().enumerate() {
             assert!(*s, "for-of shape {} never generated", i);
         }
@@ -2618,7 +2738,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 20, "string for-of sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 20,
+            "string for-of sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, s) in shapes.iter().enumerate() {
             assert!(*s, "string for-of shape {} never generated", i);
         }
@@ -2654,16 +2778,33 @@ mod tests {
                 || prog.contains(".concat")
                 || prog.contains(".includes")
                 || prog.contains(".length");
-            number |= prog.contains("Number.") || prog.contains("parseInt") || prog.contains("parseFloat") || prog.contains("isNaN");
+            number |= prog.contains("Number.")
+                || prog.contains("parseInt")
+                || prog.contains("parseFloat")
+                || prog.contains("isNaN");
             json |= prog.contains("JSON.");
             match differential_check_with_symbols(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3 text-math-json differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3 text-math-json differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 40, "text-math-json sweep too uniform: {} distinct", distinct.len());
-        assert!(math && string && number && json, "families reached: math={} string={} number={} json={}", math, string, number, json);
+        assert!(
+            distinct.len() > 40,
+            "text-math-json sweep too uniform: {} distinct",
+            distinct.len()
+        );
+        assert!(
+            math && string && number && json,
+            "families reached: math={} string={} number={} json={}",
+            math,
+            string,
+            number,
+            json
+        );
     }
 
     #[test]
@@ -2696,12 +2837,25 @@ mod tests {
                 || prog.contains("{") && prog.contains("[");
             match differential_check_with_symbols(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3b json-metering differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3b json-metering differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 40, "json-structured sweep too uniform: {} distinct", distinct.len());
-        assert!(object && array && nested, "shapes reached: object={} array={} nested={}", object, array, nested);
+        assert!(
+            distinct.len() > 40,
+            "json-structured sweep too uniform: {} distinct",
+            distinct.len()
+        );
+        assert!(
+            object && array && nested,
+            "shapes reached: object={} array={} nested={}",
+            object,
+            array,
+            nested
+        );
     }
 
     #[test]
@@ -2730,12 +2884,25 @@ mod tests {
             prim |= !prog.contains('{') && !prog.contains('[');
             match differential_check_with_symbols(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3b json-parse differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3b json-parse differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 40, "json-parse sweep too uniform: {} distinct", distinct.len());
-        assert!(prim && array && object, "shapes reached: prim={} array={} object={}", prim, array, object);
+        assert!(
+            distinct.len() > 40,
+            "json-parse sweep too uniform: {} distinct",
+            distinct.len()
+        );
+        assert!(
+            prim && array && object,
+            "shapes reached: prim={} array={} object={}",
+            prim,
+            array,
+            object
+        );
     }
 
     #[test]
@@ -2766,15 +2933,25 @@ mod tests {
             chained |= prog.contains(").then") || prog.contains(").catch");
             match differential_check_with_symbols(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3b promises differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3b promises differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 40, "promise sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 40,
+            "promise sweep too uniform: {} distinct",
+            distinct.len()
+        );
         assert!(
             resolved && executor && pending && chained,
             "shapes reached: resolved={} executor={} pending={} chained={}",
-            resolved, executor, pending, chained
+            resolved,
+            executor,
+            pending,
+            chained
         );
     }
 
@@ -2812,7 +2989,10 @@ mod tests {
             // without comparing); count coverage by the checks that ran.
             match differential_check_with_symbols(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3b regexp-surface differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3b regexp-surface differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
             if prog.contains("Unsupported") {
                 skipped += 1;
@@ -2820,11 +3000,19 @@ mod tests {
         }
         let _ = skipped;
         assert!(checked > 0);
-        assert!(distinct.len() > 60, "regexp sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 60,
+            "regexp sweep too uniform: {} distinct",
+            distinct.len()
+        );
         assert!(
             execd && tested && sourced && flagged && stringed,
             "ops reached: exec={} test={} source={} flags={} toString={}",
-            execd, tested, sourced, flagged, stringed
+            execd,
+            tested,
+            sourced,
+            flagged,
+            stringed
         );
     }
 
@@ -2854,7 +3042,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 20, "spread sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 20,
+            "spread sweep too uniform: {} distinct",
+            distinct.len()
+        );
     }
 
     #[test]
@@ -2892,7 +3084,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 20, "re-entrant sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 20,
+            "re-entrant sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, s) in shapes.iter().enumerate() {
             assert!(*s, "re-entrant shape {} never generated", i);
         }
@@ -2930,7 +3126,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 20, "collections sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 20,
+            "collections sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, k) in kinds.iter().enumerate() {
             assert!(*k, "collections kind {} never generated", i);
         }
@@ -2967,11 +3167,18 @@ mod tests {
             saw_cmp |= prog.contains("===") || prog.contains('<') || prog.contains('>');
             match differential_check(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3b bigint differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3b bigint differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 40, "bigint sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 40,
+            "bigint sweep too uniform: {} distinct",
+            distinct.len()
+        );
         assert!(saw_typeof, "typeof arm never generated");
         assert!(saw_neg, "negation never generated");
         assert!(saw_mul, "multiplication never generated");
@@ -3011,11 +3218,18 @@ mod tests {
             saw_dataview |= prog.contains("DataView");
             match differential_check_with_symbols(&prog) {
                 Ok(()) => checked += 1,
-                Err(d) => panic!("stage-3b binary differential divergence on {:?}: {:?}", prog, d),
+                Err(d) => panic!(
+                    "stage-3b binary differential divergence on {:?}: {:?}",
+                    prog, d
+                ),
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 40, "binary sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 40,
+            "binary sweep too uniform: {} distinct",
+            distinct.len()
+        );
         assert!(saw_buffer, "ArrayBuffer arm never generated");
         assert!(saw_typed, "TypedArray arm never generated");
         assert!(saw_element, "element write/read arm never generated");
@@ -3175,7 +3389,11 @@ mod tests {
             }
         }
         assert!(checked > 0);
-        assert!(distinct.len() > 20, "for-in sweep too uniform: {} distinct", distinct.len());
+        assert!(
+            distinct.len() > 20,
+            "for-in sweep too uniform: {} distinct",
+            distinct.len()
+        );
         for (i, k) in kinds.iter().enumerate() {
             assert!(*k, "for-in target {} never generated", i);
         }
@@ -3355,7 +3573,10 @@ mod tests {
             "compile-differential findings (byte divergence or ironhorse-only accept): {:#?}",
             findings
         );
-        assert!(identical > 0, "some generated programs should compile byte-identically");
+        assert!(
+            identical > 0,
+            "some generated programs should compile byte-identically"
+        );
     }
 }
 

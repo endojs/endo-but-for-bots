@@ -4,7 +4,8 @@
 //!
 //! For each line of every `corpora/*.js` file it dual-runs the program once
 //! against the XS oracle to record the completion (or abort) at conversion
-//! time, then emits one standard test262 case under `cases/`:
+//! time, then emits one standard test262 case under the shared
+//! `packages/test262-runner/test262/test/ironhorse/` tree:
 //!
 //! - a **positive** case whose body is `assert.sameValue((<expr>),
 //!   <expected>)` when the completion is a primitive the oracle's `String()`
@@ -31,7 +32,7 @@
 //! carried here only as the `ironhorse-meter-exact` feature marker on the
 //! bit-exact corpora.
 //!
-//! Usage: `corpus-to-262 [OUT_DIR]` (default `<crate>/cases`).
+//! Usage: `corpus-to-262 [OUT_DIR]` (default shared `test/ironhorse/` tree).
 
 use ironhorse_262::xst::constructor_name;
 use ironhorse_262::{dual_run, Agreement};
@@ -173,11 +174,17 @@ fn main() {
     let out_dir = std::env::args()
         .nth(1)
         .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("cases"));
+        .unwrap_or_else(|| {
+            manifest_dir.join("../../../packages/test262-runner/test262/test/ironhorse")
+        });
 
-    // Start from a clean tree so a re-run never leaves a stale case behind.
-    if out_dir.exists() {
-        std::fs::remove_dir_all(&out_dir).expect("clear cases dir");
+    // Clear only generated buckets. The shared tree also carries hand-written
+    // regression trophies, which a corpus regeneration must preserve.
+    for bucket in ["built-ins", "language"] {
+        let bucket_dir = out_dir.join(bucket);
+        if bucket_dir.exists() {
+            std::fs::remove_dir_all(&bucket_dir).expect("clear generated case bucket");
+        }
     }
 
     let mut total_lines = 0usize;
