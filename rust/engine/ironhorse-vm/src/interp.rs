@@ -23002,7 +23002,7 @@ impl Interp {
                     _ => unreachable!(),
                 };
                 let step = if self.iterators.contains_key(&iter_inst) {
-                    self.array_from_try(|this| this.array_iterator_next(iter_inst))?
+                    self.array_from_try(|this| this.array_iterator_next(code, iter_inst))?
                 } else {
                     self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
                 };
@@ -29925,7 +29925,7 @@ impl Interp {
                     Payload::Reference(i) if self.iterators.contains_key(&i) => i,
                     _ => return Err(Halt::Unsupported("array-iterator-next:non-iterator")),
                 };
-                self.array_iterator_next(iter)?
+                self.array_iterator_next(code, iter)?
             }
             NativeMethod::MapIteratorNext | NativeMethod::SetIteratorNext => {
                 let expected = if m == NativeMethod::MapIteratorNext {
@@ -29953,7 +29953,7 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("Iterator.from:wrapper")),
                 }
             }
-            NativeMethod::IteratorHelper(6) => self.iterator_to_array(this)?,
+            NativeMethod::IteratorHelper(6) => self.iterator_to_array(code, this)?,
             NativeMethod::IteratorHelper(_) => {
                 return Err(Halt::Unsupported("Iterator.helper"));
             }
@@ -33214,7 +33214,7 @@ impl Interp {
     /// generic user-defined `next` protocol remains an honest named gap; this
     /// path advances the same native iterator state used by ordinary `.next()`
     /// calls and appends each yielded value to a fresh Array.
-    fn iterator_to_array(&mut self, this: Slot) -> Result<Slot, Halt> {
+    fn iterator_to_array(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
         let iter = match this.value {
             Payload::Reference(i) if self.iterators.contains_key(&i) => i,
             Payload::Reference(_) => return Err(Halt::Unsupported("Iterator.toArray:generic")),
@@ -33223,7 +33223,7 @@ impl Interp {
         let array = self.new_array();
         let mut length = 0u32;
         loop {
-            let result = self.array_iterator_next(iter)?;
+            let result = self.array_iterator_next(code, iter)?;
             let Payload::Reference(result_obj) = result.value else {
                 return Err(Halt::Unsupported("Iterator.toArray:bad-result"));
             };
@@ -34335,7 +34335,11 @@ impl Interp {
     /// reused result object's `value`/`done`, and return that object. Meters
     /// [`ARRAY_ITERATOR_NEXT_METERING`]; an `entries` element allocates a fresh
     /// `[index, value]` pair (its own array-create metering).
-    fn array_iterator_next(&mut self, iter: crate::value::SlotIndex) -> Result<Slot, Halt> {
+    fn array_iterator_next(
+        &mut self,
+        code: &[u8],
+        iter: crate::value::SlotIndex,
+    ) -> Result<Slot, Halt> {
         if self.iterators[&iter].kind == 3 {
             return Ok(self.enumerator_next(iter));
         }
@@ -34352,8 +34356,13 @@ impl Interp {
             // (no yield), metering only its dispatch.
             (Slot::undefined(), true, st.index)
         } else {
-            let length = self.arrays.get(&st.iterable).map(|a| a.length).unwrap_or(0);
-            if st.index < length {
+            // `ArrayIteratorPrototype.next` performs LengthOfArrayLike on every
+            // step. This is observable for an arguments receiver (whose
+            // ordinary, configurable `length` may change), accessors, and
+            // proxies; reading the compact ArrayData length directly made an
+            // arguments iterator ignore a truncation after its first yield.
+            let length = self.array_generic_length(code, st.iterable)?;
+            if u64::from(st.index) < length {
                 // A yielding `next()`: the base result-object mutation cost,
                 // plus (for `values`/`entries`) the array-element read
                 // (`mxGetIndex`) `keys` does not do.
@@ -34362,21 +34371,12 @@ impl Interp {
                     self.meter.tick_raw(ARRAY_ITERATOR_ELEMENT_READ);
                 }
                 let v = match st.kind {
-                    0 => self
-                        .arrays
-                        .get(&st.iterable)
-                        .and_then(|a| a.items().get(&st.index).copied())
-                        .map(|s| Slot::of(s.kind, s.value))
-                        .unwrap_or_else(Slot::undefined),
+                    0 => self.array_generic_get(code, st.iterable, u64::from(st.index))?,
                     1 => Slot::integer(st.index as i32),
                     _ => {
                         // entries: a fresh `[index, arr[index]]` pair array.
-                        let elem = self
-                            .arrays
-                            .get(&st.iterable)
-                            .and_then(|a| a.items().get(&st.index).copied())
-                            .map(|s| Slot::of(s.kind, s.value))
-                            .unwrap_or_else(Slot::undefined);
+                        let elem =
+                            self.array_generic_get(code, st.iterable, u64::from(st.index))?;
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
                         a.length = 2;
@@ -38752,7 +38752,7 @@ impl Interp {
                 _ => unreachable!(),
             };
             let step = if self.iterators.contains_key(&iter_inst) {
-                self.array_from_try(|this| this.array_iterator_next(iter_inst))?
+                self.array_from_try(|this| this.array_iterator_next(code, iter_inst))?
             } else {
                 self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
             };
