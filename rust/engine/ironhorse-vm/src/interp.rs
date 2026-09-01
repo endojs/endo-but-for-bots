@@ -27806,9 +27806,33 @@ impl Interp {
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                let inst = match arg0.value {
-                    Payload::Reference(o) => o,
-                    _ => return Err(Halt::Unsupported("getOwnPropertyDescriptor:non-object")),
+                // `? ToObject(O)` precedes `? ToPropertyKey(P)`: nullish
+                // operands throw before an observable key coercion, while any
+                // other primitive is inspected through its temporary wrapper.
+                // Materializing that wrapper also reproduces XS's two-slot
+                // primitive-box allocation instead of hiding it in a special
+                // primitive-only shortcut.
+                let inst = match (arg0.kind, arg0.value) {
+                    (Kind::Reference, Payload::Reference(o)) => o,
+                    (Kind::Null | Kind::Undefined, _) => {
+                        return Err(self.catchable_type_error())
+                    }
+                    (Kind::Boolean, _) => {
+                        self.box_primitive_to_instance(Native::Boolean, arg0)
+                    }
+                    (Kind::Integer | Kind::Number, _) => {
+                        self.box_primitive_to_instance(Native::Number, arg0)
+                    }
+                    (Kind::String, _) => {
+                        self.box_primitive_to_instance(Native::String, arg0)
+                    }
+                    (Kind::Symbol, _) => {
+                        self.box_primitive_to_instance(Native::Symbol, arg0)
+                    }
+                    (Kind::BigInt, _) => {
+                        self.box_primitive_to_instance(Native::BigInt, arg0)
+                    }
+                    _ => return Err(self.catchable_type_error()),
                 };
                 // The integer-indexed exotic `[[GetOwnProperty]]` (10.4.5.1): a
                 // canonical numeric index yields the element data descriptor
@@ -27843,10 +27867,21 @@ impl Interp {
                             Slot::undefined()
                         }
                     }
+                } else if self.wrapper_data.contains_key(&inst) {
+                    let id = self.to_property_id(code, arg1)?;
+                    match self.mop_get_own_property(code, inst, id)? {
+                        Some(descriptor) => {
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            self.descriptor_object(descriptor)
+                        }
+                        None => {
+                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                            Slot::undefined()
+                        }
+                    }
                 } else if self.collections.contains_key(&inst)
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
-                    || self.wrapper_data.contains_key(&inst)
                 {
                     return Err(Halt::Unsupported("getOwnPropertyDescriptor:exotic-object"));
                 } else {
@@ -39602,12 +39637,44 @@ impl Interp {
     /// forwarding an internal method to an exotic target honors the exotic own
     /// properties the opcode dispatch materializes.
     fn exotic_own_descriptor(
-        &self,
+        &mut self,
         inst: crate::value::SlotIndex,
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
         if let Some(d) = self.array_own_descriptor(inst, id) {
             return Some(d);
+        }
+        // A String wrapper has non-writable, non-configurable own UTF-16 index
+        // properties plus a non-enumerable `length`. Other primitive wrappers
+        // have no exotic own properties (their wrapped value is internal).
+        if let Some(Slot {
+            kind: Kind::String,
+            value: Payload::String(off),
+            ..
+        }) = self.wrapper_data.get(&inst).copied()
+        {
+            let name = self.string_key_name(id);
+            if name.as_deref() == Some("length") {
+                return Some(OrdinaryDescriptor {
+                    value: Some(Slot::integer(self.str_len(off) as i32)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                });
+            }
+            if let Some(index) = name.as_deref().and_then(string_to_index) {
+                let value = self.string_index_get(off, index);
+                if value.kind != Kind::Undefined {
+                    return Some(OrdinaryDescriptor {
+                        value: Some(value),
+                        writable: Some(false),
+                        enumerable: Some(true),
+                        configurable: Some(false),
+                        ..OrdinaryDescriptor::default()
+                    });
+                }
+            }
         }
         let fi = self.functions.get(&inst)?;
         if self.string_key_name(id).as_deref() == Some("length") {
