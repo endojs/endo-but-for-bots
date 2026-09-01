@@ -5,12 +5,13 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, SandboxDeferredTaskParams, SandboxEscalationRecord, SandboxFormulaProfile, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { makeError, q, X } from '@endo/errors';
+import { getInterfaceMethodKeys } from '@endo/patterns';
 import {
   getGitCredentialController as getGitCredentialControllerForCap,
   getGitRemoteController as getGitRemoteControllerForCap,
@@ -46,10 +47,157 @@ import { makeFormulaRecord } from './formula-record.js';
 import {
   DiagnosticsInterface,
   HostInterface,
+  MountInterface,
   TracesInterface,
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
+import {
+  assertPositiveInteger,
+  assertSandboxMountGrant,
+  normalizeSandboxProfile,
+} from './sandbox.js';
+
+const sandboxMountMethodNames = harden(getInterfaceMethodKeys(MountInterface));
+
+/**
+ * Validate every mount capability before a sandbox formula is persisted, then
+ * normalize the profile with the proven formula identifiers. Local caps must
+ * identify mount formulas. Remote caps do not expose their origin formula, so
+ * they must advertise the complete canonical EndoMount interface instead.
+ *
+ * Profile normalization is synchronous, while formula-type validation may be
+ * asynchronous. Normalize once with unique temporary identifiers, then
+ * substitute the validated identifiers through those identifiers in the
+ * already-normalized record. The temporary identifiers preserve the
+ * association between each normalized mount field and the grant that created
+ * it; do not rely on replaying the normalizer's call order here.
+ *
+ * @param {unknown} profile
+ * @param {object} powers
+ * @param {(ref: unknown) => FormulaIdentifier | undefined} powers.getIdForRef
+ * @param {(id: FormulaIdentifier) => Promise<string>} powers.getTypeForId
+ * @returns {Promise<SandboxFormulaProfile>}
+ */
+export const normalizeSandboxProfileForHost = async (
+  profile,
+  { getIdForRef, getTypeForId },
+) => {
+  await null;
+  /** @type {Array<{ provisionalId: FormulaIdentifier, cap: unknown, label: string, mode: 'ro' | 'rw' }>} */
+  const grants = [];
+  /** @type {Map<FormulaIdentifier, { provisionalId: FormulaIdentifier, cap: unknown, label: string, mode: 'ro' | 'rw' }>} */
+  const grantForProvisionalId = new Map();
+  const provisionalProfile = normalizeSandboxProfile(profile, {
+    resolveMountId: (cap, label, mode) => {
+      const provisionalId = /** @type {FormulaIdentifier} */ (
+        `validation-only-${grants.length}`
+      );
+      const grant = { provisionalId, cap, label, mode };
+      grants.push(grant);
+      grantForProvisionalId.set(provisionalId, grant);
+      return provisionalId;
+    },
+  });
+
+  /** @type {Map<unknown, FormulaIdentifier>} */
+  const mountIdForCap = new Map();
+  const uniqueGrants = grants.filter(({ cap }) => {
+    if (mountIdForCap.has(cap)) return false;
+    // Reserve the key synchronously before parallel validation so repeated
+    // grants of one remote capability share its disk and CapTP checks.
+    mountIdForCap.set(
+      cap,
+      /** @type {FormulaIdentifier} */ ('validation-pending'),
+    );
+    return true;
+  });
+  await Promise.all(
+    uniqueGrants.map(async ({ cap, label }) => {
+      const mountId = getIdForRef(cap);
+      if (mountId === undefined) {
+        throw makeError(
+          X`provideSandbox: ${q(label)} must be a daemon-minted mount cap`,
+        );
+      }
+      const formulaType = await getTypeForId(mountId);
+      if (formulaType === 'remote') {
+        /** @type {PropertyKey[]} */
+        let methodNames;
+        try {
+          // Remote identifiers do not reveal their origin formula type.
+          // Require the canonical Mount protocol before preserving the ID.
+          // eslint-disable-next-line no-underscore-dangle
+          methodNames = await E(/** @type {any} */ (cap)).__getMethodNames__();
+        } catch (cause) {
+          throw makeError(
+            X`provideSandbox: ${q(label)} must implement the EndoMount interface`,
+            undefined,
+            { cause: /** @type {Error} */ (cause) },
+          );
+        }
+        const missing = sandboxMountMethodNames.filter(
+          name => !methodNames.includes(name),
+        );
+        if (missing.length > 0) {
+          throw makeError(
+            X`provideSandbox: ${q(label)} must implement the EndoMount interface; missing ${q(missing)}`,
+          );
+        }
+      } else if (formulaType !== 'mount' && formulaType !== 'scratch-mount') {
+        throw makeError(
+          X`provideSandbox: ${q(label)} must name a mount formula, got ${q(formulaType)}`,
+        );
+      }
+      mountIdForCap.set(cap, mountId);
+    }),
+  );
+
+  /**
+   * Resolve one grant after its formula type and remote interface have been
+   * checked.
+   *
+   * A remote mount has no daemon-private backing metadata. It is safe to
+   * project read-only through 9P, but a read-write grant must fail closed
+   * because the peer's read-only attenuation cannot be proven here.
+   *
+   * @param {FormulaIdentifier} provisionalId
+   * @returns {FormulaIdentifier}
+   */
+  const resolveValidatedMountId = provisionalId => {
+    const grant = grantForProvisionalId.get(provisionalId);
+    if (grant === undefined) {
+      throw makeError(X`provideSandbox: mount grant accounting failed`);
+    }
+    const { cap, label, mode } = grant;
+    const mountId = mountIdForCap.get(cap);
+    if (mountId === undefined) {
+      throw makeError(
+        X`provideSandbox: ${q(label)} must be a daemon-minted mount cap`,
+      );
+    }
+    assertSandboxMountGrant(cap, mode, label);
+    return mountId;
+  };
+
+  const rootfs =
+    provisionalProfile.rootfs.kind === 'mount'
+      ? harden({
+          kind: /** @type {'mount'} */ ('mount'),
+          mountId: resolveValidatedMountId(provisionalProfile.rootfs.mountId),
+        })
+      : provisionalProfile.rootfs;
+  const mounts = harden(
+    provisionalProfile.mounts.map(mount =>
+      harden({
+        ...mount,
+        mountId: resolveValidatedMountId(mount.mountId),
+      }),
+    ),
+  );
+  return harden({ ...provisionalProfile, rootfs, mounts });
+};
+harden(normalizeSandboxProfileForHost);
 
 /**
  * @param {string} name
@@ -112,19 +260,14 @@ export const normalizeShellPolicy = policy => {
       X`provideShell: policy.allowedCommands must be a non-empty array of command-name strings`,
     );
   }
-  if (!Number.isInteger(timeoutMs) || /** @type {number} */ (timeoutMs) <= 0) {
-    throw makeError(
-      X`provideShell: policy.timeoutMs must be a positive integer`,
-    );
-  }
-  if (
-    !Number.isInteger(maxOutputBytes) ||
-    /** @type {number} */ (maxOutputBytes) <= 0
-  ) {
-    throw makeError(
-      X`provideShell: policy.maxOutputBytes must be a positive integer`,
-    );
-  }
+  const timeoutMsValue = assertPositiveInteger(
+    timeoutMs,
+    'provideShell: policy.timeoutMs',
+  );
+  const maxOutputBytesValue = assertPositiveInteger(
+    maxOutputBytes,
+    'provideShell: policy.maxOutputBytes',
+  );
   /** @type {Record<string, string>} */
   const normalizedEnv = {};
   if (env !== undefined) {
@@ -147,8 +290,6 @@ export const normalizeShellPolicy = policy => {
   if (typeof normalizedSearchPath !== 'string') {
     throw makeError(X`provideShell: policy.searchPath must be a string`);
   }
-  const timeoutMsValue = /** @type {number} */ (timeoutMs);
-  const maxOutputBytesValue = /** @type {number} */ (maxOutputBytes);
   return harden({
     allowedCommands: harden([...allowedCommands]),
     timeoutMs: timeoutMsValue,
@@ -240,27 +381,17 @@ export const normalizeHttpClientPolicy = policy => {
 
   // Default to the exo's own defaults (60 / 1 MiB) when unspecified, but bake an
   // explicit number so the formula record is self-describing across a restart.
-  const normalizedMaxRequestsPerMinute =
-    maxRequestsPerMinute === undefined ? 60 : maxRequestsPerMinute;
-  if (
-    !Number.isSafeInteger(normalizedMaxRequestsPerMinute) ||
-    /** @type {number} */ (normalizedMaxRequestsPerMinute) <= 0
-  ) {
-    throw makeError(
-      X`provideHttpClient: policy.maxRequestsPerMinute must be a positive safe integer`,
-    );
-  }
+  const normalizedMaxRequestsPerMinute = assertPositiveInteger(
+    maxRequestsPerMinute === undefined ? 60 : maxRequestsPerMinute,
+    'provideHttpClient: policy.maxRequestsPerMinute',
+    { safe: true },
+  );
 
-  const normalizedMaxResponseBytes =
-    maxResponseBytes === undefined ? 1024 * 1024 : maxResponseBytes;
-  if (
-    !Number.isSafeInteger(normalizedMaxResponseBytes) ||
-    /** @type {number} */ (normalizedMaxResponseBytes) <= 0
-  ) {
-    throw makeError(
-      X`provideHttpClient: policy.maxResponseBytes must be a positive safe integer`,
-    );
-  }
+  const normalizedMaxResponseBytes = assertPositiveInteger(
+    maxResponseBytes === undefined ? 1024 * 1024 : maxResponseBytes,
+    'provideHttpClient: policy.maxResponseBytes',
+    { safe: true },
+  );
 
   const normalizedPolicyMode = policyMode === undefined ? 'strict' : policyMode;
   if (
@@ -276,10 +407,8 @@ export const normalizeHttpClientPolicy = policy => {
 
   return harden({
     allowedOrigins: harden(normalizedOrigins),
-    maxRequestsPerMinute: /** @type {number} */ (
-      normalizedMaxRequestsPerMinute
-    ),
-    maxResponseBytes: /** @type {number} */ (normalizedMaxResponseBytes),
+    maxRequestsPerMinute: normalizedMaxRequestsPerMinute,
+    maxResponseBytes: normalizedMaxResponseBytes,
     policyMode: /** @type {import('./types.js').HttpClientPolicyMode} */ (
       normalizedPolicyMode
     ),
@@ -311,6 +440,10 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
  * @param {DaemonCore['formulateGit']} args.formulateGit
  * @param {DaemonCore['formulateShell']} args.formulateShell
+ * @param {DaemonCore['formulateSandbox']} args.formulateSandbox
+ * @param {() => SandboxEscalationRecord[]} [args.listSandboxEscalations]
+ *   The sandbox escalation ledger, surfaced through diagnostics. Unwired
+ *   embedders see an empty ledger, matching `listRetentionPaths`.
  * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
  * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
@@ -363,6 +496,8 @@ export const makeHostMaker = ({
   formulateSubMount,
   formulateGit,
   formulateShell,
+  formulateSandbox,
+  listSandboxEscalations = () => harden([]),
   formulateHttpClient,
   getHttpClientControlForClient,
   formulateGitCredential,
@@ -920,6 +1055,27 @@ export const makeHostMaker = ({
       );
 
       const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
+      return value;
+    };
+
+    /** @type {EndoHost['provideSandbox']} */
+    const provideSandbox = async (petName, profile) => {
+      const { namePath } = petNamePathFrom(petName);
+
+      // A sandbox formula stores a normalized, reconstitutable profile, so
+      // validation completes before the formula is allocated.
+      const normalizedProfile = await normalizeSandboxProfileForHost(profile, {
+        getIdForRef,
+        getTypeForId,
+      });
+
+      /** @type {DeferredTasks<SandboxDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.sandboxId),
+      );
+
+      const { value } = await formulateSandbox(normalizedProfile, tasks);
       return value;
     };
 
@@ -2437,6 +2593,16 @@ export const makeHostMaker = ({
       return getFormulaGraphSnapshot(seedIds);
     };
 
+    const listReachableSandboxEscalations = async () => {
+      const graph = await getFormulaGraph();
+      const reachableIds = new Set(graph.nodes.map(({ id }) => id));
+      return harden(
+        listSandboxEscalations().filter(({ sandboxId }) =>
+          reachableIds.has(sandboxId),
+        ),
+      );
+    };
+
     /**
      * Snapshot every retention path from a GC root to the target,
      * named by an endo:// locator. Pet-store edges along each path
@@ -2497,10 +2663,11 @@ export const makeHostMaker = ({
           DiagnosticsInterface,
           /** @type {any} */ ({
             help: () =>
-              'Privileged read-only diagnostics. Use getFormula(id) for a formula record, getFormulaGraph() for the dependency graph reachable from this agent, and traces() for the error-trace aggregator.',
+              'Privileged read-only diagnostics. Use getFormula(id) for a formula record, getFormulaGraph() for the dependency graph reachable from this agent, traces() for the error-trace aggregator, and listSandboxEscalations() for the sandbox escalation ledger.',
             getFormula,
             getFormulaGraph,
             traces,
+            listSandboxEscalations: listReachableSandboxEscalations,
           }),
         )
       );
@@ -2562,6 +2729,7 @@ export const makeHostMaker = ({
       provideSubMount,
       provideGit,
       provideShell,
+      provideSandbox,
       provideHttpClient,
       getHttpClientControl,
       provideGitRemote,

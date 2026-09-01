@@ -6,9 +6,11 @@ import { matches } from '@endo/patterns';
 
 import { makeSandboxFactory } from '../src/factory.js';
 import {
+  BackendNameShape,
   BackendProbeShape,
   NetworkProfileShape,
   SandboxFactoryInterface,
+  backendRootfsKinds,
 } from '../src/interfaces.js';
 
 const lifecycleProbe = harden({
@@ -168,6 +170,82 @@ test('__getMethodNames__() round-trips the documented capability surface', async
   );
 });
 
+/**
+ * Minimal driver that can carry a slice through `make()` and `dispose()`
+ * without spawning anything.
+ *
+ * @param {'bwrap' | 'podman'} name
+ * @param {boolean} available
+ */
+const makeSelectableDriver = (name, available) =>
+  harden({
+    name,
+    probe: async () =>
+      harden(
+        available
+          ? { available: true, version: 'stub-1.0', details: lifecycleProbe }
+          : { available: false, reason: `${name} is not installed` },
+      ),
+    /** @param {any} spec */
+    prepareSlice: async spec => harden({ spec }),
+    spawn: async () => {
+      throw new Error('not implemented');
+    },
+    teardown: async () => {},
+  });
+
+test('a slice names the driver that make() resolved, not the selector', async t => {
+  const factory = makeSandboxFactory({
+    drivers: harden([
+      makeSelectableDriver('bwrap', false),
+      makeSelectableDriver('podman', true),
+    ]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+  });
+
+  // `host-bind` rather than `minimal` so the unusable stub scratch
+  // provider is tolerated rather than fatal.
+  const slice = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+
+  t.is(
+    await E(slice).backend(),
+    'podman',
+    'auto skipped the unavailable bwrap driver',
+  );
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await E(/** @type {any} */ (slice)).__getMethodNames__();
+  t.true(
+    [...methods].includes('backend'),
+    'the resolved backend is part of the advertised surface',
+  );
+
+  await E(slice).dispose();
+});
+
+test('backendRootfsKinds constrains only the implemented backends', t => {
+  // The table is what a policy layer refuses an unconstructible profile
+  // with, so a typo in it silently un-enforces that gate.
+  t.deepEqual(
+    Object.fromEntries(
+      Object.entries(backendRootfsKinds).map(([name, kinds]) => [
+        name,
+        [...(kinds ?? [])],
+      ]),
+    ),
+    {
+      bwrap: ['host-bind', 'minimal', 'mount'],
+      podman: ['oci'],
+    },
+  );
+  for (const name of Object.keys(backendRootfsKinds)) {
+    t.true(matches(name, BackendNameShape), `${name} is a known backend`);
+  }
+  // `auto` resolves at runtime, so it can carry no static constraint.
+  t.is(backendRootfsKinds.auto, undefined);
+});
+
 test('NetworkProfileShape accepts the documented profiles and rejects others', t => {
   for (const profile of [
     'none',
@@ -284,6 +362,11 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(handle).scratch('/tmp/work'), {
     message: /disposed/,
   });
+  // Reset is admission-controlled like the two above: a disposed slice has
+  // nothing left to reset, so reporting success would misrepresent it.
+  await t.throwsAsync(() => E(handle).reset(), {
+    message: /disposed/,
+  });
   t.is(
     fixture.counts().spawnCalls,
     2,
@@ -297,6 +380,33 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(handle).dispose(), {
     message: /dispose could not prove containment/,
   });
+});
+
+test('reset invokes the injected scratch cleanup hook', async t => {
+  let resetCalls = 0;
+  const driver = harden({
+    name: /** @type {const} */ ('bwrap'),
+    probe: async () => harden({ available: true, details: lifecycleProbe }),
+    prepareSlice: async () => harden({}),
+    spawn: async () => {
+      throw new Error('spawn not used');
+    },
+    teardown: async () => {},
+  });
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: /** @type {any} */ (stubScratchProvider),
+    resetScratch: async () => {
+      resetCalls += 1;
+    },
+  });
+  const handle = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+
+  await E(handle).reset();
+  t.is(resetCalls, 1);
+  await E(handle).dispose();
 });
 
 test('factory.help() returns descriptive text', async t => {

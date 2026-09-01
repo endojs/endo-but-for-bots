@@ -8,18 +8,45 @@ import test from 'ava';
 import url from 'url';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import popen from 'child_process';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import { makeCancelKit } from '@endo/cancel';
 import { makePromiseKit } from '@endo/promise-kit';
 import { encodeHex } from '@endo/hex';
 import { decodeBase64 } from '@endo/base64';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { start, stop, purge, makeEndoClient } from '../index.js';
 import { parseId } from '../src/formula-identifier.js';
+import { makeDaemon } from '../src/manager.js';
+import {
+  gunzip,
+  makeCryptoPowers,
+  makeDaemonicPowers,
+  makeFilePowers,
+} from '../src/manager-node-powers.js';
 
 const { raw } = String;
 
 const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
+
+/**
+ * @param {unknown} error
+ * @param {string} fragment
+ * @returns {boolean}
+ */
+const errorIncludes = (error, fragment) => {
+  if (String(error).includes(fragment)) return true;
+  if (error instanceof AggregateError) {
+    return error.errors.some(nested => errorIncludes(nested, fragment));
+  }
+  return (
+    error instanceof Error &&
+    error.cause !== undefined &&
+    errorIncludes(error.cause, fragment)
+  );
+};
 
 /**
  * @param {() => Promise<boolean>} predicate
@@ -135,6 +162,190 @@ const contentPathOf = (statePath, hashBase64) =>
 
 const mountPathOf = (statePath, formulaNumber) =>
   path.join(statePath, 'mounts', formulaNumber);
+const sandboxPathOf = (statePath, formulaNumber) =>
+  path.join(statePath, 'sandboxes', formulaNumber);
+
+/**
+ * Boot a real `makeDaemon()` core in this process — no forked child, no
+ * sockets — so a test can drive the genuine formula-graph and GC code in
+ * `manager.js` (including the private `reclaimCollectedStorage` closure,
+ * which is reachable only from a live daemon's GC sweep) while swapping
+ * only the OS-privileged sandbox/mount host tools (the `@endo/sandbox`
+ * bwrap/podman drivers, the 9P kernel mount) for deterministic fakes.
+ *
+ * Everything else — persistence, worker spawning, the formula graph, GC
+ * sweeps — is the exact code `manager-node.js` wires for a real forked
+ * daemon; only the two seams that need `CAP_SYS_ADMIN` / a container
+ * runtime are replaced, mirroring the fake-projector/fake-backend
+ * pattern `test/sandbox.test.js` already uses at the slice level.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {{ hostTools?: Partial<import('../src/types.js').HostToolPowers> }} [opts]
+ */
+const makeInProcessDaemon = async (t, { hostTools = {} } = {}) => {
+  const config = {
+    ...makeConfig('tmp', getConfigDirectoryName(t.title, t.context.length)),
+    registryUrl: 'https://registry.npmjs.org',
+  };
+  const { cancel, cancelled } = makeCancelKit();
+  cancelled.catch(() => {});
+
+  const filePowers = makeFilePowers({ fs, path });
+  const cryptoPowers = makeCryptoPowers(crypto);
+  const registryPowers = {
+    fetch: globalThis.fetch,
+    gunzip,
+    createHash: crypto.createHash,
+  };
+
+  const basePowers = await makeDaemonicPowers({
+    config,
+    cancelled,
+    fs,
+    popen,
+    url,
+    filePowers,
+    cryptoPowers,
+    registryPowers,
+  });
+  // `basePowers` is hardened; build a fresh record rather than mutating it
+  // so only `hostTools` (the OS-privileged git/shell/sandbox seam) is
+  // overridden.
+  const powers = { ...basePowers, hostTools };
+
+  await powers.persistence.initializePersistence();
+
+  const { endoBootstrap, cancelGracePeriod } = await makeDaemon(
+    powers,
+    `test daemon: ${t.title}`,
+    cancel,
+    cancelled,
+    {},
+    { gcEnabled: true },
+  );
+  t.teardown(() => {
+    cancelGracePeriod(new Error('test cleanup'));
+    cancel(new Error('test cleanup'));
+  });
+
+  const host = E(endoBootstrap).host();
+  return { host, config };
+};
+
+/**
+ * A `hostTools.makeMountProjector` stand-in whose 9P projection never
+ * confirms detachment. This is the "failing to unmount" condition
+ * `mount-projection.js`'s `release()` reports as `detached: false`: the
+ * real projector logs it to stderr and resolves `false` rather than
+ * throwing, so `sandbox-slice.js`'s `releaseProjections()` treats it as a
+ * cleanup failure and pushes a "did not confirm detachment" error. That
+ * deterministically fails the sandbox's `onCancel` hook, landing the
+ * sandbox in `manager.js`'s `sandboxIdsWithFailedCancellation` — the same
+ * scenario `sandbox.test.js`'s "a failed 9P detach preserves state for a
+ * later retry" test exercises at the slice level, here driven through a
+ * real daemon's GC sweep.
+ */
+const makeUndetachableMountProjector = () =>
+  harden({
+    projectMount: async (cap, options) =>
+      harden({
+        kind: '9p',
+        hostPath: options.mountPoint,
+        mountCap: cap,
+        release: async () => false,
+      }),
+  });
+
+/**
+ * A `hostTools.makeSandboxFactory` stand-in that mints a slice without
+ * spawning bwrap/podman, mirroring `makeFakeBackend` in
+ * `sandbox.test.js`. The daemon's real mount projection (and therefore
+ * the cancellation-failure injection above) still runs; only the
+ * container runtime is faked, so this test does not need — and does not
+ * skip for lack of — a real sandbox backend.
+ */
+const makeNoopSandboxFactory = () => async (_powers, _context, options) =>
+  Far('FakeSandboxFactory', {
+    make: async () =>
+      Far('FakeSandboxHandle', {
+        // The escalation ledger records the driver a mint resolved to,
+        // so a handle that cannot name one does not become a slice.
+        backend: () => 'bwrap',
+        dispose: async () => {
+          await options?.onHandleDisposed?.();
+        },
+      }),
+  });
+
+test.serial(
+  'GC preserves a scratch-mount whose sandbox failed to cancel in the same batch',
+  async t => {
+    const { host, config } = await makeInProcessDaemon(t, {
+      hostTools: {
+        makeMountProjector: makeUndetachableMountProjector,
+        makeSandboxFactory: makeNoopSandboxFactory(),
+      },
+    });
+
+    await E(host).provideScratchMount('gc-scratch');
+    const scratch = await E(host).lookup(['gc-scratch']);
+    const scratchId = await E(host).identify('gc-scratch');
+    const { number: scratchFormulaNumber } = parseId(scratchId);
+    const scratchDirPath = mountPathOf(config.statePath, scratchFormulaNumber);
+    t.true(fs.existsSync(scratchDirPath), 'scratch backing dir created');
+
+    // The sandbox's profile.mounts records the scratch-mount's formula id,
+    // giving reclaimCollectedStorage the dependency edge it must walk
+    // (manager.js's scratchMountIdsToPreserve) to protect a live
+    // dependency of a sandbox whose cancellation failed.
+    await E(host).provideSandbox('gc-sandbox', {
+      rootfs: { kind: 'minimal' },
+      mounts: [{ cap: scratch, innerPath: '/data', mode: 'rw' }],
+      escalation: { reason: 'OS_EFFECT', capability: 'gc-test' },
+    });
+    const sandboxId = await E(host).identify('gc-sandbox');
+    const { number: sandboxFormulaNumber } = parseId(sandboxId);
+    const sandboxDirPath = sandboxPathOf(
+      config.statePath,
+      sandboxFormulaNumber,
+    );
+    t.true(fs.existsSync(sandboxDirPath), 'sandbox state dir created');
+
+    // Drop the scratch mount's own pet name first: it is still kept alive
+    // by the sandbox's profile.mounts dependency edge (manager.js's
+    // extractLabeledDeps for 'sandbox'), so this alone must not collect
+    // it yet.
+    await E(host).remove('gc-scratch');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    t.true(
+      fs.existsSync(scratchDirPath),
+      'scratch backing dir survives while the sandbox still depends on it',
+    );
+
+    // Removing the sandbox's own name makes the sandbox — and, once its
+    // dependency edge drops, the now-unreferenced scratch-mount —
+    // collectible in the same GC batch. The fake mount projector's
+    // release() never confirms detachment, so the sandbox's cancellation
+    // hook rejects and both directories must be preserved for operator
+    // recovery.
+    await E(host).remove('gc-sandbox');
+
+    // Give the async collection-cleanup phase (cancellation, then
+    // reclaimCollectedStorage) a moment to run its course.
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    t.true(
+      fs.existsSync(sandboxDirPath),
+      'sandbox state preserved for operator recovery after a failed cancellation',
+    );
+    t.true(
+      fs.existsSync(scratchDirPath),
+      'scratch-mount backing dir preserved: still reachable from the ' +
+        'preserved sandbox even though both formulas were collected in ' +
+        'the same GC batch',
+    );
+  },
+);
 
 test('content-store blob is reclaimed when its only formula is collected', async t => {
   const { cancelled, config } = await prepareConfig(t);
@@ -227,6 +438,45 @@ test('scratch-mount backing directory is reclaimed when its formula is collected
     'scratch backing dir pruned after formula collection',
   );
 });
+
+test.serial(
+  'sandbox state is reclaimed when its formula is collected',
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    const { host } = await makeHost(config, cancelled);
+
+    try {
+      await E(host).provideSandbox('throwaway-sandbox', {
+        rootfs: { kind: 'minimal' },
+        // A minimal rootfs is the bwrap driver's surface.  Podman only
+        // accepts OCI rootfs specs, and auto selection may choose Podman on a
+        // host where bwrap is unavailable.
+        backend: 'bwrap',
+        escalation: { reason: 'OS_EFFECT', capability: 'gc-test' },
+      });
+    } catch (error) {
+      const message = String(error);
+      if (errorIncludes(error, 'no backend available')) {
+        t.pass(`SKIP: sandbox backend unavailable: ${message}`);
+        return;
+      }
+      throw error;
+    }
+
+    const sandboxId = await E(host).identify('throwaway-sandbox');
+    const { number: formulaNumber } = parseId(sandboxId);
+    const dirPath = sandboxPathOf(config.statePath, formulaNumber);
+    t.true(fs.existsSync(dirPath), 'sandbox state dir created');
+
+    await E(host).remove('throwaway-sandbox');
+
+    await waitForCondition(async () => !fs.existsSync(dirPath), {
+      message: `${dirPath} to be removed after sandbox collection`,
+      timeoutMs: 10_000,
+    });
+    t.false(fs.existsSync(dirPath), 'sandbox state pruned after collection');
+  },
+);
 
 test('content-store blob from a readable-tree formula is reclaimed when the tree is collected', async t => {
   const { cancelled, config } = await prepareConfig(t);

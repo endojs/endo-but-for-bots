@@ -259,6 +259,43 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       properties.readOnly = { kind: 'literal', value: formula.readOnly };
       break;
     }
+    case 'sandbox': {
+      // Escalation as literals, mounts as references, so an inspector sees
+      // why a slice exists without reading the daemon's log.
+      properties.escalationReason = {
+        kind: 'literal',
+        value: formula.profile.escalation.reason,
+      };
+      properties.escalationCapability = {
+        kind: 'literal',
+        value: formula.profile.escalation.capability,
+      };
+      properties.backend = { kind: 'literal', value: formula.profile.backend };
+      properties.network = { kind: 'literal', value: formula.profile.network };
+      if (formula.profile.rootfs.kind === 'mount') {
+        properties.rootfs = {
+          kind: 'reference',
+          identifier: formula.profile.rootfs.mountId,
+        };
+      } else {
+        properties.rootfs = {
+          kind: 'literal',
+          value:
+            formula.profile.rootfs.kind === 'oci'
+              ? formula.profile.rootfs
+              : formula.profile.rootfs.kind,
+        };
+      }
+      /** @type {Record<string, FormulaIdentifier>} */
+      const sandboxMounts = {};
+      for (const [index, mount] of formula.profile.mounts.entries()) {
+        // Indexing keeps repeated inner paths visible instead of silently
+        // overwriting an earlier reference in the inspector record.
+        sandboxMounts[`${index}:${mount.innerPath}`] = mount.mountId;
+      }
+      properties.mounts = { kind: 'reference-list', entries: sandboxMounts };
+      break;
+    }
     case 'http-client': {
       // Surface the formula-owned policy bounds (allowlist and limits) as
       // literals for inspector auditability. The `fetch`/`now` seams are

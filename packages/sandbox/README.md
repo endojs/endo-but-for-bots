@@ -159,13 +159,27 @@ An otherwise reachable driver is unavailable unless its probe proves
 process-group or container-wide termination and crash cleanup.
 The factory never substitutes an unconfined host process.
 
+Not every backend can materialise every rootfs: bwrap serves
+`host-bind` / `minimal` / `mount` and refuses `oci`, while podman serves
+only `oci`.
+The drivers reject the pairs they cannot serve, but not before
+`prepareSlice()`.
+[`src/interfaces.js`](./src/interfaces.js) therefore publishes the same
+constraint as `backendRootfsKinds`, so a policy layer can refuse a
+profile that no driver could ever construct — podman with a
+`host-bind` rootfs, say — up front, and name the field at fault.
+A backend absent from that table (`'auto'`, or one of the unimplemented
+names) carries no constraint; availability remains `make()`'s verdict.
+
 ## Capability surface
 
 The capability surface:
 
 - `SandboxFactory` — root cap; `help`, `listBackends`, `make`.
-- `SandboxHandle` — one slice; `spawn`, `mount`, `scratch`, `open`,
-  `fork`, `reset`, `dispose`.
+- `SandboxHandle` — one slice; `backend`, `spawn`, `mount`, `scratch`,
+  `open`, `fork`, `reset`, `dispose`.
+  `backend()` names the driver that resolved for this slice, so a caller
+  that passed `backend: 'auto'` can still tell which confinement it got.
 - `ProcessHandle` — one process inside a slice; `pid`, `stdin`,
   `stdout`, `stderr`, `wait`, `kill`.
 - `MountHandle` — one bind into a slice; `innerPath`, `cap`, `mode`,
@@ -221,6 +235,45 @@ Backend-agnostic factory tests
 `provideHostPath` that maps stub Mount exos to real tmpdirs; those
 stubs are unit-test fixtures that exercise the factory without
 standing up a full daemon.
+
+## The daemon `sandbox` formula
+
+Besides the `make-unconfined` entry point, the daemon consumes this
+package directly as a first-class capability.
+`EndoHost.provideSandbox(petName, profile)` mints a durable slice
+handle: the profile — rootfs, mount grants, network posture, backend,
+limits — is persisted as a `sandbox` formula, and the mount grants are
+recorded as formula identifiers, so the slice reconstitutes against the
+same mounts across a daemon restart.
+
+Reconstruction re-mints the slice.
+No process, stream, or kernel mount survives a daemon restart, and no
+interrupted work is replayed: a caller that needs a job to survive a
+restart records the job in a mount and re-issues it.
+
+The backend reaches the daemon core through the `DaemonicPowers`
+host-tool seam beside `makeNodeHostToolPowers`
+(`packages/daemon/src/host-tool-powers-node.js`), so the XS daemon
+bundle stays free of `node:` builtins; a supervisor that supplies no
+host tools refuses to mint a slice with a diagnosis.
+
+Every grant is projected to a host path through
+[`@endo/9p-server/mount-projection.js`](../9p-server/mount-projection.js):
+the daemon's sandbox formula intentionally omits the privileged host-path
+resolver, so every granted mount is served over 9P and attached to a per-slice
+mountpoint. The lower-level projector can support a direct physical projection
+when an explicitly trusted caller supplies a resolver, but that path is not a
+general substitute for the confinement checks provided by 9P.
+The factory's privileged `provideHostPath` surface is narrowed to
+exactly the mounts the profile named plus the slice's own scratch, so a
+`sandbox` formula cannot recover the host path of any other
+daemon-minted mount.
+
+Each mint records an escalation — `OS_EFFECT`, `RESOURCE_LIMIT`, or
+`NATIVE_IMPLEMENTATION` — plus the capability that asked, both on
+stderr and in `EndoHost.diagnostics().listSandboxEscalations()`.
+A slice is the one daemon capability that leaves the object-capability
+graph, so the reason it was needed is part of the record.
 
 ## Network profiles
 

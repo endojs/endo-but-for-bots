@@ -56,6 +56,7 @@ ProcessHandle is killed and every MountHandle is unmounted before the
 driver tears down the underlying namespace.
 
 Methods:
+  backend()           Name the driver that is confining this slice.
   spawn(argv, opts)   Spawn a process in the slice.
   mount(cap, …)       Bind a Mount capability into the slice.
   scratch(innerPath)  Mint an ephemeral scratch mount.
@@ -301,7 +302,13 @@ const resolveHostPath = async (scratchProvider, cap, context) => {
  * @returns {SandboxFactory}
  */
 export const makeSandboxFactory = (
-  { drivers, scratchProvider, context },
+  {
+    drivers,
+    scratchProvider,
+    context,
+    onHandleDisposed,
+    resetScratch = async () => {},
+  },
   { makeDelay = delay } = {},
 ) => {
   const driverList = harden([...drivers]);
@@ -556,6 +563,8 @@ export const makeSandboxFactory = (
     const containmentFailures = [];
     /** @type {Set<MountHandle>} */
     const liveMounts = new Set();
+    /** @type {Set<MountHandle>} */
+    const scratchMounts = new Set();
     /** @type {Promise<void> | undefined} */
     let disposePromise;
     /** @type {SandboxHandle | undefined} */
@@ -953,9 +962,10 @@ export const makeSandboxFactory = (
      * @param {MountCap} cap
      * @param {string} innerPath
      * @param {MountMode} [mode]
+     * @param {boolean} [scratch]
      * @returns {MountHandle}
      */
-    const makeMountHandle = (cap, innerPath, mode = 'ro') => {
+    const makeMountHandle = (cap, innerPath, mode = 'ro', scratch = false) => {
       let unmounted = false;
       /** @type {MountHandle} */
       const m = /** @type {any} */ (
@@ -967,11 +977,13 @@ export const makeSandboxFactory = (
           unmount: async () => {
             unmounted = true;
             liveMounts.delete(m);
+            scratchMounts.delete(m);
           },
         })
       );
       void unmounted;
       liveMounts.add(m);
+      if (scratch) scratchMounts.add(m);
       return m;
     };
 
@@ -1000,7 +1012,7 @@ export const makeSandboxFactory = (
           `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
         )
       );
-      return makeMountHandle(scratchCap, innerPath, 'rw');
+      return makeMountHandle(scratchCap, innerPath, 'rw', true);
     };
 
     /**
@@ -1017,10 +1029,20 @@ export const makeSandboxFactory = (
     };
 
     const resetSlice = async () => {
+      // Reset is admission-controlled like spawn, mount, and scratch: a
+      // disposed handle has no processes to stop and no scratch to clear, so
+      // reporting success would tell the caller its slice was reset when
+      // nothing was.
+      assertRunning();
       const reason = makeError(X`sandbox handle reset`);
-      await Promise.all(
-        [...liveProcesses].map(lease => lease.killAndReap(reason)),
-      );
+      await Promise.all([
+        ...[...liveProcesses].map(lease => lease.killAndReap(reason)),
+        ...[...scratchMounts].map(m => E(m).unmount()),
+      ]);
+      // The daemon owns the scratch directory and its capability-token
+      // bookkeeping. Clear it only after every process has stopped, while
+      // preserving any directory inode still used as a bind source.
+      await resetScratch();
     };
 
     /**
@@ -1068,6 +1090,13 @@ export const makeSandboxFactory = (
           } finally {
             if (handle !== undefined) liveHandles.delete(handle);
           }
+          if (onHandleDisposed !== undefined) {
+            try {
+              await onHandleDisposed();
+            } catch (e) {
+              containmentFailures.push(/** @type {Error} */ (e));
+            }
+          }
           if (containmentFailures.length > 0) {
             throw makeError(
               X`sandbox dispose could not prove containment: ${q(containmentFailures.map(e => e.message).join('; '))}`,
@@ -1085,6 +1114,10 @@ export const makeSandboxFactory = (
       /** @type {unknown} */ (
         makeExo('SandboxHandle', SandboxHandleInterface, {
           help: () => `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
+          // Resolved at `pickDriver` above and fixed for the slice's
+          // lifetime: a handle never migrates between backends, so this
+          // stays true even when the selector was `'auto'`.
+          backend: () => driver.name,
           spawn: spawnProc,
           mount: mountInSlice,
           scratch: scratchInSlice,

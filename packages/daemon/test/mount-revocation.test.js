@@ -14,6 +14,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import {
+  getMountBacking,
   makeMount,
   makeRevocableMount,
   defaultDeniedSegments,
@@ -215,6 +216,23 @@ test('override: an empty set disables denial entirely', async t => {
   t.true(names.includes('.env'));
 });
 
+test('getMountBacking does not expose the mount deny set', async t => {
+  const rootPath = makeDenyFixture(t);
+  const mount = makeMount({
+    rootPath,
+    readOnly: false,
+    filePowers,
+    deniedSegments: ['Secret', 'VAULT'],
+  });
+  const subView = await E(mount).lookup('src');
+  t.deepEqual(getMountBacking(subView), {
+    kind: 'physical',
+    physicalRoot: rootPath,
+    currentDir: path.join(rootPath, 'src'),
+    readOnly: false,
+  });
+});
+
 test('override: callers extend the default by spreading defaultDeniedSegments', async t => {
   const rootPath = makeDenyFixture(t);
   fs.mkdirSync(path.join(rootPath, 'extra'));
@@ -293,6 +311,9 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
   });
   await E(mount).writeText(['file.txt'], 'contents');
   const file = await E(mount).lookup('file.txt');
+  if (!('text' in file)) {
+    throw new TypeError('expected lookup to return a file');
+  }
   t.is(await E(file).text(), 'contents');
 
   E(control).revoke();

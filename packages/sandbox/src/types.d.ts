@@ -303,6 +303,12 @@ export type SandboxFactory = FarRef<{
 export type SandboxHandle = FarRef<{
   help(methodName?: string): string;
   /**
+   * The driver actually confining this slice, resolved at `make()` time
+   * and fixed for the handle's lifetime. Never the `'auto'` selector —
+   * a caller that did not name a backend learns the real one here.
+   */
+  backend(): BackendName;
+  /**
    * Spawn a process in the slice.
    * `spawn()` rejects for any timeout, disposal, or owner cancellation
    * initiated before it settles, including after driver admission resolves.
@@ -471,9 +477,9 @@ export type SandboxDriver = {
  * capability into a host filesystem path so the driver can issue a
  * bind-mount.
  *
- * Cap-to-path resolution is the *only* privileged operation the factory
- * performs; drivers never see Endo capabilities directly. The daemon's
- * `EndoHost` exposes both `provideScratchMount` and `provideHostPath`,
+ * Scratch allocation and cap-to-path resolution are privileged operations;
+ * drivers never see Endo capabilities directly. The daemon's `EndoHost`
+ * exposes both `provideScratchMount` and `provideHostPath`,
  * so a caller invoking `endo run --UNCONFINED packages/sandbox/src/agent.js`
  * with `--powers @host` (the default for `make-unconfined`) gets the
  * full `SandboxPowers` surface for free — no per-caller stub is
@@ -517,4 +523,8 @@ export type MakeSandboxFactoryInput = {
   scratchProvider: SandboxPowers;
   /** Formula/daemon cancellation context that owns every minted handle. */
   context?: ERef<{ whenCancelled(): Promise<unknown> }>;
+  /** Notification after a handle tears down its backend resources. */
+  onHandleDisposed?: () => void | Promise<void>;
+  /** Clear this slice's scratch contents and invalidate scratch tokens. */
+  resetScratch?: () => void | Promise<void>;
 };

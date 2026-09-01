@@ -96,6 +96,9 @@
       "path": "../promise-kit/tsconfig.composite.json"
     },
     {
+      "path": "../sandbox/tsconfig.composite.json"
+    },
+    {
       "path": "../stream/tsconfig.composite.json"
     },
     {

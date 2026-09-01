@@ -141,7 +141,7 @@ test('normalizeHttpClientPolicy rejects an unsafe-integer limit the exo would re
         allowedOrigins: ['https://api.example.com'],
         maxResponseBytes: Number.MAX_SAFE_INTEGER + 1,
       }),
-    { message: /maxResponseBytes must be a positive safe integer/ },
+    { message: /maxResponseBytes" must be a positive safe integer/ },
   );
 });
 

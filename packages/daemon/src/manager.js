@@ -52,6 +52,15 @@ import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
+import {
+  makeSandboxFormulaPath,
+  makeSandboxIncarnationPath,
+  makeSandboxSlice,
+} from './sandbox-slice.js';
+import {
+  assertSandboxMountGrant,
+  makeSandboxEscalationLog,
+} from './sandbox.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -126,7 +135,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, SandboxFormulaProfile, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -489,12 +498,22 @@ const makeDaemonCore = async (
     hostTools,
   } = powers;
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;
-  // `git` and `shell` formulas spawn host processes.  The supervisor
-  // injects the implementations rather than the daemon core importing
-  // them, so the core stays free of `node:` builtins; a supervisor that
-  // cannot spawn gets stand-ins that refuse.
-  const { gitClone, makeNativeGitBackend, makeHostSpawner } =
-    provideHostToolPowers(hostTools);
+  // `git`, `shell`, and `sandbox` formulas spawn host processes.  The
+  // supervisor injects the implementations rather than the daemon core
+  // importing them, so the core stays free of `node:` builtins; a
+  // supervisor that cannot spawn gets stand-ins that refuse.
+  const {
+    gitClone,
+    makeNativeGitBackend,
+    makeHostSpawner,
+    makeSandboxFactory,
+    makeMountProjector,
+    getEnvironment,
+  } = provideHostToolPowers(hostTools);
+  const sandboxEnvironment = getEnvironment();
+  // Held by the core, not the formula, so a restart's re-mints land in the
+  // same ledger as the mint they replace.
+  const sandboxEscalations = makeSandboxEscalationLog();
   const contentStore = persistencePowers.makeContentStore();
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
@@ -690,6 +709,26 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Return every mount a sandbox profile depends on, in profile order.
+   * Keeping this walk in one place ensures graph edges, cancellation links,
+   * and failed-cleanup preservation all cover the same mount set.
+   *
+   * @param {SandboxFormulaProfile} profile
+   * @returns {Array<[string, FormulaIdentifier]>}
+   */
+  const sandboxMountDependencies = profile => {
+    /** @type {Array<[string, FormulaIdentifier]>} */
+    const dependencies = [];
+    if (profile.rootfs.kind === 'mount') {
+      dependencies.push(['rootfs', profile.rootfs.mountId]);
+    }
+    for (const [index, mount] of profile.mounts.entries()) {
+      dependencies.push([`mount${index}`, mount.mountId]);
+    }
+    return dependencies;
+  };
+
+  /**
    * Returns [label, id] pairs for each dependency of a formula,
    * providing meaningful edge labels (e.g. "worker", "handle") for the
    * graph snapshot.
@@ -834,6 +873,10 @@ const makeDaemonCore = async (
         return [['mount', formula.mountId]];
       case 'shell':
         return [['mount', formula.mountId]];
+      case 'sandbox':
+        // Every mount the slice binds — including a rootfs mount — keeps
+        // the slice alive and dies with it.
+        return sandboxMountDependencies(formula.profile);
       case 'http-client':
         // The HTTP client is rooted in a host-owned `fetch` seam, not a mount
         // or any other daemon-minted capability, so it has no formula deps.
@@ -971,23 +1014,64 @@ const makeDaemonCore = async (
         }),
       );
 
-      // Reclaim daemon-local storage owned by collected formulas.
-      // Content-store blobs use sweep-time reference counting because
-      // multiple readable-blob and readable-tree formulas can dedupe
-      // on the same sha256.  Scratch-mount directories have a 1:1
-      // relationship with their formula and need no reference count.
+      // Only storage a collected sandbox can still reach has to wait for
+      // that sandbox's cancellation hooks; the rest of the batch reclaims
+      // now, as every collected formula did before sandboxes existed, so one
+      // slow slice does not hold unrelated disk space.
+      /** @type {Set<FormulaIdentifier>} */
+      const collectedSandboxIds = new Set();
+      for (const [id, formula] of collectedFormulas) {
+        if (formula.type === 'sandbox') {
+          collectedSandboxIds.add(id);
+        }
+      }
       // eslint-disable-next-line no-use-before-define
-      await reclaimCollectedStorage(collectedFormulas);
+      const sandboxReachableIds = sandboxReachableStorageIds(
+        collectedFormulas,
+        collectedSandboxIds,
+      );
+      // eslint-disable-next-line no-use-before-define
+      await reclaimCollectedStorage(collectedFormulas, sandboxReachableIds);
 
       // Cancel controllers and disconnect workers.
       const cancelReason = new Error(
         'became unreachable by any pet name path and was collected',
       );
-      await Promise.allSettled(
+      const cancellationResults = await Promise.allSettled(
         controllersToCancel.map(async ({ controller }) => {
           await null;
           await controller.context.cancel(cancelReason, '!');
         }),
+      );
+
+      // A rejected sandbox cancellation means its backend or a projection
+      // could still reach the incarnation tree. Never recursively traverse
+      // that formula directory during GC; preserve it for operator recovery.
+      /** @type {Set<FormulaIdentifier>} */
+      const sandboxIdsWithFailedCancellation = new Set();
+      for (let index = 0; index < cancellationResults.length; index += 1) {
+        const result = cancellationResults[index];
+        if (result.status === 'rejected') {
+          const { id } = controllersToCancel[index];
+          console.error(`Cancellation cleanup failed for ${id}`, result.reason);
+          if (collectedFormulas.get(id)?.type === 'sandbox') {
+            sandboxIdsWithFailedCancellation.add(id);
+          }
+        }
+      }
+
+      // Now that cancellation hooks have disposed the slices and released
+      // their 9P projections, reclaim the storage held back above — minus
+      // whatever a sandbox that failed to cancel can still reach.
+      // eslint-disable-next-line no-use-before-define
+      const preservedIds = sandboxReachableStorageIds(
+        collectedFormulas,
+        sandboxIdsWithFailedCancellation,
+      );
+      // eslint-disable-next-line no-use-before-define
+      await reclaimCollectedDirectories(
+        collectedFormulas,
+        [...sandboxReachableIds].filter(id => !preservedIds.has(id)),
       );
 
       // eslint-disable-next-line no-use-before-define
@@ -1074,6 +1158,94 @@ const makeDaemonCore = async (
   };
 
   /**
+   * Return the collected formulas whose on-disk storage a collected sandbox
+   * can still reach: the sandboxes themselves and every `scratch-mount`
+   * backing under them, following a collected sub-mount up to the
+   * scratch-mount it is rooted in, because one GC batch can collect both
+   * formula types.
+   *
+   * These are the only formulas whose reclamation has to wait for
+   * cancellation; every other collected formula owns storage no live slice
+   * can name.
+   *
+   * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Iterable<FormulaIdentifier>} sandboxIds
+   * @returns {Set<FormulaIdentifier>}
+   */
+  const sandboxReachableStorageIds = (collectedFormulasByid, sandboxIds) => {
+    /** @type {Set<FormulaIdentifier>} */
+    const reachable = new Set();
+    for (const sandboxId of sandboxIds) {
+      const sandboxFormula = collectedFormulasByid.get(sandboxId);
+      if (sandboxFormula?.type === 'sandbox') {
+        reachable.add(sandboxId);
+        /** @type {Set<FormulaIdentifier>} */
+        const visited = new Set();
+        const pendingMountIds = sandboxMountDependencies(
+          sandboxFormula.profile,
+        ).map(([, mountId]) => mountId);
+        while (pendingMountIds.length > 0) {
+          const mountId = pendingMountIds.pop();
+          if (mountId !== undefined && !visited.has(mountId)) {
+            visited.add(mountId);
+            const mountFormula = collectedFormulasByid.get(mountId);
+            if (mountFormula?.type === 'scratch-mount') {
+              reachable.add(mountId);
+            } else if (
+              mountFormula?.type === 'mount' &&
+              mountFormula.parent !== undefined
+            ) {
+              pendingMountIds.push(mountFormula.parent);
+            }
+          }
+        }
+      }
+    }
+    return reachable;
+  };
+
+  /**
+   * Unlink the backing directory of each collected `scratch-mount`
+   * (`{statePath}/mounts/{formulaNumber}`) and `sandbox`
+   * (`{statePath}/sandboxes/{formulaNumber}`) named by `ids`. Both are 1:1
+   * with their formula, so no reference count is needed.
+   *
+   * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Iterable<FormulaIdentifier>} ids
+   * @returns {Promise<void>}
+   */
+  const reclaimCollectedDirectories = async (collectedFormulasByid, ids) => {
+    /** @type {Array<Promise<unknown>>} */
+    const removals = [];
+    for (const id of ids) {
+      const formula = collectedFormulasByid.get(id);
+      const formulaNumber = parseId(id).number;
+      if (formula?.type === 'scratch-mount') {
+        removals.push(
+          filePowers.removeDirectory(
+            filePowers.joinPath(
+              persistencePowers.statePath,
+              'mounts',
+              /** @type {string} */ (formulaNumber),
+            ),
+          ),
+        );
+      } else if (formula?.type === 'sandbox') {
+        removals.push(
+          filePowers.removeDirectory(
+            makeSandboxFormulaPath({
+              statePath: persistencePowers.statePath,
+              formulaNumber,
+              joinPath: filePowers.joinPath,
+            }),
+          ),
+        );
+      }
+    }
+    await Promise.allSettled(removals);
+  };
+
+  /**
    * Reclaim daemon-local on-disk storage owned by a batch of just-
    * collected formulas: orphaned content-store blobs and scratch-mount
    * backing directories.
@@ -1087,13 +1259,19 @@ const makeDaemonCore = async (
    * formula added concurrently is honored as a survivor and its
    * hashes are protected).
    *
-   * Scratch-mount cleanup unlinks `{statePath}/mounts/{formulaNumber}`
-   * for every collected `scratch-mount` formula.
+   * Directory cleanup covers every collected formula except the ones in
+   * `deferredIds`, whose storage a collected sandbox can still reach and
+   * which `reclaimSandboxReachableStorage` picks up once cancellation has
+   * released the slices.
    *
    * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {Set<FormulaIdentifier>} [deferredIds]
    * @returns {Promise<void>}
    */
-  const reclaimCollectedStorage = async collectedFormulasByid => {
+  const reclaimCollectedStorage = async (
+    collectedFormulasByid,
+    deferredIds = new Set(),
+  ) => {
     /** @type {Set<string>} */
     const candidateHashes = new Set();
     for (const formula of collectedFormulasByid.values()) {
@@ -1122,23 +1300,9 @@ const makeDaemonCore = async (
       );
     }
 
-    // Scratch-mount backing dirs are 1:1 with their formula; no
-    // reference count needed.
-    const scratchMountNumbers = [];
-    for (const [id, formula] of collectedFormulasByid) {
-      if (formula.type === 'scratch-mount') {
-        scratchMountNumbers.push(parseId(id).number);
-      }
-    }
-    await Promise.allSettled(
-      scratchMountNumbers.map(formulaNumber => {
-        const mountPath = filePowers.joinPath(
-          persistencePowers.statePath,
-          'mounts',
-          /** @type {string} */ (formulaNumber),
-        );
-        return filePowers.removeDirectory(mountPath);
-      }),
+    await reclaimCollectedDirectories(
+      collectedFormulasByid,
+      [...collectedFormulasByid.keys()].filter(id => !deferredIds.has(id)),
     );
   };
 
@@ -3333,6 +3497,86 @@ const makeDaemonCore = async (
         readOnly: false,
       });
     },
+    sandbox: async ({ profile }, context, id, formulaNumber) => {
+      // Register cleanup before the first allocation await. Cancellation can
+      // arrive while a slice is minting; its disposal barrier must wait for
+      // that mint attempt (including its failure cleanup) and release any
+      // successfully minted resources before GC removes the incarnation.
+      const { promise: mintSettled, resolve: resolveMintSettled } =
+        /** @type {PromiseKit<void>} */ (makePromiseKit());
+      /** @type {(() => Promise<void>) | undefined} */
+      let releaseSlice;
+      const cleanupRegistration = context.onCancel(async () => {
+        await mintSettled;
+        await releaseSlice?.();
+      });
+
+      await null;
+      try {
+        // The slice dies with any mount it binds: otherwise a container keeps
+        // writing into a directory the daemon no longer vouches for.
+        for (const [, mountId] of sandboxMountDependencies(profile)) {
+          context.thisDiesIfThatDies(mountId);
+        }
+
+        // Each evaluation owns a distinct state directory, keeping its scratch
+        // space, projection mount points, and recursive cleanup isolated from
+        // every other incarnation of this formula.
+        const statePath = await makeSandboxIncarnationPath({
+          statePath: persistencePowers.statePath,
+          formulaNumber,
+          randomHex256,
+          joinPath: filePowers.joinPath,
+        });
+
+        const projector = makeMountProjector({
+          env: sandboxEnvironment,
+          cancelled: context.cancelled,
+          // A kernel bind cannot constrain symlink traversal to the mount's
+          // confinement root. Leave the resolver absent so every mount uses
+          // the 9P chain, whose filesystem operations retain those checks.
+        });
+
+        const { slice, release } = await makeSandboxSlice({
+          profile,
+          sandboxId: id,
+          statePath,
+          provideMount: mountId => provide(mountId),
+          projector,
+          makeSandboxFactory,
+          makePath: filePowers.makePath,
+          removeDirectory: filePowers.removeDirectory,
+          clearDirectory: async directory => {
+            const entries = await filePowers.readDirectory(directory);
+            await Promise.all(
+              entries.map(entry =>
+                filePowers.removeDirectory(
+                  filePowers.joinPath(directory, entry),
+                ),
+              ),
+            );
+          },
+          joinPath: filePowers.joinPath,
+          escalations: sandboxEscalations,
+          // Validate the requested attenuation and the realized projection each
+          // time the formula evaluates.
+          assertMountGrant: assertSandboxMountGrant,
+          farContext: makeFarContext(context),
+          env: sandboxEnvironment,
+        });
+
+        // Terminal: no resume. Cancel kills the processes and releases the
+        // projections; the next `provide()` mints a new slice.
+        releaseSlice = release;
+        return slice;
+      } finally {
+        resolveMintSettled(undefined);
+        // This is already fulfilled for the normal pre-cancellation
+        // registration path. If cancellation preceded evaluation, it is the
+        // late hook itself and must finish before evaluation can escape.
+        await cleanupRegistration;
+      }
+    },
     'http-client': ({ policy }) => {
       // The Network (HTTP) tier is the deliberate exception to "everything
       // derives from the mount": there is no filesystem to root it in, so its
@@ -4751,6 +4995,32 @@ const makeDaemonCore = async (
         });
 
         return formulate(formulaNumber, formula);
+      })
+    );
+  };
+
+  /** @type {DaemonCore['formulateSandbox']} */
+  const formulateSandbox = async (profile, deferredTasks) => {
+    return /** @type {FormulateResult<import('@endo/sandbox/types.js').SandboxHandle>} */ (
+      withFormulaGraphLock(async () => {
+        await null;
+        const formulaNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+
+        /** @type {import('./types.js').SandboxFormula} */
+        const formula = harden({
+          type: 'sandbox',
+          profile,
+        });
+
+        // Publish the durable pet name only after the formula is on disk and
+        // registered in the graph.
+        const result = await formulate(formulaNumber, formula);
+
+        await deferredTasks.execute({ sandboxId: result.id });
+
+        return result;
       })
     );
   };
@@ -7208,6 +7478,8 @@ const makeDaemonCore = async (
     formulateSubMount,
     formulateGit,
     formulateShell,
+    formulateSandbox,
+    listSandboxEscalations: sandboxEscalations.list,
     formulateHttpClient,
     getHttpClientControlForClient,
     formulateGitCredential,

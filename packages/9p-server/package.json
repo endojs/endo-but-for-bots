@@ -17,6 +17,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.js",
+    "./mount-caplet.js": "./mount-caplet.js",
+    "./mount-projection.js": "./mount-projection.js",
     "./src/fs-bridge.js": "./src/fs-bridge.js",
     "./src/server.js": "./src/server.js",
     "./src/wire.js": "./src/wire.js",

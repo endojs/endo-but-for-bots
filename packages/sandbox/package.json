@@ -22,6 +22,7 @@
     "./types.js": "./src/types.d.ts",
     "./factory.js": "./src/factory.js",
     "./interfaces.js": "./src/interfaces.js",
+    "./probe-bwrap-userns.js": "./src/probe-bwrap-userns.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -36,7 +37,6 @@
   },
   "dependencies": {
     "@endo/cancel": "workspace:^",
-    "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
