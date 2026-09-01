@@ -33,7 +33,7 @@
       "default": "./src/workspace.js"
     },
     "./sturdyref-escrow.js": {
-      "types": "./src/sturdyref-escrow.d.ts",
+      "types": "./src/sturdyref-escrow.types.d.ts",
       "default": "./src/sturdyref-escrow.js"
     },
     "./json-tools/git.js": {
