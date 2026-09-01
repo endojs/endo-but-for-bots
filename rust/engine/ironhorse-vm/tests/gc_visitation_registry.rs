@@ -264,6 +264,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("string_proto", &[Req::GcRoots], "boot anchor"),
     ("number_proto", &[Req::GcRoots], "boot anchor"),
     ("symbol_proto", &[Req::GcRoots], "boot anchor"),
+    ("bigint_proto", &[Req::GcRoots], "boot anchor"),
     ("promise_proto", &[Req::GcRoots], "boot anchor"),
     ("generator_proto", &[Req::GcRoots], "boot anchor"),
     ("async_function_proto", &[Req::GcRoots], "boot anchor"),

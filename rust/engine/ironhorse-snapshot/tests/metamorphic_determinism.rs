@@ -160,7 +160,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // intrinsic Array iterator is now the same function object as
         // Array.prototype.values, as required by JavaScript. Format
         // unchanged.
-        "90853a6a148b3feff5244fd36c080c154dd4b3b9a519261cf07eacedf1fd0dd2",
+        // Re-pinned 2026-09-01 for another boot-heap CONTENT move:
+        // `%BigInt%`, its prototype, and its two prototype methods are
+        // now real realm intrinsics. Format unchanged.
+        "a24f27a97f5449818dbeeb30afa4268c163cbecf154ed1af958c34f011246b7c",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -256,7 +259,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob on 2026-09-01: Array's intrinsic
         // iterator/values identity changes the boot page rows, so the
         // manifest root and seal move with that content.
-        "19a732df09c194f4671a67ba7ca360d2783f967f86f1f46a139ed91dbee220e9",
+        // Re-pinned with the blob for the `%BigInt%` boot-heap content
+        // addition. Schema and format remain unchanged.
+        "eb876e6b28888000fddd7707c2f08ee1558de47356ef53310be4f0dac89c2302",
         "epoch-3 seal chain"
     );
 }
