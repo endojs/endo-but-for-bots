@@ -24,6 +24,7 @@ import {
   gunzip,
 } from './manager-node-powers.js';
 import { startWsGateway } from './ws-gateway.js';
+import { runExtraSetups } from './extra-setups.js';
 
 const fsp = { access: fs.promises.access };
 /** @import { Config } from './types.js' */
@@ -225,15 +226,27 @@ const main = async () => {
       .split(',')
       .map(s => s.trim())
       .filter(Boolean);
-    for (const specifier of extraSpecifiers) {
-      try {
-        console.log(`Endo extra: running ${specifier}`);
-        const namespace = await import(specifier);
-        await namespace.main(host);
-        console.log(`Endo extra: ${specifier} done`);
-      } catch (error) {
-        console.error(`Endo extra: ${specifier} failed:`, error);
-      }
+    const extraOutcomes = await runExtraSetups({
+      specifiers: extraSpecifiers,
+      host,
+      importModule: specifier => import(specifier),
+      now: () => new Date().toISOString(),
+      log: (message, error) =>
+        error === undefined
+          ? console.log(message)
+          : console.error(message, error),
+    });
+    // Best-effort: a record we cannot write must not fail a daemon that
+    // otherwise came up. It lands beside `gateway` and `root` in the state
+    // directory, which is already 0700.
+    try {
+      const extrasPath = filePowers.joinPath(statePath, 'extras.json');
+      await filePowers.writeFileText(
+        extrasPath,
+        `${JSON.stringify(extraOutcomes, null, 2)}\n`,
+      );
+    } catch (error) {
+      console.error('Could not record ENDO_EXTRA outcomes:', error);
     }
   } catch (error) {
     reportErrorToParent(/** @type {Error} */ (error).message);
