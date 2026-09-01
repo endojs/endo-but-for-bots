@@ -258,7 +258,7 @@ const assertValidSegment = segment => {
     segment.includes('\0')
   ) {
     throw new Error(
-      `Path segment must not contain '/', '\\', or '\\0': ${q(segment)}`,
+      `Path segment must not contain '/', '\\', or '\\0' (a string is one segment; pass ["dir", "file.txt"] or entry("dir/file.txt") for nested paths): ${q(segment)}`,
     );
   }
 };
