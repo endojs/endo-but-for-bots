@@ -62,6 +62,45 @@ const resolveCodePath = () => {
  * @param {import('@endo/eventual-send').ERef<any>} agent
  * @param {string[]} factoryProfilePath - pet-name path of the factory profile
  */
+/**
+ * Grant the Forgejo push credential to the factory host, so a machine-admin
+ * session pushes with a credential that is alive.
+ *
+ * packages/space-nixos-admin/setup-forgejo-credential.js provisions and rotates
+ * `forgejo-credential` in the ROOT inventory on every start, because credential
+ * material is daemon-process-local and does not survive a restart. Without this
+ * grant the machine-admin host never sees it: it holds its own credential, which
+ * nothing re-provisions, so every restart leaves that one revoked and the next
+ * push fails with "has been revoked" (forge issues #21, #29).
+ *
+ * A locator rather than a copy is what makes it hold across restarts. A
+ * GitRemote holds the credential CAP, so remotes wired to the granted one keep
+ * working: the seeder rotates that same capability back to life rather than
+ * minting a replacement the remotes cannot see.
+ *
+ * Best-effort and idempotent, like the nixos-admin grant next door.
+ *
+ * @param {import('@endo/eventual-send').ERef<any>} agent
+ * @param {string[]} factoryProfilePath - pet-name path of the factory profile
+ */
+const grantForgejoCredential = async (agent, factoryProfilePath) => {
+  try {
+    if (!(await E(agent).has('forgejo-credential'))) {
+      return;
+    }
+    const locator = await E(agent).locate('forgejo-credential');
+    const factoryAgent = await E(agent).lookup(factoryProfilePath);
+    await E(factoryAgent).storeLocator('forgejo-credential', locator);
+    console.log('Granted forgejo-credential to the Floot factory.');
+  } catch (err) {
+    console.warn(
+      `Floot: could not grant forgejo-credential to the factory: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+};
+
 const grantNixosAdmin = async (agent, factoryProfilePath) => {
   try {
     if (!(await E(agent).has('controller-for-nixos-admin'))) {
@@ -247,6 +286,7 @@ export const main = async agent => {
     // Re-grant machine-admin every boot: keeps existing factories (created
     // before this feature, or before the controller existed) up to date.
     await grantNixosAdmin(agent, controllerProfilePath);
+  await grantForgejoCredential(agent, controllerProfilePath);
     // Re-grant (and chart-version-refresh) the deploy-workflow factories
     // every boot, for the same reason.
     await grantDeployFactories(agent, controllerProfilePath);
@@ -322,6 +362,7 @@ export const main = async agent => {
   // 5b. Grant the NixOS machine-admin caplet to the factory (if present) so the
   // "machine-admin" preset can hand it to sessions.
   await grantNixosAdmin(agent, controllerProfilePath);
+  await grantForgejoCredential(agent, controllerProfilePath);
   // 5c. Grant the deploy-workflow factories (if the workflow service and the
   // NixOS controller are present) so admin presets can hand them to sessions.
   await grantDeployFactories(agent, controllerProfilePath);
