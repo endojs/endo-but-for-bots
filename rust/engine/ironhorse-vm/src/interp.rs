@@ -5724,8 +5724,7 @@ impl Interp {
             self.proto_methods.push((array_ctor, "isArray", mf));
             let of = self.alloc_method(NativeMethod::ArrayOf);
             self.proto_methods.push((array_ctor, "of", of));
-            // Recognized-but-unimplemented statics (honest named skips).
-            let from = self.alloc_method(NativeMethod::ArrayFrom);
+            let from = self.alloc_named_method(NativeMethod::ArrayFrom, "from", 1);
             self.proto_methods.push((array_ctor, "from", from));
             let from_async =
                 self.alloc_named_method(NativeMethod::ArrayFromAsync, "fromAsync", 1);
@@ -22167,6 +22166,457 @@ impl Interp {
     }
 
     // ------------------------------------------------------------------
+    // `Array.from` (ECMA-262 23.1.2.1). This shares the general callable,
+    // iterator, MOP, and constructor seams used by `Array.fromAsync`, but runs
+    // synchronously and closes an acquired iterator on every abrupt mapping or
+    // element-definition completion.
+    // ------------------------------------------------------------------
+
+    fn array_from(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.array_from_inner(code, base, argc);
+        self.jumps = saved_jumps;
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            },
+            Err(halt) => Err(halt),
+        }
+    }
+
+    /// Normalize one operation executed behind Array.from's native try
+    /// boundary. A JS throw becomes its realm value; an implementation halt
+    /// remains a halt.
+    fn array_from_try<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> Result<T, Halt>,
+    ) -> Result<Result<T, Slot>, Halt> {
+        let stack_base = self.stack.len();
+        let call_depth = self.call_stack.len();
+        let jump_depth = self.jumps.len();
+        let result = operation(self);
+        self.from_async_try(result, stack_base, call_depth, jump_depth)
+    }
+
+    /// IteratorClose for an already-abrupt Array.from completion. The original
+    /// throw wins over a missing/non-callable/throwing `return`, while every
+    /// close side effect still runs.
+    fn array_from_close(
+        &mut self,
+        code: &[u8],
+        iterator: Slot,
+        original: Slot,
+    ) -> Result<Slot, Halt> {
+        let inst = match iterator.value {
+            Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+            _ => return Ok(original),
+        };
+        let return_id = self.intern_key("return");
+        let return_method = match self.array_from_try(|this| {
+            this.mop_get(code, inst, return_id, iterator)
+        })? {
+            Ok(method) => method,
+            Err(_) => return Ok(original),
+        };
+        if return_method.kind == Kind::Undefined
+            || return_method.kind == Kind::Null
+            || !self.is_callable_value(return_method)
+        {
+            return Ok(original);
+        }
+        let _ = self.array_from_try(|this| this.call_any(code, return_method, iterator, &[]))?;
+        Ok(original)
+    }
+
+    fn array_from_make_target(
+        &mut self,
+        code: &[u8],
+        constructor: Slot,
+        len: Option<u64>,
+    ) -> Result<Result<crate::value::SlotIndex, Slot>, Halt> {
+        if self.is_constructor_value(constructor) {
+            let args = len
+                .map(|length| vec![Slot::number(length as f64)])
+                .unwrap_or_default();
+            let value = match self.array_from_try(|this| {
+                this.construct_value(code, constructor, &args, constructor)
+            })? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+            return match value.value {
+                Payload::Reference(target) if value.kind == Kind::Reference => Ok(Ok(target)),
+                _ => Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+        }
+        let array = self.new_array();
+        if let Some(length) = len {
+            if length > u32::MAX as u64 {
+                return Ok(Err(self.build_error("RangeError", 0, 0)));
+            }
+            self.array_set_length(array, Slot::number(length as f64));
+        }
+        Ok(Ok(array))
+    }
+
+    fn array_from_define(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        index: u64,
+        value: Slot,
+    ) -> Result<Result<(), Slot>, Halt> {
+        if index > u32::MAX as u64 {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+        if self.arrays.contains_key(&target) {
+            self.array_set_dense(target, index as u32, value);
+            return Ok(Ok(()));
+        }
+        let id = self.intern_key(&index.to_string());
+        let descriptor = OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        };
+        match self.array_from_try(|this| {
+            this.mop_define_own_property(code, target, id, descriptor)
+        })? {
+            Ok(true) => Ok(Ok(())),
+            Ok(false) => Ok(Err(self.build_error("TypeError", 0, 0))),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
+    fn array_from_set_length(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        length: u64,
+    ) -> Result<Result<(), Slot>, Halt> {
+        let value = Slot::number(length as f64);
+        if self.arrays.contains_key(&target) {
+            self.array_set_length(target, value);
+            return Ok(Ok(()));
+        }
+        let id = self.intern_key("length");
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(target));
+        match self.array_from_try(|this| this.mop_set(code, target, id, value, receiver))? {
+            Ok(true) => Ok(Ok(())),
+            Ok(false) => Ok(Err(self.build_error("TypeError", 0, 0))),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
+    fn array_from_map_value(
+        &mut self,
+        code: &[u8],
+        mapfn: Slot,
+        mapping: bool,
+        this_arg: Slot,
+        value: Slot,
+        index: u64,
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        if !mapping {
+            return Ok(Ok(value));
+        }
+        self.array_from_try(|this| {
+            this.call_any(
+                code,
+                mapfn,
+                this_arg,
+                &[value, Slot::number(index as f64)],
+            )
+        })
+    }
+
+    fn array_from_inner(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        _argc: usize,
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        self.meter.tick_builtin();
+        let constructor = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let items = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let mapfn = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 6)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let mapping = if mapfn.kind == Kind::Undefined {
+            false
+        } else if self.is_callable_value(mapfn) {
+            true
+        } else {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        };
+        if matches!(items.kind, Kind::Null | Kind::Undefined) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+
+        // Intrinsic iterator result objects only materialize fields whose ids
+        // are cached when they are created. Seed these before constructing an
+        // Array/String/collection iterator below.
+        let value_id = self.intern_key("value");
+        let done_id = self.intern_key("done");
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+
+        // GetMethod(items, @@iterator). A descriptor explicitly set to
+        // undefined/null suppresses the intrinsic Array/collection fallback
+        // and selects the array-like branch.
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let mut iterator_method = Slot::undefined();
+        let mut explicit_iterator_property = false;
+        if let Payload::Reference(inst) = items.value {
+            if items.kind == Kind::Reference {
+                explicit_iterator_property = self.chain_has_descriptor(inst, iterator_id);
+                iterator_method = match self.array_from_try(|this| {
+                    this.mop_get(code, inst, iterator_id, items)
+                })? {
+                    Ok(method) => method,
+                    Err(error) => return Ok(Err(error)),
+                };
+            }
+        }
+        if iterator_method.kind != Kind::Undefined
+            && iterator_method.kind != Kind::Null
+            && !self.is_callable_value(iterator_method)
+        {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+
+        let mut next_method = Slot::undefined();
+        let mut target = None;
+        let iterator = if iterator_method.kind != Kind::Undefined
+            && iterator_method.kind != Kind::Null
+        {
+            // The iterable branch constructs A before invoking the iterator
+            // method. This ordering is observable when either operation throws
+            // or when a custom constructor mutates `items`.
+            target = match self.array_from_make_target(code, constructor, None)? {
+                Ok(target) => Some(target),
+                Err(error) => return Ok(Err(error)),
+            };
+            let iterator = match self.array_from_try(|this| {
+                this.call_any(code, iterator_method, items, &[])
+            })? {
+                Ok(iterator) => iterator,
+                Err(error) => return Ok(Err(error)),
+            };
+            let inst = match iterator.value {
+                Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+            if !self.iterators.contains_key(&inst) {
+                let next_id = self.intern_key("next");
+                next_method = match self.array_from_try(|this| {
+                    this.mop_get(code, inst, next_id, iterator)
+                })? {
+                    Ok(method) if self.is_callable_value(method) => method,
+                    Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+                    Err(error) => return Ok(Err(error)),
+                };
+            }
+            Some(iterator)
+        } else if !explicit_iterator_property {
+            match items.value {
+                Payload::Reference(array)
+                    if items.kind == Kind::Reference && self.arrays.contains_key(&array) =>
+                {
+                    Some(self.make_array_iterator(array, 0))
+                }
+                Payload::String(off) if items.kind == Kind::String => {
+                    let content = self.str_content(off).to_vec();
+                    Some(self.make_string_iterator(content))
+                }
+                Payload::Reference(collection)
+                    if items.kind == Kind::Reference
+                        && self.collections.contains_key(&collection) =>
+                {
+                    let kind = match self.collections[&collection].kind {
+                        CollKind::Map => 7,
+                        CollKind::Set => 6,
+                        _ => 0,
+                    };
+                    (kind != 0).then(|| self.make_collection_iterator(collection, kind))
+                }
+                Payload::Reference(iter)
+                    if items.kind == Kind::Reference && self.iterators.contains_key(&iter) =>
+                {
+                    Some(items)
+                }
+                Payload::Reference(generator)
+                    if items.kind == Kind::Reference
+                        && self.generators.contains_key(&generator) =>
+                {
+                    let next_id = self.intern_key("next");
+                    next_method = match self.array_from_try(|this| {
+                        this.mop_get(code, generator, next_id, items)
+                    })? {
+                        Ok(method) if self.is_callable_value(method) => method,
+                        Ok(_) => return Err(Halt::Unsupported("Array.from:generator-next")),
+                        Err(error) => return Ok(Err(error)),
+                    };
+                    Some(items)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
+        if let Some(iterator) = iterator {
+            let target = match target {
+                Some(target) => target,
+                None => match self.array_from_make_target(code, constructor, None)? {
+                    Ok(target) => target,
+                    Err(error) => return Ok(Err(error)),
+                },
+            };
+            for index in 0..1_000_000u64 {
+                let iter_inst = match iterator.value {
+                    Payload::Reference(iter) => iter,
+                    _ => unreachable!(),
+                };
+                let step = if self.iterators.contains_key(&iter_inst) {
+                    self.array_from_try(|this| this.array_iterator_next(iter_inst))?
+                } else {
+                    self.array_from_try(|this| this.call_any(code, next_method, iterator, &[]))?
+                };
+                let step = match step {
+                    Ok(step) => step,
+                    Err(error) => {
+                        let error = self.array_from_close(code, iterator, error)?;
+                        return Ok(Err(error));
+                    }
+                };
+                let step_inst = match step.value {
+                    Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+                    _ => {
+                        let error = self.build_error("TypeError", 0, 0);
+                        let error = self.array_from_close(code, iterator, error)?;
+                        return Ok(Err(error));
+                    }
+                };
+                let done = match self.array_from_try(|this| {
+                    this.mop_get(code, step_inst, done_id, step)
+                })? {
+                    Ok(done) => done,
+                    Err(error) => {
+                        let error = self.array_from_close(code, iterator, error)?;
+                        return Ok(Err(error));
+                    }
+                };
+                if self.truthy(&done) {
+                    return match self.array_from_set_length(code, target, index)? {
+                        Ok(()) => Ok(Ok(Slot::of(
+                            Kind::Reference,
+                            Payload::Reference(target),
+                        ))),
+                        Err(error) => Ok(Err(error)),
+                    };
+                }
+                let value = match self.array_from_try(|this| {
+                    this.mop_get(code, step_inst, value_id, step)
+                })? {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let error = self.array_from_close(code, iterator, error)?;
+                        return Ok(Err(error));
+                    }
+                };
+                let value = match self
+                    .array_from_map_value(code, mapfn, mapping, this_arg, value, index)?
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let error = self.array_from_close(code, iterator, error)?;
+                        return Ok(Err(error));
+                    }
+                };
+                if let Err(error) = self.array_from_define(code, target, index, value)? {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    return Ok(Err(error));
+                }
+            }
+            return Err(Halt::StepLimit(self.n_dispatched));
+        }
+
+        // Array-like fallback: ToObject, ToLength(Get(length)), construct with
+        // the length, then Get/map/CreateDataProperty for each index.
+        let array_like = match items.value {
+            Payload::Reference(_) if items.kind == Kind::Reference => items,
+            _ => match self.from_async_box_primitive(items) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            },
+        };
+        let inst = match array_like.value {
+            Payload::Reference(inst) => inst,
+            _ => unreachable!(),
+        };
+        let length_value = match self.array_from_try(|this| {
+            this.arraylike_length(code, inst, array_like)
+        })? {
+            Ok(value) => value,
+            Err(error) => return Ok(Err(error)),
+        };
+        let length = match self.array_from_try(|this| this.to_length_value(code, length_value))? {
+            Ok(length) => length,
+            Err(error) => return Ok(Err(error)),
+        };
+        let target = match self.array_from_make_target(code, constructor, Some(length))? {
+            Ok(target) => target,
+            Err(error) => return Ok(Err(error)),
+        };
+        for index in 0..length {
+            let value = match self.array_from_try(|this| {
+                this.arraylike_index(code, inst, index, array_like)
+            })? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+            let value = match self
+                .array_from_map_value(code, mapfn, mapping, this_arg, value, index)?
+            {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+            if let Err(error) = self.array_from_define(code, target, index, value)? {
+                return Ok(Err(error));
+            }
+        }
+        match self.array_from_set_length(code, target, length)? {
+            Ok(()) => Ok(Ok(Slot::of(
+                Kind::Reference,
+                Payload::Reference(target),
+            ))),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
+    // ------------------------------------------------------------------
     // `Array.fromAsync` (ECMA-262 sec-array.fromasync) — a native async state
     // machine. The entry builds the result promise, runs the synchronous
     // prologue (GetIterator / Construct / first `next`), and returns the
@@ -28857,8 +29307,7 @@ impl Interp {
                 ));
             }
             NativeMethod::ArrayFrom => {
-                let _ = (base, argc);
-                return Err(Halt::Unsupported("Array.from:iterator-protocol-metering"));
+                self.array_from(code, base, argc)?
             }
             NativeMethod::ArrayFromAsync => self.array_from_async(code, base, argc)?,
             // `Array.isArray(v)`: whether `v` is an array exotic object.
