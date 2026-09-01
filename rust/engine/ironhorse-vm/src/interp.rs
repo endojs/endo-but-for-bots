@@ -11123,6 +11123,24 @@ impl Interp {
                             if item.kind != Kind::Undefined && item.kind != Kind::Null {
                                 out.push_str(&self.render(item));
                             }
+                        } else if let Some(id) = self.symbol_ids.get(&i.to_string()).copied() {
+                            // A restrictive `defineProperty` descriptor moves
+                            // the index out of the compact item table and into
+                            // the ordinary property chain. Completion rendering
+                            // is the host's `String(result)`/array join boundary;
+                            // include a materialized data index just as the
+                            // guest `join` path's MOP read does. (An accessor
+                            // would require re-entering guest code after the
+                            // run and remains outside this read-only renderer.)
+                            if let Some(property) = self.find_property(r, id) {
+                                let item = self.slots.get(property);
+                                if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
+                                    && item.kind != Kind::Undefined
+                                    && item.kind != Kind::Null
+                                {
+                                    out.push_str(&self.render(&item));
+                                }
+                            }
                         }
                     }
                     out
@@ -12900,10 +12918,34 @@ impl Interp {
                                     Err(halt) => return halt,
                                 }
                             }
-                        } else if self.arrays.contains_key(&inst) && Some(id) == self.length_id {
+                        } else if self.arrays.contains_key(&inst)
+                            && self.string_key_name(id).as_deref() == Some("length")
+                        {
                             // `arr.length = N`: the exotic-array length accessor
                             // setter (`fxArrayLengthSetter` → `fxArraySetLength`).
-                            self.array_set_length(inst, value);
+                            let accepted = dispatch_result!(
+                                self.array_define_length(
+                                    code,
+                                    inst,
+                                    OrdinaryDescriptor {
+                                        value: Some(value),
+                                        ..OrdinaryDescriptor::default()
+                                    },
+                                ),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if !accepted && self.strict {
+                                let error = self.build_error("TypeError", 0, 0);
+                                match self.raise_js(error) {
+                                    Ok(target) => {
+                                        pc = target;
+                                        continue;
+                                    }
+                                    Err(halt) => return halt,
+                                }
+                            }
                         } else if self.regexps.contains_key(&inst) && Some(id) == self.last_index_id
                         {
                             // `re.lastIndex = N`: the `lastIndex` own data
@@ -13352,6 +13394,10 @@ impl Interp {
                                     self,
                                     return_depth
                                 )
+                            } else if self.arrays.contains_key(&inst)
+                                && self.string_key_name(id).as_deref() == Some("length")
+                            {
+                                false
                             } else {
                                 self.delete_own_property(inst, id)
                             };
@@ -13443,9 +13489,17 @@ impl Interp {
                             } else if let Some(index) =
                                 numeric_index.filter(|_| self.arrays.contains_key(&inst))
                             {
-                                self.arrays.get_mut(&inst).unwrap().remove_item(&index, &mut self.side_refs);
-                                true
-                            } else if self.arrays.contains_key(&inst) && Some(id) == self.length_id
+                                if self.arrays[&inst].items().contains_key(&index) {
+                                    self.arrays
+                                        .get_mut(&inst)
+                                        .unwrap()
+                                        .remove_item(&index, &mut self.side_refs);
+                                    true
+                                } else {
+                                    self.delete_own_property(inst, id)
+                                }
+                            } else if self.arrays.contains_key(&inst)
+                                && self.string_key_name(id).as_deref() == Some("length")
                             {
                                 false
                             } else {
@@ -27752,8 +27806,19 @@ impl Interp {
                             Slot::undefined()
                         }
                     }
-                } else if self.arrays.contains_key(&inst)
-                    || self.collections.contains_key(&inst)
+                } else if self.arrays.contains_key(&inst) {
+                    let id = self.to_property_id(code, arg1)?;
+                    match self.mop_get_own_property(code, inst, id)? {
+                        Some(descriptor) => {
+                            self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
+                            self.descriptor_object(descriptor)
+                        }
+                        None => {
+                            self.meter.tick_raw(GOPD_ABSENT_RESIDUAL_METERING);
+                            Slot::undefined()
+                        }
+                    }
+                } else if self.collections.contains_key(&inst)
                     || self.array_buffers.contains_key(&inst)
                     || self.data_views.contains_key(&inst)
                     || self.wrapper_data.contains_key(&inst)
@@ -27958,7 +28023,7 @@ impl Interp {
                 if target == self.global_obj {
                     return Err(Halt::Unsupported("defineProperty:global-object"));
                 }
-                if self.is_ordinary_object(target) {
+                if self.is_ordinary_object(target) || self.arrays.contains_key(&target) {
                     let key = self
                         .stack
                         .get(base + 5)
@@ -27985,8 +28050,8 @@ impl Interp {
                     let id = self.to_property_id(code, key)?;
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                    if !self.ordinary_define_own_property(object, id, descriptor) {
-                        return Err(Halt::Throw("TypeError: cannot define property".into()));
+                    if !self.mop_define_own_property(code, object, id, descriptor)? {
+                        return Err(self.catchable_type_error());
                     }
                     arg0
                 } else if self.typed_arrays.contains_key(&target) {
@@ -28220,6 +28285,13 @@ impl Interp {
                         }
                     };
                     Slot::boolean(r)
+                } else if self.arrays.contains_key(&inst) {
+                    self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
+                    let id = self.to_property_id(code, arg0)?;
+                    Slot::boolean(
+                        self.mop_get_own_property(code, inst, id)?
+                            .is_some_and(|descriptor| descriptor.enumerable == Some(true)),
+                    )
                 } else {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("propertyIsEnumerable:exotic-object"));
@@ -30651,13 +30723,13 @@ impl Interp {
                         }
                     });
                 }
-                if !self.is_ordinary_object(inst) {
+                if !self.is_ordinary_object(inst) && !self.arrays.contains_key(&inst) {
                     return Err(Halt::Unsupported(
                         "Reflect.getOwnPropertyDescriptor:exotic-object",
                     ));
                 }
                 let id = self.to_property_id(code, arg1)?;
-                match self.ordinary_get_own_descriptor(inst, id) {
+                match self.mop_get_own_property(code, inst, id)? {
                     Some(descriptor) => {
                         self.meter.tick_raw(GOPD_PRESENT_RESIDUAL_METERING);
                         Ok(self.descriptor_object(descriptor))
@@ -30720,7 +30792,7 @@ impl Interp {
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
                     Ok(Slot::boolean(
-                        self.ordinary_define_own_property(object, id, descriptor),
+                        self.mop_define_own_property(code, object, id, descriptor)?,
                     ))
                 } else {
                     let inst = match arg0.value {
@@ -36981,12 +37053,12 @@ impl Interp {
             // An index key. (A TypedArray receiver is handled by the
             // integer-indexed exotic `[[Get]]` above and never reaches here.)
             if self.arrays.contains_key(&inst) {
-                Ok(self
-                    .arrays
-                    .get(&inst)
-                    .and_then(|a| a.items().get(&index).copied())
-                    .map(|s| Slot::of(s.kind, s.value))
-                    .unwrap_or_else(Slot::undefined))
+                if let Some(s) = self.arrays[&inst].items().get(&index).copied() {
+                    Ok(Slot::of(s.kind, s.value))
+                } else {
+                    let id = self.intern_key(&index.to_string());
+                    self.ordinary_get(code, inst, id, obj)
+                }
             } else {
                 let id = self.intern_key(&index.to_string());
                 self.ordinary_get(code, inst, id, obj)
@@ -37080,7 +37152,36 @@ impl Interp {
             // A TypedArray receiver is handled by the integer-indexed exotic
             // `[[Set]]` above and never reaches here.
             if self.arrays.contains_key(&inst) {
-                self.array_item_set(inst, index, value, define);
+                let key_id = self.intern_key(&index.to_string());
+                if self.find_property(inst, key_id).is_some() {
+                    if define {
+                        let descriptor = OrdinaryDescriptor {
+                            value: Some(value),
+                            writable: Some(true),
+                            enumerable: Some(true),
+                            configurable: Some(true),
+                            ..OrdinaryDescriptor::default()
+                        };
+                        let _ = self.array_define_index(inst, key_id, index, descriptor);
+                        self.meter.tick_builtin();
+                    } else {
+                        let accepted = self.ordinary_set(code, inst, key_id, value, obj)?;
+                        if !accepted && self.strict {
+                            return Err(self.catchable_type_error());
+                        }
+                    }
+                } else if !define
+                    && (index >= self.arrays[&inst].length
+                        && !self.array_length_writable(inst)
+                        || !self.instance_extensible(inst)
+                            && !self.arrays[&inst].items().contains_key(&index))
+                {
+                    if self.strict {
+                        return Err(self.catchable_type_error());
+                    }
+                } else {
+                    self.array_item_set(inst, index, value, define);
+                }
                 Ok(())
             } else {
                 let id = self.intern_key(&index.to_string());
@@ -37099,8 +37200,20 @@ impl Interp {
                 }
                 Ok(())
             }
-        } else if Some(id) == self.length_id && self.arrays.contains_key(&inst) {
-            self.array_set_length(inst, value);
+        } else if self.arrays.contains_key(&inst)
+            && self.string_key_name(id).as_deref() == Some("length")
+        {
+            let accepted = self.array_define_length(
+                code,
+                inst,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    ..OrdinaryDescriptor::default()
+                },
+            )?;
+            if !accepted && self.strict {
+                return Err(self.catchable_type_error());
+            }
             Ok(())
         } else {
             if define {
@@ -37177,39 +37290,75 @@ impl Interp {
         ((bytes + 7) & !7) + 16
     }
 
-    /// Set an array's `length` (XS's `fxArrayLengthSetter` → `fxSetArrayLength`).
-    /// Growing past the current length adds holes; shrinking drops the items at
-    /// or above the new length. Meters the accessor-setter call machinery
-    /// ([`ARRAY_LENGTH_SET_METERING`]); the literal's length prelude sets it
-    /// before any item exists, so no chunk realloc is metered there.
-    fn array_set_length(&mut self, inst: crate::value::SlotIndex, value: Slot) {
-        self.meter.tick_raw(ARRAY_LENGTH_SET_METERING);
-        let new_len = self.to_length_u32(value);
-        if let Some(a) = self.arrays.get_mut(&inst) {
-            if new_len < a.length {
-                let drop: Vec<u32> = a
-                    .items()
-                    .range(new_len..)
-                    .map(|(&k, _)| k)
-                    .collect();
-                for k in drop {
-                    a.remove_item(&k, &mut self.side_refs);
-                }
-            }
-            a.length = new_len;
+    /// Whether an Array exotic's non-configurable `length` data property is
+    /// writable. The instance slot's property-only `XS_DONT_SET_FLAG` bit is
+    /// otherwise unused on instances, travels in the ordinary slot snapshot,
+    /// and therefore keeps this bit of exotic state durable without another
+    /// side-table/schema row.
+    fn array_length_writable(&self, inst: crate::value::SlotIndex) -> bool {
+        self.slots.get(inst).flag & XS_DONT_SET_FLAG == 0
+    }
+
+    fn set_array_length_writable(&mut self, inst: crate::value::SlotIndex, writable: bool) {
+        if writable {
+            self.slots.get_mut(inst).flag &= !XS_DONT_SET_FLAG;
+        } else {
+            self.slots.get_mut(inst).flag |= XS_DONT_SET_FLAG;
         }
     }
 
-    /// ToUint32-ish length coercion for `arr.length = v` (the covered grammar
-    /// uses integer/number lengths; `fxCheckArrayLength` throws a RangeError on
-    /// a non-integer, which is out of the covered set and left to a later
-    /// increment).
-    fn to_length_u32(&self, value: Slot) -> u32 {
-        match value.value {
-            Payload::Integer(i) if i >= 0 => i as u32,
-            Payload::Number(n) if n >= 0.0 && n.fract() == 0.0 && n <= 4294967295.0 => n as u32,
-            _ => 0,
+    /// Set an array's `length` after the caller has performed the observable
+    /// numeric coercion (XS's `fxArrayLengthSetter` → `fxSetArrayLength`).
+    /// Growing past the current length adds holes; shrinking drops compact
+    /// items and any materialized configurable index descriptors at or above
+    /// the new length. A non-configurable materialized index stops the shrink
+    /// at `index + 1`, as ArraySetLength requires. Returns the internal-method
+    /// boolean; assignment decides whether a false result throws from strict
+    /// code.
+    fn array_set_length(&mut self, inst: crate::value::SlotIndex, value: Slot) -> bool {
+        self.meter.tick_raw(ARRAY_LENGTH_SET_METERING);
+        let Some(new_len) = self.checked_array_length(value) else {
+            return false;
+        };
+        let old_len = self.arrays[&inst].length;
+        if new_len != old_len && !self.array_length_writable(inst) {
+            return false;
         }
+        if new_len < old_len {
+            let mut indices: Vec<(u32, Option<u16>)> = self
+                .own_property_slots(inst)
+                .into_iter()
+                .filter_map(|property| {
+                    let id = self.slots.get(property).id;
+                    self.string_key_name(id)
+                        .and_then(|name| string_to_index(&name))
+                        .filter(|index| *index >= new_len)
+                        .map(|index| (index, Some(id)))
+                })
+                .collect();
+            indices.extend(
+                self.arrays[&inst]
+                    .items()
+                    .range(new_len..)
+                    .map(|(&index, _)| (index, None)),
+            );
+            indices.sort_unstable_by_key(|(index, _)| std::cmp::Reverse(*index));
+            for (index, ordinary_id) in indices {
+                if let Some(id) = ordinary_id {
+                    if !self.delete_own_property(inst, id) {
+                        self.arrays.get_mut(&inst).unwrap().length = index + 1;
+                        return false;
+                    }
+                } else {
+                    self.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .remove_item(&index, &mut self.side_refs);
+                }
+            }
+        }
+        self.arrays.get_mut(&inst).unwrap().length = new_len;
+        true
     }
 
     /// A valid array length (`fxCheckArrayLength`): a non-negative integer in
@@ -37223,6 +37372,150 @@ impl Interp {
             }
             _ => None,
         }
+    }
+
+    /// `ArraySetLength` for a property descriptor. `ToUint32`/`ToNumber` is
+    /// represented by the shared observable `ToNumber` path followed by the
+    /// exact array-length range/integrality check; a mismatch is the spec's
+    /// catchable `RangeError`. Attribute checks happen after value coercion.
+    fn array_define_length(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        descriptor: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
+        let requested_nonwritable = descriptor.writable == Some(false);
+        let new_length = if let Some(value) = descriptor.value {
+            // ArraySetLength performs ToUint32(value) and then ToNumber(value)
+            // as two distinct observable coercions. For an object value this
+            // deliberately invokes valueOf/toString twice, in that order.
+            let uint32_number = to_number(&self.to_number_value(code, value)?);
+            let new_len = if !uint32_number.is_finite() || uint32_number == 0.0 {
+                0
+            } else {
+                uint32_number
+                    .trunc()
+                    .rem_euclid(4_294_967_296.0) as u32
+            };
+            let number = to_number(&self.to_number_value(code, value)?);
+            if !number.is_finite()
+                || number < 0.0
+                || number != new_len as f64
+                || number.fract() != 0.0
+            {
+                return Err(self.catchable_range_error());
+            }
+            Some((new_len, number))
+        } else {
+            None
+        };
+
+        if descriptor.is_accessor()
+            || descriptor.configurable == Some(true)
+            || descriptor.enumerable == Some(true)
+            || (!self.array_length_writable(inst) && descriptor.writable == Some(true))
+        {
+            return Ok(false);
+        }
+
+        if let Some((new_len, number)) = new_length {
+            let old_len = self.arrays[&inst].length;
+            if new_len != old_len && !self.array_length_writable(inst) {
+                return Ok(false);
+            }
+            if !self.array_set_length(inst, Slot::number(number)) {
+                if requested_nonwritable {
+                    self.set_array_length_writable(inst, false);
+                }
+                return Ok(false);
+            }
+        }
+        if requested_nonwritable {
+            self.set_array_length_writable(inst, false);
+        }
+        Ok(true)
+    }
+
+    /// Array exotic `[[DefineOwnProperty]]` for an integer index. Compact
+    /// elements have the implicit `{writable,enumerable,configurable}: true`
+    /// descriptor. On the first restrictive/accessor redefinition, move that
+    /// element into the ordinary property chain so the existing descriptor,
+    /// accessor, snapshot, and GC machinery carries the full shape. The side
+    /// item is removed, making array algorithms select their generic MOP path.
+    fn array_define_index(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        index: u32,
+        descriptor: OrdinaryDescriptor,
+    ) -> bool {
+        let old_len = self.arrays[&inst].length;
+        if index >= old_len && !self.array_length_writable(inst) {
+            return false;
+        }
+
+        if let Some(current) = self.ordinary_get_own_descriptor(inst, id) {
+            if !self.is_compatible_descriptor(
+                self.instance_extensible(inst),
+                &descriptor,
+                Some(&current),
+            ) {
+                return false;
+            }
+            let accepted = self.ordinary_define_own_property(inst, id, descriptor);
+            if accepted && index >= old_len {
+                self.arrays.get_mut(&inst).unwrap().length = index + 1;
+            }
+            return accepted;
+        }
+
+        if let Some(value) = self.arrays[&inst].items().get(&index).copied() {
+            let current = OrdinaryDescriptor {
+                value: Some(Slot::of(value.kind, value.value)),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                ..OrdinaryDescriptor::default()
+            };
+            if !self.is_compatible_descriptor(true, &descriptor, Some(&current)) {
+                return false;
+            }
+            self.arrays
+                .get_mut(&inst)
+                .unwrap()
+                .remove_item(&index, &mut self.side_refs);
+            self.set_own_unmetered_with_flag(inst, id, current.value.unwrap(), 0);
+            return self.ordinary_define_own_property(inst, id, descriptor);
+        }
+
+        if !self.instance_extensible(inst) {
+            return false;
+        }
+        let accepted = self.ordinary_define_own_property(inst, id, descriptor);
+        if accepted && index >= old_len {
+            self.arrays.get_mut(&inst).unwrap().length = index + 1;
+        }
+        accepted
+    }
+
+    /// Array exotic `[[DefineOwnProperty]]` (ECMA-262 10.4.2.1): dispatch
+    /// `length`, array-index strings, and ordinary expandos to their respective
+    /// storage/validation paths.
+    fn array_define_own_property(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+        descriptor: OrdinaryDescriptor,
+    ) -> Result<bool, Halt> {
+        let name = self.string_key_name(id);
+        if name.as_deref() == Some("length") {
+            return self.array_define_length(code, inst, descriptor);
+        }
+        if let Some(index) = name.as_deref().and_then(string_to_index) {
+            return Ok(self.array_define_index(inst, id, index, descriptor));
+        }
+        Ok(self.ordinary_define_own_property(inst, id, descriptor))
     }
 
     fn new_object(&mut self) -> crate::value::SlotIndex {
@@ -38795,6 +39088,9 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_define_own_property(code, inst, id, desc);
         }
+        if self.arrays.contains_key(&inst) {
+            return self.array_define_own_property(code, inst, id, desc);
+        }
         Ok(self.ordinary_define_own_property(inst, id, desc))
     }
 
@@ -38872,7 +39168,7 @@ impl Interp {
             return Some(d);
         }
         let fi = self.functions.get(&inst)?;
-        if Some(id) == self.length_id {
+        if self.string_key_name(id).as_deref() == Some("length") {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::integer(fi.arity as i32)),
                 writable: Some(false),
@@ -38914,10 +39210,10 @@ impl Interp {
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
         let a = self.arrays.get(&inst)?;
-        if Some(id) == self.length_id {
+        if self.string_key_name(id).as_deref() == Some("length") {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::integer(a.length as i32)),
-                writable: Some(true),
+                writable: Some(self.array_length_writable(inst)),
                 enumerable: Some(false),
                 configurable: Some(false),
                 ..OrdinaryDescriptor::default()
@@ -38959,6 +39255,21 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_delete(code, inst, id);
         }
+        if self.arrays.contains_key(&inst) {
+            let name = self.string_key_name(id);
+            if name.as_deref() == Some("length") {
+                return Ok(false);
+            }
+            if let Some(index) = name.as_deref().and_then(string_to_index) {
+                if self.arrays[&inst].items().contains_key(&index) {
+                    self.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .remove_item(&index, &mut self.side_refs);
+                    return Ok(true);
+                }
+            }
+        }
         Ok(self.delete_own_property(inst, id))
     }
 
@@ -38977,15 +39288,25 @@ impl Interp {
         if self.arrays.contains_key(&inst) {
             let mut out = Vec::new();
             let mut idxs: Vec<u32> = self.arrays[&inst].items().keys().copied().collect();
+            let ordinary_ids = self.ordered_own_key_ids(inst);
+            idxs.extend(ordinary_ids.iter().filter_map(|id| {
+                self.string_key_name(*id)
+                    .and_then(|name| string_to_index(&name))
+            }));
             idxs.sort_unstable();
+            idxs.dedup();
             for i in idxs {
                 let id = self.intern_key(&i.to_string());
                 out.push(self.property_key_slot(id)?);
             }
             let length_id = self.intern_key("length");
             out.push(self.property_key_slot(length_id)?);
-            for id in self.ordered_own_key_ids(inst) {
-                if id == length_id {
+            for id in ordinary_ids {
+                if id == length_id
+                    || self
+                        .string_key_name(id)
+                        .is_some_and(|name| string_to_index(&name).is_some())
+                {
                     continue;
                 }
                 out.push(self.property_key_slot(id)?);

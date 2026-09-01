@@ -122,3 +122,49 @@ fn symbol_tables_rebuilt_at_restore() {
         "the inverse symbol_ids map is rebuilt at restore: the global reads back by name",
     );
 }
+
+/// Array descriptor state deliberately straddles both persisted substrates:
+/// materialized non-default index descriptors live in the slot chain, while
+/// the Array exotic's non-writable `length` bit lives on the instance slot and
+/// its compact elements/length remain in the Arrays side-table row. A real
+/// byte snapshot must restore all three pieces coherently.
+#[test]
+fn array_define_property_state_survives_suspend_resume() {
+    let (crank1, names1) = compile(
+        "var a = [1]; Object.defineProperty(a, 'length', { writable: false }); \
+         Object.defineProperty(a, '0', { value: 7, writable: false, configurable: false }); 0",
+    );
+    let (crank2, names2) = compile(
+        "'' + Reflect.defineProperty(a, '1', { value: 2 }) + ',' + \
+         Reflect.defineProperty(a, '0', { value: 9 }) + ',' + a.length + ',' + a[0]",
+    );
+
+    let run_second = |machine: &mut Interp| {
+        let relinked = machine
+            .relink_crank(&crank2, &names2)
+            .expect("second crank relinks onto the persisted name table");
+        machine.run(&relinked)
+    };
+
+    let mut uninterrupted = Interp::new();
+    uninterrupted.link_intrinsics(&names1);
+    assert!(uninterrupted.run(&crank1).completed, "baseline crank 1");
+    let baseline = run_second(&mut uninterrupted);
+    assert!(baseline.completed, "baseline crank 2");
+    assert_eq!(baseline.result, "false,false,1,7");
+
+    let mut before_snapshot = Interp::new();
+    before_snapshot.link_intrinsics(&names1);
+    assert!(before_snapshot.run(&crank1).completed, "snapshot crank 1");
+    let bytes = before_snapshot
+        .write_snapshot(&sig())
+        .expect("array descriptor state snapshots");
+    drop(before_snapshot);
+
+    let mut restored =
+        from_snapshot_bytes(&bytes, &sig()).expect("array descriptor state restores");
+    let resumed = run_second(&mut restored);
+    assert!(resumed.completed, "resumed crank 2");
+    assert_eq!(resumed.result, baseline.result);
+    assert_eq!(resumed.computrons, baseline.computrons);
+}
