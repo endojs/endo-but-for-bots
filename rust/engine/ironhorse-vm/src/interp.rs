@@ -21290,16 +21290,35 @@ impl Interp {
     /// `fx_RegExp_prototype_match` via the `Symbol.match` protocol). The
     /// non-global path returns `exec`'s result (the match array or `null`)
     /// directly; `inst` is the RegExp argument, `subject` the receiver string.
-    /// The global path (collect every whole match into a fresh array, advancing
-    /// on an empty match) is a later increment — self-named. A non-RegExp
-    /// argument (the `withoutRegexp` coerce-to-RegExp path) self-names.
+    /// The global path resets `lastIndex`, collects each whole match, and
+    /// advances past an empty match so the loop always makes progress.
     fn string_match(&mut self, inst: crate::value::SlotIndex, subject: Slot) -> Result<Slot, Halt> {
         let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
-        if global {
-            return Err(Halt::Unsupported("String.match:global"));
-        }
         self.meter.tick_raw(STRING_MATCH_FRAME_METERING);
-        Ok(self.regexp_exec_inner(inst, subject)?.0)
+        if !global {
+            return Ok(self.regexp_exec_inner(inst, subject)?.0);
+        }
+
+        self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
+        let mut matches = Vec::new();
+        loop {
+            let (result, _) = self.regexp_exec_inner(inst, subject)?;
+            if result.kind == Kind::Null {
+                break;
+            }
+            let whole = self.array_index_slot(result, 0);
+            let empty = matches!(whole.value, Payload::String(off) if self.str_len(off) == 0);
+            self.meter.tick_slot_alloc();
+            matches.push(whole);
+            if empty {
+                self.regexps.get_mut(&inst).unwrap().last_index += 1.0;
+            }
+        }
+        if matches.is_empty() {
+            return Ok(Slot::null());
+        }
+        let array = self.new_array_unmetered();
+        Ok(self.finish_split_array(array, matches))
     }
 
     /// `String.prototype.replace(regexp, replacement)` (`fx_String_prototype_
@@ -30251,18 +30270,42 @@ impl Interp {
                     }
                 }
             }
-            // `String.prototype.match` over the matcher (via the
-            // `Symbol.match` protocol to the RegExp worker). A non-RegExp
-            // argument and the global collection remain named gaps.
+            // `String.prototype.match`: a custom `regexp[Symbol.match]` is
+            // called with the original receiver before string coercion. The
+            // intrinsic RegExp path uses the existing matcher; every other
+            // argument is converted through `RegExpCreate(regexp, undefined)`.
             NativeMethod::StringMatch => {
-                if self.string_receiver_units(this).is_none() {
-                    return Err(Halt::Unsupported("String.match:non-string-receiver"));
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error());
                 }
-                match arg0.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                        self.string_match(r, this)?
+                let match_method = self.string_protocol_method(code, arg0, "match")?;
+                if !matches!(match_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, match_method, arg0, &[this])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    match arg0.value {
+                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
+                            self.string_match(r, subject)?
+                        }
+                        _ => {
+                            let pattern = if arg0.kind == Kind::Undefined {
+                                String::new()
+                            } else {
+                                let units = self.to_string_units(code, arg0)?;
+                                String::from_utf16_lossy(&units)
+                            };
+                            let regexp = self.build_regexp(pattern, String::new())?;
+                            let Payload::Reference(inst) = regexp.value else {
+                                unreachable!()
+                            };
+                            self.string_match(inst, subject)?
+                        }
                     }
-                    _ => return Err(Halt::Unsupported("String.match:non-regexp-arg")),
                 }
             }
             // `String.prototype.replace` over the matcher (non-global RegExp +
