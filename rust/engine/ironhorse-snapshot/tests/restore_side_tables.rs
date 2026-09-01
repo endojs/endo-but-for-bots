@@ -168,3 +168,48 @@ fn array_define_property_state_survives_suspend_resume() {
     assert_eq!(resumed.result, baseline.result);
     assert_eq!(resumed.computrons, baseline.computrons);
 }
+
+/// An arguments object's ordinary, configurable `length` slot and its
+/// arguments-exotic brand must survive together. If restore retained only the
+/// compact indexed storage, `length` would incorrectly reappear as Array's
+/// non-configurable side-table length and deletion would fail after resume.
+#[test]
+fn arguments_length_attributes_survive_suspend_resume() {
+    let (crank1, names1) = compile(
+        "var saved; function capture() { saved = arguments; } capture(3, 4); \
+         Object.defineProperty(saved, 'length', { value: 7 }); 0",
+    );
+    let (crank2, names2) = compile(
+        "var before = saved.length; var deleted = delete saved.length; \
+         '' + before + ',' + deleted + ',' + saved.hasOwnProperty('length') + ',' + saved[1]",
+    );
+
+    let run_second = |machine: &mut Interp| {
+        let relinked = machine
+            .relink_crank(&crank2, &names2)
+            .expect("second crank relinks onto the persisted name table");
+        machine.run(&relinked)
+    };
+
+    let mut uninterrupted = Interp::new();
+    uninterrupted.link_intrinsics(&names1);
+    assert!(uninterrupted.run(&crank1).completed, "baseline crank 1");
+    let baseline = run_second(&mut uninterrupted);
+    assert!(baseline.completed, "baseline crank 2");
+    assert_eq!(baseline.result, "7,true,false,4");
+
+    let mut before_snapshot = Interp::new();
+    before_snapshot.link_intrinsics(&names1);
+    assert!(before_snapshot.run(&crank1).completed, "snapshot crank 1");
+    let bytes = before_snapshot
+        .write_snapshot(&sig())
+        .expect("arguments descriptor state snapshots");
+    drop(before_snapshot);
+
+    let mut restored =
+        from_snapshot_bytes(&bytes, &sig()).expect("arguments descriptor state restores");
+    let resumed = run_second(&mut restored);
+    assert!(resumed.completed, "resumed crank 2");
+    assert_eq!(resumed.result, baseline.result);
+    assert_eq!(resumed.computrons, baseline.computrons);
+}

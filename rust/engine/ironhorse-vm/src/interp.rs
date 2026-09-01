@@ -11732,6 +11732,19 @@ impl Interp {
                     // indexed element storage is unchanged.
                     if op == XS_CODE_ARGUMENTS_SLOPPY || op == XS_CODE_ARGUMENTS_STRICT {
                         self.arguments_objects.insert(array);
+                        // Unlike an Array's exotic, non-configurable `length`,
+                        // an arguments object's `length` is an ordinary own data
+                        // property: writable and configurable, but not
+                        // enumerable. Keep it in the ordinary slot chain so
+                        // assignment, definition, deletion, ownKeys, snapshots,
+                        // and proxy forwarding all observe those attributes.
+                        let length_id = self.intern_key_unmetered("length");
+                        self.set_own_unmetered_with_flag(
+                            array,
+                            length_id,
+                            Slot::integer(self.arrays[&array].length as i32),
+                            XS_DONT_ENUM_FLAG,
+                        );
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(array)));
                     pc += size as usize;
@@ -12919,6 +12932,7 @@ impl Interp {
                                 }
                             }
                         } else if self.arrays.contains_key(&inst)
+                            && !self.arguments_objects.contains(&inst)
                             && self.string_key_name(id).as_deref() == Some("length")
                         {
                             // `arr.length = N`: the exotic-array length accessor
@@ -12999,7 +13013,9 @@ impl Interp {
                     let obj = self.pop();
                     let v = match obj.value {
                         Payload::Reference(inst)
-                            if self.arrays.contains_key(&inst) && Some(id) == self.length_id =>
+                            if self.arrays.contains_key(&inst)
+                                && !self.arguments_objects.contains(&inst)
+                                && Some(id) == self.length_id =>
                         {
                             // `arr.length`: the exotic-array length accessor
                             // getter (`fxArrayLengthGetter`).
@@ -13395,6 +13411,7 @@ impl Interp {
                                     return_depth
                                 )
                             } else if self.arrays.contains_key(&inst)
+                                && !self.arguments_objects.contains(&inst)
                                 && self.string_key_name(id).as_deref() == Some("length")
                             {
                                 false
@@ -13499,6 +13516,7 @@ impl Interp {
                                     self.delete_own_property(inst, id)
                                 }
                             } else if self.arrays.contains_key(&inst)
+                                && !self.arguments_objects.contains(&inst)
                                 && self.string_key_name(id).as_deref() == Some("length")
                             {
                                 false
@@ -37063,7 +37081,10 @@ impl Interp {
                 let id = self.intern_key(&index.to_string());
                 self.ordinary_get(code, inst, id, obj)
             }
-        } else if Some(id) == self.length_id && self.arrays.contains_key(&inst) {
+        } else if Some(id) == self.length_id
+            && self.arrays.contains_key(&inst)
+            && !self.arguments_objects.contains(&inst)
+        {
             self.meter.tick_raw(ARRAY_LENGTH_GET_METERING);
             Ok(Slot::integer(self.arrays[&inst].length as i32))
         } else {
@@ -37201,6 +37222,7 @@ impl Interp {
                 Ok(())
             }
         } else if self.arrays.contains_key(&inst)
+            && !self.arguments_objects.contains(&inst)
             && self.string_key_name(id).as_deref() == Some("length")
         {
             let accepted = self.array_define_length(
@@ -37509,7 +37531,7 @@ impl Interp {
         descriptor: OrdinaryDescriptor,
     ) -> Result<bool, Halt> {
         let name = self.string_key_name(id);
-        if name.as_deref() == Some("length") {
+        if name.as_deref() == Some("length") && !self.arguments_objects.contains(&inst) {
             return self.array_define_length(code, inst, descriptor);
         }
         if let Some(index) = name.as_deref().and_then(string_to_index) {
@@ -39023,7 +39045,8 @@ impl Interp {
         // live in the slot chain.
         if let Some(a) = self.arrays.get(&o) {
             if name.as_deref() == Some("length") {
-                return Ok(true);
+                return Ok(!self.arguments_objects.contains(&o)
+                    || self.find_property(o, id).is_some());
             }
             if let Some(idx) = index {
                 if a.items().contains_key(&idx) {
@@ -39210,7 +39233,9 @@ impl Interp {
         id: u16,
     ) -> Option<OrdinaryDescriptor> {
         let a = self.arrays.get(&inst)?;
-        if self.string_key_name(id).as_deref() == Some("length") {
+        if self.string_key_name(id).as_deref() == Some("length")
+            && !self.arguments_objects.contains(&inst)
+        {
             return Some(OrdinaryDescriptor {
                 value: Some(Slot::integer(a.length as i32)),
                 writable: Some(self.array_length_writable(inst)),
@@ -39257,7 +39282,7 @@ impl Interp {
         }
         if self.arrays.contains_key(&inst) {
             let name = self.string_key_name(id);
-            if name.as_deref() == Some("length") {
+            if name.as_deref() == Some("length") && !self.arguments_objects.contains(&inst) {
                 return Ok(false);
             }
             if let Some(index) = name.as_deref().and_then(string_to_index) {
@@ -39283,10 +39308,12 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_own_keys(code, inst);
         }
-        // An exotic-array target: integer indices ascending, then `length`,
-        // then the ordinary string keys, then symbol keys.
+        // An exotic-array target: integer indices ascending, then the Array's
+        // exotic `length` (ordinary and deletable for an arguments object),
+        // then the remaining ordinary string keys and symbol keys.
         if self.arrays.contains_key(&inst) {
             let mut out = Vec::new();
+            let is_arguments = self.arguments_objects.contains(&inst);
             let mut idxs: Vec<u32> = self.arrays[&inst].items().keys().copied().collect();
             let ordinary_ids = self.ordered_own_key_ids(inst);
             idxs.extend(ordinary_ids.iter().filter_map(|id| {
@@ -39300,9 +39327,11 @@ impl Interp {
                 out.push(self.property_key_slot(id)?);
             }
             let length_id = self.intern_key("length");
-            out.push(self.property_key_slot(length_id)?);
+            if !is_arguments {
+                out.push(self.property_key_slot(length_id)?);
+            }
             for id in ordinary_ids {
-                if id == length_id
+                if (!is_arguments && id == length_id)
                     || self
                         .string_key_name(id)
                         .is_some_and(|name| string_to_index(&name).is_some())
