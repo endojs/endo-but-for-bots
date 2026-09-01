@@ -562,6 +562,29 @@ fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
+    // `%TypedArray%` and `%TypedArray.prototype%` are boot-rebuilt shared
+    // intermediates. Concrete constructors, prototypes, instances, and their
+    // inherited methods must retain those links across a full close/reopen.
+    let last = carry_scenario(
+        "carry-typed-array-hierarchy",
+        "Object.getPrototypeOf(Int8Array); Object.getPrototypeOf(Uint8Array); \
+         C.prototype; inst.copyWithin; inst.length; inst instanceof C;",
+        &[
+            "C = Object.getPrototypeOf(Int8Array); \
+             o = Object.getPrototypeOf(Int8Array.prototype); \
+             inst = new Int8Array([1, 2, 3]); t = 7;",
+            "inst.copyWithin(1, 0, 1); \
+             t = (Object.getPrototypeOf(Uint8Array) === C) + ':' + \
+                 (C.prototype === o); t",
+            "t = (inst instanceof C) + ':' + inst[1] + ':' + \
+                 (Object.getPrototypeOf(inst) === Int8Array.prototype); t",
+        ],
+    );
+    assert_eq!(last, "true:1:true");
+}
+
+#[test]
 fn the_promise_cluster_survives_sqlite_sleep_cycles() {
     // The SQLite arm of the schema-23 promise-cluster carry: a pending
     // promise with a stored resolver and a user reaction crosses two

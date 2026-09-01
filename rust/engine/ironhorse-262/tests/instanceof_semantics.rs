@@ -28,6 +28,18 @@ fn right_operand_must_be_an_object_with_a_callable_handler_or_be_callable() {
 }
 
 #[test]
+fn native_type_errors_remain_recognizable_by_instanceof() {
+    agrees("var TypedArray=Object.getPrototypeOf(Int8Array); var ok=false; try { TypedArray() } catch (e) { ok=e instanceof TypeError } ok");
+    agrees("var TypedArray=Object.getPrototypeOf(Int8Array); var ok=false; try { new TypedArray() } catch (e) { ok=e instanceof TypeError } ok");
+}
+
+#[test]
+fn typed_array_constructors_share_the_abstract_constructor_and_prototype() {
+    agrees("var TypedArray=Object.getPrototypeOf(Int8Array); var TypedArrayPrototype=Object.getPrototypeOf(Int8Array.prototype); ''+(TypedArray===Object.getPrototypeOf(Uint8Array))+':'+(TypedArray.prototype===TypedArrayPrototype)+':'+(new Int8Array(1) instanceof TypedArray)");
+    agrees("var p=Object.getPrototypeOf(Int8Array.prototype); ''+(Int8Array.prototype.copyWithin===p.copyWithin)+':'+(Uint8Array.prototype.copyWithin===p.copyWithin)+':'+Object.prototype.hasOwnProperty.call(Int8Array.prototype,'copyWithin')");
+}
+
+#[test]
 fn custom_has_instance_observes_receiver_argument_and_truthiness() {
     agrees("var c=0,t,a; var o={ [Symbol.hasInstance]:function(v){c++;t=this;a=v;return 'yes'} }; var x={}; ''+(x instanceof o)+':' + (c===1)+':' + (t===o)+':' + (a===x)");
     agrees("var o={ [Symbol.hasInstance]:function(){return 0} }; 1 instanceof o");
