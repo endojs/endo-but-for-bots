@@ -51,3 +51,20 @@ fn primitive_keys_work_in_destructuring() {
         agrees(source);
     }
 }
+
+#[test]
+fn in_coerces_its_left_operand_to_a_property_key() {
+    for source in [
+        "var o={null:1,true:2,undefined:3,'12':4};[null in o,true in o,undefined in o,12n in o].join(',')",
+        "[undefined in {},null in {},true in {},1n in {}].join(',')",
+        "var k={[Symbol.toPrimitive](hint){return hint}};var o={string:1};k in o",
+        "var seen;var p=new Proxy({}, {has(t,k){seen=typeof k+':'+String(k);return true}});var k={toString(){return '7'}};(k in p)+':'+seen",
+        "var a=[];a[2]=1;[2 in a,1 in a,'length' in a].join(',')",
+        "'prototype' in (()=>{})",
+        "var a=new Uint8Array([1]);[0 in a,1n in a,null in a,'-0' in a].join(',')",
+        "var k={[Symbol.toPrimitive](){throw 42}};try{k in {}}catch(e){e}",
+        "var hit=false;var k={[Symbol.toPrimitive](){hit=true;return 'x'}};try{k in null}catch(e){};hit",
+    ] {
+        agrees(source);
+    }
+}

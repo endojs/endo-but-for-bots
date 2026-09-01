@@ -15360,10 +15360,11 @@ impl Interp {
                 // `in` (`XS_CODE_IN`, xsRun.c → fxRunIn → fxHasAt = fxAt +
                 // fxHasAll): does the right operand (object) have a property
                 // named by the left (key). Stack: [.., left (key), right
-                // (object)]. The key is resolved through the global intern
-                // table exactly as `fxAt` does, then answered by a full
-                // prototype-chain walk (`fxHasAll`). A program symbol present
-                // own-or-inherited ⇒ `true`. When ironhorse's (possibly
+                // (object)]. The key passes through `ToPropertyKey`, then is
+                // resolved through the global intern table exactly as `fxAt`
+                // does and answered by a full prototype-chain walk
+                // (`fxHasAll`). A program symbol present own-or-inherited ⇒
+                // `true`. When ironhorse's (possibly
                 // incomplete) chain does not hold the name, `false` is sound
                 // only if the name can be no inherited built-in: a boot
                 // default-key name the program never referenced could be an
@@ -15371,31 +15372,41 @@ impl Interp {
                 // XS), so it self-names rather than risk a wrong `false`; a
                 // genuinely-novel name (absent from the boot key table) is
                 // absent everywhere, so `in` is soundly `false`, `fxAt`
-                // interning one key slot. An index-valued key, a non-string
-                // key, or a non-object right operand stays out of grammar.
+                // interning one key slot. Integer-index keys route through the
+                // receiver's exotic own-property behavior; a non-object right
+                // operand remains an error outside this opcode's covered
+                // grammar.
                 XS_CODE_IN => {
                     let obj = self.pop();
                     let key = self.pop();
                     let objref = match obj.value {
                         Payload::Reference(r) => r,
-                        _ => return Halt::Unsupported(op.name()),
+                        _ => {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(
+                                self.raise_js(error),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            continue;
+                        }
                     };
+                    // The spec checks that the RHS is an object before
+                    // coercing the LHS. In particular, an object key's
+                    // `@@toPrimitive` must not run for `key in null`.
+                    let key = dispatch_result!(
+                        self.to_property_key(code, key),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     // `k in p`: the proxy `has` trap (ECMA-262 10.5.7). No index /
                     // boot-default gate applies — a proxy honors any string key.
                     if self.proxies.contains_key(&objref) {
-                        let id = match key.kind {
-                            Kind::Symbol => match key.value {
-                                Payload::Reference(desc) => self.intern_symbol_key(desc),
-                                _ => return Halt::Unsupported(op.name()),
-                            },
-                            Kind::String => match key.value {
-                                Payload::String(off) => {
-                                    let s = self.str_text(off);
-                                    self.intern_key(&s)
-                                }
-                                _ => return Halt::Unsupported(op.name()),
-                            },
-                            _ => return Halt::Unsupported(op.name()),
+                        let id = match self.property_key_id(key, false) {
+                            Some(id) => id,
+                            None => return Halt::Unsupported(op.name()),
                         };
                         let present =
                             dispatch_result!(self.proxy_has(code, objref, id), pc, self, return_depth);
@@ -15415,43 +15426,36 @@ impl Interp {
                             continue;
                         }
                     }
-                    // A **symbol** key (`sym in o`) resolves its descriptor-slot
-                    // identity to the interned id (`mxID(symbol)`); no index /
-                    // boot-default gate applies (a symbol is never an index and
-                    // never a boot string name). A **string** key interns as a
-                    // name, gating out an index-valued string (the exotic index
-                    // [[HasProperty]]) and a boot default-key name the program
-                    // never referenced (which could be an unlinked inherited
-                    // built-in — `'toString' in {}` is `true` in XS — so a
-                    // `false` would risk being wrong).
-                    let id = match key.kind {
-                        Kind::Symbol => match key.value {
-                            Payload::Reference(desc) => self.intern_symbol_key(desc),
-                            _ => return Halt::Unsupported(op.name()),
-                        },
-                        Kind::String => {
-                            let s = match key.value {
-                                Payload::String(off) => self.str_text(off),
-                                _ => return Halt::Unsupported(op.name()),
-                            };
-                            if string_to_index(&s).is_some() {
-                                return Halt::Unsupported(op.name());
-                            }
-                            if !self.symbol_ids.contains_key(&s)
-                                && self.default_keys.contains(s.as_str())
-                            {
-                                return Halt::Unsupported(op.name());
-                            }
-                            // Resolve exactly as `fxAt` does (a novel name meters
-                            // one `fxNewSlot`; a known one none).
-                            self.intern_key(&s)
+                    // A boot default-key name the program never referenced may
+                    // name an inherited intrinsic that ironhorse did not link.
+                    // Retain the existing soundness gate before interning the
+                    // converted key; symbols and all other strings are exact.
+                    if let (Kind::String, Payload::String(off)) = (key.kind, key.value) {
+                        let name = self.str_text(off);
+                        if !self.symbol_ids.contains_key(&name)
+                            && self.default_keys.contains(name.as_str())
+                        {
+                            return Halt::Unsupported(op.name());
                         }
-                        _ => return Halt::Unsupported(op.name()),
+                    }
+                    let id = match self.property_key_id(key, false) {
+                        Some(id) => id,
+                        None => return Halt::Unsupported(op.name()),
                     };
                     // Answer with the metered chain walk: XS meters one
                     // `XS_CODE_METERING` per prototype level the
                     // `fxOrdinaryHasProperty` recursion descends.
-                    let (present, recursions) = self.instance_has(objref, id);
+                    let own = dispatch_result!(
+                        self.object_own_property_present(code, objref, id),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    let (present, recursions) = if own {
+                        (true, 0)
+                    } else {
+                        self.instance_has(objref, id)
+                    };
                     self.meter.tick_raw(IN_METERING);
                     self.meter.tick_code_n(recursions);
                     self.push(Slot::boolean(present));
@@ -38765,7 +38769,6 @@ impl Interp {
                     return Ok(self.find_property(o, id).is_some()
                         || !self.deleted_fn_meta.contains(&(o, id)));
                 }
-                Some("prototype") if self.ctor_prototype.contains_key(&o) => return Ok(true),
                 _ => return Ok(self.find_property(o, id).is_some()),
             }
         }
@@ -39809,6 +39812,22 @@ impl Interp {
         Ok(out)
     }
 
+    /// `ToPropertyKey(argument)`: preserve a Symbol's identity; otherwise use
+    /// the string-hint `ToPrimitive` path followed by metered `ToString`.
+    /// Keeping the resulting string slot separate from interning lets callers
+    /// apply receiver-specific checks (canonical numeric indices and the
+    /// boot-default soundness gate) before the name enters `symbol_ids`.
+    fn to_property_key(&mut self, code: &[u8], key: Slot) -> Result<Slot, Halt> {
+        if key.kind == Kind::Symbol {
+            return Ok(key);
+        }
+        let primitive = self.to_primitive(code, key, true)?;
+        if primitive.kind == Kind::Symbol {
+            return Ok(primitive);
+        }
+        Ok(self.to_string_slot_metered(primitive))
+    }
+
     fn to_property_id(&mut self, code: &[u8], key: Slot) -> Result<u16, Halt> {
         if let Payload::At(id, index) = key.value {
             return Ok(if id == crate::value::XS_NO_ID {
@@ -39817,21 +39836,14 @@ impl Interp {
                 id
             });
         }
-        if key.kind == Kind::Symbol {
-            return match key.value {
+        let property_key = self.to_property_key(code, key)?;
+        if property_key.kind == Kind::Symbol {
+            return match property_key.value {
                 Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
                 _ => Err(Halt::Throw("TypeError: invalid symbol".into())),
             };
         }
-        let primitive = self.to_primitive(code, key, true)?;
-        if primitive.kind == Kind::Symbol {
-            return match primitive.value {
-                Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
-                _ => Err(Halt::Throw("TypeError: invalid symbol".into())),
-            };
-        }
-        let string = self.to_string_slot_metered(primitive);
-        let name = match string.value {
+        let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
             _ => return Err(Halt::Throw("TypeError: invalid property key".into())),
         };
