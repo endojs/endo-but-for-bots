@@ -3786,10 +3786,8 @@ pub struct Interp {
     /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
     /// of the `eval` native call, so the bridge can tell a **direct** eval
     /// (whose scope is the caller's) from an **indirect** one (whose scope is
-    /// always the realm global). Indirect eval always runs in the shared
-    /// realm's program scope; a direct eval only runs when the caller scope
-    /// *is* that program scope (top level — [`Self::call_stack`] empty), else
-    /// it stays a named gap rather than a wrong-scope result.
+    /// always the realm global). A direct eval retains the caller's published
+    /// environment chain and `this`.
     eval_direct: bool,
     /// Side table of user-function metadata (body range + captured
     /// closures), keyed by the function instance's slot index. See
@@ -7983,11 +7981,11 @@ impl Interp {
     ///   program never named — so `Object`, `Math`, … mean the realm's.
     /// - **Realm identity.** It runs on this same [`Interp`]: the same global
     ///   object, intrinsics, heap, and meter. Indirect eval and `Function`
-    ///   evaluate in the realm's program (global) scope; a direct eval shares
-    ///   the caller's scope, which here is the program scope **only** at top
-    ///   level (`call_stack` empty) — a direct eval nested inside a function
-    ///   frame would need caller-local capture we do not model, so it stays a
-    ///   named gap (`eval:direct-scope`) rather than a wrong-scope result.
+    ///   evaluate in the realm's program (global) scope. A direct eval keeps
+    ///   the caller's published environment chain, so parameters and lexical
+    ///   cells remain live across the nested dispatch. Sloppy direct-eval
+    ///   `var`/function declarations are instantiated in the nearest published
+    ///   caller variable environment.
     /// - **Nested invocation / safe recursion.** The unit runs as an isolated
     ///   program activation: the caller's whole frame (scope, `this`, args,
     ///   target, catch-jump chain, call stack, result) is saved and a clean
@@ -8000,15 +7998,9 @@ impl Interp {
     ///   eval unit's promise reactions drain with the outer program's job
     ///   pump (not a nested drain), matching a single host crank.
     fn eval_source(&mut self, source: &str, strict: bool) -> Result<Slot, Halt> {
-        // A direct eval (the `XS_CODE_EVAL` opcode) whose caller scope is a
-        // function frame is not modeled: only the program-scope case (top
-        // level) is faithful here. Refuse rather than run in the wrong scope.
-        if self.eval_direct && !self.call_stack.is_empty() {
-            return Err(Halt::Unsupported("eval:direct-scope"));
-        }
         // Whether this is a direct eval (its declaration instantiation observes
-        // the caller's — here the global — lexical environment). Captured before
-        // the nested-frame setup clears `eval_direct`.
+        // the caller's lexical environment). Captured before the nested-frame
+        // setup clears `eval_direct`.
         let is_direct = self.eval_direct;
         let compiler = match &self.source_compiler {
             Some(compiler) => compiler.clone(),
@@ -8062,6 +8054,7 @@ impl Interp {
         let saved_args = std::mem::take(&mut self.args);
         let saved_call_stack = std::mem::take(&mut self.call_stack);
         let saved_jumps = std::mem::take(&mut self.jumps);
+        let saved_env = self.env;
         let saved_result = self.result;
         let saved_strict = self.strict;
         let saved_this = self.this_val;
@@ -8085,6 +8078,12 @@ impl Interp {
         self.callback_return_depth = None;
         self.frame_slots = 0;
         self.eval_direct = false;
+        // A direct eval resolves through the caller's compiler-published
+        // closure environments. An indirect eval always starts at the realm
+        // global and must not inherit an enclosing function's dynamic chain.
+        if !is_direct {
+            self.env = Slot::undefined();
+        }
         // The unit's declaration-instantiation hoist observes the direct/indirect
         // distinction (only a direct eval sees the caller's global lexicals).
         self.direct_eval_hoist = is_direct;
@@ -8104,6 +8103,7 @@ impl Interp {
         self.args = saved_args;
         self.call_stack = saved_call_stack;
         self.jumps = saved_jumps;
+        self.env = saved_env;
         self.result = saved_result;
         self.strict = saved_strict;
         self.this_val = saved_this;
@@ -10800,6 +10800,7 @@ impl Interp {
         // Declaration order = the `locals` index the name maps to.
         let mut names: Vec<(usize, u16)> = self.id_map.iter().map(|(&id, &i)| (i, id)).collect();
         names.sort_unstable();
+        let direct_variable_env = self.direct_eval_variable_environment();
         for (index, id) in names {
             // GlobalDeclarationInstantiation: a top-level **function**
             // declaration must satisfy `CanDeclareGlobalFunction`, else it is
@@ -10809,6 +10810,15 @@ impl Interp {
             // apart with no source inspection.
             let kind = self.locals.get(index).map(|slot| slot.kind);
             let is_function_declaration = matches!(kind, Some(Kind::Null));
+            if let Some(variable_env) = direct_variable_env {
+                if self.has_lexical_binding_before(variable_env, id) {
+                    return Err(self.build_error("SyntaxError", 0, 0));
+                }
+                if !self.has_function_var_binding(variable_env, id) {
+                    self.append_environment_capture(variable_env, id, Slot::undefined());
+                }
+                continue;
+            }
             // A **direct** eval's `var`/function declaration that collides with an
             // enclosing lexical binding — here the realm's global lexical
             // environment, holding the running program's top-level
@@ -10844,6 +10854,87 @@ impl Interp {
             }
         }
         Ok(())
+    }
+
+    /// The nearest caller variable environment used by a direct eval inside a
+    /// function. The compiler publishes function scopes as declarative
+    /// environment instances: a `null` behavior marks the variable environment
+    /// and an `undefined` behavior marks lexical/parameter layers. Object
+    /// (`with`) environments carry a reference and are skipped.
+    fn direct_eval_variable_environment(&self) -> Option<crate::value::SlotIndex> {
+        if !self.direct_eval_hoist || self.env.kind != Kind::Reference {
+            return None;
+        }
+        let mut env = match self.env.value {
+            Payload::Reference(env) => env,
+            _ => return None,
+        };
+        while !env.is_null() {
+            let behavior = self.slots.get(env).next;
+            if !behavior.is_null() && self.slots.get(behavior).kind == Kind::Null {
+                return Some(env);
+            }
+            env = self.instance_prototype(env);
+        }
+        None
+    }
+
+    /// Whether a declarative lexical layer between the active environment head
+    /// and `variable_env` already binds `id`. EvalDeclarationInstantiation
+    /// rejects a `var`/function declaration at that collision, while parameter
+    /// and older variable layers below `variable_env` remain valid targets.
+    fn has_lexical_binding_before(
+        &self,
+        variable_env: crate::value::SlotIndex,
+        id: u16,
+    ) -> bool {
+        let mut env = match self.env.value {
+            Payload::Reference(env) => env,
+            _ => return false,
+        };
+        while !env.is_null() && env != variable_env {
+            let behavior = self.slots.get(env).next;
+            if !behavior.is_null() {
+                let slot = self.slots.get(behavior);
+                if slot.kind != Kind::Reference && self.environment_property(env, id).is_some() {
+                    return true;
+                }
+            }
+            env = self.instance_prototype(env);
+        }
+        false
+    }
+
+    /// Whether `id` is already published in the current function's variable
+    /// environment group. XS's eval-poisoned function layout has the body var
+    /// layer first, then parameter bindings, then a second `null` behavior
+    /// boundary. Reusing a parameter/body cell is required for `eval('var a =
+    /// ...')`; walking beyond the second boundary would incorrectly reuse a
+    /// binding captured from an outer function.
+    fn has_function_var_binding(
+        &self,
+        variable_env: crate::value::SlotIndex,
+        id: u16,
+    ) -> bool {
+        let mut env = variable_env;
+        let mut null_boundaries = 0usize;
+        while !env.is_null() {
+            let behavior = self.slots.get(env).next;
+            if !behavior.is_null() {
+                let slot = self.slots.get(behavior);
+                if slot.kind != Kind::Reference && self.environment_property(env, id).is_some() {
+                    return true;
+                }
+                if slot.kind == Kind::Null {
+                    null_boundaries += 1;
+                    if null_boundaries == 2 {
+                        return false;
+                    }
+                }
+            }
+            env = self.instance_prototype(env);
+        }
+        false
     }
 
     /// ECMA-262 § 9.1.1.4.16 `CanDeclareGlobalFunction` over this realm's
@@ -11457,7 +11548,9 @@ impl Interp {
                     // stack-based `run` set it up, dispatch-only) does not.
                     if self.call_stack.is_empty() {
                         self.tick_program_overhead();
-                        self.bind_program_this();
+                        if !self.direct_eval_hoist {
+                            self.bind_program_this();
+                        }
                     } else if self.cur_target {
                         // A constructor frame (`new f(...)`): allocate the
                         // `this` instance (`fxRunConstructor`) before the body.
@@ -11476,8 +11569,11 @@ impl Interp {
                         self.tick_program_overhead();
                         // A top-level *script* frame's `this` is the realm
                         // global in strict mode too (only an ES module's is
-                        // `undefined`, and modules are structurally skipped).
-                        self.bind_program_this();
+                        // `undefined`). A direct eval instead retains its
+                        // caller's `this` binding across the nested dispatch.
+                        if !self.direct_eval_hoist {
+                            self.bind_program_this();
+                        }
                     } else {
                         match op {
                             XS_CODE_BEGIN_STRICT_BASE => {
@@ -17964,8 +18060,8 @@ impl Interp {
                     // A direct eval inherits the caller's strictness; an
                     // indirect eval of ordinary source is sloppy (a
                     // `"use strict"` prologue still promotes it, in the
-                    // compiler). At the (only) faithful direct-eval site — top
-                    // level — `self.strict` is the program's strictness.
+                    // compiler). `self.strict` is the calling script or
+                    // function frame's strictness at this direct-eval site.
                     let strict = self.eval_direct && self.strict;
                     self.eval_source(&text, strict)?
                 } else {
