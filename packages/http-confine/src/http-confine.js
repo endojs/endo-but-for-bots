@@ -431,6 +431,73 @@ export const resolveRedirect = (response, origins) => {
 freeze(resolveRedirect);
 
 /**
+ * Copy response headers out of native Web API objects before hardening. Node's
+ * Undici Headers implementation lazily populates an internal sorted cache when
+ * iterated; deep-hardening the native object first makes that cache read-only
+ * and turns an ordinary response into an uncaught TypeError.
+ *
+ * @param {Headers | Record<string, string> | Iterable<[string, string]> | undefined} headers
+ * @returns {Record<string, string>}
+ */
+const snapshotHeaders = headers => {
+  /** @type {Record<string, string>} */
+  const record = {};
+  /**
+   * @param {string} key
+   * @param {string} value
+   */
+  const setHeader = (key, value) => {
+    Object.defineProperty(record, key.toLowerCase(), {
+      value: String(value),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  };
+  if (
+    headers &&
+    typeof (
+      /** @type {Iterable<[string, string]>} */ (headers)[Symbol.iterator]
+    ) === 'function'
+  ) {
+    for (const [key, value] of /** @type {Iterable<[string, string]>} */ (
+      headers
+    )) {
+      setHeader(key, value);
+    }
+  } else if (
+    headers &&
+    typeof (/** @type {Headers} */ (headers).forEach) === 'function'
+  ) {
+    /** @type {Headers} */ (headers).forEach((value, key) => {
+      setHeader(key, value);
+    });
+  } else {
+    for (const [key, value] of Object.entries(headers || {})) {
+      setHeader(key, value);
+    }
+  }
+  return freeze(record);
+};
+
+/**
+ * Project a transport response to inert data. The body has already been
+ * consumed into bounded bytes, so retaining and hardening the native Response
+ * object serves no purpose and is unsafe for host objects with lazy internals.
+ *
+ * @param {FetchLikeResponse} response
+ * @returns {FetchLikeResponse}
+ */
+const snapshotResponse = response =>
+  freeze({
+    status: Number(response.status || 0),
+    statusText: String(response.statusText || ''),
+    ok: Boolean(response.ok),
+    headers: snapshotHeaders(response.headers),
+    url: String(response.url || ''),
+  });
+
+/**
  * @param {{ timeoutMs: number, cancellation?: Promise<never> }} opts
  * @returns {{ signal: AbortSignal, dispose: () => void }}
  */
@@ -565,7 +632,7 @@ export const makeHttpConfinement = (policy, { fetch, now }) => {
       const bytes = await limited.stream;
       assertNotRevoked();
       return freeze({
-        response,
+        response: snapshotResponse(response),
         bytes,
         truncated: limited.truncated(),
         maxResponseBytes,

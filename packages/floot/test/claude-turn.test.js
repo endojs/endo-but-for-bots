@@ -233,6 +233,20 @@ test('the model option reaches the client', async t => {
   t.deepEqual(options, [{ model: 'claude-opus-4-8' }]);
 });
 
+test('the thinking option reaches the client', async t => {
+  const { writer } = makeRecordingWriter();
+  const { client, push, options } = makeFakeClient();
+  const turn = runClaudeTurn({
+    client,
+    text: 'hi',
+    writer,
+    thinking: 'high',
+  });
+  push({ type: 'end' });
+  await turn;
+  t.deepEqual(options, [{ thinking: 'high' }]);
+});
+
 test('the systemPrompt option reaches the client', async t => {
   const { writer } = makeRecordingWriter();
   const { client, push, options } = makeFakeClient();

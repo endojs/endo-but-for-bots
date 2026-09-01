@@ -396,6 +396,10 @@ export const HostInterface = M.interface('EndoHost', {
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('BasicCredential')),
+  // Write credential material to a mount path without revealing the bytes.
+  writeSecret: M.callWhen(M.remotable(), M.any(), M.remotable()).returns(
+    M.promise(),
+  ),
   // Host-side controllers for daemon-minted credential / remote caps.
   getGitCredentialController: M.callWhen(M.remotable()).returns(
     M.remotable('GitCredentialController'),

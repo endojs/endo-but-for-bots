@@ -27,19 +27,21 @@ if (!globalThis.MutationObserver && testWindow.MutationObserver) {
  * Mock Floot factory with one session. Each startTurn() returns a FlootTurn
  * whose watch() stream the test drives event by event.
  */
-const makeMockFactory = () => {
+const makeMockFactory = ({ catalog = false } = {}) => {
   const turns = [];
   const history = [];
-  const makeSessionFacet = id =>
+  const creations = [];
+  const makeSessionFacet = (id, info = {}) =>
     Far(`FlootSession-${id}`, {
       async getInfo() {
         return {
           id,
-          title: 'Chat one',
+          title: info.title || 'Chat one',
           createdAt: 1,
-          presetId: 'general',
-          runtime: '',
-          model: '',
+          presetId: info.presetId || 'general',
+          runtime: info.runtime || '',
+          model: info.model || '',
+          thinking: info.thinking || '',
         };
       },
       startTurn(input) {
@@ -82,13 +84,79 @@ const makeMockFactory = () => {
       ];
     },
     async listPresets() {
-      return [];
+      return catalog
+        ? [
+            {
+              id: 'general',
+              title: 'General',
+              description: 'General assistant',
+            },
+          ]
+        : [];
     },
     async listModels() {
-      return [];
+      return catalog
+        ? [
+            {
+              id: 'claude-sonnet',
+              title: 'Claude Sonnet',
+              runtimes: ['claude-cli'],
+              defaultFor: ['claude-cli'],
+            },
+            {
+              id: 'gpt-sol',
+              title: 'GPT Sol',
+              runtimes: ['codex-cli'],
+              defaultFor: ['codex-cli'],
+            },
+            {
+              id: 'gpt-terra',
+              title: 'GPT Terra',
+              runtimes: ['codex-cli'],
+              defaultFor: [],
+            },
+          ]
+        : [];
     },
     async listRuntimes() {
-      return [];
+      return catalog
+        ? [
+            { id: 'claude-cli', title: 'Claude Code', default: true },
+            { id: 'codex-cli', title: 'Codex' },
+          ]
+        : [];
+    },
+    async listThinkingOptions() {
+      return catalog
+        ? [
+            {
+              id: 'auto',
+              title: 'Auto',
+              default: true,
+              runtimes: ['claude-cli', 'codex-cli'],
+            },
+            {
+              id: 'none',
+              title: 'None',
+              runtimes: ['codex-cli'],
+            },
+            {
+              id: 'xhigh',
+              title: 'Extra high',
+              runtimes: ['claude-cli', 'codex-cli'],
+            },
+          ]
+        : [];
+    },
+    async createSession(title, presetId, model, runtime, thinking) {
+      creations.push({ title, presetId, model, runtime, thinking });
+      return makeSessionFacet('s2', {
+        title,
+        presetId,
+        model,
+        runtime,
+        thinking,
+      });
     },
     async getSession(id) {
       return makeSessionFacet(id);
@@ -102,13 +170,13 @@ const makeMockFactory = () => {
       return factory;
     },
   });
-  return { rootPowers, turns, history };
+  return { rootPowers, turns, history, creations };
 };
 
-const mountFloot = t => {
+const mountFloot = (t, options = {}) => {
   const $parent = testDocument.createElement('div');
   testDocument.body.appendChild($parent);
-  const { rootPowers, turns, history } = makeMockFactory();
+  const { rootPowers, turns, history, creations } = makeMockFactory(options);
   const cleanup = flootComponent(
     $parent,
     rootPowers,
@@ -133,8 +201,69 @@ const mountFloot = t => {
       new testWindow.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }),
     );
   };
-  return { $parent, turns, history, bodyText, composer, loaded, send };
+  return {
+    $parent,
+    turns,
+    history,
+    creations,
+    bodyText,
+    composer,
+    loaded,
+    send,
+  };
 };
+
+test.serial('new sessions filter models and thinking by runtime', async t => {
+  const { $parent, creations, loaded } = mountFloot(t, { catalog: true });
+  await waitFor(() => loaded());
+
+  $parent
+    .querySelector('.floot-new-btn')
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => $parent.querySelector('.floot-modal'));
+
+  const selects = () => [...$parent.querySelectorAll('.floot-model-select')];
+  t.deepEqual(
+    [...selects()[0].options].map(option => option.value),
+    ['claude-sonnet'],
+  );
+  t.deepEqual(
+    [...selects()[1].options].map(option => option.value),
+    ['auto', 'xhigh'],
+  );
+
+  const codexButton = [
+    ...$parent.querySelectorAll('.floot-runtime-option'),
+  ].find(button => button.textContent === 'Codex');
+  codexButton.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+  await waitFor(() => selects()[0].value === 'gpt-sol');
+  t.deepEqual(
+    [...selects()[0].options].map(option => option.value),
+    ['gpt-sol', 'gpt-terra'],
+  );
+  t.deepEqual(
+    [...selects()[1].options].map(option => option.value),
+    ['auto', 'none', 'xhigh'],
+  );
+
+  selects()[0].value = 'gpt-terra';
+  selects()[0].dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+  selects()[1].value = 'xhigh';
+  selects()[1].dispatchEvent(new testWindow.Event('input', { bubbles: true }));
+  await new Promise(resolve => globalThis.setTimeout(resolve, 0));
+  $parent
+    .querySelector('.floot-preset-card')
+    .dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+
+  await waitFor(() => creations.length === 1);
+  t.deepEqual(creations[0], {
+    title: 'New chat',
+    presetId: 'general',
+    model: 'gpt-terra',
+    runtime: 'codex-cli',
+    thinking: 'xhigh',
+  });
+});
 
 test.serial(
   'a message sent while a turn streams stays visible while queued',

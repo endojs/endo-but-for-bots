@@ -60,6 +60,9 @@
       "path": "packages/cli/tsconfig.composite.json"
     },
     {
+      "path": "packages/codex-sandbox/tsconfig.composite.json"
+    },
+    {
       "path": "packages/common/tsconfig.composite.json"
     },
     {

@@ -158,6 +158,195 @@ test('a claude-cli turn persists history and folds usage', async t => {
   });
 });
 
+test('a codex-cli turn surfaces and persists tool activity', async t => {
+  t.timeout(20_000);
+  const powers = makeFakePowers();
+  const { client, turns } = makeFakeClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { codexClient: client },
+    'test prompt',
+  );
+
+  const { writer, reader } = makeReplyChannel();
+  const replyP = collectReply(reader);
+  const turnP = agent.converse('check health', writer);
+  for (let i = 0; i < 50 && turns.length === 0; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.is(turns.length, 1);
+  turns[0].push({ type: 'thread.started', thread_id: 'thread-1' });
+  turns[0].push({ type: 'turn.started' });
+  turns[0].push({
+    type: 'item.started',
+    item: {
+      id: 'cmd-1',
+      type: 'command_execution',
+      command: 'uptime',
+      status: 'in_progress',
+    },
+  });
+  turns[0].push({
+    type: 'item.completed',
+    item: {
+      id: 'cmd-1',
+      type: 'command_execution',
+      command: 'uptime',
+      aggregated_output: 'up 13 days',
+      exit_code: 0,
+      status: 'completed',
+    },
+  });
+  turns[0].push({
+    type: 'item.completed',
+    item: { id: 'msg-1', type: 'agent_message', text: 'Healthy.' },
+  });
+  turns[0].push({
+    type: 'turn.completed',
+    usage: { input_tokens: 30, output_tokens: 6 },
+  });
+  turns[0].push({ type: 'end' });
+
+  await turnP;
+  const events = await replyP;
+  t.deepEqual(
+    events.map(event => event.type),
+    [
+      'phase',
+      'phase',
+      'phase',
+      'tool_call',
+      'phase',
+      'phase',
+      'tool_result',
+      'phase',
+      'delta',
+      'usage',
+      'final',
+      'end',
+    ],
+  );
+  t.deepEqual(await agent.getHistory(), [
+    { role: 'user', content: 'check health' },
+    {
+      role: 'tool',
+      name: 'shell',
+      args: '{"command":"uptime"}',
+      result: 'up 13 days',
+    },
+    { role: 'assistant', content: 'Healthy.' },
+  ]);
+});
+
+test('codex-cli history keeps reused tool ids paired to their own turn', async t => {
+  t.timeout(20_000);
+  const powers = makeFakePowers();
+  const { client, turns } = makeFakeClient();
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { codexClient: client },
+    'test prompt',
+  );
+
+  const { writer, reader } = makeReplyChannel();
+  const replyP = collectReply(reader);
+  const turnP = agent.converse('check health', writer);
+  for (let i = 0; i < 50 && turns.length === 0; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  turns[0].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      call_id: 'call-health',
+      name: 'exec',
+      input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+    },
+  });
+  turns[0].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call_output',
+      call_id: 'call-health',
+      output: [
+        {
+          type: 'input_text',
+          text: 'MCP tool call requires approval, but approval policy is never',
+        },
+      ],
+    },
+  });
+  turns[0].push({
+    type: 'item.completed',
+    item: { id: 'msg-1', type: 'agent_message', text: 'Blocked.' },
+  });
+  turns[0].push({ type: 'turn.completed', usage: {} });
+  turns[0].push({ type: 'end' });
+
+  await turnP;
+  await replyP;
+
+  const secondChannel = makeReplyChannel();
+  const secondReplyP = collectReply(secondChannel.reader);
+  const secondTurnP = agent.converse('retry health', secondChannel.writer);
+  for (let i = 0; i < 50 && turns.length < 2; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  turns[1].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call',
+      call_id: 'call-health',
+      name: 'exec',
+      input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+    },
+  });
+  turns[1].push({
+    type: 'response_item',
+    payload: {
+      type: 'custom_tool_call_output',
+      call_id: 'call-health',
+      output: [{ type: 'input_text', text: 'healthy' }],
+    },
+  });
+  turns[1].push({
+    type: 'item.completed',
+    item: { id: 'msg-2', type: 'agent_message', text: 'Healthy.' },
+  });
+  turns[1].push({ type: 'turn.completed', usage: {} });
+  turns[1].push({ type: 'end' });
+  await secondTurnP;
+  await secondReplyP;
+
+  t.deepEqual(await agent.getHistory(), [
+    { role: 'user', content: 'check health' },
+    {
+      role: 'tool',
+      name: 'exec',
+      args: JSON.stringify({
+        input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+      }),
+      result: 'MCP tool call requires approval, but approval policy is never',
+    },
+    { role: 'assistant', content: 'Blocked.' },
+    { role: 'user', content: 'retry health' },
+    {
+      role: 'tool',
+      name: 'exec',
+      args: JSON.stringify({
+        input: 'const r = await tools.mcp__endo__exec({ code: "health" });',
+      }),
+      result: 'healthy',
+    },
+    { role: 'assistant', content: 'Healthy.' },
+  ]);
+});
+
 test('a failed claude-cli turn aborts the reply but keeps the delivered prompt', async t => {
   t.timeout(20_000);
   const powers = makeFakePowers();

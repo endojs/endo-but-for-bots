@@ -485,14 +485,16 @@ export const flootComponent = (
    *   meta?: { mail?: { from?: string } },
    *   name?: string, args?: string, result?: string | null }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
-   *   runtime: string, model: string, messages: HistoryMessage[], facet: any,
+   *   runtime: string, model: string, thinking: string, messages: HistoryMessage[], facet: any,
    *   loaded: boolean }}
    *   FlootSession
    * @typedef {{ id: string, title: string, description: string }} FlootPreset
    * @typedef {{ id: string, title: string, description: string,
-   *   default: boolean }} FlootModel
+   *   default: boolean, runtimes: string[], defaultFor: string[] }} FlootModel
    * @typedef {{ id: string, title: string, description: string,
    *   default: boolean }} FlootRuntime
+   * @typedef {{ id: string, title: string, description: string,
+   *   default: boolean, runtimes: string[] }} FlootThinkingOption
    */
 
   /** @type {FlootPreset[]} */
@@ -501,6 +503,8 @@ export const flootComponent = (
   let models = [];
   /** @type {FlootRuntime[]} */
   let runtimes = [];
+  /** @type {FlootThinkingOption[]} */
+  let thinkingOptions = [];
   /** @type {FlootSession[]} */
   let sessions = [];
   /** @type {string | null} */
@@ -511,6 +515,8 @@ export const flootComponent = (
   let status = 'Loading sessions…';
   let inputText = '';
   let settingsOpen = false;
+  /** @type {{ id: string, label: string, petName: string, kind: string, audience: string, username?: string } | null} */
+  let secretRequest = null;
   // Whether the transcript should follow new content to the bottom. Tracked
   // host-side (see the scroll observer at mount) because the confined view
   // cannot touch DOM scroll positions.
@@ -612,13 +618,15 @@ export const flootComponent = (
    * @param {string} [presetId]
    * @param {string} [model]
    * @param {string} [runtime]
+   * @param {string} [thinking]
    */
-  const createSession = async (title, presetId, model, runtime) => {
+  const createSession = async (title, presetId, model, runtime, thinking) => {
     const facet = await E(factory).createSession(
       title || DEFAULT_TITLE,
       presetId,
       model,
       runtime,
+      thinking,
     );
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
@@ -629,6 +637,7 @@ export const flootComponent = (
       presetId: info.presetId || DEFAULT_PRESET_ID,
       runtime: info.runtime || '',
       model: info.model || '',
+      thinking: info.thinking || '',
       messages: [],
       facet,
       loaded: true,
@@ -683,7 +692,8 @@ export const flootComponent = (
             /** @type {{ pending?: boolean }} */ (m).pending
               ? {
                   pending: true,
-                  pendingId: /** @type {{ pendingId?: number }} */ (m).pendingId,
+                  pendingId: /** @type {{ pendingId?: number }} */ (m)
+                    .pendingId,
                 }
               : {}
           ),
@@ -718,6 +728,7 @@ export const flootComponent = (
         presetId: s.presetId,
         runtime: s.runtime,
         model: s.model,
+        thinking: s.thinking,
         status: liveTurnFor(s.id)
           ? /** @type {const} */ ('streaming')
           : sessionStatus.get(s.id) || 'idle',
@@ -735,12 +746,21 @@ export const flootComponent = (
         title: m.title,
         description: m.description,
         default: m.default,
+        runtimes: m.runtimes || [],
+        defaultFor: m.defaultFor || [],
       })),
       runtimes: runtimes.map(r => ({
         id: r.id,
         title: r.title,
         description: r.description,
         default: r.default,
+      })),
+      thinkingOptions: thinkingOptions.map(option => ({
+        id: option.id,
+        title: option.title,
+        description: option.description,
+        default: option.default,
+        runtimes: option.runtimes || [],
       })),
       messages: allMessages.map(toViewMessage),
       streamingText: liveTurn ? liveTurn.streamingText : '',
@@ -750,6 +770,7 @@ export const flootComponent = (
       status,
       input: inputText,
       settingsOpen,
+      secretRequest,
       usage: usage
         ? { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens }
         : null,
@@ -1109,10 +1130,11 @@ export const flootComponent = (
    * @param {string} [presetId]
    * @param {string} [model]
    * @param {string} [runtime]
+   * @param {string} [thinking]
    */
-  const newSession = (presetId, model, runtime) => {
+  const newSession = (presetId, model, runtime, thinking) => {
     if (busy) return;
-    createSession(undefined, presetId, model, runtime)
+    createSession(undefined, presetId, model, runtime, thinking)
       .then(() => {
         stick = true;
         notify();
@@ -1590,9 +1612,7 @@ export const flootComponent = (
   });
 
   updateWakeLock = () => {
-    screenWakeLock.set(
-      !cancelled && Boolean(micActive || ttsSpeaking || busy),
-    );
+    screenWakeLock.set(!cancelled && Boolean(micActive || ttsSpeaking || busy));
   };
 
   // The browser drops the lock when the page is hidden and does not restore it.
@@ -1815,8 +1835,9 @@ export const flootComponent = (
       /** @type {string | undefined} */ presetId,
       /** @type {string | undefined} */ model,
       /** @type {string | undefined} */ runtime,
+      /** @type {string | undefined} */ thinking,
     ) {
-      newSession(presetId, model, runtime);
+      newSession(presetId, model, runtime, thinking);
     },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);
@@ -1848,7 +1869,80 @@ export const flootComponent = (
       inputText = text;
       notify();
     },
+    submitSecret(
+      /** @type {string} */ value,
+      /** @type {string | undefined} */ username,
+    ) {
+      const session = getActiveSession();
+      const request = secretRequest;
+      if (!session || !request) return;
+      const requestId = request.id;
+      secretRequest = null;
+      notify();
+      const payload =
+        request.kind === 'basic'
+          ? harden({
+              password: value,
+              username: username || request.username || 'user',
+            })
+          : value;
+      E(facetFor(session))
+        .submitSecret(requestId, payload)
+        .then(() => {
+          setStatus('Secret received as a capability.');
+        })
+        .catch((/** @type {Error} */ err) => {
+          setStatus(`error: ${err.message}`);
+          notify();
+        });
+    },
+    cancelSecretRequest() {
+      const session = getActiveSession();
+      const request = secretRequest;
+      if (!session || !request) return;
+      secretRequest = null;
+      notify();
+      E(facetFor(session))
+        .cancelSecretRequest(request.id)
+        .catch(() => {});
+    },
   });
+
+  const pollSecretRequest = () => {
+    if (cancelled) return;
+    const session = getActiveSession();
+    if (!session) {
+      if (secretRequest) {
+        secretRequest = null;
+        notify();
+      }
+      return;
+    }
+    E(facetFor(session))
+      .getSecretRequest()
+      .then((/** @type {any} */ next) => {
+        if (cancelled) return;
+        const prevId = secretRequest && secretRequest.id;
+        const nextId = next && next.id;
+        if (prevId === nextId) return;
+        secretRequest = next
+          ? {
+              id: String(next.id),
+              label: String(next.label || ''),
+              petName: String(next.petName || ''),
+              kind: String(next.kind || 'bearer'),
+              audience: String(next.audience || ''),
+              ...(next.username ? { username: String(next.username) } : {}),
+            }
+          : null;
+        if (next) setStatus('Waiting for a secret in the paste box…');
+        notify();
+      })
+      .catch(() => {
+        // Session facet may not be incarnated yet.
+      });
+  };
+  const secretPoll = setInterval(pollSecretRequest, 400);
 
   // ── Mount the confined Preact view ───────────────────────────────────────────
   $parent.replaceChildren();
@@ -1969,19 +2063,24 @@ export const flootComponent = (
   // default session if the factory has none, then repaint the active history.
   (async () => {
     try {
-      const [metas, presetList, modelList, runtimeList] = await Promise.all([
-        E(factory).listSessions(),
-        E(factory)
-          .listPresets()
-          .catch(() => []),
-        E(factory).listModels(),
-        E(factory)
-          .listRuntimes()
-          .catch(() => []),
-      ]);
+      const [metas, presetList, modelList, runtimeList, thinkingList] =
+        await Promise.all([
+          E(factory).listSessions(),
+          E(factory)
+            .listPresets()
+            .catch(() => []),
+          E(factory).listModels(),
+          E(factory)
+            .listRuntimes()
+            .catch(() => []),
+          E(factory)
+            .listThinkingOptions()
+            .catch(() => []),
+        ]);
       presets = presetList;
       models = modelList;
       runtimes = runtimeList;
+      thinkingOptions = thinkingList;
       sessions = [...metas]
         .sort(
           (/** @type {any} */ a, /** @type {any} */ b) =>
@@ -1994,6 +2093,7 @@ export const flootComponent = (
           presetId: m.presetId || DEFAULT_PRESET_ID,
           runtime: m.runtime || '',
           model: m.model || '',
+          thinking: m.thinking || '',
           messages: [],
           facet: null,
           loaded: false,
@@ -2025,6 +2125,7 @@ export const flootComponent = (
       ttsCtx.close().catch(() => {});
       ttsCtx = null;
     }
+    clearInterval(secretPoll);
     scrollObserver.disconnect();
     $mount.removeEventListener('scroll', onScrollCapture, true);
     unmount($mount);

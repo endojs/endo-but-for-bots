@@ -1310,6 +1310,20 @@ const makeDaemonCore = async (
   /** @type {DaemonCore['getIdForRef']} */
   const getIdForRef = ref => idForRef.get(/** @type {any} */ (ref));
 
+  /**
+   * Privileged host-only read of credential material. Used by `writeSecret`
+   * so a mount can receive the bytes without exposing them to a guest.
+   *
+   * @param {unknown} cap
+   * @returns {GitCredentialMaterial | undefined}
+   */
+  const getGitCredentialMaterialForCap = cap => {
+    const id = getIdForRef(cap);
+    if (id === undefined) return undefined;
+    return gitCredentialMaterialForId.get(id);
+  };
+  harden(getGitCredentialMaterialForCap);
+
   /** @param {unknown} value */
   const getLocalIdForRef = value => {
     if (
@@ -7284,6 +7298,7 @@ const makeDaemonCore = async (
     formulateHttpClient,
     getHttpClientControlForClient,
     formulateGitCredential,
+    getGitCredentialMaterialForCap,
     formulateGitRemote,
     formulateInvitation,
     formulateDirectoryForStore,

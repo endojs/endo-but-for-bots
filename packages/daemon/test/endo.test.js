@@ -4348,6 +4348,26 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
   t.deepEqual(resultValue, { displayName: 'Bob' });
 });
 
+test('writeSecret rejects a caller-controlled remotable destination', async t => {
+  const { host } = await prepareHost(t);
+  const credential = await E(host).provideBearerCredential('credential', {
+    audience: 'https://git.example',
+    token: 'super-secret-token',
+  });
+  let captured;
+  const fakeMount = Far('FakeMount', {
+    writeText(_path, value) {
+      captured = value;
+    },
+  });
+
+  await t.throwsAsync(
+    () => E(host).writeSecret(fakeMount, 'secret.txt', credential),
+    { message: /daemon-minted mount/ },
+  );
+  t.is(captured, undefined);
+});
+
 // Formula write failure test removed: SQLite provides transactional
 // atomicity, making partial writes structurally impossible.
 

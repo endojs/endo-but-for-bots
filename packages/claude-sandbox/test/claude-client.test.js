@@ -233,6 +233,18 @@ test('send() adds --continue after the first turn and forwards --model', async t
   }
 });
 
+test('send() forwards a non-auto thinking effort', async t => {
+  const fake = makeFakeSlice([[]]);
+  const client = makeClaudeClient(baseArgs(fake, makeFakeMount()));
+
+  await drain(await client.send('think carefully', { thinking: 'high' }));
+
+  const { argv } = fake.spawned[0];
+  const effortIndex = argv.indexOf('--effort');
+  t.true(effortIndex !== -1);
+  t.is(argv[effortIndex + 1], 'high');
+});
+
 test('a constructor systemPrompt adds --append-system-prompt to every spawn', async t => {
   const fake = makeFakeSlice([[], []]);
   const client = makeClaudeClient(
@@ -777,7 +789,10 @@ test('a turn killed by a mount recreate aborts with the recreate-labelled reason
   t.regex(last.reason, /send this turn again/, 'says what to do');
   t.notRegex(last.reason, /killed by SIGKILL/);
   t.notRegex(last.reason, /exited with code/);
-  t.true(last.expected, 'marked as by-design so the UI need not style an error');
+  t.true(
+    last.expected,
+    'marked as by-design so the UI need not style an error',
+  );
   releaseProvision();
   await applied;
   t.is(provisionCount, 2);

@@ -91,6 +91,7 @@ const allowEnvPass = key => {
     key.startsWith('LOCKDOWN_') ||
     key.startsWith('XDG_') ||
     key.startsWith('CLAUDE_') ||
+    key.startsWith('CODEX_') ||
     key.startsWith('NINEP_') ||
     key === 'CONTAINER_HOST' ||
     key === 'CONTAINERS_CONF'

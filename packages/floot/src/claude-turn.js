@@ -240,6 +240,7 @@ harden(makeClaudeEventTranslator);
  * @param {object} options.writer - makeReplyChannel writer.
  * @param {AbortSignal} [options.signal]
  * @param {string} [options.model] - Optional model override for this turn.
+ * @param {string} [options.thinking] - Optional Claude Code effort level.
  * @param {string} [options.systemPrompt] - Optional session system prompt to
  *   append to Claude Code's built-in prompt (via `--append-system-prompt`), so
  *   the CLI runtime runs under the same persona the API runtime gets.
@@ -260,6 +261,7 @@ export const runClaudeTurn = async ({
   writer,
   signal,
   model,
+  thinking,
   systemPrompt,
 }) => {
   const translator = makeClaudeEventTranslator(writer);
@@ -267,6 +269,7 @@ export const runClaudeTurn = async ({
     text,
     harden({
       ...(model ? { model } : {}),
+      ...(thinking ? { thinking } : {}),
       ...(systemPrompt ? { systemPrompt } : {}),
     }),
   );

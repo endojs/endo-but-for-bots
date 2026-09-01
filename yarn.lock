@@ -1760,6 +1760,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/codex-sandbox@workspace:packages/codex-sandbox":
+  version: 0.0.0-use.local
+  resolution: "@endo/codex-sandbox@workspace:packages/codex-sandbox"
+  dependencies:
+    "@endo/9p-server": "workspace:^"
+    "@endo/cli": "workspace:^"
+    "@endo/daemon": "workspace:^"
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
+    "@endo/sandbox": "workspace:^"
+    "@endo/stream": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/common@workspace:^, @endo/common@workspace:packages/common":
   version: 0.0.0-use.local
   resolution: "@endo/common@workspace:packages/common"
@@ -3324,6 +3345,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/spaces-util": "workspace:^"
     "@endo/workflow": "workspace:^"
     eslint: "catalog:dev"
     preact: "npm:^10.29.2"

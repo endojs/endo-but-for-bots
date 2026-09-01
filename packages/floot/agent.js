@@ -34,6 +34,7 @@ import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
+import { runCodexTurn } from './src/codex-turn.js';
 import { makeReplyChannel } from './src/stream.js';
 import { makeSessionTurn } from './src/session-turn.js';
 import { makeFlootLocalTools } from './src/tool-registry.js';
@@ -41,6 +42,7 @@ import { makeMcpBridge } from './src/mcp-bridge.js';
 import { startMcpSocketServer } from './src/mcp-socket-server.js';
 import { makePublishTool } from './src/publish-tool.js';
 import { makeContainerMountRegistrar } from './src/container-mounts.js';
+import { makeSecretRequestKit } from './src/secret-request.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply. This is a *safety* ceiling, not a work budget: real
@@ -214,19 +216,30 @@ harden(makeSpeechWriter);
  * @param {any} powers
  * @param {Record<string, string>} [env]
  */
-export const makeClaudeClientResolver = (powers, env = {}) => {
+const makeCliClientResolver = (
+  powers,
+  env,
+  {
+    baseEnv,
+    defaultBase,
+    provisionerEnv,
+    defaultProvisioner,
+    claimName,
+    label,
+    packageName,
+  },
+) => {
   /** @type {Map<string, Promise<any>>} */
   const clients = new Map();
-  const base = env.FLOOT_CLAUDE_CLIENT || 'claude-client';
-  const provisionerName =
-    env.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
+  const base = env[baseEnv] || defaultBase;
+  const provisionerName = env[provisionerEnv] || defaultProvisioner;
 
   // Which session claimed the shared client. A shared ClaudeClient carries ONE
   // CLI conversation and workspace, so the claim must survive a daemon restart:
   // held only in memory, a different session could claim it after a restart and
   // silently `--continue` the first session's conversation. Persisted to the
   // factory petstore; loaded lazily, written on first claim.
-  const SHARED_CLAIM_NAME = 'floot-claude-shared-claim';
+  const SHARED_CLAIM_NAME = claimName;
   /** @type {string | undefined} */
   let sharedClaimedBy;
   const loadSharedClaim = async () => {
@@ -247,7 +260,7 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
       // The in-memory claim still guards this incarnation; only cross-restart
       // protection is lost, and that must not fail the turn.
       console.error(
-        '[floot] could not persist shared ClaudeClient claim:',
+        `[floot] could not persist shared ${label} claim:`,
         error instanceof Error ? error.message : String(error),
       );
     }
@@ -285,23 +298,23 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
             return E(powers).lookup(perSession);
           }
           throw new Error(
-            `floot: Claude provisioner "${provisionerName}" did not store "${perSession}".`,
+            `floot: ${label} provisioner "${provisionerName}" did not store "${perSession}".`,
           );
         }
         const claimedBy = await loadSharedClaim();
         if (claimedBy !== undefined && claimedBy !== id) {
           throw new Error(
-            `floot: session ${id} cannot use the shared ClaudeClient "${base}" —` +
+            `floot: session ${id} cannot use the shared ${label} "${base}" —` +
               ` session ${claimedBy} already holds it, and a client` +
               ` carries one CLI conversation and workspace. Provision` +
-              ` "${perSession}" with @endo/claude-sandbox for this session.`,
+              ` "${perSession}" with ${packageName} for this session.`,
           );
         }
         if (!(await E(powers).has(base))) {
           throw new Error(
-            `floot: no ClaudeClient capability for session ${id} — provision` +
+            `floot: no ${label} capability for session ${id} — provision` +
               ` "${perSession}" (or "${base}" for a single-session setup) with` +
-              ` @endo/claude-sandbox, or set FLOOT_CLAUDE_CLIENT.`,
+              ` ${packageName}, or set ${baseEnv}.`,
           );
         }
         const shared = await E(powers).lookup(base);
@@ -347,16 +360,43 @@ export const makeClaudeClientResolver = (powers, env = {}) => {
 
   return harden({ get, remove, identifyClient });
 };
+harden(makeCliClientResolver);
+
+/** @param {any} powers @param {Record<string, string>} [env] */
+export const makeClaudeClientResolver = (powers, env = {}) =>
+  makeCliClientResolver(powers, env, {
+    baseEnv: 'FLOOT_CLAUDE_CLIENT',
+    defaultBase: 'claude-client',
+    provisionerEnv: 'FLOOT_CLAUDE_PROVISIONER',
+    defaultProvisioner: 'claude-session-provisioner',
+    claimName: 'floot-claude-shared-claim',
+    label: 'ClaudeClient',
+    packageName: '@endo/claude-sandbox',
+  });
 harden(makeClaudeClientResolver);
+
+/** @param {any} powers @param {Record<string, string>} [env] */
+export const makeCodexClientResolver = (powers, env = {}) =>
+  makeCliClientResolver(powers, env, {
+    baseEnv: 'FLOOT_CODEX_CLIENT',
+    defaultBase: 'codex-client',
+    provisionerEnv: 'FLOOT_CODEX_PROVISIONER',
+    defaultProvisioner: 'codex-session-provisioner',
+    claimName: 'floot-codex-shared-claim',
+    label: 'CodexClient',
+    packageName: '@endo/codex-sandbox',
+  });
+harden(makeCodexClientResolver);
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
-    .optional(M.string(), M.string(), M.string(), M.string())
+    .optional(M.string(), M.string(), M.string(), M.string(), M.string())
     .returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
   listModels: M.callWhen().returns(M.arrayOf(M.record())),
   listRuntimes: M.callWhen().returns(M.arrayOf(M.record())),
+  listThinkingOptions: M.callWhen().returns(M.arrayOf(M.record())),
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
@@ -377,6 +417,9 @@ const FlootSessionInterface = M.interface('FlootSession', {
     .returns(M.any()),
   getHistory: M.callWhen().returns(M.any()),
   getUsage: M.callWhen().returns(M.any()),
+  getSecretRequest: M.callWhen().returns(M.any()),
+  submitSecret: M.callWhen(M.string(), M.any()).returns(M.any()),
+  cancelSecretRequest: M.callWhen(M.string()).returns(M.undefined()),
   help: M.call().returns(M.string()),
 });
 
@@ -427,6 +470,15 @@ objects attached:
 Caplet tools dropped into your \`tools/\` directory are discovered automatically,
 so your abilities can grow over time. When asked what you can do, you can list
 your tools and petnames to find out.
+
+Secrets — never paste them into chat and never put them in exec source. Those
+paths write the bytes into the model transcript. When you need a token, API
+key, private key, or service-account JSON, call requestSecret({ label, petName,
+kind?, audience? }). The operator gets a paste box; you receive only
+{ petName, kind, audience, byteLength }. Look that petname up and pass the
+handle to provideGitRemote / provideGitClone as \`credential\`, or call
+writeSecret({ petName, destPetName, path }) to place the bytes on a mount you
+hold. The handle exposes only audience(); you cannot read the secret back.
 `;
 
 // Flagship "vibe code a new project" persona: the base voice persona plus the
@@ -792,36 +844,65 @@ export const refreshPresetEntry = entry => {
 };
 harden(refreshPresetEntry);
 
-// Catalog of Anthropic models selectable for a session, ordered faster/lighter
-// to stronger. Ids are passed verbatim to the API provider AND to `claude
-// --model` in the CLI sandbox, so they must be valid Anthropic model ids. The
-// runtime (CLI vs API) is an INDEPENDENT choice (see RUNTIMES) — either runtime
-// can run any of these models.
+// Models selectable for a session. Each entry names the runtimes that accept
+// its id and the runtime(s) for which it is the default. This keeps provider
+// model ids out of incompatible CLIs while letting the UI render one catalog.
 const MODELS = [
   {
     id: 'claude-haiku-4-5-20251001',
     title: 'Claude Haiku 4.5',
     description: 'Fastest and lightest — best for quick, simple turns.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: ['claude-cli', 'claude-api'],
   },
   {
     id: 'claude-sonnet-4-6',
     title: 'Claude Sonnet 4.6',
     description: 'Balanced speed and capability.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
   },
   {
     id: 'claude-sonnet-5',
     title: 'Claude Sonnet 5',
     description: 'Stronger reasoning at Sonnet-class latency.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
   },
   {
     id: 'claude-opus-4-8',
     title: 'Claude Opus 4.8',
     description: 'High capability for hard reasoning and agentic work.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
   },
   {
     id: 'claude-opus-5',
     title: 'Claude Opus 5',
     description: 'Most capable — deepest reasoning and longest-horizon work.',
+    runtimes: ['claude-cli', 'claude-api'],
+    defaultFor: [],
+  },
+  {
+    id: 'gpt-5.6-sol',
+    title: 'GPT-5.6 Sol',
+    description: 'Flagship model for complex reasoning and coding.',
+    runtimes: ['codex-cli'],
+    defaultFor: ['codex-cli'],
+  },
+  {
+    id: 'gpt-5.6-terra',
+    title: 'GPT-5.6 Terra',
+    description: 'Balances intelligence, speed, and cost.',
+    runtimes: ['codex-cli'],
+    defaultFor: [],
+  },
+  {
+    id: 'gpt-5.6-luna',
+    title: 'GPT-5.6 Luna',
+    description: 'Fast, cost-sensitive model for high-volume work.',
+    runtimes: ['codex-cli'],
+    defaultFor: [],
   },
 ];
 // Runtime for a session: how the model runs, independent of which model.
@@ -843,17 +924,91 @@ const RUNTIMES = [
     title: 'Claude API',
     description: 'Streams from the Anthropic API with Floot’s tool loop.',
   },
+  {
+    id: 'codex-cli',
+    title: 'Codex CLI (sandbox)',
+    description:
+      'Runs Codex in an isolated sandbox over a projected workspace; Endo ' +
+      'tools are bridged in over MCP.',
+  },
 ];
 const CLAUDE_CLI_RUNTIME_ID = 'claude-cli';
 const CLAUDE_API_RUNTIME_ID = 'claude-api';
+const CODEX_CLI_RUNTIME_ID = 'codex-cli';
 const DEFAULT_RUNTIME_ID = CLAUDE_CLI_RUNTIME_ID;
 // New sessions default to Claude CLI + the latest Haiku (fast/light).
-const DEFAULT_MODEL_ID = 'claude-haiku-4-5-20251001';
 // Legacy: sessions created before runtime/model were separated pinned this
 // pseudo-model to select the CLI runtime.
 const LEGACY_CLI_MODEL_ID = 'claude-cli';
-const isKnownModel = id => MODELS.some(m => m.id === id);
 const isKnownRuntime = id => RUNTIMES.some(r => r.id === id);
+const modelsForRuntime = runtime =>
+  MODELS.filter(model => model.runtimes.includes(runtime));
+const defaultModelForRuntime = runtime => {
+  const compatible = modelsForRuntime(runtime);
+  return (
+    compatible.find(model => model.defaultFor.includes(runtime)) ||
+    compatible[0]
+  )?.id;
+};
+const isKnownModelForRuntime = (id, runtime) =>
+  MODELS.some(model => model.id === id && model.runtimes.includes(runtime));
+
+const THINKING_OPTIONS = [
+  {
+    id: 'auto',
+    title: 'Auto',
+    description: 'Use the model and CLI default.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'none',
+    title: 'None',
+    description: 'Lowest latency; do not request reasoning tokens.',
+    runtimes: ['codex-cli'],
+  },
+  {
+    id: 'low',
+    title: 'Low',
+    description: 'Fast, lightweight reasoning.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'medium',
+    title: 'Medium',
+    description: 'Balanced reasoning depth and latency.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'high',
+    title: 'High',
+    description: 'Thorough reasoning for complex work.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'xhigh',
+    title: 'Extra high',
+    description: 'Extended reasoning for difficult agentic work.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+  {
+    id: 'max',
+    title: 'Maximum',
+    description: 'Deepest reasoning; highest latency and token use.',
+    runtimes: ['claude-cli', 'codex-cli'],
+  },
+];
+const isKnownThinkingForRuntime = (id, runtime) =>
+  THINKING_OPTIONS.some(
+    option => option.id === id && option.runtimes.includes(runtime),
+  );
+const thinkingOf = entry => {
+  const runtime = runtimeOf(entry);
+  return entry?.thinking && isKnownThinkingForRuntime(entry.thinking, runtime)
+    ? entry.thinking
+    : runtime === CLAUDE_API_RUNTIME_ID
+      ? ''
+      : 'auto';
+};
 
 /**
  * Resolve a registry entry's runtime, migrating older entries. An explicit
@@ -877,8 +1032,12 @@ const runtimeOf = entry => {
  * @param {{ model?: string } | undefined} entry
  * @returns {string | undefined}
  */
-const modelOf = entry =>
-  entry?.model && isKnownModel(entry.model) ? entry.model : undefined;
+const modelOf = entry => {
+  const runtime = runtimeOf(entry);
+  return entry?.model && isKnownModelForRuntime(entry.model, runtime)
+    ? entry.model
+    : defaultModelForRuntime(runtime);
+};
 
 /**
  * Provision a preset's objects into a session guest's petstore, referenced ONLY
@@ -1016,6 +1175,10 @@ const provisionPresetObjects = async (
  *   events. Turns bypass the provider tool loop — the CLI runs its own tools
  *   in the sandbox and keeps its own conversation continuity.
  * @property {string} [claudeModel] - Model id passed per turn (`--model`).
+ * @property {string} [claudeThinking] - Claude Code `--effort` value.
+ * @property {any} [codexClient] - A CodexClient capability.
+ * @property {string} [codexModel] - Model id passed per Codex turn.
+ * @property {string} [codexThinking] - Codex reasoning effort.
  *   Threaded explicitly because the client's own default is frozen into its
  *   formula env at provision time — without a per-turn override, changing a
  *   session's model after provisioning would silently have no effect.
@@ -1071,9 +1234,16 @@ export const makeStreamingAgent = async (
       ? options.maxToolRounds
       : DEFAULT_MAX_TOOL_ROUNDS;
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
-  const claudeModel = /** @type {any} */ (providerConfig).claudeModel;
+  const codexClient = /** @type {any} */ (providerConfig).codexClient;
+  const cliClient = codexClient || claudeClient;
+  const cliModel = codexClient
+    ? /** @type {any} */ (providerConfig).codexModel
+    : /** @type {any} */ (providerConfig).claudeModel;
+  const cliThinking = codexClient
+    ? /** @type {any} */ (providerConfig).codexThinking
+    : /** @type {any} */ (providerConfig).claudeThinking;
   /** @type {any} */
-  const provider = claudeClient
+  const provider = cliClient
     ? null
     : /** @type {any} */ (providerConfig).provider ||
       createStreamingProvider({
@@ -1216,7 +1386,7 @@ export const makeStreamingAgent = async (
       { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
     ]);
 
-    if (claudeClient) {
+    if (cliClient) {
       // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
       // its own agentic loop in the sandbox (tools, continuity via the
       // workspace), so the provider tool loop below is bypassed. Preserve its
@@ -1265,14 +1435,16 @@ export const makeStreamingAgent = async (
 
       let turnResult;
       try {
-        turnResult = await runClaudeTurn({
-          client: claudeClient,
+        const runCliTurn = codexClient ? runCodexTurn : runClaudeTurn;
+        turnResult = await runCliTurn({
+          client: cliClient,
           text,
           writer,
           signal,
           // Pin the session's selected model per turn; the client's own
           // default is frozen into its formula env at provision time.
-          model: claudeModel,
+          model: cliModel,
+          thinking: cliThinking,
           // Give the CLI runtime the same session persona/instructions the API
           // runtime gets (the CLI never sees the tree's system message).
           systemPrompt: effectivePrompt,
@@ -1587,17 +1759,22 @@ export const makeStreamingAgent = async (
   const getHistory = async () => {
     const leafId = await getOrCreateLeaf();
     const path = await tree.getPath(leafId);
-    // Index tool outputs by call id so each assistant tool_call can carry its
-    // result. The raw 'tool' messages are model-wire records; the UI wants the
-    // call and its result joined.
-    const resultById = new Map();
-    for (const m of path) {
-      if (m.role === 'tool' && m.tool_call_id != null) {
-        resultById.set(m.tool_call_id, m.content);
-      }
-    }
+    // Pair results in transcript order rather than indexing the entire path by
+    // call id. CLI runtimes can reuse an item id in a later process/turn; a
+    // path-wide map made that later result overwrite every earlier card with
+    // the same id.
+    const pendingById = new Map();
     const out = [];
     for (const m of path) {
+      if (m.role === 'tool') {
+        const pending = pendingById.get(m.tool_call_id);
+        if (pending) {
+          pending.result = m.content;
+          pendingById.delete(m.tool_call_id);
+        }
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       if (m.role !== 'user' && m.role !== 'assistant') {
         // eslint-disable-next-line no-continue
         continue;
@@ -1612,12 +1789,14 @@ export const makeStreamingAgent = async (
       if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls) {
           const args = tc.function?.arguments;
-          out.push({
+          const tool = {
             role: 'tool',
             name: tc.function?.name || 'tool',
             args: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
-            result: resultById.has(tc.id) ? resultById.get(tc.id) : null,
-          });
+            result: null,
+          };
+          out.push(tool);
+          pendingById.set(tc.id, tool);
         }
       }
     }
@@ -1637,6 +1816,10 @@ harden(makeStreamingAgent);
 // Petname (in the factory guest's own petstore) where the session registry —
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
+// A write-ahead copy that remains rooted until REGISTRY_NAME contains the same
+// snapshot. Its presence means an interrupted save must be completed before
+// the registry is read or another save starts.
+const REGISTRY_BACKUP_NAME = 'floot-sessions-backup';
 
 // Petname where whole-Floot voice/TTS preferences (voice, speed, expression…)
 // are persisted. These are a property of the Floot instance — shared across
@@ -1742,6 +1925,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   const claudeClientResolver = makeClaudeClientResolver(powers, env);
   const getClaudeClient = claudeClientResolver.get;
+  const codexClientResolver = makeCodexClientResolver(powers, env);
+  const getCodexClient = codexClientResolver.get;
 
   // Runtime container-mount attach registrar
   // (designs/runtime-container-fs-mount.md): validates guest-chosen /mnt/
@@ -1751,25 +1936,33 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // the hosted Claude session provisioner (root-host powers + fs-mounter);
   // older provisioner caplets without the bridge methods — and deployments
   // with no provisioner at all — simply leave attach unavailable.
-  const containerMountRegistrar = makeContainerMountRegistrar({
-    powers,
-    getBridgeProvider: async () => {
-      const provisionerName =
-        env?.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner';
-      if (!(await E(powers).has(provisionerName))) return undefined;
-      const provider = await E(powers).lookup(provisionerName);
-      try {
-        // eslint-disable-next-line no-underscore-dangle
-        const methods = await E(provider).__getMethodNames__();
-        if (methods.includes('provideContainerMountBridge')) {
-          return provider;
+  const makeCliMountRegistrar = (registryName, provisionerName) =>
+    makeContainerMountRegistrar({
+      powers,
+      registryName,
+      getBridgeProvider: async () => {
+        if (!(await E(powers).has(provisionerName))) return undefined;
+        const provider = await E(powers).lookup(provisionerName);
+        try {
+          // eslint-disable-next-line no-underscore-dangle
+          const methods = await E(provider).__getMethodNames__();
+          if (methods.includes('provideContainerMountBridge')) {
+            return provider;
+          }
+        } catch {
+          // An older provisioner without introspection cannot bridge either.
         }
-      } catch {
-        // An older provisioner without introspection cannot bridge either.
-      }
-      return undefined;
-    },
-  });
+        return undefined;
+      },
+    });
+  const claudeContainerMountRegistrar = makeCliMountRegistrar(
+    'floot-container-mounts',
+    env?.FLOOT_CLAUDE_PROVISIONER || 'claude-session-provisioner',
+  );
+  const codexContainerMountRegistrar = makeCliMountRegistrar(
+    'floot-codex-container-mounts',
+    env?.FLOOT_CODEX_PROVISIONER || 'codex-session-provisioner',
+  );
 
   // Hand a session only the authority its turns need. A session runs prompts;
   // it has no business interrupting or terminating the sandbox session out
@@ -1861,6 +2054,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // so the served mount can be revoked when the session is rebuilt or deleted.
   /** @type {Map<string, { revoke: () => Promise<void> }>} */
   const publishers = new Map();
+  // Per-session secret-ingestion kits. The model calls requestSecret; the UI
+  // calls submitSecret on the session facet. Bytes never enter the transcript.
+  /** @type {Map<string, ReturnType<typeof makeSecretRequestKit>>} */
+  const secretKits = new Map();
   // Build the session-scoped extra tools for a session: a bounded workspace
   // publisher for new-project sessions when an asset server is available. The
   // same map backs both the API tool loop and the CLI MCP bridge.
@@ -1942,10 +2139,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // lazily so make() never awaits.
   /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, model?: string }> | undefined} */
   let registry;
+
+  // Complete an interrupted save while the write-ahead copy remains rooted.
+  // Removing/replacing the canonical name is safe here because the backup is
+  // not removed until the canonical value has been stored successfully.
+  const recoverRegistryBackup = async () => {
+    await null;
+    if (!(await E(powers).has(REGISTRY_BACKUP_NAME))) return undefined;
+    const stored = await E(powers).lookup(REGISTRY_BACKUP_NAME);
+    if (await E(powers).has(REGISTRY_NAME)) {
+      await E(powers).remove(REGISTRY_NAME);
+    }
+    await E(powers).storeValue(stored, REGISTRY_NAME);
+    await E(powers).remove(REGISTRY_BACKUP_NAME);
+    return stored;
+  };
+
   const loadRegistry = async () => {
     if (registry) return registry;
-    if (await E(powers).has(REGISTRY_NAME)) {
-      const stored = await E(powers).lookup(REGISTRY_NAME);
+    const recovered = await recoverRegistryBackup();
+    if (recovered !== undefined || (await E(powers).has(REGISTRY_NAME))) {
+      const stored =
+        recovered === undefined
+          ? await E(powers).lookup(REGISTRY_NAME)
+          : recovered;
       const entries = Array.isArray(stored) ? [...stored] : [];
       const refreshed = entries.map(refreshPresetEntry);
       registry = refreshed;
@@ -1959,19 +2176,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
     }
     return registry;
   };
-  // Serialize registry writes: storeValue can't overwrite, so each save is a
-  // remove-then-store. Two concurrent saves would interleave (both see the key,
-  // the second remove throws on the already-removed name), so we chain them.
+  // Serialize registry writes. storeValue cannot overwrite, so root a
+  // write-ahead copy first and keep it until the canonical name contains the
+  // same immutable snapshot. A crash at every await leaves at least one name
+  // from which loadRegistry can recover.
   let registryWrite = Promise.resolve();
   const saveRegistry = () => {
+    const snapshot = harden([...(registry || [])]);
     const result = registryWrite.then(async () => {
+      // A previous in-process failure may have left a backup behind. Complete
+      // that save before beginning this one, then persist the current snapshot.
+      await recoverRegistryBackup();
+      await E(powers).storeValue(snapshot, REGISTRY_BACKUP_NAME);
       if (await E(powers).has(REGISTRY_NAME)) {
         await E(powers).remove(REGISTRY_NAME);
       }
-      await E(powers).storeValue(harden([...(registry || [])]), REGISTRY_NAME);
+      await E(powers).storeValue(snapshot, REGISTRY_NAME);
+      await E(powers).remove(REGISTRY_BACKUP_NAME);
     });
-    // Keep the chain alive even if this write rejects.
-    registryWrite = result.catch(() => {});
+    // Keep the chain alive after a rejection, but do not make persistence
+    // failures silent: callers still receive `result`, and the daemon journal
+    // records failures from fire-and-forget migrations.
+    registryWrite = result.catch(error => {
+      console.error('[floot-factory] session registry save failed:', error);
+    });
     return result;
   };
 
@@ -2084,6 +2312,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
             err instanceof Error ? err.message : String(err),
           );
         }
+        const secretKit = makeSecretRequestKit({
+          host,
+          sessionGuest,
+          sessionId: id,
+          managedAcceptors: {
+            codexAuth: async (value, info) => {
+              if (typeof value !== 'string' || value.length === 0) {
+                throw new Error('Codex auth must be non-empty JSON text');
+              }
+              const seederName =
+                env.FLOOT_CODEX_AUTH_SEEDER || 'codex-auth-seeder';
+              if (!(await E(powers).has(seederName))) {
+                throw new Error(
+                  `Codex auth seeder "${seederName}" is not installed on this host`,
+                );
+              }
+              const seeder = await E(powers).lookup(seederName);
+              const receipt = await E(seeder).seed(value);
+              return harden({ ...receipt, petName: info.petName });
+            },
+          },
+        });
+        secretKits.set(id, secretKit);
+        extraTools = { ...extraTools, ...secretKit.tools };
         // Runtime (CLI vs API) and model are independent, resolved with
         // backward-compatible migration of older entries (see runtimeOf/modelOf).
         // The CLI runtime routes through a ClaudeClient capability and gets a
@@ -2092,8 +2344,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Floot's own tool loop. Either runtime honors the selected model.
         const runtime = runtimeOf(entry);
         const model = modelOf(entry);
+        const thinking = thinkingOf(entry);
         let agentConfig;
-        if (runtime === CLAUDE_CLI_RUNTIME_ID) {
+        if (
+          runtime === CLAUDE_CLI_RUNTIME_ID ||
+          runtime === CODEX_CLI_RUNTIME_ID
+        ) {
+          const isCodex = runtime === CODEX_CLI_RUNTIME_ID;
+          const clientResolver = isCodex
+            ? codexClientResolver
+            : claudeClientResolver;
+          const getCliClient = isCodex ? getCodexClient : getClaudeClient;
+          const containerMountRegistrar = isCodex
+            ? codexContainerMountRegistrar
+            : claudeContainerMountRegistrar;
           // Runtime container-mount attach tools
           // (designs/runtime-container-fs-mount.md): let the session bind
           // caps it holds into the sandbox under /mnt/. Built BEFORE the MCP
@@ -2131,7 +2395,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             ...(workspaceDir ? { workspaceDir } : {}),
             ...(model ? { model } : {}),
           };
-          const claudeClient = await getClaudeClient(
+          const cliClient = await getCliClient(
             id,
             Object.keys(provisionOptions).length ? provisionOptions : undefined,
           );
@@ -2141,9 +2405,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
           // without a resolvable client identity (or bridge provider) still
           // opens; the tools report the situation when called.
           try {
-            const clientKey = await claudeClientResolver.identifyClient(id);
+            const clientKey = await clientResolver.identifyClient(id);
             if (clientKey !== undefined) {
-              await mountKit.arm({ clientKey, client: claudeClient });
+              await mountKit.arm({ clientKey, client: cliClient });
             }
           } catch (err) {
             console.warn(
@@ -2153,11 +2417,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
             );
           }
           agentConfig = {
-            claudeClient: makeSendOnlyClient(claudeClient),
+            [isCodex ? 'codexClient' : 'claudeClient']:
+              makeSendOnlyClient(cliClient),
             // Per-turn --model: the client's env default was frozen at
             // provision time, so a later model change would otherwise be
             // silently ignored for this session.
-            ...(model ? { claudeModel: model } : {}),
+            ...(model
+              ? { [isCodex ? 'codexModel' : 'claudeModel']: model }
+              : {}),
+            ...(thinking && thinking !== 'auto'
+              ? {
+                  [isCodex ? 'codexThinking' : 'claudeThinking']: thinking,
+                }
+              : {}),
           };
         } else {
           agentConfig = { provider: await getProvider(model) };
@@ -2199,6 +2471,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             presetId: entry?.presetId || DEFAULT_PRESET_ID,
             runtime: runtimeOf(entry),
             model: modelOf(entry) || '',
+            thinking: thinkingOf(entry),
           });
         },
         /**
@@ -2209,7 +2482,18 @@ export const make = (hostPowers, _context, { env } = {}) => {
           return makeSessionTurn({
             run: async (writer, signal) => {
               const agent = await getAgent(id);
-              await agent.converse(input, writer, undefined, signal);
+              const onAbort = () => {
+                const kit = secretKits.get(id);
+                const waiting = kit && kit.getPending();
+                if (waiting) kit.cancel(waiting.id);
+              };
+              if (signal.aborted) onAbort();
+              else signal.addEventListener('abort', onAbort, { once: true });
+              try {
+                await agent.converse(input, writer, undefined, signal);
+              } finally {
+                signal.removeEventListener('abort', onAbort);
+              }
             },
           });
         },
@@ -2228,13 +2512,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const turn = makeSessionTurn({
             channel,
             run: async (_writer, signal) => {
-              signal.addEventListener(
-                'abort',
-                () => speech.abort('reply stopped'),
-                { once: true },
-              );
-              const agent = await getAgent(id);
-              await agent.converse(input, speech.writer, undefined, signal);
+              const onAbort = () => {
+                speech.abort('reply stopped');
+                const kit = secretKits.get(id);
+                const waiting = kit && kit.getPending();
+                if (waiting) kit.cancel(waiting.id);
+              };
+              signal.addEventListener('abort', onAbort, { once: true });
+              try {
+                const agent = await getAgent(id);
+                await agent.converse(input, speech.writer, undefined, signal);
+              } finally {
+                signal.removeEventListener('abort', onAbort);
+              }
             },
           });
           return harden({
@@ -2251,8 +2541,30 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const agent = await getAgent(id);
           return agent.getUsage();
         },
+        async getSecretRequest() {
+          const kit = secretKits.get(id);
+          return kit ? kit.getPending() : null;
+        },
+        /**
+         * @param {string} requestId
+         * @param {unknown} value
+         */
+        submitSecret(requestId, value) {
+          const kit = secretKits.get(id);
+          if (!kit) {
+            throw new Error('No secret request is waiting on this session');
+          }
+          return kit.submit(requestId, value);
+        },
+        /**
+         * @param {string} requestId
+         */
+        cancelSecretRequest(requestId) {
+          const kit = secretKits.get(id);
+          if (kit) kit.cancel(requestId);
+        },
         help() {
-          return 'Floot session: startTurn(input) returns a FlootTurn (getStatus, watch, cancel, whenFinished); startTurnWithSpeech(input, tts, options?) adds daemon-side speech; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn (getStatus, watch, cancel, whenFinished); startTurnWithSpeech(input, tts, options?) adds daemon-side speech; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }; getSecretRequest / submitSecret / cancelSecretRequest ingest operator secrets without putting bytes in the transcript.';
         },
       });
       facets.set(id, facet);
@@ -2287,23 +2599,31 @@ export const make = (hostPowers, _context, { env } = {}) => {
     /**
      * @param {string} [title]
      * @param {string} [presetId]
-     * @param {string} [model] - one of listModels() ids; defaults to the
-     *   catalog default (latest Haiku).
-     * @param {string} [runtime] - "claude-cli" or "claude-api"; defaults to CLI.
+     * @param {string} [model] - one of listModels() ids compatible with the
+     *   selected runtime; defaults to that runtime's catalog default.
+     * @param {string} [runtime] - a listRuntimes() id; defaults to Claude CLI.
+     * @param {string} [thinking] - reasoning effort for CLI runtimes.
      * @returns {Promise<object>} an opaque session facet
      */
-    async createSession(title, presetId, model, runtime) {
+    async createSession(title, presetId, model, runtime, thinking) {
       await loadRegistry();
       const preset = getPreset(presetId || DEFAULT_PRESET_ID);
       const id = newSessionId();
       // Runtime and model are independent and always pinned at creation: the
-      // runtime defaults to CLI, the model to the catalog default (latest
-      // Haiku). Snapshot the preset's id and prompt so later catalog edits
+      // runtime defaults to CLI, the model to that runtime's catalog default.
+      // Snapshot the preset's id and prompt so later catalog edits
       // don't change a live session.
       const chosenRuntime = isKnownRuntime(runtime)
         ? runtime
         : DEFAULT_RUNTIME_ID;
-      const chosenModel = isKnownModel(model) ? model : DEFAULT_MODEL_ID;
+      const chosenModel = isKnownModelForRuntime(model, chosenRuntime)
+        ? model
+        : defaultModelForRuntime(chosenRuntime);
+      const chosenThinking = isKnownThinkingForRuntime(thinking, chosenRuntime)
+        ? thinking
+        : chosenRuntime === CLAUDE_API_RUNTIME_ID
+          ? ''
+          : 'auto';
       const entry = harden({
         id,
         title: title || 'New chat',
@@ -2315,6 +2635,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           : {}),
         runtime: chosenRuntime,
         model: chosenModel,
+        thinking: chosenThinking,
       });
       /** @type {any[]} */ (registry).push(entry);
       await saveRegistry();
@@ -2324,13 +2645,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
       getAgent(id).catch(() => {});
       console.error(
         `[floot-factory] Created session "${id}" (preset "${preset.id}", ` +
-          `runtime "${chosenRuntime}", model "${chosenModel}")`,
+          `runtime "${chosenRuntime}", model "${chosenModel}", thinking "${chosenThinking}")`,
       );
       return getFacet(id);
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, runtime: string, model: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, runtime: string, model: string, thinking: string }>>}
      */
     async listSessions() {
       await loadRegistry();
@@ -2342,6 +2663,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           presetId: entry.presetId || DEFAULT_PRESET_ID,
           runtime: runtimeOf(entry),
           model: modelOf(entry) || '',
+          thinking: thinkingOf(entry),
         })),
       );
     },
@@ -2361,17 +2683,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
     /**
      * The selectable models for a new session (faster/lighter → stronger).
-     * `default` marks the pre-selected model (latest Haiku).
+     * `defaultFor` identifies the pre-selected model for each runtime.
      *
-     * @returns {Promise<Array<{ id: string, title: string, description: string, default: boolean }>>}
+     * @returns {Promise<Array<{ id: string, title: string, description: string, runtimes: string[], defaultFor: string[], default: boolean }>>}
      */
     async listModels() {
       return harden(
-        MODELS.map(({ id, title, description }) => ({
+        MODELS.map(({ id, title, description, runtimes, defaultFor }) => ({
           id,
           title,
           description,
-          default: id === DEFAULT_MODEL_ID,
+          runtimes,
+          defaultFor,
+          default: defaultFor.includes(DEFAULT_RUNTIME_ID),
         })),
       );
     },
@@ -2389,6 +2713,23 @@ export const make = (hostPowers, _context, { env } = {}) => {
           title,
           description,
           default: id === DEFAULT_RUNTIME_ID,
+        })),
+      );
+    },
+
+    /**
+     * Reasoning-effort choices, annotated with compatible CLI runtimes.
+     *
+     * @returns {Promise<Array<{ id: string, title: string, description: string, runtimes: string[], default: boolean }>>}
+     */
+    async listThinkingOptions() {
+      return harden(
+        THINKING_OPTIONS.map(({ id, title, description, runtimes }) => ({
+          id,
+          title,
+          description,
+          runtimes,
+          default: id === 'auto',
         })),
       );
     },
@@ -2437,12 +2778,24 @@ export const make = (hostPowers, _context, { env } = {}) => {
           }`,
         );
       }
+      try {
+        await codexClientResolver.remove(id);
+      } catch (error) {
+        console.warn(
+          `[floot-factory] could not remove Codex client for ${id}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
       // Drop this session's container-mount attach references; last-reference
       // attaches release their 9P bridges and host mount names. Runs after
       // the client removal so the container no longer binds the mountpoints
       // being released.
       try {
-        await containerMountRegistrar.releaseSession(id);
+        await Promise.allSettled([
+          claudeContainerMountRegistrar.releaseSession(id),
+          codexContainerMountRegistrar.releaseSession(id),
+        ]);
       } catch (error) {
         console.warn(
           `[floot-factory] could not release container mounts for ${id}: ${
@@ -2469,6 +2822,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
             error instanceof Error ? error.message : String(error)
           }`,
         );
+      }
+      const secretKit = secretKits.get(id);
+      if (secretKit) {
+        const waiting = secretKit.getPending();
+        if (waiting) secretKit.cancel(waiting.id);
+        secretKits.delete(id);
       }
       // Best-effort removal of the backing session guest's persistence (both
       // the handle and the controlling agent petnames).

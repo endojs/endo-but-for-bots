@@ -10,7 +10,7 @@ import { ComposeBar } from './ComposeBar.js';
 import { SettingsPanel } from './SettingsPanel.js';
 
 /** @import { VNode } from 'preact' */
-/** @import { FlootController, FlootPreset, FlootModel, FlootRuntime, FlootSafeEvent } from './types.js' */
+/** @import { FlootController, FlootPreset, FlootModel, FlootRuntime, FlootThinkingOption, FlootSafeEvent } from './types.js' */
 
 // Floot voice-assistant space as a PURE confined Preact component. The host
 // (packages/chat/floot-component.js) owns the imperative engine — mic capture,
@@ -42,25 +42,79 @@ const formatTokens = (/** @type {number} */ n) => {
   return `${n}`;
 };
 
+const supportsRuntime = (
+  /** @type {{ runtimes?: string[] }} */ option,
+  /** @type {string} */ runtime,
+) => !option.runtimes?.length || option.runtimes.includes(runtime);
+
+const defaultModel = (
+  /** @type {FlootModel[]} */ models,
+  /** @type {string} */ runtime,
+) =>
+  models.find(model => model.defaultFor?.includes(runtime)) ||
+  models.find(model => model.default) ||
+  models[0];
+
+const defaultThinking = (/** @type {FlootThinkingOption[]} */ options) =>
+  options.find(option => option.default) || options[0];
+
 /**
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
  *   runtimes: FlootRuntime[],
- *   onPick: (id: string, model: string, runtime: string) => void,
+ *   thinkingOptions: FlootThinkingOption[],
+ *   onPick: (id: string, model: string, runtime: string, thinking: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
  */
-const PresetModal = ({ presets, models, runtimes, onPick, onClose }) => {
-  // Pre-select the default model and runtime (falling back to the first listed),
-  // so picking a preset alone still creates a sensible session.
-  const preferredModel = models.find(m => m.default) || models[0];
+const PresetModal = ({
+  presets,
+  models,
+  runtimes,
+  thinkingOptions,
+  onPick,
+  onClose,
+}) => {
+  // Pick the runtime first, then choose defaults compatible with that backend.
   const preferredRuntime = runtimes.find(r => r.default) || runtimes[0];
-  const [model, setModel] = useState(preferredModel ? preferredModel.id : '');
   const [runtime, setRuntime] = useState(
     preferredRuntime ? preferredRuntime.id : '',
   );
+  const initialModels = models.filter(option =>
+    supportsRuntime(option, preferredRuntime?.id || ''),
+  );
+  const initialThinking = thinkingOptions.filter(option =>
+    supportsRuntime(option, preferredRuntime?.id || ''),
+  );
+  const [model, setModel] = useState(
+    defaultModel(initialModels, preferredRuntime?.id || '')?.id || '',
+  );
+  const [thinking, setThinking] = useState(
+    defaultThinking(initialThinking)?.id || '',
+  );
+  const compatibleModels = models.filter(option =>
+    supportsRuntime(option, runtime),
+  );
+  const compatibleThinking = thinkingOptions.filter(option =>
+    supportsRuntime(option, runtime),
+  );
+  const chooseRuntime = (/** @type {string} */ nextRuntime) => {
+    setRuntime(nextRuntime);
+    const nextModels = models.filter(option =>
+      supportsRuntime(option, nextRuntime),
+    );
+    if (!nextModels.some(option => option.id === model)) {
+      setModel(defaultModel(nextModels, nextRuntime)?.id || '');
+    }
+    const nextThinking = thinkingOptions.filter(option =>
+      supportsRuntime(option, nextRuntime),
+    );
+    if (!nextThinking.some(option => option.id === thinking)) {
+      setThinking(defaultThinking(nextThinking)?.id || '');
+    }
+  };
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -92,7 +146,7 @@ const PresetModal = ({ presets, models, runtimes, onPick, onClose }) => {
                     }`,
                     'aria-pressed': r.id === runtime ? 'true' : 'false',
                     title: r.description || '',
-                    onClick: () => setRuntime(r.id),
+                    onClick: () => chooseRuntime(r.id),
                   },
                   r.title,
                 ),
@@ -100,7 +154,7 @@ const PresetModal = ({ presets, models, runtimes, onPick, onClose }) => {
             ),
           )
         : null,
-      models.length
+      compatibleModels.length
         ? h(
             'label',
             { class: 'floot-modal-field' },
@@ -110,14 +164,42 @@ const PresetModal = ({ presets, models, runtimes, onPick, onClose }) => {
               {
                 class: 'floot-model-select',
                 value: model,
-                onChange: (/** @type {FlootSafeEvent} */ e) =>
+                onInput: (/** @type {FlootSafeEvent} */ e) =>
                   setModel(e.target.value),
               },
-              models.map(m =>
+              compatibleModels.map(m =>
                 h(
                   'option',
                   { key: m.id, value: m.id },
-                  `${m.title}${m.default ? ' (default)' : ''}`,
+                  `${m.title}${
+                    m.defaultFor?.includes(runtime) ||
+                    (!m.defaultFor?.length && m.default)
+                      ? ' (default)'
+                      : ''
+                  }`,
+                ),
+              ),
+            ),
+          )
+        : null,
+      compatibleThinking.length
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Thinking effort'),
+            h(
+              'select',
+              {
+                class: 'floot-model-select',
+                value: thinking,
+                onInput: (/** @type {FlootSafeEvent} */ e) =>
+                  setThinking(e.target.value),
+              },
+              compatibleThinking.map(option =>
+                h(
+                  'option',
+                  { key: option.id, value: option.id },
+                  `${option.title}${option.default ? ' (default)' : ''}`,
                 ),
               ),
             ),
@@ -133,7 +215,7 @@ const PresetModal = ({ presets, models, runtimes, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              onClick: () => onPick(p.id, model, runtime),
+              onClick: () => onPick(p.id, model, runtime, thinking),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
             h('div', { class: 'floot-preset-desc' }, p.description || ''),
@@ -166,6 +248,7 @@ export const FlootApp = ({ controller }) => {
     presets,
     models,
     runtimes,
+    thinkingOptions,
     usage,
     status,
   } = state;
@@ -175,12 +258,25 @@ export const FlootApp = ({ controller }) => {
     // Skip the modal only when there is nothing to choose — a single preset,
     // no model alternatives, and no runtime choice. Multiple models or runtimes
     // alone still warrant the picker.
-    if (presets.length <= 1 && models.length <= 1 && runtimes.length <= 1) {
+    if (
+      presets.length <= 1 &&
+      models.length <= 1 &&
+      runtimes.length <= 1 &&
+      thinkingOptions.length <= 1
+    ) {
       const defaultRuntime = runtimes.find(r => r.default) || runtimes[0];
+      const runtime = defaultRuntime?.id || '';
+      const compatibleModels = models.filter(option =>
+        supportsRuntime(option, runtime),
+      );
+      const compatibleThinking = thinkingOptions.filter(option =>
+        supportsRuntime(option, runtime),
+      );
       controller.newSession(
         presets[0] ? presets[0].id : undefined,
-        models[0] ? models[0].id : undefined,
-        defaultRuntime ? defaultRuntime.id : undefined,
+        defaultModel(compatibleModels, runtime)?.id,
+        runtime || undefined,
+        defaultThinking(compatibleThinking)?.id,
       );
       setDrawerOpen(false);
     } else {
@@ -191,10 +287,11 @@ export const FlootApp = ({ controller }) => {
     /** @type {string} */ id,
     /** @type {string} */ model,
     /** @type {string} */ runtime,
+    /** @type {string} */ thinking,
   ) => {
     setModalOpen(false);
     setDrawerOpen(false);
-    controller.newSession(id, model, runtime);
+    controller.newSession(id, model, runtime, thinking);
   };
 
   const commitTitle = () => {
@@ -306,6 +403,7 @@ export const FlootApp = ({ controller }) => {
           presets,
           models,
           runtimes,
+          thinkingOptions,
           onPick: pickPreset,
           onClose: () => setModalOpen(false),
         })

@@ -1726,6 +1726,16 @@ export interface EndoHost extends EndoAgent {
     options: { audience: string; username: string; password: string },
   ): Promise<unknown>;
   /**
+   * Write the material of a daemon-minted credential onto `mount` at
+   * `path` without returning the bytes. Host-only. After a daemon
+   * restart the material is unavailable and this rejects.
+   */
+  writeSecret(
+    mount: unknown,
+    path: string | string[],
+    credential: unknown,
+  ): Promise<void>;
+  /**
    * Privileged accessor: return the host-side controller paired with
    * a daemon-minted `GitCredential` exo.  The controller exposes
    * `inspect`, `rotate`, `revoke`, and `audit`; the guest-held

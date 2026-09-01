@@ -2,16 +2,16 @@
 /* eslint-disable no-await-in-loop */
 
 /**
- * `ClaudeClient` — a single Claude Code session running inside an
+ * `CodexClient` — a single Codex Code session running inside an
  * `@endo/sandbox` slice (rootless podman, by default).
  *
  * Turn model: each `send(prompt)` runs one
- * `claude -p <prompt> --output-format stream-json` process inside the
+ * `codex -p <prompt> --output-format stream-json` process inside the
  * slice. Turns **queue** on an internal chain so two processes never
  * race the same workspace conversation; `--continue` on every turn
  * after the first resumes the conversation persisted in the session's
- * Claude config dir (a dedicated per-session mount that survives daemon
- * restarts — see `claude-client-module.js`), letting a sequence of
+ * Codex config dir (a dedicated per-session mount that survives daemon
+ * restarts — see `codex-client-module.js`), letting a sequence of
  * `send()` calls build on each other (no long-lived stdin plumbing).
  * A client reincarnated after a restart is constructed with
  * `resumePriorConversation: true` when that config dir already holds a
@@ -22,13 +22,13 @@
  * with `makeRefIterator`): it yields the parsed stream-json events, then
  * a terminal `{ type: 'end' }` on clean completion or
  * `{ type: 'abort', reason }` on a spawn/stream error. **Closing the
- * reader aborts the turn** — it kills the in-flight `claude` process (or
+ * reader aborts the turn** — it kills the in-flight `codex` process (or
  * makes a still-queued turn bail). This mirrors the floot session's
  * reply channel; `interrupt()` is the same thing applied to the current
  * turn. See `DESIGN.md` § "Turn model".
  *
  * The slice and 9P mount are provisioned lazily (see the `provision`
- * thunk and `claude-client-module.js`), so the exo can be a pure-`env`
+ * thunk and `codex-client-module.js`), so the exo can be a pure-`env`
  * formula that reincarnates across daemon restarts. `terminate()`
  * disposes the slice, unmounts the workspace, and revokes the
  * credential grant.
@@ -48,7 +48,7 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
-const ClaudeClientInterface = M.interface('ClaudeClient', {
+const CodexClientInterface = M.interface('CodexClient', {
   send: M.call(M.string())
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.promise()),
@@ -104,7 +104,7 @@ const parseStreamJsonLine = line => {
     return JSON.parse(line);
   } catch (e) {
     throw makeError(
-      X`ClaudeClient: malformed stream-json line ${q(line.slice(0, 120))}: ${q(
+      X`CodexClient: malformed stream-json line ${q(line.slice(0, 120))}: ${q(
         /** @type {Error} */ (e).message,
       )}`,
     );
@@ -113,7 +113,7 @@ const parseStreamJsonLine = line => {
 
 /**
  * Parse a stream of UTF-8 byte chunks as newline-delimited JSON, yielding one
- * parsed object per non-empty line — the `claude -p --output-format
+ * parsed object per non-empty line — the `codex -p --output-format
  * stream-json` wire shape. Byte-framing (`splitLines`) is the 1-to-many half;
  * the JSON parse is a 1-to-1 `@endo/stream` `mapReader` layered over it.
  *
@@ -175,11 +175,11 @@ const defaultStderrIterable = proc =>
  */
 
 /**
- * @typedef {object} ClaudeClientArgs
+ * @typedef {object} CodexClientArgs
  * @property {string} sessionId
  * @property {string} createdAt - ISO timestamp.
  * @property {SandboxHandle} [slice] - Live sandbox slice handle. `spawn`
- *   runs `claude` inside it; `dispose` tears it down on terminate.
+ *   runs `codex` inside it; `dispose` tears it down on terminate.
  *   Provide this (with `mountHandle`) for an eagerly-provisioned client;
  *   omit both and pass `provision` for a lazily-provisioned one.
  * @property {{ unmount: () => Promise<void> }} [mountHandle] - Host-side
@@ -207,47 +207,17 @@ const defaultStderrIterable = proc =>
  * @property {string} [model] - Default `--model` for every send.
  * @property {string} [systemPrompt] - Default system prompt appended to
  *   every spawn via `--append-system-prompt`, so the CLI's own agent loop
- *   runs under the caller's persona/instructions in addition to Claude
+ *   runs under the caller's persona/instructions in addition to Codex
  *   Code's built-in prompt. Overridable per turn via `send(prompt, {
  *   systemPrompt })`. Omitted argv when neither is set.
- * @property {boolean} [resumePriorConversation] - Seed
- *   `conversationStarted` so the very first `send()` passes `--continue`.
- *   Set by `claude-client-module.js` when a reincarnated session's
- *   persistent Claude config dir already holds a transcript, so a
- *   post-restart turn resumes the pre-restart conversation instead of
- *   starting a fresh, context-free one. Defaults to `false` (a brand-new
- *   session has nothing to resume).
- * @property {() => boolean} [detectPriorConversation] - Ground-truth
- *   check for a persisted transcript, consulted before *every* spawn
- *   (not once at construction). When provided it decides `--continue`
- *   directly, which closes two gaps the in-memory flag cannot: a first
- *   turn killed before Claude persisted anything must NOT make the next
- *   turn pass `--continue` (there is nothing to resume — the CLI would
- *   error or silently fork a fresh conversation), and a post-restart
- *   turn must resume whenever a transcript exists even if the one-shot
- *   construction-time detection raced or failed. A detector throw falls
- *   back to the in-memory flag. Also gates `initialPrompt`, so a
- *   reincarnated formula does not re-fire its initial prompt as a
- *   spurious extra turn on every daemon restart.
- * @property {() => string | undefined} [resolveResumeSessionId] - The id
- *   of the newest persisted conversation, read from the session's config
- *   dir before every spawn. When it yields an id the turn resumes that
- *   conversation by name (`--resume <id>`) rather than asking the CLI to
- *   infer "the most recent conversation" (`--continue`); a named resume
- *   that cannot be honoured fails loudly instead of silently forking a
- *   fresh, context-free conversation. Absent for sessions with no
- *   persistent config dir, which fall back to `--continue`.
- * @property {() => unknown} [describeTranscripts] - Opt-in resume
- *   diagnostic (see `ENDO_CLAUDE_DEBUG_RESUME` in
- *   `claude-client-module.js`). When set, every spawn reports the
- *   resume decision, Claude's own `system/init` event, and whether the
- *   turn's prompt chained onto earlier ones. Absent in production.
+ * @property {() => string | undefined} [resolveThreadId] - Read the stable
+ *   Codex thread id persisted for this Floot session.
+ * @property {(threadId: string) => void} [persistThreadId] - Persist the id
+ *   from the CLI's `thread.started` event before later turns resume it.
  * @property {string} [mcpConfigPath] - Slice-internal path to an MCP
  *   config file (see the floot package's mcp-socket-server). When set,
- *   every spawn passes `--mcp-config` (with this path) and
- *   `--strict-mcp-config`, wiring the CLI to the session's Endo tool
- *   bridge over a mounted Unix socket and ignoring any ambient
- *   project/user MCP config.
+ *   every spawn supplies a required inline stdio MCP server pointing at the
+ *   mounted relay beside this file.
  * @property {Record<string, string>} [env] - Extra per-spawn env
  *   merged on top of the slice's env. The slice's env already carries
  *   the credential, so this is normally empty.
@@ -268,11 +238,11 @@ const defaultStderrIterable = proc =>
  */
 
 /**
- * Build a `ClaudeClient` exo.
+ * Build a `CodexClient` exo.
  *
- * @param {ClaudeClientArgs} args
+ * @param {CodexClientArgs} args
  */
-export const makeClaudeClient = ({
+export const makeCodexClient = ({
   sessionId,
   createdAt,
   slice,
@@ -287,10 +257,8 @@ export const makeClaudeClient = ({
   mcpConfigPath,
   env = {},
   initialPrompt,
-  resumePriorConversation = false,
-  detectPriorConversation,
-  resolveResumeSessionId,
-  describeTranscripts,
+  resolveThreadId,
+  persistThreadId,
   makeStdoutIterable = defaultStdoutIterable,
   makeStderrIterable = defaultStderrIterable,
   stderrReadLimit = 16_384,
@@ -321,31 +289,13 @@ export const makeClaudeClient = ({
     }
   };
   let terminated = false;
-  // `--continue` resumes the most recent conversation persisted in the
-  // session's Claude config dir. A brand-new session has nothing to
-  // resume, so `--continue` is omitted until one prompt has been
-  // dispatched. A session reincarnated after a daemon restart, whose
-  // persistent config dir already holds a transcript, is constructed with
-  // `resumePriorConversation: true` so its first post-restart turn
-  // resumes the pre-restart conversation rather than forking a fresh one.
-  let conversationStarted = resumePriorConversation;
-  // Whether the *next* spawn should resume at all, and whether `initialPrompt`
-  // has already been answered. The detector, when present, is the ground truth
-  // (it reads the persisted transcript), so a turn killed before Claude
-  // persisted anything does not poison the next turn with a resume that has
-  // nothing to resume, and a post-restart turn resumes whenever a transcript
-  // actually exists. Which conversation to resume is a separate question,
-  // answered by `resolveResumeSessionId`. Without a detector (tests, ephemeral
-  // tmpfs config dirs) the in-memory flag is all we have.
+  let conversationStarted = Boolean(resolveThreadId?.());
   const priorConversation = () => {
-    if (detectPriorConversation) {
-      try {
-        return detectPriorConversation();
-      } catch {
-        // Unreadable backing dir (transient fs race): fall back to the flag.
-      }
+    try {
+      return Boolean(resolveThreadId?.()) || conversationStarted;
+    } catch {
+      return conversationStarted;
     }
-    return conversationStarted;
   };
   /** @type {ProcessHandle | null} */
   let inFlight = null;
@@ -358,13 +308,17 @@ export const makeClaudeClient = ({
   // (spawned, streaming). `interrupt()` prefers this over `currentClose` so
   // that,
   // with a turn already in flight and another queued behind it, interrupt
-  // kills the running `claude` process rather than bailing the queued turn.
+  // kills the running `codex` process rather than bailing the queued turn.
   /** @type {(() => void) | null} */
   let inFlightClose = null;
-  // Serialize turns so two `claude -p` processes never race the same
+  // Serialize turns so two `codex -p` processes never race the same
   // workspace conversation: each `send()` queues behind the previous turn.
   /** @type {Promise<void>} */
   let turnChain = Promise.resolve();
+  // Cache only a successful check. A signed-out client keeps checking on later
+  // turns so credentials mounted into CODEX_HOME become usable without
+  // restarting the Floot session.
+  let authenticationChecked = false;
 
   // Runtime-attached extra container binds
   // (designs/runtime-container-fs-mount.md). Replacing the set while a slice
@@ -429,7 +383,7 @@ export const makeClaudeClient = ({
 
   const guardLive = () => {
     if (terminated) {
-      throw makeError(X`ClaudeClient(${q(sessionId)}) is terminated.`);
+      throw makeError(X`CodexClient(${q(sessionId)}) is terminated.`);
     }
   };
 
@@ -471,91 +425,105 @@ export const makeClaudeClient = ({
   };
 
   /**
-   * Spawn one `claude -p` process inside the slice and return its
+   * Deliver EOF to a spawned command. Codex exec reads additional prompt text
+   * from non-TTY stdin, so leaving the sandbox writer open makes it wait
+   * forever even when a complete prompt was supplied on argv.
+   *
+   * @param {ProcessHandle} proc
+   */
+  const closeProcessStdin = async proc => {
+    const stdin = await E(proc).stdin();
+    await E(/** @type {any} */ (stdin)).return();
+  };
+
+  /**
+   * Check the authentication cache once per client before starting Codex.
+   * `codex login status` exits non-zero when no supported authentication
+   * method is active. Successful checks are cached; failures are not.
+   *
+   * @param {SandboxHandle} activeSlice
+   */
+  const ensureAuthenticated = async activeSlice => {
+    if (authenticationChecked) return;
+    const proc = await E(activeSlice).spawn(
+      harden(['codex', 'login', 'status']),
+      harden({
+        cwd: workspacePath,
+        env: { ...env },
+        captureStdout: false,
+        captureStderr: false,
+      }),
+    );
+    await closeProcessStdin(proc);
+    const status = await E(proc).wait();
+    if (status.code === null ? status.signal : status.code) {
+      throw makeError(
+        X`Codex is not authenticated. Authenticate the hosted Codex runtime before starting a Codex session.`,
+      );
+    }
+    authenticationChecked = true;
+  };
+
+  /**
+   * Spawn one `codex exec --json` process inside the slice and return its
    * `ProcessHandle`.
    *
    * @param {string} prompt
    * @param {{ model?: string, thinking?: string, systemPrompt?: string }} [opts]
    * @returns {Promise<ProcessHandle>}
    */
-  const spawnClaude = async (prompt, opts = {}) => {
+  const spawnCodex = async (prompt, opts = {}) => {
     const { slice: activeSlice } = await ensureProvisioned();
+    await ensureAuthenticated(activeSlice);
     const argv = [
-      'claude',
-      '-p',
-      String(prompt),
-      '--output-format',
-      'stream-json',
-      // Emit Anthropic content-block deltas as `stream_event` records instead
-      // of waiting for each complete assistant message.
-      '--include-partial-messages',
-      // `stream-json` print mode requires --verbose to emit the full
-      // per-event stream rather than only the final result.
-      '--verbose',
-      // This client always runs inside an Endo-confined rootless Podman slice.
-      // There is no interactive permission channel in print mode, so let the
-      // CLI execute its agentic tool loop within that OS-level boundary.
-      '--dangerously-skip-permissions',
+      'codex',
+      'exec',
+      '--json',
+      // This process already runs inside an Endo-owned rootless Podman slice:
+      // its mounts and network are the security and approval boundary. Codex's
+      // explicit externally-sandboxed automation mode both avoids the nested
+      // bubblewrap uid-map failure and pre-authorizes MCP calls. Merely using
+      // `--sandbox danger-full-access` leaves non-interactive approval policy
+      // at `never`, which rejects every MCP tool marked as requiring approval.
+      '--dangerously-bypass-approvals-and-sandbox',
+      '--skip-git-repo-check',
     ];
     if (mcpConfigPath) {
-      // Wire the session's Endo tool bridge (mounted Unix socket) and ignore
-      // any project/user .mcp.json so only these capability-bounded tools load.
-      argv.push('--mcp-config', mcpConfigPath, '--strict-mcp-config');
+      const mcpDir = mcpConfigPath.slice(0, mcpConfigPath.lastIndexOf('/'));
+      argv.push(
+        '-c',
+        'mcp_servers.endo.command="node"',
+        '-c',
+        `mcp_servers.endo.args=${JSON.stringify([
+          `${mcpDir}/mcp-stdio-bridge.mjs`,
+          `${mcpDir}/mcp.sock`,
+        ])}`,
+        '-c',
+        'mcp_servers.endo.required=true',
+      );
     }
     const useModel = opts.model || model;
     if (useModel) {
       argv.push('--model', useModel);
     }
     if (opts.thinking && opts.thinking !== 'auto') {
-      argv.push('--effort', opts.thinking);
-    }
-    // Append the caller's persona/instructions to Claude Code's built-in
-    // system prompt so the CLI's own agent loop honors them (the CLI never
-    // sees the conversation-tree system message the API path injects). Sent
-    // on every spawn — each `claude -p` is a fresh process — so a resumed
-    // (`--continue`) turn keeps the same persona as the first.
-    const useSystemPrompt = opts.systemPrompt || systemPrompt;
-    if (useSystemPrompt) {
-      argv.push('--append-system-prompt', String(useSystemPrompt));
-    }
-    // Resume the conversation by its own id when we can read one off the
-    // persisted transcript. `--continue` asks the CLI to pick "the most recent
-    // conversation" by its own reckoning; naming the session removes that
-    // inference and fails loudly ("No conversation found with session ID")
-    // instead of silently starting a fresh, context-free one. Sessions with no
-    // persistent config dir (older ones, on the ephemeral tmpfs) have no id to
-    // read, so they keep the `--continue` behaviour.
-    let resumeSessionId;
-    if (resolveResumeSessionId) {
-      try {
-        resumeSessionId = resolveResumeSessionId();
-      } catch {
-        // Unreadable backing dir (transient fs race): fall back to --continue.
-      }
-    }
-    const resuming = resumeSessionId !== undefined || priorConversation();
-    if (resumeSessionId !== undefined) {
-      argv.push('--resume', resumeSessionId);
-    } else if (resuming) {
-      argv.push('--continue');
-    }
-    if (describeTranscripts) {
-      // The prompt is user content; report only its length so the journal
-      // carries the resume decision without the conversation itself.
-      console.error(
-        '[claude-sandbox] spawn',
-        JSON.stringify({
-          sessionId,
-          resuming,
-          resumeSessionId,
-          detector: Boolean(detectPriorConversation),
-          conversationStarted,
-          promptChars: String(prompt).length,
-          argv: argv.filter(arg => arg !== String(prompt)),
-          transcripts: describeTranscripts(),
-        }),
+      argv.push(
+        '-c',
+        `model_reasoning_effort=${JSON.stringify(opts.thinking)}`,
       );
     }
+    const useSystemPrompt = opts.systemPrompt || systemPrompt;
+    const effectivePrompt = useSystemPrompt
+      ? `System instructions:\n${String(useSystemPrompt)}\n\nUser request:\n${String(prompt)}`
+      : String(prompt);
+    let threadId;
+    try {
+      threadId = resolveThreadId?.();
+    } catch {
+      // A transient state-file read failure starts a new thread safely.
+    }
+    if (threadId) argv.push('resume', threadId);
+    argv.push(effectivePrompt);
     const proc = await E(activeSlice).spawn(
       harden(argv),
       harden({
@@ -565,13 +533,14 @@ export const makeClaudeClient = ({
         captureStderr: true,
       }),
     );
+    await closeProcessStdin(proc);
     conversationStarted = true;
     return proc;
   };
 
   /**
    * Run one turn: queue behind any in-flight turn (`turnChain`), spawn
-   * `claude -p`, stream its parsed stream-json stdout into a buffered
+   * `codex exec`, stream its parsed JSONL stdout into a buffered
    * reply reader, and return that reader immediately. The reader yields
    * the raw stream-json events, then a terminal `{ type: 'end' }` on
    * clean completion or `{ type: 'abort', reason }` on a spawn/stream
@@ -622,8 +591,7 @@ export const makeClaudeClient = ({
       // work. There is no safe way to resume from the middle, so that case
       // reports honestly instead.
       //
-      // `claude`'s own `system/init` does not count as output: it says the CLI
-      // started, not that the turn did anything.
+      // Thread/turn startup records do not count as observable work.
       let initPushed = false;
       // Bounded so a stream of attaches cannot spin here forever; a second
       // recreate during the retry gives up and reports.
@@ -658,7 +626,7 @@ export const makeClaudeClient = ({
         };
 
         try {
-          proc = await spawnClaude(prompt, opts);
+          proc = await spawnCodex(prompt, opts);
         } catch (error) {
           // A recreate disposes the slice a queued spawn may be about to use.
           const message =
@@ -680,44 +648,22 @@ export const makeClaudeClient = ({
           for await (const event of parseStreamJsonLines(
             makeStdoutIterable(proc),
           )) {
-            if (
-              describeTranscripts &&
-              event?.type === 'system' &&
-              event?.subtype === 'init'
-            ) {
-              // What the CLI itself believes it opened. A `session_id` other than
-              // the one we asked to resume means the resume did not take.
-              console.error(
-                '[claude-sandbox] init',
-                JSON.stringify({
-                  sessionId,
-                  claudeSessionId: event.session_id,
-                  cwd: event.cwd,
-                  model: event.model,
-                  version: event.claude_code_version,
-                  apiKeySource: event.apiKeySource,
-                }),
-              );
+            if (event?.type === 'thread.started' && event.thread_id) {
+              persistThreadId?.(`${event.thread_id}`);
+              conversationStarted = true;
             }
             const isInit =
-              event?.type === 'system' && event?.subtype === 'init';
-            // A retry re-runs `claude`, which emits its own init. Suppress
+              event?.type === 'thread.started' ||
+              event?.type === 'turn.started';
+            // A retry re-runs `codex`, which emits its own init. Suppress
             // the duplicate so the consumer sees one turn, not two.
-            if (isInit && initPushed) continue;
-            if (isInit) initPushed = true;
-            else emitted = true;
-            push(event);
+            if (!(isInit && initPushed)) {
+              if (isInit) initPushed = true;
+              else emitted = true;
+              push(event);
+            }
           }
-          if (describeTranscripts) {
-            // Ground truth for the turn: whether the prompt Claude just
-            // persisted chained onto the conversation, or started a fresh
-            // root.
-            console.error(
-              '[claude-sandbox] after-turn',
-              JSON.stringify({ sessionId, transcripts: describeTranscripts() }),
-            );
-          }
-          // Stdout EOF alone does not mean the turn succeeded: `claude` exits
+          // Stdout EOF alone does not mean the turn succeeded: `codex` exits
           // non-zero on auth failure, an internal error, or an external kill,
           // having already streamed a partial transcript. Consult the exit
           // status so a failed turn terminates as `abort` (with whatever it
@@ -735,7 +681,7 @@ export const makeClaudeClient = ({
               ? ''
               : await readStderrBrief(proc);
             // eslint-disable-next-line no-continue
-            if (retryOrReport(`claude ${how}`, stderrText)) continue;
+            if (retryOrReport(`codex ${how}`, stderrText)) continue;
             return;
           }
           push({ type: 'end' });
@@ -744,8 +690,8 @@ export const makeClaudeClient = ({
           const message =
             error instanceof Error ? error.message : String(error);
           // Kill first so the captured stderr stream EOFs, then fold any
-          // diagnostic claude wrote to stderr into the abort reason — without
-          // it, a claude-side failure surfaces only as an opaque stream/parse
+          // diagnostic codex wrote to stderr into the abort reason — without
+          // it, a codex-side failure surfaces only as an opaque stream/parse
           // error. Skipped for a recreate: the diagnostics would be of our own
           // kill.
           await E(proc)
@@ -817,7 +763,7 @@ export const makeClaudeClient = ({
       // unmountable by `terminate()`.
       if (!provision) {
         throw makeError(
-          X`ClaudeClient(${q(sessionId)}): extra mounts require a lazily-provisioned client (no provision thunk to recreate the slice with)`,
+          X`CodexClient(${q(sessionId)}): extra mounts require a lazily-provisioned client (no provision thunk to recreate the slice with)`,
         );
       }
       extraMounts = harden([...extras]);
@@ -844,7 +790,7 @@ export const makeClaudeClient = ({
             // itself; the next provision binds the new set.
             return;
           }
-          // Dispose the slice first: it kills the in-flight `claude` (that
+          // Dispose the slice first: it kills the in-flight `codex` (that
           // turn aborts with a recreate-labelled reason) and releases the
           // container's binds so the 9P mounts below can unmount.
           try {
@@ -903,7 +849,7 @@ export const makeClaudeClient = ({
     return run;
   };
 
-  return makeExo('ClaudeClient', ClaudeClientInterface, {
+  return makeExo('CodexClient', CodexClientInterface, {
     /**
      * Start a turn and return its reply reader immediately. The turn
      * queues behind any in-flight turn; the reader yields the parsed
@@ -923,18 +869,18 @@ export const makeClaudeClient = ({
 
     /**
      * Interrupt the current turn by closing its reply reader: closing
-     * kills the in-flight `claude` process (or makes a still-queued turn
+     * kills the in-flight `codex` process (or makes a still-queued turn
      * bail before it spawns). The slice survives; the next `send()`
      * starts a fresh process.
      */
     async interrupt() {
       guardLive();
-      // Prefer the executing turn (kills its `claude` process); fall back
+      // Prefer the executing turn (kills its `codex` process); fall back
       // to the most-recent queued turn (which bails before it spawns).
       const target = inFlightClose || currentClose;
       if (!target) {
         throw makeError(
-          X`ClaudeClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
+          X`CodexClient(${q(sessionId)}): no in-flight prompt to interrupt.`,
         );
       }
       target();
@@ -1034,7 +980,7 @@ export const makeClaudeClient = ({
           // best-effort; the mount caplet also unmounts on teardown
         }
       }
-      // The persistent Claude config dir is a second host-side 9P mount; it
+      // The persistent Codex config dir is a second host-side 9P mount; it
       // must be released too. Its backing directory survives (that is the
       // whole point — the transcript persists for the next revival); only the
       // live mount is torn down.
@@ -1086,7 +1032,7 @@ export const makeClaudeClient = ({
     help(methodName) {
       if (methodName === undefined) {
         return [
-          'ClaudeClient: a single Claude Code session in a sandbox slice.',
+          'CodexClient: a single Codex Code session in a sandbox slice.',
           '  send(prompt, opts?) → reply reader of stream-json events,',
           '                        terminated by {type:"end"} or',
           '                        {type:"abort",reason} (consume with',
@@ -1106,4 +1052,4 @@ export const makeClaudeClient = ({
     },
   });
 };
-harden(makeClaudeClient);
+harden(makeCodexClient);
