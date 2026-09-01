@@ -56,6 +56,22 @@ const resolveSafe = (relativePath, cwd) => {
 };
 
 /**
+ * BigInt has no JSON representation, so a result that merely *contains* one
+ * throws inside `JSON.stringify` and the whole result is lost — even though
+ * the capabilities most worth calling return them (`stat()` sizes and times, a
+ * workflow's `status()` and `journal()`). Callers worked around that by
+ * hand-rolling this replacer at every call site, which buries the real result
+ * in a re-parsed blob. Decimal strings rather than a marshalling sentinel: a
+ * tool result is text a model reads, and `"1786825186213908033"` is the
+ * readable answer.
+ *
+ * @param {string} _key
+ * @param {unknown} value
+ */
+const bigintsAsDecimalStrings = (_key, value) =>
+  typeof value === 'bigint' ? value.toString() : value;
+
+/**
  * Render a tool result value as text for the model. Plain JSON-serializable
  * values stringify directly. A CapTP presence (a remote capability) has no
  * enumerable own properties, so `JSON.stringify` collapses it to `"{}"` — the
@@ -70,7 +86,7 @@ const resolveSafe = (relativePath, cwd) => {
 const renderToolResult = async result => {
   let json;
   try {
-    json = JSON.stringify(result, null, 2);
+    json = JSON.stringify(result, bigintsAsDecimalStrings, 2);
   } catch {
     json = undefined;
   }
