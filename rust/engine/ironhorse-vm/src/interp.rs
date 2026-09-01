@@ -36794,9 +36794,9 @@ impl Interp {
     /// `if (flag) the->meterIndex += 2 * XS_CODE_METERING`, meters two extra
     /// code units. Integer/number index keys and the negative/non-index
     /// numeric-name cases (which XS reaches through the same `mxToString` +
-    /// `fxNewName` path) are handled identically. A symbol value key stays out
-    /// of the covered grammar (`None`), as does a reference needing
-    /// `ToPrimitive`.
+    /// `fxNewName` path) are handled identically. The remaining primitive
+    /// values use their `ToString` spelling; references have already passed
+    /// through `ToPrimitive` in the opcode dispatch above this helper.
     fn resolve_at_key(&mut self, key: Slot) -> Option<Slot> {
         match key.kind {
             Kind::At => Some(key),
@@ -36833,6 +36833,32 @@ impl Interp {
                     let id = self.intern_key(&name);
                     Some(Slot::of(Kind::At, Payload::At(id, 0)))
                 }
+            }
+            Kind::Undefined | Kind::Null | Kind::Boolean | Kind::BigInt => {
+                let name = match key.kind {
+                    Kind::Undefined => "undefined".to_owned(),
+                    Kind::Null => "null".to_owned(),
+                    Kind::Boolean => match key.value {
+                        Payload::Boolean(true) => "true".to_owned(),
+                        Payload::Boolean(false) => "false".to_owned(),
+                        _ => return None,
+                    },
+                    Kind::BigInt => match key.value {
+                        Payload::BigInt(off) => {
+                            let (negative, magnitude) = self.read_bigint(off);
+                            bi_to_decimal(negative, &magnitude)
+                        }
+                        _ => return None,
+                    },
+                    _ => unreachable!(),
+                };
+                // None of these primitive spellings names a standard inherited
+                // object property. In particular, `undefined` is a global own
+                // property, not an `%Object.prototype%` property, so the broad
+                // boot-default ambiguity gate used for arbitrary strings does
+                // not apply here.
+                let id = self.intern_key(&name);
+                Some(Slot::of(Kind::At, Payload::At(id, 0)))
             }
             // A symbol key (`o[sym]`): resolve its descriptor-slot identity to
             // the interned property id (XS's `mxID(symbol)`). No index branch —
