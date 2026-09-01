@@ -37,14 +37,24 @@ const makeHost = () => {
   const minted = [];
   /** @type {Array<{ mount: unknown, path: unknown, cap: unknown }>} */
   const written = [];
+  /** Names currently bound in the host inventory. */
+  const bound = new Set();
   const host = Far('Host', {
+    async has(name) {
+      return bound.has(name);
+    },
+    async remove(name) {
+      bound.delete(name);
+    },
     async provideBearerCredential(name, opts) {
+      bound.add(name);
       minted.push({ kind: 'bearer', name, opts });
       return Far('BearerCredential', {
         audience: () => opts.audience,
       });
     },
     async provideBasicCredential(name, opts) {
+      bound.add(name);
       minted.push({ kind: 'basic', name, opts });
       return Far('BasicCredential', {
         audience: () => opts.audience,
@@ -54,7 +64,7 @@ const makeHost = () => {
       written.push({ mount, path, cap });
     },
   });
-  return { host, minted, written };
+  return { host, minted, written, bound };
 };
 
 test('requestSecret waits for submit and returns a receipt without the bytes', async t => {
@@ -205,4 +215,47 @@ test('writeSecret writes through the host without returning bytes', async t => {
   t.is(written[0].path, 'secrets/token');
   t.is(written[0].mount, mount);
   t.is(minted.length, 1);
+});
+
+// Ingested material dies with the daemon process, so re-requesting the same
+// secret after a restart is the ORDINARY path, not an edge case. Keying the
+// host name on the request id left a dead credential bound for every one of
+// those, forever.
+test('re-requesting a secret rebinds one host name instead of accumulating', async t => {
+  const { host, minted, bound } = makeHost();
+  const guest = makeGuest();
+  let n = 0;
+  const kit = makeSecretRequestKit({
+    host,
+    sessionGuest: guest,
+    sessionId: 's1',
+    randomId: () => {
+      n += 1;
+      return `req-${n}`;
+    },
+  });
+
+  const ingest = async value => {
+    const done = E(kit.tools.requestSecret).execute({
+      label: 'Forge token',
+      petName: 'forge',
+      audience: 'https://git.example',
+    });
+    for (let i = 0; i < 20 && !kit.getPending(); i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await null;
+    }
+    const pending = kit.getPending();
+    await kit.submit(/** @type {any} */ (pending).id, value);
+    return done;
+  };
+
+  await ingest('first-token');
+  await ingest('second-token');
+
+  t.deepEqual(
+    minted.map(m => m.name),
+    ['floot-secret-s1-forge', 'floot-secret-s1-forge'],
+  );
+  t.deepEqual([...bound], ['floot-secret-s1-forge']);
 });

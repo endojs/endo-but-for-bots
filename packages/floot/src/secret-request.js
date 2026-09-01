@@ -167,7 +167,15 @@ export const makeSecretRequestKit = ({
    */
   const acceptCredential = async (info, value) => {
     await null;
-    const hostName = `floot-secret-${sessionId}-${info.petName}-${info.id}`;
+    // Stable per (session, petName), NOT per request. Keying on the request
+    // id minted a fresh permanent host name every time, and the material of
+    // an ingested credential dies with the daemon process — so the ordinary
+    // path, re-requesting the same secret after a restart, left the dead one
+    // bound forever. Rebind the one name instead.
+    const hostName = `floot-secret-${sessionId}-${info.petName}`;
+    if (await E(host).has(hostName)) {
+      await E(host).remove(hostName);
+    }
     /** @type {unknown} */
     let cap;
     let byteLength = 0;
@@ -222,7 +230,11 @@ export const makeSecretRequestKit = ({
             'only a capability handle stored under petName — never the bytes. ' +
             'NEVER ask the user to paste secrets into chat or put them in exec. ' +
             'Pass the resulting handle to provideGitRemote / provideGitClone as ' +
-            '`credential`, or write it to a mount with writeSecret.',
+            '`credential`, or write it to a mount with writeSecret. ' +
+            'The material is held in the daemon process, so it does NOT survive ' +
+            'a daemon restart: the handle keeps its name but stops working, ' +
+            'which GitRemote.credentialHealth() reports as revoked. Ask for it ' +
+            'again rather than assuming a stored petname is still usable.',
           parameters: {
             type: 'object',
             properties: {
