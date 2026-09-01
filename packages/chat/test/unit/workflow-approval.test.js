@@ -11,7 +11,8 @@ const ASK = {
   kind: 'ask',
   path: ['await-approval'],
   correlation: {
-    messageId: 'f573528dff2be58e25b82c8f73ebb1020734a5db169b09cc7292b34b2ab5f10f',
+    messageId:
+      'f573528dff2be58e25b82c8f73ebb1020734a5db169b09cc7292b34b2ab5f10f',
     messageNumber: '0',
     mode: 'form',
     responseName: ['workflow', 'runs', 'r-6f886ae6d099', 'answers', '5-0'],
@@ -64,7 +65,10 @@ test('a pending record with no kind at all still counts', t => {
 });
 
 test('an ask in another mode is not treated as a form', t => {
-  const request = { ...ASK, correlation: { ...ASK.correlation, mode: 'request' } };
+  const request = {
+    ...ASK,
+    correlation: { ...ASK.correlation, mode: 'request' },
+  };
   t.deepEqual(formAsks([request]), []);
 });
 
@@ -103,5 +107,8 @@ test('a non-form message with the same id is not answerable', t => {
 
 test('an ask with no message id matches nothing', t => {
   const anonymous = { kind: 'ask', correlation: { mode: 'form' } };
-  t.is(matchInboxMessage([{ type: 'form', messageId: 'x' }], anonymous), undefined);
+  t.is(
+    matchInboxMessage([{ type: 'form', messageId: 'x' }], anonymous),
+    undefined,
+  );
 });
