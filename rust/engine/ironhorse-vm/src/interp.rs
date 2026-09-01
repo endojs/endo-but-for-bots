@@ -32754,10 +32754,51 @@ impl Interp {
         Ok(self.new_string_units(&out))
     }
 
+    /// `ToIntegerOrInfinity` followed by the relative-index adjustment used by
+    /// `String.prototype.slice`. `undefined` selects `default`; negative finite
+    /// values count from the end, and infinities clamp to the corresponding
+    /// boundary.
+    fn string_arg_to_index(
+        &mut self,
+        code: &[u8],
+        arg: Option<Slot>,
+        default: i64,
+        len: i64,
+    ) -> Result<i64, Halt> {
+        let Some(value) = arg.filter(|value| value.kind != Kind::Undefined) else {
+            return Ok(default);
+        };
+        let integer = self.array_to_integer_or_infinity(code, value)?;
+        if integer == f64::NEG_INFINITY {
+            return Ok(0);
+        }
+        if integer < 0.0 {
+            return Ok((len as f64 + integer).max(0.0) as i64);
+        }
+        Ok(integer.min(len as f64) as i64)
+    }
+
+    /// `ToIntegerOrInfinity` followed by the absolute-position clamp used by
+    /// String indexing/search methods and `substring`.
+    fn string_arg_to_position(
+        &mut self,
+        code: &[u8],
+        arg: Option<Slot>,
+        default: i64,
+        len: i64,
+    ) -> Result<i64, Halt> {
+        let Some(value) = arg.filter(|value| value.kind != Kind::Undefined) else {
+            return Ok(default);
+        };
+        let integer = self.array_to_integer_or_infinity(code, value)?;
+        Ok(integer.clamp(0.0, len as f64) as i64)
+    }
+
     /// Dispatch a `String.prototype` method (`xsString.c`) over the primitive
     /// receiver's UTF-16 code units (the stored form — indexing is direct, no
-    /// boundary walk). A position/search argument that is not a number/string
-    /// ironhorse can coerce self-names an honest skip. Meters exactly the pin's
+    /// boundary walk). Numeric arguments pass through the shared
+    /// `ToIntegerOrInfinity` machinery, including observable `ToPrimitive`
+    /// calls and catchable BigInt/Symbol errors. Meters exactly the pin's
     /// `mxMeterSome` + `fxNewChunk` (re-based to code-unit length), plus the
     /// (zero) native frame.
     fn call_string(
@@ -32792,17 +32833,6 @@ impl Interp {
             })
             .collect();
         let argn = |i: usize| -> Option<Slot> { args.get(i).copied() };
-        // ToInteger/ToNumber over a numeric operand only (a string/reference
-        // position argument self-names — ironhorse does not model string→number
-        // coercion in these built-ins).
-        let to_num = |s: Slot| -> Result<f64, Halt> {
-            match s.kind {
-                Kind::String | Kind::Reference | Kind::Symbol => {
-                    Err(Halt::Unsupported("string-method:non-numeric-argument"))
-                }
-                _ => Ok(to_number(&s)),
-            }
-        };
         self.meter.tick_raw(STRING_METHOD_FRAME_METERING);
         use NativeMethod::*;
         let result = match m {
@@ -32811,7 +32841,7 @@ impl Interp {
             StringCharCodeAt => {
                 let pos = match argn(0) {
                     Some(s) if s.kind != Kind::Undefined => {
-                        let n = to_num(s)?;
+                        let n = self.array_to_integer_or_infinity(code, s)?;
                         if n < 0.0 {
                             return Ok(Slot::number(f64::NAN));
                         }
@@ -32830,12 +32860,7 @@ impl Interp {
             StringCodePointAt => {
                 let pos = match argn(0) {
                     Some(s) if s.kind != Kind::Undefined => {
-                        let n = to_num(s)?;
-                        if n.is_nan() {
-                            0
-                        } else {
-                            n as i64
-                        }
+                        self.array_to_integer_or_infinity(code, s)? as i64
                     }
                     _ => 0,
                 };
@@ -32861,8 +32886,7 @@ impl Interp {
             StringCharAt => {
                 let pos = match argn(0) {
                     Some(s) if s.kind != Kind::Undefined => {
-                        let n = to_num(s)?;
-                        n.trunc() as i64
+                        self.array_to_integer_or_infinity(code, s)? as i64
                     }
                     _ => 0,
                 };
@@ -32876,14 +32900,7 @@ impl Interp {
             // end), else undefined.
             StringAt => {
                 let idx = match argn(0) {
-                    Some(s) => {
-                        let n = to_num(s)?.trunc();
-                        if n.is_nan() {
-                            0
-                        } else {
-                            n as i64
-                        }
-                    }
+                    Some(s) => self.array_to_integer_or_infinity(code, s)? as i64,
                     None => 0,
                 };
                 let idx = if idx < 0 { idx + ulen } else { idx };
@@ -32896,8 +32913,8 @@ impl Interp {
             // slice([start[,end]]): the substring `[start,end)` with negative
             // offsets counted from the end.
             StringSlice => {
-                let start = arg_to_index(argn(0), 0, ulen, &to_num)?;
-                let end = arg_to_index(argn(1), ulen, ulen, &to_num)?;
+                let start = self.string_arg_to_index(code, argn(0), 0, ulen)?;
+                let end = self.string_arg_to_index(code, argn(1), ulen, ulen)?;
                 if start < end {
                     self.new_string_units(&content[clamp(start)..clamp(end)])
                 } else {
@@ -32907,8 +32924,8 @@ impl Interp {
             // substring([start[,end]]): clamp both to `[0,len]`, swap if
             // start>end.
             StringSubstring => {
-                let mut start = arg_to_position(argn(0), 0, ulen, &to_num)?;
-                let mut stop = arg_to_position(argn(1), ulen, ulen, &to_num)?;
+                let mut start = self.string_arg_to_position(code, argn(0), 0, ulen)?;
+                let mut stop = self.string_arg_to_position(code, argn(1), ulen, ulen)?;
                 if start > stop {
                     std::mem::swap(&mut start, &mut stop);
                 }
@@ -32937,26 +32954,13 @@ impl Interp {
             // repeat(count): the receiver repeated `count` times; a negative or
             // over-large count is a RangeError. mxMeterSome(count) + chunk.
             StringRepeat => {
-                // A negative/over-large count throws a RangeError; ironhorse does
-                // not model that throw's metering this stage, so it self-names
-                // an honest skip rather than a completion divergence.
                 let count = match argn(0) {
                     Some(s) if s.kind != Kind::Undefined => {
-                        if let Payload::Integer(v) = s.value {
-                            if v < 0 {
-                                return Err(Halt::Unsupported("repeat:range-error"));
-                            }
-                            v as i64
-                        } else {
-                            let n = to_num(s)?.trunc();
-                            if n.is_nan() {
-                                0
-                            } else if n < 0.0 || n > 0x7FFFFFFF as f64 {
-                                return Err(Halt::Unsupported("repeat:range-error"));
-                            } else {
-                                n as i64
-                            }
+                        let n = self.array_to_integer_or_infinity(code, s)?;
+                        if n < 0.0 || n == f64::INFINITY || n > 0x7FFF_FFFF as f64 {
+                            return Err(self.catchable_range_error());
                         }
+                        n as i64
                     }
                     _ => 0,
                 };
@@ -32987,9 +32991,9 @@ impl Interp {
                 let is_start = m == StringStartsWith;
                 // The position argument (code unit), clamped to [0, ulen].
                 let pos = if is_start {
-                    arg_to_position(argn(1), 0, ulen, &to_num)?
+                    self.string_arg_to_position(code, argn(1), 0, ulen)?
                 } else {
-                    arg_to_position(argn(1), ulen, ulen, &to_num)?
+                    self.string_arg_to_position(code, argn(1), ulen, ulen)?
                 };
                 let at = clamp(pos);
                 let matches = if is_start {
@@ -33011,7 +33015,7 @@ impl Interp {
                     Some(Payload::String(off)) => self.str_units(off),
                     _ => return Err(Halt::Unsupported("includes:non-string-search")),
                 };
-                let from = arg_to_position(argn(1), 0, ulen, &to_num)?;
+                let from = self.string_arg_to_position(code, argn(1), 0, ulen)?;
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 let bfrom = clamp(from).min(content.len());
                 let hay = &content[bfrom..];
@@ -45042,62 +45046,6 @@ fn float_prefix_len(body: &[u8]) -> usize {
         }
     }
     i
-}
-
-/// `fxArgToIndex` (`xsArray.c`, used by `String.prototype.slice`): a relative
-/// index — `undefined` yields `default`; otherwise `trunc(ToNumber)` with a
-/// negative value counted from `len` (clamped to 0) and a value past `len`
-/// clamped to `len`.
-fn arg_to_index<F: Fn(Slot) -> Result<f64, Halt>>(
-    arg: Option<Slot>,
-    default: i64,
-    len: i64,
-    to_num: &F,
-) -> Result<i64, Halt> {
-    match arg {
-        Some(s) if s.kind != Kind::Undefined => {
-            let mut i = to_num(s)?.trunc();
-            if i.is_nan() {
-                i = 0.0;
-            }
-            let mut i = i as i64;
-            if i < 0 {
-                i += len;
-                if i < 0 {
-                    i = 0;
-                }
-            } else if i > len {
-                i = len;
-            }
-            Ok(i)
-        }
-        _ => Ok(default),
-    }
-}
-
-/// `fxArgToPosition` (`xsString.c`, used by `substring`/`indexOf`-from/
-/// `startsWith`/`endsWith`): an absolute position — `undefined` yields
-/// `default`; otherwise `trunc(ToNumber)` (NaN→0) clamped to `[0, len]`.
-fn arg_to_position<F: Fn(Slot) -> Result<f64, Halt>>(
-    arg: Option<Slot>,
-    default: i64,
-    len: i64,
-    to_num: &F,
-) -> Result<i64, Halt> {
-    match arg {
-        Some(s) if s.kind != Kind::Undefined => {
-            let i = to_num(s)?.trunc();
-            let i = if i.is_nan() { 0.0 } else { i };
-            Ok(if i < 0.0 {
-                0
-            } else if i > len as f64 {
-                len
-            } else {
-                i as i64
-            })
-        }
-        _ => Ok(default),
-    }
 }
 
 /// `fx_Math_toInteger` (`xsMath.c`): fold a number result to an INTEGER-kind
