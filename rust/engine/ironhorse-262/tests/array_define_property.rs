@@ -93,3 +93,24 @@ fn proxy_forwarding_uses_array_define_own_property() {
          '' + target.length + ',' + target[1] + ',' + target.propertyIsEnumerable('1')",
     );
 }
+
+#[test]
+fn arguments_length_remains_an_ordinary_configurable_property() {
+    agrees(
+        "function f() { var before = arguments.length; var deleted = delete arguments.length; \
+         return '' + before + ',' + deleted + ',' + arguments.hasOwnProperty('length') + \
+         ',' + arguments.length; } f(1, 2)",
+    );
+    agrees(
+        "function f() { arguments[3] = 9; return '' + arguments.length + ',' + arguments[3]; } f(1)",
+    );
+    agrees(
+        "function f() { Object.defineProperty(arguments, 'length', { value: 7 }); \
+         var d = Object.getOwnPropertyDescriptor(arguments, 'length'); \
+         return '' + arguments.length + ',' + d.writable + ',' + d.enumerable + ',' + d.configurable; } f(1)",
+    );
+    agrees(
+        "function f() { 'use strict'; arguments.length = 4; \
+         return '' + arguments.length + ',' + arguments.propertyIsEnumerable('length'); } f(1, 2)",
+    );
+}
