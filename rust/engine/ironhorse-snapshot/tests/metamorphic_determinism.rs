@@ -166,7 +166,12 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-01 because String.prototype.split now has
         // its standard observable name and arity and Math carries its
         // standard Symbol.toStringTag in the linked heap. Format unchanged.
-        "c871549895bbc2f93dc08f6afd8cc32bf51c90abe0d19d59eb591b4d66c3c242",
+        // Re-pinned 2026-09-02 for a boot-heap CONTENT move: the
+        // OrdinaryToPrimitive fallback names `toString` and `valueOf`
+        // are now linked even when the guest source never names them,
+        // so wrappers and ordinary objects coerce correctly. Format
+        // unchanged.
+        "067fc05eb2f387d7da6dd48d1ba4be6dea8fd4fb4d33ff2e04159fbc9d296381",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -267,7 +272,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for String.prototype.split's standard
         // name and arity and Math's standard Symbol.toStringTag. Schema
         // and format remain unchanged.
-        "71baae6772a2e4d0307bb18938d93c9bc2307595746400f0182fe37d5b078f7c",
+        // Re-pinned with the blob for the OrdinaryToPrimitive fallback
+        // names now linked into every boot heap. Schema and format
+        // remain unchanged.
+        "7da99f20fdfdc55f7fb67f466b27133a4cacd49d3ece2a1377ddfefa32d204fd",
         "epoch-3 seal chain"
     );
 }
