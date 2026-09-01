@@ -82,3 +82,22 @@ test('exec renders BigInts nested in a result', async t => {
     name: 'secrets.env',
   });
 });
+
+// The compartment has no timers, so before `sleep` an agent could not wait
+// between polls inside one call — it spun, or burned a turn per check.
+test('exec can wait with the sleep endowment', async t => {
+  const tool = makeExecTool(powers);
+  const result = await tool.execute({
+    code: 'await sleep(5);\nreturn "waited";',
+  });
+  t.is(result, '"waited"');
+});
+
+test('exec still has no ambient timers', async t => {
+  const tool = makeExecTool(powers);
+  await t.throwsAsync(() =>
+    tool.execute({
+      code: 'return typeof setTimeout === "function" ? setTimeout(() => {}, 1) : (() => { throw new Error("no setTimeout") })();',
+    }),
+  );
+});
