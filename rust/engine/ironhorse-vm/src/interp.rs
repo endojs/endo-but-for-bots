@@ -1524,6 +1524,10 @@ pub const STRING_SPLIT_PER_STEP_METERING: u64 = 212984;
 /// (read the match end `e`) + the `fxIsSameValue(e, p)` check + the branch.
 /// Calibrated raw-exact.
 pub const STRING_SPLIT_MATCH_STEP_METERING: u64 = 163872;
+/// XS's `e == p` empty-match advance omits six `mxMeterOne` operations that
+/// the ordinary matched-step residual above includes. Subtract that branch
+/// discount after observing `lastIndex`. Calibrated raw-exact.
+pub const STRING_SPLIT_EMPTY_ADVANCE_DISCOUNT: u64 = 98304;
 /// The per-capture-group residual of a `split` match: the `mxGetIndex(i)` read
 /// of each capture inserted between splits. Calibrated raw-exact.
 pub const STRING_SPLIT_PER_CAPTURE_METERING: u64 = 65568;
@@ -7101,7 +7105,11 @@ impl Interp {
             ("replace", StringReplace),
             ("split", StringSplit),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = if m == StringSplit {
+                self.alloc_named_method(m, name, 2)
+            } else {
+                self.alloc_method(m)
+            };
             self.proto_methods.push((p, name, mf));
         }
         // `trimStart`/`trimEnd` and their Annex-B references
@@ -7783,13 +7791,15 @@ impl Interp {
         if !full {
             return;
         }
-        // Each ECMA-402 formatter prototype carries a `Symbol.toStringTag`
-        // string own property (writable:false, enumerable:false,
-        // configurable:true — flags `DONT_SET | DONT_ENUM`, but deletable) so
-        // `Object.prototype.toString` renders `[object Intl.ListFormat]` and
-        // the property's descriptor matches the specification.
+        // Namespace objects and ECMA-402 formatter prototypes carry a
+        // `Symbol.toStringTag` string own property (writable:false,
+        // enumerable:false, configurable:true — flags `DONT_SET | DONT_ENUM`,
+        // but deletable), so `Object.prototype.toString` renders their
+        // specified tag and a non-string guest override falls back to the
+        // ordinary builtin tag.
         if let Some(tag_id) = self.well_known_symbol_property_id("toStringTag") {
             for (proto, tag) in [
+                (self.math_object, "Math"),
                 (self.list_format_proto, "Intl.ListFormat"),
                 (self.plural_rules_proto, "Intl.PluralRules"),
                 (self.segmenter_proto, "Intl.Segmenter"),
@@ -18654,23 +18664,23 @@ impl Interp {
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     Kind::Boolean => {
-                        let inst = self.box_primitive_to_instance(Native::Boolean, a);
+                        let inst = self.box_object_primitive(Native::Boolean, a);
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     Kind::Integer | Kind::Number => {
-                        let inst = self.box_primitive_to_instance(Native::Number, a);
+                        let inst = self.box_object_primitive(Native::Number, a);
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     Kind::String => {
-                        let inst = self.box_primitive_to_instance(Native::String, a);
+                        let inst = self.box_object_primitive(Native::String, a);
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     Kind::Symbol => {
-                        let inst = self.box_primitive_to_instance(Native::Symbol, a);
+                        let inst = self.box_object_primitive(Native::Symbol, a);
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     Kind::BigInt => {
-                        let inst = self.box_primitive_to_instance(Native::BigInt, a);
+                        let inst = self.box_object_primitive(Native::BigInt, a);
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
@@ -21578,6 +21588,105 @@ impl Interp {
         Ok(sp)
     }
 
+    /// `GetMethod(separator, @@split)` for `String.prototype.split`. The
+    /// protocol is consulted only when the separator is an Object; primitive
+    /// separators proceed directly to string conversion without reading their
+    /// wrapper prototypes. Object access uses full `[[Get]]` (including
+    /// proxies and accessors). A present non-callable is returned and rejected
+    /// by [`Self::invoke_value`] with a catchable `TypeError`.
+    fn string_split_method(&mut self, code: &[u8], separator: Slot) -> Result<Slot, Halt> {
+        let Payload::Reference(inst) = separator.value else {
+            return Ok(Slot::undefined());
+        };
+        if separator.kind != Kind::Reference {
+            return Ok(Slot::undefined());
+        }
+        let Some(id) = self.well_known_symbol_property_id("split") else {
+            return Ok(Slot::undefined());
+        };
+        self.mop_get(code, inst, id, separator)
+    }
+
+    /// ECMAScript `ToUint32`, used by the ordinary string-split limit. The
+    /// coercion is re-entrant and therefore observes object conversion hooks;
+    /// Symbols and BigInts reject through the shared `ToNumber` path.
+    fn string_split_limit(&mut self, code: &[u8], limit: Slot) -> Result<u32, Halt> {
+        if limit.kind == Kind::Undefined {
+            return Ok(u32::MAX);
+        }
+        let number = self.to_number_value(code, limit)?;
+        if number.kind == Kind::BigInt {
+            return Err(self.catchable_type_error());
+        }
+        let n = to_number(&number);
+        if !n.is_finite() || n == 0.0 {
+            return Ok(0);
+        }
+        Ok(n.trunc().rem_euclid(4_294_967_296.0) as u32)
+    }
+
+    /// The `String.prototype.split` `withoutRegexp` path. Both the subject and
+    /// separator use ordinary `ToString`; matching and slicing operate on
+    /// UTF-16 code units so empty separators split surrogate pairs into their
+    /// individual code units as required by ECMA-262.
+    fn string_split_plain(
+        &mut self,
+        code: &[u8],
+        subject: Slot,
+        separator: Slot,
+        limit_slot: Slot,
+    ) -> Result<Slot, Halt> {
+        if matches!(subject.kind, Kind::Undefined | Kind::Null) {
+            return Err(self.catchable_type_error());
+        }
+        let subject_units = self.to_string_units(code, subject)?;
+        let limit = self.string_split_limit(code, limit_slot)? as usize;
+        let array = self.new_array_unmetered();
+        let mut segments = Vec::new();
+        // For a present separator, ToString precedes the zero-limit return;
+        // an abrupt conversion remains observable even when the result would
+        // otherwise be the empty array.
+        let separator_units = if separator.kind == Kind::Undefined {
+            None
+        } else {
+            Some(self.to_string_units(code, separator)?)
+        };
+        if limit == 0 {
+            return Ok(self.finish_split_array(array, segments));
+        }
+        let push = |this: &mut Self, units: &[u16], out: &mut Vec<Slot>| {
+            this.meter.tick_slot_alloc();
+            out.push(this.new_string_units(units));
+        };
+        let Some(separator_units) = separator_units else {
+            push(self, &subject_units, &mut segments);
+            return Ok(self.finish_split_array(array, segments));
+        };
+        if separator_units.is_empty() {
+            for unit in subject_units.iter().take(limit) {
+                push(self, std::slice::from_ref(unit), &mut segments);
+            }
+            return Ok(self.finish_split_array(array, segments));
+        }
+
+        let mut from = 0usize;
+        while segments.len() < limit {
+            let found = subject_units[from..]
+                .windows(separator_units.len())
+                .position(|window| window == separator_units)
+                .map(|offset| from + offset);
+            let Some(at) = found else {
+                break;
+            };
+            push(self, &subject_units[from..at], &mut segments);
+            from = at + separator_units.len();
+        }
+        if segments.len() < limit {
+            push(self, &subject_units[from..], &mut segments);
+        }
+        Ok(self.finish_split_array(array, segments))
+    }
+
     /// `String.prototype.split(regexp[, limit])` (`fx_String_prototype_split`
     /// → `fx_RegExp_prototype_split` via the `Symbol.split` protocol): build a
     /// sticky splitter (`new RegExp(this, flags+"y")`), then walk the subject,
@@ -21587,29 +21696,25 @@ impl Interp {
     /// non-RegExp separator (the `withoutRegexp` string-split path) self-names.
     fn string_split(
         &mut self,
+        code: &[u8],
         inst: crate::value::SlotIndex,
         subject: Slot,
         limit_slot: Slot,
     ) -> Result<Slot, Halt> {
-        let subject_bytes = match self.string_receiver_text(subject) {
-            Some(c) => c,
-            None => return Err(Halt::Unsupported("String.split:non-string-receiver")),
+        let subject_units = self.to_string_units(code, subject)?;
+        let subject_bytes = String::from_utf16_lossy(&subject_units).into_bytes();
+        let subject = if subject.kind == Kind::String {
+            subject
+        } else {
+            let off = self.chunks.alloc(&units_to_be16(&subject_units));
+            Slot::of(Kind::String, Payload::String(off))
         };
         // Non-ASCII would need the code-unit↔byte remap the sticky walk assumes
         // away.
         if !subject_bytes.is_ascii() {
             return Err(Halt::Unsupported("String.split:non-ascii-subject"));
         }
-        let limit: u64 = if limit_slot.kind == Kind::Undefined {
-            0xFFFF_FFFF
-        } else {
-            let n = to_number(&limit_slot);
-            if n.is_nan() || n < 0.0 {
-                0
-            } else {
-                (n as u64) & 0xFFFF_FFFF
-            }
-        };
+        let limit = self.string_split_limit(code, limit_slot)? as u64;
         self.meter.tick_raw(STRING_SPLIT_FRAME_METERING);
         // `mxGetID(_flags)` in the worker (the eight-property cascade) + the
         // species-constructor lookup/new framing.
@@ -21648,27 +21753,18 @@ impl Interp {
             if start.is_none() {
                 q += 1; // fxAdvanceStringIndex (ASCII → +1)
             } else {
-                // An empty match (`a*`, `x?`, …) drives XS's
-                // `fxAdvanceStringIndex` empty-match corner, whose per-position
-                // metering this stage does not model — self-name rather than
-                // fit it (a non-empty-matching separator stays bit-exact).
-                if self.regexp_whole_match_len(res) == 0 {
-                    return Err(Halt::Unsupported("String.split:empty-match"));
-                }
                 // A matched step: `mxGetID(_lastIndex)` (read `e`) + the
                 // `fxIsSameValue(e, p)` check.
                 self.meter.tick_raw(STRING_SPLIT_MATCH_STEP_METERING);
                 let e = self.regexps[&splitter].last_index as usize;
                 if e == p {
+                    self.meter
+                        .untick_raw(STRING_SPLIT_EMPTY_ADVANCE_DISCOUNT);
                     q += 1;
                 } else {
                     push_segment(self, p, q, &mut segments);
                     if segments.len() as u64 == limit {
-                        // The `goto bail` truncation boundary meters a hair
-                        // differently than the normal step completion; rather
-                        // than fit that corner, self-name it (the non-truncating
-                        // and no-limit paths stay bit-exact).
-                        return Err(Halt::Unsupported("String.split:limit-truncation"));
+                        return Ok(self.finish_split_array(array, segments));
                     }
                     // The capture groups (result[1..]) inserted between splits.
                     let cap_count = self.regexp_capture_count(res);
@@ -21678,7 +21774,7 @@ impl Interp {
                         let cap = self.array_index_slot(res, i as u32);
                         segments.push(cap);
                         if segments.len() as u64 == limit {
-                            return Err(Halt::Unsupported("String.split:limit-truncation"));
+                            return Ok(self.finish_split_array(array, segments));
                         }
                     }
                     p = e;
@@ -24688,6 +24784,21 @@ impl Interp {
         if self.strict {
             self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
         }
+        inst
+    }
+
+    /// `Object(primitive)` / `new Object(primitive)` creates an ordinary,
+    /// extensible wrapper even when the call appears in strict code. The
+    /// shared coercion boxer stamps strict temporary wrappers non-extensible
+    /// to mirror XS internals, so the explicit constructor path clears only
+    /// that internal stamp before exposing the object to guest mutation.
+    fn box_object_primitive(
+        &mut self,
+        native: Native,
+        prim: Slot,
+    ) -> crate::value::SlotIndex {
+        let inst = self.box_primitive_to_instance(native, prim);
+        self.slots.get_mut(inst).flag &= !XS_DONT_PATCH_FLAG;
         inst
     }
 
@@ -30142,24 +30253,31 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("String.replace:non-regexp-pattern")),
                 }
             }
-            // `String.prototype.split(regexp[, limit])` over the matcher (via
-            // the `Symbol.split` protocol → the sticky-splitter worker). A
-            // string (non-RegExp) separator self-names the `withoutRegexp`
-            // path.
+            // `String.prototype.split(separator[, limit])`: a custom
+            // `separator[Symbol.split]` runs before receiver coercion; a RegExp
+            // without an override uses the sticky-splitter worker; everything
+            // else follows the ordinary UTF-16 string-separator algorithm.
             NativeMethod::StringSplit => {
-                if self.string_receiver_units(this).is_none() {
-                    return Err(Halt::Unsupported("String.split:non-string-receiver"));
+                // RequireObjectCoercible precedes the separator protocol, so a
+                // custom `@@split` cannot observe a nullish receiver.
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error());
                 }
                 let limit = self
                     .stack
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                match arg0.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                        self.string_split(r, this, limit)?
+                let split_method = self.string_split_method(code, arg0)?;
+                if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, split_method, arg0, &[this, limit])?
+                } else {
+                    match arg0.value {
+                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
+                            self.string_split(code, r, this, limit)?
+                        }
+                        _ => self.string_split_plain(code, this, arg0, limit)?,
                     }
-                    _ => return Err(Halt::Unsupported("String.split:non-regexp-separator")),
                 }
             }
         };

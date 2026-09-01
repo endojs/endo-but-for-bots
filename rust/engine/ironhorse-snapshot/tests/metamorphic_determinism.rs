@@ -163,7 +163,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-01 for another boot-heap CONTENT move:
         // `%BigInt%`, its prototype methods, and its `asIntN`/`asUintN`
         // statics are now real realm intrinsics. Format unchanged.
-        "a6069780135868983a320323ad59e7a4b8710de793ea9732ef5f1957793d204f",
+        // Re-pinned 2026-09-01 because String.prototype.split now has
+        // its standard observable name and arity and Math carries its
+        // standard Symbol.toStringTag in the linked heap. Format unchanged.
+        "c871549895bbc2f93dc08f6afd8cc32bf51c90abe0d19d59eb591b4d66c3c242",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -261,7 +264,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // manifest root and seal move with that content.
         // Re-pinned with the blob for the complete `%BigInt%` boot-heap
         // content addition. Schema and format remain unchanged.
-        "70a3505f63c87312c26f5b0ed0e44b35e02e3ddfe0782cc7b6a5f07cb6b6470f",
+        // Re-pinned with the blob for String.prototype.split's standard
+        // name and arity and Math's standard Symbol.toStringTag. Schema
+        // and format remain unchanged.
+        "71baae6772a2e4d0307bb18938d93c9bc2307595746400f0182fe37d5b078f7c",
         "epoch-3 seal chain"
     );
 }

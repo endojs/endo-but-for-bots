@@ -81,3 +81,48 @@ fn explicit_string_iterator_yields_unicode_code_points() {
         agrees(source);
     }
 }
+
+#[test]
+fn split_handles_string_separators_limits_and_utf16() {
+    for source in [
+        "JSON.stringify('one--two----four--'.split('--'))",
+        "JSON.stringify('hello'.split('l', 2))",
+        "JSON.stringify('hello'.split(undefined))",
+        "JSON.stringify(''.split(''))",
+        "JSON.stringify(''.split('x'))",
+        "JSON.stringify('abc'.split('', 2))",
+        "var s=String.fromCodePoint(0x1F600); var a=s.split(''); a.length+':'+a[0].charCodeAt(0)+':'+a[1].charCodeAt(0)",
+        "String.prototype.split.call(123, '2').join('|')",
+        "'thisnullisnull'.split(null).join('|')",
+        "'aaaa'.split('a', -1).length",
+        "'aaaa'.split('a', 4294967297).length",
+        "JSON.stringify('hello'.split(/l/, 1))",
+        "JSON.stringify('hello'.split(/l/, 2))",
+        "JSON.stringify('hello'.split(new RegExp()))",
+        "JSON.stringify('axb'.split(/x?/))",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn split_observes_custom_protocol_and_coercion_order() {
+    for source in [
+        "var log=[]; var recv={toString:function(){log.push('recv');return 'a--b'}}; var sep={get [Symbol.split](){log.push('get');return undefined},toString:function(){log.push('sep');return '--'}}; var lim={valueOf:function(){log.push('limit');return 9}}; String.prototype.split.call(recv,sep,lim).join(',')+'|'+log.join(',')",
+        "var seen=''; var sep={ [Symbol.split]: function(s,l){seen=s+':'+l;return 7} }; var r='abc'.split(sep,2); seen+':'+r",
+        "Number.prototype[Symbol.split]=function(s,l){return s+':'+l}; 'abc'.split(4,2)",
+        "try { 'x'.split({[Symbol.split]: 1}); false } catch (e) { e instanceof TypeError }",
+        "try { String.prototype.split.call(null, ','); false } catch (e) { e instanceof TypeError }",
+        "var called=false; try { String.prototype.split.call(null,{[Symbol.split]:function(){called=true}}); false } catch(e) { e instanceof TypeError && !called }",
+        "try { 'x'.split(Symbol()); false } catch (e) { e instanceof TypeError }",
+        "var E=function(){}; var s={toString:function(){throw new E}}; try{'x'.split(s,0);false}catch(e){e instanceof E}",
+        "String.prototype.split.name+':'+String.prototype.split.length",
+        "'use strict'; var o=new Object(true); o.x=1; o.x",
+        "'use strict'; var o=new Object(true); o.split=String.prototype.split; typeof o.split",
+        "'use strict'; Boolean.prototype.toString; var o=new Object(true); o.split=String.prototype.split; o.split(true,false).length",
+        "Object.prototype.toString; String.prototype.split.call(Math)[0]",
+        "Object.defineProperty(Math,Symbol.toStringTag,{value:Symbol()}); Object.prototype.toString.call(Math)",
+    ] {
+        agrees(source);
+    }
+}
