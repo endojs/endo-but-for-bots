@@ -615,8 +615,28 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                 Verdict::RunSkip("oracle-gate-off:ironhorse-only-complete".into())
             }
         }
-        // ironhorse aborted where the oracle completed — an ironhorse limitation.
-        Agreement::OracleOnlyComplete => Verdict::RunSkip("ironhorse-aborted".into()),
+        // ironhorse aborted where the oracle completed — an ironhorse
+        // limitation, split by halt kind so the report ranks the backlog:
+        // an `Unsupported` names the missing surface (the honest gap), while
+        // a `Throw` is a *wrong throw* — ironhorse raised an exception on a
+        // program the oracle completed, a behavioral divergence to work off,
+        // not a surface gap. Every refinement keeps the `ironhorse-aborted`
+        // prefix so the report's category mapping is unchanged.
+        Agreement::OracleOnlyComplete => match &run.ironhorse_halt {
+            Halt::Unsupported(op) => {
+                Verdict::RunSkip(format!("ironhorse-aborted:unsupported:{op}"))
+            }
+            Halt::Throw(error) => Verdict::RunSkip(format!(
+                "ironhorse-aborted:wrong-throw:{}",
+                constructor_name(error)
+            )),
+            Halt::Decode(_) => Verdict::RunSkip("ironhorse-aborted:decode".into()),
+            Halt::StackOverflow(_) => {
+                Verdict::RunSkip("ironhorse-aborted:stack-overflow".into())
+            }
+            Halt::MeterAbort => Verdict::RunSkip("ironhorse-aborted:meter".into()),
+            _ => Verdict::RunSkip("ironhorse-aborted".into()),
+        },
     }
 }
 

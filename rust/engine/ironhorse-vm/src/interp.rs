@@ -31458,7 +31458,7 @@ impl Interp {
                 // `Object.assign`, `this` is deliberately `undefined`.
                 let target = match arg0.value {
                     Payload::Reference(target) if arg0.kind == Kind::Reference => target,
-                    _ => return Err(Halt::Throw("TypeError: copy target".into())),
+                    _ => return Err(self.catchable_type_error_msg("copy target")),
                 };
                 let source_value = self
                     .stack
@@ -31498,7 +31498,7 @@ impl Interp {
                             ..OrdinaryDescriptor::default()
                         };
                         if !self.mop_define_own_property(code, target, id, copied)? {
-                            return Err(self.catchable_type_error());
+                            return Err(self.catchable_type_error_msg("copy property"));
                         }
                     }
                     arg0
@@ -32115,7 +32115,7 @@ impl Interp {
                 let prototype = match arg0.value {
                     Payload::Reference(prototype) if arg0.kind == Kind::Reference => prototype,
                     _ if arg0.kind == Kind::Null => crate::value::SlotIndex::NULL,
-                    _ => return Err(Halt::Throw("TypeError: Object.create prototype".into())),
+                    _ => return Err(self.catchable_type_error_msg("Object.create prototype")),
                 };
                 let object = self.new_object();
                 self.slots.get_mut(object).value = Payload::Reference(prototype);
@@ -32130,7 +32130,7 @@ impl Interp {
                         unreachable!("ToObject returns a reference")
                     };
                     if !self.define_properties_from_object(code, object, descriptors)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("cannot define properties"));
                     }
                 }
                 Slot::of(Kind::Reference, Payload::Reference(object))
@@ -32138,7 +32138,7 @@ impl Interp {
             NativeMethod::ObjectDefineProperties => {
                 let target = match arg0.value {
                     Payload::Reference(target) if arg0.kind == Kind::Reference => target,
-                    _ => return Err(Halt::Throw("TypeError: defineProperties target".into())),
+                    _ => return Err(self.catchable_type_error_msg("defineProperties target")),
                 };
                 let properties = self
                     .stack
@@ -32150,7 +32150,7 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 if !self.define_properties_from_object(code, target, descriptors)? {
-                    return Err(self.catchable_type_error());
+                    return Err(self.catchable_type_error_msg("cannot define properties"));
                 }
                 arg0
             }
@@ -32180,7 +32180,7 @@ impl Interp {
             NativeMethod::ObjectDefineProperty => {
                 let target = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(Halt::Throw("TypeError: defineProperty target".into())),
+                    _ => return Err(self.catchable_type_error_msg("defineProperty target")),
                 };
                 if self.is_ordinary_object(target)
                     || self.arrays.contains_key(&target)
@@ -32217,7 +32217,7 @@ impl Interp {
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
                     if !self.mop_define_own_property(code, object, id, descriptor)? {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("cannot define property"));
                     }
                     arg0
                 } else if self.typed_arrays.contains_key(&target) {
@@ -35103,7 +35103,7 @@ impl Interp {
             NativeMethod::ReflectIsExtensible => {
                 let object = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error()),
+                    _ => return Err(self.catchable_type_error_msg("Reflect.isExtensible target")),
                 };
                 Ok(Slot::boolean(self.mop_is_extensible(code, object)?))
             }
@@ -45283,6 +45283,22 @@ impl Interp {
         }
     }
 
+    /// As [`Self::catchable_type_error`], but carrying the native helper's
+    /// diagnostic text so the thrown `TypeError` renders `TypeError: <message>`
+    /// — the exact string the site's former bare `Halt::Throw` escaped with, so
+    /// the uncaught rendering is unchanged while a live `try`/`catch` now
+    /// observes a realm-correct `TypeError` object instead of a host abort.
+    fn catchable_type_error_msg(&mut self, message: &str) -> Halt {
+        if message.is_empty() {
+            return self.catchable_type_error();
+        }
+        let error = self.internal_error("TypeError", message.to_string());
+        match self.raise_js(error) {
+            Ok(target) => Halt::Resume(target),
+            Err(halt) => halt,
+        }
+    }
+
     /// Raise a realm-local, catchable `SyntaxError` from a native helper —
     /// the shape `new RegExp(badPattern)` throws (`fxThrowMessage` with
     /// `XS_SYNTAX_ERROR`). Like [`Self::catchable_type_error`], `try`/`catch`
@@ -49947,13 +49963,13 @@ impl Interp {
                 "writable" => out.writable = Some(to_boolean(&value)),
                 "get" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("getter is not callable"));
                     }
                     out.get = Some(value);
                 }
                 "set" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error());
+                        return Err(self.catchable_type_error_msg("setter is not callable"));
                     }
                     out.set = Some(value);
                 }
@@ -49961,7 +49977,7 @@ impl Interp {
             }
         }
         if out.is_accessor() && out.is_data() {
-            return Err(self.catchable_type_error());
+            return Err(self.catchable_type_error_msg("invalid property descriptor"));
         }
         Ok(out)
     }
@@ -49994,12 +50010,12 @@ impl Interp {
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
                 Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
-                _ => Err(Halt::Throw("TypeError: invalid symbol".into())),
+                _ => Err(self.catchable_type_error_msg("invalid symbol")),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
-            _ => return Err(Halt::Throw("TypeError: invalid property key".into())),
+            _ => return Err(self.catchable_type_error_msg("invalid property key")),
         };
         let id = self.intern_key(&name);
         // A runtime-computed key can be the first observation of a standard
