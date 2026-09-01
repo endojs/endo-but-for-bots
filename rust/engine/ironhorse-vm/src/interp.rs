@@ -18725,16 +18725,11 @@ impl Interp {
             // wraps the call in `try`/`catch` (or `assert.throws`) must observe
             // a realm-correct `TypeError` object. Raise it through the same
             // jump-buffer chain as the `throw` opcode. A handler in the current
-            // frame is a *resume*, not a callee body address: preserve that
-            // distinction with `Halt::Resume` so `RUN` does not enter the catch
-            // target as though it were a function.
-            _ => {
-                let error = self.build_error("TypeError", 0, 0);
-                return match self.raise_js(error) {
-                    Ok(target) => Err(Halt::Resume(target)),
-                    Err(halt) => Err(halt),
-                };
-            }
+            // frame is a *resume*, not a callee body address: `catchable_type_error`
+            // preserves that distinction with `Halt::Resume` so `RUN` does not
+            // enter the catch target as though it were a function — the protocol
+            // every other native raise site already speaks.
+            _ => return Err(self.catchable_type_error()),
         };
         // The single choke point every user-function dispatch funnels through.
         // A `None` body means the callee has no runnable bytecode — a bound
