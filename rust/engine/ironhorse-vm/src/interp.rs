@@ -1848,6 +1848,9 @@ pub enum MathId {
 /// user code — the `call`/`apply`/`bind` re-entrant methods are separate.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum NativeMethod {
+    /// `%Function.prototype%` itself is a callable, non-constructable built-in
+    /// that accepts any arguments and returns `undefined`.
+    FunctionPrototype,
     /// `Date` statics and prototype methods. The compact operation id keeps
     /// the calendar implementation centralized; see `date_method`.
     Date(u8),
@@ -2099,6 +2102,10 @@ pub enum NativeMethod {
     /// function's later invocation is a separate trampoline in the `run`
     /// dispatch.
     FunctionBind,
+    /// `Function.prototype[Symbol.hasInstance](value)`: the public
+    /// `OrdinaryHasInstance(this, value)` entry point inherited by callable
+    /// objects and consulted by the `instanceof` operator.
+    FunctionHasInstance,
     ErrorToString,
     DisposableStackUse,
     DisposableStackAdopt,
@@ -5480,6 +5487,15 @@ impl Interp {
         self.object_proto = object_proto;
         let func_proto = self.slots.alloc(Slot::instance(object_proto));
         self.function_proto = func_proto;
+        let function_proto_name = self.alloc_str_text(b"");
+        self.functions.insert(
+            func_proto,
+            FuncInfo {
+                method: Some(NativeMethod::FunctionPrototype),
+                name_chunk: function_proto_name,
+                ..FuncInfo::default()
+            },
+        );
         // Each Error type's `.prototype`: the base `%Error.prototype%` chains
         // to %Object.prototype%; each subtype's prototype chains to
         // %Error.prototype% (so `TypeError` `instanceof Error`).
@@ -6352,6 +6368,16 @@ impl Interp {
             let value = Slot::of(Kind::Symbol, Payload::Reference(d));
             self.well_known_symbols.push((name, value));
         }
+        // Mint `%Function.prototype%[@@hasInstance]` below `boot_slot_count`
+        // so its native identity is reconstructed on resume. Its symbol-keyed
+        // property is installed lazily when that well-known key is first used;
+        // eagerly interning the key would turn an otherwise-empty persisted
+        // symbol-key table into non-canonical state for legacy migrations.
+        let _has_instance = self.alloc_named_method(
+            NativeMethod::FunctionHasInstance,
+            "[Symbol.hasInstance]",
+            1,
+        );
         // The wrapper prototypes carry valueOf + toString over the primitive.
         for native in [Native::Boolean, Native::Number, Native::String] {
             if let Some(&c) = self.intrinsics.get(native.display_name()) {
@@ -7296,6 +7322,85 @@ impl Interp {
         false
     }
 
+    /// ECMAScript `InstanceofOperator(O, C)`. The right operand must be an
+    /// object; its `@@hasInstance` method is read through the full MOP and, if
+    /// present, called with `C` as `this` and `O` as its sole argument.
+    /// Otherwise `C` must be callable and falls through to
+    /// [`Self::ordinary_has_instance`].
+    fn instanceof_operator(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        constructor: Slot,
+    ) -> Result<bool, Halt> {
+        let ctor = match constructor.value {
+            Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
+            _ => return Err(self.catchable_type_error()),
+        };
+        self.meter.tick_raw(INSTANCEOF_METERING);
+        let has_instance_id = self
+            .well_known_symbol_property_id("hasInstance")
+            .expect("well-known hasInstance symbol");
+        let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
+        if method.kind != Kind::Undefined && method.kind != Kind::Null {
+            if !self.is_callable_value(method) {
+                return Err(self.catchable_type_error());
+            }
+            let result = self.invoke_value(code, method, constructor, &[value])?;
+            return Ok(self.truthy(&result));
+        }
+        if !self.is_callable_value(constructor) {
+            return Err(self.catchable_type_error());
+        }
+        self.ordinary_has_instance(code, constructor, value)
+    }
+
+    /// ECMAScript `OrdinaryHasInstance(C, O)`, including bound-function
+    /// recursion, the primitive-left short circuit, observable `.prototype`
+    /// access, and proxy-aware `[[GetPrototypeOf]]` traversal.
+    fn ordinary_has_instance(
+        &mut self,
+        code: &[u8],
+        constructor: Slot,
+        value: Slot,
+    ) -> Result<bool, Halt> {
+        if !self.is_callable_value(constructor) {
+            return Ok(false);
+        }
+        let ctor = match constructor.value {
+            Payload::Reference(ctor) => ctor,
+            _ => return Ok(false),
+        };
+        if let Some(bound) = self.bound_functions.get(&ctor).cloned() {
+            let target = Slot::of(Kind::Reference, Payload::Reference(bound.target));
+            return self.instanceof_operator(code, value, target);
+        }
+        let mut object = match value.value {
+            Payload::Reference(object) if value.kind == Kind::Reference => object,
+            _ => return Ok(false),
+        };
+        self.meter.tick_raw(INSTANCEOF_OBJECT_METERING);
+        let prototype_id = self.intern_key("prototype");
+        let prototype = self.mop_get(code, ctor, prototype_id, constructor)?;
+        let target = match prototype.value {
+            Payload::Reference(target) if prototype.kind == Kind::Reference => target,
+            _ => return Err(self.catchable_type_error()),
+        };
+        loop {
+            let parent = self.mop_get_prototype(code, object)?;
+            match (parent.kind, parent.value) {
+                (Kind::Reference, Payload::Reference(parent)) => {
+                    if parent == target {
+                        return Ok(true);
+                    }
+                    object = parent;
+                }
+                (Kind::Null, _) => return Ok(false),
+                _ => return Err(self.catchable_type_error()),
+            }
+        }
+    }
+
     /// An instance slot's prototype (its payload reference), or `NULL`.
     #[inline]
     fn instance_prototype(&self, inst: crate::value::SlotIndex) -> crate::value::SlotIndex {
@@ -7346,6 +7451,7 @@ impl Interp {
         self.buffer_id = id_of("buffer");
         self.then_id = id_of("then");
         self.constructor_id = id_of("constructor");
+        self.prototype_key_id = id_of("prototype");
         self.last_index_id = id_of("lastIndex");
         self.regexp_getter_ids = RegExpGetterIds {
             source: id_of("source"),
@@ -15410,39 +15516,19 @@ impl Interp {
                     pc += size as usize;
                 }
 
-                // `instanceof` (`XS_CODE_INSTANCEOF`, xsRun.c → fxRunInstanceOf
-                // → fxOrdinaryHasInstance): is the right operand's `.prototype`
-                // in the left operand's prototype chain. Stack: [.., left
-                // (object), right (constructor)]. A non-callable right operand
-                // needs the `Symbol.hasInstance` general path (self-names); a
-                // non-object left is simply `false`. Meters the fixed
-                // host-frame `Symbol.hasInstance` cost ([`INSTANCEOF_METERING`],
-                // 4 computrons) beyond its dispatch.
+                // `instanceof` (`XS_CODE_INSTANCEOF`, xsRun.c →
+                // `fxRunInstanceOf`): `GetMethod(C, @@hasInstance)`, invoke a
+                // custom method when present, otherwise require a callable and
+                // apply `OrdinaryHasInstance`. Stack: [.., left, right].
                 XS_CODE_INSTANCEOF => {
                     let right = self.pop();
                     let left = self.pop();
-                    let ctor = match right.value {
-                        Payload::Reference(r) => r,
-                        _ => return Halt::Unsupported(op.name()),
-                    };
-                    let proto = match self.prototype_of(ctor) {
-                        Some(p) => p,
-                        // Not a modeled constructor (no `.prototype`): the
-                        // general `Symbol.hasInstance` path is a later
-                        // increment — self-name rather than answer wrongly.
-                        None => return Halt::Unsupported(op.name()),
-                    };
-                    // The `Symbol.hasInstance` host-frame call is paid for
-                    // every operand; an object left additionally reads the
-                    // constructor prototype and walks the chain.
-                    self.meter.tick_raw(INSTANCEOF_METERING);
-                    let result = match left.value {
-                        Payload::Reference(x) => {
-                            self.meter.tick_raw(INSTANCEOF_OBJECT_METERING);
-                            self.prototype_chain_has(x, proto)
-                        }
-                        _ => false,
-                    };
+                    let result = dispatch_result!(
+                        self.instanceof_operator(code, left, right),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     self.push(Slot::boolean(result));
                     pc += size as usize;
                 }
@@ -27560,6 +27646,7 @@ impl Interp {
             // `Function.prototype.apply` is handled by the `run` trampoline
             // (`enter_call_dot_apply`) and never reaches here.
             NativeMethod::FunctionApply => return Err(Halt::Unsupported("apply:unexpected")),
+            NativeMethod::FunctionPrototype => Slot::undefined(),
             // `Object.prototype.valueOf`: returns the receiver unchanged.
             NativeMethod::ObjectValueOf => this,
             // `<wrapper>.valueOf`: the wrapped primitive.
@@ -27652,6 +27739,9 @@ impl Interp {
             // `Function.prototype.bind(thisArg, ...boundArgs)`: create a bound
             // function (its creation; the bound call is a `run` trampoline).
             NativeMethod::FunctionBind => self.make_bound_function(base, argc)?,
+            NativeMethod::FunctionHasInstance => {
+                Slot::boolean(self.ordinary_has_instance(code, this, arg0)?)
+            }
             // `Symbol.prototype.toString()` → `Symbol(<description>)`
             // (`fxSymbolToString`: `fxStringX("Symbol(")` + the description +
             // `")"`). The receiver must be a symbol; a non-symbol self-names.
@@ -37271,21 +37361,25 @@ impl Interp {
     /// drawn from the top-down [`Self::next_symbol_key_id`] counter, so it never
     /// collides with a string key or a program symbol.
     fn intern_symbol_key(&mut self, desc: crate::value::SlotIndex) -> u16 {
-        if let Some(&id) = self.symbol_key_ids.get(&desc) {
-            return id;
-        }
-        if (self.next_symbol_key_id as usize) <= self.symbol_names.len().saturating_add(1) {
+        let id = if let Some(&id) = self.symbol_key_ids.get(&desc) {
+            id
+        } else if (self.next_symbol_key_id as usize)
+            <= self.symbol_names.len().saturating_add(1)
+        {
             // Same poison latch as `append_name_key`: the placeholder id
             // aliases, but the loop-top halt fires before the next
             // instruction, so it never leaks to a completed crank.
             self.id_space_exhausted = true;
             let id = self.next_symbol_key_id;
             self.symbol_key_ids.insert(desc, id);
-            return id;
-        }
-        let id = self.next_symbol_key_id;
-        self.next_symbol_key_id -= 1;
-        self.symbol_key_ids.insert(desc, id);
+            id
+        } else {
+            let id = self.next_symbol_key_id;
+            self.next_symbol_key_id -= 1;
+            self.symbol_key_ids.insert(desc, id);
+            id
+        };
+        self.install_well_known_symbol_property(desc, id);
         id
     }
 
@@ -37302,6 +37396,36 @@ impl Interp {
             Payload::Reference(descriptor) => Some(self.intern_symbol_key(descriptor)),
             _ => None,
         }
+    }
+
+    /// Materialize symbol-keyed boot properties whose function identity was
+    /// minted below `boot_slot_count` but whose property id must remain lazy.
+    /// The only such property today is
+    /// `%Function.prototype%[Symbol.hasInstance]`.
+    fn install_well_known_symbol_property(
+        &mut self,
+        descriptor: crate::value::SlotIndex,
+        id: u16,
+    ) {
+        let is_has_instance = self.well_known_symbols.iter().any(|(name, value)| {
+            *name == "hasInstance" && value.value == Payload::Reference(descriptor)
+        });
+        if !is_has_instance || self.find_property(self.function_proto, id).is_some() {
+            return;
+        }
+        let method = self
+            .functions
+            .iter()
+            .find_map(|(&function, info)| {
+                (info.method == Some(NativeMethod::FunctionHasInstance)).then_some(function)
+            })
+            .expect("boot Function.prototype @@hasInstance method");
+        self.set_own_unmetered_with_flag(
+            self.function_proto,
+            id,
+            Slot::of(Kind::Reference, Payload::Reference(method)),
+            XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+        );
     }
 
     /// Whether property id `id` was minted for a **symbol** key (present as a
