@@ -397,8 +397,11 @@ export const HostInterface = M.interface('EndoHost', {
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('BasicCredential')),
   // Write credential material to a mount path without revealing the bytes.
+  // `callWhen` checks the AWAITED result, and this method resolves to
+  // nothing: demanding a promise here made every SUCCESSFUL call throw after
+  // the file was already written. Only the rejection path had a test.
   writeSecret: M.callWhen(M.remotable(), M.any(), M.remotable()).returns(
-    M.promise(),
+    M.undefined(),
   ),
   // Host-side controllers for daemon-minted credential / remote caps.
   getGitCredentialController: M.callWhen(M.remotable()).returns(

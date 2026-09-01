@@ -4348,6 +4348,23 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
   t.deepEqual(resultValue, { displayName: 'Bob' });
 });
 
+
+test('writeSecret writes credential material to a daemon-minted mount', async t => {
+  const { host } = await prepareHost(t);
+  const credential = await E(host).provideBearerCredential('credential', {
+    audience: 'https://git.example',
+    token: 'super-secret-token',
+  });
+  const mount = await E(host).provideScratchMount('secret-mount');
+
+  // The success path had no test, so a return guard that could never be
+  // satisfied went unnoticed: the file was written and the caller still saw
+  // an error. Assert that the call resolves AND that the bytes landed.
+  await E(host).writeSecret(mount, 'secret.txt', credential);
+
+  t.is(await E(mount).readText(['secret.txt']), 'super-secret-token');
+});
+
 test('writeSecret rejects a caller-controlled remotable destination', async t => {
   const { host } = await prepareHost(t);
   const credential = await E(host).provideBearerCredential('credential', {
