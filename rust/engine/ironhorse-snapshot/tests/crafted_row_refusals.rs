@@ -614,7 +614,7 @@ fn a_crafted_combine_element_shape_is_refused() {
 }
 
 #[test]
-fn an_undone_combinator_with_a_settled_derived_promise_is_refused() {
+fn a_combinator_done_state_that_disagrees_with_its_derived_promise_is_refused() {
     // No `.then` on the combinator, so the derived promise carries no
     // reactions and the settled-retains-reactions gate stays out of
     // the way — isolating the done/derived-state cross-check.
@@ -631,17 +631,38 @@ fn an_undone_combinator_with_a_settled_derived_promise_is_refused() {
         !image.promise_cluster.combinators[0].done,
         "the fixture's combinator is mid-flight"
     );
-    let row = image
+    let derived_row = image
         .promise_cluster
         .promises
-        .iter_mut()
-        .find(|p| p.owner == derived)
+        .iter()
+        .position(|p| p.owner == derived)
         .expect("the derived promise's row");
-    row.state = 1; // Fulfilled — but `done` never latched, so the
-                   // drain would RE-settle it.
+    // Fulfilled — but `done` never latched, so the drain would
+    // RE-settle it.
+    image.promise_cluster.promises[derived_row].state = 1;
     expect_container_refusal(
         &image,
-        "promise cluster: undone combinator's derived promise is settled",
+        "promise cluster: combinator done state disagrees with derived promise",
+    );
+
+    // The converse strands the derived promise: every surviving
+    // element reaction observes `done` and returns without settling it.
+    image.promise_cluster.promises[derived_row].state = 0;
+    image.promise_cluster.combinators[0].done = true;
+    expect_container_refusal(
+        &image,
+        "promise cluster: combinator done state disagrees with derived promise",
+    );
+
+    // Once done and settlement agree, the remaining counter must still
+    // cover every pending element reaction. Completion only causes
+    // future reactions to short-circuit; it never rewrites the counter
+    // below the number that survive in the snapshot.
+    image.promise_cluster.promises[derived_row].state = 1;
+    image.promise_cluster.combinators[0].remaining = 0;
+    expect_container_refusal(
+        &image,
+        "promise cluster: remaining below its pending reactions",
     );
 }
 

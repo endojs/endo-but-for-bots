@@ -2608,19 +2608,19 @@ pub(crate) fn decode_promise_cluster(
                 "promise cluster: combinator's derived promise has no row",
             ));
         }
-        // An undone combinator has not settled its derived promise yet
-        // — that is the one thing `done` latches — so an undone row
-        // whose derived is already settled can only be crafted, and
-        // the drain would RE-settle it: `settle_promise` overwrites
-        // state and result unconditionally (its Pending gates live in
-        // the resolving-function and `done` paths, not here).
-        if !row.done && state_of(row.derived) != Some(0) {
+        // `done` latches exactly the derived promise's settlement. An
+        // undone row whose derived is settled would RE-settle it at the
+        // drain; a done row whose derived is pending would instead
+        // discard every surviving element reaction and strand the
+        // derived forever. Neither state can come from the writer.
+        let derived_pending = state_of(row.derived) == Some(0);
+        if row.done == derived_pending {
             return Err(SnapshotError::Corrupt(
-                "promise cluster: undone combinator's derived promise is settled",
+                "promise cluster: combinator done state disagrees with derived promise",
             ));
         }
         // kind byte 2 is Race, which never decrements `remaining`.
-        if row.kind != 2 && !row.done && row.remaining < pending {
+        if row.kind != 2 && row.remaining < pending {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: remaining below its pending reactions",
             ));

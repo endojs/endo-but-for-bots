@@ -9955,9 +9955,10 @@ impl Interp {
         // the drain's `settle_promise` overwrites unconditionally.
         let mut results_lengths = Vec::with_capacity(snap.combinators.len());
         for c in &snap.combinators {
+            let derived_pending = state_of(c.derived) == Some(0);
             if c.kind > 3
                 || !owners.contains(&c.derived)
-                || (!c.done && state_of(c.derived) != Some(0))
+                || c.done == derived_pending
             {
                 return false;
             }
@@ -9975,6 +9976,7 @@ impl Interp {
             }
         }
         let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
+        let mut comb_pending = vec![0u32; snap.combinators.len()];
         // A `User`/`FinallyReturn` reaction's capability must be one
         // resolving pair (the decoder's rule, re-proved here): both
         // slots reference cluster rows naming one promise and one
@@ -10041,6 +10043,7 @@ impl Interp {
                                 .all(|slot| slot.kind == Kind::Undefined)
                             && elem_seen.insert((r.a, r.b)) =>
                         {
+                            comb_pending[r.a as usize] += 1;
                             ReactionKind::Combine(r.a, r.b)
                         }
                         // The async-flavored kinds name machinery no
@@ -10070,6 +10073,14 @@ impl Interp {
                     ever_handled: row.ever_handled,
                 },
             );
+        }
+        if snap
+            .combinators
+            .iter()
+            .zip(comb_pending)
+            .any(|(c, pending)| c.kind != 2 && c.remaining < pending)
+        {
+            return false;
         }
         // Guard coherence, the decoder's rule re-proved: one resolving
         // pair (or its surviving half) per guard, one promise per pair.
