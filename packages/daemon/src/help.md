@@ -847,8 +847,8 @@ Entries whose symlinks escape the mount root are excluded. Results include
 directories as well as files, are sorted by UTF-16 code unit, and are capped at
 10,000 with silent truncation. Results are capped; for incremental or unbounded
 result sets use streamGlob.
-Example: glob("**/*.js") → all JavaScript files at any depth.
-Example: glob("src/*") → the immediate children of src.
+Example: glob("**/*.js") -> all JavaScript files at any depth.
+Example: glob("src/*") -> the immediate children of src.
 
 ## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -863,8 +863,8 @@ path, line is 1-based, and text is the whole line with any trailing carriage ret
 (CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot
 be read is skipped silently. Results are capped; for incremental or unbounded result sets
 use streamGrep.
-Example: grep("TODO", glob("src/**/*.js")) → every TODO line under src.
-Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+Example: grep("TODO", glob("src/**/*.js")) -> every TODO line under src.
+Example: grep("^export") -> up to 1000 exported-symbol lines across the whole mount.
 
 ## glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -876,7 +876,7 @@ layer can push down and fuse into a single enumerate-and-scan pass. It returns t
 { file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
 options.maxResults: number — Cap on the number of match records (default 1000).
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Example: glorp("src/**/*.js", "TODO") → every TODO line under src.
+Example: glorp("src/**/*.js", "TODO") -> every TODO line under src.
 
 ## streamGlob(pattern, options?) -> PassableReader<string>
 
@@ -904,7 +904,7 @@ incremental — closing the iterator early leaves the remaining files' contents 
 directory walk is eager (the whole tree is enumerated before the first match, like streamGlob), so
 early close bounds file reads, not the walk. With buffer 0 a mid-stream revoke() rejects the next
 pull immediately; a non-zero buffer may still deliver up to that many already-buffered elements first.
-Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { if (done) break; }
+Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { ... }
 
 # EndoMountFile - A file within a mounted directory.
 

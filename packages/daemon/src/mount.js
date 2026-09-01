@@ -2007,7 +2007,12 @@ harden(makeMount);
  * spread, a single `revoke()` trips the `assertLive()` gate on the root mount
  * and every face derived from it — sub-views, entries, opened files,
  * `readOnly()` views, `makeDirectory` results, and any open `followNameChanges`
- * stream. The daemon's `mount` / `scratch-mount` formulas wire
+ * stream. Revocation is an atomic cutoff for every face *except* a
+ * `streamGlob`/`streamGrep` reader minted with `buffer > 0`: up to that many
+ * already-pre-acknowledged elements (bounded by `STREAM_BUFFER_MAX`) may still
+ * deliver after `revoke()` before the next pull rejects; a `buffer: 0` stream
+ * (the default) is a hard cutoff like every other face. The daemon's `mount` /
+ * `scratch-mount` formulas wire
  * `context.onCancel(() => control.revoke())`, tying revocation to formula
  * cancellation, and keep the `control` captive so only the daemon can revoke.
  *

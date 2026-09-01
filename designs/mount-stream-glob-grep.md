@@ -50,7 +50,11 @@ streamGrep(pattern, options?) -> PassableReader<{ file, line, text }>
 - `streamGlob` options: `{ buffer?: number }`.
 - `streamGrep` options: `{ glob?: string, buffer?: number }`.
   There is deliberately no `maxResults`: the consumer bounds the stream by
-  returning early, which stops the remote walk (see cancellation below).
+  returning early. What early close saves is per-method (see cancellation
+  below): for `streamGrep` it elides the remaining files' *content* reads, but
+  for `streamGlob` the engine's global UTF-16 sort forces the whole match set
+  before the first element, so the walk is already complete and early close
+  saves only marshalling, not traversal.
 
 Both return a fresh `PassableReader` remotable (from
 `@endo/exo-stream/reader-from-iterator.js`) synchronously, the same way
@@ -64,7 +68,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 for await (const { file, line, text } of iterateReader(
   E(mount).streamGrep('TODO', { glob: 'src/**/*.js' }),
 )) {
-  if (foundEnough()) break; // stops the remote walk too
+  if (foundEnough()) break; // elides streamGrep's remaining content reads
+                            // (the path enumeration is already eager)
 }
 ```
 
@@ -93,7 +98,7 @@ the stream breaks with an error:
 > The mount stack landed independently of this design: by the time
 > `streamGlob`/`streamGrep` were built, `glob()`/`grep()` had already been
 > re-based onto the **shared `@endo/platform/fs/search` engine**
-> (`provideSearch(filePowers)` → `search.globPaths` / `search.grepFiles`), which
+> (`provideSearch(filePowers)` -> `search.globPaths` / `search.grepFiles`), which
 > yields *batches* of paths / match records from async generators. So there is no
 > local `walkGlobMatches`/`grepMatches` to write — the streaming methods reuse the
 > **same engine generators** the eager collectors already consume, which is what

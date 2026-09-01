@@ -394,6 +394,67 @@ test('a stream element that violates the readPattern breaks the stream with an e
   });
 });
 
+// --- Record correspondence: { line, text } identifies the matched source line ---
+
+test('streamGrep { line, text } identifies the matched source line for generated content', async t => {
+  // The readPattern guard above pins record *shape* only; it never checks that
+  // `line`/`text` actually point at the source line the record claims. This is
+  // the contract the method's doc comment states ("{ file, line, text } records
+  // identify one matched line"), so pin it directly — and against *generated*
+  // content matched by a non-literal regex, where `text` must be the whole
+  // source line, not merely the matched substring.
+  const root = makeTemporaryRoot(t, 'mount-grep-correspondence-');
+  // Generate a multi-line file whose matches are produced by a regex, not a
+  // literal: a `MARK-<n>` token on a subset of lines, interleaved with lines
+  // that must never match. A blank line and a two-match line stress the
+  // whole-line (not substring) and one-record-per-line invariants.
+  /** @type {string[]} */
+  const lines = [];
+  for (let i = 0; i < 40; i += 1) {
+    if (i % 7 === 0) {
+      lines.push(`  const value${i} = compute(); // MARK-${i} keep this line`);
+    } else if (i % 5 === 0) {
+      lines.push(''); // blank line, never matches
+    } else {
+      lines.push(`  noise line ${i} without the token`);
+    }
+  }
+  // A line bearing the token twice: still one record, still the whole line.
+  lines.push('MARK-100 and again MARK-101 on one line');
+  const source = lines.join('\n');
+  fs.writeFileSync(path.join(root, 'generated.js'), source);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  const records = await collect(E(mount).streamGrep('MARK-\\d+'));
+  t.true(records.length > 3, 'the regex matches several generated lines');
+
+  // Source of truth: re-read the file from disk and split on newlines exactly
+  // as the grep engine reports 1-based line numbers.
+  const onDisk = fs.readFileSync(path.join(root, 'generated.js'), 'utf8');
+  const sourceLines = onDisk.split('\n');
+  const seenLines = new Set();
+  for (const record of records) {
+    const file = /** @type {string} */ (record.file);
+    const line = /** @type {number} */ (record.line);
+    const text = /** @type {string} */ (record.text);
+    t.is(file, 'generated.js', 'every record names the searched file');
+    t.is(typeof line, 'number');
+    t.true(line >= 1 && line <= sourceLines.length, 'line is in range');
+    t.false(seenLines.has(line), 'at most one record per matched line');
+    seenLines.add(line);
+    // The load-bearing invariant: `text` is the whole matched source line,
+    // and `line` is the 1-based index that recovers it.
+    t.is(text, sourceLines[line - 1], `text === source line ${line}`);
+    t.false(text.includes('\n'), 'text carries no embedded newline');
+    t.regex(
+      text,
+      /MARK-\d+/,
+      'the reported line genuinely matches the pattern',
+    );
+  }
+});
+
 // --- readOnly semantics: streaming is a read, present on read-only mounts ---
 // --- but excluded from the structural ReadableTree view. ---
 
