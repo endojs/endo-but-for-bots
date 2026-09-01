@@ -7441,7 +7441,16 @@ impl Interp {
         // restored `symbol_names` without re-linking intrinsics (the
         // SymbolTables ledger row's restore-time rebuild).
         self.bind_program_symbols(names);
-        self.install_intrinsic_bindings(names, true, |_| true);
+        // OrdinaryToPrimitive reaches these properties implicitly even when
+        // the guest never names either one (for example, `String(new
+        // Number(3))`). They are XS boot default keys, so assigning realm ids
+        // here is unmetered. Include them in the full install's input/floor so
+        // their intrinsic prototype methods are present from realm creation
+        // and a later partial relink cannot resurrect a guest deletion.
+        self.intern_key("toString");
+        self.intern_key("valueOf");
+        let names = self.symbol_names.clone();
+        self.install_intrinsic_bindings(&names, true, |_| true);
     }
 
     /// Install the global bindings, prototype methods/data, native
@@ -21821,6 +21830,25 @@ impl Interp {
         self.mop_get(code, inst, id, value)
     }
 
+    /// ECMA-262 `IsRegExp(argument)`: non-objects are never RegExps; an
+    /// observable `@@match` property overrides the internal matcher brand,
+    /// while `undefined` falls back to that brand. This is shared by
+    /// `includes`, `startsWith`, and `endsWith`, which reject RegExp search
+    /// values before applying `ToString`.
+    fn string_is_regexp(&mut self, code: &[u8], value: Slot) -> Result<bool, Halt> {
+        let Payload::Reference(inst) = value.value else {
+            return Ok(false);
+        };
+        if value.kind != Kind::Reference {
+            return Ok(false);
+        }
+        let matcher = self.string_protocol_method(code, value, "match")?;
+        if matcher.kind != Kind::Undefined {
+            return Ok(self.truthy(&matcher));
+        }
+        Ok(self.regexps.contains_key(&inst))
+    }
+
     /// ECMAScript `ToUint32`, used by the ordinary string-split limit. The
     /// coercion is re-entrant and therefore observes object conversion hooks;
     /// Symbols and BigInts reject through the shared `ToNumber` path.
@@ -32936,16 +32964,14 @@ impl Interp {
                 }
             }
             // concat(...args): the receiver followed by each stringified
-            // argument; mxMeterSome(argc) + the result chunk. A non-string
-            // argument self-names (ToString of a non-string is not modeled).
+            // argument; mxMeterSome(argc) + the result chunk. Argument
+            // `ToString` conversions run left-to-right and may re-enter guest
+            // code or throw.
             StringConcat => {
                 let mut out = content.clone();
                 for i in 0..argc {
                     let a = argn(i).unwrap();
-                    match a.value {
-                        Payload::String(off) => out.extend_from_slice(&self.str_units(off)),
-                        _ => return Err(Halt::Unsupported("concat:non-string-argument")),
-                    }
+                    out.extend_from_slice(&self.to_string_units(code, a)?);
                 }
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 self.meter.tick_builtin_some(argc as u64);
@@ -32979,14 +33005,15 @@ impl Interp {
                 }
                 self.new_string_units(&out)
             }
-            // startsWith / endsWith: mxMeterSome(searchUnitLen), then a byte
-            // compare (no per-byte meter). A regexp/non-string search arg
-            // self-names.
+            // startsWith / endsWith: reject `IsRegExp(searchString)`, then
+            // `ToString(searchString)`, then mxMeterSome(searchUnitLen) and a
+            // byte compare (no per-byte meter).
             StringStartsWith | StringEndsWith => {
-                let sub = match argn(0).map(|s| s.value) {
-                    Some(Payload::String(off)) => self.str_units(off),
-                    _ => return Err(Halt::Unsupported("startsWith/endsWith:non-string-search")),
-                };
+                let search = argn(0).unwrap_or_else(Slot::undefined);
+                if self.string_is_regexp(code, search)? {
+                    return Err(self.catchable_type_error());
+                }
+                let sub = self.to_string_units(code, search)?;
                 let sub_units = sub.len() as u64;
                 let is_start = m == StringStartsWith;
                 // The position argument (code unit), clamped to [0, ulen].
@@ -33011,10 +33038,11 @@ impl Interp {
             // distinct host-frame shape from `indexOf`), so the search runs
             // unmetered.
             StringIncludes => {
-                let sub = match argn(0).map(|s| s.value) {
-                    Some(Payload::String(off)) => self.str_units(off),
-                    _ => return Err(Halt::Unsupported("includes:non-string-search")),
-                };
+                let search = argn(0).unwrap_or_else(Slot::undefined);
+                if self.string_is_regexp(code, search)? {
+                    return Err(self.catchable_type_error());
+                }
+                let sub = self.to_string_units(code, search)?;
                 let from = self.string_arg_to_position(code, argn(1), 0, ulen)?;
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 let bfrom = clamp(from).min(content.len());

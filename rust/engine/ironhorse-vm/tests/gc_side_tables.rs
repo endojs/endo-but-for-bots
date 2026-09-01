@@ -119,9 +119,10 @@ fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
     // consume the freed slots), so the churn's first allocation
     // deterministically reuses the dead Date's slot. `new Date(value)`
     // reads a branded argument's time DIRECTLY (no property lookup
-    // shields it): a healthy engine halts each probe at the plain
-    // object's unsupported ToPrimitive; a stale row instead COMPLETES
-    // with the dead Date's 123456 — the silent-wrong signature.
+    // shields it): a healthy engine coerces each plain object through
+    // Object.prototype.toString and produces an invalid Date (`NaN`);
+    // a stale row instead completes with the dead Date's 123456 — the
+    // silent-wrong signature.
     let (b1, n1) = compile(
         "var churn = 0; churn = []; \
          (function () { var dead = new Date(123456); })(); 0;",
@@ -147,10 +148,10 @@ fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
             &mut m,
             &format!("var churn; var t = 0; t = '' + new Date(churn[{i}]).getTime(); t"),
         );
-        assert!(
-            !o.completed,
-            "churn[{i}] answered as a branded Date: {} (the dead row leaked)",
-            o.result
+        assert!(o.completed, "churn[{i}] coercion failed: {:?}", o.halt);
+        assert_eq!(
+            o.result, "NaN",
+            "churn[{i}] inherited the dead Date's stale brand"
         );
     }
 }
