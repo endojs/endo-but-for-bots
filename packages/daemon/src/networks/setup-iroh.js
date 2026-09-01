@@ -3,16 +3,12 @@
 
 import { E } from '@endo/eventual-send';
 
-import { toCurrentSpecifier } from './current-specifier.js';
-
 /** @import { ERef } from '@endo/eventual-send' */
 
-// Reroute through the hosted deploy's `current` symlink (no-op elsewhere) so
-// the persisted make-unconfined formula does not pin a release directory that
-// later gets pruned; otherwise the transport fails to revive on restart.
-const irohSpecifier = toCurrentSpecifier(
-  new URL('iroh.js', import.meta.url).href,
-);
+// Keep the persisted formula independent of any particular installation path.
+// The worker resolves this export from the active @endo/daemon package when it
+// revives the network service.
+const irohSpecifier = '@endo/daemon/iroh.js';
 const irohWorker = 'iroh-worker';
 
 /**
