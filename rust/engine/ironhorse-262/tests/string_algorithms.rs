@@ -157,3 +157,47 @@ fn search_observes_custom_symbol_protocol() {
         agrees(source);
     }
 }
+
+#[test]
+fn match_constructs_regexp_from_ordinary_arguments() {
+    for source in [
+        "'ssABBABAB'.match({toString:function(){return 'AB'}})[0]",
+        "new String('test string').match('string')[0]",
+        "'a1b1c'.match(1).index",
+        "'atrueb'.match(true)[0]",
+        "'a42b'.match(42n)[0]",
+        "'abc'.match(undefined)[0]",
+        "String.prototype.match.call(12345, '34')[0]",
+        "try { 'abc'.match(Symbol()); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn match_observes_custom_symbol_protocol() {
+    for source in [
+        "var seen=[]; var p={ [Symbol.match]:function(v){seen.push(this===p,v);return 7} }; 'abc'.match(p)+':'+seen.join(',')",
+        "var p={ [Symbol.match]:null,toString:function(){return '3'} }; 'ab3c'.match(p)[0]",
+        "var boom={}; var p={get [Symbol.match](){throw boom}}; try{'x'.match(p);false}catch(e){e===boom}",
+        "try { 'x'.match({[Symbol.match]: 1}); false } catch (e) { e instanceof TypeError }",
+        "var called=false; Number.prototype[Symbol.match]=function(){called=true}; 'a1'.match(1)[0]+':'+called",
+        "var recv={toString:function(){throw Error('must not coerce')}}; var p={[Symbol.match]:function(v){return v===recv}}; String.prototype.match.call(recv,p)",
+        "try { String.prototype.match.call(null, { [Symbol.match]:function(){return 1} }); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn match_collects_global_results_and_advances_empty_matches() {
+    for source in [
+        "JSON.stringify('123456abcde7890'.match(/\\d{2}/g))",
+        "'abc'.match(/z/g)",
+        "var r=/a/g; r.lastIndex=2; JSON.stringify('aba'.match(r))+':'+r.lastIndex",
+        "JSON.stringify('ab'.match(/(?:)/g))",
+        "JSON.stringify('abb'.match(/b*/g))",
+    ] {
+        agrees(source);
+    }
+}
