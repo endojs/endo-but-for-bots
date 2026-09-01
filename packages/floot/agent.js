@@ -611,11 +611,8 @@ const { runId, run } = await E(changeNixos).start({
     files: [{ path: 'hosts/endo-tokyo.nix', text: completeNewText }],
   },
 });
-const runName = \`nixos-run-\${runId}\`;
-await E(powers).storeValue(run, runName);
 return {
   runId,
-  runName,
   status: await E(run).status(),
   waiting: await E(run).explain(),
 };
@@ -680,9 +677,12 @@ which in-container \`git commit\` does not:
 \`\`\`
 const endo = await E(powers).lookup('endo');
 const git = await E(endo).lookup('endo-work');
+const mount = await E(endo).lookup('endo-work-mount');
 await E(git).switchBranch('agent');    // createBranch('agent') the first time
-const st = await E(git).status();
-await E(git).add(st.map(s => s.entry));
+const { entries } = await E(git).status();   // NOT an array
+const staged = [];
+for (const e of entries) staged.push(await E(mount).entry(e.path));
+await E(git).add(staged);
 const commit = await E(git).commit('fix(floot): …');
 return commit.oid;
 \`\`\`
@@ -710,20 +710,24 @@ const { runId, run } = await E(deployEndo).start({
     branch: 'agent',
   },
 });
-const runName = \`endo-run-\${runId}\`;
-await E(powers).storeValue(run, runName);
 return {
   pushed: result.updatedRefs,
   rev: head.oid,
   runId,
-  runName,
   status: await E(run).status(),
   waiting: await E(run).explain(),
 };
 \`\`\`
 Tell the user the run id, what state it reached, and explicitly that its approval
-form is in the owner's inbox, not this conversation. The stored observer survives
-turns: on a later turn look it up by \`runName\`, then call \`status()\` and
+form is in the owner's inbox, not this conversation. A run observer is derived,
+not a named formula, so \`storeValue(run, ...)\` throws \`No corresponding formula\`
+and there is nothing to look up by name. Re-reach a run on a later turn through
+the workflow service, which keeps every run by id:
+\`\`\`
+const pins = await E(await E(powers).lookup('endo')).lookup('@pins');
+const run = await E(await E(pins).lookup('workflow-service')).run(runId);
+\`\`\`
+Then call \`status()\` and
 \`explain()\`. Use \`follow({ since })\` when actively narrating journal
 transitions; otherwise checkpoint with \`status()\` so a turn never blocks waiting
 for approval. Narrate state CHANGES in short plain language, especially for
@@ -733,12 +737,13 @@ Rules that are not obvious and will bite you:
 - PUSH BEFORE YOU START THE DEPLOY RUN. The host fetches a pinned revision from
   Forgejo and only finds commits reachable from a branch head. Proposing a
   commit you have not pushed makes the workflow's build fail to resolve it.
-- Applying RESTARTS THE DAEMON. The work area and its commits survive, but the
-  credential is re-minted as a NEW capability, and "endo-work-origin" still holds
-  the old one — so pushing after a restart fails until you re-run the
+- Applying RESTARTS THE DAEMON. The work area, its commits and a \`/mnt/\` disk all
+  survive — attach records are replayed onto the rebuilt sandbox, so
+  \`listContainerMounts()\` tells you rather than re-attaching. Credential material
+  is process-local, so the start-up setup rotates the Forgejo credential in place
+  and a remote holding it keeps working. If a push does fail with "has been
+  revoked", that remote holds an older credential cap: re-run the
   \`provideGitRemote\` call above. Do not re-clone; only the remote needs redoing.
-  A \`/mnt/\` disk survives too — attach records are replayed onto the rebuilt
-  sandbox — so re-attaching is unnecessary; \`listContainerMounts()\` tells you.
 - Your push authority is not fenced in — nothing stops you writing to another
   branch. Stay on \`agent\` so the change is reviewable, and say what you pushed.
 - A revision that only exists on Forgejo is fine to deploy here, but that is NOT
@@ -748,6 +753,19 @@ Rules that are not obvious and will bite you:
   so proposing upstream ends with you. Report the commit hash, branch, run id,
   and a one-line summary, and say plainly that the change is pending or running
   here but is not submitted upstream, so the user can take it from there.
+- exec runs under SES lockdown: no \`Date.now()\`, no \`Math.random()\`, no timers.
+  You cannot sleep-and-poll inside one exec, so checkpoint with \`status()\` and
+  look again on a later turn rather than spinning in a loop that cannot wait.
+- exec results are JSON-serialized. BigInts render as decimal strings, so
+  \`stat()\` sizes and times arrive as text rather than numbers.
+- Filesystem caps take a slash-joined string or an array of segments —
+  \`readText('a/b')\` and \`readText(['a','b'])\` name the same file — while
+  \`list()\` takes varargs segments. A \`glob()\` result feeds straight back in.
+- \`git.status()\` returns \`{ entries, truncated }\`, not an array, and \`git.log()\`
+  entries carry \`summary\`, not \`message\`.
+- Capability results have no size bound: one \`diff()\` or a wide \`list()\` can blow
+  the turn. Narrow before you return, and filter at the source — \`glob\` and
+  \`grep\` on the mount — rather than reading everything back to sift it here.
 Speak short, plain summaries — never read config text aloud.`;
 
 // Catalog of session presets. Each preset pairs a system prompt with a set of

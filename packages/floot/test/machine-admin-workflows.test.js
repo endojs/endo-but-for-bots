@@ -35,7 +35,10 @@ test('machine-admin prompt routes ordinary deploys through durable runs', t => {
   t.true(systemPrompt.includes("lookup('change-nixos')"));
   t.true(systemPrompt.includes('E(deployEndo).start'));
   t.true(systemPrompt.includes('E(changeNixos).start'));
-  t.true(systemPrompt.includes('storeValue(run, runName)'));
+  // A run observer is a derived object with no formula behind it, so
+  // storeValue throws on one; the prompt has to point at the workflow service.
+  t.false(systemPrompt.includes('await E(powers).storeValue(run, runName)'));
+  t.true(systemPrompt.includes("lookup('workflow-service')).run(runId)"));
   t.true(systemPrompt.includes("approval form to the OWNER'S INBOX"));
 
   // The old source-deploy recipe staged and applied through the raw caplet.
