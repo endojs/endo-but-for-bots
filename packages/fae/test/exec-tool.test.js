@@ -60,3 +60,25 @@ test('exec reports a corrective error for malformed code', async t => {
     message: /Could not parse the code/,
   });
 });
+
+// A capability that answers with BigInts is the common case, not an exotic one:
+// stat() sizes and times and a workflow's status()/journal() all do. Before the
+// replacer, returning one threw "Do not know how to serialize a BigInt" and the
+// caller lost the whole result.
+test('exec renders a BigInt result as a decimal string', async t => {
+  const tool = makeExecTool(powers);
+  const result = await tool.execute({ code: 'return 7n;' });
+  t.is(result, '"7"');
+});
+
+test('exec renders BigInts nested in a result', async t => {
+  const tool = makeExecTool(powers);
+  const result = await tool.execute({
+    code: 'return { size: 408n, times: [1n, 2n], name: "secrets.env" };',
+  });
+  t.deepEqual(JSON.parse(result), {
+    size: '408',
+    times: ['1', '2'],
+    name: 'secrets.env',
+  });
+});
