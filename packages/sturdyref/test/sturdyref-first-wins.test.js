@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global globalThis */
 // The other direction of first-wins: when a namespace is ALREADY installed at
 // globalThis.SturdyRef (an eval twin got there first), the shim ADOPTS it rather
 // than overwriting it. Isolated in its own file (its own process) so its

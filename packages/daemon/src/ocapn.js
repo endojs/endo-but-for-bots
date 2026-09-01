@@ -38,8 +38,8 @@
 /** @import { FormulaIdentifier, OcapnIdentity, SturdyRefStore } from './types.js' */
 /** @import { OcapnLocation } from '@endo/ocapn' */
 
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { toIndexableUint8Array } from '@endo/bytes/indexed.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeCryptography } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeOcapn, parseSturdyRefUri, formatSturdyRefUri } from '@endo/ocapn';
@@ -167,7 +167,7 @@ export const makeOcapnIdentity = async ({
   const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(
     bytesFromHex(privateKeyHex),
   );
-  const publicKeyBytes = bytesFromImmutable(keyPair.publicKey.bytes);
+  const publicKeyBytes = toIndexableUint8Array(keyPair.publicKey.bytes);
   const designator = base32Encode(publicKeyBytes);
 
   // The daemon's base self peer-locator, derived from the keypair alone with no
@@ -268,7 +268,7 @@ export const makeOcapnIdentity = async ({
     const normalized =
       typeof secret === 'string' || secret instanceof Uint8Array
         ? secret
-        : bytesFromImmutable(secret);
+        : toIndexableUint8Array(secret);
     return harden({ location, secret: normalized });
   };
 
@@ -344,7 +344,7 @@ export const makeOcapnIdentity = async ({
       }
       // The URI codec yields the swiss-num as an immutable-bytes `SwissNum`;
       // materialize (and the whole seam) speaks plain bytes.
-      return exporter.materialize(location, bytesFromImmutable(swissNum));
+      return exporter.materialize(location, toIndexableUint8Array(swissNum));
     },
     /**
      * Format an `ocapn://` sturdyref URI for a self-minted SturdyRef (design
@@ -366,8 +366,7 @@ export const makeOcapnIdentity = async ({
       // `lookup` — the same hex string the exporter's locator keys on. A raw
       // byte secret (a foreign implementation's) rides through verbatim.
       const { location, secret } = details;
-      const swissNum =
-        typeof secret === 'string' ? bytesFromText(secret) : secret;
+      const swissNum = typeof secret === 'string' ? encodeUtf8(secret) : secret;
       return formatSturdyRefUri({ location, swissNum });
     },
   });

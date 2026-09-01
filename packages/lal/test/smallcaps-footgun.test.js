@@ -592,6 +592,7 @@ test('a tool handle redeems to its sturdyref before Lal dispatch', async t => {
   const sturdyRefEscrow = makeSturdyRefEscrow({
     randomBytes: bytes => bytes.fill(1),
   });
+  /** @type {unknown} */
   let received;
   const powers = harden({
     lookup(value) {
@@ -606,14 +607,18 @@ test('a tool handle redeems to its sturdyref before Lal dispatch', async t => {
     sturdyRefEscrow,
   );
   const published = await publish.execute('publish', {}, undefined, undefined);
-  const [{ text }] = published.content;
+  const text = /** @type {{ text: string }} */ (published.content[0]).text;
   const handle = JSON.parse(text).ref;
 
   const executeTool = makeExecuteTool(powers, sturdyRefEscrow);
   t.is(await executeTool('lookup', { petNameOrPath: handle }), 'resolved');
   t.is(received, sturdyRef);
   await t.throwsAsync(
-    () => executeTool('lookup', { petNameOrPath: 'sturdyref:forged' }),
+    () =>
+      executeTool(
+        'lookup',
+        /** @type {any} */ ({ petNameOrPath: 'sturdyref:forged' }),
+      ),
     { message: 'unknown sturdyref handle' },
   );
 });

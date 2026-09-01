@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global process */
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import crypto from 'node:crypto';
@@ -11,7 +10,7 @@ import { makeCryptography } from '@endo/ocapn/cryptography';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeOcapn, formatSturdyRefUri } from '@endo/ocapn';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { toIndexableUint8Array } from '@endo/bytes/indexed.js';
 import { makeSturdyRefStore } from '../src/sturdyref-store.js';
 import { makeOcapnIdentity, UNARMED_OCAPN_TRANSPORT } from '../src/ocapn.js';
 
@@ -106,7 +105,7 @@ const designatorForPrivateKeyHex = privateKeyHex => {
   const keyPair = cryptography.makeOcapnKeyPairFromPrivateKey(
     bytesFromHex(privateKeyHex),
   );
-  return base32Encode(bytesFromImmutable(keyPair.publicKey.bytes));
+  return base32Encode(toIndexableUint8Array(keyPair.publicKey.bytes));
 };
 
 const makeFixture = ({ state = makeFakeState(), transport } = {}) => {

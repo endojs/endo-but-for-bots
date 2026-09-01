@@ -1,7 +1,5 @@
 // @ts-check
 /// <reference types="ses"/>
-/* global globalThis */
-
 import { passStyleOf } from '@endo/pass-style';
 import harden from '@endo/harden';
 
