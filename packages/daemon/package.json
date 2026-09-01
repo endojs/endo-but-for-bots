@@ -27,6 +27,10 @@
       "types": "./types.d.ts",
       "default": "./index.js"
     },
+    "./provision.js": {
+      "types": "./provision.types.d.ts",
+      "default": "./provision.js"
+    },
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",

@@ -4,7 +4,7 @@
 /** @import { Model } from '@earendil-works/pi-ai' */
 /** @import { Agent, AgentMessage, StreamFn } from '@earendil-works/pi-agent-core' */
 /** @import { Credentials, GetApiKey, ThinkingLevel } from './harness/types.js' */
-/** @import { CodeModeGlobal, CodeModeGrant, CodeModePower, Evaluate, LookupPowers, PowerHandle, StoreValue } from '@endo/agent-tools/code-mode/types.js' */
+/** @import { CodeModeGlobal, CodeModePower, Evaluate, LookupPowers, PowerHandle, StoreValue } from '@endo/agent-tools/code-mode/types.js' */
 /** @import { CodeModePowers, GitLoopOptions, MakeCodeModeAgentOptions } from './code-mode/types.js' */
 
 import { E } from '@endo/eventual-send';
@@ -17,12 +17,18 @@ import {
 import { toPiAgentTool } from '@endo/agent-tools/adapters/pi.js';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
 
-import { defineAgent } from './define-agent.js';
 import {
-  codeModeGrantGlobals,
-  makeCodeModeGrantMinter,
-  normalizeCodeModeGrants,
-} from './code-mode-grants.js';
+  makeFilesystemGlobal,
+  makeWorkspaceGlobal,
+} from '@endo/agent-tools/code-mode-globals/fs.js';
+import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
+import { lineageOf } from '@endo/daemon/src/mount.js';
+import { isGitHistoryRewrite, isGitReadOnly } from '@endo/exo-git';
+import {
+  isFilesystemReadOnly,
+  isFilesystemReadWrite,
+} from '@endo/platform/fs/extended';
+import { defineAgent } from './define-agent.js';
 import { getAmbientEnv, makeEnvCredentials } from './harness/credentials.js';
 
 /**
@@ -43,13 +49,18 @@ export const makeCodeModeSystemPrompt = (globals, options = {}) => {
   const toolGuidance = options.preserveTools
     ? 'You have the evaluate tool plus the other active Pi tools. Use the tool best suited to each task; use evaluate for Endo capabilities.'
     : 'You have exactly one tool: evaluate. Do not call any other tool and do not answer in prose when a tool call can do the work.';
+  const workspaceGuidance = normalized.some(
+    global => global.name === 'workspace',
+  )
+    ? 'The `workspace` binding is the workspace root itself; do not call `workspace.root()`. For path arguments, an array is a sequence of segments and a string is one segment. The `workspace.entry()` exception accepts a slash-joined string when you intentionally need an entry for a nested path.'
+    : 'Only the lexical bindings listed below are available; do not assume a workspace, Git, mount, remote, or introduced capability exists unless it is declared below.';
   return `${preamble}
 
 ${toolGuidance}
 
 The evaluate tool evaluates JavaScript source in an Endo Compartment. The compartment includes hardened SES globals plus the powers listed below. These powers are already in lexical scope; do not look them up by pet name. The TypeScript declarations below are your primary reference: use them to pick a method and its arguments before your first call rather than probing at runtime. They may be a subset of a capability's live surface, so if you need a method that is not declared, discover it with E(capability).__getMethodNames__().
 
-The \`workspace\` binding is the workspace root itself; do not call \`workspace.root()\`. For path arguments, an array is a sequence of segments and a string is one segment. The \`workspace.entry()\` exception accepts a slash-joined string when you intentionally need an entry for a nested path.
+${workspaceGuidance}
 
 Use E(capability).method(...) for remotable capabilities. Top-level await is not available, so use an async IIFE when you need multiple awaits or a final awaited result:
 
@@ -123,59 +134,91 @@ const rejectUnresolvedPower = (lookupPowers, label) => {
 };
 
 /**
- * @param {CodeModePowers} powers
- * @returns {CodeModeGlobal[]}
+ * @param {string} name
+ * @param {CodeModePower} capability
+ * @param {'mount' | 'filesystem' | undefined} surface
+ * @returns {CodeModeGlobal}
  */
-const namedGrantsForCollision = powers =>
-  (powers.grants || []).map(({ name }) => ({ name }));
+const deriveFilesystemGlobal = (name, capability, surface) => {
+  const posture = isFilesystemReadOnly(capability)
+    ? 'readOnly'
+    : isFilesystemReadWrite(capability)
+      ? 'readWrite'
+      : undefined;
+  const isMount = lineageOf(capability) !== undefined;
+  if (
+    (surface === 'filesystem' && posture === undefined) ||
+    (surface === 'mount' && !isMount) ||
+    (surface === undefined && posture === undefined && !isMount)
+  ) {
+    throw new Error(
+      `code-mode filesystem global "${name}" requires a locally recognized exact reader or writer posture; foreign filesystem capabilities are rejected`,
+    );
+  }
+  return surface === 'filesystem' ||
+    (surface === undefined && posture !== undefined)
+    ? makeFilesystemGlobal({ name, readOnly: posture === 'readOnly' })
+    : makeWorkspaceGlobal({ name });
+};
+harden(deriveFilesystemGlobal);
 
 /**
- * @param {Record<string, unknown>} baseEndowments
- * @param {CodeModeGlobal[] | undefined} legacyGlobals
- * @returns {CodeModeGlobal[]}
+ * @param {string} name
+ * @param {CodeModePower} capability
+ * @param {'readOnly' | 'readWrite' | 'historyRewrite' | undefined} requestedMode
+ * @returns {CodeModeGlobal}
  */
-const primitiveGlobalsFor = (baseEndowments, legacyGlobals) => {
-  const globalsByName = new Map(
-    (legacyGlobals || []).map(global => [global.name, global]),
-  );
-  return Object.entries(baseEndowments)
-    .filter(
-      ([, value]) =>
-        (typeof value !== 'object' || value === null) &&
-        typeof value !== 'function',
-    )
-    .map(([name]) => {
-      const global = globalsByName.get(name);
-      return {
-        name,
-        ...(global?.petName === undefined ? {} : { petName: global.petName }),
-        ...(global?.description === undefined
-          ? {}
-          : { description: global.description }),
-      };
-    });
+const deriveGitGlobal = (name, capability, requestedMode) => {
+  const readOnly = isGitReadOnly(capability);
+  const historyRewrite = isGitHistoryRewrite(capability);
+  if (readOnly === undefined || historyRewrite === undefined) {
+    throw new Error(
+      'code-mode Git global requires a recognized same-vat Git capability; foreign or unknown Git objects are rejected',
+    );
+  }
+  const actualMode = historyRewrite
+    ? 'historyRewrite'
+    : readOnly
+      ? 'readOnly'
+      : 'readWrite';
+  if (requestedMode !== undefined && requestedMode !== actualMode) {
+    if (requestedMode === 'readOnly') {
+      throw new Error(
+        'code-mode gitMode readOnly requires an already read-only Git capability',
+      );
+    }
+    if (requestedMode === 'historyRewrite') {
+      throw new Error(
+        'code-mode gitMode historyRewrite requires a Git capability with history-rewrite authority',
+      );
+    }
+    throw new Error(
+      `code-mode gitMode ${requestedMode} does not match the recognized Git capability posture (${actualMode})`,
+    );
+  }
+  return makeGitGlobal({
+    name,
+    readOnly: actualMode === 'readOnly',
+    historyRewrite: actualMode === 'historyRewrite',
+  });
 };
-harden(primitiveGlobalsFor);
+harden(deriveGitGlobal);
 
 /**
  * @param {CodeModePowers} powers
  * @param {LookupPowers | undefined} lookupPowers
  * @param {Record<string, unknown>} baseEndowments
- * @param {CodeModeGlobal[] | undefined} legacyGlobals
- * @returns {CodeModeGrant[]}
+ * @param {CodeModeGlobal[] | undefined} suppliedGlobals
+ * @returns {CodeModeGlobal[]}
  */
-const makeCodeModeGrants = (
+const makeCodeModeGlobals = (
   powers,
   lookupPowers,
   baseEndowments,
-  legacyGlobals,
+  suppliedGlobals,
 ) => {
-  const minter = makeCodeModeGrantMinter();
-  // Validate the complete lexical-name set before resolving capabilities so a
-  // deterministic collision cannot be masked by a later posture check.
   /** @type {CodeModeGlobal[]} */
-  const candidateGlobals = [
-    ...namedGrantsForCollision(powers),
+  const globals = [
     ...(powers.workspace !== undefined || powers.workspacePetName !== undefined
       ? [
           {
@@ -193,137 +236,154 @@ const makeCodeModeGrants = (
           },
         ]
       : []),
-    ...(powers.namedPowers || []).map(({ name }) => ({ name })),
+    ...(powers.namedPowers || []).map(({ name, petName }) => ({
+      name,
+      ...(petName === undefined ? {} : { petName }),
+    })),
     ...Object.keys(baseEndowments).map(name => ({ name })),
   ];
-  normalizeGlobals(candidateGlobals);
-  /** @type {CodeModeGrant[]} */
-  const grants = [];
-  const namedGrants = powers.grants || [];
-  grants.push(...normalizeCodeModeGrants(namedGrants));
-
+  // Detect binding collisions before posture derivation can report a less
+  // useful capability-shape error for the first duplicate.
+  normalizeGlobals(globals);
   if (powers.workspace !== undefined || powers.workspacePetName !== undefined) {
     const petName = powers.workspacePetName ?? 'workspace';
     const name = petNameToBindingName(petName, 'workspace');
-    grants.push(
-      minter.filesystem({
+    globals.splice(
+      globals.findIndex(global => global.name === name),
+      1,
+      deriveFilesystemGlobal(
         name,
-        petName,
-        surface: powers.workspaceSurface,
-        capability:
-          powers.workspace ?? rejectUnresolvedPower(lookupPowers, 'workspace'),
-      }),
+        powers.workspace ?? rejectUnresolvedPower(lookupPowers, 'workspace'),
+        powers.workspaceSurface,
+      ),
     );
   }
   if (powers.git !== undefined || powers.gitPetName !== undefined) {
     const petName = powers.gitPetName ?? 'git';
     const name = petNameToBindingName(petName, 'git');
-    grants.push(
-      minter.git({
+    globals.splice(
+      globals.findIndex(global => global.name === name),
+      1,
+      deriveGitGlobal(
         name,
-        petName,
-        requestedMode: powers.gitMode,
-        capability: powers.git ?? rejectUnresolvedPower(lookupPowers, 'git'),
-      }),
+        powers.git ?? rejectUnresolvedPower(lookupPowers, 'git'),
+        powers.gitMode,
+      ),
     );
   }
 
-  for (const namedPower of powers.namedPowers || []) {
-    if (Object.hasOwn(namedPower, 'capability')) {
-      throw new Error(
-        `code-mode named power "${namedPower.name}" cannot supply a capability-and-declaration pair; use a trusted grant minter`,
-      );
-    }
-    if (namedPower.declaration !== undefined) {
-      throw new Error(
-        `code-mode named power "${namedPower.name}" cannot supply an unrecognized declaration`,
-      );
-    } else {
-      const capability = lookupRequiredPower(
-        lookupPowers,
-        namedPower.petName || namedPower.name,
-        namedPower.name,
-      );
-      // Legacy descriptors have no trusted declaration/capability pairing.
-      // Preserve their lexical name and description, but intentionally reduce
-      // the declaration to `unknown` at this adapter boundary.
-      grants.push(
-        minter.opaque({
-          name: namedPower.name,
-          petName: namedPower.petName,
-          description: namedPower.description,
-          capability,
-        }),
-      );
-    }
-  }
-
-  const globalsByName = new Map(
-    (legacyGlobals || []).map(global => [global.name, global]),
-  );
   for (const [name, capability] of Object.entries(baseEndowments)) {
     if (name === 'E') {
       throw new Error('code-mode endowments may not replace the reserved E');
-    }
-    if (grants.some(grant => grant.name === name)) {
-      throw new Error(
-        `code-mode endowment "${name}" duplicates a capability grant`,
-      );
-    }
-    const global = globalsByName.get(name);
-    if (global?.declaration !== undefined) {
-      throw new Error(
-        `code-mode endowment "${name}" cannot pair an unrecognized capability with a declaration`,
-      );
     }
     if (
       (typeof capability === 'object' && capability !== null) ||
       typeof capability === 'function'
     ) {
-      grants.push(
-        minter.opaque({
-          name,
-          petName: global?.petName,
-          description: global?.description,
-          capability: /** @type {CodeModePower} */ (capability),
-        }),
-      );
+      const derivedIndex = globals.findIndex(global => global.name === name);
+      const derived = globals[derivedIndex];
+      if (derived?.declaration === undefined && derivedIndex >= 0) {
+        const recognized = (() => {
+          try {
+            return deriveFilesystemGlobal(
+              name,
+              /** @type {CodeModePower} */ (capability),
+              undefined,
+            );
+          } catch {
+            try {
+              return deriveGitGlobal(
+                name,
+                /** @type {CodeModePower} */ (capability),
+                undefined,
+              );
+            } catch {
+              return undefined;
+            }
+          }
+        })();
+        if (recognized !== undefined) {
+          globals.splice(derivedIndex, 1, recognized);
+        } else {
+          const supplied = suppliedGlobals?.find(
+            global => global.name === name,
+          );
+          if (supplied?.declaration !== undefined) {
+            throw new Error(
+              `code-mode endowment "${name}" cannot claim a declaration without a recognized capability posture`,
+            );
+          }
+          if (supplied !== undefined) {
+            globals.splice(derivedIndex, 1, {
+              name,
+              ...(supplied.petName === undefined
+                ? {}
+                : { petName: supplied.petName }),
+              ...(supplied.description === undefined
+                ? {}
+                : { description: supplied.description }),
+            });
+          }
+        }
+      }
     }
   }
 
-  const normalized = normalizeCodeModeGrants(grants);
-  if (legacyGlobals !== undefined) {
-    const normalizedLegacy = normalizeGlobals(legacyGlobals);
-    const primitiveGlobals = primitiveGlobalsFor(baseEndowments, legacyGlobals);
-    const derived = normalizeGlobals([
-      ...codeModeGrantGlobals(normalized),
-      ...primitiveGlobals,
-    ]);
-    if (
-      normalizedLegacy.length !== derived.length ||
-      normalizedLegacy.some((global, index) =>
-        Object.keys(global).some(key => global[key] !== derived[index][key]),
-      )
-    ) {
+  const normalized = normalizeGlobals(
+    powers.workspace === undefined &&
+      powers.git === undefined &&
+      (powers.namedPowers?.length ?? 0) === 0 &&
+      Object.values(baseEndowments).every(
+        value =>
+          (typeof value !== 'object' || value === null) &&
+          typeof value !== 'function',
+      ) &&
+      suppliedGlobals !== undefined
+      ? suppliedGlobals
+      : globals,
+  );
+  if (
+    suppliedGlobals !== undefined &&
+    (powers.workspace !== undefined ||
+      powers.git !== undefined ||
+      (powers.namedPowers?.length ?? 0) > 0 ||
+      Object.keys(baseEndowments).length > 0)
+  ) {
+    const supplied = normalizeGlobals(suppliedGlobals);
+    if (JSON.stringify(supplied) !== JSON.stringify(normalized)) {
       throw new Error(
-        'code-mode globals must be derived from the live capability grants',
+        'code-mode globals must be derived from live capability posture',
       );
     }
   }
   return normalized;
 };
-harden(makeCodeModeGrants);
+harden(makeCodeModeGlobals);
 
 /**
- * @param {CodeModeGrant[]} grants
+ * @param {CodeModePowers} powers
  * @param {Record<string, unknown>} baseEndowments
+ * @param {LookupPowers | undefined} lookupPowers
  * @returns {Record<string, unknown>}
  */
-const makeCodeModeEndowments = (grants, baseEndowments) => {
+const makeCodeModeEndowments = (powers, baseEndowments, lookupPowers) => {
   /** @type {Record<string, unknown>} */
   const endowments = { E, ...baseEndowments };
-  for (const grant of grants) {
-    endowments[grant.name] = grant.capability;
+  if (powers.workspace !== undefined) {
+    endowments[
+      petNameToBindingName(powers.workspacePetName ?? 'workspace', 'workspace')
+    ] = powers.workspace;
+  }
+  if (powers.git !== undefined) {
+    endowments[petNameToBindingName(powers.gitPetName ?? 'git', 'git')] =
+      powers.git;
+  }
+  for (const namedPower of powers.namedPowers || []) {
+    endowments[namedPower.name] = lookupRequiredPower(
+      lookupPowers,
+      namedPower.petName || namedPower.name,
+      namedPower.name,
+    );
   }
   return harden(endowments);
 };
@@ -336,7 +396,7 @@ const makeCodeModeEndowments = (grants, baseEndowments) => {
  * closure; supplying powers here is the powered stage.
  *
  * @param {MakeCodeModeAgentOptions} options
- * @returns {{ agent: Agent, grants: CodeModeGrant[], globals: CodeModeGlobal[], evaluate: Evaluate, systemPrompt: string, model: Model<string> }}
+ * @returns {{ agent: Agent, globals: CodeModeGlobal[], evaluate: Evaluate, systemPrompt: string, model: Model<string> }}
  */
 export const makeCodeModeAgent = options => {
   const {
@@ -354,24 +414,12 @@ export const makeCodeModeAgent = options => {
     preamble,
   } = options;
 
-  if (options.systemPrompt !== undefined) {
-    throw new Error(
-      'code-mode systemPrompt is derived from live capability grants; use preamble for trusted instructions',
-    );
-  }
-
-  const grants = makeCodeModeGrants(
+  const globals = makeCodeModeGlobals(
     powers,
     lookupPowers,
     baseEndowments,
     options.globals,
   );
-  const primitiveGlobals = primitiveGlobalsFor(baseEndowments, options.globals);
-  const globals = normalizeGlobals([
-    ...codeModeGrantGlobals(grants),
-    ...primitiveGlobals,
-  ]);
-
   if (
     options.evaluate !== undefined &&
     onContainedEventualSendRejection !== undefined
@@ -384,7 +432,7 @@ export const makeCodeModeAgent = options => {
   const evaluate =
     options.evaluate ||
     makeCompartmentEvaluate({
-      endowments: makeCodeModeEndowments(grants, baseEndowments),
+      endowments: makeCodeModeEndowments(powers, baseEndowments, lookupPowers),
       storeValue,
       onContainedEventualSendRejection,
     });
@@ -392,9 +440,10 @@ export const makeCodeModeAgent = options => {
     /** @type {Evaluate & { hasStoreValue?: boolean }} */ (evaluate);
   const hasStoreValue =
     storeValue !== undefined || evaluateWithStore.hasStoreValue === true;
-  const systemPrompt =
-    options.systemPrompt ||
-    makeCodeModeSystemPrompt(globals, { preamble, storeValue: hasStoreValue });
+  const systemPrompt = makeCodeModeSystemPrompt(globals, {
+    preamble,
+    storeValue: hasStoreValue,
+  });
   const tool = makeEvaluateTool(
     evaluate,
     globals,
@@ -416,19 +465,17 @@ export const makeCodeModeAgent = options => {
   // The returned record is intentionally NOT hardened: `agent` is a live
   // pi-agent-core instance that mutates its own run state (e.g. `activeRun`)
   // while driving a conversation, so deep-freezing it would break the loop.
-  return { agent, grants, globals, evaluate, systemPrompt, model };
+  return { agent, globals, evaluate, systemPrompt, model };
 };
 harden(makeCodeModeAgent);
 
 /**
  * Resolve the lookup-backed `workspace` and `git` capabilities of a code-mode
  * powers record into inline capabilities, so that the synchronous posture
- * validation and grant minting in {@link makeCodeModeAgent} inspect the live
+ * validation in {@link makeCodeModeAgent} inspects the live
  * capability rather than the promise for it.
  *
- * Named powers are intentionally left unresolved: they mint opaque `unknown`
- * grants that never consult a posture tester, so forcing a round trip for
- * them would only delay agent construction.
+ * Named powers remain lookup-backed and are described as `unknown` globals.
  *
  * @param {CodeModePowers} [powers]
  * @param {LookupPowers} [lookupPowers]
@@ -466,7 +513,7 @@ harden(resolveCodeModePowers);
  * agent through the same synchronous validation boundary.
  *
  * @param {MakeCodeModeAgentOptions} options
- * @returns {Promise<{ agent: Agent, grants: CodeModeGrant[], globals: CodeModeGlobal[], evaluate: Evaluate, systemPrompt: string, model: Model<string> }>}
+ * @returns {Promise<{ agent: Agent, globals: CodeModeGlobal[], evaluate: Evaluate, systemPrompt: string, model: Model<string> }>}
  */
 export const makeCodeModeAgentFromLookup = async options => {
   const powers = await resolveCodeModePowers(

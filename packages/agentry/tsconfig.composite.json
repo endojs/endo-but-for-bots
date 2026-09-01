@@ -33,6 +33,12 @@
       "path": "../marshal/tsconfig.composite.json"
     },
     {
+      "path": "../pass-style/tsconfig.composite.json"
+    },
+    {
+      "path": "../patterns/tsconfig.composite.json"
+    },
+    {
       "path": "../platform/tsconfig.composite.json"
     },
     {

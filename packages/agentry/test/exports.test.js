@@ -23,7 +23,6 @@ test('agentry subpaths resolve through package exports', async t => {
     import('@endo/agentry/harness/types.js'),
     import('@endo/agentry/code-mode/types.js'),
     import('@endo/agentry/endo-code-mode-pi-extension'),
-    // eslint-disable-next-line import/no-unresolved, import/no-extraneous-dependencies
     import('@endo/agentry/eval'),
     import('@endo/agentry/edit-text'),
   ]);
@@ -87,12 +86,7 @@ test('agentry subpaths resolve through package exports', async t => {
   t.is(typeof codeModeProvisioningModule.reconstructEndoCodeMode, 'function');
   t.deepEqual(
     Object.keys(codeModeProvisioningModule).sort(),
-    [
-      'EndoCredentialUnavailableError',
-      'normalizeEndoProvisionSpec',
-      'provisionEndoCodeMode',
-      'reconstructEndoCodeMode',
-    ],
+    ['provisionEndoCodeMode', 'reconstructEndoCodeMode'],
     '@endo/agentry/code-mode-provisioning export surface',
   );
 

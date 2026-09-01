@@ -1,7 +1,6 @@
 // @ts-check
 
-/** @import { EndoHost } from '@endo/daemon' */
-/** @import { EndoProvisionPersistence } from '../src/code-mode-provisioning-types.js' */
+/** @import { EndoGuest, EndoHost } from '@endo/daemon' */
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
@@ -9,94 +8,40 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { provideEndoCodeModeGuest } from '../src/code-mode-provision-host.js';
 import { normalizeEndoProvisionSpec } from '../src/code-mode-provision-policy.js';
-import { realizeEndoProvisionOnHost } from '../src/code-mode-provision-host.js';
-
-/** @param {string | string[]} path */
-const pathKey = path => (Array.isArray(path) ? path : [path]).join('/');
 
 /**
- * @returns {{ host: EndoHost, identifiers: Map<string, string>, values: Map<string, unknown>, idValues: Map<string, unknown>, identifyCalls: string[][], guestBindings: Map<string, string> }}
+ * @param {string[]} [presentNames]
+ * @param {Partial<EndoHost>} [overrides]
  */
-const makeHost = () => {
-  const directories = new Set(['']);
-  const identifiers = new Map();
+const makeHost = (presentNames = [], overrides = {}) => {
+  /** @type {Array<{ name: any, options: any }>} */
+  const provideCalls = [];
   const values = new Map();
-  const idValues = new Map();
-  const identifyCalls = [];
-  const guestBindings = new Map();
-  const guest = {
-    storeIdentifier: async (name, id) => {
-      guestBindings.set(name, id);
-    },
-  };
-
-  const makeDirectory = async path => {
-    const names = Array.isArray(path) ? path : [path];
-    for (let index = 1; index <= names.length; index += 1) {
-      directories.add(pathKey(names.slice(0, index)));
-    }
-  };
+  const guest = /** @type {EndoGuest} */ (
+    /** @type {unknown} */ (
+      harden({
+        has: async (...path) => presentNames.includes(path.join('/')),
+      })
+    )
+  );
   const host = /** @type {EndoHost} */ (
     /** @type {unknown} */ ({
-      has: async (...namePath) => {
-        const name = pathKey(namePath);
-        return (
-          directories.has(name) || identifiers.has(name) || values.has(name)
-        );
-      },
-      makeDirectory,
-      identify: async (...namePath) => {
-        identifyCalls.push([...namePath]);
-        return identifiers.get(pathKey(namePath));
-      },
-      lookupById: async id => {
-        if (!idValues.has(id)) {
-          throw Error(`missing formula ${id}`);
-        }
-        return idValues.get(id);
-      },
-      lookup: async namePath => {
-        const name = pathKey(namePath);
-        const id = identifiers.get(name);
-        if (id !== undefined) {
-          return idValues.get(id);
-        }
-        if (values.has(name)) {
-          return values.get(name);
-        }
-        if (name.endsWith('/guest-agent')) {
-          return guest;
-        }
-        throw Error(`missing name ${name}`);
-      },
-      provideGuest: async (namePath, options) => {
-        const handleName = pathKey(namePath);
-        identifiers.set(handleName, 'guest-handle');
-        idValues.set('guest-handle', guest);
-        if (options?.agentName !== undefined) {
-          const agentName = pathKey(options.agentName);
-          identifiers.set(agentName, 'guest-agent');
-          idValues.set('guest-agent', guest);
-        }
+      provideGuest: async (name, options) => {
+        provideCalls.push({ name, options });
         return guest;
       },
-      storeIdentifier: async (namePath, id) => {
-        identifiers.set(pathKey(namePath), id);
+      has: async (...path) => values.has(path.join('/')),
+      lookup: async path =>
+        values.get((Array.isArray(path) ? path : [path]).join('/')),
+      storeValue: async (value, path) => {
+        values.set((Array.isArray(path) ? path : [path]).join('/'), value);
       },
-      storeValue: async (value, namePath) => {
-        values.set(pathKey(namePath), value);
-      },
+      ...overrides,
     })
   );
-  return {
-    host,
-    identifiers,
-    values,
-    idValues,
-    identifyCalls,
-    guestBindings,
-  };
+  return { host, guest, provideCalls, values };
 };
 
 /** @param {import('ava').ExecutionContext} t */
@@ -106,91 +51,148 @@ const makeWorkspace = async t => {
   return root;
 };
 
-test.todo(
-  'interrupted initial provisioning after policy storage before all named-grant aliases are installed still needs recovery behavior',
-);
-
-test('named grants pin the first host capability and bind only the guest alias', async t => {
+test('adapter stores policy projection in host state, not caller persistence', async t => {
   const root = await makeWorkspace(t);
-  const fixture = makeHost();
-  fixture.identifiers.set('tools', 'tools-directory');
-  fixture.idValues.set('tools-directory', {});
-  fixture.identifiers.set('tools/calendar', 'calendar-original');
-  fixture.idValues.set('calendar-original', { version: 'original' });
-
-  const persistence = await normalizeEndoProvisionSpec(
+  const fixture = makeHost(['workspace', 'repo', 'calendar']);
+  const request = await normalizeEndoProvisionSpec(
     {
-      grants: {
-        calendar: {
-          from: ['tools', 'calendar'],
-          description: 'A calendar service',
-        },
+      mount: { workspace: { path: '.', mode: 'readWrite' } },
+      git: {
+        repo: { mount: 'workspace', path: [], mode: 'readWrite' },
       },
+      introducedNames: { 'calendar-service': 'calendar' },
     },
     { harness: 'test', sessionId: 'pinned-grant', cwd: root },
   );
-  await realizeEndoProvisionOnHost(fixture.host, persistence);
 
-  const controllerPowerPath = [
-    ...persistence.guestHandlePath.slice(0, -1),
-    'grants',
-    'calendar',
-  ];
-  t.is(
-    fixture.identifiers.get(pathKey(controllerPowerPath)),
-    'calendar-original',
+  const projection = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+    { request },
   );
-  t.is(fixture.guestBindings.get('calendar'), 'calendar-original');
-  t.deepEqual(fixture.identifyCalls, [
-    ['tools', 'calendar'],
-    controllerPowerPath,
-  ]);
 
-  fixture.identifiers.set('tools/calendar', 'calendar-rebound');
-  fixture.idValues.set('calendar-rebound', { version: 'rebound' });
-  await realizeEndoProvisionOnHost(fixture.host, persistence);
-
-  t.is(fixture.guestBindings.get('calendar'), 'calendar-original');
+  t.is(projection.guest, fixture.guest);
   t.deepEqual(
-    fixture.identifyCalls,
-    [['tools', 'calendar'], controllerPowerPath, controllerPowerPath],
-    'reconstruction does not resolve the rebound source path',
+    projection.globals.map(({ name }) => name),
+    ['workspace', 'repo', 'calendar'],
+  );
+  t.deepEqual(fixture.provideCalls, [
+    {
+      name: request.persistence.guestName,
+      options: {
+        authority: request.authority,
+        introducedNames: { 'calendar-service': 'calendar' },
+      },
+    },
+  ]);
+  t.deepEqual(Object.keys(request.persistence), ['version', 'guestName']);
+  t.is(fixture.values.size, 1);
+  t.deepEqual(Object.keys([...fixture.values.values()][0]), [
+    'version',
+    'authority',
+    'introducedNames',
+  ]);
+});
+
+test('opaque reconstruction reacquires guest and host-owned globals', async t => {
+  const root = await makeWorkspace(t);
+  const fixture = makeHost(['workspace']);
+  const request = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
+    { harness: 'test', sessionId: 'reconstruct', cwd: root },
+  );
+  const first = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+    { request },
+  );
+  const reconstructed = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+  );
+
+  t.deepEqual(reconstructed.globals, first.globals);
+  t.deepEqual(fixture.provideCalls[1], {
+    name: request.persistence.guestName,
+    options: undefined,
+  });
+});
+
+test('missing introduced sources are ignored and projected when later present', async t => {
+  const root = await makeWorkspace(t);
+  const presentNames = [];
+  const fixture = makeHost(presentNames);
+  const request = await normalizeEndoProvisionSpec(
+    { introducedNames: { missing: 'optionalTool' } },
+    { harness: 'test', sessionId: 'missing-source', cwd: root },
+  );
+
+  const projection = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+    { request },
+  );
+
+  t.deepEqual(projection.globals, []);
+  t.deepEqual(fixture.provideCalls[0].options.introducedNames, {
+    missing: 'optionalTool',
+  });
+
+  presentNames.push('optionalTool');
+  const reconstructed = await provideEndoCodeModeGuest(
+    fixture.host,
+    request.persistence,
+  );
+  t.deepEqual(
+    reconstructed.globals.map(({ name }) => name),
+    ['optionalTool'],
   );
 });
 
-test('missing retained grant state and missing sources fail closed', async t => {
+test('fork inherits daemon-owned parent state under a new opaque name', async t => {
   const root = await makeWorkspace(t);
-  const spec = {
-    grants: { calendar: { from: ['tools', 'calendar'] } },
-  };
-  const first = makeHost();
-  first.identifiers.set('tools', 'tools-directory');
-  first.idValues.set('tools-directory', {});
-  first.identifiers.set('tools/calendar', 'calendar-original');
-  first.idValues.set('calendar-original', {});
-  const persistence = await normalizeEndoProvisionSpec(spec, {
+  const fixture = makeHost(['workspace']);
+  const parent = await normalizeEndoProvisionSpec(
+    { mount: { workspace: { path: '.', mode: 'readOnly' } } },
+    { harness: 'test', sessionId: 'fork-parent', cwd: root },
+  );
+  const child = await normalizeEndoProvisionSpec(undefined, {
     harness: 'test',
-    sessionId: 'missing-grant',
+    sessionId: 'fork-child',
     cwd: root,
   });
-  await realizeEndoProvisionOnHost(first.host, persistence);
-  first.identifiers.delete(
-    pathKey([
-      ...persistence.guestHandlePath.slice(0, -1),
-      'grants',
-      'calendar',
-    ]),
-  );
-  await t.throwsAsync(
-    () => realizeEndoProvisionOnHost(first.host, persistence),
-    {
-      message: /refusing to re-resolve its host source/,
-    },
+  await provideEndoCodeModeGuest(fixture.host, parent.persistence, {
+    request: parent,
+  });
+  const forked = await provideEndoCodeModeGuest(
+    fixture.host,
+    child.persistence,
+    { forkFrom: parent.persistence },
   );
 
-  const missing = makeHost();
-  await t.throwsAsync(
-    () => realizeEndoProvisionOnHost(missing.host, persistence),
-    { message: /source.*not available on the host/ },
+  t.deepEqual(
+    forked.globals.map(({ name }) => name),
+    ['workspace'],
   );
+  t.deepEqual(fixture.provideCalls[1].options.authority, parent.authority);
+});
+
+test('host provisioning failures pass through untouched', async t => {
+  const root = await makeWorkspace(t);
+  const failure = Error('daemon rejected the record');
+  const fixture = makeHost([], {
+    provideGuest: async () => {
+      throw failure;
+    },
+  });
+  const request = await normalizeEndoProvisionSpec(undefined, {
+    harness: 'test',
+    sessionId: 'provision-failure',
+    cwd: root,
+  });
+
+  const error = await t.throwsAsync(() =>
+    provideEndoCodeModeGuest(fixture.host, request.persistence, { request }),
+  );
+  t.is(error, failure);
 });

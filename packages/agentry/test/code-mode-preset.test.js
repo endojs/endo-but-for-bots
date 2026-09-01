@@ -314,7 +314,7 @@ test('makeCodeModeAgent throws when a namedPower collides with the well-known gi
         model: fauxModel,
         powers: {
           git: Far('G', {}),
-          namedPowers: [{ name: 'git', petName: 'other', description: 'h' }],
+          namedPowers: [{ name: 'git', petName: 'other' }],
         },
       }),
     { message: /code-mode global name "git" is declared twice/ },
@@ -385,14 +385,12 @@ test('makeCodeModeAgent resolves named powers through a live lookup handle', t =
     model: fauxModel,
     lookupPowers,
     powers: {
-      namedPowers: [
-        { name: 'helper', petName: 'helper-cap', description: 'h' },
-      ],
+      namedPowers: [{ name: 'helper', petName: 'helper-cap' }],
     },
   });
   t.is(model, fauxModel);
   t.is(typeof evaluate, 'function');
-  t.true(systemPrompt.includes('declare const helper: unknown;'));
+  t.true(systemPrompt.includes('declare const helper;'));
   t.deepEqual(
     globals.map(global => global.name),
     ['helper'],
@@ -412,7 +410,7 @@ test('makeCodeModeAgent honors an explicit globals list and preamble override', 
     preamble: 'CUSTOM PREAMBLE.',
   });
   t.true(systemPrompt.startsWith('CUSTOM PREAMBLE.'));
-  t.true(systemPrompt.includes('declare const thing: unknown;'));
+  t.true(systemPrompt.includes('declare const thing;'));
   t.deepEqual(
     globals.map(global => global.name),
     ['thing'],

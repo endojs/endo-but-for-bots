@@ -453,13 +453,20 @@ harden(assertConfinedOrAncestor);
 
 /**
  * Check if a path is confined (returns boolean, does not throw).
+ * Narrowed to `realPath` alone so callers holding a lighter path-only power
+ * bundle (e.g. named guest authority's `ProvisionPathPowers`) can share this
+ * check instead of reimplementing confinement semantics.
  *
  * @param {string} candidatePath
  * @param {string} confinementRoot
- * @param {FilePowers} filePowers
+ * @param {Pick<FilePowers, 'realPath'>} filePowers
  * @returns {Promise<boolean>}
  */
-const isConfinedPath = async (candidatePath, confinementRoot, filePowers) => {
+export const isConfinedPath = async (
+  candidatePath,
+  confinementRoot,
+  filePowers,
+) => {
   try {
     const resolved = await filePowers.realPath(candidatePath);
     const rootResolved = await filePowers.realPath(confinementRoot);
@@ -531,6 +538,12 @@ harden(resolvePhysicalPath);
  *   the mount is never revocable. `whenRevoked` settles when `revoke()` runs,
  *   so an open stream can wake promptly rather than waiting on the next
  *   coincidental filesystem event.
+ */
+
+/**
+ * @typedef {object} EndoMountControl
+ * @property {() => void} revoke
+ * @property {(method?: string) => string} help
  */
 
 /**
@@ -1838,7 +1851,7 @@ harden(makeMount);
  * cancellation, and keep the `control` captive so only the daemon can revoke.
  *
  * @param {Parameters<typeof makeMount>[0]} opts
- * @returns {{ mount: object, control: object }}
+ * @returns {{ mount: EndoMount, control: EndoMountControl }}
  */
 export const makeRevocableMount = opts => {
   // `whenRevoked` settles the instant `revoke()` runs, so an open

@@ -744,17 +744,6 @@ const parseDtsModule = (dtsUrl, moduleName) => {
 /** @typedef {{ sourceFile: ts.SourceFile, aliasMap: Map<string, ts.TypeAliasDeclaration | ts.InterfaceDeclaration>, importMap: Map<string, ImportBinding>, starExports: string[] }} ParsedTypeModule */
 
 /**
- * Type sources the package's own `exports` map cannot name directly.
- * These packages publish thin declaration re-export indexes, which carry no
- * definitions of their own; the definitions live in checked `.ts` hosts.
- */
-const TYPE_SOURCE_OVERRIDES = new Map([
-  ['@endo/exo-stream', 'types.ts'],
-  ['@endo/platform/fs/lite/types', 'src/fs/types.ts'],
-  ['@endo/platform/fs/extended', 'src/fs/extended/types.ts'],
-]);
-
-/**
  * The `@endo/<name>` package a bare or subpath specifier belongs to, or
  * `undefined` for a specifier outside the `@endo` namespace.
  *
@@ -828,12 +817,10 @@ const resolvePackageRoot = (require, packageName) => {
  * Resolve the declaration source behind an imported type expression.
  * Workspace packages expose runtime paths for their default condition, while
  * the extractor needs the checked source type host instead: the `types`
- * condition of the package's `exports` map, else the `.ts` or `.d.ts` beside
- * the resolved runtime module.
+ * condition of the package's `exports` map.
  *
- * A package that publishes no type source (`@endo/patterns` and
- * `@endo/pass-style` export a bare runtime path) resolves to `undefined`, and
- * the types it would have contributed collapse to `unknown`.
+ * A package entry with no explicit `types` condition resolves to `undefined`,
+ * and the types it would have contributed collapse to `unknown`.
  *
  * A relative specifier stays inside the package the referring source belongs
  * to, so it is followed as well: a published type entry point that re-exports
@@ -850,8 +837,8 @@ const resolveTypeModule = (moduleName, fromFile) => {
     const candidates = /\.(?:d\.)?ts$/u.test(resolved)
       ? [resolved]
       : [
-          `${resolved.replace(/\.js$/u, '')}.d.ts`,
           `${resolved.replace(/\.js$/u, '')}.ts`,
+          `${resolved.replace(/\.js$/u, '')}.d.ts`,
         ];
     return candidates.find(candidate => existsSync(candidate));
   }
@@ -863,10 +850,6 @@ const resolveTypeModule = (moduleName, fromFile) => {
   const packageRoot = resolvePackageRoot(require, packageName);
   if (packageRoot === undefined) {
     return undefined;
-  }
-  const override = TYPE_SOURCE_OVERRIDES.get(moduleName);
-  if (override !== undefined) {
-    return join(packageRoot, override);
   }
   const subpath =
     moduleName === packageName
@@ -880,19 +863,12 @@ const resolveTypeModule = (moduleName, fromFile) => {
     const resolved = join(packageRoot, declared);
     return existsSync(resolved) ? resolved : undefined;
   }
-  let runtime;
-  try {
-    runtime = require.resolve(moduleName);
-  } catch {
-    return undefined;
-  }
-  if (runtime.endsWith('.ts')) {
-    return runtime;
-  }
-  const base = runtime.replace(/\.js$/u, '');
-  return [`${base}.ts`, `${base}.d.ts`].find(candidate =>
-    existsSync(candidate),
-  );
+  // Composite builds emit ignored `.d.ts` files beside runtime `.js` files.
+  // Treating those as authored package entry points would make extraction
+  // depend on whether `yarn build:types` happened to run first. A package
+  // import is followable only when its manifest names the checked source
+  // deliberately.
+  return undefined;
 };
 harden(resolveTypeModule);
 

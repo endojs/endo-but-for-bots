@@ -131,6 +131,7 @@ export const gunzip = async bytes => {
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
+/** @import { ProvisionPathPowers } from './provision/types.js' */
 
 /**
  * @param {object} modules
@@ -589,6 +590,18 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
 
   const joinPath = (...components) => fspath.join(...components);
 
+  /** @param {...string} segments */
+  const resolvePath = (...segments) => fspath.resolve(...segments);
+
+  /**
+   * @param {string} from
+   * @param {string} to
+   */
+  const relativePath = (from, to) => fspath.relative(from, to);
+
+  /** @param {string} path */
+  const isAbsolutePath = path => fspath.isAbsolute(path);
+
   /** @param {string} path */
   const realPath = async path => fs.promises.realpath(path);
 
@@ -601,6 +614,16 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
       return false;
     }
   };
+
+  /** @type {ProvisionPathPowers} */
+  const provisionPathPowers = harden({
+    realPath,
+    isDirectory,
+    resolvePath,
+    relativePath,
+    isAbsolutePath,
+    pathSeparator: fspath.sep,
+  });
 
   /** @param {string} path */
   const statPath = async path => {
@@ -873,6 +896,7 @@ export const makeFilePowers = ({ fs, path: fspath }) => {
     removeDirectory,
     renamePath,
     realPath,
+    provisionPathPowers,
     pathIdentity,
     statPath,
     isDirectory,

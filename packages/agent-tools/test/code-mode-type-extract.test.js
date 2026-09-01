@@ -13,9 +13,9 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
@@ -49,7 +49,9 @@ const writeModules = (t, files) => {
   const directory = mkdtempSync(join(tmpdir(), 'code-mode-type-extract-'));
   t.teardown(() => rmSync(directory, { recursive: true, force: true }));
   for (const [name, text] of Object.entries(files)) {
-    writeFileSync(join(directory, name), text);
+    const fileName = join(directory, name);
+    mkdirSync(dirname(fileName), { recursive: true });
+    writeFileSync(fileName, text);
   }
   return name => join(directory, name);
 };
@@ -210,6 +212,30 @@ test('a generic base fails rather than printing an unsubstituted parameter', t =
       `),
     { message: /type arguments are not substituted/u },
   );
+});
+
+test('an adjacent build declaration does not open a package type boundary', t => {
+  const pathTo = writeModules(t, {
+    'node_modules/@endo/bare-types/package.json': JSON.stringify({
+      name: '@endo/bare-types',
+      type: 'module',
+      exports: { '.': './index.js' },
+    }),
+    'node_modules/@endo/bare-types/index.js': 'export {};',
+    'node_modules/@endo/bare-types/index.d.ts':
+      'export interface BuildArtifact { leaked(): string }',
+  });
+  const ir = extract(
+    `
+    import type { BuildArtifact } from '@endo/bare-types';
+    export interface Root {
+      artifact(): BuildArtifact;
+    }
+  `,
+    { fileName: pathTo('root.ts') },
+  );
+  t.deepEqual(ir.members, [{ name: 'artifact', signature: '() => unknown' }]);
+  t.deepEqual(ir.auxTypes, []);
 });
 
 test('a type reference outside the @endo namespace still collapses', t => {

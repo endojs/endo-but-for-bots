@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeGuestOptions, MakeHostOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -22,6 +22,8 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   assertPetName,
   assertPetNamePath,
+  isName,
+  isPetName,
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
@@ -50,6 +52,7 @@ import {
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
+import { makeGuestAuthorityProvider } from './provision/index.js';
 
 /**
  * @param {string} name
@@ -76,8 +79,8 @@ const assertPowersNameOrPath = nameOrPath => {
 
 /**
  * Normalizes host or guest options, providing default values.
- * @param {MakeHostOrGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath }}
+ * @param {MakeGuestOptions | undefined} opts
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
@@ -86,6 +89,7 @@ const normalizeHostOrGuestOptions = opts => {
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
+    ...(opts?.authority !== undefined && { authority: opts.authority }),
   };
 };
 
@@ -295,6 +299,9 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateWorker']} args.formulateWorker
  * @param {DaemonCore['formulateHost']} args.formulateHost
  * @param {DaemonCore['formulateGuest']} args.formulateGuest
+ * @param {(agentId: FormulaIdentifier, nodeNumber?: NodeNumber) => Promise<FormulaIdentifier>} args.formulateHandle
+ *   Mint an additional handle formula for an already-incarnated guest or
+ *   host, so a second pet name can alias it.
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateUnconfined']} args.formulateUnconfined
@@ -338,6 +345,11 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['getFormulaGraphSnapshot']} [args.getFormulaGraphSnapshot]
  * @param {DaemonCore['listRetentionPaths']} [args.listRetentionPaths]
  * @param {DaemonCore['followRetentionPaths']} [args.followRetentionPaths]
+ * @param {import('./provision/types.js').ProvisionPathPowers} [args.provisionPathPowers]
+ *   Filesystem and path operations for named guest authority.
+ *   Injected by the supervisor rather than imported here so the daemon core
+ *   stays free of `node:` builtins.
+ *   Without them, authority-bearing `provideGuest()` fails closed.
  * @param {ReturnType<typeof makeTraceAggregator>} [args.traceAggregator]
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
@@ -350,6 +362,7 @@ export const makeHostMaker = ({
   formulateWorker,
   formulateHost,
   formulateGuest,
+  formulateHandle,
   formulateMarshalValue,
   formulateEval,
   formulateUnconfined,
@@ -423,6 +436,7 @@ export const makeHostMaker = ({
   followRetentionPaths = async function* _follow(_id) {
     return undefined;
   },
+  provisionPathPowers = undefined,
   traceAggregator = undefined,
 }) => {
   /**
@@ -1832,7 +1846,7 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [petName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeHostOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoHost>}>}
      */
     const makeChildHost = async (
@@ -1889,14 +1903,19 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [handleName]
-     * @param {MakeHostOrGuestOptions} [opts]
+     * @param {MakeGuestOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
       handleName,
       { introducedNames = Object.create(null), agentName = undefined } = {},
     ) => {
-      let guest = await getNamedAgent(handleName, 'guest');
+      // An explicit agent name is the stable capability identity; the handle
+      // name remains a separate lifecycle artifact.
+      let guest = await getNamedAgent(
+        /** @type {NameOrPath | undefined} */ (agentName ?? handleName),
+        'guest',
+      );
       if (guest === undefined) {
         const guestLabel = agentName
           ? `guest:${agentName}`
@@ -1915,6 +1934,26 @@ export const makeHostMaker = ({
             guestLabel,
           );
         guest = { value: Promise.resolve(value), id };
+      } else if (handleName !== undefined) {
+        // Reusing an existing guest (found via agentName) under a new
+        // handle name still needs its own handle binding: the deferred
+        // tasks that would bind it only run when the guest formula itself
+        // is created, above.
+        const { namePath: handlePath, petName: handlePetName } =
+          petNamePathFrom(handleName);
+        const alreadyBound =
+          handlePath.length === 1
+            ? petStore.identifyLocal(handlePetName) !== undefined
+            : (await E(directory).identify(...handlePath)) !== undefined;
+        if (!alreadyBound) {
+          const { node: guestNodeNumber } = parseId(guest.id);
+          const newHandleId = await formulateHandle(guest.id, guestNodeNumber);
+          if (handlePath.length === 1) {
+            await petStore.storeIdentifier(handlePetName, newHandleId);
+          } else {
+            await E(directory).storeIdentifier(handlePath, newHandleId);
+          }
+        }
       }
 
       await introduceNamesToAgent(
@@ -1930,10 +1969,84 @@ export const makeHostMaker = ({
 
     /** @type {EndoHost['provideGuest']} */
     const provideGuest = async (petName, opts) => {
+      await null;
       if (petName !== undefined) {
         petNamePathFrom(petName);
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
+      if (petName === undefined) {
+        if (normalizedOpts.authority !== undefined) {
+          throw makeError(
+            X`provideGuest requires a host pet name when authority is supplied`,
+          );
+        }
+      } else {
+        const { namePath } = petNamePathFrom(petName);
+        const retainedAuthority = await hasGuestAuthority(namePath);
+        if (
+          (normalizedOpts.authority !== undefined || retainedAuthority) &&
+          normalizedOpts.agentName !== undefined
+        ) {
+          const { namePath: agentNamePath } = petNamePathFrom(
+            normalizedOpts.agentName,
+          );
+          if (
+            agentNamePath.length !== namePath.length ||
+            agentNamePath.some((name, index) => name !== namePath[index])
+          ) {
+            throw makeError(
+              X`provideGuest authority requires agentName to match the host pet name`,
+            );
+          }
+        }
+        if (normalizedOpts.authority !== undefined || retainedAuthority) {
+          const authorityBindings =
+            normalizedOpts.authority !== undefined
+              ? new Set([
+                  ...Object.keys(normalizedOpts.authority.mount ?? {}),
+                  ...Object.keys(normalizedOpts.authority.git ?? {}),
+                  ...Object.keys(normalizedOpts.authority.gitRemote ?? {}),
+                ])
+              : // Reconnecting without a new `authority` argument still binds
+                // the previously granted authority, so the collision guard
+                // must consult what was actually retained.
+                await retainedAuthorityBindings(namePath);
+          for (const [hostName, guestName] of Object.entries(
+            normalizedOpts.introducedNames,
+          )) {
+            if (!isName(hostName) || !isPetName(guestName)) {
+              throw makeError(
+                X`introducedNames must map host names to guest pet names`,
+              );
+            }
+            if (authorityBindings.has(guestName)) {
+              throw makeError(
+                X`Introduced name ${q(guestName)} conflicts with provisioned authority`,
+              );
+            }
+          }
+          return provideGuestAuthority(
+            namePath,
+            normalizedOpts.authority,
+            opts?.introducedNames,
+            async () => {
+              const { value } = await makeGuest(
+                /** @type {NameOrPath} */ (
+                  harden(['provisioned-guests', ...namePath, 'guest-handle'])
+                ),
+                harden({
+                  ...normalizedOpts,
+                  introducedNames: {},
+                  agentName:
+                    normalizedOpts.agentName ??
+                    /** @type {NameOrPath} */ (petName),
+                }),
+              );
+              return value;
+            },
+          );
+        }
+      }
       const { value } = await makeGuest(
         /** @type {NameOrPath | undefined} */ (petName),
         normalizedOpts,
@@ -2327,6 +2440,39 @@ export const makeHostMaker = ({
      * @returns {Promise<unknown>} The value.
      */
     const lookupByLocator = async locator => provide(idFromLocator(locator));
+
+    // Named guest provisioning extends the existing provideGuest lifecycle.
+    // The host validates and retains immutable authority before minting any
+    // capability aliases. Path powers are injected by the supervisor.
+    const {
+      hasGuestAuthority,
+      provideGuestAuthority,
+      retainedAuthorityBindings,
+    } = makeGuestAuthorityProvider({
+      pathPowers: provisionPathPowers,
+      has,
+      identify,
+      lookup,
+      makeDirectory: makeDirectoryLocal,
+      storeValue,
+      provideMount,
+      provideGit,
+      provideGitRemote,
+      getGitCredentialController,
+      bindGuest: async (guest, guestName, source) => {
+        const sourcePath = Array.isArray(source) ? source : [source];
+        const id = await identify(...sourcePath);
+        if (id === undefined) {
+          throw makeError(
+            X`Provisioned capability ${q(sourcePath.join('/'))} has no formula identifier`,
+          );
+        }
+        await E(guest).storeIdentifier(guestName, id);
+      },
+      bindGuestIdentifier: async (guest, guestName, id) => {
+        await E(guest).storeIdentifier(guestName, id);
+      },
+    });
 
     /** @type {EndoHost['endow']} */
     const endow = async (messageNumber, bindings, workerName, resultName) => {

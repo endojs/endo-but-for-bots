@@ -34,21 +34,6 @@ export interface CodeModeGlobal {
   declaration?: GlobalDeclaration;
 }
 
-/**
- * A live code-mode capability together with the exact declaration derived for
- * the lexical binding that receives it.
- */
-declare const codeModeGrantBrand: unique symbol;
-export interface CodeModeGrant {
-  /** Only a trusted code-mode grant minter can produce this brand. */
-  readonly [codeModeGrantBrand]: 'CodeModeGrant';
-  name: string;
-  petName?: string | string[];
-  description?: string;
-  declaration: GlobalDeclaration;
-  capability: CodeModePower;
-}
-
 /** The input accepted by a code-mode evaluator. */
 export interface EvaluateInput {
   source: string;
