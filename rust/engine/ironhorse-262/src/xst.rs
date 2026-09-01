@@ -562,6 +562,13 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // false over-acceptance while preserving all other runtime
                     // ReferenceError divergences as failures.
                     Verdict::RunSkip("oracle-xs-with-reference".into())
+                } else if oracle_skips_super_arguments(run) {
+                    // Pinned XS checks whether the super constructor is
+                    // constructible before evaluating the argument list. The
+                    // specification requires the opposite order, and the
+                    // official case observes that ordering through a side
+                    // effect. Do not make Ironhorse reproduce the XS defect.
+                    Verdict::RunSkip("oracle-xs-super-arguments".into())
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -645,6 +652,19 @@ fn oracle_loses_with_reference(run: &DualRun) -> bool {
         && run.oracle_error == "ReferenceError: set x: undefined property"
         && run.source.contains("with (")
         && run.source.contains("delete")
+}
+
+/// The pinned XS `super()` ordering defect in the official
+/// `call-proto-not-ctor` case. ECMA-262 evaluates the argument list before
+/// checking whether the super constructor is constructible; XS checks first,
+/// leaves the argument side effect false, and fails the official assertion.
+/// Match both the exact assertion error and the distinctive source operations
+/// so no unrelated Test262 failure is hidden.
+fn oracle_skips_super_arguments(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.oracle_error == "Test262Error: performs ArgumentsListEvaluation"
+        && run.source.contains("super(evaluatedArg = true)")
+        && run.source.contains("Object.setPrototypeOf(C, parseInt)")
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -2136,6 +2156,34 @@ mod tests {
         assert!(!oracle_loses_with_reference(&ordinary));
         assert!(matches!(
             evaluate_positive(&Config::default(), &ordinary, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_super_argument_ordering_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: performs ArgumentsListEvaluation",
+        );
+        run.source = "class C extends Object { constructor() { \
+            super(evaluatedArg = true); } } \
+            Object.setPrototypeOf(C, parseInt);"
+            .to_string();
+        assert!(oracle_skips_super_arguments(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-super-arguments".into())
+        );
+        assert_eq!(
+            crate::report::classify(crate::report::Verdict::RunSkip, "oracle-xs-super-arguments"),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source = "super(evaluatedArg = true)".to_string();
+        assert!(!oracle_skips_super_arguments(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(_)
         ));
     }
