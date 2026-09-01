@@ -90,6 +90,11 @@ fn has_trap_and_in_operator() {
     agrees("'foo' in new Proxy({}, { has: function () { return true; } })");
     agrees("'missing' in new Proxy({}, { has: function () { return false; } })");
     agrees("'k' in new Proxy({ k: 1 }, {})"); // forward
+    agrees(
+        "var target = Object.create([14]); var handler = { has: function (t, k) { \
+         return this === handler && t === target && k === '1' ? false : true; } }; \
+         var array = []; Object.setPrototypeOf(array, new Proxy(target, handler)); 1 in array",
+    );
 }
 
 #[test]
@@ -226,6 +231,16 @@ fn nested_proxy_forwarding() {
     agrees(
         "var inner = new Proxy({}, { get: function () { return 'inner'; } }); \
          new Proxy(inner, {}).anything",
+    );
+    agrees(
+        "var inner = new Proxy({ foo: 2 }, {}); \
+         var outer = new Proxy(inner, { has: undefined }); \
+         ['foo' in outer, 'bar' in outer, Reflect.has(outer, 'foo')].join(',')",
+    );
+    agrees(
+        "var inner = new Proxy([1, 2], {}); \
+         var outer = new Proxy(inner, { has: undefined }); \
+         ['length' in Object.create(outer), '1' in outer, '2' in outer].join(',')",
     );
 }
 
