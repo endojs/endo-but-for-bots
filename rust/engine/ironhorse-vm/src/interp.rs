@@ -7813,6 +7813,23 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(self.iterator_identity)),
                 XS_DONT_ENUM_FLAG,
             );
+            // Array.prototype[@@iterator] is the exact same function object as
+            // Array.prototype.values. Reuse the boot method identity even when
+            // source names only the symbol, so `array[Symbol.iterator]()` and
+            // harness-generated iterable wrappers follow ordinary lookup.
+            if let Some((_, _, values)) = self
+                .proto_methods
+                .iter()
+                .find(|(holder, name, _)| *holder == self.array_proto && *name == "values")
+                .copied()
+            {
+                self.set_own_unmetered_with_flag(
+                    self.array_proto,
+                    id,
+                    Slot::of(Kind::Reference, Payload::Reference(values)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
             self.set_own_unmetered_with_flag(
                 self.string_proto,
                 id,
@@ -18961,15 +18978,61 @@ impl Interp {
                         }
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
-                    // Any other **object** source (an array-like without dense
-                    // storage, a bare iterable, a Map/Set) → the general
-                    // from-object protocol; honest skip. A Symbol/BigInt first
-                    // argument is a primitive, not an Object (its `Payload` is a
-                    // Reference to the interned symbol/bigint), so it falls
-                    // through to the length path below, where `ToNumber` throws a
-                    // catchable TypeError exactly as the spec's `ToIndex` does.
+                    // Any other **object** source (an array-like, custom
+                    // iterable, Map/Set, or proxy) first traverses the same
+                    // iterator/array-like protocol as `Array.from`. Re-enter
+                    // this constructor with the resulting dense Array so the
+                    // bounded allocation and element-coercion path above stays
+                    // single-sourced. A Symbol/BigInt first argument is a
+                    // primitive, not an Object (its `Payload` is a Reference to
+                    // the interned symbol/bigint), so it falls through to the
+                    // length path below, where `ToNumber` throws a catchable
+                    // TypeError exactly as the spec's `ToIndex` does.
                     Payload::Reference(_) if a.kind == Kind::Reference => {
-                        return Err(Halt::Unsupported("native-call:TypedArray:from-object"))
+                        let array_ctor = self
+                            .intrinsics
+                            .get("Array")
+                            .copied()
+                            .expect("Array intrinsic");
+                        let array_ctor = Slot::of(
+                            Kind::Reference,
+                            Payload::Reference(array_ctor),
+                        );
+                        let collect_base = self.stack.len();
+                        self.push(array_ctor);
+                        self.push(Slot::undefined());
+                        self.push(Slot::undefined());
+                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                        self.push(a);
+                        let collected = self.array_from(code, collect_base, 1);
+                        self.stack.truncate(collect_base);
+                        let collected = collected?;
+
+                        let typed_array_ctor = self
+                            .stack
+                            .get(base + 1)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined);
+                        let construct_base = self.stack.len();
+                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                        self.push(typed_array_ctor);
+                        self.push(Slot::undefined());
+                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                        self.push(collected);
+                        let constructed = self.call_native(
+                            Native::TypedArray(idx),
+                            construct_base,
+                            1,
+                            true,
+                            code,
+                        );
+                        match constructed {
+                            Ok(()) => self.pop(),
+                            Err(halt) => {
+                                self.stack.truncate(construct_base);
+                                return Err(halt);
+                            }
+                        }
                     }
                     // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
                     _ => {
@@ -19905,7 +19968,12 @@ impl Interp {
         let iterator_id = self
             .well_known_symbol_property_id("iterator")
             .unwrap_or(crate::value::XS_NO_ID);
-        let custom = if iterator_id == crate::value::XS_NO_ID {
+        let intrinsic_array_iterator = self.arrays.contains_key(&obj)
+            && iterator_id != crate::value::XS_NO_ID
+            && self
+                .ordinary_get_own_descriptor(obj, iterator_id)
+                .is_none();
+        let custom = if iterator_id == crate::value::XS_NO_ID || intrinsic_array_iterator {
             Slot::undefined()
         } else {
             self.ordinary_get(code, obj, iterator_id, iterable)?
@@ -30737,7 +30805,10 @@ impl Interp {
             _ => return Err(Halt::Unsupported("collection-constructor:general-iterable")),
         };
         if let Some(iterator_id) = self.well_known_symbol_property_id("iterator") {
-            if self.find_property(array, iterator_id).is_some() {
+            if self
+                .ordinary_get_own_descriptor(array, iterator_id)
+                .is_some()
+            {
                 return Err(Halt::Unsupported(
                     "collection-constructor:custom-array-iterator",
                 ));

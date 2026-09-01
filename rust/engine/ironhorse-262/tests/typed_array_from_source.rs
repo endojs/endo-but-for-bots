@@ -74,3 +74,29 @@ fn from_source_typed_array() {
     // Cross-type: a Uint8 source read into an Int32 view (value-preserving here).
     assert_result_agrees("var a = new Uint8Array([5, 6, 7]); new Int32Array(a)[1]");
 }
+
+// -------------------------------------------------------------------------
+// §3  General object sources — array-like and iterator protocol paths.
+// -------------------------------------------------------------------------
+
+#[test]
+fn from_array_like_object() {
+    assert_result_agrees(
+        "var o={0:3,2:5,length:3}; var a=new Uint8Array(o); a.length+':'+a[0]+','+a[1]+','+a[2]",
+    );
+    assert_result_agrees("var o={0:257,length:1}; new Uint8Array(o)[0]");
+}
+
+#[test]
+fn from_custom_iterable() {
+    assert_result_agrees(
+        "var o={}; o[Symbol.iterator]=function(){var i=0;return {next:function(){return i<3?{value:++i,done:false}:{done:true}}}}; var a=new Uint8Array(o); a.length+':'+a[0]+','+a[1]+','+a[2]",
+    );
+}
+
+#[test]
+fn iterable_precedes_array_like_length() {
+    assert_result_agrees(
+        "var reads=0,o={length:{valueOf:function(){reads++;return 99}}}; o[Symbol.iterator]=function(){var i=0;return {next:function(){return i<2?{value:7+i++,done:false}:{done:true}}}}; var a=new Uint8Array(o); a[0]+','+a[1]+':'+reads",
+    );
+}

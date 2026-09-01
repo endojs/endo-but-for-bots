@@ -61,6 +61,18 @@ fn custom_iterator_protocol_is_consumed() {
 }
 
 #[test]
+fn array_symbol_iterator_is_materialized() {
+    assert_oracle_result(
+        "var a=[4,5]; var it=a[Symbol.iterator](); var x=it.next(),xv=x.value,xd=x.done,y=it.next(),yv=y.value,z=it.next(); xv+':'+xd+':'+yv+':'+z.done",
+        "4:false:5:true",
+    );
+    assert_oracle_result(
+        "Array.prototype[Symbol.iterator]===Array.prototype.values",
+        "true",
+    );
+}
+
+#[test]
 fn custom_constructor_receives_iterable_shape() {
     assert_oracle_result(
         "function C(){this.calls=arguments.length} var r=Array.from.call(C,[4,5]); (r instanceof C)+':'+r.calls+':'+r.length+':'+r[0]+r[1]",
