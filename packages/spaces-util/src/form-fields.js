@@ -96,9 +96,8 @@ export const collectFormValues = (fields, values) => {
     if (fieldKind(field) === 'boolean') {
       collected[field.name] = value === true;
     } else {
-      collected[field.name] = value === undefined || value === null
-        ? ''
-        : String(value);
+      collected[field.name] =
+        value === undefined || value === null ? '' : String(value);
     }
   }
   return collected;

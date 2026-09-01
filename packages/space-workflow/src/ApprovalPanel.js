@@ -108,7 +108,9 @@ export const ApprovalPanel = ({ powers, pending, runId }) => {
           const found = matchInboxMessage(messages, ask);
           setMessage(found);
           setValues(
-            found ? initialFormValues(fieldsOf(found)) : /** @type {any} */ ({}),
+            found
+              ? initialFormValues(fieldsOf(found))
+              : /** @type {any} */ ({}),
           );
         },
         () => {
