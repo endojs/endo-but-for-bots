@@ -15195,8 +15195,9 @@ impl Interp {
                 // first, then the right operand. This order is observable when
                 // either conversion calls a guest hook. Number operands use
                 // `fx_pow`; mixed Number/BigInt operands throw TypeError.
-                // Arbitrary-precision BigInt exponentiation remains a named
-                // gap after both conversions have run.
+                // Two BigInts use exponentiation by squaring, with a bounded
+                // projected result size so an untrusted exponent cannot make
+                // the host allocate without limit.
                 XS_CODE_EXPONENTIATION => {
                     let n = self.stack.len();
                     if n < 2 {
@@ -15219,7 +15220,13 @@ impl Interp {
                     self.stack.truncate(n - 2);
                     match (a.kind, b.kind) {
                         (Kind::BigInt, Kind::BigInt) => {
-                            return Halt::Unsupported(op.name())
+                            let result = dispatch_result!(
+                                self.bigint_pow(a, b),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            self.push(result);
                         }
                         (Kind::BigInt, _) | (_, Kind::BigInt) => {
                             let error = self.build_error("TypeError", 0, 0);
@@ -18420,10 +18427,10 @@ impl Interp {
             }
             // `Number(v)` / `new Number(v)`: the primitive number is
             // ToNumber(v). ironhorse handles the numeric fast path (identity), the
-            // primitive `boolean`/`null`/`undefined` coercions, and a string
-            // (the `fxStringToNumber` whole-string parse) — all
-            // metering-neutral (no chunk); an object argument needs
-            // ToPrimitive and self-names. `new` wraps the primitive.
+            // primitive `boolean`/`null`/`undefined` coercions, a string (the
+            // `fxStringToNumber` whole-string parse), and explicit BigInt to
+            // Number conversion. A Symbol throws TypeError. `new` wraps the
+            // converted primitive.
             Native::Number => {
                 let a = arg(0);
                 let prim = match a.kind {
@@ -18441,7 +18448,18 @@ impl Interp {
                         _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
                     },
                     _ if argc == 0 => Slot::integer(0),
-                    Kind::Reference => self.to_number_value(code, a)?,
+                    Kind::Reference => {
+                        let primitive = self.to_number_value(code, a)?;
+                        match primitive.value {
+                            Payload::BigInt(off) => Slot::number(self.bigint_to_f64(off)),
+                            _ => primitive,
+                        }
+                    }
+                    Kind::BigInt => match a.value {
+                        Payload::BigInt(off) => Slot::number(self.bigint_to_f64(off)),
+                        _ => return Err(self.catchable_type_error()),
+                    },
+                    Kind::Symbol => return Err(self.catchable_type_error()),
                     _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
                 };
                 if has_target {
@@ -18480,15 +18498,15 @@ impl Interp {
                             let off = self.alloc_str_text(&bytes);
                             Slot::of(Kind::String, Payload::String(off))
                         }
-                        // `String(aBigInt)` renders through `fxBigintToString`,
-                        // whose radix-derived working-chunk allocation +
-                        // `fxBigInt_dup` + call-frame residual this stage does
-                        // not yet model computron-exactly — an honest named skip
-                        // rather than a wrong meter. (The bare-completion decimal
-                        // render, [`Self::render`], is modeled separately and
-                        // stays bit-exact.)
+                        // `String(aBigInt)` uses the same arbitrary-precision
+                        // decimal renderer as implicit ToString. The helper
+                        // charges the conversion step and result chunk; the
+                        // constructor adds no separate allocation unless this
+                        // is the `new String` wrapper path below.
                         Kind::BigInt => {
-                            return Err(Halt::Unsupported(native_unsupported_name(native)))
+                            let bytes = self.to_string_bytes_metered(a);
+                            let off = self.alloc_str_text(&bytes);
+                            Slot::of(Kind::String, Payload::String(off))
                         }
                         _ => {
                             let bytes = self.to_string_bytes_metered(a);
@@ -40373,6 +40391,127 @@ impl Interp {
             mag.push(0);
         }
         (neg, bi_trim(mag))
+    }
+
+    /// Convert a BigInt magnitude to the nearest IEEE-754 binary64 value,
+    /// using round-to-nearest, ties-to-even. Reading only the leading 53 bits
+    /// and the discarded round/sticky bits avoids an intermediate `f64`
+    /// accumulation (and therefore avoids double rounding for wide values).
+    fn bigint_to_f64(&self, off: crate::value::ChunkOffset) -> f64 {
+        let (negative, magnitude) = self.read_bigint(off);
+        if bi_is_zero(&magnitude) {
+            return 0.0;
+        }
+
+        let top = *magnitude.last().expect("a BigInt has at least one limb");
+        let bit_length = (magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize);
+        let mut exponent = bit_length - 1;
+        let discarded = bit_length.saturating_sub(53);
+
+        let bit = |position: usize| -> bool {
+            magnitude
+                .get(position / 32)
+                .is_some_and(|limb| limb & (1u32 << (position % 32)) != 0)
+        };
+        let mut significand = 0u64;
+        for position in (discarded..bit_length).rev() {
+            significand = (significand << 1) | u64::from(bit(position));
+        }
+        if bit_length < 53 {
+            significand <<= 53 - bit_length;
+        }
+
+        if discarded > 0 {
+            let round = bit(discarded - 1);
+            let sticky = (0..discarded - 1).any(bit);
+            if round && (sticky || significand & 1 != 0) {
+                significand += 1;
+                if significand == 1u64 << 53 {
+                    significand >>= 1;
+                    exponent += 1;
+                }
+            }
+        }
+
+        if exponent > 1023 {
+            return if negative {
+                f64::NEG_INFINITY
+            } else {
+                f64::INFINITY
+            };
+        }
+        let sign = u64::from(negative) << 63;
+        let biased = (exponent as u64 + 1023) << 52;
+        let fraction = significand - (1u64 << 52);
+        f64::from_bits(sign | biased | fraction)
+    }
+
+    /// BigInt exponentiation (`base ** exponent`) using exponentiation by
+    /// squaring. Negative exponents are a RangeError. The constant-result
+    /// bases `0`, `1`, and `-1` accept arbitrarily wide positive exponents;
+    /// other bases are bounded by projected result bits so adversarial source
+    /// cannot turn one opcode into an unbounded host allocation.
+    fn bigint_pow(&mut self, base: Slot, exponent: Slot) -> Result<Slot, Halt> {
+        // `bi_mul_mag` is the straightforward quadratic limb multiply. Keep
+        // the largest admitted result small enough that one guest opcode
+        // cannot monopolize the host before the next meter check.
+        const MAX_BIGINT_POW_BITS: usize = 64 * 1024;
+
+        let (Payload::BigInt(base_off), Payload::BigInt(exponent_off)) =
+            (base.value, exponent.value)
+        else {
+            return Err(self.catchable_type_error());
+        };
+        let (base_negative, base_magnitude) = self.read_bigint(base_off);
+        let (exponent_negative, exponent_magnitude) = self.read_bigint(exponent_off);
+        if exponent_negative {
+            return Err(self.catchable_range_error());
+        }
+        if bi_is_zero(&exponent_magnitude) {
+            return Ok(self.make_bigint(false, vec![1]));
+        }
+        if bi_is_zero(&base_magnitude) {
+            return Ok(self.make_bigint(false, vec![0]));
+        }
+        if base_magnitude == [1] {
+            let odd = exponent_magnitude[0] & 1 != 0;
+            return Ok(self.make_bigint(base_negative && odd, vec![1]));
+        }
+
+        let exponent = if exponent_magnitude.len() == 1 {
+            exponent_magnitude[0]
+        } else {
+            return Err(Halt::Unsupported("exponentiation:result-too-large"));
+        };
+        let top = *base_magnitude
+            .last()
+            .expect("a non-zero BigInt has a leading limb");
+        let base_bits = (base_magnitude.len() - 1) * 32
+            + (32 - top.leading_zeros() as usize);
+        let projected_bits = base_bits
+            .checked_mul(exponent as usize)
+            .ok_or(Halt::Unsupported("exponentiation:result-too-large"))?;
+        if projected_bits > MAX_BIGINT_POW_BITS {
+            return Err(Halt::Unsupported("exponentiation:result-too-large"));
+        }
+
+        let mut power = base_magnitude;
+        let mut result = vec![1u32];
+        let mut remaining = exponent;
+        while remaining != 0 {
+            if remaining & 1 != 0 {
+                result = bi_mul_mag(&result, &power);
+            }
+            remaining >>= 1;
+            if remaining != 0 {
+                power = bi_mul_mag(&power, &power);
+            }
+        }
+        let negative = base_negative && exponent & 1 != 0;
+        // The allocation meter is charged at the retained result size. Exact
+        // XS repeated-squaring work metering remains advisory in dual-run
+        // coverage; the semantic result and allocation bound are enforced.
+        Ok(self.make_bigint(negative, result))
     }
 
     /// Build a BigInt value from `(negative, limbs)`, allocating the digit
