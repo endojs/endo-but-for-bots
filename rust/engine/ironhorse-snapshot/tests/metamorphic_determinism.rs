@@ -156,7 +156,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for format version 12, marking the promise cluster
         // (`PRMS`). This fixture holds no promise, so the atom is
         // absent and only the VERS payload changes.
-        "3ff87db04dc44e6096e3c16de42e83f8d78ec232be9f4a521cd8753265327b37",
+        // Re-pinned 2026-09-01 for a boot-heap CONTENT move: the
+        // intrinsic Array iterator is now the same function object as
+        // Array.prototype.values, as required by JavaScript. Format
+        // unchanged.
+        "90853a6a148b3feff5244fd36c080c154dd4b3b9a519261cf07eacedf1fd0dd2",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -249,7 +253,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for schema 23 and format 12: the small state gains
         // the (empty here) promise-cluster section and VERS marks
         // `PRMS`, so the small leaf, the root and the seal all move.
-        "e44eed990c5fab722d0504341e37213df0d51a4262d56cbfc8180e3b58ab0310",
+        // Re-pinned with the blob on 2026-09-01: Array's intrinsic
+        // iterator/values identity changes the boot page rows, so the
+        // manifest root and seal move with that content.
+        "19a732df09c194f4671a67ba7ca360d2783f967f86f1f46a139ed91dbee220e9",
         "epoch-3 seal chain"
     );
 }
