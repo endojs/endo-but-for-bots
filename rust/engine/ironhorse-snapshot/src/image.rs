@@ -2587,6 +2587,14 @@ pub(crate) fn decode_promise_cluster(
                     "promise cluster: reaction capability is not one resolving pair",
                 ));
             }
+            // The `a`/`b` payload belongs to `Combine` alone; the
+            // writer zeroes it on every other kind, so a non-zero
+            // value is a second encoding of the same machine.
+            if r.a != 0 || r.b != 0 {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: unused reaction payload not zero",
+                ));
+            }
         }
     }
     for (row, &pending) in combinators.iter().zip(&comb_pending) {
@@ -4040,7 +4048,19 @@ pub(crate) fn check_image_slot_bounds(
                 "promise cluster: combinator's results Array has no row",
             ));
         };
-        results_lengths.push(arrays[k].length);
+        let len = arrays[k].length;
+        // `remaining` starts at the ELEMENT COUNT — which is exactly
+        // the results Array's preset length — and only ever
+        // decrements, so a value above it can only be crafted (it
+        // would leave the combinator pending after every surviving
+        // reaction drains). A `race` never decrements at all, so its
+        // remaining still EQUALS the count.
+        if row.remaining > len || (row.kind == 2 && row.remaining != len) {
+            return Err(SnapshotError::Corrupt(
+                "promise cluster: remaining outside its element count",
+            ));
+        }
+        results_lengths.push(len);
     }
     // A `Combine` reaction's element index writes the results Array at
     // the drain (`array_set_dense` grows `length` to cover it) — and on
@@ -4494,11 +4514,27 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => Vec::new(),
     };
     let temporal = match r.find(crate::format::TMPR) {
-        Some(a) => decode_temporal(a.payload)?,
+        Some(a) => {
+            let t = decode_temporal(a.payload)?;
+            if t.is_empty() {
+                return Err(SnapshotError::Corrupt(
+                    "TMPR atom present but empty; the writer omits it",
+                ));
+            }
+            t
+        }
         None => TemporalImage::default(),
     };
     let intl = match r.find(crate::format::INTL) {
-        Some(a) => decode_intl(a.payload)?,
+        Some(a) => {
+            let t = decode_intl(a.payload)?;
+            if t.is_empty() {
+                return Err(SnapshotError::Corrupt(
+                    "INTL atom present but empty; the writer omits it",
+                ));
+            }
+            t
+        }
         None => IntlTables::default(),
     };
     let iterators = match r.find(crate::format::ITER) {
@@ -4510,11 +4546,27 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => Vec::new(),
     };
     let function_state = match r.find(crate::format::FUNC) {
-        Some(a) => decode_function_state(a.payload)?,
+        Some(a) => {
+            let state = decode_function_state(a.payload)?;
+            if state.is_empty() {
+                return Err(SnapshotError::Corrupt(
+                    "FUNC atom present but empty; the writer omits it",
+                ));
+            }
+            state
+        }
         None => ironhorse_vm::FunctionStateSnapshot::default(),
     };
     let proxy_state = match r.find(crate::format::PROX) {
-        Some(a) => decode_proxy_state(a.payload)?,
+        Some(a) => {
+            let state = decode_proxy_state(a.payload)?;
+            if state.is_empty() {
+                return Err(SnapshotError::Corrupt(
+                    "PROX atom present but empty; the writer omits it",
+                ));
+            }
+            state
+        }
         None => ironhorse_vm::ProxyStateSnapshot::default(),
     };
     let accessors = match r.find(crate::format::ACCS) {
@@ -4526,7 +4578,15 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         None => Vec::new(),
     };
     let private_elements = match r.find(crate::format::PRIV) {
-        Some(a) => decode_private_elements(a.payload)?,
+        Some(a) => {
+            let state = decode_private_elements(a.payload)?;
+            if state.is_empty() {
+                return Err(SnapshotError::Corrupt(
+                    "PRIV atom present but empty; the writer omits it",
+                ));
+            }
+            state
+        }
         None => ironhorse_vm::PrivateElementSnapshot::default(),
     };
     let disposable_stacks = match r.find(crate::format::DISP) {
@@ -4615,6 +4675,25 @@ pub fn read_machine(buf: &[u8], expected_sig: &Signature) -> Result<MachineImage
         chunks.len(),
         &slot_free,
     )?;
+
+    // A container stamped with the CURRENT version must carry every
+    // atom the current writer unconditionally emits — omitting one
+    // (the reader would supply a default and the next write would put
+    // it back) is one more second-encoding shape. Older versions in
+    // the read range keep their recorded leniencies (e.g. the
+    // pre-row-6 absent `METR`); their writers no longer run, so the
+    // canonical-bytes property is claimed of current containers.
+    // Checked LAST so a malformed atom refuses by its own decoder's
+    // name first — this gate is about honest-looking omissions.
+    if version.format_version == crate::format::IRONHORSE_FORMAT_VERSION {
+        for tag in [VERS, SIGN, CREA, BLOC, HEAP, STAC, KEYS, NAME, SYMB, METR] {
+            if r.find(tag).is_none() {
+                return Err(SnapshotError::Corrupt(
+                    "container missing an atom its version always writes",
+                ));
+            }
+        }
+    }
 
     Ok(MachineImage {
         version,

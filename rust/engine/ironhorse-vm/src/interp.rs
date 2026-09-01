@@ -9962,8 +9962,16 @@ impl Interp {
                 return false;
             }
             match self.arrays.get(&crate::value::SlotIndex(c.results)) {
-                Some(data) => results_lengths.push(data.length),
-                None => return false,
+                // `remaining` starts at the element count (the results
+                // Array's preset length) and only decrements — and a
+                // race never decrements it at all.
+                Some(data)
+                    if c.remaining <= data.length
+                        && (c.kind != 2 || c.remaining == data.length) =>
+                {
+                    results_lengths.push(data.length)
+                }
+                _ => return false,
             }
         }
         let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
@@ -10012,8 +10020,12 @@ impl Interp {
                 .iter()
                 .map(|r| {
                     let kind = match r.kind {
-                        0 if fn_pair_ok(&r.resolve, &r.reject) => ReactionKind::User,
-                        1 if fn_pair_ok(&r.resolve, &r.reject) => ReactionKind::FinallyReturn,
+                        0 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
+                            ReactionKind::User
+                        }
+                        1 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
+                            ReactionKind::FinallyReturn
+                        }
                         // The element index must sit inside the results
                         // Array's carried length (the creation preset —
                         // `array_set_dense` would grow past it and the

@@ -675,13 +675,20 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                     b: c.u32() % results.length,
                 };
                 prms_promises[host].reactions.push(reaction);
+                let kind = c.byte() % 4;
+                // `remaining` sits in [pending, element count]; the one
+                // pending reaction makes the floor 1, the results
+                // Array's preset length is the ceiling — and a race
+                // (kind 2) never decrements, so it stays AT the count.
+                let remaining = if kind == 2 {
+                    results.length
+                } else {
+                    1 + c.u32() % results.length
+                };
                 prms_combinators.push(ironhorse_vm::CombinatorRow {
-                    kind: c.byte() % 4,
+                    kind,
                     derived: prms_promises[pending[(c.byte() as usize) % pending.len()]].owner,
-                    // Exactly one pending element reaction names this
-                    // combinator, so any remaining >= 1 satisfies the
-                    // underflow gate.
-                    remaining: 1 + c.u32() % 4,
+                    remaining,
                     results: results.owner,
                     done: c.byte() % 2 == 0,
                 });
