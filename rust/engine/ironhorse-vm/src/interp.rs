@@ -2116,6 +2116,11 @@ pub enum NativeMethod {
     /// `BigInt.prototype.valueOf()`: unwrap a BigInt wrapper or return a
     /// primitive BigInt receiver unchanged.
     BigIntValueOf,
+    /// `BigInt.asIntN(bits, bigint)`: truncate to a signed `bits`-wide value.
+    BigIntAsIntN,
+    /// `BigInt.asUintN(bits, bigint)`: truncate to an unsigned `bits`-wide
+    /// value.
+    BigIntAsUintN,
     /// `Symbol.for(key)` (`fx_Symbol_for`): the shared registry symbol for
     /// `key` — the same symbol on repeat calls (registry-interned identity).
     SymbolFor,
@@ -6360,6 +6365,12 @@ impl Interp {
                 let to_string = self.alloc_method(NativeMethod::BigIntToString);
                 self.proto_methods.push((proto, "toString", to_string));
             }
+            let as_int_n = self.alloc_named_method(NativeMethod::BigIntAsIntN, "asIntN", 2);
+            self.proto_methods.push((bigint_ctor, "asIntN", as_int_n));
+            let as_uint_n =
+                self.alloc_named_method(NativeMethod::BigIntAsUintN, "asUintN", 2);
+            self.proto_methods
+                .push((bigint_ctor, "asUintN", as_uint_n));
         }
         self.create_math();
         self.create_string_proto();
@@ -14016,6 +14027,22 @@ impl Interp {
                         // threaded through so a callback-taking method
                         // (`forEach`/`map`/…) can drive the callback via
                         // `run_callback`.
+                        // Native methods have `[[Call]]` but no `[[Construct]]`;
+                        // reject a direct `new method()` just as the
+                        // `Reflect.construct` constructor gate already does.
+                        if has_target {
+                            dispatch_result!(
+                                Err::<(), Halt>(self.catchable_type_error()),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            if self.check_meter() == MeterCheck::Abort {
+                                return Halt::MeterAbort;
+                            }
+                            pc = ret_pc;
+                            continue;
+                        }
                         dispatch_result!(
                             self.call_native_method(m, base, argc, code),
                             pc,
@@ -27292,6 +27319,16 @@ impl Interp {
                 this
             }
             NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
+            NativeMethod::BigIntAsIntN | NativeMethod::BigIntAsUintN => {
+                let bits = self.to_bigint_width(code, arg0)?;
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let value = self.to_bigint_value(code, arg1)?;
+                self.bigint_as_n(value, bits, m == NativeMethod::BigIntAsIntN)?
+            }
             NativeMethod::BigIntToString => {
                 let value = self.bigint_this_value(this)?;
                 let radix = if arg0.kind == Kind::Undefined {
@@ -40589,6 +40626,109 @@ impl Interp {
         }
     }
 
+    /// `ToIndex(bits)` for `BigInt.asIntN` / `BigInt.asUintN`.
+    fn to_bigint_width(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
+        if matches!(value.kind, Kind::Symbol | Kind::BigInt) {
+            return Err(self.catchable_type_error());
+        }
+        let number = self.to_number_value(code, value)?;
+        if matches!(number.kind, Kind::Symbol | Kind::BigInt) {
+            return Err(self.catchable_type_error());
+        }
+        let n = to_number(&number);
+        let integer = if n.is_nan() { 0.0 } else { n.trunc() };
+        if integer < 0.0 || !integer.is_finite() || integer > 9_007_199_254_740_991.0 {
+            return Err(self.catchable_range_error());
+        }
+        Ok(integer as u64)
+    }
+
+    /// The general `ToBigInt` operation used by the width-limiting statics.
+    /// Unlike the public `BigInt()` constructor, this rejects Number values.
+    fn to_bigint_value(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+        let primitive = self.to_primitive(code, value, false)?;
+        match primitive.kind {
+            Kind::BigInt => Ok(primitive),
+            Kind::Boolean => Ok(self.make_bigint(
+                false,
+                vec![u32::from(matches!(primitive.value, Payload::Boolean(true)))],
+            )),
+            Kind::String => {
+                let text = match primitive.value {
+                    Payload::String(off) => self.str_text(off),
+                    _ => return Err(self.catchable_syntax_error()),
+                };
+                let (negative, magnitude) = parse_bigint_string(&text)
+                    .ok_or_else(|| self.catchable_syntax_error())?;
+                Ok(self.make_bigint(negative, magnitude))
+            }
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    /// Reduce `value` modulo `2**bits`, interpreting the retained high bit as
+    /// a sign bit for `asIntN`. Widths that would require an adversarially
+    /// large positive result are named unsupported; widths wider than an
+    /// already-representable value return that value without allocation.
+    fn bigint_as_n(&mut self, value: Slot, bits: u64, signed: bool) -> Result<Slot, Halt> {
+        const MAX_BIGINT_WIDTH_BITS: u64 = 64 * 1024;
+
+        let Payload::BigInt(off) = value.value else {
+            return Err(self.catchable_type_error());
+        };
+        let (negative, magnitude) = self.read_bigint(off);
+        if bits == 0 || bi_is_zero(&magnitude) {
+            return Ok(self.make_bigint(false, vec![0]));
+        }
+        let top = *magnitude
+            .last()
+            .expect("a non-zero BigInt has a leading limb");
+        let magnitude_bits = (magnitude.len() as u64 - 1) * 32
+            + u64::from(32 - top.leading_zeros());
+
+        if !negative && ((!signed && magnitude_bits <= bits) || (signed && magnitude_bits < bits))
+        {
+            return Ok(value);
+        }
+        if negative && signed {
+            let minimum_at_width = magnitude_bits == bits
+                && magnitude.iter().take(magnitude.len() - 1).all(|&limb| limb == 0)
+                && top.is_power_of_two();
+            if magnitude_bits < bits || minimum_at_width {
+                return Ok(value);
+            }
+        }
+        if bits > MAX_BIGINT_WIDTH_BITS {
+            return Err(Halt::Unsupported("BigInt.asN:result-too-large"));
+        }
+
+        let limb_count = bits.div_ceil(32) as usize;
+        let mut unsigned = vec![0u32; limb_count];
+        let copied = limb_count.min(magnitude.len());
+        unsigned[..copied].copy_from_slice(&magnitude[..copied]);
+        if negative {
+            for limb in &mut unsigned {
+                *limb = !*limb;
+            }
+            bi_add_one_in_place(&mut unsigned);
+        }
+        bi_mask_width(&mut unsigned, bits);
+
+        if signed {
+            let sign_index = (bits - 1) as usize;
+            let sign_set = unsigned[sign_index / 32] & (1u32 << (sign_index % 32)) != 0;
+            if sign_set {
+                for limb in &mut unsigned {
+                    *limb = !*limb;
+                }
+                bi_add_one_in_place(&mut unsigned);
+                bi_mask_width(&mut unsigned, bits);
+                return Ok(self.make_bigint(true, unsigned));
+            }
+        }
+        Ok(self.make_bigint(false, unsigned))
+    }
+
     /// BigInt exponentiation (`base ** exponent`) using exponentiation by
     /// squaring. Negative exponents are a RangeError. The constant-result
     /// bases `0`, `1`, and `-1` accept arbitrarily wide positive exponents;
@@ -44810,6 +44950,28 @@ fn bi_trim(mut mag: Vec<u32>) -> Vec<u32> {
 
 fn bi_is_zero(mag: &[u32]) -> bool {
     mag.iter().all(|&d| d == 0)
+}
+
+/// Add one modulo the fixed width of `limbs`.
+fn bi_add_one_in_place(limbs: &mut [u32]) {
+    for limb in limbs {
+        let (next, carry) = limb.overflowing_add(1);
+        *limb = next;
+        if !carry {
+            break;
+        }
+    }
+}
+
+/// Clear the unused high bits in a fixed-width little-endian limb vector.
+fn bi_mask_width(limbs: &mut [u32], bits: u64) {
+    let retained = bits % 32;
+    if retained != 0 {
+        let mask = (1u32 << retained) - 1;
+        if let Some(top) = limbs.last_mut() {
+            *top &= mask;
+        }
+    }
 }
 
 /// Compare two magnitudes (already trimmed): Ordering of `a` vs `b`.
