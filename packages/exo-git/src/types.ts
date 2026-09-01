@@ -239,6 +239,22 @@ export type GitRemoteCredential =
  * This is host-private because `ensureCredentialUsable()` exposes
  * native credential material.
  */
+/**
+ * What a holder can learn about the credential a remote would push with,
+ * without spending it. `required: false` is the whole record for a remote
+ * that needs no credential; the remaining fields are present only when one
+ * is required. Material is never included.
+ */
+export type RemoteCredentialHealth =
+  | { required: false }
+  | {
+      required: true;
+      kind: 'bearer' | 'basic';
+      audience: string;
+      available: boolean;
+      revoked: boolean;
+    };
+
 export type GitRemoteEndpoint = {
   url: string;
   origin: string;
@@ -251,6 +267,7 @@ export type GitRemoteEndpoint = {
     operation: string,
     version: number | undefined,
   ) => void;
+  credentialHealth: () => RemoteCredentialHealth;
   watchChange: (onChange: () => void) => (() => void) | undefined;
 };
 

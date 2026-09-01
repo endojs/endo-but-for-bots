@@ -529,6 +529,9 @@ test('GitRemoteInterface rejects a fetch result whose text exceeds the guard cei
     inspect: async () => {
       throw new Error('not needed');
     },
+    credentialHealth: async () => {
+      throw new Error('not needed');
+    },
     fetch: async () =>
       harden({
         updatedRefs: harden([]),
@@ -548,6 +551,9 @@ test('GitRemoteInterface rejects a fetch result whose updatedRefs exceeds the gu
   const exo = makeExo('GitRemote', GitRemoteInterface, {
     help: () => '',
     inspect: async () => {
+      throw new Error('not needed');
+    },
+    credentialHealth: async () => {
       throw new Error('not needed');
     },
     fetch: async () =>
@@ -578,6 +584,9 @@ test('GitRemoteInterface accepts a fetch result exactly at the guard ceiling', a
   const exo = makeExo('GitRemote', GitRemoteInterface, {
     help: () => '',
     inspect: async () => {
+      throw new Error('not needed');
+    },
+    credentialHealth: async () => {
       throw new Error('not needed');
     },
     fetch: async () =>

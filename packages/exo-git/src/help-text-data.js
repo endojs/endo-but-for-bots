@@ -116,6 +116,8 @@ export const helpTextEntries = harden([
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("push") returns documentation for the push method',
       inspect:
         "inspect() -> Promise<RemoteSnapshot>\nRead the remote's name, URL, and current policy.\nThrows once the remote has been revoked.",
+      credentialHealth:
+        'credentialHealth() -> Promise<RemoteCredentialHealth>\nReport whether the credential this remote would push with is usable,\nwithout using it.\nA credential holds its material in process memory, so a daemon restart\nleaves the record unavailable and the next push would otherwise be the\nfirst thing to say so.\n`required: false` is the whole answer for a remote that needs no\ncredential; otherwise the result carries `kind`, `audience`, `available`,\nand `revoked`.\nThis reports health only and never the credential material, which is why\nit is separate from inspect(), whose snapshot is policy alone.',
       fetch:
         "fetch(options?) -> Promise<RemoteOperationResult>\nFetch the policy's fetch refspecs from the remote.\n`prune: true` requires `allowDelete` and `tags: true` requires\n`allowTags`.",
       pull: 'pull(options?) -> Promise<RemotePullResult>\nFetch and then integrate the result into the current branch.\n`strategy` is "ff-only" (the default), "merge", or "rebase", and `branch`\nmust be a ref the fetch policy is allowed to populate.\nThe result reports the fetch, the integration kind, and the new head.',
