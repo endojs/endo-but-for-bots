@@ -41341,20 +41341,18 @@ impl Interp {
         let a = self.to_number_value(code, a_value)?;
         let b = self.to_number_value(code, b_value)?;
         self.stack.truncate(n - 2);
-        // BigInt `-`/`*` (both BigInt); `/`/`%` and any mixed BigInt/number
-        // self-name (the caller reports the skip / TypeError).
+        // ToNumeric has completed left-to-right above. Arithmetic with one
+        // BigInt and one Number is a catchable TypeError; two BigInts stay in
+        // the arbitrary-precision domain for every binary arithmetic op.
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            match self
-                .try_bigint_binop(op, a, b)
-                .map_err(|_| Halt::Unsupported("to_numeric:mixed-bigint"))?
-            {
+            match self.try_bigint_binop(op, a, b)? {
                 Some(r) => {
                     self.push(r);
                     return Ok(());
                 }
                 None => {}
             }
-            return Err(Halt::Unsupported("to_numeric:mixed-bigint"));
+            return Err(self.catchable_type_error());
         }
         self.push(apply_arith(op, &a, &b));
         Ok(())
@@ -41432,27 +41430,59 @@ impl Interp {
         }
         // A mixed string/numeric comparison converts both operands to numbers
         // after the primitive step below.
-        // BigInt relational (`<`/`<=`/`>`/`>=` → `fxBigIntCompare` with the
-        // less/equal/more flags). Both BigInt: sign+magnitude order, no residual
-        // beyond dispatch (the compare neither allocates nor meters a digit
-        // step). A BigInt mixed with a Number/Boolean needs XS's fractional-
-        // delta tie-break path (unmodeled) — an honest named skip.
+        // BigInt relational (`<`/`<=`/`>`/`>=`). String operands use
+        // StringToBigInt (an invalid integer string makes the comparison
+        // undefined/false); other primitives use ToNumeric and compare the
+        // exact mathematical values. In particular, never round the BigInt to
+        // f64 at this boundary: values around 2**53 depend on the Number's
+        // fractional/integer position relative to the exact BigInt.
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            if let (Payload::BigInt(x), Payload::BigInt(y)) = (a.value, b.value) {
-                let (nx, mx) = self.read_bigint(x);
-                let (ny, my) = self.read_bigint(y);
-                let ord = bi_cmp(nx, &mx, ny, &my);
-                use std::cmp::Ordering;
-                let r = match op {
-                    RelOp::Less => ord == Ordering::Less,
-                    RelOp::LessEqual => ord != Ordering::Greater,
-                    RelOp::More => ord == Ordering::Greater,
-                    RelOp::MoreEqual => ord != Ordering::Less,
-                };
-                self.push(Slot::boolean(r));
-                return Ok(());
-            }
-            return Err(Halt::Unsupported("to_numeric:mixed-bigint"));
+            let ordering = match (a.value, b.value) {
+                (Payload::BigInt(x), Payload::BigInt(y)) => {
+                    let (nx, mx) = self.read_bigint(x);
+                    let (ny, my) = self.read_bigint(y);
+                    Some(bi_cmp(nx, &mx, ny, &my))
+                }
+                (Payload::BigInt(x), Payload::String(y)) => {
+                    let text = self.str_text(y);
+                    parse_bigint_string(&text).map(|(ny, my)| {
+                        let (nx, mx) = self.read_bigint(x);
+                        bi_cmp(nx, &mx, ny, &my)
+                    })
+                }
+                (Payload::String(x), Payload::BigInt(y)) => {
+                    let text = self.str_text(x);
+                    parse_bigint_string(&text).map(|(nx, mx)| {
+                        let (ny, my) = self.read_bigint(y);
+                        bi_cmp(nx, &mx, ny, &my)
+                    })
+                }
+                (Payload::BigInt(x), _) => {
+                    let number = self.to_number_value(code, b)?;
+                    if number.kind == Kind::BigInt {
+                        unreachable!("the both-BigInt case was handled above");
+                    }
+                    self.compare_bigint_number(x, to_number(&number))
+                }
+                (_, Payload::BigInt(y)) => {
+                    let number = self.to_number_value(code, a)?;
+                    if number.kind == Kind::BigInt {
+                        unreachable!("the both-BigInt case was handled above");
+                    }
+                    self.compare_bigint_number(y, to_number(&number))
+                        .map(std::cmp::Ordering::reverse)
+                }
+                _ => unreachable!("a BigInt kind carries a BigInt payload"),
+            };
+            use std::cmp::Ordering;
+            let r = ordering.is_some_and(|ord| match op {
+                RelOp::Less => ord == Ordering::Less,
+                RelOp::LessEqual => ord != Ordering::Greater,
+                RelOp::More => ord == Ordering::Greater,
+                RelOp::MoreEqual => ord != Ordering::Less,
+            });
+            self.push(Slot::boolean(r));
+            return Ok(());
         }
         let x = to_number(&self.to_number_value(code, a)?);
         let y = to_number(&self.to_number_value(code, b)?);
@@ -41779,31 +41809,26 @@ impl Interp {
         }
         let a = self.to_primitive(code, self.stack[n - 2], false)?;
         let b = self.to_primitive(code, self.stack[n - 1], false)?;
-        // BigInt `+` (both BigInt); a BigInt mixed with a non-BigInt — including
-        // a string, whose concat metering over a BigInt is not yet modeled —
-        // self-names.
+        // After ToPrimitive, either String selects concatenation and ToString
+        // accepts a BigInt. Otherwise two BigInts add, while a BigInt mixed
+        // with a Number throws the catchable TypeError from ToNumeric.
+        if a.kind == Kind::String || b.kind == Kind::String {
+            self.stack.truncate(n - 2);
+            self.concat_add(a, b);
+            return Ok(());
+        }
         if a.kind == Kind::BigInt || b.kind == Kind::BigInt {
-            if let Some(r) = self
-                .try_bigint_binop(ArithOp::Add, a, b)
-                .map_err(|_| Halt::Unsupported("add"))?
-            {
+            if let Some(r) = self.try_bigint_binop(ArithOp::Add, a, b)? {
                 self.stack.truncate(n - 2);
                 self.push(r);
                 return Ok(());
             }
-            return Err(Halt::Unsupported("add"));
+            return Err(self.catchable_type_error());
         }
-        if a.kind == Kind::String || b.kind == Kind::String {
-            self.stack.truncate(n - 2);
-            self.concat_add(a, b);
-            Ok(())
-        } else {
-            self.stack.truncate(n - 2);
-            self.push(a);
-            self.push(b);
-            self.binary_arith(code, ArithOp::Add)
-                .map_err(|_| Halt::Unsupported("add"))
-        }
+        self.stack.truncate(n - 2);
+        self.push(a);
+        self.push(b);
+        self.binary_arith(code, ArithOp::Add)
     }
 
     /// String `+`: `ToString` both operands and concatenate, metering
@@ -42236,22 +42261,33 @@ impl Interp {
     /// subtract `max(a,b)`, a multiply `a.size+b.size`; then the digit step
     /// `mxBigInt_meter(result_size)` = `(result_size - 1) * XS_BIGINT_METERING`
     /// over the trimmed result size (XS trims `rr->size` in `uadd`/`usub`/
-    /// `umul`); then the calibrated frame residual. `/`/`%`/`**` are not modeled
-    /// (their long-division / repeated-squaring metering is a later increment) —
-    /// the caller self-names them.
+    /// `umul`); then the calibrated frame residual. Division and remainder use
+    /// limb long division, truncate the quotient toward zero, and give the
+    /// remainder the dividend's sign. Their retained-result allocation is
+    /// metered here; exact XS long-division work calibration remains advisory.
     fn bigint_arith(
         &mut self,
         op: ArithOp,
         a_off: crate::value::ChunkOffset,
         b_off: crate::value::ChunkOffset,
-    ) -> Result<Slot, ()> {
+    ) -> Result<Slot, Halt> {
         let (na, ma) = self.read_bigint(a_off);
         let (nb, mb) = self.read_bigint(b_off);
         let (neg, mag) = match op {
             ArithOp::Add => bi_add(na, &ma, nb, &mb),
             ArithOp::Sub => bi_add(na, &ma, !nb, &mb),
             ArithOp::Mul => bi_mul(na, &ma, nb, &mb),
-            ArithOp::Div | ArithOp::Mod => return Err(()),
+            ArithOp::Div | ArithOp::Mod => {
+                if bi_is_zero(&mb) {
+                    return Err(self.catchable_range_error());
+                }
+                let (quotient, remainder) = bi_div_rem_mag(&ma, &mb);
+                if op == ArithOp::Div {
+                    (na != nb && !bi_is_zero(&quotient), quotient)
+                } else {
+                    (na && !bi_is_zero(&remainder), remainder)
+                }
+            }
         };
         // XS's per-op allocation size (`fxBigInt_alloc` limb count), which is
         // what `fxNewChunk` meters — distinct from the trimmed `bigint.size`.
@@ -42274,7 +42310,7 @@ impl Interp {
                 }
             }
             ArithOp::Mul => (ma.len() + mb.len()) as u64,
-            ArithOp::Div | ArithOp::Mod => unreachable!(),
+            ArithOp::Div | ArithOp::Mod => mag.len() as u64,
         };
         self.meter.tick_chunk_new(alloc_limbs * 4);
         let size = mag.len() as u64; // trimmed to XS's post-op `rr->size`
@@ -42284,18 +42320,57 @@ impl Interp {
         Ok(self.store_bigint(neg, mag))
     }
 
-    /// If `a`/`b` involve a BigInt, dispatch the op: both BigInt → the BigInt
-    /// arithmetic; a BigInt mixed with any non-BigInt → `Err` (a TypeError in
-    /// JS, self-named as an honest skip). Returns `Ok(None)` when neither is a
-    /// BigInt (the caller takes its numeric path).
-    fn try_bigint_binop(&mut self, op: ArithOp, a: Slot, b: Slot) -> Result<Option<Slot>, ()> {
+    /// If `a`/`b` involve a BigInt, dispatch the op: both BigInt → BigInt
+    /// arithmetic; a BigInt mixed with any non-BigInt → catchable TypeError.
+    /// Returns `Ok(None)` when neither is a BigInt.
+    fn try_bigint_binop(&mut self, op: ArithOp, a: Slot, b: Slot) -> Result<Option<Slot>, Halt> {
         if a.kind != Kind::BigInt && b.kind != Kind::BigInt {
             return Ok(None);
         }
         match (a.value, b.value) {
             (Payload::BigInt(x), Payload::BigInt(y)) => Ok(Some(self.bigint_arith(op, x, y)?)),
-            _ => Err(()),
+            _ => Err(self.catchable_type_error()),
         }
+    }
+
+    /// Compare an exact BigInt with an IEEE-754 Number without converting the
+    /// BigInt to f64. `None` represents the abstract relational comparison's
+    /// undefined result for NaN.
+    fn compare_bigint_number(
+        &self,
+        bigint: crate::value::ChunkOffset,
+        number: f64,
+    ) -> Option<std::cmp::Ordering> {
+        use std::cmp::Ordering;
+        if number.is_nan() {
+            return None;
+        }
+        if number == f64::INFINITY {
+            return Some(Ordering::Less);
+        }
+        if number == f64::NEG_INFINITY {
+            return Some(Ordering::Greater);
+        }
+
+        let (bigint_negative, bigint_magnitude) = self.read_bigint(bigint);
+        let truncated = number.trunc();
+        let (number_negative, number_magnitude) = number_to_bigint(truncated);
+        let ordering = bi_cmp(
+            bigint_negative,
+            &bigint_magnitude,
+            number_negative,
+            &number_magnitude,
+        );
+        if ordering != Ordering::Equal || number == truncated {
+            return Some(ordering);
+        }
+        // The BigInt equals trunc(number). A positive fractional Number lies
+        // just above it; a negative fractional Number lies just below it.
+        Some(if number.is_sign_positive() {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        })
     }
 }
 
@@ -44408,7 +44483,7 @@ fn regexp_flag_bit_for(g: RegExpGetterIds, id: u16) -> Option<u32> {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq)]
 enum ArithOp {
     Add,
     Sub,
@@ -46417,6 +46492,81 @@ fn bi_mul_mag(a: &[u32], b: &[u32]) -> Vec<u32> {
         out[i + b.len()] = (out[i + b.len()] as u64 + carry) as u32;
     }
     bi_trim(out)
+}
+
+/// Unsigned magnitude division. Returns `(quotient, remainder)`, both
+/// trimmed. The one-limb path covers the common case in linear time; the
+/// general path is binary long division over little-endian limbs.
+fn bi_div_rem_mag(dividend: &[u32], divisor: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    use std::cmp::Ordering;
+    debug_assert!(!bi_is_zero(divisor));
+    match bi_cmp_mag(dividend, divisor) {
+        Ordering::Less => return (vec![0], dividend.to_vec()),
+        Ordering::Equal => return (vec![1], vec![0]),
+        Ordering::Greater => {}
+    }
+
+    if divisor.len() == 1 {
+        let divisor = divisor[0] as u64;
+        let mut quotient = vec![0u32; dividend.len()];
+        let mut remainder = 0u64;
+        for i in (0..dividend.len()).rev() {
+            let wide = (remainder << 32) | dividend[i] as u64;
+            quotient[i] = (wide / divisor) as u32;
+            remainder = wide % divisor;
+        }
+        return (bi_trim(quotient), vec![remainder as u32]);
+    }
+
+    let dividend_bits = bi_bit_length(dividend);
+    let divisor_bits = bi_bit_length(divisor);
+    let shift = dividend_bits - divisor_bits;
+    let mut shifted_divisor = bi_shl_bits(divisor, shift);
+    let mut remainder = dividend.to_vec();
+    let mut quotient = vec![0u32; shift / 32 + 1];
+    for bit in (0..=shift).rev() {
+        if bi_cmp_mag(&remainder, &shifted_divisor) != Ordering::Less {
+            remainder = bi_sub_mag(&remainder, &shifted_divisor);
+            quotient[bit / 32] |= 1u32 << (bit % 32);
+        }
+        bi_shr_one_in_place(&mut shifted_divisor);
+    }
+    (bi_trim(quotient), bi_trim(remainder))
+}
+
+fn bi_bit_length(magnitude: &[u32]) -> usize {
+    let top = *magnitude
+        .last()
+        .expect("a BigInt magnitude has at least one limb");
+    (magnitude.len() - 1) * 32 + (32 - top.leading_zeros() as usize)
+}
+
+fn bi_shl_bits(magnitude: &[u32], bits: usize) -> Vec<u32> {
+    let limb_shift = bits / 32;
+    let bit_shift = bits % 32;
+    let mut out = vec![0u32; magnitude.len() + limb_shift + usize::from(bit_shift != 0)];
+    let mut carry = 0u64;
+    for (i, &limb) in magnitude.iter().enumerate() {
+        let wide = ((limb as u64) << bit_shift) | carry;
+        out[i + limb_shift] = wide as u32;
+        carry = wide >> 32;
+    }
+    if carry != 0 {
+        out[magnitude.len() + limb_shift] = carry as u32;
+    }
+    bi_trim(out)
+}
+
+fn bi_shr_one_in_place(magnitude: &mut Vec<u32>) {
+    let mut carry = 0u32;
+    for limb in magnitude.iter_mut().rev() {
+        let next_carry = *limb & 1;
+        *limb = (*limb >> 1) | (carry << 31);
+        carry = next_carry;
+    }
+    while magnitude.len() > 1 && magnitude.last() == Some(&0) {
+        magnitude.pop();
+    }
 }
 
 /// Signed add of `(neg_a, a) + (neg_b, b)` → `(neg, mag)`, trimmed. A `-0`
