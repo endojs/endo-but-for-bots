@@ -100,6 +100,8 @@ fn array_like_search_family_with_from_index() {
     agrees("Array.prototype.includes.call({length: 3, 0: 1, 1: NaN, 2: 3}, NaN)");
     agrees("Array.prototype.includes.call({length: 3, 0: 1, 1: 2, 2: 3}, 2, -1)");
     agrees("Array.prototype.includes.call({length: 3, 0: 1, 1: 2, 2: 3}, 4)");
+    agrees("try { Array.prototype.indexOf.call({length: 1, 0: 'x'}, 'x', 0n); false } catch (e) { e instanceof TypeError }");
+    agrees("try { Array.prototype.at.call({length: 1, 0: 'x'}, {valueOf:function(){return 0n}}); false } catch (e) { e instanceof TypeError }");
 }
 
 #[test]
