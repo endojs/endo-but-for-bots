@@ -14517,8 +14517,14 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_BIT_NOT => {
-                    let a = self.pop();
-                    if a.kind == Kind::String {
+                    let raw = self.pop();
+                    let a = dispatch_result!(
+                        self.to_number_value(code, raw),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    if a.kind == Kind::BigInt {
                         return Halt::Unsupported(op.name());
                     }
                     self.push(Slot::integer(!to_int32(to_number(&a))));
@@ -14591,11 +14597,13 @@ impl Interp {
 
                 // ---- unary ------------------------------------------
                 XS_CODE_MINUS => {
-                    let a = self.pop();
-                    // `-string` needs ToNumber(string); defer.
-                    if a.kind == Kind::String {
-                        return Halt::Unsupported(op.name());
-                    }
+                    let raw = self.pop();
+                    let a = dispatch_result!(
+                        self.to_number_value(code, raw),
+                        pc,
+                        self,
+                        return_depth
+                    );
                     // `-aBigInt` (XS_CODE_MINUS general path →
                     // `fxToNumericNumberUnary(the, a, gxTypeBigInt._neg)`):
                     // `fxBigInt_neg` copies the magnitude into a fresh chunk
@@ -14612,14 +14620,27 @@ impl Interp {
                     pc += size as usize;
                 }
                 XS_CODE_PLUS => {
-                    let a = self.pop();
-                    // ToNumber; an integer stays an integer. `+string` needs
-                    // string→number parsing; defer.
-                    match a.kind {
-                        Kind::Integer => self.push(a),
-                        Kind::String => return Halt::Unsupported(op.name()),
-                        _ => self.push(Slot::number(to_number(&a))),
+                    let raw = self.pop();
+                    let a = dispatch_result!(
+                        self.to_number_value(code, raw),
+                        pc,
+                        self,
+                        return_depth
+                    );
+                    // Unary plus performs ToNumber rather than ToNumeric, so
+                    // a BigInt is a catchable TypeError. Preserve XS's integer
+                    // fast kind for every other integral conversion.
+                    if a.kind == Kind::BigInt {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(
+                            self.raise_js(error),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        continue;
                     }
+                    self.push(a);
                     pc += size as usize;
                 }
                 XS_CODE_NOT => {
