@@ -2110,6 +2110,12 @@ pub enum NativeMethod {
     /// symbol primitive itself (unwrapping a Symbol wrapper object, though
     /// ironhorse's covered grammar has only the primitive receiver).
     SymbolValueOf,
+    /// `BigInt.prototype.toString([radix])`: render the primitive/wrapper
+    /// receiver in radix 2 through 36.
+    BigIntToString,
+    /// `BigInt.prototype.valueOf()`: unwrap a BigInt wrapper or return a
+    /// primitive BigInt receiver unchanged.
+    BigIntValueOf,
     /// `Symbol.for(key)` (`fx_Symbol_for`): the shared registry symbol for
     /// `key` — the same symbol on repeat calls (registry-interned identity).
     SymbolFor,
@@ -3291,6 +3297,7 @@ pub enum Native {
     Function,
     Boolean,
     Symbol,
+    BigInt,
     Number,
     String,
     Date,
@@ -3384,6 +3391,7 @@ impl Native {
             Native::Function => "Function",
             Native::Boolean => "Boolean",
             Native::Symbol => "Symbol",
+            Native::BigInt => "BigInt",
             Native::Number => "Number",
             Native::String => "String",
             Native::Date => "Date",
@@ -3454,6 +3462,7 @@ impl Native {
             Native::Object
             | Native::Function
             | Native::Boolean
+            | Native::BigInt
             | Native::Number
             | Native::String
             | Native::Array
@@ -3480,6 +3489,7 @@ impl Native {
             ("Function", Native::Function),
             ("Boolean", Native::Boolean),
             ("Symbol", Native::Symbol),
+            ("BigInt", Native::BigInt),
             ("Number", Native::Number),
             ("String", Native::String),
             ("Date", Native::Date),
@@ -4208,6 +4218,9 @@ pub struct Interp {
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
+    /// The realm's `%BigInt.prototype%` (a boot object) — the box target for a
+    /// primitive bigint's method access (`(42n).toString(2)`, …).
+    bigint_proto: crate::value::SlotIndex,
     /// The global symbol registry (`Symbol.for`/`keyFor`, XS's `symbolTable`):
     /// the registry key → the canonical symbol-description slot that is the
     /// registered symbol's identity, so `Symbol.for(k) === Symbol.for(k)`.
@@ -5336,6 +5349,7 @@ impl Interp {
             date_proto: crate::value::SlotIndex::NULL,
             dates: std::collections::HashMap::new(),
             symbol_proto: crate::value::SlotIndex::NULL,
+            bigint_proto: crate::value::SlotIndex::NULL,
             symbol_registry: std::collections::HashMap::new(),
             symbol_registry_keys: std::collections::HashMap::new(),
             symbol_key_ids: std::collections::HashMap::new(),
@@ -5485,7 +5499,12 @@ impl Interp {
                 | Native::URIError
                 | Native::AggregateError => self.slots.alloc(Slot::instance(error_proto)),
                 Native::SuppressedError => self.slots.alloc(Slot::instance(error_proto)),
-                Native::Boolean | Native::Symbol | Native::Number | Native::String | Native::Date => {
+                Native::Boolean
+                | Native::Symbol
+                | Native::BigInt
+                | Native::Number
+                | Native::String
+                | Native::Date => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
                 Native::DisposableStack | Native::AsyncDisposableStack => {
@@ -6331,6 +6350,15 @@ impl Interp {
                     let t = self.alloc_method(NativeMethod::WrapperToString);
                     self.proto_methods.push((p, "toString", t));
                 }
+            }
+        }
+        if let Some(&bigint_ctor) = self.intrinsics.get("BigInt") {
+            if let Some(proto) = self.prototype_of(bigint_ctor) {
+                self.bigint_proto = proto;
+                let value_of = self.alloc_method(NativeMethod::BigIntValueOf);
+                self.proto_methods.push((proto, "valueOf", value_of));
+                let to_string = self.alloc_method(NativeMethod::BigIntToString);
+                self.proto_methods.push((proto, "toString", to_string));
             }
         }
         self.create_math();
@@ -12088,7 +12116,15 @@ impl Interp {
                                 self.push(head);
                             }
                         }
-                        // BigInt still lacks a realm intrinsic/prototype.
+                        Kind::BigInt => {
+                            let inst = self.box_primitive_to_instance(Native::BigInt, top);
+                            let head = Slot::of(Kind::Reference, Payload::Reference(inst));
+                            if let Some(t) = self.stack.last_mut() {
+                                *t = head;
+                            } else {
+                                self.push(head);
+                            }
+                        }
                         _ => return Halt::Unsupported("to_instance:primitive-box"),
                     }
                     pc += size as usize;
@@ -13256,6 +13292,10 @@ impl Interp {
                             if !self.number_proto.is_null() =>
                         {
                             self.instance_get(self.number_proto, id)
+                        }
+                        // A primitive bigint boxes to `%BigInt.prototype%`.
+                        Payload::BigInt(_) if !self.bigint_proto.is_null() => {
+                            self.instance_get(self.bigint_proto, id)
                         }
                         _ => Slot::undefined(),
                     };
@@ -18521,6 +18561,50 @@ impl Interp {
                     prim
                 }
             }
+            // `BigInt(value)` performs ToPrimitive(number), then accepts a
+            // BigInt unchanged, Boolean as 0n/1n, an integral finite Number,
+            // or a StringIntegerLiteral. `%BigInt%` is not constructible.
+            Native::BigInt => {
+                if has_target {
+                    return Err(self.catchable_type_error());
+                }
+                if argc == 0 {
+                    return Err(self.catchable_type_error());
+                }
+                let primitive = self.to_primitive(code, arg(0), false)?;
+                match primitive.kind {
+                    Kind::BigInt => primitive,
+                    Kind::Boolean => self.make_bigint(
+                        false,
+                        vec![u32::from(matches!(primitive.value, Payload::Boolean(true)))],
+                    ),
+                    Kind::Integer => match primitive.value {
+                        Payload::Integer(i) => {
+                            let magnitude = (i as i64).unsigned_abs() as u32;
+                            self.make_bigint(i < 0, vec![magnitude])
+                        }
+                        _ => return Err(self.catchable_type_error()),
+                    },
+                    Kind::Number => match primitive.value {
+                        Payload::Number(n) if n.is_finite() && n.trunc() == n => {
+                            let (negative, magnitude) = number_to_bigint(n);
+                            self.make_bigint(negative, magnitude)
+                        }
+                        Payload::Number(_) => return Err(self.catchable_range_error()),
+                        _ => return Err(self.catchable_type_error()),
+                    },
+                    Kind::String => {
+                        let text = match primitive.value {
+                            Payload::String(off) => self.str_text(off),
+                            _ => return Err(self.catchable_syntax_error()),
+                        };
+                        let (negative, magnitude) = parse_bigint_string(&text)
+                            .ok_or_else(|| self.catchable_syntax_error())?;
+                        self.make_bigint(negative, magnitude)
+                    }
+                    _ => return Err(self.catchable_type_error()),
+                }
+            }
             // `Object([value])` / `new Object([value])` (`fx_Object`): with no
             // argument (or `undefined`/`null`), create a fresh empty ordinary
             // object; with an object argument, return it unchanged (ToObject
@@ -18556,6 +18640,10 @@ impl Interp {
                     }
                     Kind::Symbol => {
                         let inst = self.box_primitive_to_instance(Native::Symbol, a);
+                        Slot::of(Kind::Reference, Payload::Reference(inst))
+                    }
+                    Kind::BigInt => {
+                        let inst = self.box_primitive_to_instance(Native::BigInt, a);
                         Slot::of(Kind::Reference, Payload::Reference(inst))
                     }
                     _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
@@ -22927,11 +23015,7 @@ impl Interp {
                 .get("Boolean")
                 .and_then(|&c| self.ctor_prototype.get(&c).copied())
                 .unwrap_or(crate::value::SlotIndex::NULL),
-            Kind::BigInt => self
-                .intrinsics
-                .get("BigInt")
-                .and_then(|&c| self.ctor_prototype.get(&c).copied())
-                .unwrap_or(crate::value::SlotIndex::NULL),
+            Kind::BigInt => self.bigint_proto,
             _ => return None,
         };
         if proto.is_null() {
@@ -26948,6 +27032,7 @@ impl Interp {
                             Kind::String => self.string_proto,
                             Kind::Integer | Kind::Number => self.number_proto,
                             Kind::Symbol => self.symbol_proto,
+                            Kind::BigInt => self.bigint_proto,
                             Kind::Boolean => self
                                 .intrinsics
                                 .get("Boolean")
@@ -27131,6 +27216,12 @@ impl Interp {
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
+                        Payload::BigInt(_) => b"[object BigInt]",
+                        Payload::Reference(r)
+                            if matches!(self.wrapper_data.get(&r), Some(v) if v.kind == Kind::BigInt) =>
+                        {
+                            b"[object BigInt]"
+                        }
                         _ if self.is_callable_value(this) => b"[object Function]",
                         _ => b"[object Object]",
                     };
@@ -27199,6 +27290,32 @@ impl Interp {
                     return Err(Halt::Unsupported("Symbol.prototype.valueOf:non-symbol"));
                 }
                 this
+            }
+            NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
+            NativeMethod::BigIntToString => {
+                let value = self.bigint_this_value(this)?;
+                let radix = if arg0.kind == Kind::Undefined {
+                    10
+                } else {
+                    let converted = self.to_number_value(code, arg0)?;
+                    if converted.kind == Kind::BigInt {
+                        return Err(self.catchable_type_error());
+                    }
+                    let n = to_number(&converted).trunc();
+                    if !(2.0..=36.0).contains(&n) {
+                        return Err(self.catchable_range_error());
+                    }
+                    n as u32
+                };
+                let Payload::BigInt(off) = value.value else {
+                    return Err(self.catchable_type_error());
+                };
+                let (negative, magnitude) = self.read_bigint(off);
+                let rendered = bi_to_radix(negative, &magnitude, radix);
+                self.meter.tick_builtin();
+                self.meter.tick_chunk_new((rendered.len() + 1) as u64);
+                let off = self.alloc_str_text(rendered.as_bytes());
+                Slot::of(Kind::String, Payload::String(off))
             }
             // `Symbol.for(key)`: the registry symbol for `key` — the same
             // symbol identity on repeat calls. `key` must be a string in the
@@ -36430,6 +36547,16 @@ impl Interp {
             }
             return Ok(self.string_property_get(off, id));
         }
+        // A primitive BigInt boxes to `%BigInt.prototype%` for a computed
+        // property read just as it does for the static `GET_PROPERTY` path.
+        if obj.kind == Kind::BigInt && !self.bigint_proto.is_null() {
+            let id = if id == crate::value::XS_NO_ID {
+                self.intern_key(&index.to_string())
+            } else {
+                id
+            };
+            return Ok(self.instance_get(self.bigint_proto, id));
+        }
         let inst = match obj.value {
             Payload::Reference(i) => i,
             _ => return Ok(Slot::undefined()),
@@ -40446,6 +40573,22 @@ impl Interp {
         f64::from_bits(sign | biased | fraction)
     }
 
+    /// The BigInt primitive carried by a primitive or boxed receiver.
+    fn bigint_this_value(&mut self, this: Slot) -> Result<Slot, Halt> {
+        if this.kind == Kind::BigInt {
+            return Ok(this);
+        }
+        match this.value {
+            Payload::Reference(owner) => self
+                .wrapper_data
+                .get(&owner)
+                .copied()
+                .filter(|value| value.kind == Kind::BigInt)
+                .ok_or_else(|| self.catchable_type_error()),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
     /// BigInt exponentiation (`base ** exponent`) using exponentiation by
     /// squaring. Negative exponents are a RangeError. The constant-result
     /// bases `0`, `1`, and `-1` accept arbitrarily wide positive exponents;
@@ -42686,6 +42829,7 @@ fn native_unsupported_name(native: Native) -> &'static str {
         Native::Function => "native-call:Function",
         Native::Boolean => "native-call:Boolean",
         Native::Symbol => "native-call:Symbol",
+        Native::BigInt => "native-call:BigInt",
         Native::Number => "native-call:Number",
         Native::String => "native-call:String",
         Native::Date => "native-call:Date",
@@ -44864,6 +45008,30 @@ fn bi_to_decimal(neg: bool, mag: &[u32]) -> String {
     out
 }
 
+/// Render a sign/magnitude BigInt in radix 2 through 36.
+fn bi_to_radix(negative: bool, magnitude: &[u32], radix: u32) -> String {
+    debug_assert!((2..=36).contains(&radix));
+    if bi_is_zero(magnitude) {
+        return "0".to_string();
+    }
+    let mut limbs = magnitude.to_vec();
+    let mut digits = Vec::new();
+    while !bi_is_zero(&limbs) {
+        let mut remainder = 0u64;
+        for limb in limbs.iter_mut().rev() {
+            let value = (remainder << 32) | *limb as u64;
+            *limb = (value / radix as u64) as u32;
+            remainder = value % radix as u64;
+        }
+        limbs = bi_trim(limbs);
+        digits.push(char::from_digit(remainder as u32, radix).expect("radix digit"));
+    }
+    if negative {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
 /// Render a completion value the way JS `String()` does.
 pub fn slot_to_ecma_string(s: &Slot) -> String {
     match s.value {
@@ -44954,6 +45122,57 @@ fn parse_bigint_string_u64(source: &str) -> Option<u64> {
         value = value.wrapping_mul(radix as u64).wrapping_add(digit);
     }
     Some(if negative { value.wrapping_neg() } else { value })
+}
+
+/// Parse a StringIntegerLiteral into arbitrary-precision sign/magnitude
+/// limbs. The accepted syntax matches [`parse_bigint_string_u64`], but retains
+/// every digit for the public `BigInt(string)` constructor.
+fn parse_bigint_string(source: &str) -> Option<(bool, Vec<u32>)> {
+    let mut s = source.trim();
+    if s.is_empty() {
+        return Some((false, vec![0]));
+    }
+    let mut negative = false;
+    let mut explicitly_signed = false;
+    if let Some(rest) = s.strip_prefix('-') {
+        negative = true;
+        explicitly_signed = true;
+        s = rest;
+    } else if let Some(rest) = s.strip_prefix('+') {
+        explicitly_signed = true;
+        s = rest;
+    }
+    let (radix, digits) = if !explicitly_signed {
+        if let Some(rest) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+            (16, rest)
+        } else if let Some(rest) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+            (8, rest)
+        } else if let Some(rest) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+            (2, rest)
+        } else {
+            (10, s)
+        }
+    } else {
+        (10, s)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut magnitude = vec![0u32];
+    for ch in digits.chars() {
+        let digit = ch.to_digit(radix)? as u64;
+        let mut carry = digit;
+        for limb in &mut magnitude {
+            let value = *limb as u64 * radix as u64 + carry;
+            *limb = value as u32;
+            carry = value >> 32;
+        }
+        if carry != 0 {
+            magnitude.push(carry as u32);
+        }
+    }
+    let magnitude = bi_trim(magnitude);
+    Some((negative && !bi_is_zero(&magnitude), magnitude))
 }
 
 // --- full garbage collection over machine roots and side tables (the
@@ -45057,6 +45276,7 @@ impl Interp {
             self.string_proto,
             self.number_proto,
             self.symbol_proto,
+            self.bigint_proto,
             self.promise_proto,
             self.generator_proto,
             self.async_function_proto,
