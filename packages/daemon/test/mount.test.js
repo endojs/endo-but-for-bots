@@ -73,12 +73,14 @@ test('writeText rejects empty path segment', async t => {
   });
 });
 
-test('writeText rejects path segment containing forward slash', async t => {
+test('writeText splits a slash-joined path segment', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await t.throwsAsync(() => E(mount).writeText(['a/b'], 'c'), {
-    message: /must not contain/,
-  });
+  fs.mkdirSync(path.join(rootPath, 'a'));
+  // glob() reports paths slash-joined, so the two spellings have to mean the
+  // same thing for a glob result to be usable as a path argument.
+  await E(mount).writeText(['a/b'], 'c');
+  t.is(fs.readFileSync(path.join(rootPath, 'a', 'b'), 'utf8'), 'c');
 });
 
 test('writeText rejects path segment containing backslash', async t => {
@@ -115,15 +117,14 @@ test('writeText resolves ".." segments and clamps at confinement root', async t 
   t.is(fs.readFileSync(path.join(rootPath, 'a.txt'), 'utf8'), 'data');
 });
 
-test('writeText with a slash-joined ".." string segment is treated as a single literal name', async t => {
-  // writeText uses normalizeSegments on [stringArg], so a string like
-  // 'sub/..' is NOT split by /; the slash inside the single segment
-  // triggers the validator.
+test('a slash-joined ".." resolves like the array form and stays clamped', async t => {
+  // 'sub/../..' splits to ['sub', '..', '..'], which pops back to the root and
+  // then clamps there — the same normalization the array form gets, so
+  // splitting adds no reach beyond the confinement root.
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  await t.throwsAsync(() => E(mount).writeText('sub/..', 'data'), {
-    message: /must not contain/,
-  });
+  await E(mount).writeText('sub/../../escaped.txt', 'data');
+  t.is(fs.readFileSync(path.join(rootPath, 'escaped.txt'), 'utf8'), 'data');
 });
 
 // --- assertConfined error paths ---
@@ -630,15 +631,16 @@ test('lookup results expose a kind discriminator and targeted cross-type errors'
   });
 });
 
-test('lookup explains the array and entry forms for slash-joined strings', async t => {
+test('lookup resolves a slash-joined string', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.mkdirSync(path.join(rootPath, 'dir'));
+  fs.writeFileSync(path.join(rootPath, 'dir', 'value.txt'), 'data');
 
-  const error = await t.throwsAsync(() => E(mount).lookup('dir/value.txt'), {
-    message: /array of path segments or entry\(\)/,
-  });
-  t.regex(/** @type {Error} */ (error.cause).message, /slash|segment/i);
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup('dir/value.txt')
+  );
+  t.is(await E(file).text(), 'data');
 });
 
 test('EndoMountFile.append extends the file content', async t => {
@@ -1051,4 +1053,37 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   t.true(methods.includes('streamBase64'));
   t.true(methods.includes('text'));
   t.false(methods.includes('writeText'), 'attenuated, not full file');
+});
+
+// The round trip the slash-splitting exists for: glob() reports slash-joined
+// paths, and feeding one straight back into a path-bearing method used to
+// throw "Path segment must not contain '/'".
+test('a glob result is usable as a path argument', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.mkdirSync(path.join(rootPath, 'dir'));
+  fs.writeFileSync(path.join(rootPath, 'dir', 'value.txt'), 'data');
+
+  const [globbed] = await E(mount).glob('**/*.txt');
+  t.is(globbed, 'dir/value.txt');
+  t.is(await E(mount).readText(globbed), 'data');
+});
+
+test('list accepts a slash-joined argument', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  fs.mkdirSync(path.join(rootPath, 'a'));
+  fs.mkdirSync(path.join(rootPath, 'a', 'b'));
+  fs.writeFileSync(path.join(rootPath, 'a', 'b', 'c.txt'), '');
+
+  t.deepEqual(await E(mount).list('a/b'), ['c.txt']);
+  t.deepEqual(await E(mount).list('a', 'b'), ['c.txt']);
+});
+
+test('a denied name inside a slash-joined path is still refused', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+  await t.throwsAsync(() => E(mount).readText('home/.ssh/id_rsa'), {
+    message: /Access denied/,
+  });
 });
