@@ -1346,6 +1346,13 @@ pub const STRING_METHOD_FRAME_METERING: u64 = 0;
 /// sub-computron rounding).
 pub const STRING_METERSOME_FRAME_METERING: u64 = (2 << 14) + (2 << 8);
 
+/// The fixed residual of `String.prototype.indexOf`/`lastIndexOf` beyond their
+/// matching-prefix scan ticks. The pinned XS passes an unparenthesized ternary
+/// to `mxMeterSome`; macro expansion and C precedence therefore add one *raw*
+/// tick per matching CESU-8 leading byte rather than one built-in unit. The
+/// fixed residual itself matches the other `mxMeterSome` string methods.
+pub const STRING_INDEX_FRAME_METERING: u64 = (2 << 14) + (2 << 8);
+
 /// The native residual of `new Map()` / `new Set()` (`fx_Map`/`fx_Set` with no
 /// iterable argument) BEYOND the `RUN` dispatch and the explicit
 /// allocation ticks the construct path charges (four `fxNewSlot`s — instance,
@@ -32635,6 +32642,13 @@ impl Interp {
         self.to_string_units(code, this)
     }
 
+    /// Number of CESU-8 leading bytes represented by a matching UTF-16 prefix.
+    /// The oracle is built with `mxCESU8`, so every UTF-16 code unit—including
+    /// each half of a surrogate pair—has exactly one leading byte.
+    fn string_search_match_meter(units: &[u16]) -> u64 {
+        units.len() as u64
+    }
+
     fn catchable_range_error(&mut self) -> Halt {
         let error = self.build_error("RangeError", 0, 0);
         match self.raise_js(error) {
@@ -32911,6 +32925,13 @@ impl Interp {
                 };
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 self.meter.tick_builtin_some(count as u64);
+                // XS meters `count` above but guards its copy loop with
+                // `if (length)`. Repeating the empty string therefore returns
+                // immediately even for the maximum accepted count instead of
+                // spending billions of no-op iterations.
+                if content.is_empty() {
+                    return Ok(self.new_string_units(&[]));
+                }
                 let mut out = Vec::with_capacity(content.len() * count as usize);
                 for _ in 0..count {
                     out.extend_from_slice(&content);
@@ -32961,14 +32982,91 @@ impl Interp {
                     || (sub.len() <= hay.len() && hay.windows(sub.len()).any(|w| w == &sub[..]));
                 Slot::boolean(found)
             }
-            // indexOf / lastIndexOf: the pin's inner compare loop meters a
-            // per-matched-byte count ironhorse does not yet reproduce for
-            // multi-character searches (the single-character/not-found cases
-            // agree, but a partial-then-full match over-counts). Rather than
-            // ship a computron divergence, these self-name an honest skip until
-            // the scan-metering shape is calibrated.
+            // indexOf / lastIndexOf: search in UTF-16 code units, after the
+            // observable ToString(searchString) and ToIntegerOrInfinity(position)
+            // coercions. XS's inner UTF-8 scan meters only the matching prefix
+            // at each candidate (one raw tick per CESU-8 leading byte because
+            // of the pinned macro-precedence quirk), including a full match;
+            // `string_search_match_meter` translates that charge to the VM's
+            // UTF-16 storage without losing astral/lone-surrogate behavior.
             StringIndexOf | StringLastIndexOf => {
-                return Err(Halt::Unsupported("indexOf/lastIndexOf:scan-metering"))
+                let search = self.to_string_units(
+                    code,
+                    argn(0).unwrap_or_else(Slot::undefined),
+                )?;
+                let last = m == StringLastIndexOf;
+                let position = if last
+                    && (argc < 2 || argn(1).is_some_and(|v| v.kind == Kind::Undefined))
+                {
+                    f64::INFINITY
+                } else if argc < 2 {
+                    0.0
+                } else {
+                    self.array_to_integer_or_infinity(
+                        code,
+                        argn(1).unwrap_or_else(Slot::undefined),
+                    )?
+                };
+                let length = content.len();
+                let start = if position == f64::INFINITY {
+                    length
+                } else if position == f64::NEG_INFINITY || position <= 0.0 {
+                    0
+                } else if position >= length as f64 {
+                    length
+                } else {
+                    position as usize
+                };
+                self.meter.tick_raw(STRING_INDEX_FRAME_METERING);
+
+                if search.is_empty() {
+                    Self::array_index_number(start as u64)
+                } else if search.len() > length {
+                    Slot::integer(-1)
+                } else if last {
+                    let mut candidate = start.min(length - search.len());
+                    loop {
+                        let mut matched = 0usize;
+                        while matched < search.len()
+                            && content[candidate + matched] == search[matched]
+                        {
+                            matched += 1;
+                        }
+                        self.meter.tick_raw(Self::string_search_match_meter(
+                            &search[..matched],
+                        ));
+                        if matched == search.len() {
+                            break Self::array_index_number(candidate as u64);
+                        }
+                        if candidate == 0 {
+                            break Slot::integer(-1);
+                        }
+                        candidate -= 1;
+                    }
+                } else if start + search.len() > length {
+                    Slot::integer(-1)
+                } else {
+                    let limit = length - search.len();
+                    let mut candidate = start;
+                    loop {
+                        let mut matched = 0usize;
+                        while matched < search.len()
+                            && content[candidate + matched] == search[matched]
+                        {
+                            matched += 1;
+                        }
+                        self.meter.tick_raw(Self::string_search_match_meter(
+                            &search[..matched],
+                        ));
+                        if matched == search.len() {
+                            break Self::array_index_number(candidate as u64);
+                        }
+                        if candidate == limit {
+                            break Slot::integer(-1);
+                        }
+                        candidate += 1;
+                    }
+                }
             }
             // toLowerCase / toUpperCase: ASCII case mapping. mxMeterSome(count)
             // over the code units + the result chunk. A non-ASCII code point
@@ -34643,6 +34741,13 @@ impl Interp {
     /// infinities pass through, else truncate toward zero.
     fn array_to_integer_or_infinity(&mut self, code: &[u8], v: Slot) -> Result<f64, Halt> {
         let num = self.to_number_value(code, v)?;
+        // `to_number_value` is the shared ToNumeric primitive and deliberately
+        // preserves BigInt. Array/String index operations require ToNumber,
+        // whose BigInt boundary is a TypeError (including an object whose
+        // valueOf/@@toPrimitive produces a BigInt).
+        if num.kind == Kind::BigInt {
+            return Err(self.catchable_type_error());
+        }
         let n = to_number(&num);
         if n.is_nan() {
             Ok(0.0)

@@ -66,6 +66,81 @@ fn methods_coerce_generic_receivers_and_trim_ecmascript_whitespace() {
         "String.prototype.trim.call({ toString: function () { return '  ok  '; } })",
         "String.prototype.trim.call('\\u00A0\\uFEFFok\\u3000')",
         "String.prototype.padStart.call({ toString: function () { return 'x'; } }, 3, '0')",
+        "''.repeat(2147483647).length",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn index_of_and_last_index_of_search_utf16_with_spec_coercions() {
+    for source in [
+        "'abcabc'.indexOf('bc')",
+        "'abcabc'.indexOf('bc', 2)",
+        "'abcabc'.indexOf('', 99)",
+        "'abcabc'.lastIndexOf('bc')",
+        "'abcabc'.lastIndexOf('bc', 3)",
+        "'abcabc'.lastIndexOf('', -99)",
+        "String.prototype.indexOf.call(12345, 34)",
+        "String.prototype.lastIndexOf.call(true, 'r')",
+        "var s=String.fromCodePoint(0x1F600)+'x'+String.fromCodePoint(0x1F600); s.indexOf(String.fromCodePoint(0x1F600), 1)",
+        "var s=String.fromCharCode(0xD800,65,0xD800); s.lastIndexOf(String.fromCharCode(0xD800))",
+        "'abc'.lastIndexOf('a', undefined)",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn index_of_missing_search_uses_undefined_despite_the_pinned_oracle_shortcut() {
+    // ECMA-262 applies ToString(undefined), so this finds the word at zero.
+    // The pinned XS oracle has an `argc < 1` shortcut returning -1; lock the
+    // standards-correct IronHorse result without laundering that host bug into
+    // the general oracle-agreement helper.
+    let run = dual_run("'undefined value'.indexOf()")
+        .expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert_eq!(run.ironhorse_result, "0");
+    assert_eq!(run.oracle_result, "-1");
+
+    let run = dual_run("'undefined value'.lastIndexOf()")
+        .expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert_eq!(run.ironhorse_result, "0");
+    assert_eq!(run.oracle_result, "-1");
+}
+
+#[test]
+fn index_of_and_last_index_of_meter_representative_scans_exactly() {
+    for source in [
+        "'abc'.indexOf('b')",
+        "'aaab'.indexOf('aab')",
+        "'abcabc'.lastIndexOf('bc')",
+        "var x=String.fromCodePoint(0x1F600); (x+'a'+x).lastIndexOf(x)",
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert!(
+            run.is_bit_exact(),
+            "`{source}` is not bit exact: oracle={:?}/{}/{} ironhorse={:?}/{}/{}",
+            run.oracle_result,
+            run.oracle_computrons,
+            run.oracle_meter_raw,
+            run.ironhorse_result,
+            run.ironhorse_computrons,
+            run.ironhorse_meter_raw,
+        );
+    }
+}
+
+#[test]
+fn index_of_and_last_index_of_observe_coercion_order_and_errors() {
+    for source in [
+        "var log=[]; var r={toString:function(){log.push('this');return 'abc'}}; var s={toString:function(){log.push('search');return 'b'}}; var p={valueOf:function(){log.push('position');return 0}}; String.prototype.indexOf.call(r,s,p)+':'+log.join(',')",
+        "var log=[]; var r={toString:function(){log.push('this');return 'abcabc'}}; var s={toString:function(){log.push('search');return 'b'}}; var p={valueOf:function(){log.push('position');return 4}}; String.prototype.lastIndexOf.call(r,s,p)+':'+log.join(',')",
+        "try { String.prototype.indexOf.call(null, 'x'); false } catch (e) { e instanceof TypeError }",
+        "try { 'abc'.indexOf(Symbol()); false } catch (e) { e instanceof TypeError }",
+        "try { 'abc'.lastIndexOf('a', 0n); false } catch (e) { e instanceof TypeError }",
+        "var marker={}; try { 'abc'.indexOf({toString:function(){throw marker}}); false } catch(e) { e===marker }",
     ] {
         agrees(source);
     }
