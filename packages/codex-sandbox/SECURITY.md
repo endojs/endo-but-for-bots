@@ -1,50 +1,67 @@
 # Security model
 
-`@endo/codex-sandbox` treats Codex and every command it launches as untrusted
-code. The `CodexClient` is a protocol adapter, not a sandbox or a credential
-manager. Its caller must provide an `@endo/sandbox` slice with the exact mounts,
-network access, resource limits, and credentials intended for one session.
+The trusted computing base includes the host provisioner, credential broker,
+audit anchor, and digest-pinned Codex CLI/app-server runtime.
+Prompts, workspace data, dynamic-tool arguments, and model-launched commands
+are untrusted.
+App-server must write its credential-free state volume and is trusted to apply
+the pinned per-turn `workspaceWrite` sandbox; compromise of that runtime is
+outside the inner command-boundary threat model and requires revoking the image
+digest.
 
-## Authority boundaries
+`@endo/codex-sandbox` trusts only the digest-pinned Codex app-server component
+described above, not the model or the commands that app-server launches on its
+behalf.
+The outer Endo slice is the host and cross-session authority boundary; the
+pinned app-server's inner sandbox is the boundary between its own control state
+and model-launched commands.
+Codex's approval UI is not an authority boundary.
 
-- One client represents one Codex thread, one workspace, and one disposable
-  `CODEX_HOME`. The home separates sessions but is not secret from model-run
-  commands: they share the Codex process UID and can address it directly.
-- `auth.json` is password-equivalent. Do not place it or another reusable token
-  anywhere in this image, and never mount a machine-wide Codex home into a
-  slice. A future provisioner must put a revocable, session-scoped credential
-  broker or API proxy behind a separate protection boundary; a same-UID file
-  mount is not a credential boundary.
-- App-server requests (approvals, user input, dynamic tools, token refresh, and
-  future request methods) are denied by this core. Adding a request handler is
-  an authority change and requires an explicit capability plus security review.
-- The default app-server approval policy is `never` because the outer slice is
-  the enforcement boundary. This is safe only when that slice is actually
-  confined to the declared workspace and network/resource policy.
-- Codex API access and tool-process Internet access need different authority.
-  The hosted provisioner must ensure a shell command cannot inherit the API
-  credential path or use Codex's API channel as general outbound network access.
-- Closing a reply reader sends `turn/interrupt`. A cancelled turn is never
-  automatically replayed because it may already have produced side effects.
-- `turn/interrupt` does not stop background terminals spawned by a turn. Stop
-  means the foreground turn reached `turn/completed(status: "interrupted")`,
-  not that every descendant process is gone. Only disposing the session slice
-  is a security teardown.
+The lifecycle owner refuses to start a session unless the sandbox returns the
+machine-checkable `HostedAgentPolicyV1` attestation specified in
+[SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md).
+Inside that exact envelope, shell-command and file-change operation prompts are
+automatically approved.
+Permission-profile expansion is authority creation and is denied.
+The outer kernel policy still denies every operation outside the endowed
+workspace, process, network, mount, and resource boundaries.
 
-The transport bounds individual JSONL records, cumulative process output, turn
-events, turn bytes, and stderr capture. Reaching those bounds fails the turn or
-process rather than dropping security-relevant events. Displayed tool arguments
-and results are separately truncated for the provider-neutral UI stream; that
-stream is not an audit log and the full event must be recorded by the future
-durable audit capability.
+Endo dynamic tools are capabilities, not ambient integrations.
+Only the immutable catalog supplied at thread creation is callable.
+Unknown tools, uncorrelated calls, account-token refresh, login, other-session,
+remote-control, and every unknown app-server request are denied.
+The model receives the run facet; the factory alone retains lifecycle
+administration, the audit reader, and credential-broker administration.
 
-If a transport arrives after startup was abandoned, the client closes it and
-reports any close failure through `reportCleanupFailure` and `status()`. A
-hosted provisioner must connect the callback to durable operator-visible
-telemetry and dispose the enclosing slice independently.
+`auth.json` and OAuth refresh tokens are password-equivalent.
+They must never enter the session filesystem, environment, process namespace,
+image, audit payload, or writable `CODEX_HOME`.
+The per-session provider broker described in
+[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md) is the only allowed model API
+channel.
 
-See [MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) before enabling this package in a
-hosted deployment.
+The durable audit journal is outside the workspace and slice.
+Every append advances a head checkpoint through independently protected anchor
+powers, so rolling back or deleting a valid suffix in the mutable entry store is
+detectable on recovery.
+The client awaits journal durability before dispatching a prompt, answering an
+approval or Endo tool call, or reporting a terminal result.
+Complete operation payloads are retained within the explicit audit-entry bound;
+an oversized successful dynamic result quarantines the session instead of being
+truncated or returned as an ordinary retryable tool error.
+Built-in Codex item notifications are forensic: app-server may emit them only
+after execution starts.
+No code here claims write-ahead audit for built-in shell or file activity.
+
+Failed and cancelled hosted turns remain security-relevant because their tools
+may have produced side effects.
+The client write-ahead journals the previous and current turn IDs, then rolls
+an unacknowledged turn out of Codex's conversation history before the next
+prompt.
+Floot acknowledges a successful turn only after the corresponding conversation
+node and usage total are durable.
+Rollback does not undo filesystem, process, remote-capability, or network side
+effects; those remain in the workspace and audit record.
 
 For private vulnerability reports, follow the repository-level Endo security
 policy.

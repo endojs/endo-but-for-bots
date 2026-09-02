@@ -1,4 +1,5 @@
 // @ts-check
+/* eslint-disable no-await-in-loop */
 
 // Floot consumes this provider-neutral stream contract; Codex-specific JSON-RPC
 // names and item schemas stay behind @endo/codex-sandbox's capability boundary.
@@ -7,7 +8,7 @@ import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -17,6 +18,7 @@ export const runHostedTurn = async ({
   model,
   reasoningEffort,
   systemPrompt,
+  acknowledgedCheckpoint,
 }) => {
   if (signal?.aborted) {
     return harden({ finalContent: '', usage: undefined, toolCalls: [] });
@@ -36,25 +38,36 @@ export const runHostedTurn = async ({
   const onAbort = () => {
     cancellationP = (async () => {
       await null;
-      let closeFailure;
-      if (iterator) {
-        try {
-          await iterator.return();
-        } catch (error) {
-          closeFailure = error;
-        }
-      }
       // Reader close initiates cancellation, but its local return can settle
       // before a remote Codex turn reaches terminal confirmation. The explicit
       // barrier keeps Floot's serialized turn chain occupied until it is safe
-      // to accept the next prompt.
-      await E(client).interrupt();
-      if (closeFailure) throw closeFailure;
+      // to accept the next prompt. Start both concurrently: a stream adapter is
+      // allowed to withhold its terminal acknowledgement until the producer's
+      // interrupt has completed.
+      const closeP = iterator ? iterator.return() : Promise.resolve();
+      // Keep a wedged reader observed. If the authoritative backend barrier
+      // rejects, the enclosing session is quarantined and its slice owner must
+      // reap the process; waiting forever for an untrusted stream ack would
+      // hide that failure behind a generic shutdown timeout.
+      closeP.catch(() => undefined);
+      try {
+        await E(client).interrupt();
+        await closeP;
+      } catch (error) {
+        const details = error instanceof Error ? error.message : String(error);
+        const failure = new AggregateError(
+          [error],
+          `Hosted turn cancellation failed: ${details}`,
+        );
+        failure.name = 'HostedTurnCancellationError';
+        throw failure;
+      }
     })();
     cancellationP.then(resolveAbort, rejectAbort);
   };
   if (signal) signal.addEventListener('abort', onAbort, { once: true });
   let finalContent = '';
+  let checkpoint;
   /** @type {{ inputTokens: number, outputTokens: number } | undefined} */
   let usage;
   const toolCalls = [];
@@ -67,6 +80,7 @@ export const runHostedTurn = async ({
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(systemPrompt ? { systemPrompt } : {}),
+        ...(acknowledgedCheckpoint ? { acknowledgedCheckpoint } : {}),
       }),
     );
     const outcome = signal
@@ -79,8 +93,17 @@ export const runHostedTurn = async ({
       return harden({ finalContent: '', usage: undefined, toolCalls: [] });
     }
     iterator = iterateReader(/** @type {any} */ (outcome.reader));
-    for await (const rawEvent of iterator) {
-      const event = /** @type {any} */ (rawEvent);
+    for (;;) {
+      const nextP = iterator.next();
+      const nextOutcome = signal
+        ? await Promise.race([
+            nextP.then(result => ({ result })),
+            abortP.then(() => ({ aborted: true })),
+          ])
+        : { result: await nextP };
+      if ('aborted' in nextOutcome) break;
+      if (nextOutcome.result.done) break;
+      const event = /** @type {any} */ (nextOutcome.result.value);
       switch (event?.type) {
         case 'phase':
           writer.setPhase(`${event.phase || 'thinking'}`);
@@ -132,11 +155,16 @@ export const runHostedTurn = async ({
         case 'abort':
           throw Error(`${event.reason || 'hosted turn aborted'}`);
         case 'end':
+          checkpoint =
+            typeof event.checkpoint === 'string' && event.checkpoint !== ''
+              ? event.checkpoint
+              : undefined;
           if (signal?.aborted && cancellationP) await cancellationP;
           return harden({
             finalContent,
             usage,
             toolCalls: toolCalls.map(call => harden({ ...call })),
+            ...(checkpoint ? { checkpoint } : {}),
           });
         default:
         // Forward compatibility: unknown normalized event kinds are ignored.
@@ -152,6 +180,7 @@ export const runHostedTurn = async ({
     finalContent,
     usage,
     toolCalls: toolCalls.map(call => harden({ ...call })),
+    ...(checkpoint ? { checkpoint } : {}),
   });
 };
 harden(runHostedTurn);

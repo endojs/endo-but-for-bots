@@ -44,6 +44,11 @@ export {};
  *   title: string,
  *   description?: string,
  *   default?: boolean,
+ *   defaultReasoningEffort?: string | null,
+ *   backendId?: string,
+ *   modelId?: string,
+ *   selectionId?: string,
+ *   reasoningEfforts?: string[],
  * }} FlootModel
  */
 
@@ -104,7 +109,7 @@ export {};
  * @property {(text?: string) => void} send
  * @property {() => void} stop
  * @property {(id: string) => void} selectSession
- * @property {(presetId?: string, model?: string) => void} newSession
+ * @property {(presetId?: string, model?: string, reasoningEffort?: string) => void} newSession
  * @property {(id: string, title: string) => void} renameSession
  * @property {(id: string) => void} deleteSession
  * @property {() => void} toggleMic

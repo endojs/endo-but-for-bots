@@ -16,6 +16,7 @@
 // pinned factory caplet revives every session on daemon restart.
 
 import { execFile } from 'node:child_process';
+import { clearTimeout, setTimeout } from 'node:timers';
 import { promisify } from 'node:util';
 
 import { makeExo } from '@endo/exo';
@@ -26,28 +27,39 @@ import {
   makeConversationTree,
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
-import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
+import { runAgenticTurn } from '@endo/fae/src/turn-engine.js';
 import {
-  makeExecTool,
-  makeListPetnamesTool,
-  makeLookupTool,
-  makeStoreTool,
-  makeRemoveTool,
-  makeAdoptTool,
-  makeSendTool,
-  makeReplyTool,
-} from '@endo/fae/src/tool-makers.js';
+  assertHostedBackendDescriptor,
+  normalizeHostedModelDescriptor,
+} from '@endo/hosted-agent';
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
 import { runHostedTurn } from './src/hosted-turn.js';
 import { makeReplyChannel } from './src/stream.js';
+import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply.
 const MAX_TOOL_ROUNDS = 8;
+const AGENT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
+
+const withTimeout = async (operation, label) => {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(Error(`${label} timed out`)),
+      AGENT_SHUTDOWN_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
 
 // Initialize a fresh, empty directory as a git repository so a daemon git cap
 // can be derived from it: provideGit requires an existing worktree, but a new
@@ -116,11 +128,12 @@ const makeBufferingWriter = () => {
 
 const FlootFactoryInterface = M.interface('FlootFactory', {
   createSession: M.callWhen()
-    .optional(M.string(), M.string(), M.string())
+    .optional(M.any(), M.string(), M.string())
     .returns(M.remotable()),
   listSessions: M.callWhen().returns(M.arrayOf(M.record())),
   listPresets: M.callWhen().returns(M.arrayOf(M.record())),
-  listModels: M.callWhen().returns(M.arrayOf(M.record())),
+  listBackends: M.callWhen().returns(M.arrayOf(M.record())),
+  listModels: M.callWhen().optional(M.string()).returns(M.arrayOf(M.record())),
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
@@ -287,7 +300,7 @@ const PRESETS = [
     systemPrompt: fullControlSystemPrompt,
     objects: [
       { kind: 'host-powers', petName: 'endo' },
-      { kind: 'code-mount', petName: 'endo-src' },
+      { kind: 'code-mount', petName: 'endo-src', required: false },
     ],
   },
 ];
@@ -334,6 +347,7 @@ const CLAUDE_CLI_MODEL_ID = 'claude-cli';
 // agrees with what an unpinned session actually runs.
 const DEFAULT_MODEL_ID = 'claude-sonnet-4-6';
 const isKnownModel = id => MODELS.some(m => m.id === id);
+const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
 
 /**
  * Provision a preset's objects into a session guest's petstore, referenced ONLY
@@ -345,7 +359,7 @@ const isKnownModel = id => MODELS.some(m => m.id === id);
  * @param {string} agentName - petname (in the host) of the session's guest agent
  * @param {any} sessionGuest - the resolved guest facet (for `has` checks)
  * @param {string} id - session id (used to namespace temporary host petnames)
- * @param {Array<{ kind: string, petName: string }>} objects
+ * @param {Array<{ kind: string, petName: string, required?: boolean }>} objects
  * @param {string} [codePath] - absolute host path to the Endo codebase, for the
  *   `code-mount` object kind (read-only). Absent when the daemon host has no
  *   source on disk; such objects are then skipped.
@@ -404,8 +418,13 @@ const provisionPresetObjects = async (
       // prior attempt aborted), then move it into the guest's petstore so the
       // guest is the only reference.
       if (!codePath) {
+        if (obj.required !== false) {
+          throw Error(
+            `No code path is configured for required preset object "${obj.petName}"`,
+          );
+        }
         console.warn(
-          `[floot-factory] no code path configured; skipping "${obj.petName}" mount for session ${id}`,
+          `[floot-factory] optional code mount "${obj.petName}" is unavailable for session ${id}`,
         );
       } else {
         const mountTmp = `_floot-codemount-${id}`;
@@ -414,9 +433,7 @@ const provisionPresetObjects = async (
         await E(host).move([mountTmp], [agentName, obj.petName]);
       }
     } else {
-      console.warn(
-        `[floot-factory] unknown preset object kind "${obj.kind}" for session ${id}`,
-      );
+      throw Error(`Unknown required preset object kind "${obj.kind}"`);
     }
   }
 };
@@ -430,7 +447,7 @@ const provisionPresetObjects = async (
 
 /**
  * @typedef {object} InjectedProviderConfig
- * @property {{ chatStream: Function, chat: Function }} provider
+ * @property {{ chatStream: (messages: any[], tools: any[], onDelta: (delta: string) => void, signal?: AbortSignal) => Promise<any> }} provider
  */
 
 /**
@@ -474,6 +491,7 @@ const provisionPresetObjects = async (
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
  *   startInbox: () => void,
+ *   shutdown: (allowBackendQuarantine?: boolean) => Promise<void>,
  * }>}
  */
 export const makeStreamingAgent = async (
@@ -558,55 +576,7 @@ export const makeStreamingAgent = async (
     return usageWrite;
   };
 
-  // Built-in tools bound to this agent's guest powers — the dynamic surface for
-  // working with the daemon and petstore. `exec` is the most general (arbitrary
-  // JS with `powers`); the rest are explicit petstore operations. Caplet tools
-  // dropped into the guest's `tools/` directory are discovered on top of these
-  // each turn (see discoverTools), so the toolset can grow at runtime.
-  /** @type {Map<string, any>} */
-  const localTools = new Map();
-  localTools.set('exec', makeExecTool(powers));
-  localTools.set('list', makeListPetnamesTool(powers));
-  localTools.set('lookup', makeLookupTool(powers));
-  localTools.set('store', makeStoreTool(powers));
-  localTools.set('remove', makeRemoveTool(powers));
-  // Mail: discover incoming messages and adopt objects attached to them into
-  // this session's petstore. adopt needs a message number + edge name, which
-  // listMessages surfaces. fae's listMessages tool returns raw records whose
-  // `number` is a BigInt and so don't stringify for the model — format a
-  // readable summary (number, sender, text, edge names) here instead.
-  localTools.set(
-    'listMessages',
-    harden({
-      schema: () =>
-        harden({
-          type: 'function',
-          function: {
-            name: 'listMessages',
-            description:
-              'List messages in your inbox. Each entry has its number, sender, ' +
-              'type, text, and the edge names of any attached objects. Use an ' +
-              'edge name together with the message number to adopt an object.',
-            parameters: { type: 'object', properties: {}, required: [] },
-          },
-        }),
-      execute: async () => {
-        const msgs = await E(powers).listMessages();
-        const summary = (Array.isArray(msgs) ? msgs : []).map(m => ({
-          number: Number(m.number),
-          from: m.from,
-          type: m.type,
-          text: Array.isArray(m.strings) ? m.strings.join('') : undefined,
-          edgeNames: Array.isArray(m.names) ? m.names : [],
-        }));
-        return JSON.stringify(summary, null, 2);
-      },
-      help: () => 'List inbox messages with their numbers and edge names.',
-    }),
-  );
-  localTools.set('adopt', makeAdoptTool(powers));
-  localTools.set('send', makeSendTool(powers));
-  localTools.set('reply', makeReplyTool(powers));
+  const toolRegistry = makeFlootToolRegistry(powers);
 
   // One session = one guest = one linear conversation. The guest's petstore
   // holds a conversation-tree root and a linear branch beneath it. We cache the
@@ -655,6 +625,9 @@ export const makeStreamingAgent = async (
   // Serialize turns: a streaming reply must finish (and persist its assistant
   // node) before the next converse() reads the path, or context would race.
   let turnChain = Promise.resolve();
+  let stopped = false;
+  let quarantineError;
+  const turnControllers = new Set();
 
   // Assemble the user message. A string is used as-is; a reader is drained
   // (replace semantics — each partial/final carries the full text so far) until
@@ -676,8 +649,18 @@ export const makeStreamingAgent = async (
   const runTurn = async (input, writer, meta, signal) => {
     const text = await resolveUserText(input);
     const baseLeafId = await getOrCreateLeaf();
+    const baseNode = await tree.getNode(baseLeafId);
+    const acknowledgedCheckpoint =
+      typeof baseNode?.metadata?.backendCheckpoint === 'string'
+        ? baseNode.metadata.backendCheckpoint
+        : undefined;
 
-    const commitExternalTurn = async (replyText, turnUsage, toolCalls = []) => {
+    const commitExternalTurn = async (
+      replyText,
+      turnUsage,
+      backendCheckpoint,
+      toolCalls = [],
+    ) => {
       const current = await loadUsage();
       const nextUsage = {
         inputTokens: current.inputTokens + (turnUsage?.inputTokens || 0),
@@ -711,10 +694,25 @@ export const makeStreamingAgent = async (
       // recovery mistakes for committed history.
       const finalNode = await tree.addNode(baseLeafId, messages, {
         usageTotals: harden({ ...nextUsage }),
+        ...(backendCheckpoint ? { backendCheckpoint } : {}),
       });
       cachedLeaf = finalNode.id;
       usage = nextUsage;
       await saveUsage();
+      if (backendCheckpoint && hostedClient) {
+        try {
+          await E(hostedClient).acknowledge(backendCheckpoint);
+        } catch (error) {
+          // The durable tree node is the source of truth. The checkpoint rides
+          // on the next send and safely completes acknowledgement after a
+          // transient failure or reincarnation.
+          console.error(
+            `[floot] backend checkpoint acknowledgement deferred: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
       writer.usage(nextUsage);
       writer.final(replyText);
       writer.end();
@@ -740,30 +738,31 @@ export const makeStreamingAgent = async (
         finalContent: replyText,
         usage: turnUsage,
         toolCalls,
+        checkpoint,
       } = await runHostedTurn({
         client: hostedClient,
         text,
         writer,
         signal,
         systemPrompt: effectivePrompt,
+        acknowledgedCheckpoint,
       });
       if (signal?.aborted) return;
-      await commitExternalTurn(replyText, turnUsage, toolCalls);
+      await commitExternalTurn(replyText, turnUsage, checkpoint, toolCalls);
       return;
     }
 
     // `meta` rides along on the user node (the provider ignores unknown fields)
     // so getHistory can mark, e.g., turns that arrived via mail rather than the
     // local UI.
-    const userNode = await tree.addNode(baseLeafId, [
+    const stagedMessages = [
       { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
-    ]);
+    ];
 
     // Agentic loop: stream a reply; if it calls tools, run them, persist the
     // assistant turn plus tool results, and loop again until the model returns a
     // plain (spoken) answer. Tools are re-discovered each round so anything the
     // model creates mid-turn (e.g. via exec/store) is immediately callable.
-    let leafId = userNode.id;
     let finalContent = '';
     // Whether the model produced a plain (toolless) answer. If it never does
     // within MAX_TOOL_ROUNDS, we send a fallback instead of an empty reply.
@@ -774,124 +773,112 @@ export const makeStreamingAgent = async (
     let turnOutput = 0;
     writer.setPhase('thinking');
 
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round += 1) {
-      // The consumer (reply reader) may have stopped pulling between rounds —
-      // its onClose aborts `signal`. Bail before spending another provider call.
-      if (signal?.aborted) return;
-      const { schemas, toolMap } = await discoverTools(powers, localTools);
-      // Always lead with the *current* system prompt and drop whatever system
-      // message the tree's root happens to store. This decouples the prompt from
-      // the stored conversation, so editing the prompt updates instructions
-      // immediately without leaking stale ones — and without orphaning history.
-      const path = await tree.getPath(leafId);
-      const conversationContext = [
-        { role: 'system', content: effectivePrompt },
-        ...path.filter(m => m.role !== 'system'),
-      ];
-      console.error(
-        `[floot] round ${round}: ${conversationContext.length} messages, ${schemas.length} tools`,
-      );
-
-      let streamed = '';
-      const { message, usage: roundUsage } = await provider.chatStream(
-        conversationContext,
-        schemas,
-        delta => {
-          streamed += delta;
-          writer.delta(delta);
-        },
-        signal,
-      );
-      if (roundUsage) {
-        turnInput += roundUsage.inputTokens || 0;
-        turnOutput += roundUsage.outputTokens || 0;
-      }
-
-      const rm = message || { role: 'assistant', content: streamed };
-      const toolCalls = Array.isArray(rm.tool_calls) ? rm.tool_calls : [];
-
-      if (toolCalls.length === 0) {
-        finalContent = rm.content || streamed;
-        const finalNode = await tree.addNode(leafId, [rm]);
-        leafId = finalNode.id;
-        answered = true;
-        break;
-      }
-
-      writer.setPhase('using tools');
-      // Some providers omit tool-call ids. Synthesize a stable one per call so
-      // the persisted assistant tool_call and its tool_result share the same id;
-      // without it the Anthropic conversion fabricates a fresh random id for the
-      // tool_use and maps the tool_result to "unknown", breaking their
-      // association on the next round.
-      const normalizedToolCalls = toolCalls.map((tc, i) => ({
-        ...tc,
-        // The `floot-synth-` prefix keeps a synthesized id from colliding with a
-        // real provider id (e.g. Anthropic's `toolu_…`) when a single response
-        // mixes calls that have ids with ones that don't.
-        id: tc.id || `floot-synth-${round}-${i}`,
-      }));
-      // The model can emit several independent tool calls in one turn — run them
-      // concurrently. Each call announces itself (in call order, before any
-      // await), then results stream back as they land; the reply wire carries the
-      // call id so the UI can pair an out-of-order result with its call.
-      const runOne = async tc => {
-        const name = tc.function?.name;
-        let args = {};
-        let parseError;
-        try {
-          args =
-            typeof tc.function?.arguments === 'string'
-              ? JSON.parse(tc.function.arguments || '{}')
-              : tc.function?.arguments || {};
-        } catch (err) {
-          parseError = err instanceof Error ? err.message : String(err);
-        }
-        writer.toolCall({
-          id: tc.id,
-          name: `${name}`,
-          args: JSON.stringify(args),
-        });
-        let resultText;
-        if (parseError !== undefined) {
-          // Report malformed arguments back to the model instead of silently
-          // running the tool with empty args, so it can retry with valid JSON.
-          resultText = `Error: could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`;
-        } else {
-          try {
-            resultText = await executeTool(name, args, toolMap);
-          } catch (err) {
-            resultText = `Error: ${err instanceof Error ? err.message : String(err)}`;
-          }
-        }
-        writer.toolResult({
-          id: tc.id,
-          name: `${name}`,
-          result: `${resultText}`,
-        });
-        // Diagnostics go to stderr and omit the result payload, which can carry
-        // capability output or secrets — log only the tool name and size.
+    const loop = await runAgenticTurn({
+      leafId: baseLeafId,
+      maxRounds: MAX_TOOL_ROUNDS,
+      getTools: async () => {
+        if (signal?.aborted) throw Error('Floot turn aborted');
+        return toolRegistry.snapshot();
+      },
+      getContext: async () => {
+        const path = await tree.getPath(baseLeafId);
+        return [
+          { role: 'system', content: effectivePrompt },
+          ...path.filter(message => message.role !== 'system'),
+          ...stagedMessages,
+        ];
+      },
+      invoke: async (context, tools, round) => {
         console.error(
-          `[floot] tool ${name} -> ${`${resultText}`.length} chars`,
+          `[floot] round ${round}: ${context.length} messages, ${tools.providerSchemas.length} tools`,
         );
-        return {
-          role: 'tool',
-          tool_call_id: tc.id,
-          content: `${resultText}`,
+        let streamed = '';
+        const { message, usage: roundUsage } = await provider.chatStream(
+          context,
+          tools.providerSchemas,
+          delta => {
+            streamed += delta;
+            writer.delta(delta);
+          },
+          signal,
+        );
+        if (roundUsage) {
+          turnInput += roundUsage.inputTokens || 0;
+          turnOutput += roundUsage.outputTokens || 0;
+        }
+        return harden({
+          message: message || { role: 'assistant', content: streamed },
+        });
+      },
+      getToolCalls: message =>
+        Array.isArray(message.tool_calls) ? message.tool_calls : [],
+      runTools: async (calls, tools, round) => {
+        writer.setPhase('using tools');
+        const normalizedCalls = calls.map((call, index) => ({
+          ...call,
+          id: call.id || `floot-synth-${round}-${index}`,
+        }));
+        const runOne = async call => {
+          const name = call.function?.name;
+          let args = {};
+          let parseError;
+          try {
+            args =
+              typeof call.function?.arguments === 'string'
+                ? JSON.parse(call.function.arguments || '{}')
+                : call.function?.arguments || {};
+          } catch (error) {
+            parseError = error instanceof Error ? error.message : String(error);
+          }
+          writer.toolCall({
+            id: call.id,
+            name: `${name}`,
+            args: JSON.stringify(args),
+          });
+          let resultText;
+          if (parseError !== undefined) {
+            resultText = `Error: could not parse tool arguments as JSON (${parseError}). Re-send this tool call with valid JSON arguments.`;
+          } else {
+            try {
+              resultText = await tools.execute(name, args);
+            } catch (error) {
+              resultText = `Error: ${
+                error instanceof Error ? error.message : String(error)
+              }`;
+            }
+          }
+          writer.toolResult({
+            id: call.id,
+            name: `${name}`,
+            result: `${resultText}`,
+          });
+          console.error(
+            `[floot] tool ${name} -> ${`${resultText}`.length} chars`,
+          );
+          return {
+            role: 'tool',
+            tool_call_id: call.id,
+            content: `${resultText}`,
+          };
         };
-      };
-      // Collected in call order (Promise.all preserves it) for a stable
-      // tool_result sequence in the persisted history.
-      /** @type {Array<{ role: 'tool', tool_call_id: string, content: string }>} */
-      const toolResults = await Promise.all(normalizedToolCalls.map(runOne));
-
-      const stepNode = await tree.addNode(leafId, [
-        { ...rm, tool_calls: normalizedToolCalls },
-        ...toolResults,
-      ]);
-      leafId = stepNode.id;
-      writer.setPhase('thinking');
-    }
+        const results = await Promise.all(normalizedCalls.map(runOne));
+        return harden({ normalizedCalls, results });
+      },
+      commitStep: async (currentLeafId, message, step) => {
+        stagedMessages.push(
+          { ...message, tool_calls: step.normalizedCalls },
+          ...step.results,
+        );
+        writer.setPhase('thinking');
+        return currentLeafId;
+      },
+      commitFinal: async (currentLeafId, message) => {
+        finalContent = message.content || '';
+        stagedMessages.push(message);
+        return currentLeafId;
+      },
+    });
+    answered = loop.answered;
 
     if (!answered) {
       // The loop hit MAX_TOOL_ROUNDS while the model still wanted to call tools,
@@ -900,10 +887,7 @@ export const makeStreamingAgent = async (
       // sitting atop a dangling tool_result.
       finalContent =
         "I wasn't able to finish that within my tool-step limit. Could you narrow it down or try again?";
-      const fallbackNode = await tree.addNode(leafId, [
-        { role: 'assistant', content: finalContent },
-      ]);
-      leafId = fallbackNode.id;
+      stagedMessages.push({ role: 'assistant', content: finalContent });
       console.error(
         `[floot] turn hit MAX_TOOL_ROUNDS (${MAX_TOOL_ROUNDS}); sent fallback reply`,
       );
@@ -915,12 +899,12 @@ export const makeStreamingAgent = async (
     totals.inputTokens += turnInput;
     totals.outputTokens += turnOutput;
     totals.turns += 1;
-    // The empty accounting node does not alter model/UI history, but makes the
-    // cumulative total recoverable atomically from the durable leaf.
-    const accountingNode = await tree.addNode(leafId, [], {
+    // Persist the complete logical turn and its accounting in one node. A
+    // provider failure therefore leaves no deeper branch for revival to adopt.
+    const committedNode = await tree.addNode(baseLeafId, stagedMessages, {
       usageTotals: harden({ ...totals }),
     });
-    cachedLeaf = accountingNode.id;
+    cachedLeaf = committedNode.id;
     await saveUsage();
     writer.usage(totals);
     writer.final(finalContent);
@@ -928,19 +912,52 @@ export const makeStreamingAgent = async (
   };
 
   const converse = (input, writer, meta, signal) => {
+    if (stopped || quarantineError) {
+      const error =
+        quarantineError || Error('Floot session agent is shutting down');
+      writer.abort(error.message);
+      return Promise.reject(error);
+    }
+    const turnController = new AbortController();
+    turnControllers.add(turnController);
+    const forwardAbort = () => turnController.abort();
+    if (signal?.aborted) forwardAbort();
+    else signal?.addEventListener('abort', forwardAbort, { once: true });
     const result = turnChain.then(() =>
-      runTurn(input, writer, meta, signal).catch(err => {
-        // A consumer that stopped pulling (reply reader closed) aborts `signal`,
-        // tearing down the in-flight provider stream. That's a clean stop, not a
-        // failure, and the writer is already settled, so swallow it.
-        if (signal?.aborted) return;
-        // runTurn has no internal catch, so on failure the writer is still
-        // unsettled — abort it here or every consumer (UI stream and the mail
-        // inbox's turnDone) would hang forever. Rethrow so callers still see it.
-        writer.abort(err instanceof Error ? err.message : String(err));
-        throw err;
-      }),
+      stopped
+        ? Promise.reject(Error('Floot session agent is shutting down'))
+        : runTurn(input, writer, meta, turnController.signal).catch(err => {
+            // A consumer that stopped pulling (reply reader closed) aborts `signal`,
+            // tearing down the in-flight provider stream. That's a clean stop, not a
+            // failure, and the writer is already settled, so swallow it.
+            if (turnController.signal.aborted) {
+              if (
+                err?.name === 'HostedTurnCancellationError' ||
+                `${err?.message || ''}`.includes(
+                  'Hosted turn cancellation failed:',
+                )
+              ) {
+                quarantineError = err;
+                stopped = true;
+                writer.abort(err.message);
+                throw err;
+              }
+              if (stopped) writer.abort('Floot session agent shut down');
+              return;
+            }
+            // runTurn has no internal catch, so on failure the writer is still
+            // unsettled — abort it here or every consumer (UI stream and the mail
+            // inbox's turnDone) would hang forever. Rethrow so callers still see it.
+            writer.abort(err instanceof Error ? err.message : String(err));
+            throw err;
+          }),
     );
+    const releaseTurn = () => {
+      signal?.removeEventListener('abort', forwardAbort);
+      turnControllers.delete(turnController);
+      if (stopped) writer.abort('Floot session agent shut down');
+    };
+    result.then(releaseTurn, releaseTurn);
     // Keep the chain alive even if a turn rejects.
     turnChain = result.catch(() => {});
     return result;
@@ -953,12 +970,19 @@ export const makeStreamingAgent = async (
   // message via reply(). Streaming-over-mail is a later phase; for now the
   // reply is the assembled final text.
   let inboxStarted = false;
+  let inboxIterator;
+  let inboxLoop = Promise.resolve();
   const startInbox = () => {
-    if (inboxStarted) return;
+    if (inboxStarted || stopped) return;
     inboxStarted = true;
-    (async () => {
+    inboxLoop = (async () => {
       const selfLocator = await E(powers).locate('@self');
       const messages = iterateReader(E(powers).followMessages());
+      inboxIterator = messages;
+      if (stopped) {
+        await messages.return();
+        return;
+      }
       // followMessages can deliver the same message twice: its initial drain
       // iterates a *live* Map that our own reply() mutates (so the iterator
       // re-yields the freshly-added reply), and that reply is also republished
@@ -1025,11 +1049,31 @@ export const makeStreamingAgent = async (
       }
     })().catch(error => {
       inboxStarted = false;
+      if (stopped) return;
       console.error(
         '[floot] inbox loop error:',
         error instanceof Error ? error.message : String(error),
       );
     });
+  };
+
+  const shutdownAgent = async (allowBackendQuarantine = false) => {
+    stopped = true;
+    for (const controller of turnControllers) controller.abort();
+    const closing = [];
+    if (inboxIterator) closing.push(inboxIterator.return());
+    closing.push(turnChain, inboxLoop);
+    const settled = await withTimeout(
+      Promise.allSettled(closing),
+      'Floot session agent shutdown',
+    );
+    const failures = /** @type {PromiseRejectedResult[]} */ (settled)
+      .filter(result => result.status === 'rejected')
+      .map(result => result.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, 'Floot session agent shutdown failed');
+    }
+    if (quarantineError && !allowBackendQuarantine) throw quarantineError;
   };
 
   // Replay the conversation for UI repaint: user prompts, the assistant's spoken
@@ -1084,7 +1128,13 @@ export const makeStreamingAgent = async (
 
   const getUsage = async () => harden({ ...(await loadUsage()) });
 
-  return harden({ converse, getHistory, getUsage, startInbox });
+  return harden({
+    converse,
+    getHistory,
+    getUsage,
+    startInbox,
+    shutdown: shutdownAgent,
+  });
 };
 harden(makeStreamingAgent);
 
@@ -1095,6 +1145,7 @@ harden(makeStreamingAgent);
 // Petname (in the factory guest's own petstore) where the session registry —
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
+const REGISTRY_PREFIX = 'floot-sessions-v1-';
 
 const newSessionId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1221,7 +1272,53 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const makeSendOnlyClient = client =>
     harden({
       send: (prompt, opts) => E(client).send(prompt, opts),
+      interrupt: () => E(client).interrupt(),
+      acknowledge: checkpoint => E(client).acknowledge(checkpoint),
     });
+
+  // Hosted backend factories are operator-endowed capabilities. Discovery is
+  // explicit and bounded to configured petnames plus the conventional Codex
+  // name; the session/model never receives a factory or lifecycle admin facet.
+  const configuredBackendNames = [
+    ...(env?.FLOOT_BACKEND_FACTORIES || '')
+      .split(',')
+      .map(name => name.trim())
+      .filter(Boolean),
+    'codex-backend',
+  ];
+  /** @type {Promise<Map<string, { factory: any, descriptor: any }>> | undefined} */
+  let hostedBackendsP;
+  const getHostedBackends = () => {
+    if (!hostedBackendsP) {
+      hostedBackendsP = (async () => {
+        const backends = new Map();
+        for (const name of [...new Set(configuredBackendNames)]) {
+          // eslint-disable-next-line no-await-in-loop, @jessie.js/safe-await-separator
+          if (await E(powers).has(name)) {
+            // eslint-disable-next-line no-await-in-loop
+            const factory = await E(powers).lookup(name);
+            // eslint-disable-next-line no-await-in-loop
+            const descriptor = assertHostedBackendDescriptor(
+              await E(factory).describe(),
+            );
+            if (backends.has(descriptor.id)) {
+              throw Error(`Invalid or duplicate hosted backend at "${name}"`);
+            }
+            backends.set(descriptor.id, { factory, descriptor });
+          }
+        }
+        return backends;
+      })().catch(error => {
+        hostedBackendsP = undefined;
+        throw error;
+      });
+    }
+    return hostedBackendsP;
+  };
+
+  /** @type {Map<string, any>} */
+  const backendAdmins = new Map();
+  const terminatedBackends = new Set();
 
   // One streaming provider per model. Sessions that don't pin a model share the
   // entry under the empty-string key (the factory's configured default model).
@@ -1249,28 +1346,68 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, model?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, model?: string, backendId?: string, modelId?: string, reasoningEffort?: string, lifecycle?: string }> | undefined} */
   let registry;
-  const loadRegistry = async () => {
-    if (registry) return registry;
-    if (await E(powers).has(REGISTRY_NAME)) {
-      const stored = await E(powers).lookup(REGISTRY_NAME);
-      registry = Array.isArray(stored) ? [...stored] : [];
-    } else {
-      registry = [];
+  let registryLoadP;
+  let registrySequence = 0n;
+  const loadRegistry = () => {
+    if (registry) return Promise.resolve(registry);
+    if (!registryLoadP) {
+      registryLoadP = (async () => {
+        const names = await E(powers).list();
+        const journalNames = (Array.isArray(names) ? names : [])
+          .filter(
+            name =>
+              typeof name === 'string' &&
+              name.startsWith(REGISTRY_PREFIX) &&
+              /^[0-9]{20}$/.test(name.slice(REGISTRY_PREFIX.length)),
+          )
+          .sort();
+        if (journalNames.length > 0) {
+          const latestName = journalNames.at(-1);
+          const stored = await E(powers).lookup(latestName);
+          if (
+            stored?.version !== 1 ||
+            !Array.isArray(stored.sessions) ||
+            typeof stored.sequence !== 'bigint' ||
+            latestName !==
+              `${REGISTRY_PREFIX}${`${stored.sequence}`.padStart(20, '0')}`
+          ) {
+            throw Error('Floot lifecycle registry journal is corrupt');
+          }
+          registry = [...stored.sessions];
+          registrySequence = stored.sequence + 1n;
+        } else if (await E(powers).has(REGISTRY_NAME)) {
+          const stored = await E(powers).lookup(REGISTRY_NAME);
+          registry = Array.isArray(stored) ? [...stored] : [];
+        } else {
+          registry = [];
+        }
+        return registry;
+      })().catch(error => {
+        registryLoadP = undefined;
+        throw error;
+      });
     }
-    return registry;
+    return registryLoadP;
   };
-  // Serialize registry writes: storeValue can't overwrite, so each save is a
-  // remove-then-store. Two concurrent saves would interleave (both see the key,
-  // the second remove throws on the already-removed name), so we chain them.
+  // Serialize append-only lifecycle snapshots. Every registry version has a
+  // unique name, so a crash leaves either the previous complete snapshot or the
+  // next complete snapshot; it can never erase the sole recovery record.
   let registryWrite = Promise.resolve();
   const saveRegistry = () => {
     const result = registryWrite.then(async () => {
-      if (await E(powers).has(REGISTRY_NAME)) {
-        await E(powers).remove(REGISTRY_NAME);
-      }
-      await E(powers).storeValue(harden([...(registry || [])]), REGISTRY_NAME);
+      const sequence = registrySequence;
+      const name = `${REGISTRY_PREFIX}${`${sequence}`.padStart(20, '0')}`;
+      await E(powers).storeValue(
+        harden({
+          version: 1,
+          sequence,
+          sessions: harden([...(registry || [])]),
+        }),
+        name,
+      );
+      registrySequence += 1n;
     });
     // Keep the chain alive even if this write rejects.
     registryWrite = result.catch(() => {});
@@ -1324,31 +1461,46 @@ export const make = (hostPowers, _context, { env } = {}) => {
         const preset = getPreset(entry?.presetId || DEFAULT_PRESET_ID);
         const sessionPrompt =
           entry?.systemPrompt || systemPrompt || preset.systemPrompt;
-        try {
-          await provisionPresetObjects(
-            host,
-            agentName,
-            sessionGuest,
-            id,
-            preset.objects,
-            codePath,
-          );
-        } catch (err) {
-          console.warn(
-            `[floot-factory] could not provision preset objects for session ${id}:`,
-            err instanceof Error ? err.message : String(err),
-          );
-        }
+        await provisionPresetObjects(
+          host,
+          agentName,
+          sessionGuest,
+          id,
+          preset.objects,
+          codePath,
+        );
         // Build (or reuse) the backend for this session's pinned model; an
         // unpinned session follows the factory's configured default. The
         // claude-cli pseudo-model routes through a ClaudeClient capability
         // instead of a streaming API provider.
-        const agentConfig =
-          entry?.model === CLAUDE_CLI_MODEL_ID
-            ? {
-                claudeClient: makeSendOnlyClient(await getClaudeClient(id)),
-              }
-            : { provider: await getProvider(entry?.model) };
+        let agentConfig;
+        if (entry?.backendId) {
+          const backend = (await getHostedBackends()).get(entry.backendId);
+          if (!backend) {
+            throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
+          }
+          const snapshot = await makeFlootToolRegistry(sessionGuest).snapshot();
+          const toolSet = makeEndoToolSet(snapshot);
+          const session = await E(backend.factory).create(
+            harden({
+              sessionId: id,
+              model: entry.modelId || '',
+              reasoningEffort: entry.reasoningEffort || '',
+              systemPrompt: sessionPrompt,
+            }),
+            toolSet,
+          );
+          backendAdmins.set(id, session.admin);
+          agentConfig = {
+            hostedClient: makeSendOnlyClient(session.run),
+          };
+        } else if (entry?.model === CLAUDE_CLI_MODEL_ID) {
+          agentConfig = {
+            claudeClient: makeSendOnlyClient(await getClaudeClient(id)),
+          };
+        } else {
+          agentConfig = { provider: await getProvider(entry?.model) };
+        }
         const agent = await makeStreamingAgent(
           sessionGuest,
           undefined,
@@ -1358,8 +1510,22 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // Each session is addressable by mail: start following its inbox.
         agent.startInbox();
         return agent;
-      })().catch(error => {
+      })().catch(async error => {
         agents.delete(id);
+        const admin = backendAdmins.get(id);
+        if (admin) {
+          try {
+            await E(admin).terminate();
+            backendAdmins.delete(id);
+            terminatedBackends.add(id);
+          } catch (cleanupError) {
+            throw new AggregateError(
+              [error, cleanupError],
+              `Floot session ${id} setup and hosted-backend rollback failed`,
+              { cause: cleanupError },
+            );
+          }
+        }
         throw error;
       });
       agents.set(id, agentP);
@@ -1371,19 +1537,35 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // and a history replay, but never reveals the backing guest.
   /** @type {Map<string, object>} */
   const facets = new Map();
+  const assertSessionReady = async id => {
+    await loadRegistry();
+    const entry = (registry || []).find(session => session.id === id);
+    if (!entry) throw Error(`Unknown session "${id}".`);
+    if ((entry.lifecycle || 'ready') !== 'ready') {
+      throw Error(
+        `Session "${id}" is not operable while lifecycle is ${entry.lifecycle}`,
+      );
+    }
+    return entry;
+  };
   const getFacet = id => {
     let facet = facets.get(id);
     if (!facet) {
       facet = makeExo('FlootSession', FlootSessionInterface, {
         async getInfo() {
-          await loadRegistry();
-          const entry = (registry || []).find(s => s.id === id);
+          const entry = await assertSessionReady(id);
           return harden({
             id,
             title: entry?.title || '',
             createdAt: entry?.createdAt || 0,
             presetId: entry?.presetId || DEFAULT_PRESET_ID,
-            model: entry?.model || '',
+            model: entry?.backendId
+              ? hostedModelId(entry.backendId, entry.modelId || '')
+              : entry?.model || '',
+            backendId: entry?.backendId || 'provider',
+            modelId: entry?.modelId || entry?.model || '',
+            reasoningEffort: entry?.reasoningEffort || '',
+            lifecycle: entry?.lifecycle || 'ready',
           });
         },
         /**
@@ -1399,6 +1581,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const { writer, reader } = makeReplyChannel(() => controller.abort());
           (async () => {
             try {
+              await assertSessionReady(id);
               const agent = await getAgent(id);
               await agent.converse(input, writer, undefined, controller.signal);
             } catch (error) {
@@ -1411,10 +1594,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
           return reader;
         },
         async getHistory() {
+          await assertSessionReady(id);
           const agent = await getAgent(id);
           return agent.getHistory();
         },
         async getUsage() {
+          await assertSessionReady(id);
           const agent = await getAgent(id);
           return agent.getUsage();
         },
@@ -1427,6 +1612,107 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return facet;
   };
 
+  const cleanupSessionResources = async entry => {
+    const { id } = entry;
+    const failures = [];
+    const agentP = agents.get(id);
+    if (agentP) {
+      try {
+        const agent = await agentP;
+        // A hosted backend's admin/factory termination below is the
+        // authoritative barrier for a quarantined native turn. Allow cleanup
+        // to reach it; provider-only sessions still fail closed here.
+        await agent.shutdown(Boolean(entry.backendId));
+      } catch (error) {
+        // Do not tear down the guest beneath live turn or inbox activity.
+        throw new AggregateError(
+          [error],
+          `Floot session ${id} agent did not stop`,
+          { cause: error },
+        );
+      }
+    }
+    const admin = backendAdmins.get(id);
+    if (admin) {
+      try {
+        await E(admin).terminate();
+        backendAdmins.delete(id);
+        terminatedBackends.add(id);
+      } catch (error) {
+        failures.push(error);
+      }
+    } else if (entry.backendId && !terminatedBackends.has(id)) {
+      try {
+        const backend = (await getHostedBackends()).get(entry.backendId);
+        if (!backend) {
+          throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
+        }
+        await E(backend.factory).destroy(harden({ sessionId: id }));
+      } catch (error) {
+        failures.push(error);
+      }
+    } else if (entry.model === CLAUDE_CLI_MODEL_ID) {
+      try {
+        await E(await getClaudeClient(id)).terminate();
+        claudeClients.delete(id);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    // A hosted/CLI teardown failure can mean a host-side Endo tool call is
+    // still settling. Keep the session guest and its capabilities alive until
+    // backend termination succeeds on a later lifecycle retry.
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Floot session ${id} backend did not fully clean up`,
+      );
+    }
+    const host = getHost();
+    for (const name of [`session-${id}`, `session-agent-${id}`]) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        if (await E(host).has(name)) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(host).remove(name);
+        }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Floot session ${id} resources did not fully clean up`,
+      );
+    }
+    agents.delete(id);
+    facets.delete(id);
+    terminatedBackends.delete(id);
+  };
+
+  const finishSessionDeletion = async id => {
+    const entry = (registry || []).find(session => session.id === id);
+    if (!entry) return;
+    try {
+      await cleanupSessionResources(entry);
+    } catch (error) {
+      const current = (registry || []).findIndex(session => session.id === id);
+      if (current >= 0) {
+        const currentEntry = /** @type {any[]} */ (registry)[current];
+        /** @type {any[]} */ (registry)[current] = harden({
+          ...currentEntry,
+          lifecycle: 'error',
+        });
+        await saveRegistry();
+      }
+      throw error;
+    }
+    registry = (registry || []).filter(session => session.id !== id);
+    await saveRegistry();
+    console.error(`[floot-factory] Deleted session "${id}"`);
+  };
+
   // Revive every session's inbox loop after a restart, without blocking make()
   // (the reincarnation-deadlock constraint forbids awaiting remote refs here).
   // Fire-and-forget: load the registry and build each agent, which starts its
@@ -1434,13 +1720,42 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const startAllInboxes = async () => {
     const reg = await loadRegistry();
     for (const s of reg) {
-      getAgent(s.id).catch(error => {
-        console.warn(
-          `[floot-factory] could not start inbox for session-${s.id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      });
+      if (s.lifecycle === 'deleting' || s.lifecycle === 'error') {
+        finishSessionDeletion(s.id).catch(error => {
+          console.error(
+            `[floot-factory] cleanup recovery failed for session-${s.id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+      } else {
+        const recoverCreating = async () => {
+          if (s.lifecycle === 'creating') {
+            // `creating` is an incomplete transaction. Remove every resource
+            // derivable from its stable session ID before provisioning anew.
+            await cleanupSessionResources(s);
+          }
+          return getAgent(s.id);
+        };
+        recoverCreating()
+          .then(async () => {
+            if (s.lifecycle === 'creating') {
+              /** @type {number} */
+              const index = reg.findIndex(entry => entry.id === s.id);
+              if (index >= 0) {
+                reg[index] = harden({ ...reg[index], lifecycle: 'ready' });
+                await saveRegistry();
+              }
+            }
+          })
+          .catch(error => {
+            console.warn(
+              `[floot-factory] could not start inbox for session-${s.id}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          });
+      }
     }
   };
   startAllInboxes().catch(error => {
@@ -1452,15 +1767,54 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   return makeExo('FlootFactory', FlootFactoryInterface, {
     /**
-     * @param {string} [title]
+     * @param {string | Record<string, any>} [titleOrOptions]
      * @param {string} [presetId]
      * @param {string} [model]
      * @returns {Promise<object>} an opaque session facet
      */
-    async createSession(title, presetId, model) {
+    async createSession(titleOrOptions, presetId, model) {
       await loadRegistry();
-      const preset = getPreset(presetId || DEFAULT_PRESET_ID);
+      const options =
+        titleOrOptions && typeof titleOrOptions === 'object'
+          ? titleOrOptions
+          : {
+              title: titleOrOptions,
+              presetId,
+              model,
+            };
+      const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
       const id = newSessionId();
+      let backendId;
+      let modelId;
+      const selectedModel = options.modelId || options.model || '';
+      if (options.backendId && options.backendId !== 'provider') {
+        backendId = `${options.backendId}`;
+        modelId = `${options.modelId || ''}`;
+      } else if (
+        typeof selectedModel === 'string' &&
+        selectedModel.includes(':')
+      ) {
+        [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
+      }
+      if (backendId) {
+        const backend = (await getHostedBackends()).get(backendId);
+        if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
+        const models = await E(backend.factory).listModels();
+        const chosen = models.find(candidate => candidate.id === modelId);
+        if (!chosen) {
+          throw Error(`Unknown model "${modelId}" for backend "${backendId}"`);
+        }
+        const projected = normalizeHostedModelDescriptor(chosen);
+        const supportedEfforts = projected.reasoningEfforts;
+        if (
+          options.reasoningEffort &&
+          !supportedEfforts.includes(options.reasoningEffort)
+        ) {
+          throw Error(
+            `Unsupported reasoning effort "${options.reasoningEffort}" for ${backendId}:${modelId}`,
+          );
+        }
+      }
       // Snapshot the preset's id and prompt so later catalog edits don't change
       // a live session. The object set is re-read from the catalog by id in
       // getAgent (objects are provisioned once, idempotently). A model is pinned
@@ -1468,39 +1822,104 @@ export const make = (hostPowers, _context, { env } = {}) => {
       // the factory's configured default model.
       const entry = harden({
         id,
-        title: title || 'New chat',
+        title: options.title || 'New chat',
         createdAt: Date.now(),
         presetId: preset.id,
         systemPrompt: preset.systemPrompt,
-        ...(isKnownModel(model) ? { model } : {}),
+        lifecycle: 'creating',
+        ...(backendId
+          ? {
+              backendId,
+              modelId,
+              ...(options.reasoningEffort
+                ? { reasoningEffort: `${options.reasoningEffort}` }
+                : {}),
+            }
+          : isKnownModel(selectedModel)
+            ? { model: selectedModel }
+            : {}),
       });
       /** @type {any[]} */ (registry).push(entry);
       await saveRegistry();
       // Build the agent now so the new session immediately follows its inbox
       // (addressable by mail without waiting for a first UI converse) and its
       // preset objects are provisioned up front.
-      getAgent(id).catch(() => {});
+      try {
+        await getAgent(id);
+        const index = /** @type {any[]} */ (registry).findIndex(
+          session => session.id === id,
+        );
+        const currentEntry = /** @type {any[]} */ (registry)[index];
+        /** @type {any[]} */ (registry)[index] = harden({
+          ...currentEntry,
+          lifecycle: 'ready',
+        });
+        await saveRegistry();
+      } catch (error) {
+        const failed = (registry || []).findIndex(session => session.id === id);
+        if (failed >= 0) {
+          const failedEntry = /** @type {any[]} */ (registry)[failed];
+          /** @type {any[]} */ (registry)[failed] = harden({
+            ...failedEntry,
+            lifecycle: 'error',
+          });
+        }
+        await saveRegistry();
+        agents.delete(id);
+        try {
+          await finishSessionDeletion(id);
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            `Floot session ${id} creation and rollback failed`,
+            { cause: cleanupError },
+          );
+        }
+        throw error;
+      }
       console.error(
         `[floot-factory] Created session "${id}" (preset "${preset.id}"${
-          entry.model ? `, model "${entry.model}"` : ''
+          entry.backendId
+            ? `, backend "${entry.backendId}", model "${entry.modelId}"`
+            : entry.model
+              ? `, model "${entry.model}"`
+              : ''
         })`,
       );
       return getFacet(id);
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string }>>}
      */
     async listSessions() {
       await loadRegistry();
       return harden(
-        (registry || []).map(({ id, title, createdAt, presetId, model }) => ({
-          id,
-          title,
-          createdAt,
-          presetId: presetId || DEFAULT_PRESET_ID,
-          model: model || '',
-        })),
+        (registry || []).map(
+          ({
+            id,
+            title,
+            createdAt,
+            presetId,
+            model,
+            backendId,
+            modelId,
+            reasoningEffort,
+            lifecycle,
+          }) => ({
+            id,
+            title,
+            createdAt,
+            presetId: presetId || DEFAULT_PRESET_ID,
+            model: backendId
+              ? hostedModelId(backendId, modelId || '')
+              : model || '',
+            backendId: backendId || 'provider',
+            modelId: modelId || model || '',
+            reasoningEffort: reasoningEffort || '',
+            lifecycle: lifecycle || 'ready',
+          }),
+        ),
       );
     },
 
@@ -1517,14 +1936,50 @@ export const make = (hostPowers, _context, { env } = {}) => {
       );
     },
 
+    async listBackends() {
+      const hosted = await getHostedBackends();
+      return harden([
+        harden({
+          id: 'provider',
+          title: 'LLM API',
+          kind: 'api',
+          continuity: 'explicit',
+          toolOwnership: 'endo',
+        }),
+        ...[...hosted.values()].map(({ descriptor }) => descriptor),
+      ]);
+    },
+
     /**
      * The selectable models for a new session. `default` marks the model an
      * unpinned session runs (the factory's configured model, or the conventional
      * fallback when that is unset or not in the catalog).
      *
-     * @returns {Promise<Array<{ id: string, title: string, description: string, default: boolean }>>}
+     * @param {string} [backendId]
+     * @returns {Promise<Array<{ id: string, selectionId: string, backendId: string, modelId: string, title: string, description: string, default: boolean, defaultReasoningEffort: string | null, reasoningEfforts: string[] }>>}
      */
-    async listModels() {
+    async listModels(backendId) {
+      if (backendId && backendId !== 'provider') {
+        const backend = (await getHostedBackends()).get(backendId);
+        if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
+        const models = await E(backend.factory).listModels();
+        return harden(
+          models.map(candidate => {
+            const projected = normalizeHostedModelDescriptor(candidate);
+            return harden({
+              id: hostedModelId(backendId, projected.id),
+              selectionId: hostedModelId(backendId, projected.id),
+              backendId,
+              modelId: projected.id,
+              title: projected.title,
+              description: projected.description,
+              default: projected.default,
+              defaultReasoningEffort: projected.defaultReasoningEffort,
+              reasoningEfforts: projected.reasoningEfforts,
+            });
+          }),
+        );
+      }
       let defaultModel = '';
       try {
         const cfg = await getProviderConfig();
@@ -1534,14 +1989,49 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // default so the picker still has a sensible pre-selection.
       }
       if (!isKnownModel(defaultModel)) defaultModel = DEFAULT_MODEL_ID;
-      return harden(
-        MODELS.map(({ id, title, description }) => ({
-          id,
-          title,
-          description,
-          default: id === defaultModel,
-        })),
-      );
+      const providerModels = MODELS.map(({ id, title, description }) => ({
+        id,
+        selectionId: id,
+        backendId: 'provider',
+        modelId: id,
+        title,
+        description,
+        default: id === defaultModel,
+        defaultReasoningEffort: null,
+        reasoningEfforts: [],
+      }));
+      if (backendId === 'provider') return harden(providerModels);
+      const hosted = await getHostedBackends();
+      const hostedModels = [];
+      for (const [id, backend] of hosted.entries()) {
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          const models = await E(backend.factory).listModels();
+          hostedModels.push(
+            ...models.map(candidate => {
+              const projected = normalizeHostedModelDescriptor(candidate);
+              return harden({
+                id: hostedModelId(id, projected.id),
+                selectionId: hostedModelId(id, projected.id),
+                backendId: id,
+                modelId: projected.id,
+                title: projected.title,
+                description: projected.description,
+                default: false,
+                defaultReasoningEffort: projected.defaultReasoningEffort,
+                reasoningEfforts: projected.reasoningEfforts,
+              });
+            }),
+          );
+        } catch (error) {
+          console.error(
+            `[floot-factory] model catalog unavailable for backend ${id}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+      return harden([...providerModels, ...hostedModels]);
     },
 
     /**
@@ -1549,10 +2039,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      * @returns {Promise<object>} the session facet
      */
     async getSession(id) {
-      await loadRegistry();
-      if (!(registry || []).some(s => s.id === id)) {
-        throw new Error(`Unknown session "${id}".`);
-      }
+      await assertSessionReady(id);
       return getFacet(id);
     },
 
@@ -1575,27 +2062,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     async deleteSession(id) {
       await loadRegistry();
-      registry = (registry || []).filter(s => s.id !== id);
+      const reg = registry || [];
+      const index = reg.findIndex(session => session.id === id);
+      if (index === -1) throw Error(`Unknown session "${id}".`);
+      const entry = reg[index];
+      reg[index] = harden({ ...entry, lifecycle: 'deleting' });
       await saveRegistry();
-      agents.delete(id);
-      facets.delete(id);
-      // Best-effort removal of the backing session guest's persistence (both
-      // the handle and the controlling agent petnames).
-      try {
-        const host = getHost();
-        for (const name of [`session-${id}`, `session-agent-${id}`]) {
-          if (await E(host).has(name)) {
-            await E(host).remove(name);
-          }
-        }
-      } catch (error) {
-        console.warn(
-          `[floot-factory] could not remove guest session-${id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-      console.error(`[floot-factory] Deleted session "${id}"`);
+      await finishSessionDeletion(id);
     },
 
     /**
@@ -1604,17 +2077,19 @@ export const make = (hostPowers, _context, { env } = {}) => {
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: owns all chat sessions. createSession(title?, presetId?, model?) -> session facet; listSessions() -> [{id,title,createdAt,presetId,model}]; listPresets() -> [{id,title,description}]; listModels() -> [{id,title,description,default}]; getSession(id) -> facet; renameSession(id,title); deleteSession(id). A session facet exposes converse(input) (streaming reply reader), getHistory(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id). Session facets expose converse(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
-          'createSession(title?, presetId?, model?) — Create a new session (its own guest/petstore) seeded by a preset (default "general"), optionally pinning a model from listModels() (default: the factory\'s configured model), and return an opaque session facet.',
+          'createSession(options | title?, presetId?, model?) — Create an isolated session. Options can select title, presetId, backendId, modelId, and reasoningEffort. Returns its opaque facet.',
+        listBackends:
+          'listBackends() — Return the live provider and hosted backend descriptors.',
         listSessions:
-          'listSessions() — Return metadata [{id, title, createdAt, presetId, model}] for all sessions.',
+          'listSessions() — Return metadata [{id, title, createdAt, presetId, model, backendId, modelId, reasoningEffort, lifecycle}] for all sessions.',
         listPresets:
           'listPresets() — Return the available session presets [{id, title, description}].',
         listModels:
-          'listModels() — Return the selectable models [{id, title, description, default}] for new sessions.',
+          'listModels(backendId?) — Return backend-scoped models with compound selection ids and supported reasoning efforts; no argument returns the flattened compatibility catalog.',
         getSession: 'getSession(id) — Return the session facet for an id.',
         renameSession: 'renameSession(id, title) — Rename a session.',
         deleteSession:

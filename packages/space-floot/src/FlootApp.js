@@ -38,7 +38,7 @@ const formatTokens = (/** @type {number} */ n) => {
  * @param {{
  *   presets: FlootPreset[],
  *   models: FlootModel[],
- *   onPick: (id: string, model: string) => void,
+ *   onPick: (id: string, model: string, reasoningEffort?: string) => void,
  *   onClose: () => void,
  * }} props
  * @returns {VNode}
@@ -48,6 +48,11 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
   // so picking a preset alone still creates a session with a sensible model.
   const preferred = models.find(m => m.default) || models[0];
   const [model, setModel] = useState(preferred ? preferred.id : '');
+  const [reasoningEffort, setReasoningEffort] = useState(
+    preferred?.defaultReasoningEffort || preferred?.reasoningEfforts?.[0] || '',
+  );
+  const selectedModel = models.find(candidate => candidate.id === model);
+  const reasoningEfforts = selectedModel?.reasoningEfforts || [];
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -69,8 +74,17 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               {
                 class: 'floot-model-select',
                 value: model,
-                onChange: (/** @type {FlootSafeEvent} */ e) =>
-                  setModel(e.target.value),
+                onChange: (/** @type {FlootSafeEvent} */ e) => {
+                  const next = models.find(
+                    candidate => candidate.id === e.target.value,
+                  );
+                  setModel(e.target.value);
+                  setReasoningEffort(
+                    next?.defaultReasoningEffort ||
+                      next?.reasoningEfforts?.[0] ||
+                      '',
+                  );
+                },
               },
               models.map(m =>
                 h(
@@ -78,6 +92,25 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
                   { key: m.id, value: m.id },
                   `${m.title}${m.default ? ' (default)' : ''}`,
                 ),
+              ),
+            ),
+          )
+        : null,
+      reasoningEfforts.length
+        ? h(
+            'label',
+            { class: 'floot-modal-field' },
+            h('span', { class: 'floot-modal-label' }, 'Reasoning'),
+            h(
+              'select',
+              {
+                class: 'floot-model-select',
+                value: reasoningEffort,
+                onChange: (/** @type {FlootSafeEvent} */ e) =>
+                  setReasoningEffort(e.target.value),
+              },
+              reasoningEfforts.map(effort =>
+                h('option', { key: effort, value: effort }, effort),
               ),
             ),
           )
@@ -92,7 +125,7 @@ const PresetModal = ({ presets, models, onPick, onClose }) => {
               type: 'button',
               key: p.id,
               class: 'floot-preset-card',
-              onClick: () => onPick(p.id, model),
+              onClick: () => onPick(p.id, model, reasoningEffort || undefined),
             },
             h('div', { class: 'floot-preset-name' }, p.title),
             h('div', { class: 'floot-preset-desc' }, p.description || ''),
@@ -121,10 +154,15 @@ export const FlootApp = ({ controller }) => {
   const onNew = () => {
     // Skip the modal only when there is nothing to choose — a single preset and
     // no model alternatives. Multiple models alone still warrant the picker.
-    if (presets.length <= 1 && models.length <= 1) {
+    if (
+      presets.length <= 1 &&
+      models.length <= 1 &&
+      (models[0]?.reasoningEfforts?.length || 0) <= 1
+    ) {
       controller.newSession(
         presets[0] ? presets[0].id : undefined,
         models[0] ? models[0].id : undefined,
+        models[0]?.reasoningEfforts?.[0],
       );
       setDrawerOpen(false);
     } else {
@@ -134,10 +172,11 @@ export const FlootApp = ({ controller }) => {
   const pickPreset = (
     /** @type {string} */ id,
     /** @type {string} */ model,
+    /** @type {string | undefined} */ reasoningEffort,
   ) => {
     setModalOpen(false);
     setDrawerOpen(false);
-    controller.newSession(id, model);
+    controller.newSession(id, model, reasoningEffort);
   };
 
   const commitTitle = () => {

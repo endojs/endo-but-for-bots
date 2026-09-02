@@ -30,9 +30,11 @@ import {
   makeReadChannelTool,
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
+import { runAgenticTurn } from './src/turn-engine.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
+const MAX_TOOL_ROUNDS = 32;
 
 const m = makeMarshal(undefined, undefined, {
   errorTagging: 'off',
@@ -303,73 +305,61 @@ export const spawnWorkerLoop = async (
    * @param {object[]} initialSchemas
    * @param {Map<string, object>} initialToolMap
    * @param {string} leafNodeId - the node to continue from
-   * @returns {Promise<string>} the final leaf node ID after the loop completes
+   * @returns {Promise<{ answered: boolean, exhausted: boolean, leafId: string, message?: any }>} the turn outcome
    */
   const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
-    let currentSchemas = initialSchemas;
-    let currentToolMap = initialToolMap;
-    let currentLeafId = leafNodeId;
-    /** @type {boolean} */
-    let continueLoop = true;
-    while (continueLoop) {
-      const conversationContext = await tree.getPath(currentLeafId);
-      console.log(
-        `[fae] context has ${conversationContext.length} messages, sending to LLM`,
-      );
-      const response = await chat(conversationContext, currentSchemas);
-
-      const { message: responseMessage } = response;
-      if (!responseMessage) {
-        break;
-      }
-
-      const rm = /** @type {any} */ (responseMessage);
-      if ((!rm.tool_calls || rm.tool_calls.length === 0) && rm.content) {
-        const extracted = extractToolCallsFromContent(rm.content);
-        if (extracted.toolCalls) {
-          rm.tool_calls = extracted.toolCalls;
-          rm.content = extracted.cleanedContent;
-        }
-      }
-
-      console.log(`[fae] sent: ${JSON.stringify(responseMessage, null, 2)}`);
-
-      const toolCalls = Array.isArray(rm.tool_calls) ? rm.tool_calls : [];
-      if (toolCalls.length !== 0) {
-        const toolResults = await processToolCalls(toolCalls, currentToolMap);
+    const firstTools = harden({
+      schemas: initialSchemas,
+      toolMap: initialToolMap,
+    });
+    const outcome = await runAgenticTurn({
+      leafId: leafNodeId,
+      maxRounds: MAX_TOOL_ROUNDS,
+      getTools: round =>
+        round === 0 ? firstTools : discoverTools(powers, localTools),
+      getContext: async currentLeafId => {
+        const providerContext = await tree.getPath(currentLeafId);
         console.log(
-          `[fae] tool results: ${JSON.stringify(toolResults, null, 2)}`,
+          `[fae] context has ${providerContext.length} messages, sending to LLM`,
         );
-
-        // Store the assistant response + tool results as a single tree node.
-        const stepNode = await tree.addNode(currentLeafId, [
-          responseMessage,
-          ...toolResults,
-        ]);
-        currentLeafId = stepNode.id;
-
-        const adopted = toolCalls.some(
-          tc => /** @type {any} */ (tc).function?.name === 'adoptTool',
-        );
-        if (adopted) {
-          const refreshed = await discoverTools(powers, localTools);
-          currentSchemas = refreshed.schemas;
-          currentToolMap = refreshed.toolMap;
+        return providerContext;
+      },
+      invoke: async (providerContext, tools) => {
+        const response = await chat(providerContext, tools.schemas);
+        const responseMessage = response.message;
+        if (responseMessage) {
+          const rm = /** @type {any} */ (responseMessage);
+          if ((!rm.tool_calls || rm.tool_calls.length === 0) && rm.content) {
+            const extracted = extractToolCallsFromContent(rm.content);
+            if (extracted.toolCalls) {
+              rm.tool_calls = extracted.toolCalls;
+              rm.content = extracted.cleanedContent;
+            }
+          }
           console.log(
-            `[fae] Re-discovered tools after adoption: ${currentSchemas.length} available`,
+            `[fae] sent: ${JSON.stringify(responseMessage, null, 2)}`,
           );
         }
-      } else {
-        // Final assistant response — store as a tree node.
-        const finalNode = await tree.addNode(currentLeafId, [responseMessage]);
-        currentLeafId = finalNode.id;
-        continueLoop = false;
-        if (rm.content) {
-          console.log(`[fae] ${rm.content}`);
-        }
-      }
-    }
-    return currentLeafId;
+        return harden({ message: responseMessage });
+      },
+      getToolCalls: message =>
+        Array.isArray(message.tool_calls) ? message.tool_calls : [],
+      runTools: async (calls, tools) => {
+        const results = await processToolCalls(calls, tools.toolMap);
+        console.log(`[fae] tool results: ${JSON.stringify(results, null, 2)}`);
+        return results;
+      },
+      commitStep: async (currentLeafId, message, results) => {
+        const node = await tree.addNode(currentLeafId, [message, ...results]);
+        return node.id;
+      },
+      commitFinal: async (currentLeafId, message) => {
+        const node = await tree.addNode(currentLeafId, [message]);
+        if (message.content) console.log(`[fae] ${message.content}`);
+        return node.id;
+      },
+    });
+    return outcome;
   };
 
   /**
@@ -549,7 +539,19 @@ export const spawnWorkerLoop = async (
 
         try {
           replyTracker.sent = false;
-          lastLeafId = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
+          const outcome = await runAgenticLoop(
+            toolSchemas,
+            toolMap,
+            userNode.id,
+          );
+          lastLeafId = outcome.leafId;
+          if (!outcome.answered) {
+            throw Error(
+              outcome.exhausted
+                ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
+                : 'FAE provider returned no assistant message',
+            );
+          }
 
           // If the LLM produced a final response without calling the reply
           // tool, send the content as a fallback reply so the sender

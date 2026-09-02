@@ -13,6 +13,7 @@ import { E } from '@endo/eventual-send';
  * @typedef {object} DiscoveredTools
  * @property {ToolSchema[]} schemas - OpenAI function-calling schemas for the LLM
  * @property {Map<string, FaeTool | object>} toolMap - name → tool object
+ * @property {Array<{ petName: string, functionName: string }>} storedTools
  */
 
 /**
@@ -29,12 +30,21 @@ import { E } from '@endo/eventual-send';
 export const discoverTools = async (host, localTools) => {
   /** @type {ToolSchema[]} */
   const schemas = [];
-  for (const tool of localTools.values()) {
-    schemas.push(tool.schema());
-  }
-
   /** @type {Map<string, FaeTool | object>} */
-  const toolMap = new Map(localTools);
+  const toolMap = new Map();
+  const storedTools = [];
+  for (const [petName, tool] of localTools.entries()) {
+    const schema = tool.schema();
+    const functionName = schema?.function?.name;
+    if (typeof functionName !== 'string' || functionName === '') {
+      throw Error(`Local tool ${petName} has no function name`);
+    }
+    if (toolMap.has(functionName)) {
+      throw Error(`Duplicate local tool function name: ${functionName}`);
+    }
+    schemas.push(schema);
+    toolMap.set(functionName, tool);
+  }
 
   /** @type {unknown} */
   let maybeToolNames;
@@ -46,29 +56,32 @@ export const discoverTools = async (host, localTools) => {
   }
   const names = (Array.isArray(maybeToolNames) ? maybeToolNames : []).filter(
     /**
-     * @param x
+     * @param {unknown} x
      * @returns {x is string}
      */ x => typeof x === 'string',
   );
-  await Promise.allSettled(
-    names
-      .filter(name => !toolMap.has(name))
-      .map(async name => {
-        try {
-          const tool = await E(host).lookup(['tools', name]);
-          toolMap.set(name, /** @type {object} */ (tool));
+  for (const name of names.sort()) {
+    try {
+      const tool = await E(host).lookup(['tools', name]);
+      const toolSchema = /** @type {ToolSchema} */ (await E(tool).schema());
+      const functionName = toolSchema?.function?.name;
+      if (typeof functionName !== 'string' || functionName === '') {
+        throw Error('schema has no function name');
+      }
+      if (toolMap.has(functionName)) {
+        throw Error(`function name ${functionName} is already endowed`);
+      }
+      toolMap.set(functionName, /** @type {object} */ (tool));
+      schemas.push(toolSchema);
+      storedTools.push(harden({ petName: name, functionName }));
+    } catch (/** @type {any} */ err) {
+      console.warn(
+        `[fae] tools/${name}: not a valid FaeTool: ${err.message || err}`,
+      );
+    }
+  }
 
-          const toolSchema = await E(tool).schema();
-          schemas.push(/** @type {ToolSchema} */ (toolSchema));
-        } catch (/** @type {any} */ err) {
-          console.warn(
-            `[fae] tools/${name}: not a valid FaeTool: ${err.message || err}`,
-          );
-        }
-      }),
-  );
-
-  return harden({ schemas, toolMap });
+  return harden({ schemas, toolMap, storedTools });
 };
 harden(discoverTools);
 

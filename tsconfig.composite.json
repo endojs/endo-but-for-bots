@@ -153,6 +153,9 @@
       "path": "packages/host-spawner/tsconfig.composite.json"
     },
     {
+      "path": "packages/hosted-agent/tsconfig.composite.json"
+    },
+    {
       "path": "packages/http-confine/tsconfig.composite.json"
     },
     {

@@ -395,10 +395,12 @@ const DEFAULT_PRESET_ID = 'general';
  * the view (see packages/space-floot/DESIGN.md).
  *
  * The factory owns every session; the UI never sees the backing guests. Its
- * interface is `createSession(title?, presetId?, model?) -> facet`,
- * `listSessions() -> [{id,title,createdAt,presetId,model}]`, `getSession(id) ->
- * facet`, `renameSession(id,title)`, `deleteSession(id)`, `listPresets()`,
- * `listModels() -> [{id,title,description,default}]`. A session facet exposes
+ * interface includes record-form
+ * `createSession({title,presetId,backendId,modelId,reasoningEffort}) -> facet`,
+ * `listSessions()` with backend/model/reasoning/lifecycle metadata,
+ * `listBackends()`, `listModels(backendId?)`, `getSession(id) -> facet`,
+ * `renameSession(id,title)`, `deleteSession(id)`, and `listPresets()`.
+ * A session facet exposes
  * `converse(input) -> replyReader`, `getHistory()`, `getInfo()`, and
  * `getUsage()`.
  *
@@ -565,13 +567,20 @@ export const flootComponent = (
    * @param {string} [title]
    * @param {string} [presetId]
    * @param {string} [model]
+   * @param {string} [reasoningEffort]
    */
-  const createSession = async (title, presetId, model) => {
-    const facet = await E(factory).createSession(
-      title || DEFAULT_TITLE,
-      presetId,
-      model,
+  const createSession = async (title, presetId, model, reasoningEffort) => {
+    const requiresRecordForm = Boolean(
+      reasoningEffort || (model && model.includes(':')),
     );
+    const facet = requiresRecordForm
+      ? await E(factory).createSession({
+          title: title || DEFAULT_TITLE,
+          ...(presetId ? { presetId } : {}),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+        })
+      : await E(factory).createSession(title || DEFAULT_TITLE, presetId, model);
     const info = await E(facet).getInfo();
     /** @type {FlootSession} */
     const session = {
@@ -952,10 +961,11 @@ export const flootComponent = (
   /**
    * @param {string} [presetId]
    * @param {string} [model]
+   * @param {string} [reasoningEffort]
    */
-  const newSession = (presetId, model) => {
+  const newSession = (presetId, model, reasoningEffort) => {
     if (busy) return;
-    createSession(undefined, presetId, model)
+    createSession(undefined, presetId, model, reasoningEffort)
       .then(() => {
         stick = true;
         notify();
@@ -1470,8 +1480,9 @@ export const flootComponent = (
     newSession(
       /** @type {string | undefined} */ presetId,
       /** @type {string | undefined} */ model,
+      /** @type {string | undefined} */ reasoningEffort,
     ) {
-      newSession(presetId, model);
+      newSession(presetId, model, reasoningEffort);
     },
     renameSession(/** @type {string} */ id, /** @type {string} */ title) {
       renameSession(id, title);
@@ -1539,7 +1550,8 @@ export const flootComponent = (
   // ── Initial load ─────────────────────────────────────────────────────────────
   // Load the session list from the factory (most-recent first), seeding a
   // default session if the factory has none, then repaint the active history.
-  (async () => {
+  let recoveryRefreshTimer;
+  const loadInitialSessions = async () => {
     try {
       const [metas, presetList, modelList] = await Promise.all([
         E(factory).listSessions(),
@@ -1550,7 +1562,11 @@ export const flootComponent = (
       ]);
       presets = presetList;
       models = modelList;
-      sessions = [...metas]
+      const readyMetas = [...metas].filter(
+        (/** @type {any} */ meta) =>
+          !meta.lifecycle || meta.lifecycle === 'ready',
+      );
+      sessions = readyMetas
         .sort(
           (/** @type {any} */ a, /** @type {any} */ b) =>
             (b.createdAt || 0) - (a.createdAt || 0),
@@ -1565,6 +1581,13 @@ export const flootComponent = (
           facet: null,
           loaded: false,
         }));
+      if (!sessions.length && metas.length > 0) {
+        setStatus('Recovering sessions…');
+        recoveryRefreshTimer = setTimeout(() => {
+          if (!cancelled) void loadInitialSessions();
+        }, 250);
+        return;
+      }
       if (!sessions.length) {
         await createSession();
       } else {
@@ -1575,10 +1598,14 @@ export const flootComponent = (
     } catch (err) {
       setStatus(`error: ${/** @type {Error} */ (err).message}`);
     }
-  })();
+  };
+  void loadInitialSessions();
 
   return () => {
     cancelled = true;
+    if (recoveryRefreshTimer !== undefined) {
+      clearTimeout(recoveryRefreshTimer);
+    }
     // Leave any in-flight turn running in the background — just detach our view
     // (don't return the reader, which would abort the agent). The turn finishes
     // and persists; a later remount reattaches or falls back to history.

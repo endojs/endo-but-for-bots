@@ -18,6 +18,8 @@
   "main": "src/codex-client.js",
   "exports": {
     ".": "./src/codex-client.js",
+    "./audit-journal.js": "./audit-journal.js",
+    "./backend-factory.js": "./backend-factory.js",
     "./app-server-transport.js": "./app-server-transport.js",
     "./protocol.js": "./protocol.js",
     "./package.json": "./package.json"
@@ -35,10 +37,13 @@
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
+    "@endo/hosted-agent": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/sandbox": "workspace:^"
   },
   "devDependencies": {
+    "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev"
