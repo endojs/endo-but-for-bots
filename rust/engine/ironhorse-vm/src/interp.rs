@@ -30414,8 +30414,27 @@ impl Interp {
             // a closing `mxMeterSome(4)`, plus a frame constant.
             NativeMethod::ArraySplice => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("splice:non-dense-array")),
+                    Some(i)
+                        if self.array_splice_fast_safe(i, argc)
+                            && (argc == 0
+                                || matches!(
+                                    arg0.kind,
+                                    Kind::Integer | Kind::Number | Kind::Undefined
+                                ))
+                            && (argc < 2
+                                || matches!(
+                                    self.stack.get(base + 5).map(|slot| slot.kind),
+                                    Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                                )) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_splice(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 let start = self.arg_to_index(base, 0, 0, length);
@@ -35741,6 +35760,32 @@ impl Interp {
         }
     }
 
+    /// Whether `splice` can retain its calibrated packed path without
+    /// observing species, descriptors, or inherited writes. Argument coercion
+    /// is checked by the caller; this conservatively validates every possible
+    /// new tail index implied by the insertion count.
+    fn array_splice_fast_safe(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        argc: usize,
+    ) -> bool {
+        if self.instance_prototype(inst) != self.array_proto
+            || !self.array_allocating_uses_default_species(inst)
+            || !self.array_length_writable(inst)
+            || self.arrays[&inst].items().values().any(|item| {
+                item.flag & (XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG) != 0
+            })
+        {
+            return false;
+        }
+        let length = u64::from(self.arrays[&inst].length);
+        let Some(max_length) = length.checked_add(argc.saturating_sub(2) as u64) else {
+            return false;
+        };
+        max_length <= u64::from(u32::MAX)
+            && self.array_new_index_writes_fast_safe(inst, length, max_length)
+    }
+
     /// Whether a dense allocating method may use its compact result path.
     /// A custom/accessor `constructor`, or a `Symbol.species` override on the
     /// resolved intrinsic Array constructor, requires the observable generic
@@ -36256,6 +36301,164 @@ impl Interp {
             }
         }
         Ok(object)
+    }
+
+    /// Generic `Array.prototype.splice`, including species construction and
+    /// the direction-sensitive property moves required to preserve overlap.
+    /// Every source read, target write, and deletion uses the object MOP so
+    /// sparse arrays, inherited properties, Proxies, descriptor failures, and
+    /// mapped arguments remain observable in specification order.
+    fn array_generic_splice(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let arguments: Vec<Slot> = (0..argc)
+            .map(|index| {
+                self.stack
+                    .get(base + 4 + index)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined)
+            })
+            .collect();
+        let length = self.array_generic_length(code, inst)?;
+        let start_integer = if argc == 0 {
+            0.0
+        } else {
+            self.array_to_integer_or_infinity(code, arguments[0])?
+        };
+        let actual_start = if start_integer == f64::NEG_INFINITY {
+            0
+        } else if start_integer < 0.0 {
+            (length as f64 + start_integer).max(0.0) as u64
+        } else {
+            start_integer.min(length as f64) as u64
+        };
+        let insert_count = argc.saturating_sub(2) as u64;
+        let actual_delete_count = if argc == 0 {
+            0
+        } else if argc == 1 {
+            length - actual_start
+        } else {
+            let requested = self.array_to_integer_or_infinity(code, arguments[1])?;
+            if requested <= 0.0 || requested == f64::NEG_INFINITY {
+                0
+            } else {
+                (requested as u64).min(length - actual_start)
+            }
+        };
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        let new_length = length
+            .checked_sub(actual_delete_count)
+            .and_then(|remaining| remaining.checked_add(insert_count))
+            .filter(|new_length| *new_length <= MAX_SAFE_INTEGER)
+            .ok_or_else(|| self.catchable_type_error())?;
+
+        let removed = self.array_generic_species_create(code, inst, actual_delete_count)?;
+        let removed_receiver = Slot::of(Kind::Reference, Payload::Reference(removed));
+        const GENERIC_SPLICE_CAP: u64 = 1 << 24;
+        for offset in 0..actual_delete_count {
+            if offset >= GENERIC_SPLICE_CAP {
+                return Err(Halt::Unsupported("splice:oversized-delete"));
+            }
+            let source_id = self.array_generic_index_id(actual_start + offset);
+            if self.mop_has(code, inst, source_id)? {
+                let value = self.mop_get(code, inst, source_id, object)?;
+                self.array_generic_create_data_property(code, removed, offset, value)?;
+            }
+        }
+        let length_id = self.intern_key("length");
+        if !self.mop_set(
+            code,
+            removed,
+            length_id,
+            Self::array_index_number(actual_delete_count),
+            removed_receiver,
+        )? {
+            return Err(self.catchable_type_error());
+        }
+
+        if insert_count < actual_delete_count {
+            let mut index = actual_start;
+            let move_end = length - actual_delete_count;
+            while index < move_end {
+                if index - actual_start >= GENERIC_SPLICE_CAP {
+                    return Err(Halt::Unsupported("splice:oversized-move"));
+                }
+                let source_id = self.array_generic_index_id(index + actual_delete_count);
+                let target_id = self.array_generic_index_id(index + insert_count);
+                if self.mop_has(code, inst, source_id)? {
+                    let value = self.mop_get(code, inst, source_id, object)?;
+                    if !self.mop_set(code, inst, target_id, value, object)? {
+                        return Err(self.catchable_type_error());
+                    }
+                } else if !self.mop_delete(code, inst, target_id)? {
+                    return Err(self.catchable_type_error());
+                }
+                index += 1;
+            }
+            let mut index = length;
+            while index > new_length {
+                if length - index >= GENERIC_SPLICE_CAP {
+                    return Err(Halt::Unsupported("splice:oversized-delete-tail"));
+                }
+                index -= 1;
+                let id = self.array_generic_index_id(index);
+                if !self.mop_delete(code, inst, id)? {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        } else if insert_count > actual_delete_count {
+            let mut index = length - actual_delete_count;
+            while index > actual_start {
+                if length - actual_delete_count - index >= GENERIC_SPLICE_CAP {
+                    return Err(Halt::Unsupported("splice:oversized-move"));
+                }
+                index -= 1;
+                let source_id = self.array_generic_index_id(index + actual_delete_count);
+                let target_id = self.array_generic_index_id(index + insert_count);
+                if self.mop_has(code, inst, source_id)? {
+                    let value = self.mop_get(code, inst, source_id, object)?;
+                    if !self.mop_set(code, inst, target_id, value, object)? {
+                        return Err(self.catchable_type_error());
+                    }
+                } else if !self.mop_delete(code, inst, target_id)? {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+
+        for (offset, value) in arguments.into_iter().skip(2).enumerate() {
+            let id = self.array_generic_index_id(actual_start + offset as u64);
+            if !self.mop_set(code, inst, id, value, object)? {
+                return Err(self.catchable_type_error());
+            }
+        }
+        if !self.mop_set(
+            code,
+            inst,
+            length_id,
+            Self::array_index_number(new_length),
+            object,
+        )? {
+            return Err(self.catchable_type_error());
+        }
+        Ok(removed_receiver)
     }
 
     /// `ToIntegerOrInfinity(? ToNumber(v))` (ECMA-262 7.1.5): `NaN` → 0,
