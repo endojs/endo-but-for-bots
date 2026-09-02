@@ -3405,6 +3405,21 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/space-nixos-admin@workspace:packages/space-nixos-admin":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-nixos-admin@workspace:packages/space-nixos-admin"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/far": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/space-peers@workspace:^, @endo/space-peers@workspace:packages/space-peers":
   version: 0.0.0-use.local
   resolution: "@endo/space-peers@workspace:packages/space-peers"
