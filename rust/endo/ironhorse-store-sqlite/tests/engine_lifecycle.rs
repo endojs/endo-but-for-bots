@@ -740,6 +740,18 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn implicit_array_stringification_survives_sqlite_sleep_cycles() {
+    // Neither independently compiled crank names `toString` or `join`.
+    // The second crank must still find Array's complete coercion path after a
+    // full checkpoint, close, reopen, restore, and partial relink.
+    let last = run_scenario(
+        "implicit-array-stringification",
+        &["var seed=1;", "var seed;''+[seed,seed+1]"],
+    );
+    assert_eq!(last, "1,2");
+}
+
+#[test]
 fn tagged_template_registry_survives_sqlite_sleep_cycles() {
     // The hidden realm template registry lives in the ordinary boot heap.
     // This exercises both halves of its contract through real full closes:

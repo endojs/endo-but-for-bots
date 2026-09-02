@@ -17,6 +17,14 @@ fn agrees(source: &str) {
 }
 
 #[test]
+fn implicit_array_stringification_installs_its_join_dependency() {
+    // Neither source names the properties reached by ordinary coercion.
+    for source in ["String([1,2])", "'x'+[1,2]"] {
+        agrees(source);
+    }
+}
+
+#[test]
 fn sparse_arguments_and_primitive_receivers_use_live_join_semantics() {
     for source in [
         "var a=[1,,3];Array.prototype.toString.call(a)",
@@ -64,6 +72,24 @@ fn fallback_retains_the_object_intrinsic_and_proxy_array_brand() {
         "var saved=Object.prototype.toString;delete Object.prototype.toString;var a=[];a.join=0;var r=Array.prototype.toString.call(a);Object.prototype.toString=saved;r",
         "var a=[];a.join=1;Array.prototype.toString.call(new Proxy(a,{}))",
         "var q=Proxy.revocable([],{});q.revoke();try{Array.prototype.toString.call(q.proxy);false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn object_tag_observes_array_brand_before_a_proxy_tag_getter() {
+    agrees(
+        "var record;record=Proxy.revocable([],{get:function(target,key,receiver){if(key===Symbol.toStringTag){record.revoke();return undefined}return Reflect.get(target,key,receiver)}});Object.prototype.toString.call(record.proxy)",
+    );
+}
+
+#[test]
+fn arguments_exposes_its_language_prototype() {
+    for source in [
+        "(function(){return Object.getPrototypeOf(arguments)===Object.prototype})(1,2)",
+        "(function(){return Object.prototype.hasOwnProperty.call(arguments,Symbol.iterator)+':'+arguments[Symbol.iterator]().next().value})(1,2)",
+        "(function(){Object.setPrototypeOf(arguments,Array.prototype);return Array.prototype.toString.call(arguments)})(1,2)",
     ] {
         agrees(source);
     }
