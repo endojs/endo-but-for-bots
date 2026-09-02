@@ -4,7 +4,8 @@
   height: 100%;
   overflow-y: auto;
   padding: 24px;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   color: var(--text-color, #1a1a1a);
 }
 
