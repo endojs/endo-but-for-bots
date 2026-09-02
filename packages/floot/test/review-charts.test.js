@@ -1,0 +1,383 @@
+// @ts-check
+import test from '@endo/ses-ava/prepare-endo.js';
+
+import { chartDiagnostics } from '@endo/workflow/machine.js';
+import { makeSimulator } from '@endo/workflow/src/simulate.js';
+import { renderGraph } from '@endo/workflow/src/graph.js';
+
+import {
+  reviewCharts,
+  reviewedChangeChart,
+  reviewedEndoReleaseChart,
+  reviewedNixosChangeChart,
+} from '../review-charts.js';
+
+const HEAD = 'f83f0430cfeb5968563f60f171d58f88d087c1b4';
+const NEXT_HEAD = '59aba752de8ebbbcb485015e9159dcb6d16856e6';
+
+const params = harden({
+  title: 'feat(chat): widen the command bar',
+  summary: 'One component and its test.',
+  reviewers: ['alice', 'bob'],
+  base: 'main',
+  rounds: 2,
+});
+
+const pendingOf = (sim, kind, extra = {}) =>
+  sim
+    .pending()
+    .find(
+      record =>
+        record.effect.kind === kind &&
+        Object.entries(extra).every(
+          ([key, value]) => record.effect[key] === value,
+        ),
+    );
+
+/**
+ * Every pending reviewer ask, in seat order. Region effects carry a `#<i>`
+ * segment in their path, which is what distinguishes a panel seat's ask
+ * from the implementer's.
+ *
+ * @param {any} sim
+ */
+const reviewerAsks = sim =>
+  sim
+    .pending()
+    .filter(
+      record =>
+        record.effect.kind === 'ask' &&
+        record.path.some(segment => segment.startsWith('#')),
+    );
+
+const submitHead = (sim, head = HEAD) => {
+  const ask = pendingOf(sim, 'ask', { to: 'developer' });
+  return sim.settle(ask.effectId, 'fulfilled', harden({ head, notes: 'done' }));
+};
+
+const verdict = (sim, approve, feedback) => {
+  const asks = reviewerAsks(sim);
+  let status;
+  for (const ask of asks) {
+    status = sim.settle(
+      ask.effectId,
+      'fulfilled',
+      harden({ approve, feedback }),
+    );
+  }
+  return status;
+};
+
+test('every review chart passes diagnostics with no errors or warnings', t => {
+  for (const chart of reviewCharts) {
+    const { errors, warnings } = chartDiagnostics(chart);
+    t.deepEqual(errors, [], `${chart.name} errors`);
+    t.deepEqual(warnings, [], `${chart.name} warnings`);
+  }
+});
+
+test('a unanimous panel carries the head to approved', t => {
+  const sim = makeSimulator(reviewedChangeChart, { params });
+
+  // `boot` seeds the budget from params and hands straight on: a chart's
+  // initial context is literal data, so `rounds` cannot be read there.
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.remaining, 2);
+  t.is(sim.status().context.round, 0);
+
+  submitHead(sim);
+  t.is(sim.status().state, 'review');
+  t.is(reviewerAsks(sim).length, 2, 'both seats asked in parallel');
+
+  verdict(sim, true, 'lgtm');
+  const status = sim.status();
+  t.true(status.done);
+  t.is(status.outcome, 'completed');
+  t.deepEqual(status.output, { head: HEAD, round: 0 });
+  // The happy path never enters the budget gate, so nothing was burnt.
+  t.is(status.context.remaining, 2);
+});
+
+test('the panel is waited out in full before a dissent loops back', t => {
+  const sim = makeSimulator(reviewedChangeChart, { params });
+  submitHead(sim);
+
+  const [first, second] = reviewerAsks(sim);
+  sim.settle(
+    first.effectId,
+    'fulfilled',
+    harden({ approve: false, feedback: 'needs a test' }),
+  );
+  // One dissent is not enough to turn the loop: the run is still in
+  // `review` with the other seat outstanding, so the implementer gets the
+  // COMBINED report rather than the first complaint alone.
+  t.is(sim.status().state, 'review');
+
+  sim.settle(
+    second.effectId,
+    'fulfilled',
+    harden({ approve: true, feedback: 'fine by me' }),
+  );
+
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.round, 1);
+  t.is(sim.status().context.remaining, 1, 'the round cost one of two');
+
+  const feedback = sim.status().context.feedback;
+  t.is(feedback.length, 2, 'both verdicts reach the implementer');
+  t.deepEqual(feedback.map(entry => entry.output.reviewer).sort(), [
+    'alice',
+    'bob',
+  ]);
+  t.deepEqual(
+    feedback.map(entry => entry.output.approve),
+    [false, true],
+  );
+
+  // The re-ask quotes the feedback back, delimited.
+  const reask = pendingOf(sim, 'ask', { to: 'developer' });
+  t.true(reask.effect.what.description.includes('needs a test'));
+  t.true(reask.effect.what.description.includes('round 1'));
+});
+
+test('the budget burns down, exhausts, and the operator can extend it', t => {
+  const sim = makeSimulator(reviewedChangeChart, {
+    params: harden({ ...params, rounds: 1 }),
+  });
+
+  submitHead(sim);
+  verdict(sim, false, 'no');
+  // The single round is spent, so the gate parks the run rather than
+  // asking the implementer again.
+  t.is(sim.status().state, 'exhausted');
+  t.is(sim.status().context.remaining, 0);
+
+  const form = pendingOf(sim, 'ask', { to: 'operator' });
+  t.true(form.effect.form.description.includes('review budget'));
+
+  sim.settle(form.effectId, 'fulfilled', harden({ remaining: 2 }));
+  t.is(sim.status().state, 'implement', 'extending the budget resumes');
+  t.is(sim.status().context.remaining, 2);
+
+  // And declining abandons the change with a stated reason. Each round is
+  // a fresh submission followed by a fresh panel, so both granted rounds
+  // have to be spent before the gate parks the run again.
+  submitHead(sim, NEXT_HEAD);
+  verdict(sim, false, 'still no');
+  t.is(sim.status().context.remaining, 1);
+  submitHead(sim, NEXT_HEAD);
+  verdict(sim, false, 'still no');
+  t.is(sim.status().state, 'exhausted');
+  const second = pendingOf(sim, 'ask', { to: 'operator' });
+  sim.settle(second.effectId, 'fulfilled', harden({ remaining: 0 }));
+  t.true(sim.status().done);
+  t.is(sim.status().outcome, 'completed');
+  t.is(
+    sim.status().output.reason,
+    'operator declined to extend the review budget',
+  );
+});
+
+test('the initiator can raise the budget mid-round without disturbing the ask', t => {
+  const sim = makeSimulator(reviewedChangeChart, { params });
+
+  const before = pendingOf(sim, 'ask', { to: 'developer' });
+  t.is(sim.status().context.remaining, 2);
+
+  // An internal transition: it assigns context without exiting the state,
+  // so the implementer's pending ask and its deadline survive untouched.
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 9 } }));
+
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.remaining, 9);
+  const after = pendingOf(sim, 'ask', { to: 'developer' });
+  t.is(after.effectId, before.effectId, 'the ask was not re-sent');
+  t.is(sim.pending().length, 2, 'ask and deadline both still pending');
+});
+
+test('the budget can be raised while the run waits in review', t => {
+  const sim = makeSimulator(reviewedChangeChart, { params });
+  submitHead(sim);
+  t.is(sim.status().state, 'review');
+  const seats = reviewerAsks(sim).map(record => record.effectId);
+
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 5 } }));
+  t.is(sim.status().context.remaining, 5);
+  t.deepEqual(
+    reviewerAsks(sim).map(record => record.effectId),
+    seats,
+    'no seat was re-asked',
+  );
+});
+
+test('a raise delivered to an exhausted run resumes it', t => {
+  const sim = makeSimulator(reviewedChangeChart, {
+    params: harden({ ...params, rounds: 1 }),
+  });
+  submitHead(sim);
+  verdict(sim, false, 'no');
+  t.is(sim.status().state, 'exhausted');
+
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 3 } }));
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.remaining, 3);
+});
+
+test('a malformed submission costs a round instead of failing the run', t => {
+  const sim = makeSimulator(reviewedChangeChart, { params });
+  const ask = pendingOf(sim, 'ask', { to: 'developer' });
+  sim.settle(ask.effectId, 'fulfilled', harden({ notes: 'forgot the head' }));
+
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.remaining, 1);
+  t.is(sim.status().context.feedback[0].feedback.includes('no head ref'), true);
+});
+
+test('a silent reviewer times out into a withheld approval', t => {
+  const sim = makeSimulator(reviewedChangeChart, { params });
+  submitHead(sim);
+
+  const [first] = reviewerAsks(sim);
+  sim.settle(
+    first.effectId,
+    'fulfilled',
+    harden({ approve: true, feedback: 'ok' }),
+  );
+
+  // The second seat never answers; its deadline settles it as a dissent so
+  // the wait-for-all join can complete rather than wedging.
+  const deadline = sim
+    .pending()
+    .find(
+      record =>
+        record.effect.kind === 'after' &&
+        record.path.some(s => s.startsWith('#')),
+    );
+  sim.fireTimer(deadline.effectId);
+
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.round, 1);
+  const withheld = sim
+    .status()
+    .context.feedback.find(entry => entry.output.approve === false);
+  t.is(withheld.output.feedback, 'no verdict before the review deadline');
+});
+
+test('preview CI is a slot: off by default, gating when enabled', t => {
+  const off = makeSimulator(reviewedChangeChart, { params });
+  submitHead(off);
+  verdict(off, true, 'lgtm');
+  t.true(off.status().done, 'no CI performer is named when previewCi is unset');
+
+  const on = makeSimulator(reviewedChangeChart, {
+    params: harden({ ...params, previewCi: true }),
+  });
+  submitHead(on);
+  verdict(on, true, 'lgtm');
+  t.is(on.status().state, 'preview');
+  const ci = pendingOf(on, 'invoke', { method: 'perform' });
+  t.deepEqual(ci.effect.args, [HEAD]);
+
+  // Red CI costs a round and returns the report to the implementer.
+  on.settle(
+    ci.effectId,
+    'fulfilled',
+    harden({ ok: false, log: 'tests failed' }),
+  );
+  t.is(on.status().state, 'implement');
+  t.is(on.status().context.remaining, 1);
+});
+
+test('green preview CI carries the change on to approval', t => {
+  const sim = makeSimulator(reviewedChangeChart, {
+    params: harden({ ...params, previewCi: true }),
+  });
+  submitHead(sim);
+  verdict(sim, true, 'lgtm');
+  const ci = pendingOf(sim, 'invoke', { method: 'perform' });
+  sim.settle(ci.effectId, 'fulfilled', harden({ ok: true, log: 'green' }));
+  t.true(sim.status().done);
+  t.deepEqual(sim.status().output, { head: HEAD, round: 0 });
+});
+
+test('a deploy is proposed only through a passed review', t => {
+  // The structural gate. `proposing` spawns the deploy chart, and with it
+  // the operator approval that IS the proposal. It has two inbound edges —
+  // preview CI disabled, and preview CI green — and the invariant that
+  // matters is that BOTH lie downstream of a passed review: `ready` is
+  // entered only by the unanimous-approval join, `preview` only from
+  // `ready`, and no edge reaches `proposing` from the develop/review loop
+  // or from the budget gate.
+  for (const chart of [reviewedEndoReleaseChart, reviewedNixosChangeChart]) {
+    const graph = renderGraph(chart);
+
+    const inbound = graph.edges.filter(edge => edge.to === 'proposing');
+    t.deepEqual(
+      [...new Set(inbound.map(edge => edge.from))].sort(),
+      ['preview', 'ready'],
+      `${chart.name} proposing is reached only from the post-review states`,
+    );
+
+    // `ready` — the head of that chain — is entered only by the panel's
+    // unanimous approval.
+    const intoReady = graph.edges.filter(edge => edge.to === 'ready');
+    t.is(intoReady.length, 1, `${chart.name} ready inbound edges`);
+    t.is(intoReady[0].from, 'review');
+    t.is(intoReady[0].type, 'regions-settled');
+    t.true(intoReady[0].guarded, 'only the unanimous-approval guard admits it');
+
+    // And `preview` is only ever entered from `ready`.
+    const intoPreview = graph.edges.filter(edge => edge.to === 'preview');
+    t.is(intoPreview.length, 1, `${chart.name} preview inbound edges`);
+    t.is(intoPreview[0].from, 'ready');
+
+    // Nothing in the loop reaches the proposal directly.
+    for (const edge of inbound) {
+      t.not(edge.from, 'implement');
+      t.not(edge.from, 'review');
+      t.not(edge.from, 'gate');
+      t.not(edge.from, 'exhausted');
+    }
+  }
+});
+
+test('the gated endo-release chart spawns its deploy with the reviewed head', t => {
+  const sim = makeSimulator(reviewedEndoReleaseChart, { params });
+  submitHead(sim);
+  verdict(sim, true, 'lgtm');
+
+  t.is(sim.status().state, 'proposing');
+  const spawned = pendingOf(sim, 'spawn');
+  t.is(spawned.effect.chart.name, 'endo-release');
+  t.is(spawned.effect.params.rev, HEAD);
+  t.deepEqual(spawned.effect.endowments, ['performer', 'operator']);
+
+  sim.settle(spawned.effectId, 'fulfilled', harden({ status: 'completed' }));
+  t.true(sim.status().done);
+  t.deepEqual(sim.status().output, { head: HEAD, round: 0 });
+});
+
+test('the gated nixos chart requires staged files before the panel sees them', t => {
+  const sim = makeSimulator(reviewedNixosChangeChart, { params });
+
+  // A head alone does not describe a NixOS change; it costs a round rather
+  // than reaching a spawn the deploy chart's params would reject.
+  const ask = pendingOf(sim, 'ask', { to: 'developer' });
+  sim.settle(ask.effectId, 'fulfilled', harden({ head: HEAD }));
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.remaining, 1);
+
+  const files = harden([{ path: 'modules/firewall.nix', text: '{ }\n' }]);
+  const retry = pendingOf(sim, 'ask', { to: 'developer' });
+  sim.settle(retry.effectId, 'fulfilled', harden({ head: HEAD, files }));
+  t.is(sim.status().state, 'review');
+
+  // The panel is shown the staged files, not just a ref.
+  const [seat] = reviewerAsks(sim);
+  t.true(seat.effect.what.description.includes('firewall.nix'));
+
+  verdict(sim, true, 'lgtm');
+  const spawned = pendingOf(sim, 'spawn');
+  t.is(spawned.effect.chart.name, 'nixos-config-change');
+  t.deepEqual(spawned.effect.params.files, files);
+});
