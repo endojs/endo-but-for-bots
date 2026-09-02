@@ -2644,14 +2644,17 @@ pub enum NativeMethod {
     /// `Promise.reject(reason)` (`fx_Promise_reject`): a promise rejected
     /// with `reason`.
     PromiseRejectStatic,
-    /// `Promise.all(iterable)` (`fx_Promise_all`): a later increment.
+    /// `Promise.all(iterable)` (`fx_Promise_all`): live iterator consumption
+    /// with ordered aggregate fulfillment and abrupt-completion rejection.
     PromiseAll,
-    /// `Promise.race(iterable)` (`fx_Promise_race`): a later increment.
+    /// `Promise.race(iterable)` (`fx_Promise_race`): live iterator consumption
+    /// and first-settlement forwarding.
     PromiseRace,
-    /// `Promise.allSettled(iterable)` (`fx_Promise_allSettled`): a later
-    /// increment.
+    /// `Promise.allSettled(iterable)` (`fx_Promise_allSettled`): live iterator
+    /// consumption and ordered settlement records.
     PromiseAllSettled,
-    /// `Promise.any(iterable)` (`fx_Promise_any`): a later increment.
+    /// `Promise.any(iterable)` (`fx_Promise_any`): live iterator consumption,
+    /// first fulfillment, or an ordered `AggregateError`.
     PromiseAny,
     /// A promise's resolve/reject function (XS's `fxResolvePromise`/
     /// `fxRejectPromise` host functions handed to the executor). Recognized
@@ -7874,6 +7877,21 @@ impl Interp {
             .any(|name| self.symbol_ids.contains_key(*name))
         {
             self.intern_key("constructor");
+        }
+        // Promise combinators perform these property operations implicitly:
+        // GetPromiseResolve(C), GetIterator, IteratorStepValue, and Invoke of
+        // the returned promise's `then`. Reify their boot-default string keys
+        // before the installed-name floor is fixed, exactly like Array species'
+        // implicit `constructor` lookup above. Otherwise a source that names
+        // only `Promise.all` can observe a hollow `%Promise%.resolve` or
+        // iterator prototype even though the guest never deleted it.
+        if ["all", "allSettled", "race", "any"]
+            .iter()
+            .any(|name| self.symbol_ids.contains_key(*name))
+        {
+            for name in ["resolve", "then", "next", "value", "done"] {
+                self.intern_key(name);
+            }
         }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, true, |_| true);
@@ -25493,26 +25511,6 @@ impl Interp {
         }
     }
 
-    /// `Promise.resolve(v)` reduced to the promise instance it yields (XS's
-    /// `fx_Promise_resolve` used internally by the combinators for each
-    /// element): a native promise is returned as-is (the identity fast path); a
-    /// non-promise value builds a fresh capability and settles it (adopting a
-    /// user thenable through the queued keystone job). Shares
-    /// [`PROMISE_RESOLVE_SAME_METERING`]/[`PROMISE_RESOLVE_STATIC_METERING`]
-    /// with the `Promise.resolve` static.
-    fn promise_resolve_to_instance(&mut self, v: Slot) -> Result<crate::value::SlotIndex, Halt> {
-        if let Payload::Reference(r) = v.value {
-            if self.promises.contains_key(&r) {
-                self.meter.tick_raw(PROMISE_RESOLVE_SAME_METERING);
-                return Ok(r);
-            }
-        }
-        self.meter.tick_raw(PROMISE_RESOLVE_STATIC_METERING);
-        let (derived, _resolve, _reject) = self.new_promise_capability();
-        self.settle_promise(derived, v, false)?;
-        Ok(derived)
-    }
-
     /// `Promise.prototype.finally(onFinally)` (`fx_Promise_prototype_finally`):
     /// register a native FINALLY reaction carrying `onFinally` (in the
     /// reaction's `on_fulfilled` slot) plus the derived promise's capability,
@@ -25588,14 +25586,32 @@ impl Interp {
     }
 
     /// `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build the
-    /// derived promise and its shared [`CombinatorState`], then walk the
-    /// (dense-Array) iterable resolving each element to a promise and
-    /// registering a native COMBINE reaction on it. Returns the derived
-    /// promise. Only a dense Array iterable is modeled (mirroring
-    /// [`Self::build_aggregate_error`]); any other iterable self-names. Each
-    /// element reaction settles into the shared state at the drain
-    /// ([`Self::run_combine_reaction`]).
+    /// derived promise and its shared [`CombinatorState`], consume the input's
+    /// live iterator protocol, resolve each yielded value through the
+    /// constructor's once-read `resolve` method, and register a native COMBINE
+    /// reaction on each ordinary Promise result. Iterator advancement errors
+    /// reject without closing; abrupt completions after a value is obtained
+    /// close the iterator before rejecting. Each element reaction settles into
+    /// the shared state at the drain ([`Self::run_combine_reaction`]).
     fn promise_combinator(
+        &mut self,
+        code: &[u8],
+        kind: CombinatorKind,
+        iterable: Slot,
+        constructor: Slot,
+    ) -> Result<Slot, Halt> {
+        // Promise combinator algorithms catch every abrupt completion after
+        // capability construction and reject that capability. Temporarily
+        // hide the caller's jump targets so a getter/callback throw escapes to
+        // the native boundary as a value instead of synchronously resuming the
+        // caller's surrounding `try` statement.
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.promise_combinator_inner(code, kind, iterable, constructor);
+        self.jumps = saved_jumps;
+        outcome
+    }
+
+    fn promise_combinator_inner(
         &mut self,
         code: &[u8],
         kind: CombinatorKind,
@@ -25621,146 +25637,299 @@ impl Interp {
             }
         }
         self.meter.tick_raw(PROMISE_COMBINATOR_FRAME_METERING);
-        let (derived, _resolve, _reject) = self.new_promise_capability();
+        let (derived, resolve, reject) = self.new_promise_capability();
+        let result_promise = Slot::of(Kind::Reference, Payload::Reference(derived));
 
-        // Iterator acquisition failures reject the capability; they do not
-        // synchronously throw from Promise.{all,allSettled,race,any}.  Handle
-        // the common non-iterable inputs here, including an Array whose own
-        // @@iterator shadows the intrinsic with a non-callable value.
-        let iterator_id = self.well_known_symbol_property_id("iterator");
-        let array_has_own_iterator = match (iterable.value, iterator_id) {
-            (Payload::Reference(arr), Some(id)) if self.arrays.contains_key(&arr) => {
-                self.find_property(arr, id).is_some()
-            }
-            _ => false,
-        };
-        if array_has_own_iterator {
-            let Payload::Reference(arr) = iterable.value else {
-                unreachable!()
-            };
-            let method = self.instance_get(arr, iterator_id.unwrap());
-            if !self.is_callable_value(method) {
-                let error = self.build_error("TypeError", 0, 0);
-                self.settle_promise(derived, error, true)?;
-                return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
-            }
-            if !self.is_user_function_value(method) {
-                return Err(Halt::Unsupported(
-                    "promise-combinator:native-custom-iterator",
-                ));
-            }
-            match self.run_callback_catching_throw(code, method, iterable, &[])? {
-                Ok(iterator) if iterator.kind == Kind::Reference => {
-                    return Err(Halt::Unsupported("promise-combinator:custom-iterator-next"));
-                }
-                Ok(_) => {
-                    let error = self.build_error("TypeError", 0, 0);
-                    self.settle_promise(derived, error, true)?;
-                    return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
-                }
-                Err(thrown) => {
-                    self.settle_promise(derived, thrown, true)?;
-                    return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
-                }
-            }
-        }
-        let elems: Vec<Slot> = match iterable.value {
-            Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
-                let data = &self.arrays[&arr];
-                let len = data.length;
-                (0..len)
-                    .map(|i| data.items().get(&i).copied().unwrap_or_else(Slot::undefined))
-                    .collect()
-            }
-            Payload::String(off) if iterable.kind == Kind::String => {
-                // The built-in String iterator yields Unicode code points (a
-                // surrogate pair together, a lone surrogate by itself).
-                let units = self.str_units(off);
-                let mut out = Vec::new();
-                let mut i = 0;
-                while i < units.len() {
-                    let width = if (0xD800..=0xDBFF).contains(&units[i])
-                        && i + 1 < units.len()
-                        && (0xDC00..=0xDFFF).contains(&units[i + 1])
-                    {
-                        2
-                    } else {
-                        1
-                    };
-                    out.push(self.new_string_units(&units[i..i + width]));
-                    i += width;
-                }
-                out
-            }
-            Payload::Reference(instance) => {
-                let method = iterator_id
-                    .map(|id| self.instance_get(instance, id))
-                    .unwrap_or_else(Slot::undefined);
-                if self.is_callable_value(method) {
-                    if !self.is_user_function_value(method) {
-                        return Err(Halt::Unsupported(
-                            "promise-combinator:native-custom-iterator",
-                        ));
-                    }
-                    match self.run_callback_catching_throw(code, method, iterable, &[])? {
-                        Ok(iterator) if iterator.kind == Kind::Reference => {
-                            return Err(Halt::Unsupported(
-                                "promise-combinator:custom-iterator-next",
-                            ));
-                        }
-                        Ok(_) => {
-                            let error = self.build_error("TypeError", 0, 0);
-                            self.settle_promise(derived, error, true)?;
-                            return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
-                        }
-                        Err(thrown) => {
-                            self.settle_promise(derived, thrown, true)?;
-                            return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
-                        }
-                    }
-                }
-                let error = self.build_error("TypeError", 0, 0);
-                self.settle_promise(derived, error, true)?;
-                return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
-            }
+        // GetPromiseResolve(C) precedes GetIterator in the current algorithm.
+        // In particular, a throwing `resolve` getter must not invoke the
+        // iterable's @@iterator method or attempt IteratorClose.
+        let constructor_inst = match constructor.value {
+            Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
             _ => {
                 let error = self.build_error("TypeError", 0, 0);
-                self.settle_promise(derived, error, true)?;
-                return Ok(Slot::of(Kind::Reference, Payload::Reference(derived)));
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
             }
         };
-        let total = elems.len() as u32;
-        // The accumulator Array: values (all), `{status,...}` records
-        // (allSettled), or errors (any). `race` ignores it. Preset dense length
-        // so the resolved array reports `total`.
+        let resolve_id = self.intern_key("resolve");
+        self.install_pending_intrinsics();
+        let promise_resolve = match self.array_from_try(|this| {
+            this.mop_get(code, constructor_inst, resolve_id, constructor)
+        })? {
+            Ok(method) if self.is_callable_value(method) => method,
+            Ok(_) => {
+                let error = self.build_error("TypeError", 0, 0);
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
+            }
+            Err(error) => {
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
+            }
+        };
+
+        // Intrinsic iterator result objects materialize only cached fields, so
+        // seed the two IteratorResult keys before an intrinsic iterator runs.
+        let value_id = self.intern_key("value");
+        let done_id = self.intern_key("done");
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+
+        // GetMethod(iterable, @@iterator), including GetV through primitive
+        // wrapper prototypes. Every abrupt completion after capability
+        // creation becomes a rejection of the returned promise.
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let iterator_method = match iterable.value {
+            Payload::Reference(inst) if iterable.kind == Kind::Reference => {
+                match self.array_from_try(|this| {
+                    this.mop_get(code, inst, iterator_id, iterable)
+                })? {
+                    Ok(method) => method,
+                    Err(error) => {
+                        self.settle_via_function(reject, error)?;
+                        return Ok(result_promise);
+                    }
+                }
+            }
+            _ => {
+                let proto = match iterable.kind {
+                    Kind::String => self.string_proto,
+                    Kind::Integer | Kind::Number => self.number_proto,
+                    Kind::Symbol => self.symbol_proto,
+                    Kind::BigInt => self.bigint_proto,
+                    Kind::Boolean => self
+                        .intrinsics
+                        .get("Boolean")
+                        .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                        .unwrap_or(crate::value::SlotIndex::NULL),
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if proto.is_null() {
+                    Slot::undefined()
+                } else {
+                    match self.array_from_try(|this| {
+                        this.mop_get(code, proto, iterator_id, iterable)
+                    })? {
+                        Ok(method) => method,
+                        Err(error) => {
+                            self.settle_via_function(reject, error)?;
+                            return Ok(result_promise);
+                        }
+                    }
+                }
+            }
+        };
+        if !self.is_callable_value(iterator_method) {
+            let error = self.build_error("TypeError", 0, 0);
+            self.settle_via_function(reject, error)?;
+            return Ok(result_promise);
+        }
+        let iterator = match self.call_any_catching_throw(code, iterator_method, iterable, &[])? {
+            Ok(iterator) if iterator.kind == Kind::Reference => iterator,
+            Ok(_) => {
+                let error = self.build_error("TypeError", 0, 0);
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
+            }
+            Err(error) => {
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
+            }
+        };
+        let iterator_inst = match iterator.value {
+            Payload::Reference(inst) => inst,
+            _ => unreachable!(),
+        };
+        let next_id = self.intern_key("next");
+        let next_method = match self
+            .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
+        {
+            Ok(method) if self.is_callable_value(method) => method,
+            Ok(_) => {
+                let error = self.build_error("TypeError", 0, 0);
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
+            }
+            Err(error) => {
+                self.settle_via_function(reject, error)?;
+                return Ok(result_promise);
+            }
+        };
+
+        // Keep the specification's initial +1 sentinel while iteration is in
+        // progress. Promise jobs do not drain until this call returns, so the
+        // final decrement can safely happen after the live loop completes.
         let results = self.new_array();
-        self.arrays.get_mut(&results).unwrap().length = total;
         let comb_idx = self.combinators.len();
         self.combinators.push(CombinatorState {
             kind,
             derived,
-            remaining: total,
+            remaining: 1,
             results,
             done: false,
         });
-        for (i, elem) in elems.into_iter().enumerate() {
-            self.meter.tick_raw(PROMISE_COMBINATOR_PER_ELEMENT_METERING);
-            let elem_promise = self.promise_resolve_to_instance(elem)?;
-            let reaction = PromiseReaction {
-                on_fulfilled: Slot::undefined(),
-                on_rejected: Slot::undefined(),
-                resolve: Slot::undefined(),
-                reject: Slot::undefined(),
-                kind: ReactionKind::Combine(comb_idx as u32, i as u32),
+
+        for index in 0..1_000_000u32 {
+            let step = match self.call_any_catching_throw(code, next_method, iterator, &[])? {
+                Ok(step) => step,
+                Err(error) => {
+                    // IteratorStepValue failures set [[Done]] and reject
+                    // directly; IteratorClose must not run.
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
             };
-            self.register_native_reaction(elem_promise, reaction);
+            let step_inst = match step.value {
+                Payload::Reference(inst) if step.kind == Kind::Reference => inst,
+                _ => {
+                    let error = self.build_error("TypeError", 0, 0);
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            };
+            let done = match self
+                .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
+            {
+                Ok(done) => done,
+                Err(error) => {
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            };
+            if self.truthy(&done) {
+                self.arrays.get_mut(&results).unwrap().length = index;
+                self.combinators[comb_idx].remaining -= 1;
+                if self.combinators[comb_idx].remaining == 0 {
+                    self.settle_empty_combinator(comb_idx)?;
+                }
+                return Ok(result_promise);
+            }
+            let value = match self
+                .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            };
+
+            self.meter.tick_raw(PROMISE_COMBINATOR_PER_ELEMENT_METERING);
+            self.combinators[comb_idx].remaining = self.combinators[comb_idx]
+                .remaining
+                .checked_add(1)
+                .ok_or(Halt::StepLimit(self.n_dispatched))?;
+            let next_promise = match self.call_any_catching_throw(
+                code,
+                promise_resolve,
+                constructor,
+                &[value],
+            )? {
+                Ok(value) => value,
+                Err(error) => {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            };
+            let next_promise_inst = match next_promise.value {
+                Payload::Reference(inst) if next_promise.kind == Kind::Reference => inst,
+                _ => {
+                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.array_from_close(code, iterator, error)?;
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            };
+            let then_id = self.intern_key("then");
+            self.install_pending_intrinsics();
+            self.then_id = Some(then_id);
+            let then = match self.array_from_try(|this| {
+                this.mop_get(code, next_promise_inst, then_id, next_promise)
+            })? {
+                Ok(method) if self.is_callable_value(method) => method,
+                Ok(_) => {
+                    let error = self.build_error("TypeError", 0, 0);
+                    let error = self.array_from_close(code, iterator, error)?;
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+                Err(error) => {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            };
+
+            if self.promises.contains_key(&next_promise_inst)
+                && matches!(then.value,
+                    Payload::Reference(function)
+                        if self.method_of(function) == Some(NativeMethod::PromiseThen))
+            {
+                let reaction = PromiseReaction {
+                    on_fulfilled: Slot::undefined(),
+                    on_rejected: Slot::undefined(),
+                    resolve: Slot::undefined(),
+                    reject: Slot::undefined(),
+                    kind: ReactionKind::Combine(comb_idx as u32, index),
+                };
+                self.register_native_reaction(next_promise_inst, reaction);
+                continue;
+            }
+
+            // Promise resolving functions already provide exactly the
+            // anonymous, length-1, non-constructable, one-shot callback shape
+            // the per-element algorithms require. For all/allSettled/any, a
+            // private bridge promise turns those callbacks into the existing
+            // native COMBINE reaction. Race passes the result capability pair
+            // itself, as specified. The bridge also naturally keeps callbacks
+            // captured by a custom `then` live after this call returns and is
+            // already represented by the promise snapshot cluster.
+            let handlers = if kind == CombinatorKind::Race {
+                (resolve, reject)
+            } else {
+                let (bridge, bridge_resolve, bridge_reject) = self.new_promise_capability();
+                let reaction = PromiseReaction {
+                    on_fulfilled: Slot::undefined(),
+                    on_rejected: Slot::undefined(),
+                    resolve: Slot::undefined(),
+                    reject: Slot::undefined(),
+                    kind: ReactionKind::Combine(comb_idx as u32, index),
+                };
+                self.register_native_reaction(bridge, reaction);
+                match kind {
+                    CombinatorKind::All => (bridge_resolve, reject),
+                    CombinatorKind::AllSettled => (bridge_resolve, bridge_reject),
+                    CombinatorKind::Any => (resolve, bridge_reject),
+                    CombinatorKind::Race => unreachable!(),
+                }
+            };
+            match self.call_any_catching_throw(
+                code,
+                then,
+                next_promise,
+                &[handlers.0, handlers.1],
+            )? {
+                Ok(_) => continue,
+                Err(error) => {
+                    let error = self.array_from_close(code, iterator, error)?;
+                    self.combinators[comb_idx].done = true;
+                    self.settle_via_function(reject, error)?;
+                    return Ok(result_promise);
+                }
+            }
         }
-        // An empty iterable settles synchronously (XS's `remainingElementsCount`
-        // reaching 0 after the initial +1 with no elements to add).
-        if total == 0 {
-            self.settle_empty_combinator(comb_idx)?;
-        }
-        Ok(Slot::of(Kind::Reference, Payload::Reference(derived)))
+        Err(Halt::StepLimit(self.n_dispatched))
     }
 
     /// Settle a combinator whose iterable was empty: `all`/`allSettled` resolve

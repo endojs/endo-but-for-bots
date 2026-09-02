@@ -3,11 +3,12 @@
 //! 5-slot native-reaction path (design [`designs/ironhorse-engine.md`] §
 //! promises; the review ledger's promise residuals).
 //!
-//! Each combinator builds a derived promise, resolves each (dense-Array)
-//! element to a promise, and registers a native reaction whose drain behavior
-//! folds the element's settlement into the shared `remainingElementsCount` /
-//! results state — the same crank discipline the existing promise tests lock
-//! (reactions run at the pump-loop drain, never synchronously).
+//! Each combinator builds a derived promise, consumes the input's live iterator,
+//! resolves each yielded value through the constructor's observable `resolve`
+//! method, and registers a native reaction whose drain behavior folds the
+//! element's settlement into the shared `remainingElementsCount` / results
+//! state — the same crank discipline the existing promise tests lock (reactions
+//! run at the pump-loop drain, never synchronously).
 //!
 //! Two gates per the accuracy-over-parity doctrine:
 //!   1. **Result agreement** — the program's completion value agrees with the
@@ -311,5 +312,97 @@ fn iterator_method_returning_a_primitive_rejects_capability() {
     assert_drains_to(
         "var g,o={}; o[Symbol.iterator]=function(){return 1;}; Promise.any(o).then(undefined,function(e){g=e.name;}); undefined",
         "TypeError",
+    );
+}
+
+#[test]
+fn combinators_consume_custom_iterator_protocols() {
+    assert_drains_to(
+        "var g,o={}; o[Symbol.iterator]=function(){var i=0;return {next:function(){return i<3?{value:++i,done:false}:{done:true}}}}; Promise.all(o).then(function(a){g=a.join(',')}); undefined",
+        "1,2,3",
+    );
+    assert_drains_to(
+        "var g,o={}; o[Symbol.iterator]=function(){var i=0;return {next:function(){return i<2?{value:++i,done:false}:{done:true}}}}; Promise.allSettled(o).then(function(a){g=a[0].status+':'+a[1].value}); undefined",
+        "fulfilled:2",
+    );
+    assert_drains_to(
+        "var g,o={}; o[Symbol.iterator]=function(){var i=0;return {next:function(){return i<2?{value:++i,done:false}:{done:true}}}}; Promise.race(o).then(function(v){g=''+v}); undefined",
+        "1",
+    );
+    assert_drains_to(
+        "var g,o={}; o[Symbol.iterator]=function(){var i=0;return {next:function(){return i<2?{value:++i,done:false}:{done:true}}}}; Promise.any(o).then(function(v){g=''+v}); undefined",
+        "1",
+    );
+}
+
+#[test]
+fn promise_resolve_is_read_once_before_iterator_acquisition() {
+    assert_drains_to(
+        "var g,log='',old=Promise.resolve,o={}; Object.defineProperty(Promise,'resolve',{configurable:true,get:function(){log+='r';return old}}); o[Symbol.iterator]=function(){log+='i';return {next:function(){log+='n';return {done:true}}}}; Promise.all(o).then(function(){g=log}); undefined",
+        "rin",
+    );
+}
+
+#[test]
+fn iterator_step_failures_reject_without_closing() {
+    assert_drains_to(
+        "var g,closed=0,marker={},o={}; o[Symbol.iterator]=function(){return {next:function(){throw marker},return:function(){closed++;return {}}}}; Promise.all(o).then(undefined,function(e){g=(e===marker)+':'+closed}); undefined",
+        "true:0",
+    );
+    assert_drains_to(
+        "var g,closed=0,marker={},step={value:1}; Object.defineProperty(step,'done',{get:function(){throw marker}}); var o={}; o[Symbol.iterator]=function(){return {next:function(){return step},return:function(){closed++;return {}}}}; Promise.race(o).then(undefined,function(e){g=(e===marker)+':'+closed}); undefined",
+        "true:0",
+    );
+    assert_drains_to(
+        "var g,closed=0,marker={},step={done:false}; Object.defineProperty(step,'value',{get:function(){throw marker}}); var o={}; o[Symbol.iterator]=function(){return {next:function(){return step},return:function(){closed++;return {}}}}; Promise.allSettled(o).then(undefined,function(e){g=(e===marker)+':'+closed}); undefined",
+        "true:0",
+    );
+}
+
+#[test]
+fn element_processing_failures_close_before_rejecting() {
+    assert_drains_to(
+        "var g,closed=0,marker={},old=Promise.resolve,o={}; Promise.resolve=function(){throw marker}; o[Symbol.iterator]=function(){return {next:function(){return {value:1,done:false}},return:function(){closed++;return {}}}}; Promise.all(o).then(undefined,function(e){g=(e===marker)+':'+closed}); Promise.resolve=old; undefined",
+        "true:1",
+    );
+    assert_drains_to(
+        "var g,closed=0,marker={},p=Promise.resolve(1),o={}; Object.defineProperty(p,'then',{get:function(){throw marker}}); var old=Promise.resolve; Promise.resolve=function(){return p}; o[Symbol.iterator]=function(){return {next:function(){return {value:1,done:false}},return:function(){closed++;return {}}}}; Promise.race(o).then(undefined,function(e){g=(e===marker)+':'+closed}); Promise.resolve=old; undefined",
+        "true:1",
+    );
+}
+
+#[test]
+fn array_iteration_observes_growth_caused_by_promise_resolve() {
+    assert_drains_to(
+        "var g,a=[1],old=Promise.resolve; Promise.resolve=function(v){if(v===1)a.push(2);return old.call(Promise,v)}; Promise.all(a).then(function(v){g=v.join(',')}); Promise.resolve=old; undefined",
+        "1,2",
+    );
+}
+
+#[test]
+fn custom_then_methods_drive_each_combinator() {
+    assert_drains_to(
+        "var g; Promise.resolve=function(v){return {then:function(f){f(v+1)}}}; Promise.all([1,2]).then(function(v){g=v.join(',')}); undefined",
+        "2,3",
+    );
+    assert_drains_to(
+        "var g; Promise.resolve=function(v){return {then:function(f,r){f(v);r(9)}}}; Promise.allSettled([1]).then(function(v){g=v[0].status+':'+v[0].value}); undefined",
+        "fulfilled:1",
+    );
+    assert_drains_to(
+        "var g; Promise.resolve=function(v){return {then:function(f,r){if(v===1)r(7);else f(v)}}}; Promise.race([1,2]).then(function(v){g='f'+v},function(e){g='r'+e}); undefined",
+        "r7",
+    );
+    assert_drains_to(
+        "var g; Promise.resolve=function(v){return {then:function(f,r){if(v===1)r(7);else f(v)}}}; Promise.any([1,2]).then(function(v){g='f'+v},function(e){g='r'}); undefined",
+        "f2",
+    );
+}
+
+#[test]
+fn captured_element_callback_remains_live_after_iteration() {
+    assert_drains_to(
+        "var g,fulfill; Promise.resolve=function(){return {then:function(f){fulfill=f}}}; var p=Promise.all([1]); fulfill(4); fulfill(5); p.then(function(v){g=v.join(',')}); undefined",
+        "4",
     );
 }
