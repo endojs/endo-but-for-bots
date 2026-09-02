@@ -267,6 +267,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("number_proto", &[Req::GcRoots], "boot anchor"),
     ("symbol_proto", &[Req::GcRoots], "boot anchor"),
     ("symbol_to_primitive_method", &[Req::GcRoots], "lazy well-known boot method"),
+    ("date_to_primitive_method", &[Req::GcRoots], "lazy well-known boot method"),
     ("bigint_proto", &[Req::GcRoots], "boot anchor"),
     ("promise_proto", &[Req::GcRoots], "boot anchor"),
     ("generator_proto", &[Req::GcRoots], "boot anchor"),

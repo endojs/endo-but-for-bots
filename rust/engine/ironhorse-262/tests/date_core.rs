@@ -26,8 +26,23 @@ fn constructor_utc_and_time_clip_match_xs() {
         "Date.UTC(1970, 0, 1)",
         "Date.UTC(99, 11, 31, 23, 59, 59, 999)",
         "Date.UTC(2016, 12, 1) === Date.UTC(2017, 0, 1)",
+        "Date.UTC()",
         "try{new Date(1n);false}catch(e){e instanceof TypeError}",
         "try{Date.UTC(1n);false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn date_intrinsic_reflection_matches_xs() {
+    for source in [
+        "Date.hasOwnProperty('parse')+':'+Date.hasOwnProperty('UTC')+':'+Date.hasOwnProperty('now')",
+        "Date.prototype.hasOwnProperty('toDateString')+':'+Date.prototype.hasOwnProperty('setUTCFullYear')",
+        "Object.keys(Object.getOwnPropertyDescriptor(globalThis,'Date')).join(',')",
+        "var d=Object.getOwnPropertyDescriptor(globalThis,'Date');d.writable+':'+d.enumerable+':'+d.configurable",
+        "var seen=false;for(var k in globalThis){if(k==='Date')seen=true}seen",
+        "var n='Date';Object.getOwnPropertyDescriptor(globalThis,n);delete globalThis[n];Object.getOwnPropertyDescriptor(globalThis,n)===undefined",
     ] {
         agrees(source);
     }
@@ -40,6 +55,7 @@ fn utc_getters_and_iso_rendering_match_xs() {
         "new Date(0).toISOString()",
         "new Date(-62167219200000).toISOString()",
         "new Date(0).toUTCString()",
+        "Object.prototype.toString.call(new Date(0))",
         "new Date(NaN).toString()",
         "try { new Date(NaN).toISOString(); false } catch (e) { e instanceof RangeError }",
     ] {
@@ -52,6 +68,11 @@ fn parsing_and_set_time_match_xs() {
     for source in [
         "Date.parse('1970-01-01T00:00:00.000Z')",
         "Date.parse('2000-02-29')",
+        "new Date('1970').toISOString()",
+        "new Date('2000-02').toISOString()",
+        "new Date('-000001-07-01T00:00Z').getUTCFullYear()",
+        "var d=new Date('-000001-07-01T00:00Z');d.toDateString().split(' ')[3]+':'+d.toUTCString().split(' ')[3]",
+        "var d=new Date(0);Date.parse(d.toString())+':'+Date.parse(d.toUTCString())",
         "new Date('2000-02-29T12:34:56.789Z').toISOString()",
         "var d=new Date(1); d.setTime(null) === 0 && d.getTime() === 0",
         "new Date(0).toJSON()",
@@ -71,6 +92,34 @@ fn to_json_is_generic_and_observable() {
         "var ok=false;try{Date.prototype.toJSON.call(null)}catch(e){ok=e instanceof TypeError}ok",
         "Number.prototype.toISOString=function(){return this.valueOf()+1};Date.prototype.toJSON.call(4)",
         "var o;var fn=new Proxy(function(){return 'base'},{apply:function(target,self,args){return self===o&&args.length===0?'ok':'bad'}});o={valueOf:function(){return 1},toISOString:fn};Date.prototype.toJSON.call(o)",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn date_to_primitive_and_locale_surface_match_xs() {
+    for source in [
+        "var d=new Date(0);d[Symbol.toPrimitive]('default')===d.toString()",
+        "var d=new Date(0);d[Symbol.toPrimitive]('number')===0",
+        "var log='';var o={toString:function(){log+='s';return 'ok'},valueOf:function(){log+='n';return 1}};Date.prototype[Symbol.toPrimitive].call(o,'default')+':'+log",
+        "var log='';var o={toString:function(){log+='s';return 'ok'},valueOf:function(){log+='n';return 1}};Date.prototype[Symbol.toPrimitive].call(o,'number')+':'+log",
+        "try{Date.prototype[Symbol.toPrimitive].call({},'invalid');false}catch(e){e instanceof TypeError}",
+        "try{Date.prototype[Symbol.toPrimitive].call(1,'number');false}catch(e){e instanceof TypeError}",
+        "Date.prototype[Symbol.toPrimitive].name+':'+Date.prototype[Symbol.toPrimitive].length",
+        "typeof Date.prototype.toLocaleString+':'+Date.prototype.toLocaleString.name+':'+Date.prototype.toLocaleString.length",
+        "typeof Date.prototype.toLocaleDateString+':'+Date.prototype.toLocaleDateString.name+':'+Date.prototype.toLocaleDateString.length",
+        "typeof Date.prototype.toLocaleTimeString+':'+Date.prototype.toLocaleTimeString.name+':'+Date.prototype.toLocaleTimeString.length",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn reflect_construct_date_uses_new_target_prototype() {
+    for source in [
+        "var C=function(){};var d=Reflect.construct(Date,[64],C);Object.getPrototypeOf(d)===C.prototype&&Date.prototype.getTime.call(d)===64",
+        "var C=function(){};C.prototype=null;var d=Reflect.construct(Date,[64],C);Object.getPrototypeOf(d)===Date.prototype&&d.getTime()===64",
     ] {
         agrees(source);
     }

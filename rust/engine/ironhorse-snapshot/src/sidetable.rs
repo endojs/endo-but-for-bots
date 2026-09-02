@@ -743,6 +743,7 @@ mod tests {
             // property ids remain lazy. They are explicit roots until first
             // materialization and are re-derived at identical slots on resume.
             "function_has_instance_method", "symbol_to_primitive_method",
+            "date_to_primitive_method",
             // The three `@@iterator` natives that used to be minted
             // during `link_intrinsics` (above `boot_slot_count`, so
             // resume re-derived neither their `FuncInfo` nor their name
