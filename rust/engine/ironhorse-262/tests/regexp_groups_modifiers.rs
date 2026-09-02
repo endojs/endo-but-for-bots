@@ -117,6 +117,12 @@ fn replacement_named_captures_including_duplicates() {
         "'08/2026'.replace(/(?<y>[0-9]{4})-(?<m>[0-9]{2})|(?<m>[0-9]{2})\\/(?<y>[0-9]{4})/, '$<y>') === '2026'",
         // An unset named group substitutes empty.
         "'c'.replace(/(?<x>b)?c/, '[$<x>]') === '[]'",
+        // Each collected global match retains its own duplicate-name map.
+        "'xy'.replace(/(?<a>x)|(?<a>y)/g, '$<a>$<a>') === 'xxyy'",
+        // A functional replacer receives the per-match groups object last.
+        "'2026-08'.replace(/(?<y>[0-9]{4})-(?<m>[0-9]{2})/, function(all,y,m,pos,input,named){return named.m+'/'+named.y+':'+arguments.length+':'+pos+':'+input}) === '08/2026:6:0:2026-08'",
+        "'c'.replace(/(?<x>b)?c/, function(all,x,pos,input,named){return String(named.x)+':'+arguments.length}) === 'undefined:5'",
+        "'xy'.replace(/(?<a>x)|(?<a>y)/g, function(all,x,y,pos,input,named){return named.a+pos}) === 'x0y1'",
     ] {
         agrees(source);
     }

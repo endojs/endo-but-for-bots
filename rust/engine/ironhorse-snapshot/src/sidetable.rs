@@ -106,12 +106,6 @@
 //!   which the persist gate refuses by kind, and an unanchored entry is
 //!   unreachable (the next arena compaction drops it), so a resume that
 //!   rebuilds the table empty is observationally exact.
-//! - `regexp_last_names` — the last-match named-group scratch (a global
-//!   `Vec<i32>`, not slot-keyed): per-crank match state consumed by the
-//!   legacy result accessors within the crank; its primary row (`RegExps`) is
-//!   Serialized since schema 11 (source/flags plus the legacy numeric
-//!   lastIndex fallback travel; current lastIndex is a HEAP property and the
-//!   program recompiles), while this scratch stays honest per-crank state.
 //! - `arguments_objects` — the arguments-exotic brand set, riding its
 //!   primary row (`Arrays`, Serialized). Since store schema 11 the brand
 //!   itself TRAVELS (the `ARGB` atom / small-state arguments section), so
@@ -713,7 +707,7 @@ mod tests {
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
             "detached_buffers", "shared_buffers", "deleted_fn_meta", "from_async",
-            "regexp_last_names", "arguments_objects", "side_refs",
+            "arguments_objects", "side_refs",
         ];
         const TRANSIENTS: &[&str] = &[
             "args", "this_val", "this_captures", "cur_func", "cur_target", "target_func",
