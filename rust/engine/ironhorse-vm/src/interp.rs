@@ -9841,21 +9841,37 @@ impl Interp {
     /// `%Array.prototype%.join` may be a deliberate guest deletion and is left
     /// alone.
     ///
-    /// The arguments-layout marker is stronger than inspecting the restored
-    /// objects: a current guest can intentionally select `%Array.prototype%`
-    /// or delete its own `@@iterator`, producing the exact legacy shape. Only
-    /// marker-free snapshots are upgraded. Custom prototypes and own iterator
-    /// overrides remain untouched while the old default representation gains
-    /// `%Object.prototype%` and the standard own iterator.
+    /// A current guest can intentionally select `%Array.prototype%` or delete
+    /// its own `@@iterator`, producing the exact legacy shape. The marker
+    /// identifies snapshots written after this migration existed; among older
+    /// snapshots, the persisted `join` install floor distinguishes the legacy
+    /// arguments representation from the corrected intermediate one. Custom
+    /// prototypes and own iterator overrides remain untouched while the old
+    /// default representation gains `%Object.prototype%` and the standard own
+    /// iterator.
     pub fn migrate_restored_layout(&mut self) {
-        let legacy_arguments = !self.symbol_key_ids.contains_key(&self.template_cache);
+        let marker_free = !self.symbol_key_ids.contains_key(&self.template_cache);
         // Raw-bytecode machines have no property-name table and therefore no
         // linked language layout to migrate. Minting any marker would still
         // change their otherwise table-free state and break byte-identical
         // unlinked snapshot round trips.
-        if self.symbol_names.is_empty() || !legacy_arguments {
+        if self.symbol_names.is_empty() || !marker_free {
             return;
         }
+
+        // The corrected arguments representation predates the hidden marker,
+        // but it landed together with the implicit Array `join` dependency.
+        // Those intermediate snapshots therefore have `join` at or below the
+        // persisted install floor even when the guest later deleted the
+        // property. Only a marker-free snapshot that had never considered
+        // `join` is old enough for the arguments-layout rewrite. This avoids
+        // treating a current-layout guest-selected Array prototype and deleted
+        // own iterator as legacy state.
+        let join_was_considered = self
+            .symbol_ids
+            .get("join")
+            .is_some_and(|id| *id as usize <= self.installed_names_len);
+        let legacy_arguments = !join_was_considered;
 
         // Before standard globals became non-enumerable, an untouched
         // intrinsic binding had the exact old default descriptor: its value
@@ -9897,11 +9913,6 @@ impl Interp {
             }
         }
 
-        let join_was_considered = self
-            .symbol_ids
-            .get("join")
-            .is_some_and(|id| *id as usize <= self.installed_names_len);
-
         if !join_was_considered {
             self.intern_key_unmetered("join");
         }
@@ -9913,7 +9924,7 @@ impl Interp {
             self.install_pending_intrinsics();
         }
 
-        if self.arguments_objects.is_empty() {
+        if !legacy_arguments || self.arguments_objects.is_empty() {
             return;
         }
         let iterator_id = self.well_known_symbol_property_id("iterator");
@@ -9922,7 +9933,8 @@ impl Interp {
             .iter()
             .find(|(holder, name, _)| *holder == self.array_proto && *name == "values")
             .map(|(_, _, method)| *method);
-        let owners: Vec<_> = self.arguments_objects.iter().copied().collect();
+        let mut owners: Vec<_> = self.arguments_objects.iter().copied().collect();
+        owners.sort_unstable_by_key(|owner| owner.0);
         for owner in owners {
             if self.instance_prototype(owner) == self.array_proto {
                 self.slots.get_mut(owner).value = Payload::Reference(self.object_proto);
@@ -50059,6 +50071,73 @@ mod tests {
                 .ordinary_get_own_descriptor(args, iterator_id)
                 .is_none(),
             "the marker preserves a current guest-deleted own iterator"
+        );
+    }
+
+    #[test]
+    fn marker_free_current_layout_preserves_guest_arguments_edits() {
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&["seed".to_string()]);
+        interp
+            .symbol_key_ids
+            .remove(&interp.template_cache)
+            .expect("simulate an intermediate snapshot before the marker");
+        let join_id = interp.symbol_ids["join"];
+        assert!(interp.delete_own_property(interp.array_proto, join_id));
+
+        let args = interp.new_array_unmetered();
+        let iterator_id = interp
+            .well_known_symbol_property_id("iterator")
+            .expect("boot iterator symbol");
+        interp.restore_arguments_brands(vec![args.0]);
+
+        interp.migrate_restored_layout();
+
+        assert!(interp.symbol_key_ids.contains_key(&interp.template_cache));
+        assert!(
+            interp
+                .ordinary_get_own_descriptor(interp.array_proto, join_id)
+                .is_none(),
+            "an intermediate snapshot's considered then deleted join stays deleted"
+        );
+        assert_eq!(
+            interp.instance_prototype(args),
+            interp.array_proto,
+            "an intermediate snapshot's guest-selected prototype survives"
+        );
+        assert!(
+            interp
+                .ordinary_get_own_descriptor(args, iterator_id)
+                .is_none(),
+            "an intermediate snapshot's guest-deleted iterator survives"
+        );
+    }
+
+    #[test]
+    fn legacy_arguments_migration_allocates_properties_in_owner_order() {
+        let mut interp = Interp::new();
+        let old_names = vec!["seed".to_string()];
+        interp.bind_program_symbols(&old_names);
+        interp.install_intrinsic_bindings(&old_names, true, |_| true);
+        let owners: Vec<_> = (0..12).map(|_| interp.new_array_unmetered()).collect();
+        interp.restore_arguments_brands(owners.iter().map(|owner| owner.0).collect());
+
+        interp.migrate_restored_layout();
+
+        let iterator_id = interp
+            .well_known_symbol_property_id("iterator")
+            .expect("boot iterator symbol");
+        let property_slots: Vec<_> = owners
+            .iter()
+            .map(|owner| {
+                interp
+                    .find_property(*owner, iterator_id)
+                    .expect("every legacy arguments object gains an iterator")
+            })
+            .collect();
+        assert!(
+            property_slots.windows(2).all(|pair| pair[0].0 < pair[1].0),
+            "migration allocation order follows ascending owner slots"
         );
     }
 
