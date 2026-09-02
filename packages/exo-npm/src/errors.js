@@ -25,9 +25,16 @@ const OFFLINE = 'RegistryOfflineError';
 const PACKAGE_REGISTRY = 'PackageRegistryError';
 
 const annotateRegistryFailure = (error, concreteName) => {
+  // Non-enumerable: an enumerable own property trips pass-style's
+  // "own property must not be enumerable" check. These tags are a same-vat
+  // convenience only — a passable error keeps just message/stack/cause/errors,
+  // so `errorName`/`registryErrorName` are dropped the moment the error crosses
+  // a marshal boundary. Cross-boundary classification therefore rides the
+  // message text (see `registryErrorName`'s prefix fallback), which every
+  // structured registry error carries a distinct spelling of.
   Object.defineProperties(error, {
-    errorName: { value: PACKAGE_REGISTRY, enumerable: true },
-    registryErrorName: { value: concreteName, enumerable: true },
+    errorName: { value: PACKAGE_REGISTRY, enumerable: false },
+    registryErrorName: { value: concreteName, enumerable: false },
   });
   return harden(error);
 };
@@ -174,10 +181,19 @@ harden(RegistryOfflineError);
  * Whether an error belongs to the directory-tree registry contract family.
  * @param {unknown} error
  */
-export const isPackageRegistryError = error =>
-  error !== null &&
-  typeof error === 'object' &&
-  /** @type {{ errorName?: unknown }} */ (error).errorName === PACKAGE_REGISTRY;
+export const isPackageRegistryError = error => {
+  // Classify through `registryErrorName` (which recovers the concrete name from
+  // the message when the non-enumerable `errorName` tag was stripped at a
+  // marshal boundary) rather than reading `errorName` directly, so the family
+  // predicate holds for an error received over CapTP as well as one caught
+  // same-vat. The tree family is exactly {NotFound, PathSyntax, Offline}.
+  const concreteName = registryErrorName(error);
+  return (
+    concreteName === 'RegistryNotFoundError' ||
+    concreteName === 'RegistryPathSyntaxError' ||
+    concreteName === OFFLINE
+  );
+};
 harden(isPackageRegistryError);
 
 /**
@@ -233,6 +249,13 @@ export const registryErrorName = err => {
   if (message.startsWith('Registry network error')) return NETWORK;
   if (message.startsWith('Registry is in offline mode')) return OFFLINE;
   if (message.startsWith('Registry is offline')) return OFFLINE;
+  // The tree-originated not-found and path-syntax errors carry the
+  // `errorName`/`registryErrorName` tags same-vat, but those are stripped when
+  // the error crosses a marshal boundary; the message is the surviving channel.
+  if (message.startsWith('Package registry has no entry at'))
+    return 'RegistryNotFoundError';
+  if (message.startsWith('Invalid package-registry path segment'))
+    return 'RegistryPathSyntaxError';
   return undefined;
 };
 harden(registryErrorName);

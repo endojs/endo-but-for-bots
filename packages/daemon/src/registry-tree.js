@@ -5,6 +5,7 @@
  * package-registry directory tree.
  *
  * @import { RegistryBackend, RegistryTable } from './registry.js'
+ * @import { EndoReadableTree } from '@endo/exo-npm'
  */
 
 import {
@@ -140,7 +141,7 @@ harden(makeNodePackageRegistryTree);
  *   hasPackage: (name: string) => string,
  *   listVersions: (name: string) => string,
  *   providePackageTree: (name: string, version: string) => string,
- *   makeTreeRef: (treeHash: string) => import('@endo/exo-npm').EndoReadableTree,
+ *   makeTreeRef: (treeHash: string) => EndoReadableTree,
  * }} hostPowers
  */
 export const makeEndorPackageRegistryTree = hostPowers => {

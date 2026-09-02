@@ -66,8 +66,17 @@ export const comparePublishedVersions = (left, right) => {
     /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
   const leftMatch = versionPattern.exec(left);
   const rightMatch = versionPattern.exec(right);
+  // Total order across the mixed set: every parseable spelling sorts before
+  // every unparseable one, and unparseable spellings sort lexicographically
+  // among themselves. A per-pair lexicographic fallback would be intransitive
+  // (registry-supplied version keys could then determine `list()` order and
+  // the MVS selection), so unparseable versions are segregated instead.
   if (leftMatch === null || rightMatch === null) {
-    return left < right ? -1 : left > right ? 1 : 0;
+    if (leftMatch === null && rightMatch === null) {
+      return left < right ? -1 : left > right ? 1 : 0;
+    }
+    // A parseable version is strictly less than an unparseable one.
+    return leftMatch === null ? 1 : -1;
   }
   for (let position = 1; position <= 3; position += 1) {
     const difference =
@@ -103,20 +112,54 @@ harden(comparePublishedVersions);
 /**
  * Attenuate an enumerable tree to lookup-only authority.
  *
+ * The attenuation must survive every result the view hands back: a bare
+ * forwarding `lookup` would leak the underlying enumerable tree, because every
+ * registry node returns *itself* for an empty path (so `view.lookup([])` would
+ * be the un-attenuated root, with `list` intact). The empty path is therefore
+ * rejected, and any tree-shaped result is re-wrapped so `list` stays withheld
+ * one level down as well.
+ *
  * @param {RegistryDirectory} tree
  * @param {'live' | 'stable'} [temporal]
  * @returns {RegistryHub}
  */
-export const makeLookupTreeView = (tree, temporal = 'live') =>
-  makeExo('LookupTreeView', RegistryHubInterface, {
+export const makeLookupTreeView = (tree, temporal = 'live') => {
+  /** @type {RegistryHub} */
+  const view = makeExo('LookupTreeView', RegistryHubInterface, {
     help: method =>
       method === undefined
         ? 'Lookup-only view of an enumerable tree'
         : `Lookup-only tree method ${method}`,
     has: (...path) => tree.has(...path),
-    lookup: path => tree.lookup(path),
+    async lookup(path) {
+      const segments = segmentsFromPath(path);
+      // An empty path resolves to the tree itself; returning it would hand
+      // back the enumerable authority this view exists to withhold.
+      if (segments.length === 0) {
+        throw RegistryPathSyntaxError('(empty path)');
+      }
+      const result = await tree.lookup(segments);
+      // Re-attenuate every traversable node the view returns, not just directly
+      // enumerable ones: a non-enumerable hub carries no `list` itself yet still
+      // hands back enumerable children, so wrapping only `list`-bearing results
+      // would leave enumeration recoverable two hops down. Any node with a
+      // `lookup` is wrapped so `list` stays withheld at every depth.
+      if (
+        result !== null &&
+        typeof result === 'object' &&
+        typeof (/** @type {any} */ (result).lookup) === 'function'
+      ) {
+        return makeLookupTreeView(
+          /** @type {RegistryDirectory} */ (result),
+          temporal,
+        );
+      }
+      return result;
+    },
     getInfo: () => harden({ temporal }),
   });
+  return view;
+};
 harden(makeLookupTreeView);
 
 /**
@@ -128,8 +171,6 @@ harden(makeLookupTreeView);
  */
 export const makeNpmRegistryTree = (operations, options = {}) => {
   const { label = 'npm' } = options;
-  /** @type {Map<string, RegistryHub>} */
-  const scopeHubs = new Map();
   /** @type {Map<string, RegistryDirectory>} */
   const packageDirectories = new Map();
   /** @type {Map<string, WeakMap<EndoReadableTree, EndoReadableTree>>} */
@@ -240,11 +281,13 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
     return packageDirectory;
   };
 
+  // A bare scope names no listable resource of its own — its existence is only
+  // knowable once a package under it is fetched — so scope hubs are minted on
+  // demand rather than memoized. Memoizing them in an unbounded map would let a
+  // guest holding `@registry` exhaust daemon memory with `lookup('@junk-' + i)`
+  // over distinct bogus scopes without ever touching the network.
   /** @param {string} scope */
   const scopeHubFor = scope => {
-    const cached = scopeHubs.get(scope);
-    if (cached !== undefined) return cached;
-
     /** @type {RegistryHub} */
     const scopeHub = makeExo(`npm scope ${scope}`, RegistryHubInterface, {
       help: method =>
@@ -271,7 +314,6 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
       },
       getInfo: () => harden({ temporal: /** @type {const} */ ('live') }),
     });
-    scopeHubs.set(scope, scopeHub);
     return scopeHub;
   };
 
@@ -307,13 +349,20 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
     async lookup(path) {
       const original = segmentsFromPath(path);
       if (original.length === 0) return npmHub;
-      const segments =
-        original.length === 1
-          ? scopedPackageSegments(original[0])
-          : original.flatMap(segment => {
-              if (segment.includes('/')) throw RegistryPathSyntaxError(segment);
-              return [segment];
-            });
+      // The leading segment is normalized through `scopedPackageSegments`
+      // regardless of path length, so `lookup(['@scope/package', '1.2.3'])`
+      // resolves the same node `has('@scope/package', '1.2.3')` normalizes —
+      // the has⇒lookup contract must not disagree on the one slash-bearing
+      // spelling npm tolerates. Trailing segments still reject embedded
+      // slashes, which are only meaningful in the leading package name.
+      const [head, ...tail] = original;
+      const segments = [
+        ...scopedPackageSegments(head),
+        ...tail.map(segment => {
+          if (segment.includes('/')) throw RegistryPathSyntaxError(segment);
+          return segment;
+        }),
+      ];
       const [first, ...remaining] = segments;
       if (first.startsWith('@')) {
         if (remaining.length === 0) return scopeHubFor(first);
@@ -379,9 +428,13 @@ export const makePackageRegistryTree = registries => {
       const [registryName, ...remaining] = segments;
       if (registryName.includes('/'))
         throw RegistryPathSyntaxError(registryName);
-      const registry = registries[registryName];
-      if (registry === undefined)
+      // `registries` is a caller-supplied plain record; index it with an
+      // own-property check so an inherited key (`__proto__`, `constructor`,
+      // `toString`) cannot hand a prototype intrinsic back across the
+      // `@registry` capability boundary.
+      if (!Object.hasOwn(registries, registryName))
         throw RegistryNotFoundError(`/${registryName}`);
+      const registry = registries[registryName];
       return lookupThrough(registry, remaining);
     },
     getInfo: () => harden({ temporal: /** @type {const} */ ('stable') }),

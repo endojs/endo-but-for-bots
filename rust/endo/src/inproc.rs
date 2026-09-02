@@ -155,9 +155,10 @@ impl RegistryHost for EndorRegistryHost {
 }
 
 fn make_registry_host(paths: &EndoPaths) -> io::Result<EndorRegistryHost> {
-    let project_dir = std::env::current_dir().ok();
-    let home_dir = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    let mut config = NpmConfig::load(project_dir.as_deref(), home_dir.as_deref());
+    let project_directory = std::env::current_dir().ok();
+    let home_directory = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut config =
+        NpmConfig::load(project_directory.as_deref(), home_directory.as_deref());
     if let Ok(registry_url) = std::env::var("ENDO_REGISTRY_URL") {
         if !registry_url.trim().is_empty() {
             config.set_default_registry(&registry_url);

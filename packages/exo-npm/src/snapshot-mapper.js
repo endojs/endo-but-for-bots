@@ -4,13 +4,16 @@
  * Snapshot-mapper algorithm: produce a `CompartmentMap` document from
  * a `RegistryResolution` plus an entry-source descriptor.
  *
- * Per `designs/snapshot-mapper.md`, the mapper takes a pair of daemon
- * capabilities (a package-registry tree and an entry source) and
- * produces a `CompartmentMap` whose layout follows the
- * compartment-mapper archive precedent: a top-level
- * `compartment-map.json` plus peer directories named by package
- * (`<name>@<version>/` for registry-resolved entries, `<name>/` for
- * workspace members).
+ * The mapper takes a pair of daemon capabilities — a package-registry
+ * directory tree (`registryRoot`) and an entry source — and produces a
+ * `CompartmentMap` whose layout follows the compartment-mapper archive
+ * precedent: a top-level `compartment-map.json` plus peer directories named
+ * by package (`<name>@<version>/` for registry-resolved entries, `<name>/`
+ * for workspace members).
+ *
+ * (`designs/snapshot-mapper.md` still describes the superseded `EndoRegistry`
+ * method capability rather than this tree; the directory-tree amendment lives
+ * in `designs/daemon-worker-import-from-mount.md`.)
  *
  * The algorithmic core lives here. The daemon-side surface that
  * supplies the entry source and wires `compartment-mapper.importLocation`
@@ -19,7 +22,7 @@
  * `designs/daemon-worker-import-from-mount.md`) calls into it from the
  * worker's `makeFromPackage` dispatch.
  *
- * @import { RegistryResolution } from '../types.js';
+ * @import { RegistryDirectory, RegistryResolution } from '../types.js';
  */
 
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -323,7 +326,7 @@ harden(buildCompartmentMap);
  * @param {{
  *   entrySource: { readBytes(modulePath: string | string[]): Promise<Uint8Array> },
  *   resolution: RegistryResolution,
- *   registryRoot?: import('../types.js').RegistryDirectory,
+ *   registryRoot?: RegistryDirectory,
  * }} options
  */
 export const makeMountReadPowers = options => {
@@ -437,7 +440,7 @@ harden(makeMountReadPowers);
  *   entryPackageJson: string | Uint8Array,
  *   entryModule?: string,
  *   entryCompartmentLabel?: string,
- *   registryRoot?: import('../types.js').RegistryDirectory,
+ *   registryRoot?: RegistryDirectory,
  *   workspaceMembers?: Map<string, { packageJson: string | Uint8Array }>,
  * }} options
  */
