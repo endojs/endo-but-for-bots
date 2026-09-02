@@ -4507,11 +4507,6 @@ pub struct Interp {
     /// (`index`/`input`/`groups`), set on the match array by `exec`. `None`
     /// when unreferenced.
     regexp_result_ids: RegExpResultIds,
-    /// The most recent `exec`'s runtime name→capture map (matcher `names[]`),
-    /// so `GetSubstitution`'s `$<name>` can resolve a duplicate name to the
-    /// alternative that actually matched. Set by [`Interp::regexp_exec_inner`]
-    /// immediately before `string_replace` consults it.
-    regexp_last_names: Vec<i32>,
     /// The jump-buffer chain (XS's `the->firstJump`), innermost last.
     /// `CATCH` pushes a [`CatchJump`]; `UNCATCH` pops it; `THROW`/`RETHROW`
     /// unwind to the top entry, restoring the value stack, scope, and call
@@ -5499,7 +5494,6 @@ impl Interp {
             last_index_id: None,
             regexp_getter_ids: RegExpGetterIds::default(),
             regexp_result_ids: RegExpResultIds::default(),
-            regexp_last_names: Vec::new(),
             jumps: Vec::new(),
         };
         interp.create_intrinsics();
@@ -22412,11 +22406,8 @@ impl Interp {
         let (matched, captures, names) =
             self.regexp_match_drive(code, inst, &subject, &subject_units, &offsets)?;
         if !matched {
-            self.regexp_last_names.clear();
             return Ok((Slot::null(), None));
         }
-        // Expose the runtime name→capture map for `GetSubstitution`'s `$<name>`.
-        self.regexp_last_names = names.clone();
         // On a match XS charges a per-match residual plus a small per-extra-
         // capture residual (the `fxCacheUTF8ToUnicodeOffset` remaps and
         // `fxCacheArray`), beyond the explicit per-capture slot/chunk allocs.
@@ -22821,18 +22812,12 @@ impl Interp {
             .program
             .capture_group_names
             .is_empty();
-        if has_named_captures
-            && (functional
-                || (global
-                    && repl_units
-                        .as_deref()
-                        .is_some_and(|units| {
-                            units
-                                .windows(2)
-                                .any(|w| w == [b'$' as u16, b'<' as u16])
-                        })))
-        {
-            return Err(Halt::Unsupported("String.replace:named-callback-state"));
+        if has_named_captures {
+            // A functional replacer receives the groups object directly, so
+            // `groups` can be observable even when the source never names the
+            // result-array property. Interning the boot key also makes every
+            // collected exec result retain its own duplicate-name resolution.
+            self.intern_key("groups");
         }
         self.meter.tick_raw(STRING_REPLACE_FRAME_METERING);
         // `mxGetID(_flags)` (the `globalFlag` test) — the eight-property
@@ -22873,12 +22858,21 @@ impl Interp {
                 assembled.extend_from_slice(
                     &subject_units[next_source_position..pos.min(subject_units.len())],
                 );
-                let mut args = Vec::with_capacity(capture_count + 2);
+                let mut args = Vec::with_capacity(
+                    capture_count + if has_named_captures { 3 } else { 2 },
+                );
                 for i in 0..capture_count {
                     args.push(self.array_index_slot(result, i as u32));
                 }
                 args.push(Slot::number(pos as f64));
                 args.push(subject);
+                if has_named_captures {
+                    let groups_id = self
+                        .regexp_result_ids
+                        .groups
+                        .expect("string_replace interned the groups key");
+                    args.push(self.regexp_result_property(result, groups_id));
+                }
                 let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
                 let units = self.to_string_units(code, value)?;
                 self.meter.tick_slot_alloc();
@@ -22947,6 +22941,42 @@ impl Interp {
         let item = self.arrays.get(&r)?.items().get(&(idx as u32)).copied()?;
         match item.value {
             Payload::String(off) if item.kind == Kind::String => Some(self.str_units(off)),
+            _ => None,
+        }
+    }
+
+    /// An ordinary own property of a RegExp exec result. The result's named
+    /// fields are built as raw data slots, so no user code is involved in this
+    /// internal read.
+    fn regexp_result_property(&self, result: Slot, id: u16) -> Slot {
+        let Payload::Reference(r) = result.value else {
+            return Slot::undefined();
+        };
+        self.ordinary_get_own_descriptor(r, id)
+            .and_then(|descriptor| descriptor.value)
+            .unwrap_or_else(Slot::undefined)
+    }
+
+    /// Read one named capture from this particular exec result's `groups`
+    /// object. Keeping the lookup tied to the result (rather than the most
+    /// recent matcher state) is required when a global replacement collects
+    /// several matches before performing substitutions.
+    fn regexp_named_capture_units(&self, result: Slot, name: &str) -> Option<Vec<u16>> {
+        let groups_id = self.regexp_result_ids.groups?;
+        let groups = self.regexp_result_property(result, groups_id);
+        let Payload::Reference(groups) = groups.value else {
+            return None;
+        };
+        let name_id = self.symbol_ids.get(name).copied()?;
+        let value = self
+            .ordinary_get_own_descriptor(groups, name_id)
+            .and_then(|descriptor| descriptor.value)?;
+        match value {
+            Slot {
+                kind: Kind::String,
+                value: Payload::String(off),
+                ..
+            } => Some(self.str_units(off)),
             _ => None,
         }
     }
@@ -23038,17 +23068,12 @@ impl Interp {
                         .position(|&c| c == b'>' as u16)
                     {
                         let name = &repl[i + 2..i + 2 + rel];
-                        if let Some(slot) = names
+                        if let Some((name, _)) = names
                             .iter()
-                            .position(|(nm, _)| nm.encode_utf16().eq(name.iter().copied()))
+                            .find(|(nm, _)| nm.encode_utf16().eq(name.iter().copied()))
                         {
-                            let cidx = self.regexp_last_names.get(slot).copied().unwrap_or(-1);
-                            if cidx >= 0 {
-                                if let Some(units) =
-                                    self.regexp_capture_units(result, cidx as usize)
-                                {
-                                    out.extend_from_slice(&units);
-                                }
+                            if let Some(units) = self.regexp_named_capture_units(result, name) {
+                                out.extend_from_slice(&units);
                             }
                             // An unset or absent name expands to the empty string.
                         }
