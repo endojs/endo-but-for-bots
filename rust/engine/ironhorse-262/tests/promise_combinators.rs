@@ -600,6 +600,38 @@ fn promise_constructor_rejects_non_callable_executors() {
 }
 
 #[test]
+fn promise_constructor_requires_new() {
+    assert_oracle_result(
+        "var n=0;try{Promise(function(){})}catch(e){n+=e instanceof TypeError}try{Promise.call({},function(){})}catch(e){n+=e instanceof TypeError}n",
+        "2",
+    );
+}
+
+#[test]
+fn promise_resolution_rejects_when_then_lookup_throws() {
+    assert_drains_to(
+        "var g='',marker={},x={};Object.defineProperty(x,'then',{get:function(){throw marker}});var returned;var p=new Promise(function(resolve){returned=resolve(x)});p.then(function(){g='fulfilled'},function(e){g=(returned===undefined)+':'+(e===marker)});undefined",
+        "true:true",
+    );
+    assert_drains_to(
+        "var g='',marker={},x={};Object.defineProperty(x,'then',{get:function(){throw marker}});Promise.resolve(1).then(function(){return x}).then(function(){g='fulfilled'},function(e){g=''+(e===marker)});undefined",
+        "true",
+    );
+}
+
+#[test]
+fn promise_resolution_calls_bound_and_proxy_thenables() {
+    assert_drains_to(
+        "var g='';var then=function(resolve){resolve(8)}.bind(null);Promise.resolve({then:then}).then(function(v){g=''+v});undefined",
+        "8",
+    );
+    assert_drains_to(
+        "var g='';var then=new Proxy(function(resolve){resolve(9)},{});Promise.resolve({then:then}).then(function(v){g=''+v});undefined",
+        "9",
+    );
+}
+
+#[test]
 fn promise_then_requires_a_branded_promise_receiver() {
     assert_oracle_result(
         "var n=0;for(var v of [undefined,null,{},Promise.prototype]){try{Promise.prototype.then.call(v)}catch(e){n+=e.name==='TypeError'}}n",
