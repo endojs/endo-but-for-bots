@@ -1337,7 +1337,7 @@ export const makeWorkflowService = async ({
             // approvals harmlessly miss, while an already-settled compensation
             // or child spawn can finish. Recovery observes the same unpaused
             // fold and resumes this drain.
-            await drainQueuedEvents();
+            await drainQueuedEvents(true);
           }
           if (!fold.done) {
             // A cancellation that the chart handles permanently closes the
@@ -1399,6 +1399,8 @@ export const makeWorkflowService = async ({
 
     engine.pause = () =>
       jobs.enqueue(async () => {
+        !quarantinedRuns.has(runId) ||
+          Fail`workflow run ${q(runId)} is quarantined`;
         if (fold.done || fold.paused) {
           return;
         }
@@ -1408,7 +1410,7 @@ export const makeWorkflowService = async ({
     // Replay queued events in seq order; a terminal outcome mid-replay
     // (a fail-loud settlement, say) stops the replay — nothing steps
     // past the end of a run.
-    const drainQueuedEvents = async () => {
+    const drainQueuedEvents = async (allowQuarantined = false) => {
       await null;
       const queued = [...fold.queuedEvents.entries()].sort(([a], [b]) => {
         const left = BigInt(a);
@@ -1416,7 +1418,7 @@ export const makeWorkflowService = async ({
         return left < right ? -1 : left > right ? 1 : 0;
       });
       for (const [seqName, envelope] of queued) {
-        if (fold.done) {
+        if (fold.done || (quarantinedRuns.has(runId) && !allowQuarantined)) {
           return;
         }
         // eslint-disable-next-line no-await-in-loop
@@ -1426,6 +1428,8 @@ export const makeWorkflowService = async ({
 
     engine.resume = () =>
       jobs.enqueue(async () => {
+        !quarantinedRuns.has(runId) ||
+          Fail`workflow run ${q(runId)} is quarantined`;
         if (fold.done || !fold.paused) {
           return;
         }
@@ -1442,7 +1446,7 @@ export const makeWorkflowService = async ({
     engine.rearm = () =>
       jobs.enqueue(async () => {
         await null;
-        if (fold.done) {
+        if (fold.done || quarantinedRuns.has(runId)) {
           return;
         }
         if (!fold.paused && fold.queuedEvents.size > 0) {
