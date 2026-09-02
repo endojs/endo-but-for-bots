@@ -627,7 +627,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
          Object.prototype.hasOwnProperty; Symbol.isConcatSpreadable; \
          a.join; a.length; 'con'; 'structor'; \
-         (function (y) { return y; });",
+         (function (y, z) { return y; });",
         &[
             "a = [3, 1, 2]; k = 'con' + 'structor'; delete Array.prototype[k]; t = 7;",
             "a.sort(function (x, y) { return x - y; }); t = a.join(','); t",
@@ -650,6 +650,8 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              q = q.slice(0, 3); \
              f = {length: 4294967297}; f[4294967296] = 5; \
              b = {length: 0}; Array.prototype.push.call(b, 6, 7); \
+             inst[Symbol.isConcatSpreadable] = true; z = [0].concat(inst); \
+             delete inst[Symbol.isConcatSpreadable]; \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
@@ -658,12 +660,12 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  Array.prototype.concat.name + ':' + Array.prototype.concat.length + ':' + \
                  v.join(',') + ':' + Array.prototype.slice.call(f, 4294967296).join(',') + ':' + \
                  Object.prototype.hasOwnProperty.call(Array.prototype, k) + ':' + \
-                 Array.prototype.pop.call(b) + ':' + b.length + ':' + b[0]; t",
+                 Array.prototype.pop.call(b) + ':' + b.length + ':' + b[0] + ':' + z.join(','); t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2"
     );
 }
 

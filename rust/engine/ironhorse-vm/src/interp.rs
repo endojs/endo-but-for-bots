@@ -29635,7 +29635,8 @@ impl Interp {
             NativeMethod::ArrayConcat => {
                 let recv = match self.dense_array_this(this) {
                     Some(i)
-                        if self.array_allocating_uses_default_species(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_allocating_uses_default_species(i)
                             && self.array_concat_uses_default_spreadability(this)
                             && (0..argc).all(|argi| {
                                 let operand = self
@@ -29646,7 +29647,8 @@ impl Interp {
                                 self.array_concat_uses_default_spreadability(operand)
                                     && match operand.value {
                                         Payload::Reference(inst)
-                                            if self.arrays.contains_key(&inst) =>
+                                            if self.arrays.contains_key(&inst)
+                                                && !self.arguments_objects.contains(&inst) =>
                                         {
                                             let array = &self.arrays[&inst];
                                             array.items().len() as u32 == array.length
@@ -29678,8 +29680,9 @@ impl Interp {
                 for op in operands {
                     // Every reference operand runs the `Symbol.isConcatSpreadable`
                     // check.
-                    let is_array =
-                        matches!(op.value, Payload::Reference(r) if self.arrays.contains_key(&r));
+                    let is_array = matches!(op.value, Payload::Reference(r)
+                        if self.arrays.contains_key(&r)
+                            && !self.arguments_objects.contains(&r));
                     if let Payload::Reference(_) = op.value {
                         self.meter.tick_raw(ARRAY_CONCAT_CHECK_METERING);
                     }
@@ -35921,11 +35924,12 @@ impl Interp {
         index: u64,
         value: Slot,
     ) -> Result<(), Halt> {
-        if index > u32::MAX as u64 {
-            return Err(self.catchable_type_error());
-        }
         let id = self.array_generic_index_id(index);
-        if self.arrays.contains_key(&target) {
+        // A compact Array index is strictly below 2^32 - 1. The string
+        // "4294967295" and every wider safe-integer key are ordinary
+        // properties, including on an Array result; an ordinary custom-species
+        // result supports them throughout concat's full safe-integer domain.
+        if self.arrays.contains_key(&target) && index < u64::from(u32::MAX) {
             let index = index as u32;
             let ordinary = self.ordinary_get_own_descriptor(target, id);
             let compact = self.arrays[&target].items().get(&index).copied();
@@ -36037,6 +36041,28 @@ impl Interp {
             let length = self.array_generic_length(code, source)?;
             if n > MAX_SAFE_INTEGER - length {
                 return Err(self.catchable_type_error());
+            }
+            // Integer-indexed own elements need no observable `has`/`get`
+            // property walk. Keep validating attachment before every read:
+            // a custom species result's defineProperty trap can detach the
+            // source between iterations. Indices beyond the fixed view length
+            // are known absent even when an own fake `length` is wider.
+            if let Some(typed_array) = self.typed_arrays.get(&source).copied() {
+                let copy_length = length.min(u64::from(typed_array.length));
+                for k in 0..copy_length {
+                    if self.ta_valid_index(typed_array, k as f64).is_some() {
+                        let value = if typed_array.kind <= 1 {
+                            self.typed_array_element_get_bigint(typed_array, k as u32)
+                        } else {
+                            self.typed_array_element_get(typed_array, k as u32)
+                                .unwrap_or_else(Slot::undefined)
+                        };
+                        self.meter.tick_raw(TYPED_ARRAY_ELEMENT_METERING);
+                        self.array_generic_create_data_property(code, result, n + k, value)?;
+                    }
+                }
+                n += length;
+                continue;
             }
             let mut k = 0u64;
             let mut linear_steps = 0u64;
