@@ -1125,9 +1125,10 @@ fn apply_style_pattern(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
     }
 }
 
-/// Whether the rendered standard-notation value is exactly one. Currency-name
-/// and long-unit plural selection follows the rounded display value, not the
-/// unrounded input (`1.2` at zero fraction digits formats with singular `1`).
+/// Whether the rendered standard-notation value is exactly the integer one.
+/// Currency-name and long-unit plural selection follows the rounded display
+/// value and its visible fraction count: `1.2` rounded to `1` is singular, but
+/// an explicitly rendered `1.00` is plural in the frozen English profile.
 fn rendered_value_is_one(opts: &NfResolved, parts: &[Part]) -> bool {
     if opts.notation != Notation::Standard {
         return false;
@@ -1140,11 +1141,7 @@ fn rendered_value_is_one(opts: &NfResolved, parts: &[Part]) -> bool {
     if integer != map_digits("1", &opts.numbering_system) {
         return false;
     }
-    let zero = map_digits("0", &opts.numbering_system);
-    parts
-        .iter()
-        .filter(|part| part.kind == PartType::Fraction)
-        .all(|part| !part.value.is_empty() && part.value.replace(&zero, "").is_empty())
+    !parts.iter().any(|part| part.kind == PartType::Fraction)
 }
 
 fn currency_label(opts: &NfResolved, code: &str, singular: bool) -> String {
@@ -1203,10 +1200,12 @@ fn currency_name(code: &str, singular: bool) -> String {
 }
 
 fn unit_separator(opts: &NfResolved, unit: &str) -> &'static str {
-    if opts.unit_display == UnitDisplay::Narrow || matches!(unit, "percent" | "celsius") {
+    if opts.unit_display == UnitDisplay::Narrow {
         ""
     } else if locale_language(&opts.locale) == "fr" && opts.unit_display == UnitDisplay::Short {
         "\u{202f}"
+    } else if opts.unit_display == UnitDisplay::Short && matches!(unit, "percent" | "celsius") {
+        ""
     } else {
         " "
     }
@@ -1482,6 +1481,9 @@ mod tests {
         );
         currency.currency_sign = CurrencySign::Accounting;
         assert_eq!(format_to_string(&currency, -1.0), "($1.00)");
+        currency.currency_sign = CurrencySign::Standard;
+        currency.currency_display = CurrencyDisplay::Name;
+        assert_eq!(format_to_string(&currency, 1.0), "1.00 US dollars");
 
         let mut unit = decimal("en-US");
         unit.style = Style::Unit;
@@ -1491,6 +1493,13 @@ mod tests {
         unit.unit_display = UnitDisplay::Long;
         assert_eq!(format_to_string(&unit, 1.0), "1 meter");
         assert_eq!(format_to_string(&unit, 2.0), "2 meters");
+        unit.min_fraction_digits = 2;
+        assert_eq!(format_to_string(&unit, 1.0), "1.00 meters");
+        unit.min_fraction_digits = 0;
+        unit.unit = Some("percent".to_string());
+        assert_eq!(format_to_string(&unit, 12.0), "12 percent");
+        unit.unit = Some("celsius".to_string());
+        assert_eq!(format_to_string(&unit, 12.0), "12 degrees Celsius");
     }
 
     #[test]

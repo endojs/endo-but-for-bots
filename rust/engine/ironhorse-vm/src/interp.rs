@@ -41933,6 +41933,26 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_set(code, inst, id, value, receiver);
         }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            let numeric_index = if self.is_symbol_key_id(id) {
+                None
+            } else {
+                self.string_key_name(id)
+                    .and_then(|name| canonical_numeric_index_string(&name))
+            };
+            if let Some(index) = numeric_index {
+                let target = Slot::of(Kind::Reference, Payload::Reference(inst));
+                if self.same_value(target, receiver) {
+                    self.ta_indexed_element_set(code, ta, index, value)?;
+                    return Ok(true);
+                }
+                if self.ta_valid_index(ta, index).is_none() {
+                    return Ok(true);
+                }
+                let key = self.property_key_slot(id)?;
+                return self.set_data_on_receiver(code, receiver, key, value);
+            }
+        }
         self.ordinary_set(code, inst, id, value, receiver)
     }
 

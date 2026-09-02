@@ -622,6 +622,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
          "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
+         Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; \
          a.join; a.length; \
          (function (y) { return y; });",
         &[
@@ -637,9 +638,16 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  Array.prototype.toReversed.length + ':' + \
                  Array.prototype.toSpliced.name + ':' + \
                  Array.prototype.toSpliced.length; t",
+            "inst = new Uint8Array([2, 1]); \
+             Array.prototype.sort.call(inst, function (x, y) { return x - y; }); \
+             t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
+            "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
         ],
     );
-    assert_eq!(last, "1,8,3:with:2:toReversed:0:toSpliced:2");
+    assert_eq!(
+        last,
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2"
+    );
 }
 
 #[test]
