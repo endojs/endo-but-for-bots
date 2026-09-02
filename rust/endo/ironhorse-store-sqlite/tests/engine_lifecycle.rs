@@ -830,6 +830,23 @@ fn the_promise_cluster_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn a_custom_capability_executor_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-capability-executor",
+        &[
+            "var ex = 0; var log = ''; \
+             function C(e) { ex = e; e(function (v) { log = 'r' + v; }, \
+                                        function (v) { log = 'j' + v; }); return {}; } \
+             Promise.resolve.call(C, 5); log",
+            "typeof ex + ':' + ex.name + ':' + ex.length + ':' + log",
+            "try { ex(function () {}, function () {}); false } \
+             catch (e) { e instanceof TypeError }",
+        ],
+    );
+    assert_eq!(last, "true");
+}
+
+#[test]
 fn a_pending_finally_result_survives_sqlite_sleep_cycles() {
     // `onFinally` runs in crank 1 but its returned promise remains pending.
     // The `FinallyAwait` row, original fulfillment, and derived capability all

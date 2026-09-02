@@ -134,6 +134,27 @@ fn a_resolver_called_after_resume_settles_its_promise() {
     );
 }
 
+/// A custom `NewPromiseCapability` executor can escape its constructor. Its
+/// hidden resolve/reject capture and non-constructable native identity must
+/// survive both snapshot backends, including the already-initialized guard
+/// that rejects a second non-empty capture.
+#[test]
+fn a_custom_capability_executor_survives_resume() {
+    assert_twin(
+        "ih-prms-capability-executor",
+        "var ex = 0; var log = ''; var t = 0; \
+         function C(e) { ex = e; e(function (v) { log = 'r' + v; }, \
+                                    function (v) { log = 'j' + v; }); return {}; } \
+         Promise.resolve.call(C, 5); t = 7; t",
+        &[
+            "var ex; var log; var t; typeof ex + ':' + ex.name + ':' + ex.length + ':' + log",
+            "var ex; var log; var t; try { ex(function () {}, function () {}); false } \
+             catch (e) { e instanceof TypeError }",
+        ],
+        &[(true, "function::2:r5"), (true, "true")],
+    );
+}
+
 /// A `.then` reaction registered BEFORE the split fires after it: the
 /// pending reaction row (handler + derived capability) travels.
 #[test]

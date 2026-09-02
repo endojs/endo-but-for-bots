@@ -552,6 +552,46 @@ fn promise_resolve_observes_native_promises_constructor_for_identity() {
 }
 
 #[test]
+fn promise_statics_build_custom_capabilities() {
+    assert_oracle_result(
+        "var log=[];function C(executor){log.push(typeof executor,executor.name,executor.length,'prototype' in executor,Object.isExtensible(executor));executor(function(v){log.push('r'+v)},function(e){log.push('j'+e)});return {tag:1}}var p=Promise.resolve.call(C,42);log.push(p.tag);log.join(':')",
+        "function::2:false:true:r42:1",
+    );
+    assert_oracle_result(
+        "var log=[];function C(executor){executor(function(v){log.push('r'+v)},function(e){log.push('j'+e)});return {tag:2}}var p=Promise.reject.call(C,17);log.push(p.tag);log.join(':')",
+        "j17:2",
+    );
+    assert_oracle_result(
+        "var marker={};function C(){throw marker}try{Promise.resolve.call(C,1);false}catch(e){e===marker}",
+        "true",
+    );
+    assert_oracle_result(
+        "var marker={};function C(executor){executor(function(){throw marker},function(){});return {}}try{Promise.resolve.call(C,1);false}catch(e){e===marker}",
+        "true",
+    );
+}
+
+#[test]
+fn capability_executor_enforces_single_nonempty_capture() {
+    assert_oracle_result(
+        "var log='';Promise.resolve.call(function(executor){log+='a';executor();log+='b';executor(function(){},function(){});log+='c';return {}},1);log",
+        "abc",
+    );
+    assert_oracle_result(
+        "var log='';try{Promise.resolve.call(function(executor){log+='a';executor(undefined,function(){});log+='b';executor(function(){},function(){});log+='c';return {}},1)}catch(e){log+=':'+e.name}log",
+        "ab:TypeError",
+    );
+}
+
+#[test]
+fn promise_subclass_static_resolution_preserves_brand_and_prototype() {
+    assert_oracle_result(
+        "class P extends Promise{}var p=P.resolve(1);''+(p instanceof P)+':'+(p.constructor===P)+':'+(P.resolve(p)===p)",
+        "true:true:true",
+    );
+}
+
+#[test]
 fn promise_catch_invokes_the_observable_then_method() {
     assert_oracle_result(
         "var log='',result={},o={then:function(a,b){log+=(this===o)+':'+(a===undefined)+':'+b+':'+arguments.length;return result}};var r=Promise.prototype.catch.call(o,7);log+':'+(r===result)",

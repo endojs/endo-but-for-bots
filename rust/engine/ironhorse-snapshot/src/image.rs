@@ -2355,8 +2355,9 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 ///   resumable second half of `Promise.prototype.finally`;
 /// - a settled promise carries no reactions (settlement drains them,
 ///   and quiescence requires the job queue empty);
-/// - a `Combine` reaction indexes a combinator row; a resolving
-///   function indexes a guard and names a promise row; a combinator's
+/// - a `Combine` reaction indexes a combinator row; a resolving function
+///   indexes a guard and names a promise row; a capability executor uses the
+///   reserved `u32::MAX` guard and names its hidden home object; a combinator's
 ///   derived promise names a promise row;
 /// - both arenas are DENSELY referenced (the writer emits the
 ///   compacted form, so an unreferenced entry can only be crafted —
@@ -2494,7 +2495,19 @@ pub(crate) fn decode_promise_cluster(
     // and a guard spanning promises or doubling a polarity can only
     // be crafted (its trip would then gate the WRONG settlement).
     let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; guards.len()];
+    let mut executor_homes = std::collections::BTreeSet::new();
     for row in &functions {
+        if row.guard == u32::MAX {
+            if row.reject
+                || row.promise == row.function
+                || !executor_homes.insert(row.promise)
+            {
+                return Err(SnapshotError::Corrupt(
+                    "promise cluster: malformed capability executor home",
+                ));
+            }
+            continue;
+        }
         if !owners.contains(&row.promise) {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: resolving function names no promise row",
@@ -2583,6 +2596,7 @@ pub(crate) fn decode_promise_cluster(
             };
             if res.reject
                 || !rej.reject
+                || res.guard == u32::MAX
                 || res.promise != rej.promise
                 || res.guard != rej.guard
             {
