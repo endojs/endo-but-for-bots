@@ -128,6 +128,36 @@ fn lazy_and_blob_resume_preserve_accessors() {
 }
 
 #[test]
+fn typed_array_tag_accessor_survives_lazy_and_blob_resume() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let (bytecode, names) = compile("var inst = new Int8Array(1);");
+    let observation = "Object.prototype.toString.call(inst)";
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let mut blob = from_snapshot_bytes(&bytes, &sig()).expect("blob restore");
+    assert_eq!(crank(&mut blob, observation).2, "[object Int8Array]");
+
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(
+        begin_store_session(machine, &sig(), &mut *store.borrow_mut())
+            .map_err(|(_, error)| error)
+            .expect("begin"),
+    );
+    let mut lazy = resume_from_store_lazy(store, &sig()).expect("lazy restore");
+    assert_eq!(
+        crank(lazy.machine_mut(), observation).2,
+        "[object Int8Array]"
+    );
+}
+
+#[test]
 fn malformed_accessor_rows_are_refused() {
     let (bytecode, names) = compile(FIRST);
     let mut machine = Interp::new();

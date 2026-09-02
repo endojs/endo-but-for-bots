@@ -70,6 +70,10 @@ fn iterator_next_lookup_and_primitive_getv_are_observable() {
         "var old=String.prototype[Symbol.iterator]; String.prototype[Symbol.iterator]=function(){var done=false;return {next:function(){if(done)return {done:true};done=true;return {value:'override',done:false}}}}; var r=Array.from('ab').join(','); String.prototype[Symbol.iterator]=old; r",
         "override",
     );
+    assert_oracle_result(
+        "delete String.prototype[Symbol.iterator]; Array.from('ab').join(',')",
+        "a,b",
+    );
 }
 
 #[test]

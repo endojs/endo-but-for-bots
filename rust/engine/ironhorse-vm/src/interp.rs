@@ -2282,6 +2282,14 @@ pub enum NativeMethod {
     TypedArrayValues,
     TypedArrayKeys,
     TypedArrayEntries,
+    /// `%TypedArray%.prototype.slice(start, end)` / `subarray(begin, end)`.
+    TypedArraySlice,
+    TypedArraySubarray,
+    /// `%TypedArray%.prototype.map(callback, thisArg)` / `filter(...)`.
+    TypedArrayMap,
+    TypedArrayFilter,
+    /// `%TypedArray%.prototype.sort(comparefn)`.
+    TypedArraySort,
     /// Non-allocating shared TypedArray methods. Operation ids select
     /// `forEach`, `every`, `some`, `find`, `findIndex`, `includes`, `indexOf`,
     /// `lastIndexOf`, `reduce`, and `reduceRight`, in that order.
@@ -5801,6 +5809,11 @@ impl Interp {
             ("set", 1, NativeMethod::TypedArraySet),
             ("reverse", 0, NativeMethod::TypedArrayReverse),
             ("join", 1, NativeMethod::TypedArrayJoin),
+            ("slice", 2, NativeMethod::TypedArraySlice),
+            ("subarray", 2, NativeMethod::TypedArraySubarray),
+            ("map", 1, NativeMethod::TypedArrayMap),
+            ("filter", 1, NativeMethod::TypedArrayFilter),
+            ("sort", 1, NativeMethod::TypedArraySort),
         ] {
             let mf = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((typed_array_proto, name, mf));
@@ -5836,6 +5849,17 @@ impl Interp {
             );
             self.proto_methods
                 .push((typed_array_proto, name, method));
+        }
+        // `%TypedArray%.prototype.toString%` is the exact same function object
+        // as `%Array.prototype.toString%`, not a separately minted native.
+        if let Some((_, _, to_string)) = self
+            .proto_methods
+            .iter()
+            .find(|(holder, name, _)| *holder == self.array_proto && *name == "toString")
+            .copied()
+        {
+            self.proto_methods
+                .push((typed_array_proto, "toString", to_string));
         }
         for (name, method) in [
             ("length", NativeMethod::TypedArrayLengthGetter),
@@ -19528,6 +19552,9 @@ impl Interp {
                             Some(o) => o,
                             None => self.to_index_arg(code, a1)?,
                         };
+                        if self.detached_buffers.contains(&r) {
+                            return Err(self.catchable_type_error());
+                        }
                         // A byteOffset that is not a multiple of the element
                         // size is a RangeError (`fxCheckTypedArrayIndex`).
                         if offset & ((1 << shift) - 1) != 0 {
@@ -23847,6 +23874,9 @@ impl Interp {
     /// own exotic data is not materialized — sufficient for array-like reads,
     /// whose data lives on the prototype.
     fn from_async_box_primitive(&mut self, v: Slot) -> Option<crate::value::SlotIndex> {
+        if v.kind == Kind::String {
+            return Some(self.box_primitive_to_instance(Native::String, v));
+        }
         let proto = match v.kind {
             Kind::Integer | Kind::Number => self.number_proto,
             Kind::Symbol => self.symbol_proto,
@@ -28055,7 +28085,7 @@ impl Interp {
                 // unmetered chain read never perturbs a covered/metered case
                 // (which has no such tag and falls through unchanged).
                 let tag = match this.value {
-                    Payload::Reference(r) => self.string_to_string_tag(r),
+                    Payload::Reference(r) => self.string_to_string_tag(code, r)?,
                     _ => None,
                 };
                 if let Some(tag) = tag {
@@ -29158,6 +29188,13 @@ impl Interp {
             NativeMethod::TypedArrayReadonly(operation) => {
                 self.typed_array_readonly(operation, this, base, argc, code)?
             }
+            NativeMethod::TypedArraySlice | NativeMethod::TypedArraySubarray => {
+                self.typed_array_slice_or_subarray(m, this, base, argc, code)?
+            }
+            NativeMethod::TypedArrayMap | NativeMethod::TypedArrayFilter => {
+                self.typed_array_map_filter(m, this, base, code)?
+            }
+            NativeMethod::TypedArraySort => self.typed_array_sort(this, base, argc, code)?,
             NativeMethod::TypedArrayLengthGetter
             | NativeMethod::TypedArrayByteLengthGetter
             | NativeMethod::TypedArrayByteOffsetGetter
@@ -30394,11 +30431,9 @@ impl Interp {
                         if i > 0 {
                             out.extend_from_slice(&sep);
                         }
-                        let item = self.arrays[&inst].items().get(&i).copied();
-                        if let Some(value) = item {
-                            if !matches!(value.kind, Kind::Undefined | Kind::Null) {
-                                out.extend_from_slice(&self.to_string_units(code, value)?);
-                            }
+                        let value = self.array_generic_get(code, inst, u64::from(i))?;
+                        if !matches!(value.kind, Kind::Undefined | Kind::Null) {
+                            out.extend_from_slice(&self.to_string_units(code, value)?);
                         }
                     }
                     self.stack.truncate(base);
@@ -30453,6 +30488,16 @@ impl Interp {
             // body (frame + per-element read + the result chunk). Modeled by
             // running the default-separator join and adding the prelude.
             NativeMethod::ArrayToString => {
+                if matches!(this.value, Payload::Reference(reference)
+                    if this.kind == Kind::Reference
+                        && self.typed_arrays.contains_key(&reference))
+                {
+                    self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
+                    let result = self.typed_array_join(this, base, 0, code)?;
+                    self.stack.truncate(base);
+                    self.push(result);
+                    return Ok(());
+                }
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
                     None => return Err(Halt::Unsupported("toString:non-dense-array")),
@@ -35080,7 +35125,7 @@ impl Interp {
                 u64::from(self.arrays[&st.iterable].length)
             } else if let Some(typed_array) = self.typed_arrays.get(&st.iterable) {
                 if self.detached_buffers.contains(&typed_array.buffer) {
-                    0
+                    return Err(self.catchable_type_error());
                 } else {
                     u64::from(typed_array.length)
                 }
@@ -36134,11 +36179,33 @@ impl Interp {
         })
     }
 
+    /// Construct the result for `%TypedArray%.from` / `%TypedArray%.of` and
+    /// apply `TypedArrayCreate`'s minimum-length validation before any element
+    /// write can reach the backing chunk.
+    fn typed_array_static_create(
+        &mut self,
+        code: &[u8],
+        constructor: Slot,
+        length: u32,
+    ) -> Result<(Slot, TypedArrayData), Halt> {
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(length as f64)],
+            constructor,
+        )?;
+        let ta = self.validate_typed_array(result)?;
+        if ta.length < length {
+            return Err(self.catchable_type_error());
+        }
+        Ok((result, ta))
+    }
+
     /// The inherited `%TypedArray%.from` / `%TypedArray%.of` statics. `from`
-    /// delegates iterable/array-like collection to the already complete
-    /// `Array.from` machinery, then constructs and maps into the requested
-    /// TypedArray; `of` constructs the exact final length and writes each
-    /// argument through the element conversion path.
+    /// uses the iterator protocol directly (never the mutable public
+    /// `Array.from` property) and preserves the distinct iterable and
+    /// array-like construction order. `of` constructs the exact final length
+    /// and writes each argument through the element conversion path.
     fn typed_array_static(
         &mut self,
         method: NativeMethod,
@@ -36169,36 +36236,107 @@ impl Interp {
             } else {
                 return Err(self.catchable_type_error());
             };
-            let array_ctor = self
-                .intrinsics
-                .get("Array")
-                .copied()
-                .expect("Array intrinsic");
-            let from_id = self.intern_key("from");
-            let array_ctor_slot = Slot::of(Kind::Reference, Payload::Reference(array_ctor));
-            let from = self.mop_get(code, array_ctor, from_id, array_ctor_slot)?;
-            // TypedArray.from exhausts an iterable into a List before it
-            // allocates and maps the target. Collect without Array.from's
-            // mapper so `next()` calls are not interleaved with `mapfn`.
-            let collected = self.call_any(code, from, array_ctor_slot, &[items])?;
-            let collected_ref = match collected.value {
-                Payload::Reference(r)
-                    if collected.kind == Kind::Reference && self.arrays.contains_key(&r) =>
-                {
-                    r
+            if matches!(items.kind, Kind::Null | Kind::Undefined) {
+                return Err(self.catchable_type_error());
+            }
+
+            let iterator_id = self
+                .well_known_symbol_property_id("iterator")
+                .expect("well-known iterator symbol");
+            let iterator_method = match items.value {
+                Payload::Reference(inst) if items.kind == Kind::Reference => {
+                    self.mop_get(code, inst, iterator_id, items)?
                 }
-                _ => return Err(self.catchable_type_error()),
+                _ => {
+                    let proto = match items.kind {
+                        Kind::String => self.string_proto,
+                        Kind::Integer | Kind::Number => self.number_proto,
+                        Kind::Symbol => self.symbol_proto,
+                        Kind::BigInt => self.bigint_proto,
+                        Kind::Boolean => self
+                            .intrinsics
+                            .get("Boolean")
+                            .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                            .unwrap_or(crate::value::SlotIndex::NULL),
+                        _ => crate::value::SlotIndex::NULL,
+                    };
+                    if proto.is_null() {
+                        Slot::undefined()
+                    } else {
+                        self.mop_get(code, proto, iterator_id, items)?
+                    }
+                }
             };
-            let length = self.arrays[&collected_ref].length;
-            let result = self.construct_value(
-                code,
-                constructor,
-                &[Slot::number(length as f64)],
-                constructor,
-            )?;
-            let ta = self.validate_typed_array(result)?;
+            if iterator_method.kind != Kind::Undefined
+                && iterator_method.kind != Kind::Null
+                && !self.is_callable_value(iterator_method)
+            {
+                return Err(self.catchable_type_error());
+            }
+
+            if iterator_method.kind != Kind::Undefined && iterator_method.kind != Kind::Null {
+                let iterator = self.call_any(code, iterator_method, items, &[])?;
+                let iterator_inst = match iterator.value {
+                    Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let next_id = self.intern_key("next");
+                let value_id = self.intern_key("value");
+                let done_id = self.intern_key("done");
+                self.value_id = Some(value_id);
+                self.done_id = Some(done_id);
+                let next = self.mop_get(code, iterator_inst, next_id, iterator)?;
+                if !self.is_callable_value(next) {
+                    return Err(self.catchable_type_error());
+                }
+                let mut values = Vec::new();
+                for _ in 0..1_000_000u32 {
+                    let step = self.call_any(code, next, iterator, &[])?;
+                    let step_inst = match step.value {
+                        Payload::Reference(inst) if step.kind == Kind::Reference => inst,
+                        _ => return Err(self.catchable_type_error()),
+                    };
+                    let done = self.mop_get(code, step_inst, done_id, step)?;
+                    if self.truthy(&done) {
+                        let length = values.len() as u32;
+                        let (result, ta) =
+                            self.typed_array_static_create(code, constructor, length)?;
+                        for (index, mut value) in values.into_iter().enumerate() {
+                            if mapping {
+                                value = self.call_any(
+                                    code,
+                                    mapfn,
+                                    this_arg,
+                                    &[value, Slot::number(index as f64)],
+                                )?;
+                            }
+                            self.typed_array_element_set(code, ta, index as u32, value)?;
+                        }
+                        return Ok(result);
+                    }
+                    values.push(self.mop_get(code, step_inst, value_id, step)?);
+                }
+                return Err(Halt::StepLimit(self.n_dispatched));
+            }
+
+            let array_like = match items.value {
+                Payload::Reference(_) if items.kind == Kind::Reference => items,
+                _ => match self.from_async_box_primitive(items) {
+                    Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                    None => return Err(self.catchable_type_error()),
+                },
+            };
+            let array_like_inst = match array_like.value {
+                Payload::Reference(inst) => inst,
+                _ => unreachable!(),
+            };
+            let length_value = self.arraylike_length(code, array_like_inst, array_like)?;
+            let length = self.to_length_value(code, length_value)?;
+            let length = u32::try_from(length).map_err(|_| self.catchable_type_error())?;
+            let (result, ta) = self.typed_array_static_create(code, constructor, length)?;
             for index in 0..length {
-                let mut value = self.array_index_slot(collected, index);
+                let mut value =
+                    self.arraylike_index(code, array_like_inst, u64::from(index), array_like)?;
                 if mapping {
                     value = self.call_any(
                         code,
@@ -36212,13 +36350,8 @@ impl Interp {
             return Ok(result);
         }
 
-        let result = self.construct_value(
-            code,
-            constructor,
-            &[Slot::number(args.len() as f64)],
-            constructor,
-        )?;
-        let ta = self.validate_typed_array(result)?;
+        let length = u32::try_from(args.len()).map_err(|_| self.catchable_type_error())?;
+        let (result, ta) = self.typed_array_static_create(code, constructor, length)?;
         for (index, value) in args.into_iter().enumerate() {
             self.typed_array_element_set(code, ta, index as u32, value)?;
         }
@@ -36265,6 +36398,363 @@ impl Interp {
             out.extend_from_slice(&self.to_string_units_metered(value));
         }
         Ok(self.new_string_units(&out))
+    }
+
+    /// `TypedArraySpeciesCreate(exemplar, argumentsList)`: resolve an own or
+    /// inherited `constructor[Symbol.species]`, fall back to the exemplar's
+    /// concrete intrinsic constructor, construct a branded attached view, and
+    /// enforce the Number-vs-BigInt content domain. A one-length construction
+    /// also requires the result to be at least that long (`TypedArrayCreate`).
+    fn typed_array_species_create(
+        &mut self,
+        code: &[u8],
+        exemplar: crate::value::SlotIndex,
+        source: TypedArrayData,
+        args: &[Slot],
+        minimum_length: Option<u32>,
+    ) -> Result<(Slot, TypedArrayData), Halt> {
+        let default_constructor = self
+            .intrinsics
+            .get(TYPED_ARRAY_TYPES[source.kind as usize].name)
+            .copied()
+            .expect("concrete TypedArray constructor");
+        let default_constructor =
+            Slot::of(Kind::Reference, Payload::Reference(default_constructor));
+        let exemplar_slot = Slot::of(Kind::Reference, Payload::Reference(exemplar));
+        let constructor_id = self.intern_key("constructor");
+        let mut constructor = self.mop_get(
+            code,
+            exemplar,
+            constructor_id,
+            exemplar_slot,
+        )?;
+        if constructor.kind == Kind::Undefined {
+            constructor = default_constructor;
+        } else {
+            let constructor_ref = match constructor.value {
+                Payload::Reference(reference) if constructor.kind == Kind::Reference => reference,
+                _ => return Err(self.catchable_type_error()),
+            };
+            let species_id = self
+                .well_known_symbol_property_id("species")
+                .ok_or(Halt::Unsupported("typed-array-species:symbol"))?;
+            let species = self.mop_get(code, constructor_ref, species_id, constructor)?;
+            constructor = if species.kind == Kind::Null || species.kind == Kind::Undefined {
+                default_constructor
+            } else {
+                species
+            };
+        }
+        if !self.is_constructor_value(constructor) {
+            return Err(self.catchable_type_error());
+        }
+        let result = self.construct_value(code, constructor, args, constructor)?;
+        let result_ref = match result.value {
+            Payload::Reference(reference) if result.kind == Kind::Reference => reference,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let target = self.validate_typed_array(result)?;
+        if (source.kind <= 1) != (target.kind <= 1) {
+            return Err(self.catchable_type_error());
+        }
+        if minimum_length.is_some_and(|minimum| target.length < minimum) {
+            return Err(self.catchable_type_error());
+        }
+        debug_assert!(self.typed_arrays.contains_key(&result_ref));
+        Ok((result, target))
+    }
+
+    /// The two range-copying shared TypedArray methods. `slice` allocates a
+    /// species result and copies values (raw bytes for the same element type,
+    /// preserving NaN payloads); `subarray` constructs a species view over the
+    /// original buffer and therefore shares subsequent writes.
+    fn typed_array_slice_or_subarray(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let exemplar = match this.value {
+            Payload::Reference(reference)
+                if this.kind == Kind::Reference
+                    && self.typed_arrays.contains_key(&reference) => reference,
+            _ => return Err(self.catchable_type_error()),
+        };
+        // `subarray` intentionally performs its begin/end coercions even for a
+        // detached branded view; construction over the detached buffer is the
+        // later operation that throws. `slice` uses ValidateTypedArray up front.
+        let source = if method == NativeMethod::TypedArraySubarray {
+            self.typed_arrays[&exemplar]
+        } else {
+            self.validate_typed_array(this)?
+        };
+        let begin_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let end_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let begin = Self::typed_array_relative_index(
+            self.array_to_integer_or_infinity(code, begin_arg)?,
+            source.length,
+        );
+        let end = if argc < 2 || end_arg.kind == Kind::Undefined {
+            source.length
+        } else {
+            Self::typed_array_relative_index(
+                self.array_to_integer_or_infinity(code, end_arg)?,
+                source.length,
+            )
+        };
+        let count = end.saturating_sub(begin);
+
+        if method == NativeMethod::TypedArraySubarray {
+            let element_size = TYPED_ARRAY_TYPES[source.kind as usize].size as u32;
+            let byte_offset = source
+                .offset
+                .checked_add(begin.saturating_mul(element_size))
+                .ok_or_else(|| self.catchable_range_error())?;
+            let buffer = Slot::of(Kind::Reference, Payload::Reference(source.buffer));
+            let args = [
+                buffer,
+                Slot::number(byte_offset as f64),
+                Slot::number(count as f64),
+            ];
+            let (result, _) =
+                self.typed_array_species_create(code, exemplar, source, &args, None)?;
+            return Ok(result);
+        }
+
+        let args = [Slot::number(count as f64)];
+        let (result, target) = self.typed_array_species_create(
+            code,
+            exemplar,
+            source,
+            &args,
+            Some(count),
+        )?;
+        if count == 0 {
+            return Ok(result);
+        }
+        if self.detached_buffers.contains(&source.buffer) {
+            return Err(self.catchable_type_error());
+        }
+        if source.kind == target.kind {
+            let size = TYPED_ARRAY_TYPES[source.kind as usize].size as usize;
+            let source_buffer = self.array_buffers[&source.buffer];
+            let source_start = source.offset as usize + begin as usize * size;
+            let byte_count = count as usize * size;
+            let bytes = self.chunks.payload(source_buffer.data)
+                [source_start..source_start + byte_count]
+                .to_vec();
+            let target_buffer = self.array_buffers[&target.buffer];
+            let target_start = target.offset as usize;
+            let out = self
+                .chunks
+                .slice_mut(target_buffer.data, target_start + byte_count);
+            out[target_start..target_start + byte_count].copy_from_slice(&bytes);
+        } else {
+            for offset in 0..count {
+                let value = if source.kind <= 1 {
+                    self.typed_array_element_get_bigint(source, begin + offset)
+                } else {
+                    self.typed_array_element_get(source, begin + offset)
+                        .expect("numeric TypedArray slice source decodes")
+                };
+                self.typed_array_element_set(code, target, offset, value)?;
+            }
+        }
+        Ok(result)
+    }
+
+    /// The allocating callback pair on `%TypedArray%.prototype`. `map`
+    /// creates its species result before invoking callbacks and writes each
+    /// mapped value immediately; `filter` first records the selected source
+    /// values, then creates an exactly-sized species result and copies them.
+    fn typed_array_map_filter(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let source = self.validate_typed_array(this)?;
+        let exemplar = match this.value {
+            Payload::Reference(reference) => reference,
+            _ => unreachable!(),
+        };
+        let callback = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        if !self.is_callable_value(callback) {
+            return Err(self.catchable_type_error());
+        }
+
+        if method == NativeMethod::TypedArrayMap {
+            let args = [Slot::number(source.length as f64)];
+            let (result, target) = self.typed_array_species_create(
+                code,
+                exemplar,
+                source,
+                &args,
+                Some(source.length),
+            )?;
+            for index in 0..source.length {
+                let value = self.ta_indexed_element_get(source, index as f64);
+                let mapped = self.run_callback(
+                    code,
+                    callback,
+                    this_arg,
+                    &[value, Slot::integer(index as i32), this],
+                )?;
+                self.ta_indexed_element_set(code, target, index as f64, mapped)?;
+            }
+            return Ok(result);
+        }
+
+        let mut kept = Vec::new();
+        for index in 0..source.length {
+            let value = self.ta_indexed_element_get(source, index as f64);
+            let selected = self.run_callback(
+                code,
+                callback,
+                this_arg,
+                &[value, Slot::integer(index as i32), this],
+            )?;
+            if self.truthy(&selected) {
+                kept.push(value);
+            }
+        }
+        let length = kept.len() as u32;
+        let args = [Slot::number(length as f64)];
+        let (result, target) = self.typed_array_species_create(
+            code,
+            exemplar,
+            source,
+            &args,
+            Some(length),
+        )?;
+        for (index, value) in kept.into_iter().enumerate() {
+            self.ta_indexed_element_set(code, target, index as f64, value)?;
+        }
+        Ok(result)
+    }
+
+    /// `%TypedArray%.prototype.sort`: stable numeric/BigInt ordering, with an
+    /// optional guest comparator whose result is ToNumber-coerced. A comparator
+    /// that detaches the receiver triggers the required TypeError immediately
+    /// after its result is ToNumber-coerced, before another comparison or any
+    /// write-back.
+    fn typed_array_sort(
+        &mut self,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let typed_array = self.validate_typed_array(this)?;
+        let compare = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let custom = argc > 0 && compare.kind != Kind::Undefined;
+        if custom && !self.is_callable_value(compare) {
+            return Err(self.catchable_type_error());
+        }
+        let mut values = Vec::with_capacity(typed_array.length as usize);
+        for index in 0..typed_array.length {
+            values.push(if typed_array.kind <= 1 {
+                self.typed_array_element_get_bigint(typed_array, index)
+            } else {
+                self.typed_array_element_get(typed_array, index)
+                    .expect("numeric TypedArray sort element decodes")
+            });
+        }
+
+        // Stable insertion sort keeps comparator calls sequenced and fallible
+        // without laundering guest exceptions through a Rust comparator.
+        for index in 1..values.len() {
+            let value = values[index];
+            let mut destination = index;
+            while destination > 0 {
+                let previous = values[destination - 1];
+                let ordering = if custom {
+                    let result = self.run_callback(
+                        code,
+                        compare,
+                        Slot::undefined(),
+                        &[value, previous],
+                    )?;
+                    let number = to_number(&self.to_number_value(code, result)?);
+                    if self.detached_buffers.contains(&typed_array.buffer) {
+                        return Err(self.catchable_type_error());
+                    }
+                    if number < 0.0 {
+                        std::cmp::Ordering::Less
+                    } else if number > 0.0 {
+                        std::cmp::Ordering::Greater
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
+                } else if typed_array.kind <= 1 {
+                    let (Payload::BigInt(left), Payload::BigInt(right)) =
+                        (value.value, previous.value)
+                    else {
+                        unreachable!("BigInt TypedArray sort values")
+                    };
+                    let (left_negative, left_magnitude) = self.read_bigint(left);
+                    let (right_negative, right_magnitude) = self.read_bigint(right);
+                    bi_cmp(
+                        left_negative,
+                        &left_magnitude,
+                        right_negative,
+                        &right_magnitude,
+                    )
+                } else {
+                    let left = numeric_of(&value).unwrap_or(f64::NAN);
+                    let right = numeric_of(&previous).unwrap_or(f64::NAN);
+                    if left.is_nan() {
+                        if right.is_nan() {
+                            std::cmp::Ordering::Equal
+                        } else {
+                            std::cmp::Ordering::Greater
+                        }
+                    } else if right.is_nan() {
+                        std::cmp::Ordering::Less
+                    } else if left == 0.0 && right == 0.0 {
+                        right
+                            .is_sign_negative()
+                            .cmp(&left.is_sign_negative())
+                    } else {
+                        left.partial_cmp(&right).unwrap_or(std::cmp::Ordering::Equal)
+                    }
+                };
+                if ordering != std::cmp::Ordering::Less {
+                    break;
+                }
+                values[destination] = previous;
+                destination -= 1;
+            }
+            values[destination] = value;
+        }
+        for (index, value) in values.into_iter().enumerate() {
+            self.typed_array_element_set(code, typed_array, index as u32, value)?;
+        }
+        Ok(this)
     }
 
     /// The non-allocating `%TypedArray%.prototype` iteration/search/fold
@@ -39048,26 +39538,28 @@ impl Interp {
     /// (XS's property slots hold the value directly, keyed by `id`), so
     /// the match is by `id` alone — a property slot's `kind` is the
     /// value's kind, not a separate marker.
-    /// The `Symbol.toStringTag` string on `inst`'s own+inherited chain, if any.
-    /// Unmetered — used only by `Object.prototype.toString` for the frozen Intl
-    /// objects (the pinned oracle cannot construct one, so no metered case
-    /// reaches this).
-    fn string_to_string_tag(&mut self, inst: crate::value::SlotIndex) -> Option<String> {
-        let tag_id = self.well_known_symbol_property_id("toStringTag")?;
-        let mut cur = inst;
-        while !cur.is_null() {
-            if let Some(prop) = self.find_property(cur, tag_id) {
-                let slot = self.slots.get(prop);
-                if let Payload::String(off) = slot.value {
-                    if slot.kind == Kind::String {
-                        return Some(self.str_text(off));
-                    }
-                }
-                return None;
-            }
-            cur = self.instance_prototype(cur);
-        }
-        None
+    /// `Get(inst, @@toStringTag)` followed by the string check from
+    /// `Object.prototype.toString`. The ordinary MOP lookup is load-bearing:
+    /// `%TypedArray%.prototype` supplies the tag through a native accessor, and
+    /// guest accessors must likewise run and propagate abrupt completions.
+    fn string_to_string_tag(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Option<String>, Halt> {
+        let Some(tag_id) = self.well_known_symbol_property_id("toStringTag") else {
+            return Ok(None);
+        };
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
+        let value = self.mop_get(code, inst, tag_id, receiver)?;
+        Ok(match value {
+            Slot {
+                kind: Kind::String,
+                value: Payload::String(off),
+                ..
+            } => Some(self.str_text(off)),
+            _ => None,
+        })
     }
 
     fn find_property(

@@ -587,7 +587,8 @@ fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
     let last = carry_scenario(
         "carry-typed-array-hierarchy",
         "Object.getPrototypeOf(Int8Array); Object.getPrototypeOf(Uint8Array); \
-         C.prototype; inst.copyWithin; inst.length; inst instanceof C;",
+         C.prototype; inst.copyWithin; inst.length; inst instanceof C; \
+         Object.prototype.toString.call(inst);",
         &[
             "C = Object.getPrototypeOf(Int8Array); \
              o = Object.getPrototypeOf(Int8Array.prototype); \
@@ -596,10 +597,11 @@ fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
              t = (Object.getPrototypeOf(Uint8Array) === C) + ':' + \
                  (C.prototype === o); t",
             "t = (inst instanceof C) + ':' + inst[1] + ':' + \
-                 (Object.getPrototypeOf(inst) === Int8Array.prototype); t",
+                 (Object.getPrototypeOf(inst) === Int8Array.prototype) + ':' + \
+                 Object.prototype.toString.call(inst); t",
         ],
     );
-    assert_eq!(last, "true:1:true");
+    assert_eq!(last, "true:1:true:[object Int8Array]");
 }
 
 #[test]

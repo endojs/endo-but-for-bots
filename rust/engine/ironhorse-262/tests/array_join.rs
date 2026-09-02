@@ -15,6 +15,7 @@ fn agrees(source: &str) {
 #[test]
 fn object_separator_precedes_live_element_reads() {
     agrees("var a=[{toString:function(){a[1]=9;return 1}},2]; var s={toString:function(){a.push(3);return '-'}}; a.join(s)");
+    agrees("var a=[1]; var s={toString:function(){Object.defineProperty(a,'0',{get:function(){return 2}});return ','}}; a.join(s)");
 }
 
 #[test]

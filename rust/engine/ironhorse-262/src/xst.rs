@@ -590,6 +590,18 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // official assertion. Keep this exact oracle defect from
                     // becoming a false over-acceptance.
                     Verdict::RunSkip("oracle-xs-typedarray-set-detach".into())
+                } else if oracle_misses_typed_array_sort_detachment(run) {
+                    // Pinned XS continues sorting after a guest comparator
+                    // detaches the receiver. The specification and official
+                    // assertion require an immediate TypeError; IronHorse
+                    // follows that rule. Keep this exact XS defect from
+                    // becoming a false over-acceptance.
+                    Verdict::RunSkip("oracle-xs-typedarray-sort-detach".into())
+                } else if oracle_defers_typed_array_sort_to_number(run) {
+                    // Pinned XS checks detachment before coercing the guest
+                    // comparator result. The specification requires ToNumber
+                    // first, and the official case observes that side effect.
+                    Verdict::RunSkip("oracle-xs-typedarray-sort-tonumber".into())
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -697,10 +709,37 @@ fn oracle_skips_super_arguments(run: &DualRun) -> bool {
 /// `set` call so unrelated TypedArray failures remain gating.
 fn oracle_misses_typed_array_set_detachment(run: &DualRun) -> bool {
     run.oracle_parsed
-        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run.oracle_error == "Test262Error: Expected a TypeError but got a Test262Error"
         && run.source.contains("$DETACHBUFFER(sample.buffer)")
         && run.source.contains("Should not get other values")
         && run.source.contains("sample.set(obj)")
+}
+
+/// The pinned XS `%TypedArray.prototype.sort%` comparator-detachment defect.
+/// The official Number and BigInt cases detach the receiver in the first
+/// comparator call and require a TypeError before any later comparison. XS
+/// instead calls the comparator repeatedly and fails the harness assertion;
+/// IronHorse throws at the specified checkpoint. Match the assertion shape and
+/// all distinctive source operations so no unrelated sort failure is hidden.
+fn oracle_misses_typed_array_sort_detachment(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run.source.contains("$DETACHBUFFER(sample.buffer)")
+        && run.source.contains("sample.sort(comparefn)")
+        && run.source.contains("assert.throws(TypeError")
+}
+
+/// Pinned XS performs the `%TypedArray%.prototype.sort%` detachment check
+/// before ToNumber-coercing the comparator result. The official case returns an
+/// object whose `Symbol.toPrimitive` flips a sentinel and requires that side
+/// effect before the TypeError. Restrict this exclusion to that exact shape.
+fn oracle_defers_typed_array_sort_to_number(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run.source.contains("$DETACHBUFFER(ab)")
+        && run.source.contains("[Symbol.toPrimitive]() { called = true; }")
+        && run.source.contains("ta.sort(function(a, b)")
+        && run.source.contains("assert.sameValue(true, called)")
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -2301,7 +2340,7 @@ mod tests {
     fn oracle_typed_array_set_detachment_bug_is_a_precise_exclusion() {
         let mut run = synthetic_ironhorse_only_complete(
             true,
-            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all",
+            "Test262Error: Expected a TypeError but got a Test262Error",
         );
         run.source = "Object.defineProperty(obj, 1, { get: function() { \
             $DETACHBUFFER(sample.buffer); } }); \
@@ -2324,6 +2363,75 @@ mod tests {
 
         run.source = "$DETACHBUFFER(sample.buffer); sample.set(obj);".to_string();
         assert!(!oracle_misses_typed_array_set_detachment(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+
+        run.oracle_error = "Test262Error: a different assertion failed".to_string();
+        run.source = "Object.defineProperty(obj, 1, { get: function() { \
+            $DETACHBUFFER(sample.buffer); } }); \
+            Object.defineProperty(obj, 2, { get: function() { \
+            throw new Test262Error('Should not get other values'); } }); \
+            sample.set(obj);"
+            .to_string();
+        assert!(!oracle_misses_typed_array_set_detachment(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_typed_array_sort_detachment_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all",
+        );
+        run.source = "var comparefn = function() { \
+            $DETACHBUFFER(sample.buffer); }; \
+            assert.throws(TypeError, function() { sample.sort(comparefn); });"
+            .to_string();
+        assert!(oracle_misses_typed_array_sort_detachment(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-typedarray-sort-detach".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-typedarray-sort-detach"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source = "$DETACHBUFFER(sample.buffer); sample.sort(comparefn);".to_string();
+        assert!(!oracle_misses_typed_array_sort_detachment(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_typed_array_sort_to_number_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected SameValue(«true», «false»)",
+        );
+        run.source = "ta.sort(function(a, b) { \
+            $DETACHBUFFER(ab); return { \
+            [Symbol.toPrimitive]() { called = true; } }; }); \
+            assert.sameValue(true, called);"
+            .to_string();
+        assert!(oracle_defers_typed_array_sort_to_number(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-typedarray-sort-tonumber".into())
+        );
+
+        run.source = "$DETACHBUFFER(ab); ta.sort(function(a, b) {});".to_string();
+        assert!(!oracle_defers_typed_array_sort_to_number(&run));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(_)
