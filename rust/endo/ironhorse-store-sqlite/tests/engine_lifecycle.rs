@@ -623,7 +623,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
          Array.prototype.slice; a.slice; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
-         Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; \
+         Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
          Object.prototype.hasOwnProperty; \
          a.join; a.length; \
          (function (y) { return y; });",
@@ -643,16 +643,18 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  Array.prototype.toSpliced.length; t",
             "inst = new Uint8Array([2, 1]); \
              Array.prototype.sort.call(inst, function (x, y) { return x - y; }); \
+             g = []; Reflect.set(inst, '0', 7, g); \
              q = q.slice(0, 3); \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
-                 Array.prototype.slice.name + ':' + Array.prototype.slice.length; t",
+                 Array.prototype.slice.name + ':' + Array.prototype.slice.length + ':' + \
+                 g[0] + ':' + g.length; t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1"
     );
 }
 

@@ -108,6 +108,22 @@ fn set_receiver_differs_stores_on_receiver() {
         "var s = new Int8Array([0]); var r = Object.preventExtensions({}); \
          var ok = Reflect.set(s, 0, 7, r); '' + ok + ',' + r.hasOwnProperty(0)",
     );
+    // The receiver's own exotic definition path remains authoritative. Arrays
+    // grow or update compact indexed storage rather than acquiring a shadow
+    // ordinary property.
+    agrees(
+        "var s = new Uint8Array([0]); var r = []; \
+         Reflect.set(s, '0', 2, r) + ':' + r[0] + ':' + r.length",
+    );
+    agrees(
+        "var s = new Uint8Array([0]); var r = [9]; \
+         Reflect.set(s, '0', 2, r) + ':' + r[0] + ':' + r.length",
+    );
+    // A Proxy receiver observes the GetOwnProperty/DefineOwnProperty
+    // continuation and forwards the definition to its Array target.
+    agrees(
+        "var log=[]; var a=[]; var r=new Proxy(a,{getOwnPropertyDescriptor:function(t,k){log.push('get:'+k);return Object.getOwnPropertyDescriptor(t,k)},defineProperty:function(t,k,d){log.push('define:'+k);return Reflect.defineProperty(t,k,d)}}); var s=new Uint8Array([0]); var ok=Reflect.set(s,'0',2,r); ok+':'+a[0]+':'+a.length+':'+log.join(',')",
+    );
 }
 
 // -------------------------------------------------------------------------
