@@ -5806,6 +5806,7 @@ impl Interp {
                     self.alloc_named_method(m, name, 1)
                 }
                 NativeMethod::ArraySlice => self.alloc_named_method(m, name, 2),
+                NativeMethod::ArrayConcat => self.alloc_named_method(m, name, 1),
                 NativeMethod::ArrayWith | NativeMethod::ArrayToSpliced => {
                     self.alloc_named_method(m, name, 2)
                 }
@@ -29592,20 +29593,44 @@ impl Interp {
                 self.meter.tick_builtin_some(3);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
-            // `Array.prototype.concat(...args)` — dense fast path. A new array
-            // of the receiver's elements followed by each argument: an array
-            // argument (concat-spreadable) contributes its elements, any other
-            // value is appended as one element. Dense receivers/array-args only
-            // (a hole self-names — the uninitialized-slot accounting is a later
-            // increment). Metering models `fxNewInstance` (the list) + a
+            // `Array.prototype.concat(...args)` — dense fast path, with a
+            // generic fallback for observable spreadability/species and exotic
+            // receivers. A new array contains the receiver's elements followed
+            // by each argument: an array argument contributes its elements and
+            // any other value is appended as one element. Metering for the
+            // packed default case models `fxNewInstance` (the list) + a
             // Symbol.isConcatSpreadable check per reference operand + a key slot
             // and `mxMeterSome(2)` per spread element + a key slot and
             // `mxMeterSome(4)` per appended value + the result chunk +
             // `mxMeterSome(3)`, plus a frame constant.
             NativeMethod::ArrayConcat => {
-                let recv = match this.value {
-                    Payload::Reference(i) if self.arrays.contains_key(&i) => i,
-                    _ => return Err(Halt::Unsupported("concat:non-array-receiver")),
+                let recv = match self.dense_array_this(this) {
+                    Some(i)
+                        if self.array_allocating_uses_default_species(i)
+                            && self.array_concat_uses_default_spreadability(this)
+                            && (0..argc).all(|argi| {
+                                let operand = self
+                                    .stack
+                                    .get(base + 4 + argi)
+                                    .copied()
+                                    .unwrap_or_else(Slot::undefined);
+                                self.array_concat_uses_default_spreadability(operand)
+                                    && match operand.value {
+                                        Payload::Reference(inst)
+                                            if self.arrays.contains_key(&inst) =>
+                                        {
+                                            let array = &self.arrays[&inst];
+                                            array.items().len() as u32 == array.length
+                                        }
+                                        _ => true,
+                                    }
+                            }) => i,
+                    _ => {
+                        let result = self.array_generic_concat(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 // Collect the operands: the receiver, then each argument.
                 let mut operands: Vec<Slot> = vec![this];
@@ -35483,6 +35508,38 @@ impl Interp {
         true
     }
 
+    /// Whether `IsConcatSpreadable(value)` is guaranteed to use its default
+    /// answer without an observable property lookup. A Proxy anywhere in the
+    /// prototype chain, or an own/inherited `Symbol.isConcatSpreadable`
+    /// property, requires the generic path. If the symbol has never been used
+    /// as a property key, no object can carry such a property yet.
+    fn array_concat_uses_default_spreadability(&self, value: Slot) -> bool {
+        let Payload::Reference(mut object) = value.value else {
+            return true;
+        };
+        if value.kind != Kind::Reference {
+            return true;
+        }
+        let spread_id = self
+            .well_known_symbols
+            .iter()
+            .find_map(|(name, value)| (*name == "isConcatSpreadable").then_some(value.value))
+            .and_then(|value| match value {
+                Payload::Reference(descriptor) => self.symbol_key_ids.get(&descriptor).copied(),
+                _ => None,
+            });
+        while !object.is_null() {
+            if self.proxies.contains_key(&object) {
+                return false;
+            }
+            if spread_id.is_some_and(|id| self.find_property(object, id).is_some()) {
+                return false;
+            }
+            object = self.instance_prototype(object);
+        }
+        true
+    }
+
     // ---- Generic (array-like / sparse / proxy `this`) Array.prototype path ----
     //
     // The dense fast paths in `call_native_method` operate on the internal
@@ -35490,7 +35547,7 @@ impl Interp {
     // sparse Array (holes), plain array-like object (`{length, 0:…}`), Proxy,
     // or allocating method with observable species. Reads use the object MOP
     // (`mop_get`/`mop_has`) so accessors, inherited holes, and Proxy traps are
-    // honored; `map`/`filter` additionally use `ArraySpeciesCreate` and
+    // honored; allocating methods additionally use `ArraySpeciesCreate` and
     // `CreateDataPropertyOrThrow`. An unmodeled primitive receiver keeps the
     // method's original named skip.
 
@@ -35718,6 +35775,131 @@ impl Interp {
         } else {
             Err(self.catchable_type_error())
         }
+    }
+
+    /// `IsConcatSpreadable(O)`: primitives are never spread; an explicit
+    /// `Symbol.isConcatSpreadable` value wins; otherwise the answer is
+    /// `IsArray`, including transparent Proxy recursion and revoked-Proxy
+    /// failure.
+    fn array_generic_is_concat_spreadable(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+    ) -> Result<bool, Halt> {
+        let Payload::Reference(object) = value.value else {
+            return Ok(false);
+        };
+        if value.kind != Kind::Reference {
+            return Ok(false);
+        }
+        let spread_id = self
+            .well_known_symbol_property_id("isConcatSpreadable")
+            .ok_or(Halt::Unsupported("concat:isConcatSpreadable-symbol"))?;
+        let spread = self.mop_get(code, object, spread_id, value)?;
+        if spread.kind != Kind::Undefined {
+            return Ok(self.truthy(&spread));
+        }
+        self.array_generic_is_array(object)
+    }
+
+    /// Generic `Array.prototype.concat`: honor `ToObject(this)`,
+    /// `ArraySpeciesCreate`, `Symbol.isConcatSpreadable`, sparse/inherited
+    /// elements, Proxy traps, and `CreateDataPropertyOrThrow` on the result.
+    fn array_generic_concat(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(original) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let result = self.array_generic_species_create(code, original, 0)?;
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(result));
+
+        let mut operands = Vec::with_capacity(argc + 1);
+        operands.push(object);
+        for argi in 0..argc {
+            operands.push(
+                self.stack
+                    .get(base + 4 + argi)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined),
+            );
+        }
+
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        const GENERIC_CONCAT_CAP: u64 = 1 << 24;
+        let mut n = 0u64;
+        for operand in operands {
+            if !self.array_generic_is_concat_spreadable(code, operand)? {
+                if n >= MAX_SAFE_INTEGER {
+                    return Err(self.catchable_type_error());
+                }
+                self.array_generic_create_data_property(code, result, n, operand)?;
+                n += 1;
+                continue;
+            }
+
+            let Payload::Reference(source) = operand.value else {
+                unreachable!("spreadable values are objects")
+            };
+            let length = self.array_generic_length(code, source)?;
+            if n > MAX_SAFE_INTEGER - length {
+                return Err(self.catchable_type_error());
+            }
+            let mut k = 0u64;
+            let mut linear_steps = 0u64;
+            while k < length {
+                let present = match self.array_generic_next_present_index(source, k, length) {
+                    Some(Some(next)) => {
+                        n += next - k;
+                        k = next;
+                        true
+                    }
+                    Some(None) => {
+                        n += length - k;
+                        break;
+                    }
+                    None => {
+                        if linear_steps >= GENERIC_CONCAT_CAP {
+                            return Err(Halt::Unsupported("concat:oversized-spreadable"));
+                        }
+                        linear_steps += 1;
+                        self.array_generic_has(code, source, k)?
+                    }
+                };
+                if present {
+                    let value = self.array_generic_get(code, source, k)?;
+                    self.array_generic_create_data_property(code, result, n, value)?;
+                }
+                k += 1;
+                n += 1;
+            }
+        }
+
+        let length_id = self.intern_key("length");
+        if !self.mop_set(
+            code,
+            result,
+            length_id,
+            Self::array_index_number(n),
+            receiver,
+        )? {
+            return Err(self.catchable_type_error());
+        }
+        Ok(receiver)
     }
 
     /// Generic `Array.prototype.slice`: coerce the bounds before creating the
@@ -40958,26 +41140,25 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        let mut owner = inst;
-        while !owner.is_null() {
-            // A proxy encountered while climbing the prototype chain runs its
-            // own `[[Get]]` (ECMA-262 OrdinaryGet step 4: `parent.[[Get]]`).
-            if owner != inst && self.proxies.contains_key(&owner) {
-                return self.proxy_get(code, owner, id, receiver);
-            }
-            if let Some(descriptor) = self.ordinary_get_own_descriptor(owner, id) {
-                if descriptor.is_accessor() {
-                    let getter = descriptor.get.unwrap_or_else(Slot::undefined);
-                    if getter.kind == Kind::Undefined {
-                        return Ok(Slot::undefined());
-                    }
-                    return self.invoke_getter(code, getter, receiver);
+        if let Some(descriptor) = self.ordinary_get_own_descriptor(inst, id) {
+            if descriptor.is_accessor() {
+                let getter = descriptor.get.unwrap_or_else(Slot::undefined);
+                if getter.kind == Kind::Undefined {
+                    return Ok(Slot::undefined());
                 }
-                return Ok(descriptor.value.unwrap_or_else(Slot::undefined));
+                return self.invoke_getter(code, getter, receiver);
             }
-            owner = self.instance_prototype(owner);
+            return Ok(descriptor.value.unwrap_or_else(Slot::undefined));
         }
-        Ok(Slot::undefined())
+        // OrdinaryGet step 4 delegates to the parent's full `[[Get]]`, not to
+        // another ordinary slot-chain scan. This matters when the prototype is
+        // a Proxy or carries Array/String/TypedArray exotic own properties.
+        let parent = self.instance_prototype(inst);
+        if parent.is_null() {
+            Ok(Slot::undefined())
+        } else {
+            self.mop_get(code, parent, id, receiver)
+        }
     }
 
     fn ordinary_set(
