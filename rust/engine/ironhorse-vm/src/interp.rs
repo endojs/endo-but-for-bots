@@ -1007,6 +1007,11 @@ pub const ARRAY_FLAT_PER_ARRAY_METERING: u64 = 11 << 14;
 /// `flatAux`'s function branch), beyond the callback body and the result
 /// flattening (which reuses the `flat` constants). Calibrated against the pin.
 pub const ARRAY_FLATMAP_CALLBACK_METERING: u64 = 6 << 14;
+/// The generic MOP path accounts for a small part of `flatMap`'s calibrated
+/// frame and per-element work itself. Remove that overlap when applying the
+/// dense-path constants through the generic implementation.
+const ARRAY_FLATMAP_GENERIC_FRAME_OVERLAP: u64 = 400;
+const ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP: u64 = 120;
 /// `Array.prototype.toSpliced` frame cost (`fxNewArray` host frame), beyond the
 /// modeled result chunk and the per-region `mxMeterSome` copy costs
 /// (`start * 10` for the head, `5` per insertion, `rest * 10` for the tail,
@@ -5815,6 +5820,8 @@ impl Interp {
                     self.alloc_named_method(m, name, 2)
                 }
                 NativeMethod::ArrayToReversed => self.alloc_named_method(m, name, 0),
+                NativeMethod::ArrayFlat => self.alloc_named_method(m, name, 0),
+                NativeMethod::ArrayFlatMap => self.alloc_named_method(m, name, 1),
                 _ => self.alloc_method(m),
             };
             self.proto_methods.push((self.array_proto, name, mf));
@@ -30649,10 +30656,35 @@ impl Interp {
             // element chunk growth, plus a frame constant.
             NativeMethod::ArrayFlat => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("flat:non-dense-array")),
+                    Some(i)
+                        if self.array_allocating_uses_default_species(i)
+                            && matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined)
+                            && self.array_flat_fast_safe(
+                                i,
+                                if argc == 0 || arg0.kind == Kind::Undefined {
+                                    1
+                                } else {
+                                    match numeric_of(&arg0) {
+                                        Some(n) if n.is_nan() || n < 0.0 => 0,
+                                        Some(n) => n.trunc() as u32,
+                                        None => 0,
+                                    }
+                                },
+                                &mut 1024,
+                            ) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_flat_or_flat_map(
+                            code, m, this, base, argc,
+                        )?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
-                let depth = if argc >= 1 {
+                let depth = if argc >= 1 && arg0.kind != Kind::Undefined {
                     match numeric_of(&arg0) {
                         Some(n) if n.is_nan() || n < 0.0 => 0,
                         Some(n) => n.trunc() as u32,
@@ -30682,60 +30714,11 @@ impl Interp {
             // result flattening reuses `flat`'s per-leaf/per-array constants,
             // plus a per-source callback overhead.
             NativeMethod::ArrayFlatMap => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("flatMap:non-dense-array")),
-                };
-                let callback = arg0;
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
-                let mut out: Vec<Slot> = Vec::new();
-                for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    if let Some(item) = item {
-                        self.meter.tick_raw(ARRAY_FLATMAP_CALLBACK_METERING);
-                        let cb_args = [item, Slot::integer(i as i32), this];
-                        let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                        // Flatten the result by one level.
-                        let is_array = matches!(r.value, Payload::Reference(x) if self.arrays.contains_key(&x));
-                        if is_array {
-                            let sub = match r.value {
-                                Payload::Reference(x) => x,
-                                _ => unreachable!(),
-                            };
-                            self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
-                            let sub_len = self.arrays[&sub].length;
-                            for k in 0..sub_len {
-                                if let Some(e) = self.arrays[&sub].items().get(&k).copied() {
-                                    self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
-                                    self.meter
-                                        .tick_raw(self.array_item_grow_metering(out.len() as u64));
-                                    out.push(e);
-                                }
-                            }
-                        } else {
-                            self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
-                            self.meter
-                                .tick_raw(self.array_item_grow_metering(out.len() as u64));
-                            out.push(r);
-                        }
-                    }
-                }
-                let result = self.new_array_unmetered();
-                let total = out.len() as u32;
-                {
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in out.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = total;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
+                let result =
+                    self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
+                self.stack.truncate(base);
+                self.push(result);
+                return Ok(());
             }
             // `Array.prototype.join([sep])` — dense fast path. Each element is
             // ToString'd into a key slot, the pieces joined by `sep` (default
@@ -32023,58 +32006,22 @@ impl Interp {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.has:non-object")),
                 };
-                // The integer-indexed exotic `[[HasProperty]]` (10.4.5.3): a
-                // canonical numeric index is present iff it is a valid integer
-                // index; any other key walks the chain ordinarily.
-                if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    let key = self.to_property_key_slot(code, arg1)?;
-                    if let Some(n) = self.ta_numeric_index(key) {
-                        self.meter.tick_raw(REFLECT_FRAME_METERING);
-                        return Ok(Slot::boolean(self.ta_valid_index(ta, n).is_some()));
-                    }
-                    let id = self.to_property_id(code, key)?;
-                    let (present, recursions) = self.instance_has(inst, id);
-                    self.meter.tick_raw(REFLECT_FRAME_METERING);
-                    self.meter.tick_code_n(recursions);
-                    return Ok(Slot::boolean(present));
-                }
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("Reflect.has:exotic-object"));
-                }
                 let id = self.to_property_id(code, arg1)?;
-                let (present, recursions) = self.instance_has(inst, id);
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.meter.tick_code_n(recursions);
-                Ok(Slot::boolean(present))
+                Ok(Slot::boolean(self.mop_has(code, inst, id)?))
             }
-            // `Reflect.get(target, key[, receiver])`: the own-or-inherited
-            // data-property value (the `receiver` is irrelevant to a data
-            // property — no getters in the covered grammar — so it is ignored).
+            // `Reflect.get(target, key[, receiver])`: dispatch the target's
+            // full `[[Get]]`, including exotic objects and accessors that use
+            // the explicit receiver.
             NativeMethod::ReflectGet => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.get:non-object")),
                 };
-                // The integer-indexed exotic `[[Get]]` (10.4.5.4): a canonical
-                // numeric index reads the element regardless of `receiver`; a
-                // non-canonical key is an ordinary chain `[[Get]]`.
-                if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    let receiver = if argc >= 3 { arg2 } else { arg0 };
-                    let key = self.to_property_key_slot(code, arg1)?;
-                    self.meter.tick_raw(REFLECT_FRAME_METERING);
-                    if let Some(n) = self.ta_numeric_index(key) {
-                        return Ok(self.ta_indexed_element_get(ta, n));
-                    }
-                    let id = self.to_property_id(code, key)?;
-                    return self.ordinary_get(code, inst, id, receiver);
-                }
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("Reflect.get:exotic-object"));
-                }
                 let id = self.to_property_id(code, arg1)?;
                 let receiver = if argc >= 3 { arg2 } else { arg0 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
-                self.ordinary_get(code, inst, id, receiver)
+                self.mop_get(code, inst, id, receiver)
             }
             // `Reflect.set(target, key, value[, receiver])`: an ordinary
             // `[[Set]]` returning whether it was accepted. `false` for a
@@ -35982,6 +35929,51 @@ impl Interp {
         true
     }
 
+    /// Whether the compact `flat` path can read the complete traversed graph
+    /// without invoking guest code. Dense own data elements are sufficient;
+    /// holes, accessors, Proxies, and arguments objects require `HasProperty`,
+    /// `Get`, or the full `IsArray` operation. The budget also keeps a cyclic
+    /// graph with a very large requested depth from recursing on the Rust
+    /// stack merely to decide which execution path to use.
+    fn array_flat_fast_safe(
+        &self,
+        source: crate::value::SlotIndex,
+        depth: u32,
+        budget: &mut u32,
+    ) -> bool {
+        if *budget == 0 || self.arguments_objects.contains(&source) {
+            return false;
+        }
+        *budget -= 1;
+        let Some(array) = self.arrays.get(&source) else {
+            return false;
+        };
+        if array.items().len() as u32 != array.length {
+            return false;
+        }
+        for item in array.items().values() {
+            if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                return false;
+            }
+            let Payload::Reference(element) = item.value else {
+                continue;
+            };
+            if item.kind != Kind::Reference {
+                continue;
+            }
+            if self.proxies.contains_key(&element) {
+                return false;
+            }
+            if depth > 0
+                && self.arrays.contains_key(&element)
+                && !self.array_flat_fast_safe(element, depth - 1, budget)
+            {
+                return false;
+            }
+        }
+        true
+    }
+
     /// Whether `IsConcatSpreadable(value)` is guaranteed to use its default
     /// answer without an observable property lookup. A Proxy anywhere in the
     /// prototype chain, or an own/inherited `Symbol.isConcatSpreadable`
@@ -36929,6 +36921,166 @@ impl Interp {
         } else {
             Err(self.catchable_type_error())
         }
+    }
+
+    /// Generic `flat` / `flatMap` entry. Both methods use `ToObject`, snapshot
+    /// `LengthOfArrayLike`, allocate through `ArraySpeciesCreate`, and then
+    /// share the recursive `FlattenIntoArray` operation. `flatMap` validates
+    /// its callback only after the observable receiver-length read.
+    fn array_generic_flat_or_flat_map(
+        &mut self,
+        code: &[u8],
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        let argument = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let this_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let object = self.array_to_object(this)?;
+        let Payload::Reference(source) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let source_len = self.array_generic_length(code, source)?;
+        let (depth, mapper) = if method == NativeMethod::ArrayFlatMap {
+            if !self.is_callable_value(argument) {
+                return Err(self.catchable_type_error());
+            }
+            (1.0, Some((argument, this_arg)))
+        } else {
+            let depth = if argc == 0 || argument.kind == Kind::Undefined {
+                1.0
+            } else {
+                self.array_to_integer_or_infinity(code, argument)?
+                    .max(0.0)
+            };
+            (depth, None)
+        };
+        let target = self.array_generic_species_create(code, source, 0)?;
+        // The calibrated flat frame already includes the default result Array
+        // allocation. `ArraySpeciesCreate` meters that allocation explicitly,
+        // so remove it from the frame here to avoid charging it twice.
+        let mapper_overlap = if method == NativeMethod::ArrayFlatMap {
+            ARRAY_FLATMAP_GENERIC_FRAME_OVERLAP
+        } else {
+            0
+        };
+        self.meter.tick_raw(
+            ARRAY_FLAT_FRAME_METERING - ARRAY_CREATE_METERING - mapper_overlap,
+        );
+        self.array_generic_flatten_into(
+            code, target, source, source_len, 0, depth, mapper, object, 0,
+        )?;
+        Ok(Slot::of(Kind::Reference, Payload::Reference(target)))
+    }
+
+    /// `FlattenIntoArray`: observe source presence and reads through the MOP,
+    /// apply the optional top-level mapper, recursively flatten only values for
+    /// which `IsArray` is true (including transparent Proxies), and create each
+    /// target element with `CreateDataPropertyOrThrow`.
+    #[allow(clippy::too_many_arguments)]
+    fn array_generic_flatten_into(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        source: crate::value::SlotIndex,
+        source_len: u64,
+        mut target_index: u64,
+        depth: f64,
+        mapper: Option<(Slot, Slot)>,
+        source_receiver: Slot,
+        recursion_depth: u32,
+    ) -> Result<u64, Halt> {
+        const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+        const GENERIC_FLAT_LINEAR_CAP: u64 = 1 << 24;
+        const GENERIC_FLAT_RECURSION_CAP: u32 = 1024;
+        if recursion_depth >= GENERIC_FLAT_RECURSION_CAP {
+            return Err(Halt::Unsupported("flat:recursion-depth"));
+        }
+
+        let mut source_index = 0u64;
+        let mut linear_steps = 0u64;
+        while source_index < source_len {
+            let present = match self.array_generic_next_present_index(
+                source,
+                source_index,
+                source_len,
+            ) {
+                Some(Some(next)) => {
+                    source_index = next;
+                    true
+                }
+                Some(None) => break,
+                None => {
+                    if linear_steps >= GENERIC_FLAT_LINEAR_CAP {
+                        return Err(Halt::Unsupported("flat:oversized-array-like"));
+                    }
+                    linear_steps += 1;
+                    self.array_generic_has(code, source, source_index)?
+                }
+            };
+            if !present {
+                source_index += 1;
+                continue;
+            }
+
+            let mut element = self.array_generic_get(code, source, source_index)?;
+            if let Some((callback, this_arg)) = mapper {
+                self.meter.tick_raw(
+                    ARRAY_FLATMAP_CALLBACK_METERING
+                        - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
+                );
+                let callback_args = [
+                    element,
+                    Self::array_index_number(source_index),
+                    source_receiver,
+                ];
+                element = self.run_callback(code, callback, this_arg, &callback_args)?;
+            }
+
+            let array_element = match element.value {
+                Payload::Reference(element_object) if element.kind == Kind::Reference => self
+                    .array_generic_is_array(element_object)?
+                    .then_some(element_object),
+                _ => None,
+            };
+            if depth > 0.0 {
+                if let Some(element_object) = array_element {
+                    self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
+                    let element_len = self.array_generic_length(code, element_object)?;
+                    target_index = self.array_generic_flatten_into(
+                        code,
+                        target,
+                        element_object,
+                        element_len,
+                        target_index,
+                        depth - 1.0,
+                        None,
+                        element,
+                        recursion_depth + 1,
+                    )?;
+                    source_index += 1;
+                    continue;
+                }
+            }
+
+            if target_index >= MAX_SAFE_INTEGER {
+                return Err(self.catchable_type_error());
+            }
+            self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
+            self.array_generic_create_data_property(code, target, target_index, element)?;
+            target_index += 1;
+            source_index += 1;
+        }
+        Ok(target_index)
     }
 
     /// `IsConcatSpreadable(O)`: primitives are never spread; an explicit
