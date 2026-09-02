@@ -1,4 +1,5 @@
 // @ts-check
+/* global clearInterval, process, setInterval, setTimeout */
 
 /**
  * Test-only seam for the persist-then-commit window in formulateWithCommit.
@@ -23,18 +24,15 @@
 
 import fs from 'fs';
 
+/** @import { FormulaIdentifier } from './types.js' */
+
 /** @type {() => Promise<void>} */
 let afterPersistBeforeCommit = async () => {};
 
 /**
- * @type {((id: string) => Promise<void>) | null}
+ * @type {((id: FormulaIdentifier) => Promise<void>) | null}
  */
 let unpinTransientForTests = null;
-
-/**
- * @type {((id: string) => void) | null}
- */
-let pinTransientForTests = null;
 
 /**
  * @type {ReturnType<typeof setInterval> | null}
@@ -52,7 +50,7 @@ export const setAfterPersistBeforeCommitHook = hook => {
  * Register the daemon's unpinTransient so cross-process pause tests can
  * drive concurrent unpin without a lock token.
  *
- * @param {(id: string) => Promise<void>} fn
+ * @param {(id: FormulaIdentifier) => Promise<void>} fn
  */
 export const setUnpinTransientForTests = fn => {
   unpinTransientForTests = fn;
@@ -62,10 +60,9 @@ export const setUnpinTransientForTests = fn => {
  * Register pinTransient and start a light poll for `${hookPath}.pin` files
  * when ENDO_FORMULA_COMMIT_HOOK_PATH is set.
  *
- * @param {(id: string) => void} fn
+ * @param {(id: FormulaIdentifier) => void} fn
  */
 export const setPinTransientForTests = fn => {
-  pinTransientForTests = fn;
   if (pinPollTimer !== null) {
     clearInterval(pinPollTimer);
     pinPollTimer = null;
@@ -74,6 +71,7 @@ export const setPinTransientForTests = fn => {
   if (!hookPath || !fn) {
     return;
   }
+  const pinTransient = fn;
   pinPollTimer = setInterval(() => {
     try {
       const pinPath = `${hookPath}.pin`;
@@ -82,7 +80,7 @@ export const setPinTransientForTests = fn => {
         return;
       }
       fs.unlinkSync(pinPath);
-      pinTransientForTests(id);
+      pinTransient(/** @type {FormulaIdentifier} */ (id));
       fs.writeFileSync(`${hookPath}.pin-done`, id, 'utf8');
     } catch {
       // no pin request
@@ -104,10 +102,12 @@ const waitForRelease = async hookPath => {
   const deadline = Date.now() + 30_000;
   let didUnpin = false;
   for (;;) {
+    // eslint-disable-next-line no-await-in-loop
     await new Promise(resolve => setTimeout(resolve, 20));
     // Concurrent-unpin seam: if a companion file names a formula id, unpin
     // without a lock token while the commit still holds the graph lock.
     if (!didUnpin && unpinTransientForTests) {
+      const unpinTransient = unpinTransientForTests;
       const unpinPath = `${hookPath}.unpin`;
       try {
         const unpinId = fs.readFileSync(unpinPath, 'utf8').trim();
@@ -121,7 +121,9 @@ const waitForRelease = async hookPath => {
           // Fire-and-forget so the pause wait can continue; the exclusive
           // queue holds the unpin until the commit lock releases.
           Promise.resolve()
-            .then(() => unpinTransientForTests(unpinId))
+            .then(() =>
+              unpinTransient(/** @type {FormulaIdentifier} */ (unpinId)),
+            )
             .then(() => {
               try {
                 fs.writeFileSync(`${hookPath}.unpin-done`, '1', 'utf8');

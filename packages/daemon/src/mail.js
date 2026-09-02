@@ -22,8 +22,6 @@ import {
 } from './pet-name.js';
 import {
   makeDeferredTasks,
-  makeStoreIdentifierTask,
-  makePinTransientTask,
 } from './deferred-tasks.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { externalizeId } from './locator.js';
@@ -141,7 +139,7 @@ export const makeMailboxMaker = ({
   isLocalKey,
   randomHex256,
   pinTransient = () => {},
-  unpinTransient = () => {},
+  unpinTransient = async () => {},
 }) => {
   /**
     @type {MakeMailbox} */
@@ -544,7 +542,12 @@ export const makeMailboxMaker = ({
       }
 
       if (formula.messageType === 'definition') {
-        if (formula.source === undefined || formula.slots === undefined) {
+        if (
+          formula.source === undefined ||
+          formula.slots === undefined ||
+          formula.promiseId === undefined ||
+          formula.resolverId === undefined
+        ) {
           throw new Error('Definition message formula is incomplete');
         }
         return harden({
@@ -553,6 +556,8 @@ export const makeMailboxMaker = ({
           to: formula.to,
           source: formula.source,
           slots: formula.slots,
+          promiseId: formula.promiseId,
+          resolverId: formula.resolverId,
           messageId: formula.messageId,
           ...(formula.replyTo !== undefined && { replyTo: formula.replyTo }),
           number: messageNumber,

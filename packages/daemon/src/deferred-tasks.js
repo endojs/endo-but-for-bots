@@ -174,8 +174,8 @@ harden(makeStoreIdentifierTask);
  * Preflight is a no-op; the caller still owns later `@pins` write and unpin.
  *
  * @template {Record<string, string | string[]>} T
- * @param {(id: string) => void} pinTransient
- * @param {(identifiers: Readonly<T>) => string} selectIdentifier
+ * @param {(id: import('./types.js').FormulaIdentifier) => void} pinTransient
+ * @param {(identifiers: Readonly<T>) => import('./types.js').FormulaIdentifier} selectIdentifier
  * @returns {DeferredTask<T>}
  */
 export const makePinTransientTask = (pinTransient, selectIdentifier) =>
@@ -209,11 +209,11 @@ harden(makeNoOpDeferredTask);
  *
  * @template {Record<string, string | string[]>} T
  * @param {{
- *   storeIdentifier: (name: string, id: string) => Promise<void>,
+ *   storeIdentifier: import('./types.js').StoreController['storeIdentifier'],
  * }} localStore - pet store (or special store) for single-segment names
  * @param {(path: string[], id: string) => Promise<void>} directoryStoreIdentifier
  * @param {string[]} namePath
- * @param {string} leafPetName
+ * @param {import('./types.js').PetName} leafPetName
  * @param {(identifiers: Readonly<T>) => string} selectIdentifier
  * @returns {DeferredTask<T>}
  */

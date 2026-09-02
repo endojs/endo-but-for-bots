@@ -13,7 +13,6 @@ import {
 import {
   makeDeferredTasks,
   makeStoreIdentifierTask,
-  makePinTransientTask,
   makeLocalOrDirectoryStoreTask,
 } from './deferred-tasks.js';
 import { formatLocator, idFromLocator } from './locator.js';
@@ -53,7 +52,7 @@ export const makeGuestMaker = ({
   makeDirectoryNode,
   isLocalKey,
   pinTransient = /** @param {any} _id */ _id => {},
-  unpinTransient = /** @param {any} _id */ _id => {},
+  unpinTransient = /** @param {any} _id */ async _id => {},
 }) => {
   /**
    * @param {FormulaIdentifier} guestId

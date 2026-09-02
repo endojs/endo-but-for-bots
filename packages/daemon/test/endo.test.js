@@ -7627,6 +7627,7 @@ test('pause between persist and commit: no controller until commit', async t => 
     const pausedMarker = `${hookPath}.paused`;
     const deadline = Date.now() + 10_000;
     while (!fs.existsSync(pausedMarker) && Date.now() < deadline) {
+      // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
     t.true(fs.existsSync(pausedMarker), 'hook should pause after formula persist');
@@ -7762,7 +7763,7 @@ test('Group B send settles without awaiting construction', async t => {
   t.is(raced, 'done', 'send must settle without awaiting construction');
   // Guest received the message.
   const messages = await E(guest).listMessages();
-  t.true(messages.length >= 1);
+  t.not(messages.length, 0);
 });
 
 test('Group B define settles without awaiting construction', async t => {
@@ -8012,6 +8013,7 @@ test('concurrent unpin during pause-before-commit is serialized', async t => {
     fs.writeFileSync(`${hookPath}.pin`, sentinelId, 'utf8');
     const pinDeadline = Date.now() + 5000;
     while (!fs.existsSync(`${hookPath}.pin-done`) && Date.now() < pinDeadline) {
+      // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
     t.true(fs.existsSync(`${hookPath}.pin-done`), 'daemon should pin sentinel');
@@ -8038,6 +8040,7 @@ test('concurrent unpin during pause-before-commit is serialized', async t => {
     const pausedMarker = `${hookPath}.paused`;
     const pauseDeadline = Date.now() + 10_000;
     while (!fs.existsSync(pausedMarker) && Date.now() < pauseDeadline) {
+      // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
     t.true(fs.existsSync(pausedMarker), 'commit should pause after persist');
@@ -8048,6 +8051,7 @@ test('concurrent unpin during pause-before-commit is serialized', async t => {
       !fs.existsSync(`${hookPath}.unpin-started`) &&
       Date.now() < unpinStartedDeadline
     ) {
+      // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
     t.true(
@@ -8070,6 +8074,7 @@ test('concurrent unpin during pause-before-commit is serialized', async t => {
       !fs.existsSync(`${hookPath}.unpin-done`) &&
       Date.now() < doneDeadline
     ) {
+      // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
     t.true(fs.existsSync(`${hookPath}.unpin-done`), 'unpin finishes after lock');
@@ -8114,7 +8119,7 @@ test('local-guest pin task pins handle before unlock (provideGuest)', async t =>
   await E(host).storeValue(harden({ ok: true }), 'for-guest');
   await E(host).send('pinned-guest', ['hi'], ['v'], ['for-guest']);
   const msgs = await E(guest).listMessages();
-  t.true(msgs.length >= 1);
+  t.not(msgs.length, 0);
 });
 
 test('Group B endow settles without awaiting construction', async t => {
@@ -8168,7 +8173,7 @@ test('Group B deliver settles without awaiting construction', async t => {
     'deliver via send must settle without awaiting construction',
   );
   const messages = await E(guest).listMessages();
-  t.true(messages.length >= 1);
+  t.not(messages.length, 0);
 });
 
 test('raw provide(promiseId) and waiting request second-deref are unchanged', async t => {

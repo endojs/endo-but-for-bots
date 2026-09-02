@@ -403,7 +403,7 @@ export const makeHostMaker = ({
     _dn,
   ) => {},
   pinTransient = /** @param {any} _id */ _id => {},
-  unpinTransient = /** @param {any} _id */ _id => {},
+  unpinTransient = /** @param {any} _id */ async _id => {},
   getFormulaGraphSnapshot = /** @param {any[]} _ids */ async _ids =>
     harden({ nodes: [], edges: [] }),
   // Retention-path introspection is an opt-in instrumentation
@@ -726,8 +726,12 @@ export const makeHostMaker = ({
 
       /** @type {DeferredTasks<MountDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.mountId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (path, id) => E(directory).storeIdentifier(path, id),
+          namePath,
+          identifiers => identifiers.mountId,
+        ),
       );
 
       const { value } = await formulateSubMount(
@@ -1455,7 +1459,7 @@ export const makeHostMaker = ({
       resultName,
     ) => {
       const { id, value } = await evaluateInternal(
-        workerName,
+        /** @type {NameOrPath | undefined} */ (workerName),
         source,
         codeNames,
         petNamePaths,
@@ -1501,7 +1505,7 @@ export const makeHostMaker = ({
       // Validate path syntax before any persistence.
       petNamePathFrom(resultName);
       const { id } = await evaluateInternal(
-        workerName,
+        /** @type {NameOrPath | undefined} */ (workerName),
         source,
         codeNames,
         petNamePaths,
@@ -1532,7 +1536,7 @@ export const makeHostMaker = ({
       const tasks = makeDeferredTasks();
 
       const { workerId, workerLabel } = await prepareWorkerFormulation(
-        workerName,
+        /** @type {NameOrPath | undefined} */ (workerName),
         tasks.push,
       );
 
@@ -1628,7 +1632,7 @@ export const makeHostMaker = ({
     /** @type {EndoHost['makeUnconfined']} */
     const makeUnconfined = async (workerName, specifier, options) => {
       const { value } = await makeUnconfinedInternal(
-        workerName,
+        /** @type {NameOrPath | undefined} */ (workerName),
         specifier,
         options,
       );
@@ -1709,8 +1713,8 @@ export const makeHostMaker = ({
     /** @type {EndoHost['makeArchive']} */
     const makeArchive = async (workerName, archiveName, options) => {
       const { value } = await makeArchiveInternal(
-        workerName,
-        archiveName,
+        /** @type {NameOrPath | undefined} */ (workerName),
+        /** @type {NameOrPath} */ (archiveName),
         options,
       );
       return value;
@@ -1867,7 +1871,7 @@ export const makeHostMaker = ({
     /** @type {EndoHost['stageTree']} */
     const stageTree = async (treeName, scratchPetName) => {
       const { scratchMount } = await stageTreeInternal(
-        treeName,
+        /** @type {NameOrPath} */ (treeName),
         /** @type {NameOrPath} */ (scratchPetName),
       );
       return scratchMount;
@@ -1896,7 +1900,7 @@ export const makeHostMaker = ({
       // observe / cancel it explicitly if desired.
       const scratchPetName = `scratch-${resultLabel}`;
       const { scratchId } = await stageTreeInternal(
-        treeName,
+        /** @type {NameOrPath} */ (treeName),
         /** @type {NameOrPath} */ (scratchPetName),
       );
       const scratchPath = getScratchMountPath(scratchId);
@@ -1920,8 +1924,8 @@ export const makeHostMaker = ({
     /** @type {EndoHost['makeUnconfinedFromTree']} */
     const makeUnconfinedFromTree = async (workerName, treeName, options) => {
       const { value } = await makeUnconfinedFromTreeInternal(
-        workerName,
-        treeName,
+        /** @type {NameOrPath | undefined} */ (workerName),
+        /** @type {NameOrPath} */ (treeName),
         options,
       );
       return value;
@@ -1996,8 +2000,8 @@ export const makeHostMaker = ({
     /** @type {EndoHost['makeFromTree']} */
     const makeFromTree = async (workerName, treeName, options) => {
       const { value } = await makeFromTreeInternal(
-        workerName,
-        treeName,
+        /** @type {NameOrPath | undefined} */ (workerName),
+        /** @type {NameOrPath} */ (treeName),
         options,
       );
       return value;

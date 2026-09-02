@@ -727,6 +727,8 @@ export type DefineRequest = MessageBase & {
   replyTo?: FormulaNumber;
   source: string;
   slots: Record<string, { label: string; pattern?: unknown }>;
+  promiseId: FormulaIdentifier;
+  resolverId: FormulaIdentifier;
 };
 
 export type FormField = {
@@ -2627,6 +2629,7 @@ export interface DaemonCore {
     formulaNumber: FormulaNumber,
     formula: Formula,
     nodeNumber?: NodeNumber,
+    lockContext?: FormulaGraphLockContext,
   ) => Promise<{
     id: FormulaIdentifier;
     value: unknown;
@@ -2658,6 +2661,7 @@ export interface DaemonCore {
 
   formulateDirectory: (
     nodeNumber?: NodeNumber,
+    lockContext?: FormulaGraphLockContext,
   ) => FormulateResult<EndoDirectory>;
 
   formulateDirectoryForStore: (
@@ -2759,9 +2763,13 @@ export interface DaemonCore {
     specifiedIdentifiers: FormulateHostDependenciesParams,
   ) => Promise<Readonly<FormulateNumberedHostParams>>;
 
-  formulateLoopbackNetwork: () => FormulateResult<EndoNetwork>;
+  formulateLoopbackNetwork: (
+    lockContext?: FormulaGraphLockContext,
+  ) => FormulateResult<EndoNetwork>;
 
-  formulateNetworksDirectory: () => FormulateResult<EndoDirectory>;
+  formulateNetworksDirectory: (
+    lockContext?: FormulaGraphLockContext,
+  ) => FormulateResult<EndoDirectory>;
 
   getFormulaForId: (id: FormulaIdentifier) => Promise<Formula>;
 

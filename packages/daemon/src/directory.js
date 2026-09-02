@@ -24,7 +24,6 @@ import {
 import {
   makeDeferredTasks,
   makeStoreIdentifierTask,
-  makePinTransientTask,
 } from './deferred-tasks.js';
 import { directoryHelp, makeHelp } from './help-text.js';
 
