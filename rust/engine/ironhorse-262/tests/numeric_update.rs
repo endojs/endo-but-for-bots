@@ -28,3 +28,17 @@ fn decrement_and_postfix_update_store_the_coerced_number() {
         "1",
     );
 }
+
+#[test]
+fn bigint_updates_preserve_domain_and_postfix_value() {
+    assert_result_agrees("var x = 1n; ++x; typeof x + ':' + x", "bigint:2");
+    assert_result_agrees("var x = -1n; --x; x", "-2");
+    assert_result_agrees(
+        "var x = 4294967295n; var old = x++; old + ':' + x",
+        "4294967295:4294967296",
+    );
+    assert_result_agrees(
+        "var x = Object(7n); var old = x--; typeof old + ':' + old + ':' + x",
+        "bigint:7:6",
+    );
+}
