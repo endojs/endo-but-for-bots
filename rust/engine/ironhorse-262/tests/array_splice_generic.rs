@@ -47,6 +47,7 @@ fn descriptor_failures_and_mapped_arguments_are_observable() {
         "var a=[1,2];Object.defineProperty(a,'0',{writable:false});try{a.splice(0,1,3);false}catch(e){e instanceof TypeError&&a[0]===1}",
         "var a=[1,2];Object.defineProperty(a,'1',{configurable:false});try{a.splice(0,2);false}catch(e){e instanceof TypeError&&a.length===2}",
         "var a=[1];Object.defineProperty(a,'length',{writable:false});try{a.splice(0,0);false}catch(e){e instanceof TypeError}",
+        "var seen='none';Object.defineProperty(Number.prototype,'0',{set:function(v){seen=this.valueOf()+':'+v},configurable:true});Number.prototype.length=0;try{Array.prototype.splice.call(7,0,0,'x')}catch(e){seen='threw:'+e.name}delete Number.prototype[0];delete Number.prototype.length;seen",
         "(function(a,b,c){b='z';var r=Array.prototype.splice.call(arguments,0,2,'x');return r.join(':')+':'+arguments.length+':'+Array.prototype.join.call(arguments,':')+':'+a+':'+b+':'+c})(1,2,3)",
     ] {
         agrees(source);

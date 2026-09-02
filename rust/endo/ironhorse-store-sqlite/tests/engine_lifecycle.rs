@@ -640,11 +640,12 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
          Array.prototype.concat; a.concat; \
          Array.prototype.push; Array.prototype.pop; \
          Array.prototype.shift; Array.prototype.unshift; \
+         Array.prototype.copyWithin; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
          Object.prototype.hasOwnProperty; Symbol.isConcatSpreadable; \
-         a.join; a.length; 'con'; 'structor'; \
+         a.join; a.length; cw; 'con'; 'structor'; \
          (function (h, y, z) { return y; });",
         &[
             "a = [3, 1, 2]; k = 'con' + 'structor'; delete Array.prototype[k]; t = 7;",
@@ -670,6 +671,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              f = {length: 4294967297}; f[4294967296] = 5; \
              b = {length: 0}; Array.prototype.push.call(b, 6, 7); \
              h = {0: 2, length: 1}; Array.prototype.unshift.call(h, 1); \
+             cw = {0: 'a', 2: 'c', length: 3}; \
              inst[Symbol.isConcatSpreadable] = true; z = [0].concat(inst); \
              delete inst[Symbol.isConcatSpreadable]; \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
@@ -683,12 +685,14 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  v.join(',') + ':' + Array.prototype.slice.call(f, 4294967296).join(',') + ':' + \
                  Object.prototype.hasOwnProperty.call(Array.prototype, k) + ':' + \
                  Array.prototype.pop.call(b) + ':' + b.length + ':' + b[0] + ':' + z.join(','); t",
-            "t = t + ':' + Array.prototype.shift.call(h) + ':' + h.length + ':' + h[0]; t",
+            "Array.prototype.copyWithin.call(cw, 0, 1, 3); \
+             t = t + ':' + Array.prototype.shift.call(h) + ':' + h.length + ':' + h[0] + ':' + \
+                 Object.prototype.hasOwnProperty.call(cw, 0) + ':' + cw[1] + ':' + cw[2]; t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:true:9:1|8|9|3:1:false:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:true:9:1|8|9|3:1:false:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2:false:c:c"
     );
 }
 

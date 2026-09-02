@@ -28228,16 +28228,25 @@ impl Interp {
                     // 20.1.3.6): a callable receiver is `[object Function]`
                     // (step 6) — the shape the `format` accessor getter's
                     // `builtin.js` reads — otherwise Error / plain Object.
+                    let wrapper_tag = match this.value {
+                        Payload::Reference(r) => self.wrapper_data.get(&r).map(|value| {
+                            match value.kind {
+                                Kind::Boolean => b"[object Boolean]".as_slice(),
+                                Kind::Integer | Kind::Number => b"[object Number]".as_slice(),
+                                Kind::String => b"[object String]".as_slice(),
+                                Kind::Symbol => b"[object Symbol]".as_slice(),
+                                Kind::BigInt => b"[object BigInt]".as_slice(),
+                                _ => b"[object Object]".as_slice(),
+                            }
+                        }),
+                        _ => None,
+                    };
                     let text: &[u8] = match this.value {
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
                         Payload::BigInt(_) => b"[object BigInt]",
-                        Payload::Reference(r)
-                            if matches!(self.wrapper_data.get(&r), Some(v) if v.kind == Kind::BigInt) =>
-                        {
-                            b"[object BigInt]"
-                        }
+                        _ if wrapper_tag.is_some() => wrapper_tag.unwrap(),
                         _ if self.is_callable_value(this) => b"[object Function]",
                         _ => b"[object Object]",
                     };
@@ -29917,8 +29926,23 @@ impl Interp {
             // in place. Metering: a frame constant + `mxMeterSome(count*10)`.
             NativeMethod::ArrayCopyWithin => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("copyWithin:non-dense-array")),
+                    Some(i)
+                        if (0..argc.min(3)).all(|index| {
+                            matches!(
+                                self.stack.get(base + 4 + index).map(|slot| slot.kind),
+                                Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                            )
+                        }) && self.array_copy_within_fast_safe(i, base) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result =
+                            self.array_generic_copy_within(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 let to = self.arg_to_index(base, 0, 0, length);
@@ -35716,6 +35740,28 @@ impl Interp {
         self.array_new_index_writes_fast_safe(inst, length, new_length)
     }
 
+    /// Whether `copyWithin` can retain its calibrated packed path. Dense
+    /// arrays have own data properties at every source and destination index;
+    /// only destination writability can make the direct item-table mutation
+    /// observably differ from the ordinary object MOP.
+    fn array_copy_within_fast_safe(
+        &self,
+        inst: crate::value::SlotIndex,
+        base: usize,
+    ) -> bool {
+        let length = self.arrays[&inst].length;
+        let to = self.arg_to_index(base, 0, 0, length);
+        let from = self.arg_to_index(base, 1, 0, length);
+        let end = self.arg_to_index(base, 2, length, length);
+        let count = end.saturating_sub(from).min(length - to);
+        (to..to + count).all(|index| {
+            self.arrays[&inst]
+                .items()
+                .get(&index)
+                .is_some_and(|item| item.flag & XS_DONT_SET_FLAG == 0)
+        })
+    }
+
     /// Whether `join` can snapshot the compact item table and use the
     /// calibrated primitive-only path. Mapped arguments must read through
     /// their live parameter cells, objects and Symbols require the general
@@ -35890,6 +35936,27 @@ impl Interp {
         self.intern_key(&name)
     }
 
+    /// `ToObject(this)` for a generic Array prototype method. Unlike the
+    /// lighter array-like boxer used by `Array.fromAsync`, a mutating method
+    /// can return the wrapper itself, so its primitive internal data and
+    /// intrinsic wrapper prototype must both be observable.
+    fn array_to_object(&mut self, this: Slot) -> Result<Slot, Halt> {
+        if this.kind == Kind::Reference {
+            return Ok(this);
+        }
+        let native = match this.kind {
+            Kind::Boolean => Native::Boolean,
+            Kind::Integer | Kind::Number => Native::Number,
+            Kind::String => Native::String,
+            Kind::Symbol => Native::Symbol,
+            Kind::BigInt => Native::BigInt,
+            Kind::Null | Kind::Undefined => return Err(self.catchable_type_error()),
+            _ => return Err(self.catchable_type_error()),
+        };
+        let inst = self.box_object_primitive(native, this);
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
     /// The `Number` slot for an element index `k` passed to a callback / result
     /// (a small index is an `Integer`, as the dense path emits; a large
     /// array-like index widens to a `Number`).
@@ -35962,16 +36029,7 @@ impl Interp {
         separator: Slot,
         argc: usize,
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -36034,16 +36092,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -36122,16 +36171,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -36241,16 +36281,7 @@ impl Interp {
     /// through the object MOP so sparse/inherited properties, Proxies, and
     /// mapped arguments observe the specified Has/Get/Set/Delete order.
     fn array_generic_reverse(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -36315,16 +36346,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -36459,6 +36481,90 @@ impl Interp {
             return Err(self.catchable_type_error());
         }
         Ok(removed_receiver)
+    }
+
+    /// Generic `Array.prototype.copyWithin`. Bounds are coerced in
+    /// specification order, then each source is queried and copied (or its
+    /// corresponding target deleted) through the object MOP. Direction is
+    /// reversed for overlapping ranges exactly like `memmove`.
+    fn array_generic_copy_within(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        let object = self.array_to_object(this)?;
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let arguments: Vec<Slot> = (0..argc.min(3))
+            .map(|index| {
+                self.stack
+                    .get(base + 4 + index)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined)
+            })
+            .collect();
+        let length = self.array_generic_length(code, inst)?;
+        let relative_index = |integer: f64| -> u64 {
+            if integer == f64::NEG_INFINITY {
+                0
+            } else if integer < 0.0 {
+                (length as f64 + integer).max(0.0) as u64
+            } else {
+                integer.min(length as f64) as u64
+            }
+        };
+        let target = arguments
+            .first()
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let to = relative_index(self.array_to_integer_or_infinity(code, target)?);
+        let start = arguments
+            .get(1)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let from = relative_index(self.array_to_integer_or_infinity(code, start)?);
+        let final_index = match arguments.get(2).copied() {
+            None | Some(Slot {
+                kind: Kind::Undefined,
+                ..
+            }) => length,
+            Some(end) => relative_index(self.array_to_integer_or_infinity(code, end)?),
+        };
+        let mut count = final_index.saturating_sub(from).min(length - to);
+        let backwards = from < to && to < from + count;
+        let mut source = if backwards { from + count } else { from };
+        let mut target = if backwards { to + count } else { to };
+        const GENERIC_COPY_WITHIN_CAP: u64 = 1 << 24;
+        let mut steps = 0u64;
+        while count > 0 {
+            if steps >= GENERIC_COPY_WITHIN_CAP {
+                return Err(Halt::Unsupported("copyWithin:oversized-array-like"));
+            }
+            if backwards {
+                source -= 1;
+                target -= 1;
+            }
+            let source_id = self.array_generic_index_id(source);
+            let target_id = self.array_generic_index_id(target);
+            if self.mop_has(code, inst, source_id)? {
+                let value = self.mop_get(code, inst, source_id, object)?;
+                if !self.mop_set(code, inst, target_id, value, object)? {
+                    return Err(self.catchable_type_error());
+                }
+            } else if !self.mop_delete(code, inst, target_id)? {
+                return Err(self.catchable_type_error());
+            }
+            if !backwards {
+                source += 1;
+                target += 1;
+            }
+            count -= 1;
+            steps += 1;
+        }
+        Ok(object)
     }
 
     /// `ToIntegerOrInfinity(? ToNumber(v))` (ECMA-262 7.1.5): `NaN` → 0,
@@ -36659,16 +36765,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(original) = object.value else {
             unreachable!("ToObject result")
         };
@@ -36781,16 +36878,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(original) = object.value else {
             unreachable!("ToObject result")
         };
@@ -37630,16 +37718,7 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined)
             })
             .collect();
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -37801,16 +37880,7 @@ impl Interp {
         if comparator.kind != Kind::Undefined && !self.is_callable_value(comparator) {
             return Err(self.catchable_type_error());
         }
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
@@ -37883,16 +37953,7 @@ impl Interp {
         argc: usize,
         code: &[u8],
     ) -> Result<Slot, Halt> {
-        if matches!(this.kind, Kind::Null | Kind::Undefined) {
-            return Err(self.catchable_type_error());
-        }
-        let object = match this.value {
-            Payload::Reference(_) if this.kind == Kind::Reference => this,
-            _ => match self.from_async_box_primitive(this) {
-                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
-                None => return Err(self.catchable_type_error()),
-            },
-        };
+        let object = self.array_to_object(this)?;
         let inst = match object.value {
             Payload::Reference(inst) => inst,
             _ => unreachable!(),

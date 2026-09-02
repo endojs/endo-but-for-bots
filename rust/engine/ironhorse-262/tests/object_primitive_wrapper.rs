@@ -52,6 +52,14 @@ fn object_construct_boxes_primitive_values() {
 }
 
 #[test]
+fn object_to_string_reports_wrapper_builtin_tags() {
+    assert_result_agrees(
+        "[Object(true),Object(7),Object('x'),Object(Symbol('s')),Object(1n)].map(function(v){return Object.prototype.toString.call(v)}).join(',')",
+        "[object Boolean],[object Number],[object String],[object Symbol],[object BigInt]",
+    );
+}
+
+#[test]
 fn object_boxes_symbols_to_fresh_objects() {
     assert_result_agrees(
         "var s = Symbol('s'); var a = Object(s); var b = Object(s); '' + (typeof a) + ',' + (a !== s) + ',' + (a !== b)",
