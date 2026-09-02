@@ -327,14 +327,14 @@ fn main() {
     // `--expectations` compares the run to a committed list and gates on the
     // two-directional ratchet (progress AND regression both surface, so
     // neither is silently absorbed).
+    let expected_header = Header {
+        engine: "ironhorse".to_string(),
+        features: features_label(&cfg.features_include),
+        corpus: corpus_label(&subtrees),
+        tip: std::env::var("GARDEN_TEST262_TIP").unwrap_or_else(|_| "unknown".to_string()),
+    };
     if let Some(path) = &update_expectations {
-        let header = Header {
-            engine: "ironhorse".to_string(),
-            features: features_label(&cfg.features_include),
-            corpus: subtrees.join(","),
-            tip: std::env::var("GARDEN_TEST262_TIP").unwrap_or_else(|_| "unknown".to_string()),
-        };
-        let mut exp = Expectations::new(header);
+        let mut exp = Expectations::new(expected_header.clone());
         exp.entries = rep.observed.clone();
         match std::fs::write(path, exp.to_text()) {
             Ok(()) => eprintln!(
@@ -354,6 +354,13 @@ fn main() {
             .unwrap_or_else(|e| fail(&format!("could not read {}: {}", path.display(), e)));
         let exp = Expectations::parse(&text)
             .unwrap_or_else(|e| fail(&format!("bad expectation list {}: {}", path.display(), e)));
+        exp.header.validate(&expected_header).unwrap_or_else(|e| {
+            fail(&format!(
+                "expectation list {} does not match this run: {}",
+                path.display(),
+                e
+            ))
+        });
         let events = compare(&rep.observed, &exp);
         let gating: Vec<_> = events
             .iter()
@@ -400,8 +407,20 @@ fn features_label(features_include: &[String]) -> String {
     if features_include.is_empty() {
         "default".to_string()
     } else {
-        features_include.join("+")
+        let mut features = features_include.to_vec();
+        features.sort();
+        features.dedup();
+        features.join("+")
     }
+}
+
+/// The selected corpus paths in canonical set order, so invocation ordering
+/// does not create a distinct expectation-list parameterization.
+fn corpus_label(subtrees: &[String]) -> String {
+    let mut corpus = subtrees.to_vec();
+    corpus.sort();
+    corpus.dedup();
+    corpus.join(",")
 }
 
 fn fail(msg: &str) -> ! {

@@ -97,6 +97,35 @@ pub struct Header {
     pub tip: String,
 }
 
+impl Header {
+    /// Require a list to describe the exact runner/corpus tuple being scored.
+    /// Empty fields are rejected explicitly so a headerless or partially
+    /// hand-edited list cannot accidentally authorize a coincidentally equal
+    /// set of entries.
+    pub fn validate(&self, expected: &Header) -> Result<(), String> {
+        for (name, actual, wanted) in [
+            ("engine", self.engine.as_str(), expected.engine.as_str()),
+            (
+                "features",
+                self.features.as_str(),
+                expected.features.as_str(),
+            ),
+            ("corpus", self.corpus.as_str(), expected.corpus.as_str()),
+            ("tip", self.tip.as_str(), expected.tip.as_str()),
+        ] {
+            if actual.is_empty() {
+                return Err(format!("missing {name}= header field"));
+            }
+            if actual != wanted {
+                return Err(format!(
+                    "{name}= header mismatch: list has {actual:?}, run requires {wanted:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The key an expectation is stored under: a corpus-relative case path plus
 /// the mode. Ordered so serialization is deterministic (a stable diff).
 pub type Key = (String, Mode);
@@ -412,6 +441,41 @@ mod tests {
         assert!(Expectations::parse("a.js bogusmode pass\n").is_err());
         assert!(Expectations::parse("a.js sloppy bogusoutcome\n").is_err());
         assert!(Expectations::parse("a.js sloppy\n").is_err());
+    }
+
+    #[test]
+    fn header_validation_rejects_missing_and_mismatched_parameters() {
+        let expected = Header {
+            engine: "ironhorse".into(),
+            features: "default".into(),
+            corpus: "built-ins/Array".into(),
+            tip: "abc123".into(),
+        };
+        assert!(expected.validate(&expected).is_ok());
+
+        let mut actual = expected.clone();
+        actual.engine.clear();
+        assert_eq!(
+            actual.validate(&expected),
+            Err("missing engine= header field".into())
+        );
+        for (field, value) in [
+            ("engine", "xs"),
+            ("features", "ses-xs-parity"),
+            ("corpus", "language"),
+            ("tip", "def456"),
+        ] {
+            let mut actual = expected.clone();
+            match field {
+                "engine" => actual.engine = value.into(),
+                "features" => actual.features = value.into(),
+                "corpus" => actual.corpus = value.into(),
+                "tip" => actual.tip = value.into(),
+                _ => unreachable!(),
+            }
+            let error = actual.validate(&expected).unwrap_err();
+            assert!(error.starts_with(&format!("{field}= header mismatch:")));
+        }
     }
 
     #[test]

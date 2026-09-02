@@ -180,7 +180,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 for the realm's hidden tagged-template cache
         // object added to the boot heap. Its ordinary property chain carries
         // cached template objects through snapshots. Format unchanged.
-        "de3fc5115c6ec513d9374b646e7b632759220e80a440d020a132b2f2645617fb",
+        // Re-pinned 2026-09-02 for the completed shared `%TypedArray%`
+        // surface: four accessor functions, `from`/`of`, and the
+        // `@@toStringTag` getter are now boot-minted. Format unchanged.
+        "fc8dd5251a1ad5e176627247d8b38efbfefdb3bc252ed30b3284bd0435914d53",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -293,7 +296,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for the tagged-template cache boot object;
         // its new page content moves the manifest root and seal. Schema and
         // format remain unchanged.
-        "e1ff9830c6828a551cdd711c97c1621d24cbcbea256e66f48f4ac8d512f07fbd",
+        // Re-pinned with the blob for the completed shared `%TypedArray%`
+        // boot surface. Schema and format remain unchanged.
+        "40c051ceac73f5e418bbd80f821fdecde8f152942d66f38da4c7dd4386f0261d",
         "epoch-3 seal chain"
     );
 }

@@ -2276,6 +2276,16 @@ pub enum NativeMethod {
     TypedArraySet,
     /// `%TypedArray%.prototype.reverse()`.
     TypedArrayReverse,
+    /// Shared `%TypedArray%.prototype` view accessors.
+    TypedArrayLengthGetter,
+    TypedArrayByteLengthGetter,
+    TypedArrayByteOffsetGetter,
+    TypedArrayBufferGetter,
+    TypedArrayToStringTagGetter,
+    /// `%TypedArray%.from` / `%TypedArray%.of`, inherited by concrete
+    /// TypedArray constructors.
+    TypedArrayFrom,
+    TypedArrayOf,
     /// `Array.from(iterable[, mapFn[, thisArg]])` — an honest named skip: the
     /// C-level `fxGetIterator`/`fxIteratorNext` protocol metering (routing
     /// through `%ArrayIteratorPrototype%.next` via `mxRunCount`) is not modeled
@@ -3865,6 +3875,11 @@ pub struct Interp {
     /// The active frame's `this` (`mxFrameThis`). Bound by `begin_*`;
     /// the covered subset does not yet branch on it.
     this_val: Slot,
+    /// Closure-environment property slots that captured this activation's
+    /// still-uninitialized derived-constructor `this`. Nested calls suspend
+    /// this list with the activation; `SET_THIS` updates each property in
+    /// place and clears it, so escaped arrows observe the initialized value.
+    this_captures: Vec<crate::value::SlotIndex>,
     /// The active frame's variable-environment head (XS's `mxEnvironment`
     /// register). A `Kind::Reference` names the innermost live `with`/eval
     /// environment instance (a real 2-slot arena object: an
@@ -4998,6 +5013,7 @@ struct CallerState {
     strict: bool,
     args: Vec<Slot>,
     this_val: Slot,
+    this_captures: Vec<crate::value::SlotIndex>,
     /// The caller's `with`/eval environment head (XS's `mxEnvironment`),
     /// saved so a callee starts with an empty environment and the caller's
     /// active `with` is restored on return.
@@ -5290,6 +5306,7 @@ impl Interp {
             call_stack: Vec::new(),
             args: Vec::new(),
             this_val: Slot::undefined(),
+            this_captures: Vec::new(),
             env: Slot::undefined(),
             cur_func: crate::value::SlotIndex::NULL,
             cur_target: false,
@@ -5777,6 +5794,27 @@ impl Interp {
             let mf = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((typed_array_proto, name, mf));
         }
+        for (name, method) in [
+            ("length", NativeMethod::TypedArrayLengthGetter),
+            ("byteLength", NativeMethod::TypedArrayByteLengthGetter),
+            ("byteOffset", NativeMethod::TypedArrayByteOffsetGetter),
+            ("buffer", NativeMethod::TypedArrayBufferGetter),
+        ] {
+            let getter = self.alloc_named_method(method, &format!("get {name}"), 0);
+            self.proto_accessors
+                .push((typed_array_proto, name, getter, "TypedArray"));
+        }
+        let from = self.alloc_named_method(NativeMethod::TypedArrayFrom, "from", 1);
+        let of = self.alloc_named_method(NativeMethod::TypedArrayOf, "of", 0);
+        self.proto_methods.push((typed_array_ctor, "from", from));
+        self.proto_methods.push((typed_array_ctor, "of", of));
+        // Allocated now and installed under the well-known symbol key during
+        // intrinsic linking, once that realm-local key id is available.
+        let _ = self.alloc_named_method(
+            NativeMethod::TypedArrayToStringTagGetter,
+            "get [Symbol.toStringTag]",
+            0,
+        );
         // `%Array Iterator.prototype%`: a boot object chaining to
         // %Object.prototype%, carrying `next` (the iterators produced by
         // `values`/`keys`/`entries` chain to it).
@@ -7882,8 +7920,17 @@ impl Interp {
             // `Intl` (an appended id) gets the accessor, while one whose
             // earlier link already installed it does not re-install — a guest
             // redefinition of `format` survives.
-            if let Some(&guard_id) = self.symbol_ids.get(guard) {
-                if keep(guard_id) {
+            let guard_is_kept = if guard == "TypedArray" {
+                TYPED_ARRAY_TYPES.iter().any(|ty| {
+                    self.symbol_ids
+                        .get(ty.name)
+                        .copied()
+                        .is_some_and(&keep)
+                })
+            } else {
+                self.symbol_ids.get(guard).copied().is_some_and(&keep)
+            };
+            if guard_is_kept {
                     let pid = self.intern_key_unmetered(pname);
                     if !full && self.find_property(proto, pid).is_some() {
                         continue;
@@ -7894,7 +7941,6 @@ impl Interp {
                         Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
                         None,
                     );
-                }
             }
         }
         self.proto_accessors = accessors;
@@ -7965,6 +8011,23 @@ impl Interp {
         // specified tag and a non-string guest override falls back to the
         // ordinary builtin tag.
         if let Some(tag_id) = self.well_known_symbol_property_id("toStringTag") {
+            let typed_array_proto = self.functions.iter().find_map(|(&function, info)| {
+                (info.native == Some(Native::TypedArrayBase))
+                    .then(|| self.ctor_prototype.get(&function).copied())
+                    .flatten()
+            });
+            let typed_array_tag_getter = self.functions.iter().find_map(|(&function, info)| {
+                (info.method == Some(NativeMethod::TypedArrayToStringTagGetter))
+                    .then_some(function)
+            });
+            if let (Some(proto), Some(getter)) = (typed_array_proto, typed_array_tag_getter) {
+                self.set_own_accessor_unmetered(
+                    proto,
+                    tag_id,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    None,
+                );
+            }
             for (proto, tag) in [
                 (self.math_object, "Math"),
                 (self.list_format_proto, "Intl.ListFormat"),
@@ -13426,28 +13489,17 @@ impl Interp {
                             Slot::integer(self.array_buffers[&inst].length as i32)
                         }
                         Payload::Reference(inst) if self.typed_arrays.contains_key(&inst) => {
-                            // The TypedArray view accessors
-                            // (`fx_TypedArray_prototype_*_get`): `length`,
-                            // `byteLength`, `byteOffset` (each an integer), and
-                            // `buffer` (the backing ArrayBuffer reference). A
-                            // non-accessor name resolves up the prototype chain.
-                            let ta = self.typed_arrays[&inst];
-                            let shift = TYPED_ARRAY_TYPES[ta.kind as usize].shift as u32;
-                            if Some(id) == self.length_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::integer(ta.length as i32)
-                            } else if Some(id) == self.byte_length_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::integer((ta.length << shift) as i32)
-                            } else if Some(id) == self.byte_offset_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::integer(ta.offset as i32)
-                            } else if Some(id) == self.buffer_id {
-                                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                                Slot::of(Kind::Reference, Payload::Reference(ta.buffer))
-                            } else {
-                                self.instance_get(inst, id)
-                            }
+                            // These are real accessors on the shared abstract
+                            // prototype. Route every named read through the
+                            // ordinary getter machinery so reflection,
+                            // deletion, replacement, and Symbol.toStringTag
+                            // remain observable.
+                            dispatch_result!(
+                                self.ordinary_get(code, inst, id, obj),
+                                pc,
+                                self,
+                                return_depth
+                            )
                         }
                         Payload::Reference(inst) if self.data_views.contains_key(&inst) => {
                             // The DataView view accessors
@@ -14900,7 +14952,10 @@ impl Interp {
                         self.append_environment_capture(env, id, target);
                     }
                     let id = self.intern_key_unmetered("this");
-                    self.append_environment_capture(env, id, self.this_val);
+                    let capture = self.append_environment_capture(env, id, self.this_val);
+                    if self.this_val.kind == Kind::Uninitialized {
+                        self.this_captures.push(capture);
+                    }
                     pc += size as usize;
                 }
 
@@ -15344,6 +15399,11 @@ impl Interp {
                         continue;
                     }
                     self.this_val = self.stack.last().copied().unwrap_or_else(Slot::undefined);
+                    for capture in self.this_captures.drain(..) {
+                        let slot = self.slots.get_mut(capture);
+                        slot.kind = self.this_val.kind;
+                        slot.value = self.this_val.value;
+                    }
                     pc += size as usize;
                 }
                 // A fixed-name `super.k` starts lookup at
@@ -17254,6 +17314,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            this_captures: std::mem::take(&mut self.this_captures),
             env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
@@ -17264,6 +17325,7 @@ impl Interp {
         self.strict = false;
         self.args = args;
         self.this_val = this_val;
+        self.this_captures.clear();
         // Install the callee's captured `with`/eval environment (XS resets
         // `mxEnvironment` at frame setup to the function instance's closure
         // environment). A function defined inside a `with` has a closure
@@ -17711,6 +17773,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            this_captures: std::mem::take(&mut self.this_captures),
             env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
@@ -17990,6 +18053,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            this_captures: std::mem::take(&mut self.this_captures),
             env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
@@ -18211,6 +18275,7 @@ impl Interp {
             strict: self.strict,
             args: std::mem::take(&mut self.args),
             this_val: self.this_val,
+            this_captures: std::mem::take(&mut self.this_captures),
             env: self.env,
             cur_func: self.cur_func,
             cur_target: self.cur_target,
@@ -18490,6 +18555,23 @@ impl Interp {
         // user code (the `Promise` executor via `run_callback`); the
         // value-producing natives ignore it.
         let _ = code;
+        // `super()` may construct a native heritage with a different
+        // `new.target` (the derived constructor). User-function construction
+        // consumes this latch in `enter_call`; native construction must do the
+        // same so `Object` can select the derived prototype and the one-shot
+        // target cannot leak into a later construct.
+        let pending_native_new_target = has_target.then(|| self.pending_new_target.take()).flatten();
+        let derived_native_construct = pending_native_new_target.is_some();
+        let new_target = if has_target {
+            pending_native_new_target.or_else(|| {
+                self.stack.get(base + 1).and_then(|slot| match slot.value {
+                    Payload::Reference(function) if slot.kind == Kind::Reference => Some(function),
+                    _ => None,
+                })
+            })
+        } else {
+            None
+        };
         // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
         // arguments read `undefined`.
         let arg = |i: usize| -> Slot {
@@ -19015,34 +19097,48 @@ impl Interp {
             // 33024 raw total, the fractional gap over a bare object literal.
             Native::Object => {
                 let a = arg(0);
-                match a.kind {
-                    Kind::Reference => a,
-                    Kind::Undefined | Kind::Null => {
-                        self.meter.tick_builtin();
-                        let inst = self.new_object();
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
+                if derived_native_construct {
+                    self.meter.tick_builtin();
+                    let inst = self.new_object();
+                    let proto = new_target
+                        .and_then(|target| self.prototype_of(target))
+                        .unwrap_or(self.object_proto);
+                    self.slots.get_mut(inst).value = Payload::Reference(proto);
+                    Slot::of(Kind::Reference, Payload::Reference(inst))
+                } else {
+                    match a.kind {
+                        Kind::Reference => a,
+                        Kind::Undefined | Kind::Null => {
+                            self.meter.tick_builtin();
+                            let inst = self.new_object();
+                            if let Some(target) = new_target {
+                                let proto = self.prototype_of(target).unwrap_or(self.object_proto);
+                                self.slots.get_mut(inst).value = Payload::Reference(proto);
+                            }
+                            Slot::of(Kind::Reference, Payload::Reference(inst))
+                        }
+                        Kind::Boolean => {
+                            let inst = self.box_object_primitive(Native::Boolean, a);
+                            Slot::of(Kind::Reference, Payload::Reference(inst))
+                        }
+                        Kind::Integer | Kind::Number => {
+                            let inst = self.box_object_primitive(Native::Number, a);
+                            Slot::of(Kind::Reference, Payload::Reference(inst))
+                        }
+                        Kind::String => {
+                            let inst = self.box_object_primitive(Native::String, a);
+                            Slot::of(Kind::Reference, Payload::Reference(inst))
+                        }
+                        Kind::Symbol => {
+                            let inst = self.box_object_primitive(Native::Symbol, a);
+                            Slot::of(Kind::Reference, Payload::Reference(inst))
+                        }
+                        Kind::BigInt => {
+                            let inst = self.box_object_primitive(Native::BigInt, a);
+                            Slot::of(Kind::Reference, Payload::Reference(inst))
+                        }
+                        _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
                     }
-                    Kind::Boolean => {
-                        let inst = self.box_object_primitive(Native::Boolean, a);
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    Kind::Integer | Kind::Number => {
-                        let inst = self.box_object_primitive(Native::Number, a);
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    Kind::String => {
-                        let inst = self.box_object_primitive(Native::String, a);
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    Kind::Symbol => {
-                        let inst = self.box_object_primitive(Native::Symbol, a);
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    Kind::BigInt => {
-                        let inst = self.box_object_primitive(Native::BigInt, a);
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    _ => return Err(Halt::Unsupported(native_unsupported_name(native))),
                 }
             }
             // The Error hierarchy (`fx_Error` and the per-type constructors):
@@ -21848,6 +21944,44 @@ impl Interp {
         if results.is_empty() {
             return Ok(subject);
         }
+        if functional {
+            let subject_units = self
+                .string_receiver_units(subject)
+                .expect("replace subject was already validated as a string");
+            let mut assembled = Vec::new();
+            let mut next_source_position = 0;
+            for (result, pos, match_len) in results {
+                self.meter.tick_raw(STRING_REPLACE_MATCH_METERING);
+                let capture_count = self.regexp_capture_count(result);
+                self.meter.tick_raw(
+                    STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
+                );
+                // The matcher reports offsets in its UTF-8 subject, while the
+                // replacer callback and string assembly use UTF-16 code-unit
+                // indices. A valid match boundary is always a UTF-8 boundary.
+                let prefix = &subject_bytes[..pos.min(subject_bytes.len())];
+                let code_unit_pos = String::from_utf8_lossy(prefix).encode_utf16().count();
+                assembled.extend_from_slice(
+                    &subject_units[next_source_position..code_unit_pos.min(subject_units.len())],
+                );
+                let mut args = Vec::with_capacity(capture_count + 2);
+                for i in 0..capture_count {
+                    args.push(self.array_index_slot(result, i as u32));
+                }
+                args.push(Slot::number(code_unit_pos as f64));
+                args.push(subject);
+                let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
+                let units = self.to_string_units(code, value)?;
+                self.meter.tick_slot_alloc();
+                self.meter.tick_chunk_new((units.len() + 1) as u64);
+                assembled.extend_from_slice(&units);
+                next_source_position = code_unit_pos.saturating_add(match_len);
+            }
+            assembled.extend_from_slice(&subject_units[next_source_position..]);
+            self.meter.tick_chunk_new((assembled.len() + 1) as u64);
+            let off = self.chunks.alloc(&units_to_be16(&assembled));
+            return Ok(Slot::of(Kind::String, Payload::String(off)));
+        }
         let mut assembled = Vec::new();
         let mut next_source_position = 0;
         for (result, pos, match_len) in results {
@@ -21857,30 +21991,18 @@ impl Interp {
                 STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
             );
             assembled.extend_from_slice(&subject_bytes[next_source_position..pos]);
-            let subst_bytes = if functional {
-                let mut args = Vec::with_capacity(capture_count + 2);
-                for i in 0..capture_count {
-                    args.push(self.array_index_slot(result, i as u32));
-                }
-                args.push(Slot::number(pos as f64));
-                args.push(subject);
-                let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
-                let units = self.to_string_units(code, value)?;
-                String::from_utf16_lossy(&units).into_bytes()
+            let repl = repl_bytes.as_deref().unwrap();
+            let subst_bytes = if repl.contains(&b'$') {
+                self.regexp_get_substitution(
+                    inst,
+                    result,
+                    &subject_bytes,
+                    pos,
+                    match_len,
+                    repl,
+                )
             } else {
-                let repl = repl_bytes.as_deref().unwrap();
-                if repl.contains(&b'$') {
-                    self.regexp_get_substitution(
-                        inst,
-                        result,
-                        &subject_bytes,
-                        pos,
-                        match_len,
-                        repl,
-                    )
-                } else {
-                    repl.to_vec()
-                }
+                repl.to_vec()
             };
             self.meter.tick_slot_alloc();
             self.meter.tick_chunk_new((subst_bytes.len() + 1) as u64);
@@ -28917,6 +29039,16 @@ impl Interp {
             | NativeMethod::TypedArrayReverse => {
                 self.typed_array_mutator(m, this, base, argc, code)?
             }
+            NativeMethod::TypedArrayLengthGetter
+            | NativeMethod::TypedArrayByteLengthGetter
+            | NativeMethod::TypedArrayByteOffsetGetter
+            | NativeMethod::TypedArrayBufferGetter
+            | NativeMethod::TypedArrayToStringTagGetter => {
+                self.typed_array_accessor(m, this)?
+            }
+            NativeMethod::TypedArrayFrom | NativeMethod::TypedArrayOf => {
+                self.typed_array_static(m, this, base, argc, code)?
+            }
             // `Array.prototype.push(...items)` — dense fast path only.
             NativeMethod::ArrayPush => {
                 let inst = match self.dense_array_this(this) {
@@ -35788,6 +35920,141 @@ impl Interp {
         Ok(Self::typed_array_relative_index(n, length))
     }
 
+    fn typed_array_accessor(
+        &mut self,
+        method: NativeMethod,
+        this: Slot,
+    ) -> Result<Slot, Halt> {
+        let ta = match this.value {
+            Payload::Reference(r) if this.kind == Kind::Reference => {
+                self.typed_arrays.get(&r).copied()
+            }
+            _ => None,
+        };
+        if method == NativeMethod::TypedArrayToStringTagGetter {
+            return Ok(match ta {
+                Some(ta) => self.new_string_metered(
+                    TYPED_ARRAY_TYPES[ta.kind as usize].name.as_bytes(),
+                ),
+                None => Slot::undefined(),
+            });
+        }
+        let ta = ta.ok_or_else(|| self.catchable_type_error())?;
+        self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
+        let out_of_bounds = self.detached_buffers.contains(&ta.buffer);
+        Ok(match method {
+            NativeMethod::TypedArrayLengthGetter => {
+                Slot::integer(if out_of_bounds { 0 } else { ta.length as i32 })
+            }
+            NativeMethod::TypedArrayByteLengthGetter => {
+                let shift = TYPED_ARRAY_TYPES[ta.kind as usize].shift as u32;
+                Slot::integer(if out_of_bounds {
+                    0
+                } else {
+                    (ta.length << shift) as i32
+                })
+            }
+            NativeMethod::TypedArrayByteOffsetGetter => {
+                Slot::integer(if out_of_bounds { 0 } else { ta.offset as i32 })
+            }
+            NativeMethod::TypedArrayBufferGetter => {
+                Slot::of(Kind::Reference, Payload::Reference(ta.buffer))
+            }
+            _ => unreachable!("typed_array_accessor called for non-accessor"),
+        })
+    }
+
+    /// The inherited `%TypedArray%.from` / `%TypedArray%.of` statics. `from`
+    /// delegates iterable/array-like collection to the already complete
+    /// `Array.from` machinery, then constructs and maps into the requested
+    /// TypedArray; `of` constructs the exact final length and writes each
+    /// argument through the element conversion path.
+    fn typed_array_static(
+        &mut self,
+        method: NativeMethod,
+        constructor: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        if !self.is_constructor_value(constructor) {
+            return Err(self.catchable_type_error());
+        }
+        let args: Vec<Slot> = (0..argc)
+            .map(|i| {
+                self.stack
+                    .get(base + 4 + i)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined)
+            })
+            .collect();
+        if method == NativeMethod::TypedArrayFrom {
+            let items = args.first().copied().unwrap_or_else(Slot::undefined);
+            let mapfn = args.get(1).copied().unwrap_or_else(Slot::undefined);
+            let this_arg = args.get(2).copied().unwrap_or_else(Slot::undefined);
+            let mapping = if mapfn.kind == Kind::Undefined {
+                false
+            } else if self.is_callable_value(mapfn) {
+                true
+            } else {
+                return Err(self.catchable_type_error());
+            };
+            let array_ctor = self
+                .intrinsics
+                .get("Array")
+                .copied()
+                .expect("Array intrinsic");
+            let from_id = self.intern_key("from");
+            let array_ctor_slot = Slot::of(Kind::Reference, Payload::Reference(array_ctor));
+            let from = self.mop_get(code, array_ctor, from_id, array_ctor_slot)?;
+            // TypedArray.from exhausts an iterable into a List before it
+            // allocates and maps the target. Collect without Array.from's
+            // mapper so `next()` calls are not interleaved with `mapfn`.
+            let collected = self.call_any(code, from, array_ctor_slot, &[items])?;
+            let collected_ref = match collected.value {
+                Payload::Reference(r)
+                    if collected.kind == Kind::Reference && self.arrays.contains_key(&r) =>
+                {
+                    r
+                }
+                _ => return Err(self.catchable_type_error()),
+            };
+            let length = self.arrays[&collected_ref].length;
+            let result = self.construct_value(
+                code,
+                constructor,
+                &[Slot::number(length as f64)],
+                constructor,
+            )?;
+            let ta = self.validate_typed_array(result)?;
+            for index in 0..length {
+                let mut value = self.array_index_slot(collected, index);
+                if mapping {
+                    value = self.call_any(
+                        code,
+                        mapfn,
+                        this_arg,
+                        &[value, Slot::number(index as f64)],
+                    )?;
+                }
+                self.typed_array_element_set(code, ta, index, value)?;
+            }
+            return Ok(result);
+        }
+
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(args.len() as f64)],
+            constructor,
+        )?;
+        let ta = self.validate_typed_array(result)?;
+        for (index, value) in args.into_iter().enumerate() {
+            self.typed_array_element_set(code, ta, index as u32, value)?;
+        }
+        Ok(result)
+    }
+
     /// The four in-place `%TypedArray.prototype%` mutators. All receiver and
     /// detachment failures are realm-local TypeErrors; argument coercions run
     /// in specification order and may execute guest code.
@@ -36999,6 +37266,7 @@ impl Interp {
         self.strict = caller.strict;
         self.args = caller.args;
         self.this_val = caller.this_val;
+        self.this_captures = caller.this_captures;
         self.env = caller.env;
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;
@@ -37261,7 +37529,7 @@ impl Interp {
         env: crate::value::SlotIndex,
         id: u16,
         value: Slot,
-    ) {
+    ) -> crate::value::SlotIndex {
         self.meter.tick_slot_alloc();
         let mut stored = Slot::of(value.kind, value.value);
         stored.id = id;
@@ -37276,6 +37544,7 @@ impl Interp {
             tail = next;
         }
         self.slots.get_mut(tail).next = index;
+        index
     }
 
     /// Attach a module binding's shared heap cell to an initializer or

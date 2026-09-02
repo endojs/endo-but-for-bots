@@ -271,6 +271,18 @@ pub struct CaseResult {
     /// oracle's — advisory telemetry, never a failure by itself (design §
     /// Metering, accuracy-over-parity). Feeds the `advisory:` section.
     pub computron_gap: bool,
+    /// Outcomes retained before the sloppy/strict pair is folded into the
+    /// file-level verdict. Empty for legacy/single-mode callers, for which the
+    /// report keeps its historical inference.
+    pub mode_outcomes: Vec<(Mode, Outcome)>,
+}
+
+fn expectation_outcome(verdict: &Verdict) -> Outcome {
+    match verdict {
+        Verdict::Covered => Outcome::Pass,
+        Verdict::Fail(_) => Outcome::Fail,
+        Verdict::PreSkip(reason) | Verdict::RunSkip(reason) => Outcome::Skip(reason.clone()),
+    }
 }
 
 fn preskip(reason: &str) -> CaseResult {
@@ -278,6 +290,7 @@ fn preskip(reason: &str) -> CaseResult {
         verdict: Verdict::PreSkip(reason.to_string()),
         strict_skipped: false,
         computron_gap: false,
+        mode_outcomes: Vec::new(),
     }
 }
 
@@ -916,6 +929,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
             verdict: Verdict::PreSkip(reason.into()),
             strict_skipped: run_strict,
             computron_gap: false,
+            mode_outcomes: Vec::new(),
         };
     }
 
@@ -971,6 +985,14 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         None
     };
 
+    let mut mode_outcomes = Vec::new();
+    if let Some(eval) = &sloppy {
+        mode_outcomes.push((Mode::Sloppy, expectation_outcome(&eval.outcome)));
+    }
+    if let Some(eval) = &strict {
+        mode_outcomes.push((Mode::Strict, expectation_outcome(&eval.outcome)));
+    }
+
     let (verdict, computron_gap) = match (sloppy, strict) {
         (Some(sloppy), Some(strict)) => {
             let verdict = match (&sloppy.outcome, &strict.outcome) {
@@ -995,6 +1017,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         verdict,
         strict_skipped,
         computron_gap,
+        mode_outcomes,
     }
 }
 
@@ -1018,6 +1041,7 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
                 verdict: Verdict::RunSkip("oracle-machine-error".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             };
         }
     };
@@ -1038,6 +1062,7 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
                             verdict: Verdict::RunSkip("compiler-unimplemented:parse".into()),
                             strict_skipped: false,
                             computron_gap: false,
+                            mode_outcomes: Vec::new(),
                         };
                     }
                     true
@@ -1047,6 +1072,7 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
                         verdict: Verdict::RunSkip("compiler-unimplemented:parse".into()),
                         strict_skipped: false,
                         computron_gap: false,
+                        mode_outcomes: Vec::new(),
                     };
                 }
                 Ok(Ok(_)) => false,
@@ -1067,6 +1093,7 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
                 verdict,
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             };
         }
 
@@ -1075,6 +1102,7 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
                 verdict: Verdict::RunSkip("module:resolution-linking".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             };
         }
     }
@@ -1111,6 +1139,7 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
         verdict,
         strict_skipped: false,
         computron_gap: false,
+        mode_outcomes: Vec::new(),
     }
 }
 
@@ -1315,6 +1344,7 @@ fn run_async_case(
                 verdict: Verdict::PreSkip(reason),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
     };
@@ -1327,6 +1357,7 @@ fn run_async_case(
                 verdict: Verdict::RunSkip("oracle-machine-error".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
     };
@@ -1359,6 +1390,7 @@ fn run_async_case(
         verdict,
         strict_skipped: false,
         computron_gap,
+        mode_outcomes: Vec::new(),
     }
 }
 
@@ -1367,6 +1399,13 @@ fn run_async_case(
 /// a failure, and a strict-only gap is labelled so reports retain the causal
 /// mode instead of silently treating the sloppy pass as file coverage.
 fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) -> CaseResult {
+    let mut mode_outcomes = Vec::new();
+    if let Some(result) = &sloppy {
+        mode_outcomes.push((Mode::Sloppy, expectation_outcome(&result.verdict)));
+    }
+    if let Some(result) = &strict {
+        mode_outcomes.push((Mode::Strict, expectation_outcome(&result.verdict)));
+    }
     match (sloppy, strict) {
         (Some(sloppy), Some(strict)) => {
             let verdict = match (&sloppy.verdict, &strict.verdict) {
@@ -1385,9 +1424,13 @@ fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) 
                 verdict,
                 strict_skipped: false,
                 computron_gap: sloppy.computron_gap || strict.computron_gap,
+                mode_outcomes,
             }
         }
-        (Some(result), None) | (None, Some(result)) => result,
+        (Some(mut result), None) | (None, Some(mut result)) => {
+            result.mode_outcomes = mode_outcomes;
+            result
+        }
         (None, None) => unreachable!("strict_mode_status always selects a mode"),
     }
 }
@@ -1491,19 +1534,30 @@ impl XstReport {
             Verdict::Fail(_) => Outcome::Fail,
             Verdict::PreSkip(reason) | Verdict::RunSkip(reason) => Outcome::Skip(reason.clone()),
         };
-        let only_strict =
-            matches!(&result.verdict, Verdict::PreSkip(reason) if reason.starts_with("onlyStrict"));
-        if only_strict {
-            self.observed
-                .insert((path.to_string(), Mode::Strict), outcome.clone());
+        if !result.mode_outcomes.is_empty() {
+            for (mode, mode_outcome) in &result.mode_outcomes {
+                self.observed
+                    .insert((path.to_string(), *mode), mode_outcome.clone());
+            }
         } else {
-            self.observed
-                .insert((path.to_string(), Mode::Sloppy), outcome.clone());
-            if result.strict_skipped {
+            let only_strict = matches!(
+                &result.verdict,
+                Verdict::PreSkip(reason) if reason.starts_with("onlyStrict")
+            );
+            if only_strict {
                 self.observed.insert(
                     (path.to_string(), Mode::Strict),
-                    Outcome::Skip("strict-unimplemented".to_string()),
+                    outcome.clone(),
                 );
+            } else {
+                self.observed
+                    .insert((path.to_string(), Mode::Sloppy), outcome.clone());
+                if result.strict_skipped {
+                    self.observed.insert(
+                        (path.to_string(), Mode::Strict),
+                        Outcome::Skip("strict-unimplemented".to_string()),
+                    );
+                }
             }
         }
         match result.verdict {
@@ -1675,6 +1729,7 @@ fn run_case_bounded(
                 verdict,
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -1685,6 +1740,7 @@ fn run_case_bounded(
                 verdict: Verdict::Fail("ironhorse-worker-panic".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
     }
@@ -1861,6 +1917,36 @@ mod tests {
         assert_eq!(
             constructor_name("Test262Error: Expected a TypeError"),
             "Test262Error"
+        );
+    }
+
+    #[test]
+    fn expectation_observations_retain_both_default_modes() {
+        let Some((_, harness)) = crate::test262::locate_test262() else {
+            eprintln!("test262 subset absent; skipping two-mode expectation regression");
+            return;
+        };
+        let source = "/*---\n---*/\n1 + 1;";
+        let result = run_case(&Config::default(), &harness, source);
+        assert_eq!(result.verdict, Verdict::Covered);
+        assert_eq!(
+            result.mode_outcomes,
+            vec![(Mode::Sloppy, Outcome::Pass), (Mode::Strict, Outcome::Pass)]
+        );
+
+        let mut report = XstReport::default();
+        report.record("language/both-modes.js", result);
+        assert_eq!(
+            report
+                .observed
+                .get(&("language/both-modes.js".into(), Mode::Sloppy)),
+            Some(&Outcome::Pass)
+        );
+        assert_eq!(
+            report
+                .observed
+                .get(&("language/both-modes.js".into(), Mode::Strict)),
+            Some(&Outcome::Pass)
         );
     }
 
@@ -2426,6 +2512,7 @@ mod tests {
                 verdict: Verdict::Covered,
                 strict_skipped: true,
                 computron_gap: true,
+                mode_outcomes: Vec::new(),
             },
         );
         rep.record(
@@ -2434,6 +2521,7 @@ mod tests {
                 verdict: Verdict::RunSkip("unsupported-opcode:XS_CODE_FOO".into()),
                 strict_skipped: true,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             },
         );
         rep.record(
@@ -2442,6 +2530,7 @@ mod tests {
                 verdict: Verdict::PreSkip("feature:Temporal".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             },
         );
         let y = rep.to_yaml();
