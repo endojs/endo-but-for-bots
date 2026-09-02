@@ -254,6 +254,23 @@ fn mapped_arguments_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "9");
 }
 
+/// Date calendar mutation crosses complete SQLite close/reopen cycles. The
+/// later cranks first link the setter names after resume, covering both the
+/// persisted `[[DateValue]]` row and deferred intrinsic installation.
+#[test]
+fn date_setters_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "date-setters",
+        &[
+            "var d = new Date(Date.UTC(1999, 11, 31, 23, 59, 59, 999));",
+            "var d; d.setUTCMilliseconds(1001);",
+            "var d; d.setUTCFullYear(2000);",
+            "var d; d.toJSON()",
+        ],
+    );
+    assert_eq!(last, "2000-01-01T00:00:00.001Z");
+}
+
 /// Arrow-specific function metadata and closure-environment captures survive
 /// a full SQLite close/reopen cycle. This covers all three lexical bindings
 /// stored by `STORE_ARROW`: `this`, `new.target`, and the method home object
