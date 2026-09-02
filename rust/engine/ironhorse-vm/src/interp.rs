@@ -9242,7 +9242,7 @@ impl Interp {
         let compiled = match compiler.compile_source(source, strict) {
             Ok(compiled) => compiled,
             Err(SourceCompileError::Syntax(message)) => {
-                return Err(self.catchable_syntax_error_msg(message))
+                return Err(self.catchable_syntax_error_with_message(message))
             }
             Err(SourceCompileError::Unsupported(_)) => {
                 return Err(Halt::Unsupported("eval:compiler-unimplemented"))
@@ -19103,21 +19103,45 @@ impl Interp {
     ) -> Result<Result<Slot, Slot>, Halt> {
         let stack_base = self.stack.len();
         let call_depth = self.call_stack.len();
-        let jump_depth = self.jumps.len();
+        // FENCE the caller's live handlers for the callback's duration. This
+        // helper models XS's native `mxTry` around a re-entrant callback (a
+        // promise executor, a thenable `then` job, a `finally`/dispose
+        // handler): an uncaught throw inside the callback must be CAPTURED
+        // here — the promise rejects, the job re-raises from the native
+        // boundary — and must never unwind into a guest `try` live around
+        // the native call. A native validation site now raises through
+        // `raise_js`, which resolves to `Halt::Resume` the moment
+        // `unwind_to_jump` finds ANY handler on the chain; unfenced, that
+        // raise would consume the CALLER's handler and leak the `Resume` past
+        // this boundary (the executor's TypeError landing in an outer `catch`
+        // and the promise never settling — the exact cross-native-boundary
+        // corruption the async-generator body fence at `resume_async_generator`
+        // guards against). Taking the chain hands the callback a fresh handler
+        // stack: its own `try` still catches (its entries live above the now
+        // empty base and are consumed or truncated within the run), while an
+        // uncaught raise finds no handler and returns `Halt::Throw`, which the
+        // arm below settles. The fenced chain is restored on every exit.
+        let fenced_jumps = std::mem::take(&mut self.jumps);
         match self.run_callback(code, func, this, args) {
-            Ok(value) => Ok(Ok(value)),
+            Ok(value) => {
+                self.jumps = fenced_jumps;
+                Ok(Ok(value))
+            }
             Err(Halt::Throw(_)) => {
                 while self.call_stack.len() > call_depth {
                     let _ = self.leave_call();
                 }
                 self.stack.truncate(stack_base);
-                self.jumps.truncate(jump_depth);
+                self.jumps = fenced_jumps;
                 let thrown = self.exception;
                 self.exception = Slot::undefined();
                 self.unmeter_host_escape();
                 Ok(Err(thrown))
             }
-            Err(halt) => Err(halt),
+            Err(halt) => {
+                self.jumps = fenced_jumps;
+                Err(halt)
+            }
         }
     }
 
@@ -21149,40 +21173,47 @@ impl Interp {
                         // `IteratorToList` materializes every value BEFORE any
                         // element coercion runs, so a `valueOf` that mutates the
                         // source mid-copy (`iterated-array-changed-by-tonumber`)
-                        // must not change later reads. The snapshot comes AFTER
-                        // the length bound and the metered `alloc_array_buffer`
-                        // charge above, so the wave-5 ordering (reject first,
-                        // charge second, only then length-proportional
-                        // allocation; `tests/typed_array_source_length.rs`)
-                        // still holds. A TypedArray source needs no snapshot:
-                        // its element reads are pure numeric loads and its
-                        // element coercions run no guest code, so nothing can
-                        // mutate it between reads. A hole reads `undefined`
-                        // (→ NaN → 0 for an integer view), matching the
-                        // default-iterator result.
-                        let snapshot: Option<Vec<Slot>> = match source_ta {
-                            None => self.arrays.get(&r).map(|src| {
-                                (0..length)
-                                    .map(|i| {
-                                        src.items()
-                                            .get(&i)
-                                            .copied()
-                                            .unwrap_or_else(Slot::undefined)
-                                    })
-                                    .collect()
-                            }),
-                            Some(_) => None,
-                        };
+                        // must not change later reads. The snapshot CLONES the
+                        // source's sparse `items()` map (present entries only),
+                        // NOT a dense `0..length` `Vec<Slot>`: the declared
+                        // length is guest-controlled and unbounded up to the
+                        // arm's own cap, so a dense snapshot would re-arm the
+                        // wave-5 hazard — reserving `length * size_of::<Slot>()`
+                        // (32 bytes per DECLARED element) outside the meter,
+                        // while `alloc_array_buffer` charged only the packed
+                        // `byte_length`. Cloning `items()` keeps the allocation
+                        // proportional to the storage the meter already charged
+                        // (present entries), and an absent index reads
+                        // `undefined` from the clone exactly as a hole would.
+                        // The snapshot comes AFTER the length bound and the
+                        // metered `alloc_array_buffer` charge above, so the
+                        // wave-5 ordering (reject first, charge second, only
+                        // then any length-proportional allocation;
+                        // `tests/typed_array_source_length.rs`) still holds and
+                        // the length-proportional allocation the ordering exists
+                        // to bound — the backing store — remains the only one. A
+                        // TypedArray source needs no snapshot: its element reads
+                        // are pure numeric loads and its element coercions run no
+                        // guest code, so nothing can mutate it between reads. A
+                        // hole reads `undefined` (-> NaN -> 0 for an integer
+                        // view), matching the default-iterator result.
+                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> =
+                            source_ta.map_or_else(
+                                || self.arrays.get(&r).map(|src| src.items().clone()),
+                                |_| None,
+                            );
                         for i in 0..length {
-                            let v = match (&snapshot, source_ta) {
-                                (Some(values), _) => values[i as usize],
-                                (None, Some(src)) if src.kind <= 1 => {
+                            let v = match source_ta {
+                                Some(src) if src.kind <= 1 => {
                                     self.typed_array_element_get_bigint(src, i)
                                 }
-                                (None, Some(src)) => self
+                                Some(src) => self
                                     .typed_array_element_get(src, i)
                                     .expect("numeric TypedArray element decodes"),
-                                (None, None) => Slot::undefined(),
+                                None => snapshot
+                                    .as_ref()
+                                    .and_then(|items| items.get(&i).copied())
+                                    .unwrap_or_else(Slot::undefined),
                             };
                             self.typed_array_element_set(code, ta, i, v)?;
                             self.meter
@@ -31475,7 +31506,7 @@ impl Interp {
                 // `Object.assign`, `this` is deliberately `undefined`.
                 let target = match arg0.value {
                     Payload::Reference(target) if arg0.kind == Kind::Reference => target,
-                    _ => return Err(self.catchable_type_error_msg("copy target")),
+                    _ => return Err(self.catchable_type_error_with_message("copy target")),
                 };
                 let source_value = self
                     .stack
@@ -31515,7 +31546,7 @@ impl Interp {
                             ..OrdinaryDescriptor::default()
                         };
                         if !self.mop_define_own_property(code, target, id, copied)? {
-                            return Err(self.catchable_type_error_msg("copy property"));
+                            return Err(self.catchable_type_error_with_message("copy property"));
                         }
                     }
                     arg0
@@ -32132,7 +32163,7 @@ impl Interp {
                 let prototype = match arg0.value {
                     Payload::Reference(prototype) if arg0.kind == Kind::Reference => prototype,
                     _ if arg0.kind == Kind::Null => crate::value::SlotIndex::NULL,
-                    _ => return Err(self.catchable_type_error_msg("Object.create prototype")),
+                    _ => return Err(self.catchable_type_error_with_message("Object.create prototype")),
                 };
                 let object = self.new_object();
                 self.slots.get_mut(object).value = Payload::Reference(prototype);
@@ -32147,7 +32178,7 @@ impl Interp {
                         unreachable!("ToObject returns a reference")
                     };
                     if !self.define_properties_from_object(code, object, descriptors)? {
-                        return Err(self.catchable_type_error_msg("cannot define properties"));
+                        return Err(self.catchable_type_error_with_message("cannot define properties"));
                     }
                 }
                 Slot::of(Kind::Reference, Payload::Reference(object))
@@ -32155,7 +32186,7 @@ impl Interp {
             NativeMethod::ObjectDefineProperties => {
                 let target = match arg0.value {
                     Payload::Reference(target) if arg0.kind == Kind::Reference => target,
-                    _ => return Err(self.catchable_type_error_msg("defineProperties target")),
+                    _ => return Err(self.catchable_type_error_with_message("defineProperties target")),
                 };
                 let properties = self
                     .stack
@@ -32167,7 +32198,7 @@ impl Interp {
                     unreachable!("ToObject returns a reference")
                 };
                 if !self.define_properties_from_object(code, target, descriptors)? {
-                    return Err(self.catchable_type_error_msg("cannot define properties"));
+                    return Err(self.catchable_type_error_with_message("cannot define properties"));
                 }
                 arg0
             }
@@ -32197,7 +32228,7 @@ impl Interp {
             NativeMethod::ObjectDefineProperty => {
                 let target = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error_msg("defineProperty target")),
+                    _ => return Err(self.catchable_type_error_with_message("defineProperty target")),
                 };
                 if self.is_ordinary_object(target)
                     || self.arrays.contains_key(&target)
@@ -32234,7 +32265,7 @@ impl Interp {
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
                     if !self.mop_define_own_property(code, object, id, descriptor)? {
-                        return Err(self.catchable_type_error_msg("cannot define property"));
+                        return Err(self.catchable_type_error_with_message("cannot define property"));
                     }
                     arg0
                 } else if self.typed_arrays.contains_key(&target) {
@@ -35120,7 +35151,7 @@ impl Interp {
             NativeMethod::ReflectIsExtensible => {
                 let object = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => return Err(self.catchable_type_error_msg("Reflect.isExtensible target")),
+                    _ => return Err(self.catchable_type_error_with_message("Reflect.isExtensible target")),
                 };
                 Ok(Slot::boolean(self.mop_is_extensible(code, object)?))
             }
@@ -40578,7 +40609,7 @@ impl Interp {
         k: u64,
     ) -> Result<bool, Halt> {
         let name = k.to_string();
-        if let Some(&id) = self.symbol_ids.get(&name).as_deref() {
+        if let Some(&id) = self.symbol_ids.get(&name) {
             return self.mop_has(code, o, id);
         }
         // The index's name was never interned, so no name-keyed property can
@@ -45338,7 +45369,7 @@ impl Interp {
     /// — the exact string the site's former bare `Halt::Throw` escaped with, so
     /// the uncaught rendering is unchanged while a live `try`/`catch` now
     /// observes a realm-correct `TypeError` object instead of a host abort.
-    fn catchable_type_error_msg(&mut self, message: &str) -> Halt {
+    fn catchable_type_error_with_message(&mut self, message: &str) -> Halt {
         if message.is_empty() {
             return self.catchable_type_error();
         }
@@ -45368,7 +45399,7 @@ impl Interp {
     /// pinned oracle's exact `String(exception)` for an early error the source
     /// bridge (eval / dynamic `Function`) rejects. An empty message falls back
     /// to the bare form.
-    fn catchable_syntax_error_msg(&mut self, message: String) -> Halt {
+    fn catchable_syntax_error_with_message(&mut self, message: String) -> Halt {
         if message.is_empty() {
             return self.catchable_syntax_error();
         }
@@ -50016,13 +50047,13 @@ impl Interp {
                 "writable" => out.writable = Some(self.truthy(&value)),
                 "get" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error_msg("getter is not callable"));
+                        return Err(self.catchable_type_error_with_message("getter is not callable"));
                     }
                     out.get = Some(value);
                 }
                 "set" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
-                        return Err(self.catchable_type_error_msg("setter is not callable"));
+                        return Err(self.catchable_type_error_with_message("setter is not callable"));
                     }
                     out.set = Some(value);
                 }
@@ -50030,7 +50061,7 @@ impl Interp {
             }
         }
         if out.is_accessor() && out.is_data() {
-            return Err(self.catchable_type_error_msg("invalid property descriptor"));
+            return Err(self.catchable_type_error_with_message("invalid property descriptor"));
         }
         Ok(out)
     }
@@ -50063,12 +50094,12 @@ impl Interp {
         if property_key.kind == Kind::Symbol {
             return match property_key.value {
                 Payload::Reference(descriptor) => Ok(self.intern_symbol_key(descriptor)),
-                _ => Err(self.catchable_type_error_msg("invalid symbol")),
+                _ => Err(self.catchable_type_error_with_message("invalid symbol")),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => self.str_text(offset),
-            _ => return Err(self.catchable_type_error_msg("invalid property key")),
+            _ => return Err(self.catchable_type_error_with_message("invalid property key")),
         };
         let id = self.intern_key(&name);
         // A runtime-computed key can be the first observation of a standard
