@@ -20,8 +20,9 @@
 // ATTESTATION form ("did it end up applied?") whose only path toward
 // `done` re-verifies mechanically (endo-release) or carries the
 // operator's journaled word (nixos-config-change); COMPENSATION failures
-// go to `compensation-attention`, whose only exit retries the
-// compensation — no pre-apply path can reach `done`. Timer exits prune
+// go to `compensation-attention`, which either retries compensation or
+// records that even the attention request could not be delivered — no
+// pre-apply path can reach `done`. Timer exits prune
 // the pending invoke, so a late settlement is dropped rather than
 // re-routed. The test suite asserts the single-entry-to-apply and
 // compensation-attention-exit properties from the rendered graph.
@@ -33,6 +34,9 @@ const HALF_HOUR_MS = 1_800_000;
 const WEEK_MS = 604_800_000;
 
 const okValue = M.splitRecord({ value: M.splitRecord({ ok: M.eq(true) }) });
+const rolledBackValue = M.splitRecord({
+  value: M.splitRecord({ ok: M.eq(false), phase: M.eq('error') }),
+});
 // Post-apply readback: the pin must match AND the applier must report a
 // settled 'ok' phase — a rebuild still in flight (phase 'switching') or a
 // never-executed apply behind a stale status must not read as verified.
@@ -57,6 +61,9 @@ const stagedFiles = M.splitRecord({
     paths: M.arrayOf(M.string()),
     previous: M.arrayOf(PreviousFileShape),
   }),
+});
+const revertedFiles = M.splitRecord({
+  value: M.splitRecord({ paths: M.arrayOf(M.string()) }),
 });
 
 // Performer re-validates /^[0-9a-f]{40}$/ at its boundary; the chart's
@@ -98,6 +105,7 @@ export const endoReleaseChart = harden({
           outcome: 'staged',
           failure: 'stage-failed',
         },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'stage-timed-out' } },
       ],
       on: {
         staged: [
@@ -115,6 +123,12 @@ export const endoReleaseChart = harden({
           },
         ],
         'stage-failed': [{ target: 'failed' }],
+        'stage-timed-out': [
+          {
+            target: 'staging-unsettled',
+            assign: { reason: 'stageRev did not settle before its deadline' },
+          },
+        ],
       },
     },
     // Build the RELEASE (fetch + yarn install + package builds) without
@@ -228,9 +242,11 @@ export const endoReleaseChart = harden({
         applied: [
           { when: okValue, target: 'verify' },
           {
+            when: rolledBackValue,
             target: 'auto-rolled-back',
             assign: { report: { $event: 'value' } },
           },
+          { target: 'needs-attention' },
         ],
         'apply-failed': [{ target: 'needs-attention' }],
         'apply-timed-out': [{ target: 'needs-attention' }],
@@ -273,7 +289,10 @@ export const endoReleaseChart = harden({
         { kind: 'after', ms: HOUR_MS, emit: { type: 'unpin-timed-out' } },
       ],
       on: {
-        unpinned: [{ target: 'abandoned' }],
+        unpinned: [
+          { when: stagedRevision, target: 'abandoned' },
+          { target: 'compensation-attention' },
+        ],
         'unpin-failed': [{ target: 'compensation-attention' }],
         'unpin-timed-out': [{ target: 'compensation-attention' }],
       },
@@ -323,9 +342,9 @@ export const endoReleaseChart = harden({
         ],
       },
     },
-    // Compensation failed (the un-pin itself). The only exit retries the
-    // compensation — this state can never reach `verify` or `done`, so an
-    // abandoned release cannot terminate as deployed.
+    // Compensation failed or returned without evidence of an un-pin. A reply
+    // retries it; failed delivery records a truthful unsettled terminal. No
+    // path can reach `verify` or `done`.
     'compensation-attention': {
       entry: [
         {
@@ -413,6 +432,7 @@ export const nixosConfigChangeChart = harden({
           outcome: 'staged',
           failure: 'stage-failed',
         },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'stage-timed-out' } },
       ],
       on: {
         staged: [
@@ -433,6 +453,12 @@ export const nixosConfigChangeChart = harden({
           },
         ],
         'stage-failed': [{ target: 'failed' }],
+        'stage-timed-out': [
+          {
+            target: 'staging-unsettled',
+            assign: { reason: 'stageFiles did not settle before its deadline' },
+          },
+        ],
       },
     },
     build: {
@@ -518,9 +544,11 @@ export const nixosConfigChangeChart = harden({
         applied: [
           { when: okValue, target: 'done' },
           {
+            when: rolledBackValue,
             target: 'auto-rolled-back',
             assign: { report: { $event: 'value' } },
           },
+          { target: 'needs-attention' },
         ],
         'apply-failed': [{ target: 'needs-attention' }],
         'apply-timed-out': [{ target: 'needs-attention' }],
@@ -542,7 +570,10 @@ export const nixosConfigChangeChart = harden({
         { kind: 'after', ms: HOUR_MS, emit: { type: 'revert-timed-out' } },
       ],
       on: {
-        reverted: [{ target: 'abandoned' }],
+        reverted: [
+          { when: revertedFiles, target: 'abandoned' },
+          { target: 'compensation-attention' },
+        ],
         'revert-failed': [{ target: 'compensation-attention' }],
         'revert-timed-out': [{ target: 'compensation-attention' }],
       },
@@ -593,9 +624,9 @@ export const nixosConfigChangeChart = harden({
         ],
       },
     },
-    // Compensation failed (the revert itself). The only exit retries the
-    // compensation — this state can never reach `done`, so an abandoned
-    // change cannot terminate as applied while its files sit un-reverted.
+    // Compensation failed or returned without evidence of a revert. A reply
+    // retries it; failed delivery records a truthful unsettled terminal. No
+    // path can reach `done` while the files may remain un-reverted.
     'compensation-attention': {
       entry: [
         {

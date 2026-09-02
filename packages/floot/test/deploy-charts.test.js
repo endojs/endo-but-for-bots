@@ -81,6 +81,33 @@ test('malformed successful staging stops before approval', t => {
   });
 });
 
+test('silent staging stops truthfully and prunes the pending invoke', t => {
+  /** @type {readonly { chart: any, params: Record<string, any>, method: string }[]} */
+  const cases = harden([
+    { chart: endoReleaseChart, params: releaseParams, method: 'stageRev' },
+    {
+      chart: nixosConfigChangeChart,
+      params: changeParams,
+      method: 'stageFiles',
+    },
+  ]);
+  for (const { chart, params: chartParams, method } of cases) {
+    const sim = makeSimulator(chart, { params: chartParams });
+    const stage = pendingOf(sim, 'invoke', method);
+    const timer = pendingOf(sim, 'after');
+    const final = sim.fireTimer(timer.effectId);
+
+    t.true(final.done);
+    t.is(final.state, 'staging-unsettled');
+    t.is(
+      sim.pending().find(record => record.effectId === stage.effectId),
+      undefined,
+      `${chart.name} prunes the silent stage invoke`,
+    );
+    t.is(pendingOf(sim, 'ask'), undefined, 'no approval was raised');
+  }
+});
+
 test('approval dispatch failures compensate staged changes', t => {
   const release = makeSimulator(endoReleaseChart, { params: releaseParams });
   release.settle(
@@ -184,6 +211,99 @@ test('silent verification and compensation route to attention', t => {
   t.is(reverting.status().state, 'compensation-attention');
 });
 
+test('malformed apply fulfillment requires operator attention', t => {
+  const release = makeSimulator(endoReleaseChart, { params: releaseParams });
+  release.settle(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  settlePrebuild(release);
+  release.settle(
+    pendingOf(release, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  release.settle(
+    pendingOf(release, 'ask').effectId,
+    'fulfilled',
+    harden({ approved: true, note: '' }),
+  );
+  release.settle(
+    pendingOf(release, 'invoke', 'apply').effectId,
+    'fulfilled',
+    harden({}),
+  );
+  t.is(release.status().state, 'needs-attention');
+  t.truthy(pendingOf(release, 'ask'));
+
+  const nixos = makeSimulator(nixosConfigChangeChart, { params: changeParams });
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'stageFiles').effectId,
+    'fulfilled',
+    harden({
+      paths: ['modules/firewall.nix'],
+      previous: [{ path: 'modules/firewall.nix', text: null }],
+    }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'ask').effectId,
+    'fulfilled',
+    harden({ approved: true, note: '' }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'apply').effectId,
+    'fulfilled',
+    harden({ ok: 'yes' }),
+  );
+  t.is(nixos.status().state, 'needs-attention');
+  t.truthy(pendingOf(nixos, 'ask'));
+});
+
+test('malformed compensation fulfillment cannot claim restoration', t => {
+  const release = makeSimulator(endoReleaseChart, { params: releaseParams });
+  release.settle(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  settlePrebuild(release, harden({ ok: false, phase: 'error' }));
+  release.settle(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({}),
+  );
+  t.is(release.status().state, 'compensation-attention');
+  t.false(release.status().done);
+
+  const nixos = makeSimulator(nixosConfigChangeChart, { params: changeParams });
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'stageFiles').effectId,
+    'fulfilled',
+    harden({
+      paths: ['modules/firewall.nix'],
+      previous: [{ path: 'modules/firewall.nix', text: null }],
+    }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: false }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'revertFiles').effectId,
+    'fulfilled',
+    harden({}),
+  );
+  t.is(nixos.status().state, 'compensation-attention');
+  t.false(nixos.status().done);
+});
+
 test('apply is entered exactly once, only by operator approval', t => {
   // The restart-loop guard at the chart level: no failure, timeout, or
   // resume path may lead back to `apply`. Its ONLY inbound edge is the
@@ -199,7 +319,7 @@ test('apply is entered exactly once, only by operator approval', t => {
   }
 });
 
-test('compensation-attention can only retry compensation, never complete', t => {
+test('compensation-attention cannot reach a landed terminal', t => {
   // The truthful-terminal guard: a failed compensation loops through a
   // human gate back to the compensation — it has no path to `done` or
   // `verify`, so an abandoned change cannot terminate as deployed.

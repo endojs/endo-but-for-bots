@@ -12,11 +12,10 @@
 The chart layer is complete: three reviewed-change charts, the two deploy
 charts used by the gated variants, and their simulator suites
 (`packages/floot/test/review-charts.test.js`, 17 tests, and
-`packages/floot/test/deploy-charts.test.js`, 19 tests).
+`packages/floot/test/deploy-charts.test.js`, 22 tests).
 Nothing is wired into a live host yet, and — see § "What blocks a live
 run" — a Fae agent **cannot answer a workflow ask today**, so the loop is
-currently exercisable only by the simulator and by humans answering from
-`endo inbox`.
+currently exercisable only by the simulator or a programmatic service client.
 The chart implementation in this change is complete; phases 2 and 3 are
 separate live-integration follow-ups because their hosted-management packages
 are not present on the `llm` base.
@@ -234,9 +233,12 @@ otherwise unsettled child terminals are reported through `deploy-unsettled`.
 The deploy charts validate successful stage settlements before proceeding to
 build or approval, because rollback material cannot be reconstructed safely.
 Approval delivery failure compensates the staged change.
-Verification and compensation invokes have deadlines that route silence to
-human-attention states, and every final deploy output carries a discriminated
-status so callers cannot confuse process completion with a landed change.
+Initial staging, verification, and compensation invokes have deadlines that
+route silence to truthful uncertainty or human-attention states.
+Apply and compensation fulfillments also require explicit result shapes before
+they can report rollback or restoration, and every final deploy output carries
+a discriminated status so callers cannot confuse process completion with a
+landed change.
 
 ## What blocks a live run
 
@@ -260,6 +262,13 @@ Fae's built-in tool set has no `resolve`, `reject`, or `submit` — only the
 general-purpose `exec` escape hatch, through which an agent *could* call
 `E(powers).resolve(n, name)` today, but unreliably.
 
+The CLI is not a typed fallback for these forms either.
+`endo submit --field name:value` preserves every field value as a string, while
+the daemon matches submitted values strictly against `M.boolean()` and
+`M.nat()` field patterns.
+The reviewed-change approval, attestation, and budget forms therefore require a
+typed UI or programmatic submitter until the CLI learns typed value parsing.
+
 The fix is Phase 2: branch the loop on `request` / `form`, put the
 description (and form fields) into the user node, and add first-class
 `resolveRequest` / `rejectRequest` / `submitForm` tools.
@@ -280,13 +289,17 @@ than carrying the hosted-management package into this chart-only port.
 - **Phase 1 (done).** The reviewed-change and prerequisite deploy charts,
   control-signal and parameter boundary hardening, structural-gate assertions,
   service-level provenance coverage, and simulator suites.
-- **Phase 2.** Fae ask-answering: request/form rendering and the
-  `resolveRequest` / `rejectRequest` / `submitForm` tools.
-  Without this nothing but a human can close the loop.
+- **Phase 2.** Typed ask-answering surfaces: Fae request/form rendering and the
+  `resolveRequest` / `rejectRequest` / `submitForm` tools, plus typed UI or CLI
+  submission for human operators.
 - **Phase 3.** Host gating: reshape `space-endo-mgmt` into a
   settlement-shaped performer, mint the gated factories alongside the
   existing deploy factories in `floot-factory-setup.js`, and surface the
   live run (and its budget) in the Hosted Endo space.
+  The performer contract must validate that returned revisions and paths match
+  the requested operation, and must define atomic rollback or explicit partial
+  failure semantics for staging before these structural shapes can be treated
+  as evidence.
 
 ## Open questions
 
