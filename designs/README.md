@@ -11,9 +11,9 @@ guest-native `invite`/`accept` so an `EndoGuest` onboards another guest with its
 own authority, accepting as its own handle with no minted replacement guest and
 reciprocal pet-name binding; daemon-node locator authority with daemon-sourced
 hints, narrow injected `registerPeer`/`writeRemoteAgentKey` daemon-core
-capabilities, pet-store de-reference as the durable consume-once record, and a
+capabilities, the pet-store overwrite as the durable consume-once record, and a
 shared `EndoAgent` invitation vocabulary; closes the daemon gap named by
-`kriscendobot/minion.town#56`),
+[kriscendobot/minion.town#56](https://github.com/kriscendobot/minion.town/pull/56)),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -494,7 +494,7 @@ The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root
 
 The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
 
-The 2026-09-02 rebase adds [guest-native-invitations](guest-native-invitations.md) (Not Started), increasing Not Started from 49 to 50 and the summary table from 199 to 200 rows (the authoritative 2026-08-29 totals block counts 196 designs; the difference from these row counts is the pre-existing reconciliation the totals block records, and this rebase adds exactly one row to it).
+The 2026-09-02 rebase adds [guest-native-invitations](guest-native-invitations.md) (Not Started), increasing Not Started from 49 to 50 and the summary table from 199 to 200 rows. The authoritative 2026-08-29 totals block counts 196 designs; that gap is the pre-existing reconciliation the totals block already records, and this rebase adds exactly one row to it.
 
 ## Roadmap
 
