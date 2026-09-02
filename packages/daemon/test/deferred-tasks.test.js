@@ -1,4 +1,9 @@
 import test from 'ava';
+
+/** @import { CommitOutcome, FormulaIdentifier } from '../src/types.js' */
+
+/** @typedef {Error & { commitOutcome?: CommitOutcome }} CommitError */
+
 import {
   makeDeferredTasks,
   makeStoreIdentifierTask,
@@ -66,6 +71,7 @@ test('makeStoreIdentifierTask preflight rejects empty path', async t => {
   const task = makeStoreIdentifierTask(
     async () => {},
     [],
+    /** @param {{ id: string }} ids */
     ids => ids.id,
   );
   await t.throwsAsync(() => task.preflight(), {
@@ -80,6 +86,7 @@ test('makeStoreIdentifierTask commit stores selected id', async t => {
       writes.push({ path, id });
     },
     ['result'],
+    /** @param {{ evalId: string }} ids */
     ids => ids.evalId,
   );
   await task.preflight();
@@ -93,22 +100,27 @@ test('makeStoreIdentifierTask classifies TypeError as rejected-before-write', as
       throw new TypeError('Invalid pet name');
     },
     'bad',
+    /** @param {{ id: string }} ids */
     ids => ids.id,
   );
   await task.preflight();
-  const error = await t.throwsAsync(() => task.commit({ id: 'x' }, {}));
+  const error = /** @type {CommitError} */ (
+    await t.throwsAsync(() => task.commit({ id: 'x' }, {}))
+  );
   t.is(error.commitOutcome, 'rejected-before-write');
 });
 
 test('makePinTransientTask pins on commit only', async t => {
   const pinned = [];
+  const handleId = /** @type {FormulaIdentifier} */ ('h1');
   const task = makePinTransientTask(
     id => pinned.push(id),
+    /** @param {{ handleId: FormulaIdentifier }} ids */
     ids => ids.handleId,
   );
   await task.preflight();
   t.deepEqual(pinned, []);
-  t.is(await task.commit({ handleId: 'h1' }, {}), 'committed');
+  t.is(await task.commit({ handleId }, {}), 'committed');
   t.deepEqual(pinned, ['h1']);
 });
 
@@ -117,7 +129,7 @@ test('aggregate commit prefers ambiguous over rejected-before-write', async t =>
   tasks.push({
     preflight: async () => {},
     commit: async () => {
-      const err = Error('local');
+      const err = /** @type {CommitError} */ (Error('local'));
       err.commitOutcome = 'rejected-before-write';
       throw err;
     },
@@ -125,12 +137,14 @@ test('aggregate commit prefers ambiguous over rejected-before-write', async t =>
   tasks.push({
     preflight: async () => {},
     commit: async () => {
-      const err = Error('remote');
+      const err = /** @type {CommitError} */ (Error('remote'));
       err.commitOutcome = 'ambiguous';
       throw err;
     },
   });
-  const error = await t.throwsAsync(() => tasks.commit({}, {}));
+  const error = /** @type {CommitError} */ (
+    await t.throwsAsync(() => tasks.commit({}, {}))
+  );
   t.is(error.commitOutcome, 'ambiguous');
 });
 
