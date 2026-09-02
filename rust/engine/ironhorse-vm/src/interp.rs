@@ -20467,34 +20467,136 @@ impl Interp {
             // flags to strings, compile the pattern with child 8's matcher,
             // and build the instance (compiled program + source/flags in the
             // `regexps` side table, `lastIndex` = 0). A `/.../ ` literal reaches
-            // here as `new RegExp(<pattern>, <flags>)`. A RegExp-valued pattern
-            // (the copy-constructor / `.source`+`.flags` read path) and a
-            // syntax-error or not-yet-ported pattern feature self-name an
-            // honest skip rather than mis-metering the throw.
+            // here as `new RegExp(<pattern>, <flags>)`. An internal RegExp
+            // pattern follows the copy-constructor path: a same-constructor
+            // bare call with no flags returns the argument, while construction
+            // or a flags override builds a fresh instance from its source.
             Native::RegExp => {
                 let pattern_arg = arg(0);
                 let flags_arg = arg(1);
-                // A RegExp-valued pattern reads its `source`/`flags` back
-                // through getters (`fx_RegExp`'s `patternIsRegExp` branch) —
-                // a later increment.
-                if let Payload::Reference(r) = pattern_arg.value {
-                    if self.regexps.contains_key(&r) {
-                        return Err(Halt::Unsupported("RegExp:regexp-pattern-arg"));
+                let pattern_is_regexp = self.string_is_regexp(code, pattern_arg)?;
+                let pattern_regexp = match pattern_arg.value {
+                    Payload::Reference(r) if self.regexps.contains_key(&r) => Some(r),
+                    _ => None,
+                };
+                let return_pattern = if pattern_is_regexp {
+                    if !has_target && flags_arg.kind == Kind::Undefined {
+                        // `RegExp(pattern)` returns `pattern` only when its
+                        // observable `constructor` is the active intrinsic.
+                        // When the program never names `constructor`, the lazy
+                        // boot model guarantees the untouched default link.
+                        if let (Some(id), Payload::Reference(r)) =
+                            (self.constructor_id, pattern_arg.value)
+                        {
+                            let constructor = self.mop_get(code, r, id, pattern_arg)?;
+                            let active = self
+                                .stack
+                                .get(base + 1)
+                                .copied()
+                                .unwrap_or_else(Slot::undefined);
+                            self.same_value(constructor, active)
+                        } else {
+                            // With no observable constructor key, only an
+                            // internally branded RegExp can have the untouched
+                            // `%RegExp%` default. A generic `@@match` object
+                            // inherits `%Object%`'s constructor instead.
+                            pattern_regexp.is_some()
+                        }
+                    } else {
+                        false
                     }
+                } else {
+                    false
+                };
+                if return_pattern {
+                    pattern_arg
+                } else {
+                    let pattern = if pattern_is_regexp {
+                        let source_id = self
+                            .regexp_getter_ids
+                            .source
+                            .or_else(|| self.symbol_ids.get("source").copied());
+                        if let Some(r) = pattern_regexp {
+                            // The ordinary Get is observable through own and
+                            // inherited overrides. When the program never
+                            // names `source`, lazy boot leaves no property id
+                            // that guest code could have observed.
+                            if let Some(id) = source_id
+                                .filter(|&id| !self.regexp_getter_uses_default(r, id))
+                            {
+                                let source = self.mop_get(code, r, id, pattern_arg)?;
+                                if source.kind == Kind::Undefined {
+                                    String::new()
+                                } else {
+                                    String::from_utf16_lossy(
+                                        &self.to_string_units(code, source)?,
+                                    )
+                                }
+                            } else {
+                                self.regexps[&r].source.clone()
+                            }
+                        } else {
+                            let Payload::Reference(r) = pattern_arg.value else {
+                                unreachable!("IsRegExp is false for primitives")
+                            };
+                            let source = match source_id {
+                                Some(id) => self.mop_get(code, r, id, pattern_arg)?,
+                                None => Slot::undefined(),
+                            };
+                            if source.kind == Kind::Undefined {
+                                String::new()
+                            } else {
+                                String::from_utf16_lossy(&self.to_string_units(code, source)?)
+                            }
+                        }
+                    } else if pattern_arg.kind == Kind::Undefined {
+                        String::new()
+                    } else {
+                        String::from_utf16_lossy(&self.to_string_units(code, pattern_arg)?)
+                    };
+                    let flags = if flags_arg.kind == Kind::Undefined {
+                        if pattern_is_regexp {
+                            let flags_id = self
+                                .regexp_getter_ids
+                                .flags
+                                .or_else(|| self.symbol_ids.get("flags").copied());
+                            if let Some(r) = pattern_regexp {
+                                if let Some(id) = flags_id
+                                    .filter(|&id| !self.regexp_getter_uses_default(r, id))
+                                {
+                                    let value = self.mop_get(code, r, id, pattern_arg)?;
+                                    if value.kind == Kind::Undefined {
+                                        String::new()
+                                    } else {
+                                        String::from_utf16_lossy(
+                                            &self.to_string_units(code, value)?,
+                                        )
+                                    }
+                                } else {
+                                    self.regexps[&r].flags.clone()
+                                }
+                            } else {
+                                let Payload::Reference(r) = pattern_arg.value else {
+                                    unreachable!("IsRegExp is false for primitives")
+                                };
+                                let value = match flags_id {
+                                    Some(id) => self.mop_get(code, r, id, pattern_arg)?,
+                                    None => Slot::undefined(),
+                                };
+                                if value.kind == Kind::Undefined {
+                                    String::new()
+                                } else {
+                                    String::from_utf16_lossy(&self.to_string_units(code, value)?)
+                                }
+                            }
+                        } else {
+                            String::new()
+                        }
+                    } else {
+                        String::from_utf16_lossy(&self.to_string_units(code, flags_arg)?)
+                    };
+                    self.build_regexp(pattern, flags)?
                 }
-                let pattern = if pattern_arg.kind == Kind::Undefined {
-                    String::new()
-                } else {
-                    let bytes = self.to_string_bytes_metered(pattern_arg);
-                    String::from_utf8_lossy(&bytes).into_owned()
-                };
-                let flags = if flags_arg.kind == Kind::Undefined {
-                    String::new()
-                } else {
-                    let bytes = self.to_string_bytes_metered(flags_arg);
-                    String::from_utf8_lossy(&bytes).into_owned()
-                };
-                self.build_regexp(pattern, flags)?
             }
             // `ArrayBuffer(...)` / `SharedArrayBuffer(...)` called WITHOUT `new`
             // (`has_target` false): a constructor-only intrinsic whose
@@ -43826,6 +43928,25 @@ impl Interp {
             }
         }
         self.ordinary_get(code, inst, id, receiver)
+    }
+
+    /// Whether a RegExp property lookup reaches the VM's implicit intrinsic
+    /// accessor without encountering an observable own/inherited override.
+    /// The default `source` and `flags` accessors are represented by the
+    /// RegExp side table rather than ordinary property slots, so constructor
+    /// copy semantics use this gate before reading that side table directly.
+    fn regexp_getter_uses_default(&self, inst: crate::value::SlotIndex, id: u16) -> bool {
+        let mut current = inst;
+        while !current.is_null() {
+            if self.proxies.contains_key(&current) || self.find_property(current, id).is_some() {
+                return false;
+            }
+            if current == self.regexp_proto {
+                return true;
+            }
+            current = self.instance_prototype(current);
+        }
+        false
     }
 
     /// The exotic own descriptor for an array (`length` / index) or function
