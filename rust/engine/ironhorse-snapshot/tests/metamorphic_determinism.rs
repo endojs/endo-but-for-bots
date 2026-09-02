@@ -189,7 +189,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // method natives added to the boot heap. Format unchanged.
         // Re-pinned 2026-09-02 for the shared TypedArray allocating and sort
         // method natives added to the boot heap. Format unchanged.
-        "193b1f91b61822bc988bc8a23b2f9cfbba2cdbbee3d3b99b827a9c82cef0176d",
+        // Re-pinned 2026-09-02 for the Object, Number, BigInt, and TypedArray
+        // locale-string natives added to the boot heap. Format unchanged.
+        "1e33ea82d4e37e30e10a6ea079055fed6d1ebca76309cec2e7aeb0c60226c694",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -311,7 +313,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // readonly method natives. Schema and format remain unchanged.
         // Re-pinned with the blob for the shared TypedArray allocating and
         // sort method natives. Schema and format remain unchanged.
-        "606a00faefb68c407c898293c801f0837fe21a1a8c2ca8d500efcdf1d01a89f9",
+        // Re-pinned with the blob for the locale-string natives. Schema and
+        // format remain unchanged.
+        "855544055792875392ea1062fcac4dcd755f82eae948b42dcdcf28f315268190",
         "epoch-3 seal chain"
     );
 }

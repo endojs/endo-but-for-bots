@@ -1934,6 +1934,9 @@ pub enum NativeMethod {
     /// rest. It copies the source's own enumerable properties to `this`.
     CopyObject,
     ObjectToString,
+    /// `Object.prototype.toLocaleString()` invokes the receiver's live
+    /// `toString` method.
+    ObjectToLocaleString,
     ObjectHasOwnProperty,
     ObjectValueOf,
     ObjectIsPrototypeOf,
@@ -2131,6 +2134,8 @@ pub enum NativeMethod {
     /// `BigInt.prototype.toString([radix])`: render the primitive/wrapper
     /// receiver in radix 2 through 36.
     BigIntToString,
+    /// `BigInt.prototype.toLocaleString([locales[, options]])`.
+    BigIntToLocaleString,
     /// `BigInt.prototype.valueOf()`: unwrap a BigInt wrapper or return a
     /// primitive BigInt receiver unchanged.
     BigIntValueOf,
@@ -2290,6 +2295,8 @@ pub enum NativeMethod {
     TypedArrayFilter,
     /// `%TypedArray%.prototype.sort(comparefn)`.
     TypedArraySort,
+    /// `%TypedArray%.prototype.toLocaleString([locales[, options]])`.
+    TypedArrayToLocaleString,
     /// Non-allocating shared TypedArray methods. Operation ids select
     /// `forEach`, `every`, `some`, `find`, `findIndex`, `includes`, `indexOf`,
     /// `lastIndexOf`, `reduce`, and `reduceRight`, in that order.
@@ -2413,6 +2420,8 @@ pub enum NativeMethod {
     /// spelling); a radix in `[2,36]` runs XS's digit conversion. Allocates
     /// the result chunk.
     NumberToString,
+    /// `Number.prototype.toLocaleString([locales[, options]])`.
+    NumberToLocaleString,
     /// The global `parseInt(string[,radix])` (`fx_parseInt`): the integer
     /// prefix parse. No `mxMeterSome`, no chunk.
     GlobalParseInt,
@@ -5814,6 +5823,11 @@ impl Interp {
             ("map", 1, NativeMethod::TypedArrayMap),
             ("filter", 1, NativeMethod::TypedArrayFilter),
             ("sort", 1, NativeMethod::TypedArraySort),
+            (
+                "toLocaleString",
+                0,
+                NativeMethod::TypedArrayToLocaleString,
+            ),
         ] {
             let mf = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((typed_array_proto, name, mf));
@@ -6336,6 +6350,7 @@ impl Interp {
         // a `toString`.
         let obj_methods = [
             ("toString", NativeMethod::ObjectToString),
+            ("toLocaleString", NativeMethod::ObjectToLocaleString),
             ("valueOf", NativeMethod::ObjectValueOf),
             ("hasOwnProperty", NativeMethod::ObjectHasOwnProperty),
             ("isPrototypeOf", NativeMethod::ObjectIsPrototypeOf),
@@ -6534,6 +6549,13 @@ impl Interp {
                 self.proto_methods.push((proto, "valueOf", value_of));
                 let to_string = self.alloc_method(NativeMethod::BigIntToString);
                 self.proto_methods.push((proto, "toString", to_string));
+                let to_locale_string = self.alloc_named_method(
+                    NativeMethod::BigIntToLocaleString,
+                    "toLocaleString",
+                    0,
+                );
+                self.proto_methods
+                    .push((proto, "toLocaleString", to_locale_string));
             }
             let as_int_n = self.alloc_named_method(NativeMethod::BigIntAsIntN, "asIntN", 2);
             self.proto_methods.push((bigint_ctor, "asIntN", as_int_n));
@@ -7172,6 +7194,13 @@ impl Interp {
         if !self.number_proto.is_null() {
             let mf = self.alloc_method(NativeMethod::NumberToString);
             self.proto_methods.push((self.number_proto, "toString", mf));
+            let to_locale_string = self.alloc_named_method(
+                NativeMethod::NumberToLocaleString,
+                "toLocaleString",
+                0,
+            );
+            self.proto_methods
+                .push((self.number_proto, "toLocaleString", to_locale_string));
         }
         // The numeric global functions, bound into the global object by name
         // (a native function instance, so `typeof parseInt === "function"`).
@@ -23793,6 +23822,49 @@ impl Interp {
         self.from_async_try(r, sb, cd, jd)
     }
 
+    /// `GetV(value, key)` followed by the callable check used by the `Invoke`
+    /// abstract operation. Primitive receivers read through their realm
+    /// wrapper prototype while retaining the primitive as the call receiver.
+    fn invoke_value_method(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        name: &str,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        if matches!(value.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let id = self.intern_key(name);
+        let method = match value.value {
+            Payload::Reference(inst) if value.kind == Kind::Reference => {
+                self.mop_get(code, inst, id, value)?
+            }
+            _ => {
+                let proto = match value.kind {
+                    Kind::String => self.string_proto,
+                    Kind::Integer | Kind::Number => self.number_proto,
+                    Kind::Symbol => self.symbol_proto,
+                    Kind::BigInt => self.bigint_proto,
+                    Kind::Boolean => self
+                        .intrinsics
+                        .get("Boolean")
+                        .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                        .unwrap_or(crate::value::SlotIndex::NULL),
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if proto.is_null() {
+                    return Err(self.catchable_type_error());
+                }
+                self.mop_get(code, proto, id, value)?
+            }
+        };
+        if !self.is_callable_value(method) {
+            return Err(self.catchable_type_error());
+        }
+        self.call_any(code, method, value, args)
+    }
+
     /// `Call(F, thisArg, args)` for a fromAsync step: a non-callable `F` yields
     /// the TypeError `Call` throws; otherwise dispatch (any callable) and catch
     /// a JS throw.
@@ -28116,6 +28188,9 @@ impl Interp {
                     Slot::of(Kind::String, Payload::String(off))
                 }
             }
+            NativeMethod::ObjectToLocaleString => {
+                self.invoke_value_method(code, this, "toString", &[])?
+            }
             // `Function.prototype.toString`: XS renders any function as
             // `function ["name"] (){[native code]}`.
             NativeMethod::FunctionToString => {
@@ -28215,6 +28290,29 @@ impl Interp {
                 self.meter.tick_chunk_new((rendered.len() + 1) as u64);
                 let off = self.alloc_str_text(rendered.as_bytes());
                 Slot::of(Kind::String, Payload::String(off))
+            }
+            NativeMethod::BigIntToLocaleString => {
+                let value = self.bigint_this_value(this)?;
+                let locale = self
+                    .stack
+                    .get(base + 4)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let options = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let Payload::BigInt(off) = value.value else {
+                    return Err(self.catchable_type_error());
+                };
+                let (negative, magnitude) = self.read_bigint(off);
+                let digits = bi_to_decimal(false, &magnitude);
+                let data = self.build_number_format(code, locale, options)?;
+                let resolved = self.nf_resolved(&data);
+                let rendered =
+                    crate::intl_number::format_bigint_to_string(&resolved, negative, &digits);
+                self.intl_string(&rendered)
             }
             // `Symbol.for(key)`: the registry symbol for `key` — the same
             // symbol identity on repeat calls. `key` must be a string in the
@@ -29195,6 +29293,9 @@ impl Interp {
                 self.typed_array_map_filter(m, this, base, code)?
             }
             NativeMethod::TypedArraySort => self.typed_array_sort(this, base, argc, code)?,
+            NativeMethod::TypedArrayToLocaleString => {
+                self.typed_array_to_locale_string(this, base, argc, code)?
+            }
             NativeMethod::TypedArrayLengthGetter
             | NativeMethod::TypedArrayByteLengthGetter
             | NativeMethod::TypedArrayByteOffsetGetter
@@ -30549,10 +30650,7 @@ impl Interp {
                 ));
             }
             NativeMethod::ArrayToLocaleString => {
-                let _ = (base, argc);
-                return Err(Halt::Unsupported(
-                    "Array.prototype.toLocaleString:locale-stringification",
-                ));
+                self.array_to_locale_string(this, base, argc, code)?
             }
             NativeMethod::ArrayFrom => {
                 self.array_from(code, base, argc)?
@@ -30676,6 +30774,7 @@ impl Interp {
             | NativeMethod::NumberIsNaN
             | NativeMethod::NumberIsSafeInteger
             | NativeMethod::NumberToString
+            | NativeMethod::NumberToLocaleString
             | NativeMethod::GlobalParseInt
             | NativeMethod::GlobalParseFloat
             | NativeMethod::GlobalIsNaN
@@ -32492,6 +32591,29 @@ impl Interp {
         let result = match m {
             NumberIsFinite | NumberIsInteger | NumberIsNaN | NumberIsSafeInteger => {
                 Slot::boolean(predicate(arg0, m))
+            }
+            NumberToLocaleString => {
+                let prim = match this.value {
+                    Payload::Integer(_) | Payload::Number(_) => this,
+                    Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
+                        Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
+                        _ => return Err(self.catchable_type_error()),
+                    },
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let locale = arg0.unwrap_or_else(Slot::undefined);
+                let options = if argc > 1 {
+                    self.stack
+                        .get(base + 5)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined)
+                } else {
+                    Slot::undefined()
+                };
+                let data = self.build_number_format(code, locale, options)?;
+                let resolved = self.nf_resolved(&data);
+                let rendered = crate::intl_number::format_to_string(&resolved, to_number(&prim));
+                self.intl_string(&rendered)
             }
             // Number.prototype.toString([radix]) — radix 10 renders through the
             // metered `fxNumberToString`; a radix in [2,36] runs the digit
@@ -36177,6 +36299,117 @@ impl Interp {
             }
             _ => unreachable!("typed_array_accessor called for non-accessor"),
         })
+    }
+
+    /// `Array.prototype.toLocaleString`: capture `LengthOfArrayLike`, then
+    /// invoke each live element's `toLocaleString(locales, options)` and
+    /// stringify its result. The comma is this deterministic embedding's list
+    /// separator; nullish elements contribute an empty field.
+    fn array_to_locale_string(
+        &mut self,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let inst = match object.value {
+            Payload::Reference(inst) => inst,
+            _ => unreachable!(),
+        };
+        let length_value = self.arraylike_length(code, inst, object)?;
+        let length = self.to_length_value(code, length_value)?;
+        let locales = if argc > 0 {
+            self.stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::undefined()
+        };
+        let options = if argc > 1 {
+            self.stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::undefined()
+        };
+        let mut out = Vec::new();
+        for index in 0..length {
+            if index > 0 {
+                out.push(u16::from(b','));
+            }
+            let value = if self.arrays.contains_key(&inst) {
+                self.array_generic_get(code, inst, index)?
+            } else {
+                self.arraylike_index(code, inst, index, object)?
+            };
+            if matches!(value.kind, Kind::Null | Kind::Undefined) {
+                continue;
+            }
+            let rendered =
+                self.invoke_value_method(code, value, "toLocaleString", &[locales, options])?;
+            out.extend_from_slice(&self.to_string_units(code, rendered)?);
+        }
+        Ok(self.new_string_units(&out))
+    }
+
+    /// `%TypedArray%.prototype.toLocaleString`: the Array algorithm with the
+    /// validated view's internal length. Element reads stay live, so a buffer
+    /// detached by an earlier element call contributes empty later fields.
+    fn typed_array_to_locale_string(
+        &mut self,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let ta = self.validate_typed_array(this)?;
+        let locales = if argc > 0 {
+            self.stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::undefined()
+        };
+        let options = if argc > 1 {
+            self.stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::undefined()
+        };
+        let mut out = Vec::new();
+        for index in 0..ta.length {
+            if index > 0 {
+                out.push(u16::from(b','));
+            }
+            if self.detached_buffers.contains(&ta.buffer) {
+                continue;
+            }
+            let value = if ta.kind <= 1 {
+                self.typed_array_element_get_bigint(ta, index)
+            } else {
+                self.typed_array_element_get(ta, index)
+                    .expect("numeric TypedArray locale element decodes")
+            };
+            let rendered =
+                self.invoke_value_method(code, value, "toLocaleString", &[locales, options])?;
+            out.extend_from_slice(&self.to_string_units(code, rendered)?);
+        }
+        Ok(self.new_string_units(&out))
     }
 
     /// Construct the result for `%TypedArray%.from` / `%TypedArray%.of` and
