@@ -7523,6 +7523,31 @@ impl Interp {
         self.ctor_prototype.get(&ctor).copied()
     }
 
+    /// `GetPrototypeFromConstructor(constructor, intrinsicDefaultProto)`:
+    /// perform the observable ordinary `Get(constructor, "prototype")`, then
+    /// use the intrinsic fallback unless that value is an object. This differs
+    /// from [`Self::prototype_of`], which is a non-observable cache lookup used
+    /// by internal boot plumbing; native construction must run Proxy/accessor
+    /// behavior and propagate abrupt completion.
+    fn get_prototype_from_constructor(
+        &mut self,
+        code: &[u8],
+        constructor: crate::value::SlotIndex,
+        fallback: crate::value::SlotIndex,
+    ) -> Result<crate::value::SlotIndex, Halt> {
+        let id = self.intern_key("prototype");
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(constructor));
+        let value = self.mop_get(code, constructor, id, receiver)?;
+        Ok(match value {
+            Slot {
+                kind: Kind::Reference,
+                value: Payload::Reference(prototype),
+                ..
+            } => prototype,
+            _ => fallback,
+        })
+    }
+
     /// Whether `target` appears in `obj`'s prototype chain — the core of
     /// `fxOrdinaryHasInstance`. The prototype is the instance slot's payload
     /// reference (XS's `instance->value.instance.prototype`); the walk
@@ -8220,6 +8245,12 @@ impl Interp {
         if !full {
             return;
         }
+        // `%Symbol.prototype%` and `%Date.prototype%` each have a standard
+        // own `@@toPrimitive` method before guest code executes. Materialize
+        // the shared key during the initial link so own-symbol enumeration
+        // observes both properties even when the source never evaluates
+        // `Symbol.toPrimitive` first.
+        let _ = self.well_known_symbol_property_id("toPrimitive");
         // Namespace objects and ECMA-402 formatter prototypes carry a
         // `Symbol.toStringTag` string own property (writable:false,
         // enumerable:false, configurable:true — flags `DONT_SET | DONT_ENUM`,
@@ -9825,6 +9856,47 @@ impl Interp {
         if self.symbol_names.is_empty() || !legacy_arguments {
             return;
         }
+
+        // Before standard globals became non-enumerable, an untouched
+        // intrinsic binding had the exact old default descriptor: its value
+        // was the realm intrinsic and all three attribute bits were clear.
+        // Upgrade only that unambiguous shape. A guest replacement or any
+        // writable/configurable edit is retained, while an already
+        // non-enumerable property already has the desired result.
+        let legacy_globals: Vec<_> = self
+            .intrinsics
+            .iter()
+            .filter_map(|(name, &intrinsic)| {
+                self.symbol_ids
+                    .get(*name)
+                    .copied()
+                    .map(|id| (id, intrinsic))
+            })
+            .collect();
+        for (id, intrinsic) in legacy_globals {
+            let Some(&property) = self.global_props.get(&id) else {
+                continue;
+            };
+            let slot = self.slots.get_mut(property);
+            if slot.flag == 0
+                && slot.kind == Kind::Reference
+                && slot.value == Payload::Reference(intrinsic)
+            {
+                slot.flag |= XS_DONT_ENUM_FLAG;
+            }
+        }
+        if let Some(&id) = self.symbol_ids.get("globalThis") {
+            if let Some(&property) = self.global_props.get(&id) {
+                let slot = self.slots.get_mut(property);
+                if slot.flag == 0
+                    && slot.kind == Kind::Reference
+                    && slot.value == Payload::Reference(self.global_obj)
+                {
+                    slot.flag |= XS_DONT_ENUM_FLAG;
+                }
+            }
+        }
+
         let join_was_considered = self
             .symbol_ids
             .get("join")
@@ -19356,9 +19428,12 @@ impl Interp {
                     // native Date construction to a user constructor. A
                     // non-object `NewTarget.prototype` falls back to the Date
                     // intrinsic rather than `%Object.prototype%`.
-                    let proto = new_target
-                        .and_then(|target| self.prototype_of(target))
-                        .unwrap_or(self.date_proto);
+                    let proto = match new_target {
+                        Some(target) => {
+                            self.get_prototype_from_constructor(code, target, self.date_proto)?
+                        }
+                        None => self.date_proto,
+                    };
                     let inst = self.slots.alloc(Slot::instance(proto));
                     self.dates.insert(inst, time);
                     Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -19538,9 +19613,14 @@ impl Interp {
                 if derived_native_construct {
                     self.meter.tick_builtin();
                     let inst = self.new_object();
-                    let proto = new_target
-                        .and_then(|target| self.prototype_of(target))
-                        .unwrap_or(self.object_proto);
+                    let proto = match new_target {
+                        Some(target) => self.get_prototype_from_constructor(
+                            code,
+                            target,
+                            self.object_proto,
+                        )?,
+                        None => self.object_proto,
+                    };
                     self.slots.get_mut(inst).value = Payload::Reference(proto);
                     Slot::of(Kind::Reference, Payload::Reference(inst))
                 } else {
@@ -19550,7 +19630,11 @@ impl Interp {
                             self.meter.tick_builtin();
                             let inst = self.new_object();
                             if let Some(target) = new_target {
-                                let proto = self.prototype_of(target).unwrap_or(self.object_proto);
+                                let proto = self.get_prototype_from_constructor(
+                                    code,
+                                    target,
+                                    self.object_proto,
+                                )?;
                                 self.slots.get_mut(inst).value = Payload::Reference(proto);
                             }
                             Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -43057,6 +43141,38 @@ impl Interp {
         };
         let native = fi.native;
         let method = fi.method;
+        // Function.prototype.call/apply are themselves ordinary callable
+        // built-ins whose receiver is the function to redispatch. The opcode
+        // RUN path has an in-place trampoline for them, but abstract Call
+        // sites arrive here without that opcode context. Handle the same
+        // semantics at the shared dispatcher so a bound call/apply function,
+        // a Proxy trap, or another native algorithm can invoke them too.
+        if method == Some(NativeMethod::FunctionCall) {
+            if !self.is_callable_value(this) {
+                return Err(self.catchable_type_error());
+            }
+            let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
+            let forwarded = args.get(1..).unwrap_or_default();
+            self.meter.tick_raw(
+                CALL_TRAMPOLINE_METERING
+                    + forwarded.len() as u64 * CALL_TRAMPOLINE_PER_ARG,
+            );
+            return self.invoke_value(code, this, this_arg, forwarded);
+        }
+        if method == Some(NativeMethod::FunctionApply) {
+            if !self.is_callable_value(this) {
+                return Err(self.catchable_type_error());
+            }
+            let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
+            let arg_array = args.get(1).copied().unwrap_or_else(Slot::undefined);
+            let forwarded = if arg_array.kind == Kind::Undefined || arg_array.kind == Kind::Null {
+                Vec::new()
+            } else {
+                self.arraylike_to_vec(code, arg_array)?
+            };
+            self.meter.tick_raw(CALL_TRAMPOLINE_METERING);
+            return self.invoke_value(code, this, this_arg, &forwarded);
+        }
         if native.is_some() || method.is_some() {
             // Native / native-method: build the [THIS, FUNCTION, RESULT, FRAME]
             // frame + args, dispatch, and take the pushed result.
@@ -44897,7 +45013,16 @@ impl Interp {
             Payload::String(offset) => self.str_text(offset),
             _ => return Err(Halt::Throw("TypeError: invalid property key".into())),
         };
-        Ok(self.intern_key(&name))
+        let id = self.intern_key(&name);
+        // A runtime-computed key can be the first observation of a standard
+        // global or intrinsic member. `intern_key` makes the global itself
+        // visible immediately; complete the ordinary create-only install pass
+        // before the reflective operation continues so that constructor is
+        // not observably hollow for the rest of this crank. The name floor
+        // prevents an already-considered guest deletion or monkeypatch from
+        // being resurrected.
+        self.install_pending_intrinsics();
+        Ok(id)
     }
 
     fn property_key_slot(&mut self, id: u16) -> Result<Slot, Halt> {
@@ -47188,6 +47313,7 @@ fn date_from_components_exact(v: [f64; 7]) -> f64 {
 fn parse_date_string(text: &str) -> Option<f64> {
     let text = trim_ecma_whitespace(text);
     parse_iso_date_string(text)
+        .or_else(|| parse_xs_legacy_iso_string(text))
         .or_else(|| parse_date_display_string(text))
 }
 
@@ -47284,6 +47410,114 @@ fn parse_date_clock(clock: &str) -> Option<(i128, i128, i128, i128)> {
         0
     } else {
         format!("{fraction:0<3}").parse().ok()?
+    };
+    Some((hour, minute, second.parse().ok()?, millis))
+}
+
+/// Preserve the pinned XS implementation-defined ISO-like fallback accepted
+/// before the strict Date Time String Format parser was introduced. This path
+/// is deliberately second: conforming strings use [`parse_iso_date_string`],
+/// while the fallback normalizes out-of-range calendar/clock fields, truncates
+/// excess fractional-second digits, and accepts an hours-only zone offset.
+fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
+    let (date, clock) = match text.find(['T', 't']) {
+        Some(i) => (&text[..i], Some(&text[i + 1..])),
+        None => (text, None),
+    };
+    let year_width = if date.starts_with(['+', '-']) { 7 } else { 4 };
+    if date.len() < year_width {
+        return None;
+    }
+    let year_text = &date[..year_width];
+    let year_digits = year_text.trim_start_matches(['+', '-']);
+    if year_digits.len() != year_width - usize::from(year_width == 7)
+        || !year_digits.bytes().all(|byte| byte.is_ascii_digit())
+        || year_text == "-000000"
+    {
+        return None;
+    }
+    let year: i64 = year_text.parse().ok()?;
+    let tail = &date[year_width..];
+    let (month, day) = match tail.len() {
+        0 => (1i128, 1i128),
+        3 if tail.starts_with('-') => (tail[1..].parse().ok()?, 1),
+        6 if tail.as_bytes().first() == Some(&b'-')
+            && tail.as_bytes().get(3) == Some(&b'-') =>
+        {
+            (tail[1..3].parse().ok()?, tail[4..6].parse().ok()?)
+        }
+        _ => return None,
+    };
+    let Some(clock) = clock else {
+        return Some(date_from_components_exact([
+            year as f64,
+            (month - 1) as f64,
+            day as f64,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        ]));
+    };
+
+    let (clock, offset_minutes) = if let Some(clock) = clock
+        .strip_suffix('Z')
+        .or_else(|| clock.strip_suffix('z'))
+    {
+        (clock, 0i128)
+    } else if let Some(at) = clock.rfind(['+', '-']) {
+        let (clock, zone) = clock.split_at(at);
+        let sign = if zone.starts_with('-') { -1i128 } else { 1i128 };
+        let zone = &zone[1..];
+        let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
+            (zone[..2].parse::<i128>().ok()?, zone[3..].parse::<i128>().ok()?)
+        } else if zone.len() == 4 {
+            (zone[..2].parse::<i128>().ok()?, zone[2..].parse::<i128>().ok()?)
+        } else if zone.len() == 2 {
+            (zone.parse::<i128>().ok()?, 0)
+        } else {
+            return None;
+        };
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        (clock, sign * (hours * 60 + minutes))
+    } else {
+        (clock, 0)
+    };
+    let (hour, minute, second, millis) = parse_xs_legacy_date_clock(clock)?;
+    let local = date_from_components_exact([
+        year as f64,
+        (month - 1) as f64,
+        day as f64,
+        hour as f64,
+        minute as f64,
+        second as f64,
+        millis as f64,
+    ]);
+    Some(time_clip(local - offset_minutes as f64 * 60_000.0))
+}
+
+fn parse_xs_legacy_date_clock(clock: &str) -> Option<(i128, i128, i128, i128)> {
+    let mut parts = clock.split(':');
+    let hour = parts.next()?.parse().ok()?;
+    let minute = parts.next()?.parse().ok()?;
+    let seconds = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    let Some(seconds) = seconds else {
+        return Some((hour, minute, 0, 0));
+    };
+    let (second, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    if !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let millis = if fraction.is_empty() {
+        0
+    } else {
+        let prefix = &fraction[..fraction.len().min(3)];
+        format!("{prefix:0<3}").parse().ok()?
     };
     Some((hour, minute, second.parse().ok()?, millis))
 }
@@ -49741,6 +49975,57 @@ mod tests {
                 .is_some(),
             "a custom legacy prototype is preserved while the own iterator is added"
         );
+    }
+
+    #[test]
+    fn marker_free_restore_migrates_only_untouched_standard_global_descriptors() {
+        let mut interp = Interp::new();
+        let old_names = vec![
+            "Date".to_string(),
+            "Array".to_string(),
+            "Number".to_string(),
+            "Object".to_string(),
+            "globalThis".to_string(),
+        ];
+        interp.bind_program_symbols(&old_names);
+        interp.install_intrinsic_bindings(&old_names, true, |_| true);
+
+        for name in ["Date", "Array", "globalThis"] {
+            let id = interp.symbol_ids[name];
+            let property = interp.global_props[&id];
+            interp.slots.get_mut(property).flag = 0;
+        }
+        let number_id = interp.symbol_ids["Number"];
+        let number_property = interp.global_props[&number_id];
+        interp.slots.get_mut(number_property).flag = XS_DONT_SET_FLAG;
+        let object_id = interp.symbol_ids["Object"];
+        let object_property = interp.global_props[&object_id];
+        interp.slots.get_mut(object_property).flag = 0;
+        interp.slots.get_mut(object_property).kind = Kind::Integer;
+        interp.slots.get_mut(object_property).value = Payload::Integer(17);
+
+        interp.migrate_restored_layout();
+
+        for name in ["Date", "Array", "globalThis"] {
+            let id = interp.symbol_ids[name];
+            let property = interp.global_props[&id];
+            assert_eq!(
+                interp.slots.get(property).flag,
+                XS_DONT_ENUM_FLAG,
+                "untouched legacy {name} becomes non-enumerable"
+            );
+        }
+        assert_eq!(
+            interp.slots.get(number_property).flag,
+            XS_DONT_SET_FLAG,
+            "a guest attribute edit survives"
+        );
+        assert_eq!(
+            interp.slots.get(object_property).value,
+            Payload::Integer(17),
+            "a guest value replacement survives"
+        );
+        assert_eq!(interp.slots.get(object_property).flag, 0);
     }
 
     #[test]
