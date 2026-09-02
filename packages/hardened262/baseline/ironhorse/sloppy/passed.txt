@@ -8,4 +8,6 @@ test/intrinsics/IteratorPrototype/intrinsic-metadata.js
 test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/Proxy/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/TypedArray/copying-methods.js
+test/intrinsics/TypedArray/in-place-methods.js
 test/ironhorse/smoke.js
