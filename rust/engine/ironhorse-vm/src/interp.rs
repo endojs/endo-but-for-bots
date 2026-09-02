@@ -28311,23 +28311,16 @@ impl Interp {
             }
             // `Symbol.prototype.toString()` → `Symbol(<description>)`
             // (`fxSymbolToString`: `fxStringX("Symbol(")` + the description +
-            // `")"`). The receiver must be a symbol; a non-symbol self-names.
+            // `")"`). Accept either a Symbol primitive or its realm wrapper.
             NativeMethod::SymbolToString => {
-                if this.kind != Kind::Symbol {
-                    return Err(Halt::Unsupported("Symbol.prototype.toString:non-symbol"));
-                }
-                let bytes = self.symbol_descriptive_bytes(this);
+                let symbol = self.symbol_this_value(this)?;
+                let bytes = self.symbol_descriptive_bytes(symbol);
                 self.meter.tick_raw(SYMBOL_TO_STRING_METERING);
                 let off = self.alloc_str_text(&bytes);
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Symbol.prototype.valueOf()`: the symbol primitive itself.
-            NativeMethod::SymbolValueOf => {
-                if this.kind != Kind::Symbol {
-                    return Err(Halt::Unsupported("Symbol.prototype.valueOf:non-symbol"));
-                }
-                this
-            }
+            NativeMethod::SymbolValueOf => self.symbol_this_value(this)?,
             NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
             NativeMethod::BigIntAsIntN | NativeMethod::BigIntAsUintN => {
                 let bits = self.to_bigint_width(code, arg0)?;
@@ -45816,6 +45809,22 @@ impl Interp {
                 .get(&owner)
                 .copied()
                 .filter(|value| value.kind == Kind::BigInt)
+                .ok_or_else(|| self.catchable_type_error()),
+            _ => Err(self.catchable_type_error()),
+        }
+    }
+
+    /// The Symbol primitive carried by a primitive or boxed receiver.
+    fn symbol_this_value(&mut self, this: Slot) -> Result<Slot, Halt> {
+        if this.kind == Kind::Symbol {
+            return Ok(this);
+        }
+        match this.value {
+            Payload::Reference(owner) => self
+                .wrapper_data
+                .get(&owner)
+                .copied()
+                .filter(|value| value.kind == Kind::Symbol)
                 .ok_or_else(|| self.catchable_type_error()),
             _ => Err(self.catchable_type_error()),
         }

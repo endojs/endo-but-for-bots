@@ -68,6 +68,26 @@ fn object_boxes_symbols_to_fresh_objects() {
 }
 
 #[test]
+fn boxed_symbols_support_intrinsic_symbol_methods() {
+    assert_result_agrees(
+        "var s=Symbol('s'); var o=Object(s); o.toString()+','+(o.valueOf()===s)",
+        "Symbol(s),true",
+    );
+    assert_result_agrees(
+        "var r=Array.prototype.copyWithin.call(Symbol('s'),0,0); Object.prototype.toString.call(r)+':'+String(r.valueOf())+':'+r.toString()",
+        "[object Symbol]:Symbol(s):Symbol(s)",
+    );
+}
+
+#[test]
+fn symbol_methods_reject_non_symbol_receivers() {
+    assert_result_agrees(
+        "var a=false,b=false; try{Symbol.prototype.valueOf.call({})}catch(e){a=e instanceof TypeError} try{Symbol.prototype.toString.call(1)}catch(e){b=e instanceof TypeError} ''+a+','+b",
+        "true,true",
+    );
+}
+
+#[test]
 fn object_is_compares_wrappers_by_identity() {
     assert_result_agrees(
         "var a = Object(0); var b = new Object(''); '' + Object.is(a, a) + ',' + Object.is(b, b) + ',' + Object.is(a, Object(0))",
