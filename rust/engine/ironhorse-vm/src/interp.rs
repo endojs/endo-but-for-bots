@@ -2136,6 +2136,9 @@ pub enum NativeMethod {
     /// symbol primitive itself (unwrapping a Symbol wrapper object, though
     /// ironhorse's covered grammar has only the primitive receiver).
     SymbolValueOf,
+    /// `Symbol.prototype[Symbol.toPrimitive](hint)`: the symbol primitive
+    /// itself, unwrapping a Symbol wrapper object. The hint is ignored.
+    SymbolToPrimitive,
     /// `BigInt.prototype.toString([radix])`: render the primitive/wrapper
     /// receiver in radix 2 through 36.
     BigIntToString,
@@ -4034,6 +4037,9 @@ pub struct Interp {
     /// instance (native and user), so `f.toString`/`f.call`/… resolve up the
     /// chain. A boot object.
     function_proto: crate::value::SlotIndex,
+    /// Boot-minted function identity for the lazily materialized
+    /// `%Function.prototype%[Symbol.hasInstance]` property.
+    function_has_instance_method: crate::value::SlotIndex,
     /// The realm's inaccessible tagged-template registry object. Generated
     /// site keys are properties on this ordinary object, matching XS's
     /// `mxRealmTemplateCache`; the object itself is a boot root and its
@@ -4296,6 +4302,9 @@ pub struct Interp {
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
     symbol_proto: crate::value::SlotIndex,
+    /// Boot-minted function identity for the lazily materialized
+    /// `%Symbol.prototype%[Symbol.toPrimitive]` property.
+    symbol_to_primitive_method: crate::value::SlotIndex,
     /// The realm's `%BigInt.prototype%` (a boot object) — the box target for a
     /// primitive bigint's method access (`(42n).toString(2)`, …).
     bigint_proto: crate::value::SlotIndex,
@@ -5380,6 +5389,7 @@ impl Interp {
             deleted_fn_meta: std::collections::HashSet::new(),
             object_proto: crate::value::SlotIndex::NULL,
             function_proto: crate::value::SlotIndex::NULL,
+            function_has_instance_method: crate::value::SlotIndex::NULL,
             template_cache: crate::value::SlotIndex::NULL,
             ctor_prototype: std::collections::HashMap::new(),
             private_values: std::collections::HashMap::new(),
@@ -5430,6 +5440,7 @@ impl Interp {
             date_proto: crate::value::SlotIndex::NULL,
             dates: std::collections::HashMap::new(),
             symbol_proto: crate::value::SlotIndex::NULL,
+            symbol_to_primitive_method: crate::value::SlotIndex::NULL,
             bigint_proto: crate::value::SlotIndex::NULL,
             symbol_registry: std::collections::HashMap::new(),
             symbol_registry_keys: std::collections::HashMap::new(),
@@ -5956,6 +5967,14 @@ impl Interp {
                 self.proto_methods.push((p, "toString", t));
                 let v = self.alloc_method(NativeMethod::SymbolValueOf);
                 self.proto_methods.push((p, "valueOf", v));
+                // The property id remains lazy because it is symbol-keyed,
+                // but the function identity must be boot-minted so snapshot
+                // resume can reconstruct the intrinsic exactly.
+                self.symbol_to_primitive_method = self.alloc_named_method(
+                    NativeMethod::SymbolToPrimitive,
+                    "[Symbol.toPrimitive]",
+                    1,
+                );
             }
             let f = self.alloc_method(NativeMethod::SymbolFor);
             self.proto_methods.push((symbol_ctor, "for", f));
@@ -6537,7 +6556,7 @@ impl Interp {
         // property is installed lazily when that well-known key is first used;
         // eagerly interning the key would turn an otherwise-empty persisted
         // symbol-key table into non-canonical state for legacy migrations.
-        let _has_instance = self.alloc_named_method(
+        self.function_has_instance_method = self.alloc_named_method(
             NativeMethod::FunctionHasInstance,
             "[Symbol.hasInstance]",
             1,
@@ -7725,6 +7744,7 @@ impl Interp {
         // restored `symbol_names` without re-linking intrinsics (the
         // SymbolTables ledger row's restore-time rebuild).
         self.bind_program_symbols(names);
+        let array_to_string_linked = self.symbol_ids.contains_key("toString");
         // OrdinaryToPrimitive reaches these properties implicitly even when
         // the guest never names either one (for example, `String(new
         // Number(3))`). They are XS boot default keys, so assigning realm ids
@@ -7744,6 +7764,13 @@ impl Interp {
             .any(|name| self.symbol_ids.contains_key(*name))
         {
             self.intern_key("constructor");
+        }
+        // Array.prototype.toString performs an implicit Get of `join`.
+        // Establish that boot dependency during the initial link so a later
+        // guest deletion cannot be mistaken for a never-installed method and
+        // resurrected by a partial relink or generic fallback.
+        if array_to_string_linked {
+            self.intern_key("join");
         }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, true, |_| true);
@@ -28248,6 +28275,12 @@ impl Interp {
                         }),
                         _ => None,
                     };
+                    let is_array = match this.value {
+                        Payload::Reference(r) if this.kind == Kind::Reference => {
+                            self.array_generic_is_array(r)?
+                        }
+                        _ => false,
+                    };
                     let text: &[u8] = match this.value {
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
@@ -28255,9 +28288,7 @@ impl Interp {
                         Payload::Reference(r) if self.arguments_objects.contains(&r) => {
                             b"[object Arguments]"
                         }
-                        Payload::Reference(r) if self.arrays.contains_key(&r) => {
-                            b"[object Array]"
-                        }
+                        Payload::Reference(_) if is_array => b"[object Array]",
                         Payload::BigInt(_) => b"[object BigInt]",
                         _ if wrapper_tag.is_some() => wrapper_tag.unwrap(),
                         _ if self.is_callable_value(this) => b"[object Function]",
@@ -28327,7 +28358,9 @@ impl Interp {
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `Symbol.prototype.valueOf()`: the symbol primitive itself.
-            NativeMethod::SymbolValueOf => self.symbol_this_value(this)?,
+            NativeMethod::SymbolValueOf | NativeMethod::SymbolToPrimitive => {
+                self.symbol_this_value(this)?
+            }
             NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
             NativeMethod::BigIntAsIntN | NativeMethod::BigIntAsUintN => {
                 let bits = self.to_bigint_width(code, arg0)?;
@@ -35795,14 +35828,8 @@ impl Interp {
         if self.instance_prototype(inst) != self.array_proto {
             return false;
         }
-        let join_was_interned = self.symbol_ids.contains_key("join");
         let join_id = self.intern_key("join");
-        if self.chain_resolves_native_data_method(inst, join_id, NativeMethod::ArrayJoin) {
-            return true;
-        }
-        let join_was_never_installed = !join_was_interned
-            || usize::from(join_id) > self.installed_names_len;
-        join_was_never_installed && !self.chain_has_descriptor(inst, join_id)
+        self.chain_resolves_native_data_method(inst, join_id, NativeMethod::ArrayJoin)
     }
 
     /// Whether an ordinary prototype walk reaches exactly the expected native
@@ -36174,38 +36201,33 @@ impl Interp {
         let Payload::Reference(inst) = object.value else {
             unreachable!("ToObject result")
         };
-        let join_was_interned = self.symbol_ids.contains_key("join");
         let join_id = self.intern_key("join");
-        let mut join = self.mop_get(code, inst, join_id, object)?;
-        let inherits_array_proto = inst == self.array_proto
-            || self.prototype_chain_has(inst, self.array_proto);
-        let join_was_never_installed = !join_was_interned
-            || usize::from(join_id) > self.installed_names_len;
-        if join.kind == Kind::Undefined
-            && inherits_array_proto
-            && !self.arguments_objects.contains(&inst)
-            && join_was_never_installed
-            && !self.chain_has_descriptor(inst, join_id)
+        // Arguments objects use the compact Array side table internally, and
+        // therefore carry `%Array.prototype%` as a storage implementation
+        // detail. Their language prototype is `%Object.prototype%`: do not
+        // expose Array.prototype.join unless the guest explicitly changed the
+        // prototype, while still observing an own `join` and Object-prototype
+        // accessors with the arguments object as receiver.
+        let join = if self.arguments_objects.contains(&inst)
+            && self.instance_prototype(inst) == self.array_proto
+            && self.find_property(inst, join_id).is_none()
         {
-            if let Some((&function, _)) = self
-                .functions
-                .iter()
-                .find(|(_, info)| info.method == Some(NativeMethod::ArrayJoin))
-            {
-                join = Slot::of(Kind::Reference, Payload::Reference(function));
-            }
-        }
-        let method = if self.is_callable_value(join) {
-            join
+            self.ordinary_get(code, self.object_proto, join_id, object)?
         } else {
-            let to_string_id = self.intern_key("toString");
-            let object_proto = Slot::of(
-                Kind::Reference,
-                Payload::Reference(self.object_proto),
-            );
-            self.mop_get(code, self.object_proto, to_string_id, object_proto)?
+            self.mop_get(code, inst, join_id, object)?
         };
-        self.call_any(code, method, object, &[])
+        if self.is_callable_value(join) {
+            return self.call_any(code, join, object, &[]);
+        }
+        let intrinsic = self
+            .functions
+            .iter()
+            .find_map(|(&function, info)| {
+                (info.method == Some(NativeMethod::ObjectToString)).then_some(function)
+            })
+            .expect("boot Object.prototype.toString method");
+        let method = Slot::of(Kind::Reference, Payload::Reference(intrinsic));
+        self.call_primitive_method(code, method, object, &[])
     }
 
     /// Generic `Array.prototype.push` / `pop` over an arbitrary object. The
@@ -40928,8 +40950,8 @@ impl Interp {
     /// drawn from the top-down [`Self::next_symbol_key_id`] counter, so it never
     /// collides with a string key or a program symbol.
     fn intern_symbol_key(&mut self, desc: crate::value::SlotIndex) -> u16 {
-        let id = if let Some(&id) = self.symbol_key_ids.get(&desc) {
-            id
+        let (id, newly_interned) = if let Some(&id) = self.symbol_key_ids.get(&desc) {
+            (id, false)
         } else if (self.next_symbol_key_id as usize)
             <= self.symbol_names.len().saturating_add(1)
         {
@@ -40939,14 +40961,21 @@ impl Interp {
             self.id_space_exhausted = true;
             let id = self.next_symbol_key_id;
             self.symbol_key_ids.insert(desc, id);
-            id
+            (id, true)
         } else {
             let id = self.next_symbol_key_id;
             self.next_symbol_key_id -= 1;
             self.symbol_key_ids.insert(desc, id);
-            id
+            (id, true)
         };
-        self.install_well_known_symbol_property(desc, id);
+        // Symbol-keyed boot properties are materialized the first time the
+        // realm interns their key. Re-running this on every lookup would
+        // resurrect a guest deletion; an existing key proves the initial
+        // materialization pass already happened (and snapshot rows preserve
+        // either the property or its deletion).
+        if newly_interned {
+            self.install_well_known_symbol_property(desc, id);
+        }
         id
     }
 
@@ -40967,31 +40996,38 @@ impl Interp {
 
     /// Materialize symbol-keyed boot properties whose function identity was
     /// minted below `boot_slot_count` but whose property id must remain lazy.
-    /// The only such property today is
-    /// `%Function.prototype%[Symbol.hasInstance]`.
     fn install_well_known_symbol_property(
         &mut self,
         descriptor: crate::value::SlotIndex,
         id: u16,
     ) {
-        let is_has_instance = self.well_known_symbols.iter().any(|(name, value)| {
-            *name == "hasInstance" && value.value == Payload::Reference(descriptor)
+        let well_known_name = self.well_known_symbols.iter().find_map(|(name, value)| {
+            (value.value == Payload::Reference(descriptor)).then_some(*name)
         });
-        if !is_has_instance || self.find_property(self.function_proto, id).is_some() {
+        let (owner, method, label, flags) = match well_known_name {
+            Some("hasInstance") => (
+                self.function_proto,
+                self.function_has_instance_method,
+                "boot Function.prototype @@hasInstance method",
+                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+            ),
+            Some("toPrimitive") => (
+                self.symbol_proto,
+                self.symbol_to_primitive_method,
+                "boot Symbol.prototype @@toPrimitive method",
+                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+            ),
+            _ => return,
+        };
+        if self.find_property(owner, id).is_some() {
             return;
         }
-        let method = self
-            .functions
-            .iter()
-            .find_map(|(&function, info)| {
-                (info.method == Some(NativeMethod::FunctionHasInstance)).then_some(function)
-            })
-            .expect("boot Function.prototype @@hasInstance method");
+        assert!(!method.is_null(), "{label}");
         self.set_own_unmetered_with_flag(
-            self.function_proto,
+            owner,
             id,
             Slot::of(Kind::Reference, Payload::Reference(method)),
-            XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+            flags,
         );
     }
 
@@ -45753,6 +45789,9 @@ impl Interp {
         // accepts a BigInt. Otherwise two BigInts add, while a BigInt mixed
         // with a Number throws the catchable TypeError from ToNumeric.
         if a.kind == Kind::String || b.kind == Kind::String {
+            if a.kind == Kind::Symbol || b.kind == Kind::Symbol {
+                return Err(self.catchable_type_error());
+            }
             self.stack.truncate(n - 2);
             self.concat_add(a, b);
             return Ok(());
@@ -51092,6 +51131,7 @@ impl Interp {
         roots.extend([
             self.object_proto,
             self.function_proto,
+            self.function_has_instance_method,
             self.template_cache,
             self.array_proto,
             self.map_proto,
@@ -51108,6 +51148,7 @@ impl Interp {
             self.string_proto,
             self.number_proto,
             self.symbol_proto,
+            self.symbol_to_primitive_method,
             self.bigint_proto,
             self.promise_proto,
             self.generator_proto,

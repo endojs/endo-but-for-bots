@@ -80,6 +80,30 @@ fn boxed_symbols_support_intrinsic_symbol_methods() {
 }
 
 #[test]
+fn boxed_symbols_use_the_intrinsic_to_primitive_method() {
+    assert_result_agrees(
+        "typeof Symbol.prototype[Symbol.toPrimitive]+','+Symbol.prototype[Symbol.toPrimitive].name+','+Symbol.prototype[Symbol.toPrimitive].length",
+        "function,[Symbol.toPrimitive],1",
+    );
+    assert_result_agrees(
+        "var d=Object.getOwnPropertyDescriptor(Symbol.prototype,Symbol.toPrimitive);''+d.writable+','+d.enumerable+','+d.configurable",
+        "false,false,true",
+    );
+    assert_result_agrees(
+        "var s=Symbol('s');var boxed=Object(s);var target={};Reflect.set(target,boxed,1);''+(Reflect.get(target,s)===1)+','+Object.getOwnPropertySymbols(target).length",
+        "true,1",
+    );
+    assert_result_agrees(
+        "var a=false,b=false;try{Object(Symbol('s'))+''}catch(e){a=e instanceof TypeError}try{Symbol('s')+''}catch(e){b=e instanceof TypeError}''+a+','+b",
+        "true,true",
+    );
+    assert_result_agrees(
+        "var key=Symbol.toPrimitive;delete Symbol.prototype[key];typeof Symbol.prototype[key]",
+        "undefined",
+    );
+}
+
+#[test]
 fn symbol_methods_reject_non_symbol_receivers() {
     assert_result_agrees(
         "var a=false,b=false; try{Symbol.prototype.valueOf.call({})}catch(e){a=e instanceof TypeError} try{Symbol.prototype.toString.call(1)}catch(e){b=e instanceof TypeError} ''+a+','+b",

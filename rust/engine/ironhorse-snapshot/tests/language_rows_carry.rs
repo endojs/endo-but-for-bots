@@ -96,17 +96,20 @@ fn assert_twin(name: &str, crank1: &str, observations: &[&str], expect: &[&str])
 fn resumed_primitive_wrappers_unbox_like_uninterrupted() {
     assert_twin(
         "ih-lang-twin-wrap",
-        "var w = 0; var s = 0; var b = 0; var t = 0; \
-         w = new Number(41); s = new String('hi'); b = new Boolean(true); t = 7; t",
+        "var w = 0; var s = 0; var b = 0; var q = 0; var y = 0; var t = 0; \
+         w = new Number(41); s = new String('hi'); b = new Boolean(true); \
+         q = Symbol('s'); y = Object(q); t = 7; t",
         &[
-            "var w; var s; var b; var t; \
+            "var w; var s; var b; var q; var y; var t; \
              t = (w + 1) + ':' + w.valueOf(); t",
-            "var w; var s; var b; var t; \
+            "var w; var s; var b; var q; var y; var t; \
              t = s.charAt(1) + ':' + (s + '!'); t",
-            "var w; var s; var b; var t; \
+            "var w; var s; var b; var q; var y; var t; \
              t = b.valueOf() ? 'yes' : 'no'; t",
+            "var w; var s; var b; var q; var y; var t; \
+             t = (y.valueOf() === q) + ':' + y.toString(); t",
         ],
-        &["42:41", "i:hi!", "yes"],
+        &["42:41", "i:hi!", "yes", "true:Symbol(s)"],
     );
 }
 
@@ -165,14 +168,18 @@ fn resumed_temporal_records_answer_like_uninterrupted() {
 
 #[test]
 fn blob_snapshot_carries_the_language_rows_too() {
-    let (b1, n1) = compile("var w = 0; var t = 0; w = new Number(6); t = 7; t");
-    let obs = "var w; var t; t = w * 7; t";
+    let (b1, n1) = compile(
+        "var w = 0; var q = 0; var y = 0; var t = 0; \
+         w = new Number(6); q = Symbol('s'); y = Object(q); t = 7; t",
+    );
+    let obs = "var w; var q; var y; var t; \
+               t = (w * 7) + ':' + (y.valueOf() === q) + ':' + y.toString(); t";
 
     let mut cont = Interp::new();
     cont.link_intrinsics(&n1);
     assert!(cont.run(&b1).completed, "crank 1 (continuous)");
     let continuous = crank(&mut cont, obs);
-    assert_eq!(continuous.2, "42");
+    assert_eq!(continuous.2, "42:true:Symbol(s)");
 
     let mut m = Interp::new();
     m.link_intrinsics(&n1);
