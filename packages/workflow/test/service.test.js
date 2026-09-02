@@ -510,6 +510,16 @@ test('cancel runs compensation invokes and cascades to children', async t => {
   // constant. The index is deterministic, so a re-issued cancel after a
   // crash re-derives the same key.
   t.is(calls[0].effectId, `${runId}:cancel:0`);
+  const journal = await E(engine.runFacet).journal();
+  const cancellationEntries = journal.filter(
+    entry => entry.event?.type === 'cancel-requested',
+  );
+  t.is(cancellationEntries.length, 1);
+  t.is(
+    cancellationEntries[0].kind,
+    'cancelled',
+    'an unhandled request and its terminal cancellation are one write',
+  );
 });
 
 test('handled cancellation waits for a child reconciliation workflow', async t => {
@@ -594,6 +604,68 @@ test('handled cancellation waits for a child reconciliation workflow', async t =
   t.is(engine.fold.queuedEvents.size, 0);
   t.is(calls.length, 1);
   t.deepEqual(calls[0].args, ['restore']);
+});
+
+test('paused cancellation replays an already-settled child outcome', async t => {
+  const { service, engines, stop } = await makeHarness();
+  t.teardown(stop);
+  const childChart = harden({
+    name: 'settling-child',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: { on: { finish: [{ target: 'done' }] } },
+      done: { final: true, output: { status: 'finished' } },
+    },
+  });
+  const chart = harden({
+    name: 'waiting-parent',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: {
+        entry: [
+          {
+            kind: 'spawn',
+            chart: childChart,
+            params: {},
+            outcome: 'child-done',
+          },
+        ],
+        on: {
+          'child-done': [{ target: 'done' }],
+          'cancel-requested': [{}],
+        },
+      },
+      done: { final: true, output: { status: 'child-settled' } },
+    },
+  });
+  const { runId, control } = await E(service).start(chart, {});
+  const engine = engines.get(runId);
+  await until(
+    () =>
+      [...engine.fold.pending.values()].some(
+        record => record.childRunId !== undefined,
+      ),
+    'child spawned',
+  );
+  const childRunId = [...engine.fold.pending.values()].find(
+    record => record.childRunId !== undefined,
+  ).childRunId;
+  const childControl = await E(service).control(childRunId);
+
+  await E(control).pause();
+  await E(childControl).signal(harden({ type: 'finish' }));
+  await until(
+    () => engine.fold.queuedEvents.size === 1,
+    'child outcome queued in parent',
+  );
+  t.is(engine.fold.pending.size, 0, 'the settled spawn is no longer pending');
+
+  await E(control).cancel('after child settlement');
+  await until(() => engine.fold.done, 'queued child outcome replayed');
+  t.is(engine.fold.outcome, 'completed');
+  t.deepEqual(engine.fold.output, { status: 'child-settled' });
 });
 
 test('the service start facet ignores a caller-supplied runId', async t => {

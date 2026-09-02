@@ -992,15 +992,20 @@ no world contact, exactly-once trivially.
 
 **Cancellation and compensation.**
 `cancel` first journals and steps the reserved `cancel-requested` engine event.
-If the chart handles it, the run stays live: cleanup invokes, deadlines, and
-human attention are ordinary recoverable state transitions rather than a
-fire-and-forget epilogue.
-The service propagates a handled request to linked children and waits until each
-child has journaled it before returning, while retaining the spawn links that
-carry their eventual truthful terminals back to the parent.
-If the run was paused, cancellation first resumes it and journals every queued
-event as discarded rather than replaying those stale envelopes before or after
-reconciliation.
+The service first asks every linked child to journal cancellation, then records
+the parent's request.
+This child-first durable ordering closes the crash window safely: after the
+parent request exists, every live child is already reconciling, and an earlier
+crash leaves a safe child whose eventual terminal still settles the pending
+parent spawn.
+If the chart handles the request, the run stays live: cleanup invokes,
+deadlines, and human attention are ordinary recoverable state transitions
+rather than a fire-and-forget epilogue.
+For a paused run, the cancellation transition and unpause bit occupy one journal
+entry.
+Queued envelopes then replay against the reconciliation state, where routed
+stale approvals miss exited paths but an already-settled compensation or child
+outcome can still finish; recovery resumes the same drain after a crash.
 This is the required policy for workflows whose effects can leave outside
 state ambiguous.
 

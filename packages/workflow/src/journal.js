@@ -246,6 +246,9 @@ export const applyEntry = (state, entry) => {
       applyTerminal(state, entry.terminal);
     }
   } else if (kind === 'event') {
+    if (entry.unpauses === true) {
+      state.paused = false;
+    }
     if (entry.settles !== undefined) {
       state.pending.delete(entry.settles.effectId);
     }
