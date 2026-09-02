@@ -805,13 +805,14 @@ test('failed live revocation quarantines settlements until a retry', async t => 
     makeId: makeIdCounter('live'),
   });
   t.teardown(harness.stop);
-  let finish;
+  /** @type {{ finish?: (value: any) => void }} */
+  const deferred = {};
   let calls = 0;
   const worker = Far('DeferredHazardousWorker', {
     perform: async _effectId => {
       calls += 1;
       return new Promise(resolve => {
-        finish = resolve;
+        deferred.finish = resolve;
       });
     },
   });
@@ -854,7 +855,7 @@ test('failed live revocation quarantines settlements until a retry', async t => 
     message: /simulated crash/,
   });
   crashArmed = false;
-  finish('hazard completed after failed revocation');
+  deferred.finish?.('hazard completed after failed revocation');
   await settle();
   await t.throwsAsync(() => E(control).resume(), {
     message: /is quarantined/,
@@ -962,12 +963,12 @@ test('revocation returning before a stalled start prevents all effects', async t
   /** @type {() => void} */
   let enteredResolve = () => {};
   const entered = new Promise(resolve => {
-    enteredResolve = resolve;
+    enteredResolve = () => resolve(undefined);
   });
   /** @type {() => void} */
   let release = () => {};
   const gate = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
   const wrapped = powersWithStore(powers, async (value, nameOrPath) => {
     await null;
