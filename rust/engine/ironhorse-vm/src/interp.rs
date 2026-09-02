@@ -9667,7 +9667,7 @@ impl Interp {
         let compiled = match compiler.compile_source(source, strict) {
             Ok(compiled) => compiled,
             Err(SourceCompileError::Syntax(message)) => {
-                return Err(self.catchable_syntax_error_msg(message))
+                return Err(self.catchable_syntax_error_with_message(message))
             }
             Err(SourceCompileError::Unsupported(_)) => {
                 return Err(Halt::Unsupported("eval:compiler-unimplemented"))
@@ -21975,40 +21975,47 @@ impl Interp {
                         // `IteratorToList` materializes every value BEFORE any
                         // element coercion runs, so a `valueOf` that mutates the
                         // source mid-copy (`iterated-array-changed-by-tonumber`)
-                        // must not change later reads. The snapshot comes AFTER
-                        // the length bound and the metered `alloc_array_buffer`
-                        // charge above, so the wave-5 ordering (reject first,
-                        // charge second, only then length-proportional
-                        // allocation; `tests/typed_array_source_length.rs`)
-                        // still holds. A TypedArray source needs no snapshot:
-                        // its element reads are pure numeric loads and its
-                        // element coercions run no guest code, so nothing can
-                        // mutate it between reads. A hole reads `undefined`
-                        // (→ NaN → 0 for an integer view), matching the
-                        // default-iterator result.
-                        let snapshot: Option<Vec<Slot>> = match source_ta {
-                            None => self.arrays.get(&r).map(|src| {
-                                (0..length)
-                                    .map(|i| {
-                                        src.items()
-                                            .get(&i)
-                                            .copied()
-                                            .unwrap_or_else(Slot::undefined)
-                                    })
-                                    .collect()
-                            }),
-                            Some(_) => None,
-                        };
+                        // must not change later reads. The snapshot CLONES the
+                        // source's sparse `items()` map (present entries only),
+                        // NOT a dense `0..length` `Vec<Slot>`: the declared
+                        // length is guest-controlled and unbounded up to the
+                        // arm's own cap, so a dense snapshot would re-arm the
+                        // wave-5 hazard — reserving `length * size_of::<Slot>()`
+                        // (32 bytes per DECLARED element) outside the meter,
+                        // while `alloc_array_buffer` charged only the packed
+                        // `byte_length`. Cloning `items()` keeps the allocation
+                        // proportional to the storage the meter already charged
+                        // (present entries), and an absent index reads
+                        // `undefined` from the clone exactly as a hole would.
+                        // The snapshot comes AFTER the length bound and the
+                        // metered `alloc_array_buffer` charge above, so the
+                        // wave-5 ordering (reject first, charge second, only
+                        // then any length-proportional allocation;
+                        // `tests/typed_array_source_length.rs`) still holds and
+                        // the length-proportional allocation the ordering exists
+                        // to bound — the backing store — remains the only one. A
+                        // TypedArray source needs no snapshot: its element reads
+                        // are pure numeric loads and its element coercions run no
+                        // guest code, so nothing can mutate it between reads. A
+                        // hole reads `undefined` (-> NaN -> 0 for an integer
+                        // view), matching the default-iterator result.
+                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> =
+                            source_ta.map_or_else(
+                                || self.arrays.get(&r).map(|src| src.items().clone()),
+                                |_| None,
+                            );
                         for i in 0..length {
-                            let v = match (&snapshot, source_ta) {
-                                (Some(values), _) => values[i as usize],
-                                (None, Some(src)) if src.kind <= 1 => {
+                            let v = match source_ta {
+                                Some(src) if src.kind <= 1 => {
                                     self.typed_array_element_get_bigint(src, i)
                                 }
-                                (None, Some(src)) => self
+                                Some(src) => self
                                     .typed_array_element_get(src, i)
                                     .expect("numeric TypedArray element decodes"),
-                                (None, None) => Slot::undefined(),
+                                None => snapshot
+                                    .as_ref()
+                                    .and_then(|items| items.get(&i).copied())
+                                    .unwrap_or_else(Slot::undefined),
                             };
                             self.typed_array_element_set(code, ta, i, v)?;
                             self.meter
@@ -41578,7 +41585,7 @@ impl Interp {
         k: u64,
     ) -> Result<bool, Halt> {
         let name = k.to_string();
-        if let Some(&id) = self.symbol_ids.get(&name).as_deref() {
+        if let Some(&id) = self.symbol_ids.get(&name) {
             return self.mop_has(code, o, id);
         }
         // The index's name was never interned, so no name-keyed property can
@@ -46367,7 +46374,7 @@ impl Interp {
     /// pinned oracle's exact `String(exception)` for an early error the source
     /// bridge (eval / dynamic `Function`) rejects. An empty message falls back
     /// to the bare form.
-    fn catchable_syntax_error_msg(&mut self, message: String) -> Halt {
+    fn catchable_syntax_error_with_message(&mut self, message: String) -> Halt {
         if message.is_empty() {
             return self.catchable_syntax_error();
         }
