@@ -91,7 +91,10 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
         envelope.effectId !== undefined &&
         envelope.compensation !== true &&
         typeof by === 'string' &&
-        (by.startsWith('ask:') || by.startsWith('invoke:') || by === 'spawn');
+        (by.startsWith('ask:') ||
+          by.startsWith('invoke:') ||
+          by === 'spawn' ||
+          by === 'timer');
       if (settlement) {
         append({
           ...base,
@@ -290,7 +293,9 @@ export const makeSimulator = (chart, { params = harden({}) } = {}) => {
             ? `invoke:${effect.target}`
             : effect.kind === 'spawn'
               ? 'spawn'
-              : 'engine';
+              : effect.kind === 'after'
+                ? 'timer'
+                : 'engine';
       stepEnvelope(
         harden({
           type,

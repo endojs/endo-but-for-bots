@@ -436,7 +436,7 @@ LLM-agent stack).*
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | Not Started |
-| [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-08-18 | In Progress |
+| [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
 | [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-29 | Proposed (absorbs the removed endo-gateway design) |
 | [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | 2026-06-01 | 2026-06-25 | Superseded |
 | [endo-agent-tools](endo-agent-tools.md) | 2026-06-03 | 2026-06-25 | In Progress |
