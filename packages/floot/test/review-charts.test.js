@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { matches } from '@endo/patterns';
 import { chartDiagnostics } from '@endo/workflow/machine.js';
 import { makeSimulator } from '@endo/workflow/src/simulate.js';
 import { renderGraph } from '@endo/workflow/src/graph.js';
@@ -76,6 +77,44 @@ test('every review chart passes diagnostics with no errors or warnings', t => {
   }
 });
 
+test('the public chart boundary rejects unusable panels and budgets', t => {
+  const invalidParams = [
+    harden({ ...params, reviewers: [] }),
+    harden({ ...params, reviewers: Array(33).fill('alice') }),
+    harden({ ...params, rounds: 0 }),
+    harden({ ...params, rounds: Infinity }),
+    harden({
+      title: params.title,
+      summary: params.summary,
+      reviewers: params.reviewers,
+      rounds: params.rounds,
+    }),
+  ];
+  for (const specimen of invalidParams) {
+    t.throws(() => makeSimulator(reviewedChangeChart, { params: specimen }), {
+      message: /workflow params/,
+    });
+  }
+
+  const portShape = reviewedChangeChart.ports.initiator;
+  t.true(
+    matches(
+      harden({ type: 'set-remaining', value: { remaining: 0 } }),
+      portShape,
+    ),
+    'zero is a valid absolute remainder and means no retry',
+  );
+  for (const remaining of [-1, Infinity, 0x1_0000_0000]) {
+    t.false(
+      matches(
+        harden({ type: 'set-remaining', value: { remaining } }),
+        portShape,
+      ),
+      `${remaining} is outside the review-budget domain`,
+    );
+  }
+});
+
 test('a unanimous panel carries the head to approved', t => {
   const sim = makeSimulator(reviewedChangeChart, { params });
 
@@ -140,6 +179,31 @@ test('the panel is waited out in full before a dissent loops back', t => {
   t.true(reask.effect.what.description.includes('round 1'));
 });
 
+test('a malformed reviewer answer is a dissent, not a failed run', t => {
+  const sim = makeSimulator(reviewedChangeChart, {
+    params: harden({ ...params, reviewers: ['alice'] }),
+  });
+  submitHead(sim);
+
+  const [ask] = reviewerAsks(sim);
+  sim.settle(ask.effectId, 'fulfilled', harden({ approve: true }));
+
+  t.is(sim.status().state, 'implement');
+  t.is(sim.status().context.remaining, 1);
+  t.deepEqual(sim.status().context.feedback, [
+    {
+      index: 0,
+      state: 'changesRequested',
+      output: {
+        reviewer: 'alice',
+        approve: false,
+        feedback:
+          'malformed verdict; expected { approve: boolean, feedback: string }',
+      },
+    },
+  ]);
+});
+
 test('the budget burns down, exhausts, and the operator can extend it', t => {
   const sim = makeSimulator(reviewedChangeChart, {
     params: harden({ ...params, rounds: 1 }),
@@ -154,6 +218,7 @@ test('the budget burns down, exhausts, and the operator can extend it', t => {
 
   const form = pendingOf(sim, 'ask', { to: 'operator' });
   t.true(form.effect.form.description.includes('review budget'));
+  t.is(form.effect.form.fields[0].label, 'Review rounds still available');
 
   sim.settle(form.effectId, 'fulfilled', harden({ remaining: 2 }));
   t.is(sim.status().state, 'implement', 'extending the budget resumes');
@@ -253,6 +318,10 @@ test('a silent reviewer times out into a withheld approval', t => {
         record.effect.kind === 'after' &&
         record.path.some(s => s.startsWith('#')),
     );
+  t.truthy(deadline, 'the silent reviewer retains its deadline');
+  if (deadline === undefined) {
+    return;
+  }
   sim.fireTimer(deadline.effectId);
 
   t.is(sim.status().state, 'implement');

@@ -1,15 +1,14 @@
 // @ts-check
-// The deploy workflow charts for Floot's admin presets, per
-// designs/floot-admin-deploy-workflows.md: the hazardous half of a
-// deployment — pinning, building, operator approval, applying, verifying —
-// as durable @endo/workflow statechart data. The creative half (editing,
-// pushing) stays conversational in the session that starts a run.
+// The deploy workflow charts used by the gated variants in
+// designs/reviewed-change-workflow.md: the hazardous half of a deployment —
+// pinning, building, operator approval, applying, verifying — as durable
+// @endo/workflow statechart data. The creative half (editing, pushing) stays
+// conversational in the session that starts a run.
 //
 // Charts are capability-free data. A run's whole authority is the two
 // endowments its factory binds:
-//   performer — the reshaped NixosAdmin caplet (@endo/space-nixos-admin):
-//     settlement-shaped stage/build/apply/verify, idempotent on the
-//     engine's run-qualified trailing invoke key.
+//   performer — a settlement-shaped stage/build/apply/verify capability,
+//     idempotent on the engine's run-qualified trailing invoke key.
 //   operator  — the owner host's `@self` handle; asks land in their inbox.
 //
 // ANTI-RESTART-LOOP AND TRUTHFUL-TERMINAL INVARIANTS (see the design doc
@@ -63,7 +62,7 @@ export const endoReleaseChart = harden({
   // v2 adds `prebuild` between `pin` and `build`: the release is built before
   // the operator is asked, so approving an apply no longer means approving an
   // unbuilt revision, and the apply itself is a symlink flip rather than a cold
-  // build inside activation. See floot/endo#4.
+  // build inside activation.
   version: 2,
   params: M.splitRecord(
     {
@@ -319,7 +318,7 @@ export const endoReleaseChart = harden({
  * carries the proposed edit, the operator form lists the touched paths,
  * and the run needs no read authority at all. A successful apply's health
  * check already gated activation, so there is no separate readback state;
- * needs-attention resumes through a status probe.
+ * post-apply uncertainty is settled by an attributed operator attestation.
  */
 export const nixosConfigChangeChart = harden({
   name: 'nixos-config-change',

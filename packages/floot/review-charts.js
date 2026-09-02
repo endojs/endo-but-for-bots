@@ -51,7 +51,10 @@ const DAY_MS = 86_400_000;
 const WEEK_MS = 604_800_000;
 
 const approvedVerdict = M.splitRecord({
-  value: M.splitRecord({ approve: M.eq(true) }),
+  value: M.splitRecord({ approve: M.eq(true), feedback: M.string() }),
+});
+const changesRequestedVerdict = M.splitRecord({
+  value: M.splitRecord({ approve: M.eq(false), feedback: M.string() }),
 });
 
 // A submission counts only when it carries a head ref as a string; the
@@ -83,6 +86,24 @@ const previewEnabled = M.splitRecord({
   value: M.splitRecord({ enabled: M.eq(true) }),
 });
 
+// A review budget is a deliberately narrow number domain: this chart's
+// arithmetic uses number-valued `$inc`, and four bytes is ample for a human
+// review-loop limit while keeping every decrement exact.
+const InitialReviewRoundsShape = M.and(
+  M.number(),
+  M.gte(1),
+  M.lte(0xffff_ffff),
+);
+const RemainingReviewRoundsShape = M.and(
+  M.number(),
+  M.gte(0),
+  M.lte(0xffff_ffff),
+);
+const ReviewerPanelShape = M.and(
+  M.array({ arrayLengthLimit: 32 }),
+  M.splitArray([M.string()], [], M.arrayOf(M.string())),
+);
+
 /**
  * The event an initiator submits — through the control facet's `signal`
  * or through a minted `initiator` port — to set the number of review
@@ -92,7 +113,7 @@ const previewEnabled = M.splitRecord({
  */
 const SetRemainingShape = M.splitRecord({
   type: M.eq('set-remaining'),
-  value: M.splitRecord({ remaining: M.number() }),
+  value: M.splitRecord({ remaining: RemainingReviewRoundsShape }),
 });
 
 // One panel seat. Region params are the run's params plus the `input`
@@ -129,8 +150,16 @@ const reviewerVerdictChart = harden({
             assign: { feedback: { $event: 'value.feedback' } },
           },
           {
+            when: changesRequestedVerdict,
             target: 'changesRequested',
             assign: { feedback: { $event: 'value.feedback' } },
+          },
+          {
+            target: 'changesRequested',
+            assign: {
+              feedback:
+                'malformed verdict; expected { approve: boolean, feedback: string }',
+            },
           },
         ],
         // A reviewer that cannot be reached, or that never answers, is a
@@ -242,11 +271,11 @@ export const makeReviewedChangeChart = ({
       {
         title: M.string(),
         summary: M.string(),
-        reviewers: M.arrayOf(M.string()),
-        rounds: M.number(),
+        reviewers: ReviewerPanelShape,
+        base: M.string(),
+        rounds: InitialReviewRoundsShape,
       },
       {
-        base: M.string(),
         previewCi: M.boolean(),
       },
     ),
@@ -424,8 +453,8 @@ export const makeReviewedChangeChart = ({
               fields: [
                 {
                   name: 'remaining',
-                  label: 'Additional review rounds',
-                  pattern: M.number(),
+                  label: 'Review rounds still available',
+                  pattern: RemainingReviewRoundsShape,
                 },
               ],
             },
