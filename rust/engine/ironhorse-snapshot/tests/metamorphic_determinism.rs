@@ -218,7 +218,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 because Array.prototype.join is now installed
         // as an implicit dependency of ordinary Array string coercion. Boot
         // heap content only; format unchanged.
-        "6313394ecc7525fd09bed44e2c17689323335cefa7d08cdae10a35e559dc6391",
+        // Re-pinned 2026-09-02 for Date's three locale-string aliases and
+        // boot-minted `@@toPrimitive` method identity. The symbol-keyed
+        // property remains lazy; snapshot format unchanged.
+        "ecc0c01b96d58d4c8d2db899bfa83f8ecbca3e0b5b32e51a2d15eb2ca356e628",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -363,7 +366,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Schema and format remain unchanged.
         // Re-pinned with the blob for the implicit Array.prototype.join
         // installation. Schema and format remain unchanged.
-        "9024f1492e2eafbd81b5b66e35bb74aa6ed619ea48b65f1b717a20e3d1460b96",
+        // Re-pinned with the blob for Date's locale aliases and
+        // `@@toPrimitive` identity. Schema and format remain unchanged.
+        "9566b5cc4f5d18978bd5605a7b5df54f5c2018f52e2a44154dc69432160e0271",
         "epoch-3 seal chain"
     );
 }

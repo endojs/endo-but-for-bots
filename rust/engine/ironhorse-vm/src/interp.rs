@@ -2139,6 +2139,10 @@ pub enum NativeMethod {
     /// `Symbol.prototype[Symbol.toPrimitive](hint)`: the symbol primitive
     /// itself, unwrapping a Symbol wrapper object. The hint is ignored.
     SymbolToPrimitive,
+    /// `Date.prototype[Symbol.toPrimitive](hint)`: validate the string hint,
+    /// then perform ordinary conversion in string order for `"string"` and
+    /// `"default"`, or number order for `"number"`.
+    DateToPrimitive,
     /// `BigInt.prototype.toString([radix])`: render the primitive/wrapper
     /// receiver in radix 2 through 36.
     BigIntToString,
@@ -4298,6 +4302,9 @@ pub struct Interp {
     /// remains an ordinary arena object for property/prototype behavior; its
     /// time value is the one non-property internal slot recorded here.
     date_proto: crate::value::SlotIndex,
+    /// Boot-minted function identity for the lazily materialized
+    /// `%Date.prototype%[Symbol.toPrimitive]` property.
+    date_to_primitive_method: crate::value::SlotIndex,
     dates: std::collections::HashMap<crate::value::SlotIndex, f64>,
     /// The realm's `%Symbol.prototype%` (a boot object) — the box target for a
     /// primitive symbol's method access (`Symbol("x").toString()`, …).
@@ -5438,6 +5445,7 @@ impl Interp {
             string_iterator_method: crate::value::SlotIndex::NULL,
             number_proto: crate::value::SlotIndex::NULL,
             date_proto: crate::value::SlotIndex::NULL,
+            date_to_primitive_method: crate::value::SlotIndex::NULL,
             dates: std::collections::HashMap::new(),
             symbol_proto: crate::value::SlotIndex::NULL,
             symbol_to_primitive_method: crate::value::SlotIndex::NULL,
@@ -7278,6 +7286,8 @@ impl Interp {
             ("toISOString", 21, 0), ("toUTCString", 22, 0),
             ("toGMTString", 22, 0), ("toString", 23, 0),
             ("toDateString", 24, 0), ("toTimeString", 25, 0),
+            ("toLocaleString", 23, 0), ("toLocaleDateString", 24, 0),
+            ("toLocaleTimeString", 25, 0),
             ("setTime", 26, 1), ("toJSON", 27, 1),
             ("setMilliseconds", 28, 1), ("setUTCMilliseconds", 28, 1),
             ("setSeconds", 29, 2), ("setUTCSeconds", 29, 2),
@@ -7290,6 +7300,13 @@ impl Interp {
             let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
             self.proto_methods.push((proto, name, f));
         }
+        // The symbol-key id is minted lazily, but this identity belongs to the
+        // realm's boot graph so snapshots can rederive it at the same slot.
+        self.date_to_primitive_method = self.alloc_named_method(
+            NativeMethod::DateToPrimitive,
+            "[Symbol.toPrimitive]",
+            1,
+        );
     }
 
     /// Register the modeled `String.prototype` methods (`xsString.c`) on
@@ -7833,8 +7850,12 @@ impl Interp {
                 // **reference** to the intrinsic function instance, exactly
                 // like any other global property (so `get_variable` /
                 // `get_this_variable` resolve a `Reference`, and `typeof`
-                // sees a callable). Not metered — a pre-existing global.
-                self.create_global_property(id, (Kind::Reference, Payload::Reference(func)));
+                // sees a callable). Standard intrinsic globals are writable
+                // and configurable but non-enumerable. Not metered — a
+                // pre-existing global.
+                let property = self
+                    .create_global_property(id, (Kind::Reference, Payload::Reference(func)));
+                self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
             } else if let Some(v) = value_global(name) {
                 // The primitive value globals `undefined`/`NaN`/`Infinity`
                 // (XS's non-writable realm globals): bound as ordinary global
@@ -7867,7 +7888,9 @@ impl Interp {
                 // (`globalThis.globalThis === globalThis`) is exact — the
                 // property's value slot points back at `global_obj`.
                 let g = self.global_obj;
-                self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
+                let property =
+                    self.create_global_property(id, (Kind::Reference, Payload::Reference(g)));
+                self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
             }
         }
         // The seven ES2025 "new Set methods" reach the ARGUMENT's `has`/`keys`
@@ -7989,6 +8012,8 @@ impl Interp {
         let names_typed_array = TYPED_ARRAY_TYPES
             .iter()
             .any(|ty| self.symbol_ids.contains_key(ty.name));
+        let date_ctor = self.intrinsics.get("Date").copied();
+        let names_date = self.symbol_ids.contains_key("Date");
         let methods = std::mem::take(&mut self.proto_methods);
         for &(proto, mname, mfunc) in &methods {
             // Constructor `prototype` is a mandatory own property even when
@@ -8028,6 +8053,14 @@ impl Interp {
                 // linked, just as the reflective Intl namespace path above
                 // does, so `hasOwnProperty` and descriptor operations do not
                 // depend on a coincidental static `.from`/`.set` reference.
+                Some(self.intern_key_unmetered(mname))
+            } else if names_date && (Some(proto) == date_ctor || proto == self.date_proto) {
+                // Date's constructor and prototype are likewise routinely
+                // inspected through runtime strings (`hasOwnProperty`,
+                // descriptor helpers, and harness utilities). Once `Date` is
+                // linked, expose its complete modeled surface so reflection
+                // does not depend on a coincidental static `.UTC`/`.getTime`
+                // reference in the same compilation unit.
                 Some(self.intern_key_unmetered(mname))
             } else {
                 None
@@ -11202,6 +11235,43 @@ impl Interp {
         self.slots.get_mut(self.global_obj).next = idx;
         self.global_props.insert(id, idx);
         idx
+    }
+
+    /// Materialize a standard global when its name first enters the runtime
+    /// key table through reflection rather than an identifier atom. Intrinsic
+    /// global properties pre-exist guest execution in ECMAScript, so this is
+    /// unmetered and carries the standard writable/non-enumerable/configurable
+    /// data-property shape. The caller invokes this only for a newly interned
+    /// name: once a guest deletes the property, the existing key prevents a
+    /// later lookup from resurrecting it. The name and property (or its
+    /// deletion) then travel through the ordinary snapshot tables.
+    fn materialize_runtime_global(&mut self, id: u16, name: &str) {
+        if self.global_obj.is_null() || self.global_props.contains_key(&id) {
+            return;
+        }
+        let value = if let Some(function) = self.intrinsics.get(name).copied() {
+            Some(Slot::of(
+                Kind::Reference,
+                Payload::Reference(function),
+            ))
+        } else if let Some(value) = value_global(name) {
+            Some(value)
+        } else if name == "globalThis" {
+            Some(Slot::of(
+                Kind::Reference,
+                Payload::Reference(self.global_obj),
+            ))
+        } else {
+            None
+        };
+        let Some(value) = value else { return };
+        let property = self.create_global_property(id, (value.kind, value.value));
+        if value_global(name).is_some() {
+            self.slots.get_mut(property).flag |=
+                XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG;
+        } else {
+            self.slots.get_mut(property).flag |= XS_DONT_ENUM_FLAG;
+        }
     }
 
     /// Materialize a new own global property at run time (a hoisted
@@ -19194,7 +19264,15 @@ impl Interp {
                         }
                         date_from_components(values)
                     };
-                    let inst = self.slots.alloc(Slot::instance(self.date_proto));
+                    // OrdinaryCreateFromConstructor(NewTarget,
+                    // "%Date.prototype%"): Reflect.construct may retarget a
+                    // native Date construction to a user constructor. A
+                    // non-object `NewTarget.prototype` falls back to the Date
+                    // intrinsic rather than `%Object.prototype%`.
+                    let proto = new_target
+                        .and_then(|target| self.prototype_of(target))
+                        .unwrap_or(self.date_proto);
+                    let inst = self.slots.alloc(Slot::instance(proto));
                     self.dates.insert(inst, time);
                     Slot::of(Kind::Reference, Payload::Reference(inst))
                 }
@@ -27416,7 +27494,21 @@ impl Interp {
                 Ok(Slot::number(parse_date_string(&text).unwrap_or(f64::NAN)))
             }
             1 => {
-                let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(&self.stack, i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
+                let inputs: Vec<Slot> = (0..7)
+                    .map(|i| {
+                        if i < argc {
+                            arg(&self.stack, i)
+                        } else if i == 0 {
+                            // `year` is the sole required argument. Its absent
+                            // value is `undefined`, so ToNumber produces NaN.
+                            Slot::undefined()
+                        } else if i == 2 {
+                            Slot::integer(1)
+                        } else {
+                            Slot::integer(0)
+                        }
+                    })
+                    .collect();
                 let mut values = [0.0; 7];
                 for (value, input) in values.iter_mut().zip(inputs) {
                     *value = self.to_number_f64(code, input)?;
@@ -28417,6 +28509,9 @@ impl Interp {
                         _ => None,
                     };
                     let text: &[u8] = match this.value {
+                        Payload::Reference(r) if self.dates.contains_key(&r) => {
+                            b"[object Date]"
+                        }
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
@@ -28495,6 +28590,31 @@ impl Interp {
             // `Symbol.prototype.valueOf()`: the symbol primitive itself.
             NativeMethod::SymbolValueOf | NativeMethod::SymbolToPrimitive => {
                 self.symbol_this_value(this)?
+            }
+            NativeMethod::DateToPrimitive => {
+                if !matches!(
+                    this,
+                    Slot {
+                        kind: Kind::Reference,
+                        value: Payload::Reference(_),
+                        ..
+                    }
+                ) {
+                    return Err(self.catchable_type_error());
+                }
+                let hint = match arg0 {
+                    Slot {
+                        kind: Kind::String,
+                        value: Payload::String(offset),
+                        ..
+                    } => self.str_text(offset),
+                    _ => return Err(self.catchable_type_error()),
+                };
+                match hint.as_str() {
+                    "string" | "default" => self.ordinary_to_primitive(code, this, true)?,
+                    "number" => self.ordinary_to_primitive(code, this, false)?,
+                    _ => return Err(self.catchable_type_error()),
+                }
             }
             NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
             NativeMethod::BigIntAsIntN | NativeMethod::BigIntAsUintN => {
@@ -29174,92 +29294,22 @@ impl Interp {
             // `XS_DONT_ENUM_FLAG` test) — an absent, inherited, or
             // non-enumerable own key is `false`.
             NativeMethod::ObjectPropertyIsEnumerable => {
-                let inst = match this.value {
-                    Payload::Reference(o) if this.kind == Kind::Reference => o,
-                    _ => return Err(Halt::Unsupported("propertyIsEnumerable:non-object-this")),
-                };
-                // A TypedArray's own enumerable properties are exactly its valid
-                // integer indices (a data property is enumerable); a
-                // non-canonical / invalid key is not own, hence not enumerable.
-                if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
-                    // A canonical numeric index is enumerable iff it is a valid
-                    // integer index; a symbol or non-canonical string key is an
-                    // ordinary own-enumerable probe (never a live element).
-                    let ordinary_enum = |slf: &Self, id: u16| -> bool {
-                        match slf.find_property(inst, id) {
-                            Some(p) => slf.slots.get(p).flag & XS_DONT_ENUM_FLAG == 0,
-                            None => false,
-                        }
-                    };
-                    let r = match arg0.kind {
-                        Kind::String => match arg0.value {
-                            Payload::String(off) => {
-                                let key = self.str_text(off);
-                                if let Some(n) = canonical_numeric_index_string(&key) {
-                                    self.ta_valid_index(ta, n).is_some()
-                                } else {
-                                    let id = self.intern_key(&key);
-                                    ordinary_enum(self, id)
-                                }
-                            }
-                            _ => {
-                                return Err(Halt::Unsupported(
-                                    "propertyIsEnumerable:non-string-key",
-                                ))
-                            }
-                        },
-                        Kind::Symbol => match arg0.value {
-                            Payload::Reference(desc) => {
-                                let id = self.intern_symbol_key(desc);
-                                ordinary_enum(self, id)
-                            }
-                            _ => {
-                                return Err(Halt::Unsupported("propertyIsEnumerable:bad-symbol"))
-                            }
-                        },
-                        _ => {
-                            return Err(Halt::Unsupported("propertyIsEnumerable:non-string-key"))
-                        }
-                    };
-                    Slot::boolean(r)
-                } else if self.arrays.contains_key(&inst) {
-                    self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
-                    let id = self.to_property_id(code, arg0)?;
-                    Slot::boolean(
-                        self.mop_get_own_property(code, inst, id)?
-                            .is_some_and(|descriptor| descriptor.enumerable == Some(true)),
-                    )
-                } else {
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("propertyIsEnumerable:exotic-object"));
-                }
-                let id = match (arg0.kind, arg0.value) {
-                    (Kind::String, Payload::String(off)) => {
-                        let key = self.str_text(off);
-                        if !self.symbol_ids.contains_key(&key)
-                            && self.default_keys.contains(key.as_str())
-                        {
-                            return Err(Halt::Unsupported(
-                                "propertyIsEnumerable:ambiguous-default-key",
-                            ));
-                        }
-                        self.intern_key(&key)
-                    }
-                    (Kind::Symbol, Payload::Reference(desc)) => self.intern_symbol_key(desc),
-                    _ => {
-                        return Err(Halt::Unsupported(
-                            "propertyIsEnumerable:non-string-key",
-                        ))
-                    }
-                };
-                let r = match self.find_property(inst, id) {
-                    Some(p) => self.slots.get(p).flag & XS_DONT_ENUM_FLAG == 0,
-                    None => false,
+                // `? ToPropertyKey(P)` precedes `? ToObject(this)` for this
+                // method (unlike `hasOwnProperty`), so an observable key
+                // conversion still runs when the receiver is nullish. Reuse
+                // the general object boxer so primitives expose their
+                // wrapper's own properties.
+                let id = self.to_property_id(code, arg0)?;
+                let object = self.array_to_object(this)?;
+                let inst = match object.value {
+                    Payload::Reference(object) => object,
+                    _ => unreachable!("ToObject returns a reference"),
                 };
                 self.meter.tick_raw(PROPERTY_IS_ENUMERABLE_METERING);
-                Slot::boolean(r)
-                }
+                Slot::boolean(
+                    self.mop_get_own_property(code, inst, id)?
+                        .is_some_and(|descriptor| descriptor.enumerable == Some(true)),
+                )
             }
             // `Object.values(o)` / `Object.entries(o)`: a fresh `Array` of the
             // own enumerable string-keyed values (or `[key, value]` pairs), in
@@ -41011,6 +41061,7 @@ impl Interp {
             // `fxNewNameX` calls `fxFindKey` → `fxNewSlot`: one metered slot.
             self.meter.tick_slot_alloc();
         }
+        self.materialize_runtime_global(id, name);
         id
     }
 
@@ -41126,31 +41177,41 @@ impl Interp {
         let well_known_name = self.well_known_symbols.iter().find_map(|(name, value)| {
             (value.value == Payload::Reference(descriptor)).then_some(*name)
         });
-        let (owner, method, label, flags) = match well_known_name {
-            Some("hasInstance") => (
+        let installs = match well_known_name {
+            Some("hasInstance") => vec![(
                 self.function_proto,
                 self.function_has_instance_method,
                 "boot Function.prototype @@hasInstance method",
                 XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
-            ),
-            Some("toPrimitive") => (
-                self.symbol_proto,
-                self.symbol_to_primitive_method,
-                "boot Symbol.prototype @@toPrimitive method",
-                XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
-            ),
+            )],
+            Some("toPrimitive") => vec![
+                (
+                    self.symbol_proto,
+                    self.symbol_to_primitive_method,
+                    "boot Symbol.prototype @@toPrimitive method",
+                    XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                ),
+                (
+                    self.date_proto,
+                    self.date_to_primitive_method,
+                    "boot Date.prototype @@toPrimitive method",
+                    XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                ),
+            ],
             _ => return,
         };
-        if self.find_property(owner, id).is_some() {
-            return;
+        for (owner, method, label, flags) in installs {
+            if self.find_property(owner, id).is_some() {
+                continue;
+            }
+            assert!(!method.is_null(), "{label}");
+            self.set_own_unmetered_with_flag(
+                owner,
+                id,
+                Slot::of(Kind::Reference, Payload::Reference(method)),
+                flags,
+            );
         }
-        assert!(!method.is_null(), "{label}");
-        self.set_own_unmetered_with_flag(
-            owner,
-            id,
-            Slot::of(Kind::Reference, Payload::Reference(method)),
-            flags,
-        );
     }
 
     /// Whether property id `id` was minted for a **symbol** key (present as a
@@ -42979,6 +43040,10 @@ impl Interp {
             return self.proxy_construct(code, f, args, new_target);
         }
         if let Some(n) = self.native_of(f) {
+            let target = match new_target.value {
+                Payload::Reference(target) if new_target.kind == Kind::Reference => target,
+                _ => return Err(self.catchable_type_error()),
+            };
             let base = self.stack.len();
             self.push(Slot::of(Kind::Uninitialized, Payload::None)); // THIS = construct flag
             self.push(func);
@@ -42987,7 +43052,15 @@ impl Interp {
             for a in args {
                 self.push(*a);
             }
-            self.call_native(n, base, args.len(), true, code)?;
+            // Plain `new Native` derives NewTarget from the function slot.
+            // Reflect.construct can supply a distinct constructor; hand that
+            // one-shot identity to native dispatch so it can select the
+            // requested prototype without leaking into a later construction.
+            let saved_pending_new_target = self.pending_new_target;
+            self.pending_new_target = (target != f).then_some(target);
+            let result = self.call_native(n, base, args.len(), true, code);
+            self.pending_new_target = saved_pending_new_target;
+            result?;
             return Ok(self.pop());
         }
         // A user-defined constructor: re-enter with the construct geometry.
@@ -45834,6 +45907,23 @@ impl Interp {
             }
         }
 
+        self.ordinary_to_primitive(code, value, string_hint)
+    }
+
+    /// OrdinaryToPrimitive over an object after the caller has selected the
+    /// preferred method order. This deliberately does not consult
+    /// `@@toPrimitive`; it is the shared fallback for `ToPrimitive` and the
+    /// intrinsic Date exotic-to-primitive method itself.
+    fn ordinary_to_primitive(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        string_hint: bool,
+    ) -> Result<Slot, Halt> {
+        let inst = match value.value {
+            Payload::Reference(inst) if value.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
         let names = if string_hint {
             ["toString", "valueOf"]
         } else {
@@ -47056,58 +47146,166 @@ fn date_from_components_exact(v: [f64; 7]) -> f64 {
 }
 
 fn parse_date_string(text: &str) -> Option<f64> {
-    let text = text.trim();
-    if text.starts_with("-000000-") {
-        return None;
-    }
-    if let Some(ns) = parse_temporal_instant(text) {
-        return Some(time_clip((ns / 1_000_000) as f64));
-    }
-    let (date, clock) = match text.find(['T', 't']) {
-        Some(i) => (&text[..i], Some(&text[i + 1..])), None => (text, None),
-    };
-    let last = date.rfind('-')?;
-    let second = date[..last].rfind('-')?;
-    let year: i64 = date[..second].parse().ok()?;
-    let month: u32 = date[second + 1..last].parse().ok()?;
-    let day: u32 = date[last + 1..].parse().ok()?;
-    let mut v = [year as f64, month as f64 - 1.0, day as f64, 0.0, 0.0, 0.0, 0.0];
-    if let Some(clock) = clock {
-        let clock = clock.strip_suffix('Z').or_else(|| clock.strip_suffix('z')).unwrap_or(clock);
-        let mut parts = clock.split(':');
-        v[3] = parts.next()?.parse().ok()?;
-        v[4] = parts.next()?.parse().ok()?;
-        let sec = parts.next().unwrap_or("0");
-        if parts.next().is_some() { return None; }
-        let (seconds, fraction) = sec.split_once('.').unwrap_or((sec, ""));
-        v[5] = seconds.parse().ok()?;
-        if !fraction.is_empty() {
-            let digits = &fraction[..fraction.len().min(3)];
-            v[6] = format!("{digits:0<3}").parse().ok()?;
-        }
-    }
-    Some(date_from_components(v))
+    let text = trim_ecma_whitespace(text);
+    parse_iso_date_string(text)
+        .or_else(|| parse_date_display_string(text))
 }
 
-fn date_year_string(year: i64) -> String {
+/// Parse the Date Time String Format, including the specified defaults for an
+/// omitted month, day, clock fields, and UTC offset. The profile's local zone
+/// is UTC, so an absent offset on a date-time has the same numeric result as
+/// the explicitly-UTC date-only forms.
+fn parse_iso_date_string(text: &str) -> Option<f64> {
+    let (date, clock) = match text.find(['T', 't']) {
+        Some(i) => (&text[..i], Some(&text[i + 1..])),
+        None => (text, None),
+    };
+    let year_width = if date.starts_with(['+', '-']) { 7 } else { 4 };
+    if date.len() < year_width {
+        return None;
+    }
+    let year_text = &date[..year_width];
+    let year_digits = year_text.trim_start_matches(['+', '-']);
+    if year_digits.len() != year_width - usize::from(year_width == 7)
+        || !year_digits.bytes().all(|byte| byte.is_ascii_digit())
+        || year_text == "-000000"
+    {
+        return None;
+    }
+    let year: i64 = year_text.parse().ok()?;
+    let tail = &date[year_width..];
+    let (month, day) = match tail.len() {
+        0 => (1, 1),
+        3 if tail.starts_with('-') => (tail[1..].parse().ok()?, 1),
+        6 if tail.as_bytes().get(0) == Some(&b'-')
+            && tail.as_bytes().get(3) == Some(&b'-') =>
+        {
+            (tail[1..3].parse().ok()?, tail[4..6].parse().ok()?)
+        }
+        _ => return None,
+    };
+    let days = days_from_civil(year, month, day)?;
+    let Some(clock) = clock else {
+        return Some(time_clip((days * 86_400_000) as f64));
+    };
+
+    let (clock, offset_minutes) = if let Some(clock) = clock
+        .strip_suffix('Z')
+        .or_else(|| clock.strip_suffix('z'))
+    {
+        (clock, 0i128)
+    } else if let Some(at) = clock.rfind(['+', '-']) {
+        let (clock, zone) = clock.split_at(at);
+        let sign = if zone.starts_with('-') { -1i128 } else { 1i128 };
+        let zone = &zone[1..];
+        let (hours, minutes) = if zone.len() == 5 && zone.as_bytes()[2] == b':' {
+            (zone[..2].parse::<i128>().ok()?, zone[3..].parse::<i128>().ok()?)
+        } else if zone.len() == 4 {
+            (zone[..2].parse::<i128>().ok()?, zone[2..].parse::<i128>().ok()?)
+        } else {
+            return None;
+        };
+        if hours > 23 || minutes > 59 {
+            return None;
+        }
+        (clock, sign * (hours * 60 + minutes))
+    } else {
+        (clock, 0)
+    };
+    let (hour, minute, second, millis) = parse_date_clock(clock)?;
+    if hour > 24 || minute > 59 || second > 59 || (hour == 24 && (minute != 0 || second != 0 || millis != 0)) {
+        return None;
+    }
+    let total = days * 86_400_000
+        + hour * 3_600_000
+        + minute * 60_000
+        + second * 1_000
+        + millis
+        - offset_minutes * 60_000;
+    Some(time_clip(total as f64))
+}
+
+fn parse_date_clock(clock: &str) -> Option<(i128, i128, i128, i128)> {
+    let mut parts = clock.split(':');
+    let hour = parts.next()?.parse().ok()?;
+    let minute = parts.next()?.parse().ok()?;
+    let seconds = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    let Some(seconds) = seconds else {
+        return Some((hour, minute, 0, 0));
+    };
+    let (second, fraction) = seconds.split_once('.').unwrap_or((seconds, ""));
+    if fraction.len() > 3 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let millis = if fraction.is_empty() {
+        0
+    } else {
+        format!("{fraction:0<3}").parse().ok()?
+    };
+    Some((hour, minute, second.parse().ok()?, millis))
+}
+
+/// Parse the implementation-defined forms emitted by `toString` and
+/// `toUTCString`. ECMAScript requires both forms to round-trip through
+/// `Date.parse` for integral-millisecond Date values.
+fn parse_date_display_string(text: &str) -> Option<f64> {
+    let fields: Vec<&str> = text.split_ascii_whitespace().collect();
+    let (month, day, year, clock, zone) = match fields.as_slice() {
+        [weekday, month, day, year, clock, "GMT+0000"]
+            if weekday.len() == 3 => (*month, *day, *year, *clock, 0i128),
+        [weekday, day, month, year, clock, "GMT"]
+            if weekday.len() == 4 && weekday.ends_with(',') =>
+        {
+            (*month, *day, *year, *clock, 0i128)
+        }
+        _ => return None,
+    };
+    let month = EN_MONTHS_SHORT.iter().position(|name| *name == month)? as u32 + 1;
+    let day: u32 = day.parse().ok()?;
+    let year: i64 = year.parse().ok()?;
+    let days = days_from_civil(year, month, day)?;
+    let (hour, minute, second, millis) = parse_date_clock(clock)?;
+    if hour > 23 || minute > 59 || second > 59 || millis != 0 {
+        return None;
+    }
+    let total = days * 86_400_000
+        + hour * 3_600_000
+        + minute * 60_000
+        + second * 1_000
+        - zone * 60_000;
+    Some(time_clip(total as f64))
+}
+
+fn date_iso_year_string(year: i64) -> String {
     if (0..=9999).contains(&year) { format!("{year:04}") }
-    else if year < 0 { format!("-{:<06}", -year).replace(' ', "0") }
+    else if year < 0 { format!("-{:06}", year.unsigned_abs()) }
     else { format!("+{year:06}") }
+}
+
+fn date_display_year_string(year: i64) -> String {
+    if year < 0 {
+        format!("-{:04}", year.unsigned_abs())
+    } else {
+        format!("{year:04}")
+    }
 }
 
 fn date_iso_string(t: f64) -> String {
     let (y, m, d, _, h, min, s, ms) = civil_fields(t, 0);
-    format!("{}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}Z", date_year_string(y))
+    format!("{}-{m:02}-{d:02}T{h:02}:{min:02}:{s:02}.{ms:03}Z", date_iso_year_string(y))
 }
 
 fn date_utc_string(t: f64) -> String {
     let (y, m, d, w, h, min, s, _) = civil_fields(t, 0);
-    format!("{}, {d:02} {} {} {h:02}:{min:02}:{s:02} GMT", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_year_string(y))
+    format!("{}, {d:02} {} {} {h:02}:{min:02}:{s:02} GMT", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_display_year_string(y))
 }
 
 fn date_only_string(t: f64) -> String {
     let (y, m, d, w, _, _, _, _) = civil_fields(t, 0);
-    format!("{} {} {d:02} {}", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_year_string(y))
+    format!("{} {} {d:02} {}", EN_WEEKDAYS_SHORT[w as usize], EN_MONTHS_SHORT[m as usize - 1], date_display_year_string(y))
 }
 
 fn date_time_string(t: f64) -> String {
@@ -51312,6 +51510,7 @@ impl Interp {
             self.dataview_proto,
             self.array_iterator_proto,
             self.date_proto,
+            self.date_to_primitive_method,
             self.iterator_proto,
             self.map_iterator_proto,
             self.set_iterator_proto,
