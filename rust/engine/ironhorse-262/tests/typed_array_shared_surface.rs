@@ -25,6 +25,8 @@ fn shared_view_accessors_have_spec_descriptors_and_brand_checks() {
         "var a=new Uint16Array(new ArrayBuffer(12),2,3); a.length+':'+a.byteLength+':'+a.byteOffset+':'+(a.buffer instanceof ArrayBuffer)",
         "var P=Object.getPrototypeOf(Int8Array.prototype); var g=Object.getOwnPropertyDescriptor(P,'length').get; try { g.call({}); false } catch (e) { e instanceof TypeError }",
         "var P=Object.getPrototypeOf(Int8Array.prototype); var d=Object.getOwnPropertyDescriptor(P,Symbol.toStringTag); d.get.call(new Uint16Array(1))+':'+d.get.call({})+':'+d.enumerable+':'+d.configurable",
+        "var P=Object.getPrototypeOf(Int8Array.prototype); var n=0; Object.defineProperty(P,Symbol.toStringTag,{get:function(){n++;return 'Custom'},configurable:true}); Object.prototype.toString.call(new Int8Array(1))+':'+n",
+        "var P=Object.getPrototypeOf(Int8Array.prototype); var marker={}; Object.defineProperty(P,Symbol.toStringTag,{get:function(){throw marker},configurable:true}); try{Object.prototype.toString.call(new Int8Array(1));false}catch(e){e===marker}",
     ] {
         agrees(source);
     }
@@ -39,6 +41,10 @@ fn shared_from_and_of_construct_concrete_typed_arrays() {
         "var seen=[]; var src={[Symbol.iterator]:function(){var i=0;return {next:function(){seen.push(i);return i<2?{value:++i,done:false}:{done:true}}}}}; var a=Uint8Array.from(src); a[0]+','+a[1]+':'+seen.join(',')",
         "var log=[]; var src={[Symbol.iterator]:function(){var i=0;return {next:function(){log.push('n'+i);return i<2?{value:++i,done:false}:{done:true}}}}}; Uint8Array.from(src,function(v){log.push('m'+v);return v}); log.join(',')",
         "try { Uint8Array.from.call({}, [1]); false } catch (e) { e instanceof TypeError }",
+        "Array.from=function(){return []}; Int8Array.from([1,2]).length",
+        "var log=[]; function C(n){log.push('C');return new Int8Array(n)} var o={length:1,get 0(){log.push('g');return 1}}; Int8Array.from.call(C,o); log.join('')",
+        "function C(){return new Int8Array(0)} try{Int8Array.from.call(C,[1]);false}catch(e){e instanceof TypeError}",
+        "function C(){return new Int8Array(0)} try{Int8Array.of.call(C,1);false}catch(e){e instanceof TypeError}",
     ] {
         agrees(source);
     }
@@ -90,6 +96,8 @@ fn shared_iterators_validate_and_yield_each_element_domain() {
         "var P=Object.getPrototypeOf(Int8Array.prototype); P.values===P[Symbol.iterator]",
         "var a=new Uint8Array(1); $262.detachArrayBuffer(a.buffer); try { a.values(); false } catch (e) { e instanceof TypeError }",
         "try { Uint8Array.prototype.values.call({}); false } catch (e) { e instanceof TypeError }",
+        "var a=new Uint8Array([1,2]); var i=a.values(); $262.detachArrayBuffer(a.buffer); try{i.next();false}catch(e){e instanceof TypeError}",
+        "var a=new Uint8Array([1]); var i=a.values(); i.next(); i.next(); $262.detachArrayBuffer(a.buffer); i.next().done",
     ] {
         agrees(source);
     }
@@ -107,6 +115,25 @@ fn shared_readonly_methods_observe_live_elements_and_iteration_order() {
         "var a=new Uint8Array(); var x={valueOf:function(){throw new Error('unreached')}}; a.includes(0,x)+':'+a.indexOf(0,x)",
         "var a=new BigInt64Array([1n,2n,3n]); a.reduce(function(x,y){return x+y},0n)+':'+a.reduceRight(function(x,y){return x-y})",
         "var a=new Uint8Array([1,2]); var seen=[]; a.forEach(function(v,i){seen.push(String(v));if(i===0)$262.detachArrayBuffer(a.buffer)});seen.join(',')",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn shared_allocating_methods_honor_species_copy_and_view_semantics() {
+    for source in [
+        "var a=new Uint8Array([1,2,3]); var b=a.slice(1); a[1]=9; b.join(',')+':'+(b.buffer!==a.buffer)",
+        "var a=new Uint8Array([1,2,3]); var b=a.subarray(1); a[1]=9; b.join(',')+':'+(b.buffer===a.buffer)",
+        "var a=new Uint8Array([1,255]); a.constructor={[Symbol.species]:Int16Array}; var b=a.slice(); (b instanceof Int16Array)+':'+b.join(',')",
+        "var log=[]; function S(n){log.push('species:'+n);return new Uint8Array(n)} var a=new Uint8Array([1,2]); a.constructor={[Symbol.species]:S}; var b=a.map(function(v){log.push('map:'+v);return v+1}); log.join(',')+':'+b.join(',')",
+        "var log=[]; function S(n){log.push('species:'+n);return new Uint8Array(n)} var a=new Uint8Array([1,2,3]); a.constructor={[Symbol.species]:S}; var b=a.filter(function(v){log.push('filter:'+v);return v>1}); log.join(',')+':'+b.join(',')",
+        "var a=new BigInt64Array([1n,2n,3n]); a.map(function(v){return v*2n}).join(',')+':'+a.filter(function(v){return v>1n}).join(',')",
+        "new BigInt64Array([3n,-1n,2n]).sort().join(',')",
+        "var a=new Float64Array([NaN,3,-0,0,-2]).sort(); a[0]+':'+Object.is(a[1],-0)+':'+Object.is(a[2],0)+':'+a[3]+':'+String(a[4])",
+        "new Uint8Array([7,6,5,4,3,2,1,0]).sort(function(a,b){return (a>>2)-(b>>2)}).join(',')",
+        "var P=Object.getPrototypeOf(Int8Array.prototype); P.toString===Array.prototype.toString",
+        "var a=new Uint8Array([1,2]); a.toString()",
     ] {
         agrees(source);
     }

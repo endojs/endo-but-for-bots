@@ -77,15 +77,15 @@ fn detachment_during_coercion_or_array_like_get_throws() {
 
 #[test]
 fn set_checks_detachment_after_each_array_like_get() {
-    let source = "var a=new Uint8Array([1,2,3]); var x={length:3,0:42}; Object.defineProperty(x,1,{get:function(){$262.detachArrayBuffer(a.buffer)}}); Object.defineProperty(x,2,{get:function(){throw Error('late read')}}); try { a.set(x); false } catch(e) { e instanceof TypeError }";
+    let source = "var a=new Uint8Array([1,2,3]); var x={length:3,0:42}; Object.defineProperty(x,1,{get:function(){$262.detachArrayBuffer(a.buffer)}}); Object.defineProperty(x,2,{get:function(){throw 'late read'}}); try { a.set(x); 'none' } catch(e) { e instanceof TypeError ? 'type' : e }";
     let run = dual_run(source).expect("the pinned XS oracle must start");
     assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
     assert_eq!(
-        run.oracle_result, "false",
+        run.oracle_result, "late read",
         "pinned XS defect changed: {run:?}"
     );
     assert_eq!(
-        run.ironhorse_result, "true",
+        run.ironhorse_result, "type",
         "IronHorse must follow SetTypedArrayFromArrayLike detachment order: {run:?}"
     );
 }
