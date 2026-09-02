@@ -512,6 +512,90 @@ test('cancel runs compensation invokes and cascades to children', async t => {
   t.is(calls[0].effectId, `${runId}:cancel:0`);
 });
 
+test('handled cancellation waits for a child reconciliation workflow', async t => {
+  const { service, engines, stop } = await makeHarness();
+  t.teardown(stop);
+  const { target, calls } = makeRecordingTarget(['clean']);
+  const childChart = harden({
+    name: 'reconciling-child',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: {
+        on: { 'cancel-requested': [{ target: 'cleaning' }] },
+      },
+      cleaning: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'janitor',
+            method: 'perform',
+            args: ['restore'],
+            outcome: 'cleaned',
+          },
+        ],
+        on: {
+          cleaned: [{ target: 'stopped' }],
+          'cancel-requested': [{}],
+        },
+      },
+      stopped: { final: true, output: { status: 'reconciled' } },
+    },
+  });
+  const chart = harden({
+    name: 'reconciling-parent',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        entry: [
+          {
+            kind: 'spawn',
+            chart: childChart,
+            params: {},
+            endowments: ['janitor'],
+            outcome: 'child-done',
+          },
+        ],
+        on: {
+          'child-done': [{ target: 'stopped' }],
+          'cancel-requested': [{}],
+        },
+      },
+      stopped: { final: true, output: { status: 'reconciled' } },
+    },
+  });
+  const { runId, control } = await E(service).start(chart, {
+    endowments: harden({ janitor: target }),
+  });
+  const engine = engines.get(runId);
+  await until(
+    () =>
+      [...engine.fold.pending.values()].some(
+        record => record.childRunId !== undefined,
+      ),
+    'child spawned',
+  );
+  const childRunId = [...engine.fold.pending.values()].find(
+    record => record.childRunId !== undefined,
+  ).childRunId;
+  const child = engines.get(childRunId);
+
+  await E(control).pause();
+  await E(control).signal(harden({ type: 'queued-before-cancel' }));
+  await until(() => engine.fold.queuedEvents.size === 1, 'event queued');
+  await E(control).cancel('operator changed their mind');
+  await until(() => engine.fold.done, 'parent reconciled');
+  await until(() => child.fold.done, 'child reconciled');
+  t.is(engine.fold.outcome, 'completed');
+  t.deepEqual(engine.fold.output, { status: 'reconciled' });
+  t.is(child.fold.outcome, 'completed');
+  t.deepEqual(child.fold.output, { status: 'reconciled' });
+  t.is(engine.fold.queuedEvents.size, 0);
+  t.is(calls.length, 1);
+  t.deepEqual(calls[0].args, ['restore']);
+});
+
 test('the service start facet ignores a caller-supplied runId', async t => {
   // `runId` is the internal spawn path's parameter. A caller-chosen id
   // could clobber an existing run's store and mint duplicate

@@ -437,7 +437,12 @@ harden(chartDiagnostics);
 export const engineEventTypes = chart => {
   assertChart(chart);
   /** @type {Set<string>} */
-  const types = new Set([REGIONS_SETTLED, STATE_DONE, 'effect-failed']);
+  const types = new Set([
+    REGIONS_SETTLED,
+    STATE_DONE,
+    'effect-failed',
+    'cancel-requested',
+  ]);
   const addType = type => {
     if (typeof type === 'string' && !type.includes('{')) {
       types.add(type);

@@ -165,6 +165,7 @@ test('engineEventTypes collects internal, settlement, timer, and emit types', t 
   });
   t.deepEqual(engineEventTypes(chart), [
     'answered',
+    'cancel-requested',
     'effect-failed',
     'expired',
     'hop',
@@ -231,6 +232,10 @@ test('control cannot forge settlements or region joins', async t => {
   await t.throwsAsync(
     () => E(control).signal(harden({ type: 'regions-settled' })),
     { message: /may not submit engine event type.*regions-settled/ },
+  );
+  await t.throwsAsync(
+    () => E(control).signal(harden({ type: 'cancel-requested' })),
+    { message: /may not submit engine event type.*cancel-requested/ },
   );
   await E(control).signal(
     harden({

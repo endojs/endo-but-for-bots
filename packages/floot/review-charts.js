@@ -441,12 +441,19 @@ export const makeReviewedChangeChart = ({
             { when: budgetExhausted, target: 'exhausted' },
             { target: 'implement' },
           ],
-          // Re-enter so an already-materialized budget emit is pruned and a
-          // fresh one is generated from the adjusted context.
+          // Decide directly from the trusted update. Leaving `gate` also makes
+          // an older routed `budget` envelope harmless: it names the now-dead
+          // gate path and cannot overwrite this decision when its queued
+          // delivery eventually runs.
           'set-remaining': [
             {
+              when: M.and(SetRemainingShape, grantsRounds),
+              target: 'implement',
+              assign: { remaining: { $event: 'value.remaining' } },
+            },
+            {
               when: SetRemainingShape,
-              target: 'gate',
+              target: 'exhausted',
               assign: { remaining: { $event: 'value.remaining' } },
             },
           ],
@@ -545,12 +552,12 @@ export const makeReviewedChangeChart = ({
             { when: previewEnabled, target: 'preview' },
             { target: passedTarget },
           ],
-          // Re-enter to prune and regenerate the pending policy emit rather
-          // than allowing a stale envelope to win the queue race.
+          // The policy envelope depends only on immutable params, so an
+          // internal budget assignment can safely preserve its pending
+          // delivery.
           'set-remaining': [
             {
               when: SetRemainingShape,
-              target: 'ready',
               assign: { remaining: { $event: 'value.remaining' } },
             },
           ],
@@ -640,6 +647,11 @@ export const makeReviewedChangeChart = ({
                     assign: { reason: { $event: 'value' } },
                   },
                 ],
+                // A cancellation request must reach the live deploy child and
+                // wait for its durable reconciliation. The service propagates
+                // handled requests to linked children without severing this
+                // spawn, so its truthful terminal still settles the parent.
+                'cancel-requested': [{}],
               },
             },
             landed: {
