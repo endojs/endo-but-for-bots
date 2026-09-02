@@ -229,7 +229,7 @@ flow control on the synchronize chain.
 `streamGlob` and `streamGrep` call `assertLive()` at invocation, and the
 generators re-check `assertLive()` per path batch (the `globPaths` source is
 wrapped in `assertLivePathBatches`) and again before each yield. A
-`MountControl.revoke()` mid-stream therefore causes the next pull to reject on
+`EndoMountControl.revoke()` mid-stream therefore causes the next pull to reject on
 the acknowledge chain with the same "Mount has been revoked" error the eager
 methods throw; `iterateReader` surfaces it as a thrown error at the consumer's
 `for await`. The per-path-batch check matters for the `buffer: 0` sparse-grep
