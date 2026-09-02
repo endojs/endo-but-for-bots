@@ -7722,6 +7722,18 @@ impl Interp {
         // and a later partial relink cannot resurrect a guest deletion.
         self.intern_key("toString");
         self.intern_key("valueOf");
+        // ArraySpeciesCreate performs an implicit `Get(original,
+        // "constructor")` for Array receivers. Reify the boot-default key
+        // before fixing the installed-name floor whenever an allocating
+        // method is linked, so intrinsic prototype constructor properties are
+        // present from realm creation and a later relink cannot resurrect a
+        // guest deletion.
+        if ["slice", "concat", "map", "filter"]
+            .iter()
+            .any(|name| self.symbol_ids.contains_key(*name))
+        {
+            self.intern_key("constructor");
+        }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, true, |_| true);
     }
@@ -35687,9 +35699,6 @@ impl Interp {
         original: crate::value::SlotIndex,
         length: u64,
     ) -> Result<crate::value::SlotIndex, Halt> {
-        if length > u32::MAX as u64 {
-            return Err(self.catchable_range_error());
-        }
         let mut constructor = Slot::undefined();
         if self.array_generic_is_array(original)? {
             let constructor_id = self.intern_key("constructor");
@@ -35714,6 +35723,12 @@ impl Interp {
         }
 
         if constructor.kind == Kind::Undefined {
+            // Only the intrinsic ArrayCreate branch is limited by IronHorse's
+            // compact u32-backed Array representation.  A custom species is
+            // constructed with the full ToLength-domain Number.
+            if length > u32::MAX as u64 {
+                return Err(self.catchable_range_error());
+            }
             let result = self.new_array();
             self.arrays.get_mut(&result).unwrap().length = length as u32;
             return Ok(result);
@@ -36042,8 +36057,7 @@ impl Interp {
                 let id = self.slots.get(property).id;
                 if let Some(index) = self
                     .string_key_name(id)
-                    .and_then(|name| string_to_index(&name))
-                    .map(u64::from)
+                    .and_then(|name| string_to_array_like_index(&name))
                 {
                     if index >= start && index < len && next.map_or(true, |found| index < found) {
                         next = Some(index);
@@ -49457,6 +49471,25 @@ fn string_to_index(s: &str) -> Option<u32> {
     } else {
         None
     }
+}
+
+/// Parse a canonical non-negative integer property name in the `ToLength`
+/// domain.  Unlike an Array index, an ordinary array-like object can have an
+/// indexed property at or above `2^32 - 1`; generic Array methods must still
+/// discover those properties while jumping over sparse holes.
+fn string_to_array_like_index(s: &str) -> Option<u64> {
+    if s.is_empty() || s.len() > 16 {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    if bytes[0] == b'0' && s.len() > 1 {
+        return None;
+    }
+    if !bytes.iter().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n: u64 = s.parse().ok()?;
+    (n <= 9_007_199_254_740_991).then_some(n)
 }
 
 fn canonical_numeric_index_string(s: &str) -> Option<f64> {
