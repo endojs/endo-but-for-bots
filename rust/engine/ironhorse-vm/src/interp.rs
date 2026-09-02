@@ -18858,8 +18858,11 @@ impl Interp {
                     let result = self.new_generator_result(Slot::undefined(), true);
                     self.finish_async_generator_request(code, gen, result, false)
                 }
-                GenStatus::Return => self
-                    .schedule_native_await(request.value, ReactionKind::AsyncGeneratorReturn(gen)),
+                GenStatus::Return => self.schedule_native_await(
+                    code,
+                    request.value,
+                    ReactionKind::AsyncGeneratorReturn(gen),
+                ),
                 GenStatus::Throw => {
                     self.finish_async_generator_request(code, gen, request.value, true)
                 }
@@ -18870,6 +18873,7 @@ impl Interp {
                 data.frame = None;
                 match request.status {
                     GenStatus::Return => self.schedule_native_await(
+                        code,
                         request.value,
                         ReactionKind::AsyncGeneratorReturn(gen),
                     ),
@@ -18906,6 +18910,7 @@ impl Interp {
             .and_then(|g| g.active.take())
             .ok_or(Halt::Unsupported("async-generator:no-active-request"))?;
         self.settle_via_function(
+            code,
             if reject {
                 request.reject
             } else {
@@ -19030,13 +19035,21 @@ impl Interp {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
-                self.schedule_native_await(value, ReactionKind::AsyncGeneratorYield(gen))
+                self.schedule_native_await(
+                    code,
+                    value,
+                    ReactionKind::AsyncGeneratorYield(gen),
+                )
             }
             Halt::Await(value) => {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
-                self.schedule_native_await(value, ReactionKind::AsyncGeneratorAwait(gen))
+                self.schedule_native_await(
+                    code,
+                    value,
+                    ReactionKind::AsyncGeneratorAwait(gen),
+                )
             }
             Halt::Return => {
                 // A boundary `END` already ran `leave_call` (driver restored),
@@ -19063,7 +19076,11 @@ impl Interp {
                 let data = self.async_generators.get_mut(&gen).unwrap();
                 data.state = AsyncGeneratorState::Completed;
                 data.frame = None;
-                self.schedule_native_await(value, ReactionKind::AsyncGeneratorReturn(gen))
+                self.schedule_native_await(
+                    code,
+                    value,
+                    ReactionKind::AsyncGeneratorReturn(gen),
+                )
             }
             Halt::Throw(_) => {
                 while self.call_stack.len() >= return_depth {
@@ -19258,7 +19275,7 @@ impl Interp {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
-                self.await_schedule(inst, v)
+                self.await_schedule(code, inst, v)
             }
             Halt::Return => {
                 // The body's `END` boundary branch already ran `leave_call`
@@ -19302,7 +19319,7 @@ impl Interp {
                 // framing, carried by `ASYNC_STEP_SETTLE_METERING`.
                 self.meter.tick_raw(ASYNC_STEP_SETTLE_METERING);
                 let resolve_fn = self.async_instances[&inst].resolve_fn;
-                self.settle_via_function(resolve_fn, ret)
+                self.settle_via_function(code, resolve_fn, ret)
             }
             Halt::Throw(_) => {
                 // A body throw that escaped every handler rejects the result
@@ -19330,7 +19347,7 @@ impl Interp {
                     self.meter.tick_raw(ASYNC_START_REJECT_BOUNDARY_METERING);
                 }
                 let reject_fn = self.async_instances[&inst].reject_fn;
-                self.settle_via_function(reject_fn, reason)
+                self.settle_via_function(code, reject_fn, reason)
             }
             other => {
                 // An un-modeled surface (a named skip), meter abort, or overflow
@@ -19373,11 +19390,21 @@ impl Interp {
     ///   its promise, then call the capability's `resolve` with `value` — which
     ///   fulfills with a primitive (queuing the resume for the next microtask
     ///   turn, so a bare `await 1` still costs one turn) or adopts a thenable.
-    fn await_schedule(&mut self, inst: crate::value::SlotIndex, value: Slot) -> Result<(), Halt> {
-        self.schedule_native_await(value, ReactionKind::AsyncAwait(inst))
+    fn await_schedule(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        self.schedule_native_await(code, value, ReactionKind::AsyncAwait(inst))
     }
 
-    fn schedule_native_await(&mut self, value: Slot, kind: ReactionKind) -> Result<(), Halt> {
+    fn schedule_native_await(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        kind: ReactionKind,
+    ) -> Result<(), Halt> {
         if let Payload::Reference(r) = value.value {
             if self.promises.contains_key(&r) {
                 // XS's fast path is `mxGetID(_constructor)` + `fxIsSameValue` +
@@ -19396,7 +19423,7 @@ impl Interp {
         self.meter.tick_raw(ASYNC_AWAIT_GENERAL_METERING);
         let (derived, resolve, _reject) = self.new_promise_capability();
         self.promise_then_native(derived, kind);
-        self.settle_via_function(resolve, value)
+        self.settle_via_function(code, resolve, value)
     }
 
     /// Settle a promise through its resolve/reject function directly (the core
@@ -19404,7 +19431,7 @@ impl Interp {
     /// the pair's shared `[[AlreadyResolved]]` guard, and if fresh, trip it and
     /// settle. Used where XS calls a resolving function via `mxRunCount(1)`
     /// (async completion, the await general path) rather than from guest code.
-    fn settle_via_function(&mut self, f: Slot, value: Slot) -> Result<(), Halt> {
+    fn settle_via_function(&mut self, code: &[u8], f: Slot, value: Slot) -> Result<(), Halt> {
         let fref = match f.value {
             Payload::Reference(r) => r,
             _ => return Err(Halt::Unsupported("async:bad-resolving-fn")),
@@ -19421,7 +19448,30 @@ impl Interp {
             Ok(())
         } else {
             self.promise_guards[data.guard] = true;
-            self.settle_promise(data.promise, value, data.reject)
+            self.settle_promise(code, data.promise, value, data.reject)
+        }
+    }
+
+    /// Reject through a native resolving function when the caller has no
+    /// executable code dependency. Rejection never performs thenable
+    /// assimilation, so it needs no bytecode buffer for observable property
+    /// access; keeping this path explicit prevents fulfillment callers from
+    /// accidentally bypassing the full `Get(resolution, "then")` operation.
+    fn reject_via_function(&mut self, f: Slot, value: Slot) -> Result<(), Halt> {
+        let fref = match f.value {
+            Payload::Reference(r) => r,
+            _ => return Err(Halt::Unsupported("async:bad-resolving-fn")),
+        };
+        let data = match self.promise_functions.get(&fref) {
+            Some(d) if d.reject && d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD => *d,
+            _ => return Err(Halt::Unsupported("async:bad-rejecting-fn")),
+        };
+        if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
+            self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
+            Ok(())
+        } else {
+            self.promise_guards[data.guard] = true;
+            self.finish_promise_settlement(data.promise, value, true)
         }
     }
 
@@ -19445,7 +19495,7 @@ impl Interp {
             _ => false,
         };
         if native_resolver {
-            self.settle_via_function(function, value)
+            self.settle_via_function(code, function, value)
         } else {
             self.call_any(code, function, Slot::undefined(), &[value])?;
             Ok(())
@@ -20725,10 +20775,14 @@ impl Interp {
                     &[resolve, reject],
                 )? {
                     Ok(_) => {}
-                    Err(thrown) => self.settle_via_function(reject, thrown)?,
+                    Err(thrown) => self.settle_via_function(code, reject, thrown)?,
                 }
                 Slot::of(Kind::Reference, Payload::Reference(promise))
             }
+            // `%Promise%` is constructor-only. The call form fails before
+            // inspecting its argument, and the realm TypeError remains
+            // catchable by surrounding guest code.
+            Native::Promise => return Err(self.catchable_type_error()),
             // `new RegExp(pattern, flags)` and the bare-call `RegExp(...)`
             // (`fx_RegExp` + `fxInitializeRegExp`): coerce the pattern and
             // flags to strings, compile the pattern with child 8's matcher,
@@ -24114,7 +24168,7 @@ impl Interp {
                 promise.reactions.clear();
                 self.run_combine_reaction(code, ci as usize, ei as usize, value, data.reject)?;
             } else {
-                self.settle_promise(data.promise, value, data.reject)?;
+                self.settle_promise(code, data.promise, value, data.reject)?;
             }
         }
         self.stack.truncate(base);
@@ -24132,6 +24186,7 @@ impl Interp {
     /// accepts any value.
     fn settle_promise(
         &mut self,
+        code: &[u8],
         promise: crate::value::SlotIndex,
         value: Slot,
         reject: bool,
@@ -24146,12 +24201,30 @@ impl Interp {
                 if obj == promise {
                     // `resolve(promise)` rejects that promise with a TypeError.
                     let error = self.build_error("TypeError", 0, 0);
-                    return self.settle_promise(promise, error, true);
+                    return self.finish_promise_settlement(promise, error, true);
                 }
-                let has_own_then = self
-                    .then_id
-                    .is_some_and(|tid| self.find_property(obj, tid).is_some());
-                if self.promises.contains_key(&obj) && !has_own_then {
+                // `Get(resolution, "then")` is observable even for branded
+                // promises: an own or inherited accessor may throw, and a
+                // monkeypatch may replace the intrinsic method. Run it behind
+                // the resolving function's native try boundary so an abrupt
+                // completion rejects this promise with the thrown value.
+                self.meter.tick_raw(PROMISE_RESOLVE_THEN_PROBE_METERING);
+                let then = match self.then_id {
+                    Some(tid) => match self.array_from_try(|this| {
+                        this.mop_get(code, obj, tid, value)
+                    })? {
+                        Ok(then) => then,
+                        Err(thrown) => {
+                            return self.finish_promise_settlement(promise, thrown, true)
+                        }
+                    },
+                    None => Slot::undefined(),
+                };
+                let intrinsic_then = matches!(then.value,
+                    Payload::Reference(function)
+                        if then.kind == Kind::Reference
+                            && self.method_of(function) == Some(NativeMethod::PromiseThen));
+                if self.promises.contains_key(&obj) && intrinsic_then {
                     // Promise adoption is a native `then` registration whose
                     // pass-through reaction forwards the source settlement to
                     // the target promise. An own `.then` override still goes
@@ -24169,23 +24242,29 @@ impl Interp {
                     self.register_native_reaction(obj, reaction);
                     return Ok(());
                 }
-                let then = match self.then_id {
-                    Some(tid) => self.instance_get(obj, tid),
-                    None => Slot::undefined(),
-                };
-                // The `mxGetID(_then)` probe meters one dispatch on any
-                // reference argument, whether or not `.then` is callable.
-                self.meter.tick_raw(PROMISE_RESOLVE_THEN_PROBE_METERING);
                 if self.is_callable_value(then) {
                     // Adoption drives `then.call(thenable, res, rej)` at the
-                    // drain through `run_callback`, which runs guest bytecode.
-                    if !self.is_user_function_value(then) {
-                        return Err(Halt::Unsupported("promise:adopt-native-thenable"));
-                    }
+                    // drain through the general callable dispatcher.
                     return self.adopt_thenable(promise, value, then);
                 }
                 // A non-callable `.then`: fall through and fulfill with `obj`.
             }
+        }
+        self.finish_promise_settlement(promise, value, reject)
+    }
+
+    /// Commit a promise's final state and enqueue its pending reactions after
+    /// every resolving-algorithm branch that can inspect a fulfillment value
+    /// has completed. A direct rejection enters here without a bytecode buffer
+    /// because it performs no thenable property access.
+    fn finish_promise_settlement(
+        &mut self,
+        promise: crate::value::SlotIndex,
+        value: Slot,
+        reject: bool,
+    ) -> Result<(), Halt> {
+        if !self.promises.contains_key(&promise) {
+            return Err(Halt::Unsupported("promise:settle-non-promise"));
         }
         let state = if reject {
             PromiseState::Rejected
@@ -25504,7 +25583,11 @@ impl Interp {
             };
             if !self.from_async[id].sync_wrapped {
                 // Async iterator: Await(nextResult) — a promise of {value,done}.
-                return self.schedule_native_await(step, ReactionKind::FromAsyncNext(id as u32));
+                return self.schedule_native_await(
+                    code,
+                    step,
+                    ReactionKind::FromAsyncNext(id as u32),
+                );
             }
             // Sync iterator: the step is a plain {value,done}; read it now, then
             // Await the value (unwrapping a thenable, close-on-rejection).
@@ -25534,7 +25617,7 @@ impl Interp {
                     Err(e) => return self.from_async_reject(id, e),
                 }
             };
-            self.schedule_native_await(value, ReactionKind::FromAsyncElem(id as u32))
+            self.schedule_native_await(code, value, ReactionKind::FromAsyncElem(id as u32))
         } else {
             let k = self.from_async[id].k;
             let len = self.from_async[id].len;
@@ -25557,7 +25640,7 @@ impl Interp {
                     Err(e) => return self.from_async_reject(id, e),
                 }
             };
-            self.schedule_native_await(kvalue, ReactionKind::FromAsyncElem(id as u32))
+            self.schedule_native_await(code, kvalue, ReactionKind::FromAsyncElem(id as u32))
         }
     }
 
@@ -25644,7 +25727,11 @@ impl Interp {
             let kn = Slot::number(k as f64);
             match self.from_async_call(code, mapfn, this_arg, &[v, kn])? {
                 Ok(mapped) => {
-                    self.schedule_native_await(mapped, ReactionKind::FromAsyncMap(id as u32))
+                    self.schedule_native_await(
+                        code,
+                        mapped,
+                        ReactionKind::FromAsyncMap(id as u32),
+                    )
                 }
                 Err(e) => self.from_async_close_and_reject(code, id, e),
             }
@@ -25735,7 +25822,7 @@ impl Interp {
             }
         }
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        self.from_async_resolve(id, target_slot)
+        self.from_async_resolve(code, id, target_slot)
     }
 
     /// `AsyncIteratorClose` / `IteratorClose` on an abrupt (throw) completion:
@@ -25780,7 +25867,11 @@ impl Interp {
                     self.from_async_reject(id, err)
                 } else {
                     self.from_async[id].close_error = err;
-                    self.schedule_native_await(inner, ReactionKind::FromAsyncClose(id as u32))
+                    self.schedule_native_await(
+                        code,
+                        inner,
+                        ReactionKind::FromAsyncClose(id as u32),
+                    )
                 }
             }
             // A throwing `return()` on an abrupt completion is swallowed.
@@ -25799,13 +25890,18 @@ impl Interp {
     }
 
     /// Settle the result promise as fulfilled with `A` (idempotent).
-    fn from_async_resolve(&mut self, id: usize, value: Slot) -> Result<(), Halt> {
+    fn from_async_resolve(
+        &mut self,
+        code: &[u8],
+        id: usize,
+        value: Slot,
+    ) -> Result<(), Halt> {
         if self.from_async[id].settled {
             return Ok(());
         }
         self.from_async[id].settled = true;
         let resolve = self.from_async[id].resolve;
-        self.settle_via_function(resolve, value)
+        self.settle_via_function(code, resolve, value)
     }
 
     /// Settle the result promise as rejected with `err` (idempotent).
@@ -25815,7 +25911,7 @@ impl Interp {
         }
         self.from_async[id].settled = true;
         let reject = self.from_async[id].reject;
-        self.settle_via_function(reject, err)
+        self.reject_via_function(reject, err)
     }
 
     /// Run a resolve-with-thenable job (XS's `fxOnThenable`): call
@@ -25834,7 +25930,7 @@ impl Interp {
         self.meter.tick_raw(PROMISE_THENABLE_JOB_FRAME_METERING);
         match self.run_callback_catching_throw(code, then, thenable, &[resolve, reject])? {
             Ok(_) => Ok(()),
-            Err(thrown) => self.settle_via_function(reject, thrown),
+            Err(thrown) => self.reject_via_function(reject, thrown),
         }
     }
 
@@ -26160,7 +26256,7 @@ impl Interp {
             &[bridge_resolve, bridge_reject],
         )? {
             Ok(_) => Ok(()),
-            Err(error) => self.settle_via_function(bridge_reject, error),
+            Err(error) => self.reject_via_function(bridge_reject, error),
         }
     }
 
@@ -27897,7 +27993,7 @@ impl Interp {
         if data.disposed {
             if is_async {
                 let promise = self.new_promise_instance();
-                self.settle_promise(promise, Slot::undefined(), false)?;
+                self.settle_promise(code, promise, Slot::undefined(), false)?;
                 return Ok(Slot::of(Kind::Reference, Payload::Reference(promise)));
             }
             return Ok(Slot::undefined());
@@ -27937,6 +28033,7 @@ impl Interp {
         if is_async {
             let promise = self.new_promise_instance();
             self.settle_promise(
+                code,
                 promise,
                 pending_error.unwrap_or_else(Slot::undefined),
                 pending_error.is_some(),
@@ -32793,7 +32890,7 @@ impl Interp {
                 {
                     self.meter.tick_raw(PROMISE_RESOLVE_STATIC_METERING);
                     let (derived, _resolve, _reject) = self.new_promise_capability();
-                    self.settle_promise(derived, arg0, false)?;
+                    self.settle_promise(code, derived, arg0, false)?;
                     Slot::of(Kind::Reference, Payload::Reference(derived))
                 } else {
                     let capability = self.new_promise_capability_for(code, this)?;
@@ -32819,7 +32916,7 @@ impl Interp {
                 {
                     self.meter.tick_raw(PROMISE_REJECT_STATIC_METERING);
                     let (derived, _resolve, _reject) = self.new_promise_capability();
-                    self.settle_promise(derived, arg0, true)?;
+                    self.settle_promise(code, derived, arg0, true)?;
                     Slot::of(Kind::Reference, Payload::Reference(derived))
                 } else {
                     let capability = self.new_promise_capability_for(code, this)?;

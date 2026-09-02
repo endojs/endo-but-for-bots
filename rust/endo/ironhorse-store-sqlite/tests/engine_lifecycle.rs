@@ -886,6 +886,21 @@ fn promise_intrinsic_metadata_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn poisoned_then_lookup_rejection_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-poisoned-then-lookup",
+        &[
+            "var marker={};var x={};var p=0;var g=''; \
+             Object.defineProperty(x,'then',{get:function(){throw marker}}); \
+             p=Promise.resolve(x);0",
+            "p.then(function(){g='fulfilled'},function(e){g=''+(e===marker)});0",
+            "g",
+        ],
+    );
+    assert_eq!(last, "true");
+}
+
+#[test]
 fn a_custom_species_finally_await_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "promise-custom-species-finally",
