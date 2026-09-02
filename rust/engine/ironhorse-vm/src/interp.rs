@@ -21145,27 +21145,44 @@ impl Interp {
                             length,
                         };
                         self.typed_arrays.insert(inst, ta);
-                        // Copy element by element rather than through an
-                        // intermediate vector, so the only length-proportional
-                        // allocation is the metered backing store itself. Source
-                        // and destination are distinct buffers, so interleaving
-                        // the reads with the writes is not aliasing. A hole (a
-                        // dense array's missing item / an unreadable source
-                        // element) reads `undefined` (→ NaN → 0 for an integer
-                        // view), matching the default-iterator result.
+                        // An ARRAY source is snapshotted up front — the spec's
+                        // `IteratorToList` materializes every value BEFORE any
+                        // element coercion runs, so a `valueOf` that mutates the
+                        // source mid-copy (`iterated-array-changed-by-tonumber`)
+                        // must not change later reads. The snapshot comes AFTER
+                        // the length bound and the metered `alloc_array_buffer`
+                        // charge above, so the wave-5 ordering (reject first,
+                        // charge second, only then length-proportional
+                        // allocation; `tests/typed_array_source_length.rs`)
+                        // still holds. A TypedArray source needs no snapshot:
+                        // its element reads are pure numeric loads and its
+                        // element coercions run no guest code, so nothing can
+                        // mutate it between reads. A hole reads `undefined`
+                        // (→ NaN → 0 for an integer view), matching the
+                        // default-iterator result.
+                        let snapshot: Option<Vec<Slot>> = match source_ta {
+                            None => self.arrays.get(&r).map(|src| {
+                                (0..length)
+                                    .map(|i| {
+                                        src.items()
+                                            .get(&i)
+                                            .copied()
+                                            .unwrap_or_else(Slot::undefined)
+                                    })
+                                    .collect()
+                            }),
+                            Some(_) => None,
+                        };
                         for i in 0..length {
-                            let v = match source_ta {
-                                None => self
-                                    .arrays
-                                    .get(&r)
-                                    .and_then(|src| src.items().get(&i).copied())
-                                    .unwrap_or_else(Slot::undefined),
-                                Some(src) if src.kind <= 1 => {
+                            let v = match (&snapshot, source_ta) {
+                                (Some(values), _) => values[i as usize],
+                                (None, Some(src)) if src.kind <= 1 => {
                                     self.typed_array_element_get_bigint(src, i)
                                 }
-                                Some(src) => self
+                                (None, Some(src)) => self
                                     .typed_array_element_get(src, i)
                                     .expect("numeric TypedArray element decodes"),
+                                (None, None) => Slot::undefined(),
                             };
                             self.typed_array_element_set(code, ta, i, v)?;
                             self.meter
@@ -40560,8 +40577,41 @@ impl Interp {
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<bool, Halt> {
-        let id = self.array_generic_index_id(k);
-        self.mop_has(code, o, id)
+        let name = k.to_string();
+        if let Some(&id) = self.symbol_ids.get(&name).as_deref() {
+            return self.mop_has(code, o, id);
+        }
+        // The index's name was never interned, so no name-keyed property can
+        // exist under it anywhere; membership reduces to numeric element
+        // storage. Answer from the chain's items maps WITHOUT interning —
+        // probing every absent index of a 1e6-length sparse array would
+        // otherwise permanently exhaust the 16-bit id space. Only when a
+        // chain level can answer `has` dynamically (a proxy trap) or from
+        // non-items exotic storage (a typed array's elements, a wrapper's
+        // string indices) does the probe fall back to the interning MOP walk.
+        let mut level = o;
+        loop {
+            if self.proxies.contains_key(&level)
+                || self.typed_arrays.contains_key(&level)
+                || self.wrapper_data.contains_key(&level)
+            {
+                let id = self.array_generic_index_id(k);
+                return self.mop_has(code, o, id);
+            }
+            if k <= u32::MAX as u64 {
+                if let Some(a) = self.arrays.get(&level) {
+                    if a.items().contains_key(&(k as u32)) {
+                        let id = self.array_generic_index_id(k);
+                        return self.mop_has(code, o, id);
+                    }
+                }
+            }
+            let proto = self.instance_prototype(level);
+            if proto.is_null() {
+                return Ok(false);
+            }
+            level = proto;
+        }
     }
 
     /// `? Get(O, ToString(k))` (receiver is `O`).
@@ -49957,10 +50007,13 @@ impl Interp {
             let receiver = Slot::of(Kind::Reference, Payload::Reference(descriptor));
             let value = self.mop_get(code, descriptor, id, receiver)?;
             match name {
-                "enumerable" => out.enumerable = Some(to_boolean(&value)),
-                "configurable" => out.configurable = Some(to_boolean(&value)),
+                // ToBoolean via `truthy`, not the bare `to_boolean`: an
+                // attribute given as `""` or `0n` is falsy, and only the
+                // machine can read the string/bigint payload to know it.
+                "enumerable" => out.enumerable = Some(self.truthy(&value)),
+                "configurable" => out.configurable = Some(self.truthy(&value)),
                 "value" => out.value = Some(value),
-                "writable" => out.writable = Some(to_boolean(&value)),
+                "writable" => out.writable = Some(self.truthy(&value)),
                 "get" => {
                     if value.kind != Kind::Undefined && !self.is_callable_value(value) {
                         return Err(self.catchable_type_error_msg("getter is not callable"));
