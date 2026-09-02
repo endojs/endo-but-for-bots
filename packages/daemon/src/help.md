@@ -885,7 +885,8 @@ UTF-16-sorted order as glob(), with the same dialect, deny filtering, and confin
 pattern: string — A glob pattern (same dialect as glob()).
 options.buffer: number — Elements the producer may pre-acknowledge ahead of demand, for
 high-latency links (default 0, fully synchronized; clamped to 1024).
-Iterate with iterateReader from @endo/exo-stream. Unlike glob(), there is no 10,000-result cap.
+Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. Unlike glob(), there is no
+10,000-result cap.
 Because glob order is a global sort, the directory walk is eager: the whole match set is walked
 before the first element, so streamGlob bounds message size rather than time-to-first-result, and
 closing the iterator early does not stop the walk (unlike streamGrep's incremental content reads).
@@ -896,14 +897,16 @@ Example: for await (const p of iterateReader(E(mount).streamGlob("**/*.js"))) { 
 Streaming grep: a reader that yields { file, line, text } match records one at a time, in
 path-then-line order, with the same confinement, deny filtering, and CRLF normalization as grep().
 pattern: string — An ECMAScript RegExp source (same as grep()).
-options.glob: string — Restrict the search to files matching this glob (piped straight into grep,
-no intermediate list). Omit to search every file under the mount face.
+options.glob: string — Restrict the search to files matching this glob (piped into grep as path
+batches, so no full path array round-trips as grep's argument and the 10,000-path cap is dropped).
+Omit to search every file under the mount face.
 options.buffer: number — Pre-acknowledge window for high-latency links (default 0; clamped to 1024).
-Iterate with iterateReader from @endo/exo-stream. There is no maxResults cap. Content reads are
-incremental — closing the iterator early leaves the remaining files' contents unread — but the
-directory walk is eager (the whole tree is enumerated before the first match, like streamGlob), so
-early close bounds file reads, not the walk. With buffer 0 a mid-stream revoke() rejects the next
-pull immediately; a non-zero buffer may still deliver up to that many already-buffered elements first.
+Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. There is no maxResults cap.
+Content reads are incremental — closing the iterator early leaves the remaining files' contents
+unread — but the directory walk is eager (the whole tree is enumerated before the first match, like
+streamGlob), so early close bounds file reads, not the walk. With buffer 0 a mid-stream revoke()
+rejects the next pull immediately; a non-zero buffer may still deliver up to that many
+already-buffered elements first.
 Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { ... }
 
 # EndoMountFile - A file within a mounted directory.

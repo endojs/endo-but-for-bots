@@ -1391,7 +1391,9 @@ export interface EndoMount extends PathEntryIssuer {
   /**
    * Streaming grep: a `PassableReader` yielding `{ file, line, text }` records
    * one element at a time, in path-then-line order. `options.glob` selects the
-   * file set (piped into grep with no intermediate materialization). No
+   * file set (piped into grep as path batches, so no full path array round-trips
+   * as grep's argument and the 10,000-path cap is dropped; the engine still
+   * sorts the full path set internally). No
    * `maxResults`. Content reads are incremental — early close leaves the
    * remaining files' contents unread — but the directory walk is eager (the
    * whole confined tree is enumerated before the first match), like
