@@ -863,9 +863,9 @@ Search file contents for a regular expression across selected files.
 pattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.
 NOTE: a caller-supplied source may catastrophically backtrack and stall the daemon;
 supply trusted patterns.
-paths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose
-the two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of
-paths (the promise is awaited for you). Omit it to search every file under the mount face.
+paths: string[] | Promise<string[]> — Which files to search. Await a glob result to
+compose the two — grep(pattern, await glob("src/**/*.js")) — since glob is an
+independent producer of paths. Omit it to search every file under the mount face.
 options.maxResults: number — Non-negative safe-integer cap on the number of match
 records (default 1000). NaN, Infinity, negatives, and fractions are rejected.
 options.followSymlinks: boolean — Applies only when paths is omitted, to the implicit
@@ -874,7 +874,7 @@ Each matching line yields one { file, line, text } record: file is the mount-fac
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
 (CRLF normalization). A path that is denied, escapes the mount, resolves into a denied
 directory, is a directory, or cannot be read is skipped silently.
-Example: grep("TODO", glob("src/**/*.js")) → every TODO line under src.
+Example: grep("TODO", await glob("src/**/*.js")) → every TODO line under src.
 Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
 
 ## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
@@ -892,7 +892,7 @@ options.maxResults: number — Non-negative safe-integer cap on match records (d
 options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
 receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Example: glorp("src/**/*.js", "TODO") → every TODO line under src.
+Example: glorp("src/**/*.js", "TODO") → every TODO line in a .js file under src.
 
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 
