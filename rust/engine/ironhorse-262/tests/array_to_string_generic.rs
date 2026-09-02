@@ -79,9 +79,22 @@ fn fallback_retains_the_object_intrinsic_and_proxy_array_brand() {
 
 #[test]
 fn object_tag_observes_array_brand_before_a_proxy_tag_getter() {
-    agrees(
+    for source in [
         "var record;record=Proxy.revocable([],{get:function(target,key,receiver){if(key===Symbol.toStringTag){record.revoke();return undefined}return Reflect.get(target,key,receiver)}});Object.prototype.toString.call(record.proxy)",
-    );
+        "var record;record=Proxy.revocable(function(){},{get:function(target,key,receiver){if(key===Symbol.toStringTag){record.revoke();return undefined}return Reflect.get(target,key,receiver)}});Object.prototype.toString.call(record.proxy)",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn join_accepts_every_callable_shape() {
+    for source in [
+        "var join=new Proxy(function(){return 'base'},{apply:function(){return 'ok'}});Array.prototype.toString.call({join:join})",
+        "var a=[1,2];var join=Array.prototype.join.bind(a,'-');Array.prototype.toString.call({join:join})",
+    ] {
+        agrees(source);
+    }
 }
 
 #[test]

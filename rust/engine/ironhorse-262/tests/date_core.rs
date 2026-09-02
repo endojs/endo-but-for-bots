@@ -92,6 +92,9 @@ fn to_json_is_generic_and_observable() {
         "var ok=false;try{Date.prototype.toJSON.call(null)}catch(e){ok=e instanceof TypeError}ok",
         "Number.prototype.toISOString=function(){return this.valueOf()+1};Date.prototype.toJSON.call(4)",
         "var o;var fn=new Proxy(function(){return 'base'},{apply:function(target,self,args){return self===o&&args.length===0?'ok':'bad'}});o={valueOf:function(){return 1},toISOString:fn};Date.prototype.toJSON.call(o)",
+        "var resolve;new Promise(function(r){resolve=r});var o={valueOf:function(){return 1},toISOString:resolve};String(Date.prototype.toJSON.call(o))",
+        "var d=new Date(0);var o={valueOf:function(){return 1},toISOString:d.toISOString.bind(d)};Date.prototype.toJSON.call(o)",
+        "var called=false;var valueOf=new Proxy(function(){return 1},{apply:function(){called=true;return 1}});var o={valueOf:valueOf,toISOString:function(){return called}};Date.prototype.toJSON.call(o)",
     ] {
         agrees(source);
     }
