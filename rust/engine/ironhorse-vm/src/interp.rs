@@ -29640,42 +29640,27 @@ impl Interp {
                 }
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
-            // `Object.preventExtensions(o)`: mark the instance non-extensible.
-            // Non-object arguments pass through unchanged (spec: return the
-            // argument). Ordinary receivers only.
+            // `Object.preventExtensions(o)`: delegate to `[[PreventExtensions]]`.
+            // Non-object arguments pass through unchanged.
             NativeMethod::ObjectPreventExtensions => {
-                if let Payload::Reference(inst) = arg0.value {
-                    // A fixed-length TypedArray marks non-extensible through the
-                    // ordinary instance flag (its elements are unaffected).
-                    if !self.is_ordinary_object(inst) && !self.typed_arrays.contains_key(&inst) {
-                        return Err(Halt::Unsupported("preventExtensions:exotic-object"));
+                if arg0.kind == Kind::Reference {
+                    if let Payload::Reference(inst) = arg0.value {
+                        self.meter.tick_raw(PREVENT_EXTENSIONS_RESIDUAL_METERING);
+                        if !self.mop_prevent_extensions(code, inst)? {
+                            return Err(self.catchable_type_error());
+                        }
                     }
-                    self.meter.tick_raw(PREVENT_EXTENSIONS_RESIDUAL_METERING);
-                    self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
                 }
                 arg0
             }
-            // `Object.seal(o)`: prevent extensions and mark every own property
-            // non-configurable (`XS_DONT_DELETE_FLAG`). Ordinary receivers.
+            // `Object.seal` / `Object.freeze`: SetIntegrityLevel through the
+            // complete MOP, including arrays and integer-indexed objects.
             NativeMethod::ObjectSeal | NativeMethod::ObjectFreeze => {
                 let freeze = matches!(m, NativeMethod::ObjectFreeze);
-                if let Payload::Reference(inst) = arg0.value {
-                    if !self.is_ordinary_object(inst) {
-                        return Err(Halt::Unsupported(if freeze {
-                            "freeze:exotic-object"
-                        } else {
-                            "seal:exotic-object"
-                        }));
-                    }
-                    let slots = self.own_property_slots(inst);
-                    self.meter.tick_raw(INTEGRITY_APPLY_KEYS_BASE_METERING);
-                    self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
-                    for &p in &slots {
-                        self.meter.tick_raw(INTEGRITY_APPLY_PER_KEY_METERING);
-                        let s = self.slots.get_mut(p);
-                        s.flag |= XS_DONT_DELETE_FLAG;
-                        if freeze && s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0 {
-                            s.flag |= XS_DONT_SET_FLAG;
+                if arg0.kind == Kind::Reference {
+                    if let Payload::Reference(inst) = arg0.value {
+                        if !self.set_integrity_level(code, inst, freeze)? {
+                            return Err(self.catchable_type_error());
                         }
                     }
                 }
@@ -29686,10 +29671,7 @@ impl Interp {
             NativeMethod::ObjectIsExtensible => {
                 let r = match arg0.value {
                     Payload::Reference(inst) if arg0.kind == Kind::Reference => {
-                        if !self.is_ordinary_object(inst) && !self.typed_arrays.contains_key(&inst) {
-                            return Err(Halt::Unsupported("isExtensible:exotic-object"));
-                        }
-                        self.instance_extensible(inst)
+                        self.mop_is_extensible(code, inst)?
                     }
                     _ => false,
                 };
@@ -29704,36 +29686,7 @@ impl Interp {
                 let frozen = matches!(m, NativeMethod::ObjectIsFrozen);
                 let r = match arg0.value {
                     Payload::Reference(inst) if arg0.kind == Kind::Reference => {
-                        if !self.is_ordinary_object(inst) {
-                            return Err(Halt::Unsupported(if frozen {
-                                "isFrozen:exotic-object"
-                            } else {
-                                "isSealed:exotic-object"
-                            }));
-                        }
-                        self.meter.tick_raw(IS_EXTENSIBLE_RESIDUAL_METERING);
-                        if self.instance_extensible(inst) {
-                            // Extensible short-circuits to false before the walk.
-                            false
-                        } else {
-                            self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
-                            let slots = self.own_property_slots(inst);
-                            let mut ok = true;
-                            for &p in &slots {
-                                self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
-                                let f = self.slots.get(p).flag;
-                                if f & XS_DONT_DELETE_FLAG == 0 {
-                                    ok = false;
-                                }
-                                if frozen
-                                    && f & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
-                                    && f & XS_DONT_SET_FLAG == 0
-                                {
-                                    ok = false;
-                                }
-                            }
-                            ok
-                        }
+                        self.test_integrity_level(code, inst, frozen)?
                     }
                     _ => {
                         self.meter.tick_raw(IS_EXTENSIBLE_RESIDUAL_METERING);
@@ -43614,6 +43567,95 @@ impl Interp {
         Ok(true)
     }
 
+    /// `SetIntegrityLevel(O, sealed|frozen)` (ECMA-262 7.3.15). The own-key
+    /// list is captured after preventing extensions; every key is then routed
+    /// through the receiver's `[[GetOwnProperty]]` / `[[DefineOwnProperty]]`
+    /// methods so arrays, TypedArrays, and proxies retain their exotic rules.
+    fn set_integrity_level(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        frozen: bool,
+    ) -> Result<bool, Halt> {
+        self.meter.tick_raw(INTEGRITY_APPLY_KEYS_BASE_METERING);
+        if !self.mop_prevent_extensions(code, inst)? {
+            return Ok(false);
+        }
+        let keys = self.mop_own_keys(code, inst)?;
+        let proxy = self.proxies.contains_key(&inst);
+        for key in keys {
+            self.meter.tick_raw(INTEGRITY_APPLY_PER_KEY_METERING);
+            let id = self.to_property_id(code, key)?;
+            let current = if frozen || !proxy {
+                self.mop_get_own_property(code, inst, id)?
+            } else {
+                None
+            };
+            // String-exotic indices and `length` are already frozen. Avoid
+            // manufacturing ordinary shadow properties for those synthetic
+            // descriptors; proxies still receive every mandated define trap.
+            if !proxy
+                && current.as_ref().is_some_and(|descriptor| {
+                    descriptor.configurable == Some(false)
+                        && (!frozen
+                            || descriptor.is_accessor()
+                            || descriptor.writable == Some(false))
+                })
+            {
+                continue;
+            }
+            let desc = if frozen {
+                match current {
+                    None => continue,
+                    Some(descriptor) if descriptor.is_accessor() => OrdinaryDescriptor {
+                        configurable: Some(false),
+                        ..OrdinaryDescriptor::default()
+                    },
+                    Some(_) => OrdinaryDescriptor {
+                        configurable: Some(false),
+                        writable: Some(false),
+                        ..OrdinaryDescriptor::default()
+                    },
+                }
+            } else {
+                OrdinaryDescriptor {
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                }
+            };
+            if !self.mop_define_own_property(code, inst, id, desc)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// `TestIntegrityLevel(O, sealed|frozen)` (ECMA-262 7.3.16).
+    fn test_integrity_level(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        frozen: bool,
+    ) -> Result<bool, Halt> {
+        self.meter.tick_raw(IS_EXTENSIBLE_RESIDUAL_METERING);
+        if self.mop_is_extensible(code, inst)? {
+            return Ok(false);
+        }
+        self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
+        for key in self.mop_own_keys(code, inst)? {
+            self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
+            let id = self.to_property_id(code, key)?;
+            if let Some(descriptor) = self.mop_get_own_property(code, inst, id)? {
+                if descriptor.configurable != Some(false)
+                    || (frozen && descriptor.is_data() && descriptor.writable == Some(true))
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
     /// `O.[[GetOwnProperty]](P)`.
     fn mop_get_own_property(
         &mut self,
@@ -44861,55 +44903,16 @@ impl Interp {
             }
             NativeMethod::ObjectSeal | NativeMethod::ObjectFreeze => {
                 let frozen = matches!(m, NativeMethod::ObjectFreeze);
-                if !self.mop_prevent_extensions(code, proxy)? {
+                if !self.set_integrity_level(code, proxy, frozen)? {
                     return Err(self.catchable_type_error());
-                }
-                let keys = self.mop_own_keys(code, proxy)?;
-                for key in keys {
-                    let id = self.to_property_id(code, key)?;
-                    let desc = if frozen {
-                        match self.mop_get_own_property(code, proxy, id)? {
-                            None => continue,
-                            Some(d) if d.is_accessor() => OrdinaryDescriptor {
-                                configurable: Some(false),
-                                ..OrdinaryDescriptor::default()
-                            },
-                            Some(_) => OrdinaryDescriptor {
-                                configurable: Some(false),
-                                writable: Some(false),
-                                ..OrdinaryDescriptor::default()
-                            },
-                        }
-                    } else {
-                        OrdinaryDescriptor {
-                            configurable: Some(false),
-                            ..OrdinaryDescriptor::default()
-                        }
-                    };
-                    if !self.mop_define_own_property(code, proxy, id, desc)? {
-                        return Err(self.catchable_type_error());
-                    }
                 }
                 Ok(proxy_slot)
             }
             NativeMethod::ObjectIsSealed | NativeMethod::ObjectIsFrozen => {
                 let frozen = matches!(m, NativeMethod::ObjectIsFrozen);
-                if self.mop_is_extensible(code, proxy)? {
-                    return Ok(Slot::boolean(false));
-                }
-                let keys = self.mop_own_keys(code, proxy)?;
-                for key in keys {
-                    let id = self.to_property_id(code, key)?;
-                    if let Some(d) = self.mop_get_own_property(code, proxy, id)? {
-                        if d.configurable != Some(false) {
-                            return Ok(Slot::boolean(false));
-                        }
-                        if frozen && d.is_data() && d.writable == Some(true) {
-                            return Ok(Slot::boolean(false));
-                        }
-                    }
-                }
-                Ok(Slot::boolean(true))
+                Ok(Slot::boolean(
+                    self.test_integrity_level(code, proxy, frozen)?,
+                ))
             }
             _ => {
                 let _ = argc;
