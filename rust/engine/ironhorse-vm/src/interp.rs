@@ -37068,13 +37068,13 @@ impl Interp {
                 element = self.run_callback(code, callback, this_arg, &callback_args)?;
             }
 
-            let array_element = match element.value {
-                Payload::Reference(element_object) if element.kind == Kind::Reference => self
-                    .array_generic_is_array(element_object)?
-                    .then_some(element_object),
-                _ => None,
-            };
             if depth > 0.0 {
+                let array_element = match element.value {
+                    Payload::Reference(element_object) if element.kind == Kind::Reference => self
+                        .array_generic_is_array(element_object)?
+                        .then_some(element_object),
+                    _ => None,
+                };
                 if let Some(element_object) = array_element {
                     self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
                     let element_len = self.array_generic_length(code, element_object)?;
