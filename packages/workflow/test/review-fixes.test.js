@@ -544,9 +544,14 @@ test('a lost emit delivery is re-dispatched from its journaled obligation', asyn
 test('a spawn crash window adopts the child instead of duplicating it', async t => {
   const { powers, controls } = makeFakeAgent();
   let crashArmed = true;
+  // A real crash kills every write from that moment on: the `spawned`
+  // linkage entry AND the failed-settlement conversion the engine now
+  // attempts for the dispatch throw. Both must die for the crash
+  // window to stay open.
   const wrapped = crashingPowers(
     powers,
-    value => crashArmed && value.kind === 'spawned',
+    value =>
+      crashArmed && (value.kind === 'spawned' || value.settles !== undefined),
   );
   const h1 = await makeWorkflowService({
     powers: wrapped,
@@ -575,10 +580,15 @@ test('a spawn crash window adopts the child instead of duplicating it', async t 
     },
   });
   // The child run is created durably; the parent's `spawned` linkage
-  // write dies.
-  await t.throwsAsync(() => E(h1.service).start(parentChart, {}), {
-    message: /simulated crash/,
-  });
+  // write dies, and so does the failed-settlement conversion — the
+  // parent is left with the spawn pending and unlinked.
+  const parent1 = await E(h1.service).start(parentChart, {});
+  const engine1 = h1.engines.get(parent1.runId);
+  await settle();
+  const journal1 = await E(engine1.runFacet).journal();
+  t.false(journal1.some(entry => entry.kind === 'spawned'));
+  t.false(journal1.some(entry => entry.settles !== undefined));
+  t.false(engine1.fold.done);
   h1.stop();
   crashArmed = false;
 

@@ -69,7 +69,7 @@
 
 import { Fail, q } from '@endo/errors';
 import { encodeHex } from '@endo/hex';
-import { passStyleOf, getTag } from '@endo/pass-style';
+import { passStyleOf, getTag, nameForPassableSymbol } from '@endo/pass-style';
 import { sha256 } from '@endo/sha256';
 
 const { keys } = Object;
@@ -391,10 +391,16 @@ const encodeCanonical = (value, depth) => {
     return `{"#big":"${value}"}`;
   }
   if (type === 'symbol') {
-    // Passable symbols are well-known or registered; the description
-    // names them for hashing purposes.
-    const description = /** @type {symbol} */ (value).description;
-    return `{"#sym":${JSON.stringify(String(description ?? ''))}}`;
+    // `nameForPassableSymbol` is injective over passable symbols (the
+    // well-known `Symbol.iterator` names as '@@iterator' while the
+    // registered `Symbol.for('Symbol.iterator')` keeps its key, with
+    // Hilbert-Hotel escaping for registered '@@…' keys) — a plain
+    // `description` would collide the two, letting one substitute for
+    // the other under an unchanged hash.
+    const name = nameForPassableSymbol(/** @type {symbol} */ (value));
+    name !== undefined ||
+      Fail`journal entries must be capability-free data, cannot encode an unpassable symbol`;
+    return `{"#sym":${JSON.stringify(name)}}`;
   }
   const style = passStyleOf(value);
   if (style === 'copyArray') {
@@ -435,7 +441,7 @@ const encodeCanonical = (value, depth) => {
  * hashing. JSON syntax with sorted record keys plus escape records for
  * the passable extensions: `{"#":"undefined"}`, `{"#num":"NaN"}` (and
  * `-0`, `Infinity`, `-Infinity`), `{"#big":"7"}` for bigints,
- * `{"#sym":d}` for passable symbols, `{"#tag":t,"payload":p}` for
+ * `{"#sym":n}` for passable symbols (their injective pass-style names), `{"#tag":t,"payload":p}` for
  * tagged values, and `{"#error":name,"message":m,"cause"?,"errors"?}`
  * for errors (aux data included). Literal record keys beginning with
  * `#` are escaped by doubling, so the encoding is prefix-unambiguous.

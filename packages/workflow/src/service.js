@@ -94,6 +94,12 @@ const CORRELATION_SCAN_ATTEMPTS = 8;
 const CORRELATION_SCAN_DELAY_MS = 50;
 /** Journal a state snapshot every this many entries. */
 const SNAPSHOT_EVERY = 64;
+/**
+ * Longest single timer hop. Node's `setTimeout` clamps any delay beyond
+ * 2^31 - 1 ms (~24.9 days) to 1 ms, so a longer deadline is armed as a
+ * chain of bounded hops against the durable absolute deadline.
+ */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 const DECIMAL_NAME = /^(0|[1-9][0-9]*)$/;
 const CHART_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,99}$/;
@@ -598,13 +604,14 @@ export const makeWorkflowService = async ({
      * queue.
      *
      * Fail-loud policy: a kernel throw fails the run, and so does a
-     * settlement envelope (an ask answer, invoke result, or child-run
-     * outcome) that fires no transition — a lost answer is a wedged run,
-     * and a failed run is visible where a wedge is silent. Compensation
-     * (exit-effect) settlements are exempt: their owner state is dead by
-     * design. Timer emissions and external signals may fall through
-     * guards without firing; the journaled no-fire event is their audit
-     * trail.
+     * settlement envelope (an ask answer, invoke result, child-run
+     * outcome, or timer failure) that fires no transition — a lost
+     * answer is a wedged run, and a failed run is visible where a wedge
+     * is silent. Compensation (exit-effect) settlements are exempt:
+     * their owner state is dead by design. Timer emissions (an elapsed
+     * `after` firing its declared event) and external signals may fall
+     * through guards without firing; the journaled no-fire event is
+     * their audit trail.
      *
      * @param {any} envelope
      * @param {number} depth
@@ -645,7 +652,10 @@ export const makeWorkflowService = async ({
           envelope.effectId !== undefined &&
           envelope.compensation !== true &&
           typeof by === 'string' &&
-          (by.startsWith('ask:') || by.startsWith('invoke:') || by === 'spawn');
+          (by.startsWith('ask:') ||
+            by.startsWith('invoke:') ||
+            by === 'spawn' ||
+            by === 'timer');
         if (settlement) {
           await append({
             ...base,
@@ -790,7 +800,9 @@ export const makeWorkflowService = async ({
               ? `invoke:${effect.target}`
               : effect.kind === 'spawn'
                 ? 'spawn'
-                : 'engine';
+                : effect.kind === 'after'
+                  ? 'timer'
+                  : 'engine';
         const settles = harden({
           effectId,
           status: effectiveStatus,
@@ -1005,11 +1017,20 @@ export const makeWorkflowService = async ({
       const { effectId } = record;
       clearTimer(effectId);
       const remaining = Math.max(0, deadline - clock.now());
+      // Never hand the host a delay beyond MAX_TIMER_MS: Node clamps
+      // those to 1 ms, which would fire a distant deadline immediately.
+      // Each hop re-checks the durable absolute deadline and either
+      // re-arms or fires.
+      const hop = Math.min(remaining, MAX_TIMER_MS);
       const handle = clock.setTimeout(() => {
         liveTimers.delete(handle);
         timers.delete(effectId);
-        fireAfter(record).catch(() => {});
-      }, remaining);
+        if (deadline - clock.now() > 0) {
+          armAfterTimer(record, deadline);
+        } else {
+          fireAfter(record).catch(() => {});
+        }
+      }, hop);
       timers.set(effectId, handle);
       liveTimers.add(handle);
     };
@@ -1114,25 +1135,43 @@ export const makeWorkflowService = async ({
             }),
             depth + 1,
           );
-        } else if (effect.kind === 'invoke') {
-          // eslint-disable-next-line no-await-in-loop
-          await dispatchInvoke(record);
-        } else if (effect.kind === 'ask') {
-          // eslint-disable-next-line no-await-in-loop
-          await dispatchAsk(record);
-        } else if (effect.kind === 'after') {
-          const deadline = afterDeadlineOf(effect);
-          // eslint-disable-next-line no-await-in-loop
-          await append({
-            kind: 'effect-dispatched',
-            by: 'engine',
-            effectId,
-            correlation: harden({ deadline }),
-          });
-          armAfterTimer(record, deadline);
-        } else if (effect.kind === 'spawn') {
-          // eslint-disable-next-line no-await-in-loop
-          await dispatchSpawn(record);
+        } else {
+          try {
+            if (effect.kind === 'invoke') {
+              // eslint-disable-next-line no-await-in-loop
+              await dispatchInvoke(record);
+            } else if (effect.kind === 'ask') {
+              // eslint-disable-next-line no-await-in-loop
+              await dispatchAsk(record);
+            } else if (effect.kind === 'after') {
+              const deadline = afterDeadlineOf(effect);
+              // eslint-disable-next-line no-await-in-loop
+              await append({
+                kind: 'effect-dispatched',
+                by: 'engine',
+                effectId,
+                correlation: harden({ deadline }),
+              });
+              armAfterTimer(record, deadline);
+            } else if (effect.kind === 'spawn') {
+              // eslint-disable-next-line no-await-in-loop
+              await dispatchSpawn(record);
+            }
+          } catch (error) {
+            // A dispatch throw — an unparseable `after.at`, a rejected
+            // `request`/`form` send, a child whose params refuse its
+            // chart's pattern — must not strand the pending effect it
+            // belongs to. Convert it to a failed settlement so the
+            // chart's `failure` transition, or the fail-loud terminal,
+            // decides what it means. Fire-and-forget: this loop already
+            // runs inside the run's serial queue, and awaiting a
+            // same-queue enqueue would deadlock.
+            settleEffect(
+              effectId,
+              'failed',
+              `dispatch failed: ${/** @type {Error} */ (error).message}`,
+            ).catch(() => {});
+          }
         }
       }
     };
@@ -1291,94 +1330,105 @@ export const makeWorkflowService = async ({
         }
         for (const record of [...fold.pending.values()]) {
           const { effect, effectId, correlation } = record;
-          if (effect.kind === 'invoke') {
-            // At-least-once: re-dispatch under the same effectId whether
-            // or not the previous incarnation got the send off.
-            // eslint-disable-next-line no-await-in-loop
-            await dispatchInvoke(record);
-          } else if (effect.kind === 'ask') {
-            if (correlation === undefined) {
-              // Crash between the event append and the dispatch record:
-              // dispatchAsk scans for an existing message bearing the
-              // effect's marker before sending, so this cannot double-ask.
+          try {
+            if (effect.kind === 'invoke') {
+              // At-least-once: re-dispatch under the same effectId whether
+              // or not the previous incarnation got the send off.
               // eslint-disable-next-line no-await-in-loop
-              await dispatchAsk(record);
-            } else if (correlation.mode === 'form') {
-              if (correlation.messageId !== undefined) {
-                formCorrelations.set(correlation.messageId, {
-                  runId,
-                  effectId,
-                });
+              await dispatchInvoke(record);
+            } else if (effect.kind === 'ask') {
+              if (correlation === undefined) {
+                // Crash between the event append and the dispatch record:
+                // dispatchAsk scans for an existing message bearing the
+                // effect's marker before sending, so this cannot double-ask.
+                // eslint-disable-next-line no-await-in-loop
+                await dispatchAsk(record);
+              } else if (correlation.mode === 'form') {
+                if (correlation.messageId !== undefined) {
+                  formCorrelations.set(correlation.messageId, {
+                    runId,
+                    effectId,
+                  });
+                }
+                // Adopt an answer that arrived while the daemon was down.
+                // eslint-disable-next-line no-await-in-loop
+                const messages = await E(powers).listMessages();
+                for (const message of messages) {
+                  if (
+                    message.type === 'value' &&
+                    message.replyTo === correlation.messageId
+                  ) {
+                    // eslint-disable-next-line no-await-in-loop
+                    const value = await E(powers).lookup([
+                      '@mail',
+                      String(message.number),
+                      '@value',
+                    ]);
+                    settleEffect(effectId, 'fulfilled', value).catch(() => {});
+                    break;
+                  }
+                }
+              } else {
+                // eslint-disable-next-line no-await-in-loop
+                await attachRequestAsk(effectId, correlation);
               }
-              // Adopt an answer that arrived while the daemon was down.
-              // eslint-disable-next-line no-await-in-loop
-              const messages = await E(powers).listMessages();
-              for (const message of messages) {
-                if (
-                  message.type === 'value' &&
-                  message.replyTo === correlation.messageId
-                ) {
-                  // eslint-disable-next-line no-await-in-loop
-                  const value = await E(powers).lookup([
-                    '@mail',
-                    String(message.number),
-                    '@value',
-                  ]);
-                  settleEffect(effectId, 'fulfilled', value).catch(() => {});
-                  break;
+            } else if (effect.kind === 'after') {
+              if (
+                correlation !== undefined &&
+                typeof correlation.deadline === 'number' &&
+                Number.isFinite(correlation.deadline)
+              ) {
+                armAfterTimer(record, correlation.deadline);
+              } else {
+                // No journaled deadline (crash before the dispatch entry)
+                // or a non-numeric one (torn or tampered): recompute and
+                // re-journal rather than arming a NaN timer. An `ms`
+                // deadline restarts its full duration from now — the
+                // original was never committed.
+                const deadline = afterDeadlineOf(effect);
+                // eslint-disable-next-line no-await-in-loop
+                await append({
+                  kind: 'effect-dispatched',
+                  by: 'engine',
+                  effectId,
+                  correlation: harden({ deadline }),
+                });
+                armAfterTimer(record, deadline);
+              }
+            } else if (effect.kind === 'spawn') {
+              if (record.childRunId === undefined) {
+                // eslint-disable-next-line no-await-in-loop
+                await dispatchSpawn(record);
+              } else {
+                const child = engines.get(record.childRunId);
+                if (child === undefined || child.fold.done) {
+                  const outcome =
+                    child === undefined
+                      ? { status: 'failed', reason: 'child run missing' }
+                      : {
+                          status: child.fold.outcome,
+                          ...(child.fold.output !== undefined
+                            ? { output: child.fold.output }
+                            : {}),
+                          ...(child.fold.reason !== undefined
+                            ? { reason: child.fold.reason }
+                            : {}),
+                        };
+                  engine.settleChild(effectId, outcome).catch(() => {});
+                } else {
+                  parentLinks.set(record.childRunId, { runId, effectId });
                 }
               }
-            } else {
-              // eslint-disable-next-line no-await-in-loop
-              await attachRequestAsk(effectId, correlation);
             }
-          } else if (effect.kind === 'after') {
-            if (
-              correlation !== undefined &&
-              typeof correlation.deadline === 'number' &&
-              Number.isFinite(correlation.deadline)
-            ) {
-              armAfterTimer(record, correlation.deadline);
-            } else {
-              // No journaled deadline (crash before the dispatch entry)
-              // or a non-numeric one (torn or tampered): recompute and
-              // re-journal rather than arming a NaN timer. An `ms`
-              // deadline restarts its full duration from now — the
-              // original was never committed.
-              const deadline = afterDeadlineOf(effect);
-              // eslint-disable-next-line no-await-in-loop
-              await append({
-                kind: 'effect-dispatched',
-                by: 'engine',
-                effectId,
-                correlation: harden({ deadline }),
-              });
-              armAfterTimer(record, deadline);
-            }
-          } else if (effect.kind === 'spawn') {
-            if (record.childRunId === undefined) {
-              // eslint-disable-next-line no-await-in-loop
-              await dispatchSpawn(record);
-            } else {
-              const child = engines.get(record.childRunId);
-              if (child === undefined || child.fold.done) {
-                const outcome =
-                  child === undefined
-                    ? { status: 'failed', reason: 'child run missing' }
-                    : {
-                        status: child.fold.outcome,
-                        ...(child.fold.output !== undefined
-                          ? { output: child.fold.output }
-                          : {}),
-                        ...(child.fold.reason !== undefined
-                          ? { reason: child.fold.reason }
-                          : {}),
-                      };
-                engine.settleChild(effectId, outcome).catch(() => {});
-              } else {
-                parentLinks.set(record.childRunId, { runId, effectId });
-              }
-            }
+          } catch (error) {
+            // Same conversion as dispatchEffects: a re-arm throw must
+            // strand nothing. Fire-and-forget — this body is itself a
+            // job on the run's serial queue.
+            settleEffect(
+              effectId,
+              'failed',
+              `dispatch failed: ${/** @type {Error} */ (error).message}`,
+            ).catch(() => {});
           }
         }
       });

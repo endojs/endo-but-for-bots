@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-08-18 |
+| **Updated** | 2026-09-02 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
@@ -11,7 +11,7 @@
 
 Phases 1–4 are implemented as `packages/workflow` (`@endo/workflow`),
 with Phase 5's status feeds, the `@endo/space-workflow` Chat space, and
-a fake-daemon realization of Phase 6's acceptance flow; 83 tests pass
+a fake-daemon realization of Phase 6's acceptance flow; 92 tests pass
 and package lint is clean.
 A cross-review against the parallel implementation on
 `claude/endo-workflow-system-5u7764` folded that branch's best ideas
@@ -170,6 +170,24 @@ findings were all fixed and regression-tested (81 tests):
    `return`); `$eachParam` overlay ids normalize onto the drawn
    representative region; plus error-boundary, stale-banner, key, and
    timeline fixes, and integrity/chain-verification affordances.
+
+A third round (2026-09-02) fixed the pull-request review's blockers:
+
+1. **Dispatch throws settle, never strand.** An exception while
+   dispatching an effect — an unparseable `after.at`, a rejected
+   `request`/`form` send, a spawn whose child params refuse its chart —
+   converts to a journaled failed settlement (honoring the effect's
+   `failure` transition, else the fail-loud terminal), at first dispatch
+   and at recovery re-arm alike; timer settlements joined the fail-loud
+   classes (`by: 'timer'`).
+2. **Bounded timer hops.** Node's `setTimeout` clamps delays beyond
+   2^31−1 ms to 1 ms, so a distant `after` deadline would have fired
+   immediately; timers now arm in bounded hops against the durable
+   absolute deadline.
+3. **Injective symbol encoding.** The canonical journal encoding names
+   symbols with `nameForPassableSymbol` (well-known `Symbol.iterator` ≠
+   registered `Symbol.for('Symbol.iterator')`) and refuses unpassable
+   symbols, so no two distinct entries can share a hash.
 
 ## What is the Problem Being Solved?
 
@@ -650,24 +668,37 @@ or the need for formula-edge retention semantics.
 
 ### Package shape
 
+As built (the `src/run.js` / `src/effects.js` split this section first
+sketched stayed inside `service.js`: the per-run engine closes over run
+state and the effect performers share its correlation tables, so the
+seam bought nothing; and a `src/types.ts` proved unnecessary — facet
+types ride the `interfaces.js` guards and JSDoc):
+
 ```
 packages/workflow/                  @endo/workflow
-  index.js                          re-exports the public kernel + service surface
   machine.js                        thunk → src/machine.js (pure kernel, Option K)
-  src/machine.js                    assertChart, initialStep, transition
-  src/template.js                   total substitution + string interpolation
-  src/journal.js                    entry constructors, entry pattern, foldJournal
-  src/service.js                    make(powers, context, { env }) → WorkflowService
-  src/run.js                        per-run engine: intake, dispatch, recovery
-  src/effects.js                    ask / invoke / spawn / after / emit performers
+  src/index.js                      make(powers, context, { env }) plugin entry;
+                                    re-exports the public surface
+  src/machine.js                    assertChart, chartDiagnostics, initialStep,
+                                    transition, exitEffects, engineEventTypes
+  src/template.js                   total substitution + delimited interpolation
+  src/journal.js                    entry shapes, foldJournal, canonical
+                                    encoding + hash chain
+  src/service.js                    per-run engines: intake, dispatch, recovery,
+                                    factories, facets
   src/interfaces.js                 M.interface guards for every facet
-  src/types.ts                      Chart, Run, JournalEntry, facet types
+  src/simulate.js                   makeSimulator — kernel + fold, hand-settled
+  src/sync.js                       makeRunSyncClient — client-side fold mirror
+  src/graph.js                      renderGraph / renderMermaid
+  src/topic.js                      lossless change topic (follow, followRuns)
+  src/serial-jobs.js                per-run serial queue
 ```
 
-The kernel modules (`machine.js`, `template.js`, `journal.js`) import only
-`@endo/patterns`, `@endo/errors`, and `@endo/marshal` helpers — no daemon
-types — so they run identically inside the service worker, inside a test,
-inside an agent's compartment, or inside a browser space.
+The kernel modules (`machine.js`, `template.js`, `journal.js`) import
+only `@endo/patterns`, `@endo/errors`, `@endo/pass-style`, and the
+`@endo/hex` / `@endo/sha256` hash helpers — no daemon types — so they
+run identically inside the service worker, inside a test, inside an
+agent's compartment, or inside a browser space.
 
 ### The chart schema
 
@@ -1342,11 +1373,17 @@ one-state workflow.
 
 ## Known Gaps and TODOs
 
-- [ ] Normative `ChartShape` pattern and the exact template grammar
-      (`$params`/`$ctx`/`$event`/`$inc`; decide on path syntax and
-      escaping) — Phase 1 blocker.
-- [ ] Decide `counts` envelope shape for nested joins (region outcomes
-      that are themselves compound) before Phase 4.
+- [x] Normative chart validation and the exact template grammar —
+      resolved in Phase 1: `assertChart` (structural walk with
+      `assertPattern` on guards) is the normative check, and
+      `src/template.js` fixes the grammar (`$params`/`$ctx`/`$event`
+      dotted paths, `$inc`, delimited interpolation).
+- [x] `counts` envelope shape for nested joins — resolved in Phase 4:
+      `regions-settled` carries `counts` keyed by top-level final-state
+      name (zero-populated, `pending` reserved for the unsettled count,
+      and region final states of that name rejected) plus per-region
+      `outcomes` in region order; a compound region contributes the
+      final state it settled in.
 - [ ] Service mailbox hygiene: asks fan out from one guest mailbox;
       define dismissal policy for settled correspondence so the inbox
       does not grow without bound.
