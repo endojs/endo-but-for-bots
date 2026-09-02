@@ -2358,7 +2358,8 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 ///   and quiescence requires the job queue empty);
 /// - a `Combine`/`CombineDirect` reaction indexes a combinator row; a resolving
 ///   function indexes a guard and names a promise row; a capability executor
-///   uses the reserved `u32::MAX` guard and names its hidden home object; a
+///   or persisted finally closure uses one of the three reserved high guard
+///   tags and names its hidden home object; a
 ///   combinator carries reference-shaped capability callbacks whose callability
 ///   is rechecked after function restoration;
 /// - both arenas are DENSELY referenced (the writer emits the
@@ -2491,16 +2492,18 @@ pub(crate) fn decode_promise_cluster(
     // and a guard spanning promises or doubling a polarity can only
     // be crafted (its trip would then gate the WRONG settlement).
     let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; guards.len()];
-    let mut executor_homes = std::collections::BTreeSet::new();
+    let mut runtime_homes = std::collections::BTreeSet::new();
     for row in &functions {
-        if row.guard == u32::MAX {
-            if row.reject
+        if row.guard >= u32::MAX - 2 {
+            if (row.guard == u32::MAX && row.reject)
                 || row.promise == row.function
-                || !executor_homes.insert(row.promise)
+                || !runtime_homes.insert(row.promise)
             {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: malformed capability executor home",
-                ));
+                return Err(SnapshotError::Corrupt(if row.guard == u32::MAX {
+                    "promise cluster: malformed capability executor home"
+                } else {
+                    "promise cluster: malformed finally function home"
+                }));
             }
             continue;
         }
@@ -2553,7 +2556,7 @@ pub(crate) fn decode_promise_cluster(
                 && b.promise == owner
                 && !a.reject
                 && b.reject
-                && a.guard != u32::MAX
+                && a.guard < u32::MAX - 2
                 && a.guard == b.guard)
     };
     for promise in &promises {

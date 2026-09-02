@@ -456,6 +456,15 @@ fn capability_executor_fixture() -> Interp {
     )
 }
 
+/// A generic receiver whose custom `then` retains both anonymous finally
+/// wrappers, plus an unrelated Array for malformed-home substitutions.
+fn finally_wrapper_fixture() -> Interp {
+    quiescent_machine(
+        "var saved=[];var spare=[];var o={constructor:Promise,then:function(a,b){saved=[a,b];return {}}}; \
+         Promise.prototype.finally.call(o,function(){});0",
+    )
+}
+
 fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
     let crafted = write_machine(image);
     match from_snapshot_bytes(&crafted, &sig()) {
@@ -630,6 +639,56 @@ fn a_crafted_capability_executor_home_is_refused() {
         missing_fields.arrays[0].owner;
     expect_container_refusal(
         &missing_fields,
+        "side-table restore: malformed promise cluster",
+    );
+}
+
+#[test]
+fn a_crafted_finally_wrapper_home_is_refused() {
+    let m = finally_wrapper_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    let wrappers: Vec<usize> = image
+        .promise_cluster
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| (row.guard == u32::MAX - 1).then_some(i))
+        .collect();
+    assert_eq!(wrappers.len(), 2, "both retained finally handlers persist");
+
+    let mut self_homed = image.clone();
+    self_homed.promise_cluster.functions[wrappers[0]].promise =
+        self_homed.promise_cluster.functions[wrappers[0]].function;
+    expect_container_refusal(
+        &self_homed,
+        "promise cluster: malformed finally function home",
+    );
+
+    let mut shared_home = image.clone();
+    shared_home.promise_cluster.functions[wrappers[1]].promise =
+        shared_home.promise_cluster.functions[wrappers[0]].promise;
+    expect_container_refusal(
+        &shared_home,
+        "promise cluster: malformed finally function home",
+    );
+
+    // A structurally in-bounds object is not a valid capture home. The image
+    // decoder establishes shape; adoption verifies the required hidden fields.
+    let mut missing_fields = image.clone();
+    missing_fields.promise_cluster.functions[wrappers[0]].promise =
+        missing_fields.arrays[0].owner;
+    expect_container_refusal(
+        &missing_fields,
+        "side-table restore: malformed promise cluster",
+    );
+
+    // Retagging a handler home as a value thunk must not resurrect a callable
+    // that reads a missing `[[PromiseFinallyValue]]` capture.
+    let mut wrong_kind = image;
+    wrong_kind.promise_cluster.functions[wrappers[0]].guard = u32::MAX - 2;
+    expect_container_refusal(
+        &wrong_kind,
         "side-table restore: malformed promise cluster",
     );
 }

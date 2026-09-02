@@ -2623,6 +2623,15 @@ pub enum NativeMethod {
     /// `onFinally` and pass the settlement through — a later increment
     /// (self-names until then).
     PromiseFinally,
+    /// The anonymous length-1 `thenFinally` / `catchFinally` closures created
+    /// by `Promise.prototype.finally` for an observable custom `then`. Their
+    /// hidden home and polarity live in `promise_functions`, alongside the
+    /// other runtime-minted, persisted Promise callables.
+    PromiseFinallyHandler,
+    /// The anonymous length-0 value thunk returned by a callable finally
+    /// handler. It restores the original fulfillment value or throws the
+    /// original rejection reason after `PromiseResolve(C, onFinally())`.
+    PromiseFinallyValue,
     /// `get Promise[@@species]`: the standard accessor returns its receiver.
     PromiseSpeciesGetter,
     /// `%GeneratorPrototype%.next(v)` (`fx_Generator_prototype_next`): resume
@@ -3084,25 +3093,31 @@ enum ReactionKind {
     FromAsyncClose(u32),
 }
 
-/// A resolve/reject function's bound data (XS's `fxPushPromiseFunctions`
-/// home object): which promise it settles and whether it resolves or
-/// rejects. Kept in the [`Interp::promise_functions`] side table, keyed by
-/// the host-function instance's slot; the `[[AlreadyResolved]]` guard is
-/// `guard`, an index into [`Interp::promise_guards`] shared by the two
-/// functions of one `fxPushPromiseFunctions` pair (tripped by whichever of
-/// resolve/reject fires first, the second a metered no-op).
+/// Bound state for a runtime-minted Promise callable. Ordinary resolve/reject
+/// functions use XS's `fxPushPromiseFunctions` home model: `promise` names the
+/// promise they settle and `guard` indexes the pair's shared
+/// `[[AlreadyResolved]]` flag. Reserved guard tags instead make `promise` the
+/// hidden capture home for a capability executor or `finally` closure.
 #[derive(Copy, Clone, Debug)]
 struct PromiseFnData {
     /// The promise settled by an ordinary resolving function, or the hidden
-    /// capability-record home of a [`NativeMethod::PromiseCapabilityExecutor`].
+    /// capture home of another runtime-minted Promise callable.
     promise: crate::value::SlotIndex,
+    /// Resolve/reject polarity for a resolving pair, or fulfillment/rejection
+    /// pass-through polarity for a `finally` handler/value closure.
     reject: bool,
-    /// `usize::MAX` identifies a capability executor; every other value is an
-    /// index into [`Interp::promise_guards`].
+    /// The high reserved values identify runtime-minted Promise closures;
+    /// every lower value is an index into [`Interp::promise_guards`].
     guard: usize,
 }
 
 const PROMISE_CAPABILITY_EXECUTOR_GUARD: usize = usize::MAX;
+const PROMISE_FINALLY_HANDLER_GUARD: usize = usize::MAX - 1;
+const PROMISE_FINALLY_VALUE_GUARD: usize = usize::MAX - 2;
+
+fn is_promise_resolving_guard(guard: usize) -> bool {
+    guard < PROMISE_FINALLY_VALUE_GUARD
+}
 
 #[derive(Copy, Clone, Debug)]
 struct PromiseCapability {
@@ -4500,10 +4515,10 @@ pub struct Interp {
     /// `NoStatus` outside a `step_async` resume, so the generator `BRANCH_STATUS`
     /// path (which only ever resumes `NoStatus`) is unchanged.
     resume_status: ResumeStatus,
-    /// A resolve/reject host function's bound data (XS's
-    /// `fxPushPromiseFunctions` home object). Keyed by the function
-    /// instance's slot; consulted in the `RUN` dispatch when a program calls
-    /// a resolve/reject function it was handed. See [`PromiseFnData`].
+    /// Bound state for runtime-minted Promise host functions. Keyed by the
+    /// function instance's slot and consulted in `RUN` when guest code calls a
+    /// resolver, capability executor, or `finally` closure it was handed. See
+    /// [`PromiseFnData`].
     promise_functions: std::collections::HashMap<crate::value::SlotIndex, PromiseFnData>,
     /// The per-pair `[[AlreadyResolved]]` guards (XS's boolean slot in each
     /// `fxPushPromiseFunctions` home object). A resolving-function pair shares
@@ -5066,23 +5081,25 @@ pub struct PromiseRow {
     pub reactions: Vec<PromiseReactionRow>,
 }
 
-/// One resolve/reject function's bound data (the serialized
-/// [`PromiseFnData`] plus the `FuncInfo` fields restore rebuilds —
-/// mirroring [`IntlBoundFunctionRow`], the other runtime-minted native
-/// population that travels outside `FUNC`).
+/// One runtime-minted Promise callable's bound data (the serialized
+/// [`PromiseFnData`] plus the `FuncInfo` fields restore rebuilds — mirroring
+/// [`IntlBoundFunctionRow`], the other runtime-minted native population that
+/// travels outside `FUNC`).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PromiseFnRow {
     pub function: u32,
     /// Settled promise for a resolving function; hidden record object for a
-    /// capability executor (`guard == u32::MAX`).
+    /// capability executor or `finally` closure (reserved high guard tags).
     pub promise: u32,
-    /// `false` = the resolve function, `true` = the reject function.
+    /// Resolve/reject polarity for a resolving pair, or original-completion
+    /// polarity for a `finally` closure.
     pub reject: bool,
     /// Index into [`PromiseClusterSnapshot::guards`], the pair's shared
-    /// `[[AlreadyResolved]]` boolean. `u32::MAX` marks a capability executor.
+    /// `[[AlreadyResolved]]` boolean. `u32::MAX` marks a capability executor;
+    /// the next two lower values mark a finally handler and value thunk.
     pub guard: u32,
-    /// The interned empty-name chunk `make_resolving_functions` gave the
-    /// pair. Carried (not re-interned) so restore mutates no arena.
+    /// The callable's interned empty-name chunk. Carried (not re-interned) so
+    /// restore mutates no arena.
     pub name_chunk: u32,
 }
 
@@ -10897,9 +10914,7 @@ impl Interp {
         // is empty at every persistable boundary).
         let live_guards: std::collections::BTreeSet<usize> = functions
             .iter()
-            .filter_map(|(_, d)| {
-                (d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD).then_some(d.guard)
-            })
+            .filter_map(|(_, d)| is_promise_resolving_guard(d.guard).then_some(d.guard))
             .collect();
         let live_comb: std::collections::BTreeSet<u32> = promises
             .iter()
@@ -10974,10 +10989,11 @@ impl Interp {
                     function: owner.0,
                     promise: data.promise.0,
                     reject: data.reject,
-                    guard: if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
-                        u32::MAX
-                    } else {
-                        guard_map[&data.guard]
+                    guard: match data.guard {
+                        PROMISE_CAPABILITY_EXECUTOR_GUARD => u32::MAX,
+                        PROMISE_FINALLY_HANDLER_GUARD => u32::MAX - 1,
+                        PROMISE_FINALLY_VALUE_GUARD => u32::MAX - 2,
+                        guard => guard_map[&guard],
                     },
                     name_chunk: self.functions[&owner].name_chunk.0,
                 })
@@ -11066,7 +11082,7 @@ impl Interp {
                     && b.promise == owner
                     && !a.reject
                     && b.reject
-                    && a.guard != u32::MAX
+                    && a.guard < u32::MAX - 2
                     && a.guard == b.guard)
         };
         for row in &snap.promises {
@@ -11176,11 +11192,64 @@ impl Interp {
         // Guard coherence, the decoder's rule re-proved: one resolving
         // pair (or its surviving half) per guard, one promise per pair.
         let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; snap.guards.len()];
-        let mut executor_homes = std::collections::BTreeSet::new();
+        let mut runtime_homes = std::collections::BTreeSet::new();
         for row in &snap.functions {
             let function = crate::value::SlotIndex(row.function);
             if self.functions.contains_key(&function) {
                 return false;
+            }
+            if row.guard == u32::MAX - 1 || row.guard == u32::MAX - 2 {
+                let home = crate::value::SlotIndex(row.promise);
+                let required: &[&str] = if row.guard == u32::MAX - 1 {
+                    &[
+                        "[[PromiseFinallyHandler]]",
+                        "[[PromiseFinallyConstructor]]",
+                    ]
+                } else {
+                    &["[[PromiseFinallyValue]]"]
+                };
+                if row.promise == row.function
+                    || !runtime_homes.insert(row.promise)
+                    || required.iter().any(|name| {
+                        self.symbol_ids
+                            .get(*name)
+                            .and_then(|id| self.find_property(home, *id))
+                            .is_none()
+                    })
+                {
+                    return false;
+                }
+                let (method, guard, arity) = if row.guard == u32::MAX - 1 {
+                    (
+                        NativeMethod::PromiseFinallyHandler,
+                        PROMISE_FINALLY_HANDLER_GUARD,
+                        1,
+                    )
+                } else {
+                    (
+                        NativeMethod::PromiseFinallyValue,
+                        PROMISE_FINALLY_VALUE_GUARD,
+                        0,
+                    )
+                };
+                self.functions.insert(
+                    function,
+                    FuncInfo {
+                        method: Some(method),
+                        name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                        arity,
+                        ..FuncInfo::default()
+                    },
+                );
+                self.promise_functions.insert(
+                    function,
+                    PromiseFnData {
+                        promise: home,
+                        reject: row.reject,
+                        guard,
+                    },
+                );
+                continue;
             }
             if row.guard == u32::MAX {
                 let home = crate::value::SlotIndex(row.promise);
@@ -11188,7 +11257,7 @@ impl Interp {
                 let reject_id = self.symbol_ids.get("[[PromiseCapabilityReject]]").copied();
                 if row.reject
                     || row.promise == row.function
-                    || !executor_homes.insert(row.promise)
+                    || !runtime_homes.insert(row.promise)
                     || resolve_id.and_then(|id| self.find_property(home, id)).is_none()
                     || reject_id.and_then(|id| self.find_property(home, id)).is_none()
                 {
@@ -11276,7 +11345,7 @@ impl Interp {
     /// callbacks can refer back to runtime-minted resolving functions; this
     /// second pass closes that intentional restore-order cycle.
     pub fn restored_promise_capabilities_are_valid(&self) -> bool {
-        self.promises.values().all(|promise| {
+        let reactions_valid = self.promises.values().all(|promise| {
             promise.reactions.iter().all(|reaction| match reaction.kind {
                 ReactionKind::User | ReactionKind::FinallyAwait(_) => {
                     self.is_callable_value(reaction.resolve)
@@ -11295,7 +11364,25 @@ impl Interp {
                     }),
                 _ => true,
             })
-        })
+        });
+        reactions_valid
+            && self.promise_functions.values().all(|data| {
+                if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
+                    return true;
+                }
+                let Some(&handler_id) = self.symbol_ids.get("[[PromiseFinallyHandler]]") else {
+                    return false;
+                };
+                let Some(&constructor_id) =
+                    self.symbol_ids.get("[[PromiseFinallyConstructor]]")
+                else {
+                    return false;
+                };
+                self.is_callable_value(self.instance_get(data.promise, handler_id))
+                    && self.is_constructor_value(
+                        self.instance_get(data.promise, constructor_id),
+                    )
+            })
     }
 
     /// Quiescent snapshot of the four Temporal record tables (ledger
@@ -19440,8 +19527,10 @@ impl Interp {
             Some(d) => *d,
             None => return Err(Halt::Unsupported("async:bad-resolving-fn")),
         };
-        if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
-            return Err(Halt::Unsupported("async:capability-executor-as-resolver"));
+        if !is_promise_resolving_guard(data.guard)
+            || data.guard >= self.promise_guards.len()
+        {
+            return Err(Halt::Unsupported("async:non-resolver-as-resolver"));
         }
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -19463,7 +19552,13 @@ impl Interp {
             _ => return Err(Halt::Unsupported("async:bad-resolving-fn")),
         };
         let data = match self.promise_functions.get(&fref) {
-            Some(d) if d.reject && d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD => *d,
+            Some(d)
+                if d.reject
+                    && is_promise_resolving_guard(d.guard)
+                    && d.guard < self.promise_guards.len() =>
+            {
+                *d
+            }
             _ => return Err(Halt::Unsupported("async:bad-rejecting-fn")),
         };
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
@@ -19491,7 +19586,10 @@ impl Interp {
             Payload::Reference(f) if function.kind == Kind::Reference => self
                 .promise_functions
                 .get(&f)
-                .is_some_and(|data| data.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD),
+                .is_some_and(|data| {
+                    is_promise_resolving_guard(data.guard)
+                        && data.guard < self.promise_guards.len()
+                }),
             _ => false,
         };
         if native_resolver {
@@ -22327,6 +22425,65 @@ impl Interp {
         )
     }
 
+    /// Mint one anonymous `thenFinally` / `catchFinally` closure. The hidden
+    /// null-prototype home keeps the callable handler and selected constructor
+    /// in ordinary heap slots, while the promise-function row gives the
+    /// runtime-minted native a persisted identity and records which completion
+    /// it restores.
+    fn make_promise_finally_handler(
+        &mut self,
+        on_finally: Slot,
+        constructor: Slot,
+        rejected: bool,
+    ) -> Slot {
+        for _ in 0..4 {
+            self.meter.tick_slot_alloc();
+        }
+        let handler_id = self.intern_key("[[PromiseFinallyHandler]]");
+        let constructor_id = self.intern_key("[[PromiseFinallyConstructor]]");
+        let home = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        self.set_own_unmetered(home, handler_id, on_finally);
+        self.set_own_unmetered(home, constructor_id, constructor);
+        let function = self.alloc_named_method(NativeMethod::PromiseFinallyHandler, "", 1);
+        self.promise_functions.insert(
+            function,
+            PromiseFnData {
+                promise: home,
+                reject: rejected,
+                guard: PROMISE_FINALLY_HANDLER_GUARD,
+            },
+        );
+        Slot::of(Kind::Reference, Payload::Reference(function))
+    }
+
+    /// Mint the anonymous value thunk passed to the promise returned by
+    /// `PromiseResolve(C, onFinally())`. On fulfillment it either returns the
+    /// original value or throws the original reason; an awaited rejection is
+    /// propagated by the receiver's `then` because no rejection handler is
+    /// supplied.
+    fn make_promise_finally_value(&mut self, value: Slot, rejected: bool) -> Slot {
+        for _ in 0..3 {
+            self.meter.tick_slot_alloc();
+        }
+        let value_id = self.intern_key("[[PromiseFinallyValue]]");
+        let home = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        self.set_own_unmetered(home, value_id, value);
+        let function = self.alloc_named_method(NativeMethod::PromiseFinallyValue, "", 0);
+        self.promise_functions.insert(
+            function,
+            PromiseFnData {
+                promise: home,
+                reject: rejected,
+                guard: PROMISE_FINALLY_VALUE_GUARD,
+            },
+        );
+        Slot::of(Kind::Reference, Payload::Reference(function))
+    }
+
     /// Build a fresh promise **capability** (XS's `fxNewPromiseCapability`): a
     /// derived pending promise plus its resolve/reject pair. XS routes this
     /// through `new this.constructor(capabilityCallback)`; for the native
@@ -24108,6 +24265,24 @@ impl Interp {
         _argc: usize,
     ) -> Result<(), Halt> {
         let data = self.promise_functions[&f];
+        if data.guard == PROMISE_FINALLY_HANDLER_GUARD
+            || data.guard == PROMISE_FINALLY_VALUE_GUARD
+        {
+            let value = self
+                .stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            let result = self.call_promise_finally_function(code, data, value);
+            return match result {
+                Ok(result) => {
+                    self.stack.truncate(base);
+                    self.push(result);
+                    Ok(())
+                }
+                Err(halt) => Err(halt),
+            };
+        }
         if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
             let resolve_id = self.intern_key("[[PromiseCapabilityResolve]]");
             let reject_id = self.intern_key("[[PromiseCapabilityReject]]");
@@ -24174,6 +24349,41 @@ impl Interp {
         self.stack.truncate(base);
         self.push(Slot::undefined());
         Ok(())
+    }
+
+    /// Invoke one persisted native closure created by
+    /// `Promise.prototype.finally`. Handler closures perform
+    /// `PromiseResolve(C, onFinally()).then(valueThunk)` and return that
+    /// invocation's result. Value thunks restore or throw the captured
+    /// original completion.
+    fn call_promise_finally_function(
+        &mut self,
+        code: &[u8],
+        data: PromiseFnData,
+        argument: Slot,
+    ) -> Result<Slot, Halt> {
+        if data.guard == PROMISE_FINALLY_VALUE_GUARD {
+            let value_id = self.intern_key("[[PromiseFinallyValue]]");
+            let value = self.instance_get(data.promise, value_id);
+            if data.reject {
+                return match self.raise_js(value) {
+                    Ok(target) => Err(Halt::Resume(target)),
+                    Err(halt) => Err(halt),
+                };
+            }
+            return Ok(value);
+        }
+        if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
+            return Err(Halt::Unsupported("promise:unknown-finally-function"));
+        }
+        let handler_id = self.intern_key("[[PromiseFinallyHandler]]");
+        let constructor_id = self.intern_key("[[PromiseFinallyConstructor]]");
+        let on_finally = self.instance_get(data.promise, handler_id);
+        let constructor = self.instance_get(data.promise, constructor_id);
+        let result = self.call_any(code, on_finally, Slot::undefined(), &[])?;
+        let promise = self.promise_resolve_with_constructor(code, constructor, result)?;
+        let value_thunk = self.make_promise_finally_value(argument, data.reject);
+        self.invoke_value_method(code, promise, "then", &[value_thunk])
     }
 
     /// Settle `promise` (XS's `fxResolvePromise`/`fxRejectPromise` core, called
@@ -26042,11 +26252,41 @@ impl Interp {
         Ok(selected)
     }
 
+    /// `PromiseResolve(C, x)` for the constructor selected by `finally`.
+    /// A branded promise whose observable constructor is `C` is returned
+    /// unchanged; every other value is resolved through a fresh capability so
+    /// custom constructors and resolving callbacks remain observable.
+    fn promise_resolve_with_constructor(
+        &mut self,
+        code: &[u8],
+        constructor: Slot,
+        value: Slot,
+    ) -> Result<Slot, Halt> {
+        if let Payload::Reference(inst) = value.value {
+            if value.kind == Kind::Reference && self.promises.contains_key(&inst) {
+                let constructor_id = self.intern_key("constructor");
+                let observed = self.mop_get(code, inst, constructor_id, value)?;
+                if self.same_value(observed, constructor) {
+                    return Ok(value);
+                }
+            }
+        }
+        let capability = self.new_promise_capability_for(code, constructor)?;
+        self.call_any(
+            code,
+            capability.resolve,
+            Slot::undefined(),
+            &[value],
+        )?;
+        Ok(capability.promise)
+    }
+
     /// Observable entry path for `Promise.prototype.finally`. A non-callable
     /// handler is fully generic and is forwarded unchanged to the receiver's
-    /// once-read `then`. The callable path supports any species constructor
-    /// when the receiver uses the intrinsic `then`; callable custom-`then`
-    /// wrappers still need persisted closure state and remain a named gap.
+    /// once-read `then`. A callable handler uses the direct native-reaction
+    /// representation for an intrinsic promise/`then`; every other receiver
+    /// gets the specification's anonymous `thenFinally` and `catchFinally`
+    /// closures, whose captured state persists with the Promise cluster.
     fn promise_finally_dispatch(
         &mut self,
         code: &[u8],
@@ -26074,7 +26314,17 @@ impl Interp {
         if self.promises.contains_key(&promise_inst) && intrinsic_then {
             return self.promise_finally(code, promise_inst, on_finally, constructor);
         }
-        Err(Halt::Unsupported("finally:callable-custom-dispatch"))
+        self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
+        let then_finally =
+            self.make_promise_finally_handler(on_finally, constructor, false);
+        let catch_finally =
+            self.make_promise_finally_handler(on_finally, constructor, true);
+        self.call_any(
+            code,
+            then,
+            promise,
+            &[then_finally, catch_finally],
+        )
     }
 
     /// The drain behavior of a `Promise.prototype.finally` reaction: recover the
@@ -32967,7 +33217,9 @@ impl Interp {
             // (`call_promise_function`) and never reach here.
             NativeMethod::PromiseResolveFunction
             | NativeMethod::PromiseRejectFunction
-            | NativeMethod::PromiseCapabilityExecutor => {
+            | NativeMethod::PromiseCapabilityExecutor
+            | NativeMethod::PromiseFinallyHandler
+            | NativeMethod::PromiseFinallyValue => {
                 return Err(Halt::Unsupported("promise:resolving-fn-unexpected"))
             }
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
@@ -54576,9 +54828,7 @@ impl Interp {
         let live_guards: BTreeSet<usize> = self
             .promise_functions
             .values()
-            .filter_map(|d| {
-                (d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD).then_some(d.guard)
-            })
+            .filter_map(|d| is_promise_resolving_guard(d.guard).then_some(d.guard))
             .collect();
 
         // Fully-live arenas need no rewrite (every index below the
@@ -54627,7 +54877,7 @@ impl Interp {
             }
         }
         for d in self.promise_functions.values_mut() {
-            if d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD {
+            if is_promise_resolving_guard(d.guard) {
                 d.guard = guard_map[&d.guard];
             }
         }
