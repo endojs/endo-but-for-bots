@@ -11,8 +11,8 @@
 
 The chart layer is complete: three reviewed-change charts, the two deploy
 charts used by the gated variants, and their simulator suites
-(`packages/floot/test/review-charts.test.js`, 16 tests, and
-`packages/floot/test/deploy-charts.test.js`, 16 tests).
+(`packages/floot/test/review-charts.test.js`, 17 tests, and
+`packages/floot/test/deploy-charts.test.js`, 19 tests).
 Nothing is wired into a live host yet, and — see § "What blocks a live
 run" — a Fae agent **cannot answer a workflow ask today**, so the loop is
 currently exercisable only by the simulator and by humans answering from
@@ -51,10 +51,11 @@ in this port because the reviewed gated variants embed them literally; their
 host-specific `NixosAdmin` performer and provisioning remain live-integration
 work.
 
-So the gap was never the engine.
-It was three things the fixture does not have: a **bounded** loop, a
-**combined** report, and a **structural** gate between review and
-proposal.
+The chart gap was three things the fixture does not have: a **bounded** loop,
+a **combined** report, and a **structural** gate between review and proposal.
+The engine also needed one boundary correction: administrative control signals
+must not be able to impersonate engine settlements, timers, emits, or region
+joins.
 
 ## Three constraints the kernel imposes
 
@@ -77,11 +78,11 @@ An `emit` effect's event body **is** substituted from the post-assign
 context (`machine.js:522-524`, `machine.js:621-623`).
 That gives the chart its budget mechanism:
 
-- `remaining` burns **down** by `{ $inc: -1 }` on every transition that
+- `remaining` burns **down** by `{ $inc: -1n }` on every transition that
   costs a round;
 - a dedicated `gate` state emits it —
   `{ kind: 'emit', event: { type: 'budget', value: { remaining: { $ctx: 'remaining' } } } }`;
-- the guard reads `M.lte(0)` off that envelope.
+- the guard reads `M.lte(0n)` off that envelope.
 
 A count-up `round` against a `limit` would have needed a kernel change; a
 burn-down against zero needs none.
@@ -90,8 +91,8 @@ ask text.
 
 ### 2. `{ $inc: { $event: ... } }` fails the run
 
-`applyAssign` requires `$inc` to be a literal number and throws otherwise
-(`template.js:319-322`), and a kernel throw fails the whole run
+`applyAssign` requires `$inc` to be a literal number or bigint and throws
+otherwise (`template.js`), and a kernel throw fails the whole run
 (`service.js:629-641`).
 So "grant three more rounds" cannot be expressed as a relative increment.
 Every adjustment is an **absolute** assign of the new remainder —
@@ -162,9 +163,12 @@ fan-out from one run.
 **The budget is bounded at the public boundary.**
 An initial run requires one through `2**32 - 1` review rounds; later absolute
 adjustments admit zero through the same upper bound.
-This is a deliberate four-byte profile for a human review-loop quantity, keeps
-the chart's number-valued `$inc` arithmetic exact, and rejects negative,
-non-finite, and oversized inputs before a run starts or a port signal lands.
+The values are natural-number bigints, so the boundary rejects fractional,
+negative, and oversized inputs before a run starts or a port signal lands.
+The upper bound is a deliberate four-byte profile for a human review-loop
+quantity, not a JavaScript numeric limitation.
+Each chart handler repeats the same shape guard, so a direct control signal
+cannot bypass the port's budget validation.
 `base` is required because every implementer and reviewer ask names it.
 
 **A silent reviewer cannot wedge the run.**
@@ -214,11 +218,25 @@ The test asserts this from the rendered graph rather than from a walk:
 `ready` has exactly one inbound edge and it is the unanimous-approval
 join; `preview` has exactly one and it is from `ready`; nothing reaches
 `proposing` from `implement`, `review`, `gate`, or `exhausted`.
+The service-level engine test separately asserts that `WorkflowControl.signal`
+rejects the chart's reserved engine event types, including reviewer settlements
+and `regions-settled`, and strips protected routing metadata from ordinary
+external events.
 
 A spawn passes only the endowments it names (`service.js:1062` — omitting
 the list passes *none*, not all), so the panel's reviewer endowments
 deliberately do not cross into the deploy child.
 The child gets `performer` and `operator` and nothing else.
+Only a child output explicitly discriminated as `status: "landed"` lets the
+parent enter `landed`; declined, failed, abandoned, auto-rolled-back, or
+otherwise unsettled child terminals are reported through `deploy-unsettled`.
+
+The deploy charts validate successful stage settlements before proceeding to
+build or approval, because rollback material cannot be reconstructed safely.
+Approval delivery failure compensates the staged change.
+Verification and compensation invokes have deadlines that route silence to
+human-attention states, and every final deploy output carries a discriminated
+status so callers cannot confuse process completion with a landed change.
 
 ## What blocks a live run
 
@@ -260,7 +278,8 @@ than carrying the hosted-management package into this chart-only port.
 ## Phases
 
 - **Phase 1 (done).** The reviewed-change and prerequisite deploy charts,
-  boundary hardening, structural-gate assertions, and simulator suites.
+  control-signal and parameter boundary hardening, structural-gate assertions,
+  service-level provenance coverage, and simulator suites.
 - **Phase 2.** Fae ask-answering: request/form rendering and the
   `resolveRequest` / `rejectRequest` / `submitForm` tools.
   Without this nothing but a human can close the loop.

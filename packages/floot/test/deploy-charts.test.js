@@ -51,6 +51,139 @@ test('both deploy charts pass diagnostics with no errors or warnings', t => {
   }
 });
 
+test('malformed successful staging stops before approval', t => {
+  const release = makeSimulator(endoReleaseChart, { params: releaseParams });
+  const releaseFinal = release.settle(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({}),
+  );
+  t.true(releaseFinal.done);
+  t.is(releaseFinal.state, 'staging-unsettled');
+  t.is(pendingOf(release, 'ask'), undefined);
+  t.deepEqual(releaseFinal.output, {
+    status: 'staging-unsettled',
+    reason: 'stageRev returned without a valid revision and rollback ref',
+  });
+
+  const nixos = makeSimulator(nixosConfigChangeChart, { params: changeParams });
+  const nixosFinal = nixos.settle(
+    pendingOf(nixos, 'invoke', 'stageFiles').effectId,
+    'fulfilled',
+    harden({ paths: ['modules/firewall.nix'] }),
+  );
+  t.true(nixosFinal.done);
+  t.is(nixosFinal.state, 'staging-unsettled');
+  t.is(pendingOf(nixos, 'ask'), undefined);
+  t.deepEqual(nixosFinal.output, {
+    status: 'staging-unsettled',
+    reason: 'stageFiles returned without valid paths and rollback contents',
+  });
+});
+
+test('approval dispatch failures compensate staged changes', t => {
+  const release = makeSimulator(endoReleaseChart, { params: releaseParams });
+  release.settle(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  settlePrebuild(release);
+  release.settle(
+    pendingOf(release, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  release.settle(
+    pendingOf(release, 'ask').effectId,
+    'failed',
+    'form dispatch failed',
+  );
+  t.is(release.status().state, 'unpinning');
+  t.deepEqual(pendingOf(release, 'invoke', 'stageRev').effect.args, [PREVIOUS]);
+
+  const nixos = makeSimulator(nixosConfigChangeChart, { params: changeParams });
+  const previous = harden([{ path: 'modules/firewall.nix', text: null }]);
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'stageFiles').effectId,
+    'fulfilled',
+    harden({ paths: ['modules/firewall.nix'], previous }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'ask').effectId,
+    'failed',
+    'form dispatch failed',
+  );
+  t.is(nixos.status().state, 'reverting');
+  t.deepEqual(pendingOf(nixos, 'invoke', 'revertFiles').effect.args, [
+    previous,
+  ]);
+});
+
+test('silent verification and compensation route to attention', t => {
+  const verifying = makeSimulator(endoReleaseChart, { params: releaseParams });
+  verifying.settle(
+    pendingOf(verifying, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  settlePrebuild(verifying);
+  verifying.settle(
+    pendingOf(verifying, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  verifying.settle(
+    pendingOf(verifying, 'ask').effectId,
+    'fulfilled',
+    harden({ approved: true, note: '' }),
+  );
+  verifying.settle(
+    pendingOf(verifying, 'invoke', 'apply').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  t.is(verifying.status().state, 'verify');
+  verifying.fireTimer(pendingOf(verifying, 'after').effectId);
+  t.is(verifying.status().state, 'needs-attention');
+
+  const unpinning = makeSimulator(endoReleaseChart, { params: releaseParams });
+  unpinning.settle(
+    pendingOf(unpinning, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  settlePrebuild(unpinning, harden({ ok: false, phase: 'error' }));
+  t.is(unpinning.status().state, 'unpinning');
+  unpinning.fireTimer(pendingOf(unpinning, 'after').effectId);
+  t.is(unpinning.status().state, 'compensation-attention');
+
+  const reverting = makeSimulator(nixosConfigChangeChart, {
+    params: changeParams,
+  });
+  reverting.settle(
+    pendingOf(reverting, 'invoke', 'stageFiles').effectId,
+    'fulfilled',
+    harden({
+      paths: ['modules/firewall.nix'],
+      previous: [{ path: 'modules/firewall.nix', text: null }],
+    }),
+  );
+  reverting.settle(
+    pendingOf(reverting, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: false }),
+  );
+  t.is(reverting.status().state, 'reverting');
+  reverting.fireTimer(pendingOf(reverting, 'after').effectId);
+  t.is(reverting.status().state, 'compensation-attention');
+});
+
 test('apply is entered exactly once, only by operator approval', t => {
   // The restart-loop guard at the chart level: no failure, timeout, or
   // resume path may lead back to `apply`. Its ONLY inbound edge is the
@@ -75,10 +208,12 @@ test('compensation-attention can only retry compensation, never complete', t => 
     const exits = graph.edges.filter(
       edge => edge.from === 'compensation-attention',
     );
-    t.is(exits.length, 1, `${chart.name} compensation-attention exits`);
+    t.is(exits.length, 2, `${chart.name} compensation-attention exits`);
     t.true(
-      ['unpinning', 'reverting'].includes(exits[0].to),
-      `${chart.name} compensation-attention exits only to compensation`,
+      exits.every(edge =>
+        ['unpinning', 'reverting', 'compensation-unsettled'].includes(edge.to),
+      ),
+      `${chart.name} compensation-attention cannot complete as landed`,
     );
   }
 });
@@ -126,7 +261,7 @@ test('endo-release walks pin, prebuild, build, approval, apply, verify to done',
   );
   t.true(done.done);
   t.is(done.outcome, 'completed');
-  t.deepEqual(done.output, { rev: REV });
+  t.deepEqual(done.output, { status: 'landed', rev: REV });
 });
 
 test('a declined release unpins the previous revision and abandons', t => {
@@ -158,7 +293,7 @@ test('a declined release unpins the previous revision and abandons', t => {
     harden({ rev: PREVIOUS, previous: REV }),
   );
   t.true(final.done);
-  t.deepEqual(final.output, { reason: 'declined' });
+  t.deepEqual(final.output, { status: 'abandoned', reason: 'declined' });
 });
 
 test('a revision that does not build never reaches the operator', t => {
@@ -204,7 +339,10 @@ test('a rejected build unpins without ever reaching approval', t => {
     'fulfilled',
     harden({ rev: PREVIOUS, previous: REV }),
   );
-  t.deepEqual(final.output, { reason: 'build-rejected' });
+  t.deepEqual(final.output, {
+    status: 'abandoned',
+    reason: 'build-rejected',
+  });
 });
 
 test('a build timeout prunes the pending invoke on its way out', t => {
@@ -257,7 +395,7 @@ test('an unhealthy apply reports the auto-rollback and terminates', t => {
     report,
   );
   t.true(final.done);
-  t.deepEqual(final.output, { report });
+  t.deepEqual(final.output, { status: 'auto-rolled-back', report });
 });
 
 test('an apply error goes to the operator; attesting landed re-verifies', t => {
@@ -341,7 +479,10 @@ test('attesting not-landed abandons through compensation, never done', async t =
     harden({ rev: PREVIOUS, previous: REV }),
   );
   t.true(final.done);
-  t.deepEqual(final.output, { reason: 'operator-reported-not-landed' });
+  t.deepEqual(final.output, {
+    status: 'abandoned',
+    reason: 'operator-reported-not-landed',
+  });
 });
 
 test('a first-pin decline un-pins to the empty previous and abandons', async t => {
@@ -375,7 +516,7 @@ test('a first-pin decline un-pins to the empty previous and abandons', async t =
     harden({ rev: '', previous: REV }),
   );
   t.true(final.done);
-  t.deepEqual(final.output, { reason: 'declined' });
+  t.deepEqual(final.output, { status: 'abandoned', reason: 'declined' });
 });
 
 test('a failed un-pin loops through compensation-attention until it lands', async t => {
@@ -407,7 +548,10 @@ test('a failed un-pin loops through compensation-attention until it lands', asyn
   );
   t.true(final.done);
   t.is(final.state, 'abandoned');
-  t.deepEqual(final.output, { reason: 'build-rejected' });
+  t.deepEqual(final.output, {
+    status: 'abandoned',
+    reason: 'build-rejected',
+  });
 });
 
 test('nixos-config-change stages, gets approval, applies to done', t => {
@@ -475,7 +619,7 @@ test('a declined nixos change reverts the captured previous contents', t => {
     harden({ paths: ['modules/firewall.nix'] }),
   );
   t.true(final.done);
-  t.deepEqual(final.output, { reason: 'declined' });
+  t.deepEqual(final.output, { status: 'abandoned', reason: 'declined' });
 });
 
 test('a nixos-change apply failure resolves only by operator attestation', t => {
@@ -546,5 +690,8 @@ test('a nixos-change apply failure resolves only by operator attestation', t => 
   );
   t.true(lostFinal.done);
   t.is(lostFinal.state, 'abandoned');
-  t.deepEqual(lostFinal.output, { reason: 'operator-reported-not-landed' });
+  t.deepEqual(lostFinal.output, {
+    status: 'abandoned',
+    reason: 'operator-reported-not-landed',
+  });
 });

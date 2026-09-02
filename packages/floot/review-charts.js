@@ -77,28 +77,22 @@ const dissentWithPanelSettled = M.splitRecord({
 });
 
 const budgetExhausted = M.splitRecord({
-  value: M.splitRecord({ remaining: M.lte(0) }),
+  value: M.splitRecord({ remaining: M.lte(0n) }),
 });
 const grantsRounds = M.splitRecord({
-  value: M.splitRecord({ remaining: M.gte(1) }),
+  value: M.splitRecord({
+    remaining: M.and(M.nat(), M.gte(1n), M.lte(0xffff_ffffn)),
+  }),
 });
 const previewEnabled = M.splitRecord({
   value: M.splitRecord({ enabled: M.eq(true) }),
 });
 
-// A review budget is a deliberately narrow number domain: this chart's
-// arithmetic uses number-valued `$inc`, and four bytes is ample for a human
-// review-loop limit while keeping every decrement exact.
-const InitialReviewRoundsShape = M.and(
-  M.number(),
-  M.gte(1),
-  M.lte(0xffff_ffff),
-);
-const RemainingReviewRoundsShape = M.and(
-  M.number(),
-  M.gte(0),
-  M.lte(0xffff_ffff),
-);
+// Review-cycle counts are natural-number bigints. This makes integrality part
+// of the passable-data boundary instead of relying on a number range that
+// would also admit fractions.
+const InitialReviewRoundsShape = M.and(M.nat(), M.gte(1n), M.lte(0xffff_ffffn));
+const RemainingReviewRoundsShape = M.and(M.nat(), M.lte(0xffff_ffffn));
 const ReviewerPanelShape = M.and(
   M.array({ arrayLengthLimit: 32 }),
   M.splitArray([M.string()], [], M.arrayOf(M.string())),
@@ -114,6 +108,13 @@ const ReviewerPanelShape = M.and(
 const SetRemainingShape = M.splitRecord({
   type: M.eq('set-remaining'),
   value: M.splitRecord({ remaining: RemainingReviewRoundsShape }),
+});
+
+const landedDeploy = M.splitRecord({
+  value: M.splitRecord({
+    status: M.eq('completed'),
+    output: M.splitRecord({ status: M.eq('landed') }),
+  }),
 });
 
 // One panel seat. Region params are the run's params plus the `input`
@@ -283,8 +284,8 @@ export const makeReviewedChangeChart = ({
     // `remaining` is seeded from params by `boot`, not here: a chart's
     // initial context is literal data and is never substituted.
     context: {
-      round: 0,
-      remaining: 0,
+      round: 0n,
+      remaining: 0n,
       head: '',
       files: [],
       feedback: [],
@@ -346,8 +347,8 @@ export const makeReviewedChangeChart = ({
             {
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: malformedSubmission,
               },
             },
@@ -356,8 +357,8 @@ export const makeReviewedChangeChart = ({
             {
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: unreachableDeveloper,
               },
             },
@@ -366,8 +367,8 @@ export const makeReviewedChangeChart = ({
             {
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: developerTimedOut,
               },
             },
@@ -376,7 +377,10 @@ export const makeReviewedChangeChart = ({
           // internal transition: no target, so the pending ask and its
           // deadline are untouched.
           'set-remaining': [
-            { assign: { remaining: { $event: 'value.remaining' } } },
+            {
+              when: SetRemainingShape,
+              assign: { remaining: { $event: 'value.remaining' } },
+            },
           ],
         },
       },
@@ -403,14 +407,17 @@ export const makeReviewedChangeChart = ({
               when: dissentWithPanelSettled,
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: { $event: 'outcomes' },
               },
             },
           ],
           'set-remaining': [
-            { assign: { remaining: { $event: 'value.remaining' } } },
+            {
+              when: SetRemainingShape,
+              assign: { remaining: { $event: 'value.remaining' } },
+            },
           ],
         },
       },
@@ -498,11 +505,14 @@ export const makeReviewedChangeChart = ({
           // below, which records it without resuming.
           'set-remaining': [
             {
-              when: grantsRounds,
+              when: M.and(SetRemainingShape, grantsRounds),
               target: 'implement',
               assign: { remaining: { $event: 'value.remaining' } },
             },
-            { assign: { remaining: { $event: 'value.remaining' } } },
+            {
+              when: SetRemainingShape,
+              assign: { remaining: { $event: 'value.remaining' } },
+            },
           ],
         },
       },
@@ -547,8 +557,8 @@ export const makeReviewedChangeChart = ({
             {
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: { $event: 'value' },
               },
             },
@@ -557,8 +567,8 @@ export const makeReviewedChangeChart = ({
             {
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: { $event: 'value' },
               },
             },
@@ -567,8 +577,8 @@ export const makeReviewedChangeChart = ({
             {
               target: 'gate',
               assign: {
-                round: { $inc: 1 },
-                remaining: { $inc: -1 },
+                round: { $inc: 1n },
+                remaining: { $inc: -1n },
                 feedback: 'preview CI did not report before its deadline',
               },
             },
@@ -593,7 +603,13 @@ export const makeReviewedChangeChart = ({
                 },
               ],
               on: {
-                'deploy-settled': [{ target: 'landed' }],
+                'deploy-settled': [
+                  { when: landedDeploy, target: 'landed' },
+                  {
+                    target: 'deploy-unsettled',
+                    assign: { reason: { $event: 'value' } },
+                  },
+                ],
                 'deploy-failed': [
                   {
                     target: 'deploy-unsettled',

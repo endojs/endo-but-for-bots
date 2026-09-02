@@ -298,8 +298,9 @@ harden(substituteDelimited);
 /**
  * Apply a transition's `assign` record to a context, producing the patch
  * of changed keys. Each value is an ordinary template, except
- * `{ $inc: n }`, which adds `n` to the numeric context value of the key
- * being assigned (absent or non-numeric reads as 0).
+ * `{ $inc: n }`, which adds number `n` to a number context value or bigint
+ * `n` to a bigint context value. An absent or non-numeric value reads as the
+ * corresponding zero; mixing the two numeric domains is rejected.
  *
  * @param {Record<string, any>} assign
  * @param {Record<string, any>} ctx
@@ -319,8 +320,18 @@ export const applyAssign = (assign, ctx, scope) =>
         ) {
           const step = spec.$inc;
           typeof step === 'number' ||
-            Fail`{ $inc } takes a number, got ${q(step)}`;
-          const previous = typeof ctx[name] === 'number' ? ctx[name] : 0;
+            typeof step === 'bigint' ||
+            Fail`{ $inc } takes a number or bigint, got ${q(step)}`;
+          const current = ctx[name];
+          (typeof current !== 'number' && typeof current !== 'bigint') ||
+            typeof current === typeof step ||
+            Fail`{ $inc } cannot mix ${q(typeof current)} context with ${q(typeof step)} step`;
+          const previous =
+            typeof current === typeof step
+              ? current
+              : typeof step === 'bigint'
+                ? 0n
+                : 0;
           return [name, previous + step];
         }
         return [name, substitute(spec, scope)];

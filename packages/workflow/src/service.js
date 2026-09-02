@@ -1616,6 +1616,18 @@ export const makeWorkflowService = async ({
       }
       return reservedTypes;
     };
+    const cleanExternalEvent = event =>
+      harden(
+        fromEntries(
+          entries(event).filter(
+            ([name]) =>
+              name !== 'path' &&
+              name !== 'effectId' &&
+              name !== 'compensation' &&
+              name !== 'delivers',
+          ),
+        ),
+      );
 
     // Observation only: status, journal, chart. Freely shareable — holds
     // no way to move the run or to reach redacted capabilities.
@@ -1633,9 +1645,15 @@ export const makeWorkflowService = async ({
 
     engine.controlFacet = makeExo('WorkflowControl', WorkflowControlInterface, {
       signal: async event => {
+        !reservedEventTypes().includes(event.type) ||
+          Fail`control may not submit engine event type ${q(event.type)}`;
         const redacted = await redact(event);
         return engine.inject(
-          harden({ ...redacted, by: 'control', at: isoNow() }),
+          harden({
+            ...cleanExternalEvent(redacted),
+            by: 'control',
+            at: isoNow(),
+          }),
         );
       },
       pause: async () => engine.pause(),
@@ -1655,15 +1673,7 @@ export const makeWorkflowService = async ({
               const redacted = await redact(event);
               // Routing, settlement, and delivery marks are the
               // engine's, not a participant's, to assert.
-              const cleaned = fromEntries(
-                entries(redacted).filter(
-                  ([name]) =>
-                    name !== 'path' &&
-                    name !== 'effectId' &&
-                    name !== 'compensation' &&
-                    name !== 'delivers',
-                ),
-              );
+              const cleaned = cleanExternalEvent(redacted);
               return engine.inject(
                 harden({ ...cleaned, by: `port:${role}`, at: isoNow() }),
               );

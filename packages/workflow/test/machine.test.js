@@ -66,14 +66,24 @@ test('interpolate renders structured values readably', t => {
 });
 
 test('applyAssign merges templates and $inc', t => {
-  const ctx = harden({ round: 1, keep: 'yes' });
+  const ctx = harden({ round: 1, cycles: 4n, keep: 'yes' });
   const scope = harden({ params: {}, ctx, event: { value: 'v' } });
   const patch = applyAssign(
-    harden({ round: { $inc: 2 }, got: { $event: 'value' } }),
+    harden({
+      round: { $inc: 2 },
+      cycles: { $inc: -1n },
+      got: { $event: 'value' },
+    }),
     ctx,
     scope,
   );
-  t.deepEqual(patch, { round: 3, got: 'v' });
+  t.deepEqual(patch, { round: 3, cycles: 3n, got: 'v' });
+  t.throws(() => applyAssign(harden({ round: { $inc: '1' } }), ctx, scope), {
+    message: /\$inc.*number or bigint/,
+  });
+  t.throws(() => applyAssign(harden({ cycles: { $inc: 1 } }), ctx, scope), {
+    message: /\$inc.*cannot mix.*bigint.*number/,
+  });
 });
 
 // #endregion
