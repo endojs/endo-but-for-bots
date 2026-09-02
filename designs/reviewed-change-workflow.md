@@ -11,7 +11,7 @@
 
 The chart layer is complete: three reviewed-change charts, the two deploy
 charts used by the gated variants, and their simulator suites
-(`packages/floot/test/review-charts.test.js`, 17 tests, and
+(`packages/floot/test/review-charts.test.js`, 18 tests, and
 `packages/floot/test/deploy-charts.test.js`, 22 tests).
 Nothing is wired into a live host yet, and — see § "What blocks a live
 run" — a Fae agent **cannot answer a workflow ask today**, so the loop is
@@ -111,12 +111,15 @@ the ask.
 
 There is no chart-level `on`, so a machine-wide handler needs either a
 wrapping compound root or the handler repeated on the states that matter.
-The chart takes the second option — `set-remaining` is handled on
-`implement`, `review`, and `exhausted` — because a compound root would
-force every terminal transition through `state-done` plumbing for no gain.
-A signal arriving in any other state falls through, which is journaled and
-harmless (external signals are explicitly exempt from the fail-loud
-policy, `service.js:605`).
+The chart takes the second option because a compound root would force every
+terminal transition through `state-done` plumbing for no gain.
+`set-remaining` is an internal transition on `implement`, `review`, `preview`,
+and the zero-remainder branch of `exhausted`.
+The transient `gate` and `ready` states instead self-transition: that prunes
+their already-materialized `budget` or `ci-policy` emit and regenerates it from
+the updated context, preventing a stale queued envelope from winning a race.
+Once `proposing` begins, review has passed and the review budget no longer
+affects the run.
 
 ## The chart
 
@@ -221,6 +224,8 @@ The service-level engine test separately asserts that `WorkflowControl.signal`
 rejects the chart's reserved engine event types, including reviewer settlements
 and `regions-settled`, and strips protected routing metadata from ordinary
 external events.
+Every engine event type in these review and deploy charts is literal, so none
+falls into the workflow engine's documented templated-type gap.
 
 A spawn passes only the endowments it names (`service.js:1062` — omitting
 the list passes *none*, not all), so the panel's reviewer endowments

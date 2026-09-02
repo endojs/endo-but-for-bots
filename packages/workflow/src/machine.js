@@ -425,11 +425,11 @@ export const chartDiagnostics = chart => {
 harden(chartDiagnostics);
 
 /**
- * Every event type the engine itself can produce for a chart: the
- * internal kernel events plus all effect `outcome` / `failure` types,
- * `after` emissions, and `emit` event types (dynamic, interpolated
- * types are skipped). Ports refuse these — a participant may not
- * impersonate the engine or another participant's settlement.
+ * Every statically named event type the engine itself can produce for a chart:
+ * the internal kernel events plus effect `outcome` / `failure` types, `after`
+ * emissions, and `emit` event types. Types containing interpolation syntax are
+ * skipped because no finite set of their runtime substitutions can be reserved.
+ * Security-sensitive charts should use literal engine event types.
  *
  * @param {any} chart
  * @returns {string[]}

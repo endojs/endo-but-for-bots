@@ -1605,9 +1605,10 @@ export const makeWorkflowService = async ({
 
     /** @type {Map<string, any>} */
     const ports = new Map();
-    // Event types the engine itself can produce for this chart —
-    // internal joins, settlements, timer and emit types. A port may not
-    // impersonate the engine or another participant's settlement.
+    // Statically named event types the engine itself can produce for this
+    // chart — internal joins, settlements, timer and emit types. External
+    // injection may not impersonate them; interpolated types are not finite
+    // and therefore cannot be reserved here.
     /** @type {string[] | undefined} */
     let reservedTypes;
     const reservedEventTypes = () => {
@@ -1701,7 +1702,7 @@ export const makeWorkflowService = async ({
         return cap;
       },
       help: () =>
-        `Control for workflow run ${runId}: signal(externalEvent), pause(), resume(), cancel(reason?), port(role), resolveRef(alias); signal rejects engine event types and strips routing metadata`,
+        `Control for workflow run ${runId}: signal(externalEvent), pause(), resume(), cancel(reason?), port(role), resolveRef(alias); signal rejects statically named engine event types and strips routing metadata`,
     });
 
     // #endregion

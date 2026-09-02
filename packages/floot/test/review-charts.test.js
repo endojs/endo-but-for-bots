@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { matches } from '@endo/patterns';
-import { chartDiagnostics } from '@endo/workflow/machine.js';
+import { chartDiagnostics, transition } from '@endo/workflow/machine.js';
 import { makeSimulator } from '@endo/workflow/src/simulate.js';
 import { renderGraph } from '@endo/workflow/src/graph.js';
 
@@ -282,6 +282,60 @@ test('the budget can be raised while the run waits in review', t => {
   );
 });
 
+test('a budget raise survives preview CI and transient policy states', t => {
+  const preview = makeSimulator(reviewedChangeChart, {
+    params: harden({ ...params, rounds: 1n, previewCi: true }),
+  });
+  submitHead(preview);
+  verdict(preview, true, 'lgtm');
+  t.is(preview.status().state, 'preview');
+  preview.inject(harden({ type: 'set-remaining', value: { remaining: 3n } }));
+  preview.settle(
+    pendingOf(preview, 'invoke', { method: 'perform' }).effectId,
+    'fulfilled',
+    harden({ ok: false, log: 'red' }),
+  );
+  t.is(preview.status().state, 'implement');
+  t.is(preview.status().context.remaining, 2n);
+
+  const context = harden({
+    round: 1n,
+    remaining: 0n,
+    head: HEAD,
+    files: [],
+    feedback: [],
+    reason: '',
+  });
+  const event = harden({
+    type: 'set-remaining',
+    value: { remaining: 4n },
+    by: 'control',
+    at: 'now',
+  });
+  const gate = transition(
+    reviewedChangeChart,
+    harden({ configuration: { state: 'gate' }, context, params }),
+    event,
+  );
+  t.true(gate.fired);
+  t.is(gate.configuration.state, 'gate');
+  t.is(gate.context.remaining, 4n);
+  t.deepEqual(gate.effects[0].effect.event, {
+    type: 'budget',
+    value: { remaining: 4n },
+  });
+
+  const ready = transition(
+    reviewedChangeChart,
+    harden({ configuration: { state: 'ready' }, context, params }),
+    event,
+  );
+  t.true(ready.fired);
+  t.is(ready.configuration.state, 'ready');
+  t.is(ready.context.remaining, 4n);
+  t.is(ready.effects[0].effect.event.type, 'ci-policy');
+});
+
 test('a raise delivered to an exhausted run resumes it', t => {
   const sim = makeSimulator(reviewedChangeChart, {
     params: harden({ ...params, rounds: 1n }),
@@ -394,16 +448,22 @@ test('a deploy is proposed only through a passed review', t => {
       `${chart.name} proposing is reached only from the post-review states`,
     );
 
-    // `ready` — the head of that chain — is entered only by the panel's
-    // unanimous approval.
-    const intoReady = graph.edges.filter(edge => edge.to === 'ready');
+    // `ready` — the head of that chain — is entered from another state only by
+    // the panel's unanimous approval. Its self-edge refreshes a pending policy
+    // emit after a budget adjustment and does not bypass the gate.
+    const intoReady = graph.edges.filter(
+      edge => edge.to === 'ready' && edge.from !== 'ready',
+    );
     t.is(intoReady.length, 1, `${chart.name} ready inbound edges`);
     t.is(intoReady[0].from, 'review');
     t.is(intoReady[0].type, 'regions-settled');
     t.true(intoReady[0].guarded, 'only the unanimous-approval guard admits it');
 
-    // And `preview` is only ever entered from `ready`.
-    const intoPreview = graph.edges.filter(edge => edge.to === 'preview');
+    // And `preview` is entered from another state only from `ready`; its
+    // internal budget assignment preserves the pending CI effect.
+    const intoPreview = graph.edges.filter(
+      edge => edge.to === 'preview' && edge.from !== 'preview',
+    );
     t.is(intoPreview.length, 1, `${chart.name} preview inbound edges`);
     t.is(intoPreview[0].from, 'ready');
 
