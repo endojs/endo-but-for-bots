@@ -620,11 +620,11 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
     let last = carry_scenario(
         "carry-array-sort",
          "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
-         Array.prototype.slice; a.slice; \
+         Array.prototype.slice; a.slice; Array.prototype.concat; a.concat; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
-         Object.prototype.hasOwnProperty; \
+         Object.prototype.hasOwnProperty; Symbol.isConcatSpreadable; \
          a.join; a.length; \
          (function (y) { return y; });",
         &[
@@ -635,6 +635,8 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
             "v = b.with(1, 9); s = v.toReversed(); \
              o = s.toSpliced(1, 1, 8); \
              q = [1, , 3]; \
+             f = {0: 4, length: 1}; f[Symbol.isConcatSpreadable] = true; \
+             v = a.concat(f); \
              t = o.join(',') + ':' + Array.prototype.with.name + ':' + \
                  Array.prototype.with.length + ':' + \
                  Array.prototype.toReversed.name + ':' + \
@@ -649,12 +651,14 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
                  Array.prototype.slice.name + ':' + Array.prototype.slice.length + ':' + \
-                 g[0] + ':' + g.length; t",
+                 g[0] + ':' + g.length + ':' + \
+                 Array.prototype.concat.name + ':' + Array.prototype.concat.length + ':' + \
+                 v.join(','); t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4"
     );
 }
 

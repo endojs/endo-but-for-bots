@@ -199,7 +199,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // arities. This is another boot-heap content move; format unchanged.
         // Re-pinned 2026-09-02 because Array.prototype.slice now carries its
         // standard name and arity. Boot-heap content only; format unchanged.
-        "27e14b2b6a9728bbc1165c05b809b456d9636f48b335e8995fdac779916f3f94",
+        // Re-pinned 2026-09-02 because Array.prototype.concat now carries its
+        // standard name and arity. Boot-heap content only; format unchanged.
+        "5e43f185eb9760d4e1a008adf0d1bd9f0c9e395665924fb3236702466c79b547",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -329,7 +331,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // standard function metadata. Schema and format remain unchanged.
         // Re-pinned with the blob for Array.prototype.slice's standard
         // function metadata. Schema and format remain unchanged.
-        "1b2bce481165ccb72498275b840dfeb89cb6b777e8571faa85f91193c7e6b38f",
+        // Re-pinned with the blob for Array.prototype.concat's standard
+        // function metadata. Schema and format remain unchanged.
+        "e11d49daa6b0beeded66b163e8acee0a5cd79849ed52f1b4f767399048ce6c4d",
         "epoch-3 seal chain"
     );
 }
