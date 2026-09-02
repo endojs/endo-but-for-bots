@@ -46,6 +46,7 @@ import { mustMatch } from '@endo/patterns';
 
 import {
   assertChart,
+  activePaths,
   chartDiagnostics,
   engineEventTypes,
   initialStep,
@@ -667,7 +668,16 @@ export const makeWorkflowService = async ({
             by.startsWith('invoke:') ||
             by === 'spawn' ||
             by === 'timer');
-        if (settlement) {
+        const staleReplay =
+          settlement &&
+          replays !== undefined &&
+          isArray(envelope.path) &&
+          !activePaths(chart, fold.configuration).some(
+            path =>
+              path.length === envelope.path.length &&
+              path.every((segment, index) => segment === envelope.path[index]),
+          );
+        if (settlement && !staleReplay) {
           await append({
             ...base,
             terminal: harden({
@@ -677,7 +687,10 @@ export const makeWorkflowService = async ({
           });
           settleTerminal('failed');
         } else {
-          await append(base);
+          await append({
+            ...base,
+            ...(staleReplay ? { stale: true } : {}),
+          });
         }
         return fold.done;
       }
@@ -1988,9 +2001,7 @@ export const makeWorkflowService = async ({
   /** @type {Map<string, any>} */
   const factoryFacets = new Map();
 
-  const revokeFactory = async (fid, reason) => {
-    await null;
-    // Collect this factory and every descendant by durable parent links.
+  const loadFactoryRecords = async () => {
     /** @type {string[]} */
     const fids = await E(powers).list(ROOT, FACTORIES);
     /** @type {Map<string, any>} */
@@ -2004,8 +2015,15 @@ export const makeWorkflowService = async ({
         records.set(each, record);
       }
     }
-    records.has(fid) || Fail`no workflow factory ${q(fid)}`;
-    const condemned = new Set([fid]);
+    return records;
+  };
+
+  /**
+   * @param {Map<string, any>} records
+   * @param {Iterable<string>} roots
+   */
+  const descendantsOf = (records, roots) => {
+    const condemned = new Set(roots);
     let grew = true;
     while (grew) {
       grew = false;
@@ -2020,6 +2038,15 @@ export const makeWorkflowService = async ({
         }
       }
     }
+    return condemned;
+  };
+
+  const revokeFactory = async (fid, reason) => {
+    await null;
+    // Collect this factory and every descendant by durable parent links.
+    const records = await loadFactoryRecords();
+    records.has(fid) || Fail`no workflow factory ${q(fid)}`;
+    const condemned = descendantsOf(records, [fid]);
     const revokedAt = isoNow();
     for (const each of condemned) {
       const record = records.get(each);
@@ -2036,18 +2063,24 @@ export const makeWorkflowService = async ({
         );
       }
     }
-    // Cancel every live run started through a condemned factory.
+    // Cancel every live run started through a condemned factory before
+    // revocation returns. Each cancellation request is durable at this point;
+    // recovery repeats the sweep before rearming in case a process died between
+    // the durable records above and these run journals.
+    /** @type {Promise<void>[]} */
+    const cancellations = [];
     for (const engine of [...engines.values()]) {
       if (!engine.fold.done && condemned.has(engine.fold.factory)) {
-        engine
-          .cancel(
+        cancellations.push(
+          engine.cancel(
             `factory ${engine.fold.factory} revoked${
               reason !== undefined ? `: ${reason}` : ''
             }`,
-          )
-          .catch(() => {});
+          ),
+        );
       }
     }
+    await Promise.all(cancellations);
   };
 
   /** @type {(fid: string) => any} */
@@ -2072,7 +2105,7 @@ export const makeWorkflowService = async ({
         // one side always sees the other.
         const recheck = await loadFactoryRecord(fid);
         if (recheck.revoked) {
-          engine.cancel(`factory ${fid} revoked`).catch(() => {});
+          await engine.cancel(`factory ${fid} revoked`);
           throw Fail`workflow factory ${q(fid)} is revoked`;
         }
         // The starter through a factory observes; it does not control.
@@ -2181,8 +2214,93 @@ export const makeWorkflowService = async ({
       console.error(`workflow run ${runId}: recovery failed`, error);
     }
   }
+  // Rebuild spawn links without dispatching any effects. Revoked-factory
+  // cancellation must reach live children before the ordinary rearm phase can
+  // resend an invoke or ask from either side of the link.
+  for (const parent of engines.values()) {
+    if (!parent.fold.done) {
+      for (const record of parent.fold.pending.values()) {
+        if (record.effect.kind === 'spawn') {
+          const childRunId =
+            record.childRunId ?? `${parent.runId}-c${record.effectId}`;
+          const child = engines.get(childRunId);
+          if (child !== undefined && !child.fold.done) {
+            parentLinks.set(childRunId, {
+              runId: parent.runId,
+              effectId: record.effectId,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Revocation is durable independently of run journals. Re-derive the full
+  // descendant closure, repair a child record if a derive/revoke crash left it
+  // unmarked, and reassert cancellation before any affected run is rearmed.
+  const recoveredFactoryRecords = await loadFactoryRecords();
+  const revokedFactories = descendantsOf(
+    recoveredFactoryRecords,
+    [...recoveredFactoryRecords]
+      .filter(([, record]) => record.revoked)
+      .map(([fid]) => fid),
+  );
+  const recoveredRevokedAt = isoNow();
+  for (const fid of revokedFactories) {
+    const record = recoveredFactoryRecords.get(fid);
+    if (!record.revoked) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(powers).storeValue(
+        harden({
+          ...record,
+          revoked: true,
+          revokedAt: recoveredRevokedAt,
+          revokedReason: 'ancestor factory revoked',
+        }),
+        factoryPath(fid, FACTORY_RECORD),
+      );
+    }
+  }
+
+  /** @type {Set<string>} */
+  const quarantinedRuns = new Set();
+  const quarantineRunTree = rootRunId => {
+    quarantinedRuns.add(rootRunId);
+    for (const [childRunId, link] of parentLinks) {
+      if (link.runId === rootRunId && !quarantinedRuns.has(childRunId)) {
+        quarantineRunTree(childRunId);
+      }
+    }
+  };
   for (const engine of engines.values()) {
-    if (!engine.fold.done) {
+    if (
+      !engine.fold.done &&
+      engine.fold.factory !== undefined &&
+      revokedFactories.has(engine.fold.factory)
+    ) {
+      const record = recoveredFactoryRecords.get(engine.fold.factory);
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await engine.cancel(
+          `factory ${engine.fold.factory} revoked during recovery${
+            record?.revokedReason !== undefined
+              ? `: ${record.revokedReason}`
+              : ''
+          }`,
+        );
+      } catch (error) {
+        // Fail closed: neither this run nor live descendants may re-dispatch
+        // their pre-revocation effects when the cancellation journal failed.
+        quarantineRunTree(engine.runId);
+        console.error(
+          `workflow run ${engine.runId}: revoked-run cancellation failed`,
+          error,
+        );
+      }
+    }
+  }
+  for (const engine of engines.values()) {
+    if (!engine.fold.done && !quarantinedRuns.has(engine.runId)) {
       engine
         .rearm()
         .catch(error =>

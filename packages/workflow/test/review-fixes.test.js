@@ -716,6 +716,75 @@ test('child cancellation is durable before the parent request', async t => {
   t.deepEqual(recoveredParent.fold.output, { status: 'child-safe' });
 });
 
+test('recovery cancels revoked-factory runs before effect rearm', async t => {
+  const { powers, controls } = makeFakeAgent();
+  let crashArmed = false;
+  const wrapped = crashingPowers(
+    powers,
+    value => crashArmed && value.event?.type === 'cancel-requested',
+  );
+  const h1 = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('a'),
+  });
+  let calls = 0;
+  const worker = Far('HazardousWorker', {
+    perform: async _effectId => {
+      calls += 1;
+      return new Promise(() => {});
+    },
+  });
+  const chart = harden({
+    name: 'revoked-hazard',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'worker',
+            method: 'perform',
+            outcome: 'worked',
+          },
+        ],
+        on: {
+          worked: [{ target: 'unsafe' }],
+          'cancel-requested': [{ target: 'safe' }],
+        },
+      },
+      unsafe: { final: true },
+      safe: { final: true, output: { status: 'revoked-safe' } },
+    },
+  });
+  const { factory } = await E(h1.service).makeFactory({
+    chart,
+    endowments: harden({ worker }),
+  });
+  const { runId } = await E(factory).start({});
+  const engine = h1.engines.get(runId);
+  await until(() => engine.fold.pending.size === 1, 'invoke pending');
+  t.is(calls, 1);
+  crashArmed = true;
+  // The factory record is revoked, but the following run-journal write dies.
+  await t.throwsAsync(() => E(factory).revoke('test crash'), {
+    message: /simulated crash/,
+  });
+  h1.stop();
+
+  const h2 = await makeWorkflowService({
+    powers: controls.restart(),
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('b'),
+  });
+  t.teardown(h2.stop);
+  const recovered = h2.engines.get(runId);
+  t.true(recovered.fold.done);
+  t.deepEqual(recovered.fold.output, { status: 'revoked-safe' });
+  t.is(calls, 1, 'the hazardous invoke was not rearmed before cancellation');
+});
+
 test('a lost emit delivery is re-dispatched from its journaled obligation', async t => {
   const { powers, controls } = makeFakeAgent();
   let crashArmed = true;

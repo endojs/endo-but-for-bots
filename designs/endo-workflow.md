@@ -128,7 +128,8 @@ an idea from the other branch:
    the observer facet only; `with()` derives narrower factories;
    `revoke()` cascades over durable parent links and cancels live runs;
    all of it survives restarts (records in the pet store, run
-   attribution via the `started` entry's `factory` field).
+   attribution via the `started` entry's `factory` field, and a recovery sweep
+   that cancels revoked runs before effect rearm).
 7. **Authoring and observation tools.** `chartDiagnostics`,
    `makeSimulator` (kernel + fold, effects settled by hand, engine
    policies intact), `renderGraph` / `renderMermaid` /
@@ -138,7 +139,7 @@ an idea from the other branch:
 A second hardening round followed, from six parallel adversarial review
 subagents (engine durability, kernel semantics, ocap boundaries,
 journal/fold, space integration, conventions/coverage), whose confirmed
-findings were all fixed and regression-tested (81 tests):
+findings were all fixed and regression-tested:
 
 1. **Atomic composite entries.** A settlement and the transition it
    fires, and a step and its terminal outcome, commit as one journal
@@ -991,7 +992,7 @@ duplicate firing dedupes on `effectId`.
 no world contact, exactly-once trivially.
 
 **Cancellation and compensation.**
-`cancel` first journals and steps the reserved `cancel-requested` engine event.
+`cancel` is represented by the reserved `cancel-requested` engine event.
 The service first asks every linked child to journal cancellation, then records
 the parent's request.
 This child-first durable ordering closes the crash window safely: after the
@@ -1004,8 +1005,9 @@ rather than a fire-and-forget epilogue.
 For a paused run, the cancellation transition and unpause bit occupy one journal
 entry.
 Queued envelopes then replay against the reconciliation state, where routed
-stale approvals miss exited paths but an already-settled compensation or child
-outcome can still finish; recovery resumes the same drain after a crash.
+settlements whose owner path was exited are journaled as stale instead of
+fail-loud, but an already-settled compensation or child outcome on an active
+path can still finish; recovery resumes the same drain after a crash.
 This is the required policy for workflows whose effects can leave outside
 state ambiguous.
 
