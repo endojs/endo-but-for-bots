@@ -5805,6 +5805,7 @@ impl Interp {
                 NativeMethod::ArraySort | NativeMethod::ArrayToSorted => {
                     self.alloc_named_method(m, name, 1)
                 }
+                NativeMethod::ArraySlice => self.alloc_named_method(m, name, 2),
                 NativeMethod::ArrayWith | NativeMethod::ArrayToSpliced => {
                     self.alloc_named_method(m, name, 2)
                 }
@@ -29545,8 +29546,27 @@ impl Interp {
             // and `mxMeterSome(count*10)`, plus a closing `mxMeterSome(3)`.
             NativeMethod::ArraySlice => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("slice:non-dense-array")),
+                    Some(i)
+                        if self.array_allocating_uses_default_species(i)
+                            && matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined)
+                            && (argc < 2
+                                || matches!(
+                                    self.stack
+                                        .get(base + 5)
+                                        .copied()
+                                        .unwrap_or_else(Slot::undefined)
+                                        .kind,
+                                    Kind::Integer | Kind::Number | Kind::Undefined
+                                )) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_slice(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 let start = self.arg_to_index(base, 0, 0, length);
@@ -35698,6 +35718,111 @@ impl Interp {
         } else {
             Err(self.catchable_type_error())
         }
+    }
+
+    /// Generic `Array.prototype.slice`: coerce the bounds before creating the
+    /// species result, then preserve holes with `HasProperty` and copy present
+    /// values with `CreateDataPropertyOrThrow`.
+    fn array_generic_slice(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(original) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, original)?;
+        let clamp = |integer: f64| -> u64 {
+            if integer == f64::NEG_INFINITY {
+                0
+            } else if integer < 0.0 {
+                (length as f64 + integer).max(0.0) as u64
+            } else {
+                integer.min(length as f64) as u64
+            }
+        };
+        let start_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let start = clamp(self.array_to_integer_or_infinity(code, start_arg)?);
+        let end = if argc < 2 {
+            length
+        } else {
+            let end_arg = self
+                .stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            if end_arg.kind == Kind::Undefined {
+                length
+            } else {
+                clamp(self.array_to_integer_or_infinity(code, end_arg)?)
+            }
+        };
+        let count = end.saturating_sub(start);
+        let result = self.array_generic_species_create(code, original, count)?;
+
+        // Ordinary sparse objects can skip directly to their next present
+        // property. Proxies and integer/string exotics retain the observable
+        // one-index-at-a-time MOP path, bounded against pathological lengths.
+        const GENERIC_SLICE_CAP: u64 = 1 << 24;
+        let mut source = start;
+        let mut target = 0u64;
+        let mut linear_steps = 0u64;
+        while source < end {
+            let present = match self.array_generic_next_present_index(original, source, end) {
+                Some(Some(next)) => {
+                    target += next - source;
+                    source = next;
+                    true
+                }
+                Some(None) => {
+                    target += end - source;
+                    break;
+                }
+                None => {
+                    if linear_steps >= GENERIC_SLICE_CAP {
+                        return Err(Halt::Unsupported("slice:oversized-array-like"));
+                    }
+                    linear_steps += 1;
+                    self.array_generic_has(code, original, source)?
+                }
+            };
+            if present {
+                let value = self.array_generic_get(code, original, source)?;
+                self.array_generic_create_data_property(code, result, target, value)?;
+            }
+            source += 1;
+            target += 1;
+        }
+        debug_assert_eq!(target, count);
+
+        let length_id = self.intern_key("length");
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(result));
+        if !self.mop_set(
+            code,
+            result,
+            length_id,
+            Self::array_index_number(count),
+            receiver,
+        )? {
+            return Err(self.catchable_type_error());
+        }
+        Ok(receiver)
     }
 
     /// For an ordinary (non-Proxy, non-integer-indexed, non-string-exotic)
