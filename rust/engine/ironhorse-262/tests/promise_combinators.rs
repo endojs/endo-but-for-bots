@@ -178,6 +178,22 @@ fn finally_rejects_when_returned_promise_observation_throws() {
 }
 
 #[test]
+fn finally_uses_the_selected_species_for_result_resolution() {
+    assert_drains_to(
+        "var g='',calls=0;function C(executor){var n=++calls;executor(function(v){g+=n+'r'+v+','},function(e){g+=n+'j'+e+','});return {tag:n,then:function(resolve){resolve('ok')}}}var p=Promise.resolve(7);p.constructor={};p.constructor[Symbol.species]=C;var q=p.finally(function(){return 11});var same=q.tag===1;undefined",
+        "2r11,1r7,",
+    );
+}
+
+#[test]
+fn finally_rejects_custom_species_capabilities_when_the_handler_throws() {
+    assert_drains_to(
+        "var g='',marker={};function C(executor){executor(function(v){g='r'+v},function(e){g='j'+(e===marker)});return {}}var p=Promise.resolve(7);p.constructor={};p.constructor[Symbol.species]=C;p.finally(function(){throw marker});undefined",
+        "jtrue",
+    );
+}
+
+#[test]
 fn finally_accepts_bound_callable_handlers_returning_promises() {
     assert_drains_to(
         "var g,f=Promise.resolve.bind(Promise,13); Promise.resolve(7).finally(f).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
@@ -588,6 +604,34 @@ fn promise_subclass_static_resolution_preserves_brand_and_prototype() {
     assert_oracle_result(
         "class P extends Promise{}var p=P.resolve(1);''+(p instanceof P)+':'+(p.constructor===P)+':'+(P.resolve(p)===p)",
         "true:true:true",
+    );
+}
+
+#[test]
+fn promise_then_uses_the_selected_species_capability() {
+    assert_drains_to(
+        "var g='',result={tag:1};function C(executor){executor(function(v){g='r'+v},function(e){g='j'+e});return result}var p=Promise.resolve(1);p.constructor={};p.constructor[Symbol.species]=C;var q=p.then(function(v){return v+41});var same=q===result;undefined",
+        "r42",
+    );
+    assert_oracle_result(
+        "var result={};function C(executor){executor(function(){},function(){});return result}var p=Promise.resolve(1);p.constructor={};p.constructor[Symbol.species]=C;p.then()===result",
+        "true",
+    );
+}
+
+#[test]
+fn promise_then_propagates_species_and_capability_errors_synchronously() {
+    assert_oracle_result(
+        "var p=Promise.resolve(1);p.constructor=null;try{p.then();false}catch(e){e instanceof TypeError}",
+        "true",
+    );
+    assert_oracle_result(
+        "var marker={},p=Promise.resolve(1);Object.defineProperty(p,'constructor',{get:function(){throw marker}});try{p.then();false}catch(e){e===marker}",
+        "true",
+    );
+    assert_oracle_result(
+        "var p=Promise.resolve(1);p.constructor={};p.constructor[Symbol.species]=function C(executor){executor(function(){},function(){});executor(function(){},function(){});return {}};try{p.then();false}catch(e){e instanceof TypeError}",
+        "true",
     );
 }
 

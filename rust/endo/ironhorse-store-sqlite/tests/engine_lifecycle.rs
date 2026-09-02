@@ -847,6 +847,41 @@ fn a_custom_capability_executor_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn a_custom_species_reaction_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-custom-species-reaction",
+        &[
+            "var p=0;var res=0;var q=0;var result={tag:9};var log=''; \
+             function C(executor){executor(function(v){log='r'+v}, \
+                                                   function(e){log='j'+e});return result} \
+             p=new Promise(function(resolve){res=resolve});p.constructor={}; \
+             p.constructor[Symbol.species]=C;q=p.then(function(v){return v+1});q===result",
+            "(q===result)+':'+q.tag+':'+log",
+            "res(41);0",
+            "log",
+        ],
+    );
+    assert_eq!(last, "r42");
+}
+
+#[test]
+fn a_custom_species_finally_await_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-custom-species-finally",
+        &[
+            "var P=class extends Promise{};var gate=0;var release=0;var q=0;var g=''; \
+             gate=new Promise(function(resolve){release=resolve});var p=Promise.resolve(5); \
+             p.constructor={};p.constructor[Symbol.species]=P; \
+             q=p.finally(function(){return gate});q instanceof P",
+            "(q instanceof P)+':'+(q.constructor===P)+':'+g",
+            "q.then(function(v){g='r'+v},function(e){g='j'+e});release(1);0",
+            "g",
+        ],
+    );
+    assert_eq!(last, "r5");
+}
+
+#[test]
 fn a_pending_finally_result_survives_sqlite_sleep_cycles() {
     // `onFinally` runs in crank 1 but its returned promise remains pending.
     // The `FinallyAwait` row, original fulfillment, and derived capability all

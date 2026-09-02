@@ -3037,11 +3037,10 @@ enum ReactionKind {
     AsyncGeneratorReturn(crate::value::SlotIndex),
     /// A `Promise.prototype.finally` reaction (XS's `then` whose native
     /// handlers run `onFinally` and pass the settlement through). The
-    /// reaction's `on_fulfilled` slot carries the `onFinally` function (or
-    /// `undefined` for a non-callable argument, a pure pass-through); its
-    /// `resolve`/`reject` slots are the derived promise's capability, settled
-    /// with the ORIGINAL value/reason once `onFinally` returns (a non-thenable
-    /// result is ignored — the pass-through). Drives
+    /// reaction's `on_fulfilled` slot carries the `onFinally` function and its
+    /// `on_rejected` slot carries the selected species constructor; its
+    /// `resolve`/`reject` slots are the result capability, settled with the
+    /// ORIGINAL value/reason after `PromiseResolve(C, onFinally())`. Drives
     /// [`Interp::run_finally_reaction`].
     FinallyReturn,
     /// The second half of a callable `Promise.prototype.finally` reaction:
@@ -11015,33 +11014,11 @@ impl Interp {
         }
         let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
         let mut comb_pending = vec![0u32; snap.combinators.len()];
-        // A `User`/`FinallyReturn`/`FinallyAwait` reaction's capability must be one
-        // resolving pair (the decoder's rule, re-proved here): both
-        // slots reference cluster rows naming one promise and one
-        // guard with opposite polarity.
-        let fn_pair_ok = |resolve: &Slot, reject: &Slot| -> bool {
-            let row_of = |slot: &Slot| -> Option<&PromiseFnRow> {
-                if slot.kind != Kind::Reference {
-                    return None;
-                }
-                match slot.value {
-                    Payload::Reference(r) => snap
-                        .functions
-                        .binary_search_by_key(&r.0, |row| row.function)
-                        .ok()
-                        .map(|i| &snap.functions[i]),
-                    _ => None,
-                }
-            };
-            matches!(
-                (row_of(resolve), row_of(reject)),
-                (Some(res), Some(rej))
-                    if res.guard != u32::MAX
-                        && !res.reject
-                        && rej.reject
-                        && res.promise == rej.promise
-                        && res.guard == rej.guard
-            )
+        // Capability slots may be arbitrary callbacks supplied by a custom
+        // species constructor. Their callability is checked after retained
+        // function state has been restored.
+        let capability_ok = |resolve: &Slot, reject: &Slot| -> bool {
+            resolve.kind == Kind::Reference && reject.kind == Kind::Reference
         };
         for row in &snap.promises {
             let state = match row.state {
@@ -11061,13 +11038,20 @@ impl Interp {
                 .iter()
                 .map(|r| {
                     let kind = match r.kind {
-                        0 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
+                        0 if capability_ok(&r.resolve, &r.reject)
+                            && r.a == 0
+                            && r.b == 0 =>
+                        {
                             ReactionKind::User
                         }
-                        1 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
+                        1 if capability_ok(&r.resolve, &r.reject)
+                            && r.a == 0
+                            && r.b == 0
+                            && r.on_rejected.kind == Kind::Reference =>
+                        {
                             ReactionKind::FinallyReturn
                         }
-                        11 if fn_pair_ok(&r.resolve, &r.reject)
+                        11 if capability_ok(&r.resolve, &r.reject)
                             && r.a <= 1
                             && r.b == 0
                             && r.on_rejected.kind == Kind::Undefined =>
@@ -11224,6 +11208,27 @@ impl Interp {
             })
             .collect();
         true
+    }
+
+    /// Validate capability callbacks after all persisted function populations
+    /// have been restored. Promise rows install before `FUNC` so bound/user
+    /// callbacks can refer back to runtime-minted resolving functions; this
+    /// second pass closes that intentional restore-order cycle.
+    pub fn restored_promise_capabilities_are_valid(&self) -> bool {
+        self.promises.values().all(|promise| {
+            promise.reactions.iter().all(|reaction| match reaction.kind {
+                ReactionKind::User | ReactionKind::FinallyAwait(_) => {
+                    self.is_callable_value(reaction.resolve)
+                        && self.is_callable_value(reaction.reject)
+                }
+                ReactionKind::FinallyReturn => {
+                    self.is_callable_value(reaction.resolve)
+                        && self.is_callable_value(reaction.reject)
+                        && self.is_constructor_value(reaction.on_rejected)
+                }
+                _ => true,
+            })
+        })
     }
 
     /// Quiescent snapshot of the four Temporal record tables (ledger
@@ -19348,6 +19353,33 @@ impl Interp {
         }
     }
 
+    /// Settle an arbitrary promise capability through the callback selected by
+    /// the completion. Native resolving functions retain the direct calibrated
+    /// path; callbacks supplied by a custom constructor run as ordinary calls.
+    fn settle_capability(
+        &mut self,
+        code: &[u8],
+        resolve: Slot,
+        reject: Slot,
+        value: Slot,
+        rejected: bool,
+    ) -> Result<(), Halt> {
+        let function = if rejected { reject } else { resolve };
+        let native_resolver = match function.value {
+            Payload::Reference(f) if function.kind == Kind::Reference => self
+                .promise_functions
+                .get(&f)
+                .is_some_and(|data| data.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD),
+            _ => false,
+        };
+        if native_resolver {
+            self.settle_via_function(function, value)
+        } else {
+            self.call_any(code, function, Slot::undefined(), &[value])?;
+            Ok(())
+        }
+    }
+
     /// Dispatch a plain (non-`new`) call to an intrinsic native function.
     /// The value stack below the `argc` args holds the frame geometry
     /// `[THIS, FUNCTION, RESULT, FRAME]` beginning at `base`; the handler
@@ -23822,15 +23854,15 @@ impl Interp {
 
     /// `Promise.prototype.then(onFulfilled, onRejected)`
     /// (`fx_Promise_prototype_then` → `fxPromiseThen`): register the reaction
-    /// on the receiver promise and return a fresh derived promise the
-    /// reaction's outcome settles. A handler argument is "present" iff it is a
-    /// reference (XS's `mxIsReference` gate); a non-reference handler is
-    /// treated as absent (pass-through). If the receiver is already settled,
+    /// on the receiver promise and return the selected species capability's
+    /// result object. A non-callable handler is treated as absent
+    /// (pass-through). If the receiver is already settled,
     /// the reaction is queued as a job immediately (run at the drain);
     /// otherwise it is appended to the promise's reaction list. Returns the
-    /// derived promise reference slot.
+    /// capability result slot.
     fn promise_then(
         &mut self,
+        code: &[u8],
         promise: crate::value::SlotIndex,
         base: usize,
     ) -> Result<Slot, Halt> {
@@ -23844,14 +23876,15 @@ impl Interp {
             .get(base + 5)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        self.promise_then_with(promise, arg0, arg1)
+        self.promise_then_with(code, promise, arg0, arg1)
     }
 
     /// The core of `.then` (`fxPromiseThen`), given the raw handler slots. A
-    /// handler is "present" iff it is a reference (XS's `mxIsReference` gate).
+    /// handler is present only when callable.
     /// Shared by `.then` and `.catch` (which passes `(undefined, onRejected)`).
     fn promise_then_with(
         &mut self,
+        code: &[u8],
         promise: crate::value::SlotIndex,
         arg0: Slot,
         arg1: Slot,
@@ -23867,7 +23900,9 @@ impl Interp {
             Slot::undefined()
         };
         self.meter.tick_raw(PROMISE_THEN_METERING);
-        let (derived, resolve, reject) = self.new_promise_capability();
+        let promise_slot = Slot::of(Kind::Reference, Payload::Reference(promise));
+        let constructor = self.promise_species_constructor(code, promise_slot)?;
+        let capability = self.new_promise_capability_for(code, constructor)?;
         // `fxPromiseThen`: the reaction instance's 6 `fxNewSlot`s (the reaction
         // instance + resolve/reject/onFulfilled/onRejected/result slots),
         // always built regardless of the promise's state.
@@ -23878,8 +23913,8 @@ impl Interp {
         let reaction = PromiseReaction {
             on_fulfilled,
             on_rejected,
-            resolve,
-            reject,
+            resolve: capability.resolve,
+            reject: capability.reject,
             kind: ReactionKind::User,
         };
         // A `.then`/`.catch` observes the promise: mark it handled for the
@@ -23909,7 +23944,7 @@ impl Interp {
                 });
             }
         }
-        Ok(Slot::of(Kind::Reference, Payload::Reference(derived)))
+        Ok(capability.promise)
     }
 
     /// Register a **native** reaction on `promise` (XS's `fxPromiseThen` with a
@@ -24307,14 +24342,13 @@ impl Interp {
             } else {
                 (reaction.on_fulfilled, original_rejected)
             };
-            let derived = match reaction.resolve.value {
-                Payload::Reference(rf) => match self.promise_functions.get(&rf) {
-                    Some(d) => d.promise,
-                    None => return Err(Halt::Unsupported("promise:finally-bad-capability")),
-                },
-                _ => return Err(Halt::Unsupported("promise:finally-bad-capability")),
-            };
-            return self.settle_promise(derived, settle_value, settle_reject);
+            return self.settle_capability(
+                code,
+                reaction.resolve,
+                reaction.reject,
+                settle_value,
+                settle_reject,
+            );
         }
         // A combinator element reaction: fold this element's settlement into
         // the shared `Promise.all`/`allSettled`/`race`/`any` state.
@@ -24353,17 +24387,8 @@ impl Interp {
         } else {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
         }
-        // The derived promise the reaction settles is the promise the
-        // reaction's resolve/reject functions were built for.
-        let derived = match reaction.resolve.value {
-            Payload::Reference(rf) => match self.promise_functions.get(&rf) {
-                Some(d) => d.promise,
-                None => return Err(Halt::Unsupported("promise:job-bad-capability")),
-            },
-            _ => return Err(Halt::Unsupported("promise:job-bad-capability")),
-        };
         // The default outcome: with no handler, a fulfilled job resolves the
-        // derived with the value, a rejected job rejects it with the reason
+        // capability with the value, a rejected job rejects it with the reason
         // (pass-through).
         let (settle_value, settle_reject) = if handler.kind == Kind::Undefined {
             (value, rejected)
@@ -24383,9 +24408,16 @@ impl Interp {
                 Err(thrown) => (thrown, true),
             }
         };
-        // Settle the derived promise (XS calls the captured resolve/reject
-        // function); a reference resolve value adopts as a thenable.
-        self.settle_promise(derived, settle_value, settle_reject)
+        // Call the captured capability function. For the intrinsic capability
+        // this retains the direct promise-settlement path; a custom species
+        // constructor's callbacks are invoked observably.
+        self.settle_capability(
+            code,
+            reaction.resolve,
+            reaction.reject,
+            settle_value,
+            settle_reject,
+        )
     }
 
     // ------------------------------------------------------------------
@@ -25754,24 +25786,28 @@ impl Interp {
     /// ([`Self::run_finally_reaction`]).
     fn promise_finally(
         &mut self,
+        code: &[u8],
         promise: crate::value::SlotIndex,
         on_finally: Slot,
+        constructor: Slot,
     ) -> Result<Slot, Halt> {
         self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
-        let (derived, resolve, reject) = self.new_promise_capability();
+        let capability = self.new_promise_capability_for(code, constructor)?;
         let reaction = PromiseReaction {
             on_fulfilled: on_finally,
-            on_rejected: Slot::undefined(),
-            resolve,
-            reject,
+            // The selected species constructor is needed again at the job
+            // drain for `PromiseResolve(C, onFinally())`.
+            on_rejected: constructor,
+            resolve: capability.resolve,
+            reject: capability.reject,
             kind: ReactionKind::FinallyReturn,
         };
         self.register_native_reaction(promise, reaction);
-        Ok(Slot::of(Kind::Reference, Payload::Reference(derived)))
+        Ok(capability.promise)
     }
 
-    /// `SpeciesConstructor(promise, %Promise%)` for
-    /// `Promise.prototype.finally`. The constructor and `@@species` reads are
+    /// `SpeciesConstructor(promise, %Promise%)` for `Promise.prototype.then`
+    /// and `Promise.prototype.finally`. The constructor and `@@species` reads are
     /// observable through accessors and proxies; `undefined` constructor and
     /// nullish species select the realm's intrinsic Promise constructor.
     fn promise_species_constructor(
@@ -25814,9 +25850,9 @@ impl Interp {
 
     /// Observable entry path for `Promise.prototype.finally`. A non-callable
     /// handler is fully generic and is forwarded unchanged to the receiver's
-    /// once-read `then`. The callable/default-native path keeps the existing
-    /// persistent native reaction; callable custom-then/species wrappers need
-    /// their own persisted function state and remain an honest named gap.
+    /// once-read `then`. The callable path supports any species constructor
+    /// when the receiver uses the intrinsic `then`; callable custom-`then`
+    /// wrappers still need persisted closure state and remain a named gap.
     fn promise_finally_dispatch(
         &mut self,
         code: &[u8],
@@ -25838,15 +25874,11 @@ impl Interp {
             return self.call_any(code, then, promise, &[on_finally, on_finally]);
         }
 
-        let intrinsic_promise = self.intrinsics.get("Promise").copied();
-        let default_constructor = matches!(constructor.value,
-            Payload::Reference(inst)
-                if constructor.kind == Kind::Reference && Some(inst) == intrinsic_promise);
         let intrinsic_then = matches!(then.value,
             Payload::Reference(function)
                 if self.method_of(function) == Some(NativeMethod::PromiseThen));
-        if self.promises.contains_key(&promise_inst) && default_constructor && intrinsic_then {
-            return self.promise_finally(promise_inst, on_finally);
+        if self.promises.contains_key(&promise_inst) && intrinsic_then {
+            return self.promise_finally(code, promise_inst, on_finally, constructor);
         }
         Err(Halt::Unsupported("finally:callable-custom-dispatch"))
     }
@@ -25865,21 +25897,26 @@ impl Interp {
         value: Slot,
         rejected: bool,
     ) -> Result<(), Halt> {
-        let derived = match reaction.resolve.value {
-            Payload::Reference(rf) => match self.promise_functions.get(&rf) {
-                Some(d) => d.promise,
-                None => return Err(Halt::Unsupported("promise:finally-bad-capability")),
-            },
-            _ => return Err(Halt::Unsupported("promise:finally-bad-capability")),
-        };
         let on_finally = reaction.on_fulfilled;
         if self.is_callable_value(on_finally) {
             match self.call_any_catching_throw(code, on_finally, Slot::undefined(), &[])? {
                 Ok(r) => self.await_finally_result(code, reaction, r, value, rejected),
-                Err(thrown) => self.settle_promise(derived, thrown, true),
+                Err(thrown) => self.settle_capability(
+                    code,
+                    reaction.resolve,
+                    reaction.reject,
+                    thrown,
+                    true,
+                ),
             }
         } else {
-            self.settle_promise(derived, value, rejected)
+            self.settle_capability(
+                code,
+                reaction.resolve,
+                reaction.reject,
+                value,
+                rejected,
+            )
         }
     }
 
@@ -25897,19 +25934,7 @@ impl Interp {
         original: Slot,
         original_rejected: bool,
     ) -> Result<(), Halt> {
-        let derived = match reaction.resolve.value {
-            Payload::Reference(rf) => match self.promise_functions.get(&rf) {
-                Some(d) => d.promise,
-                None => return Err(Halt::Unsupported("promise:finally-bad-capability")),
-            },
-            _ => return Err(Halt::Unsupported("promise:finally-bad-capability")),
-        };
-        let intrinsic_promise = *self
-            .intrinsics
-            .get("Promise")
-            .expect("Promise intrinsic is linked");
-        let intrinsic_promise_slot =
-            Slot::of(Kind::Reference, Payload::Reference(intrinsic_promise));
+        let constructor = reaction.on_rejected;
 
         // PromiseResolve returns an already-native promise unchanged only when
         // its observable constructor is the selected constructor.
@@ -25919,9 +25944,15 @@ impl Interp {
                 match self.array_from_try(|this| {
                     this.mop_get(code, inst, constructor_id, result)
                 })? {
-                    Ok(constructor) => self.same_value(constructor, intrinsic_promise_slot),
+                    Ok(observed) => self.same_value(observed, constructor),
                     Err(error) => {
-                        return self.settle_promise(derived, error, true);
+                        return self.settle_capability(
+                            code,
+                            reaction.resolve,
+                            reaction.reject,
+                            error,
+                            true,
+                        );
                     }
                 }
             } else {
@@ -25931,17 +25962,54 @@ impl Interp {
             false
         };
 
-        let awaited = if identity {
-            match result.value {
-                Payload::Reference(inst) => inst,
-                _ => unreachable!(),
-            }
+        let awaited_slot = if identity {
+            result
         } else {
-            let (promise, _resolve, _reject) = self.new_promise_capability();
-            self.settle_promise(promise, result, false)?;
-            promise
+            let capability = match self
+                .array_from_try(|this| this.new_promise_capability_for(code, constructor))?
+            {
+                Ok(capability) => capability,
+                Err(error) => {
+                    return self.settle_capability(
+                        code,
+                        reaction.resolve,
+                        reaction.reject,
+                        error,
+                        true,
+                    );
+                }
+            };
+            match self.call_any_catching_throw(
+                code,
+                capability.resolve,
+                Slot::undefined(),
+                &[result],
+            )? {
+                Ok(_) => capability.promise,
+                Err(error) => {
+                    return self.settle_capability(
+                        code,
+                        reaction.resolve,
+                        reaction.reject,
+                        error,
+                        true,
+                    );
+                }
+            }
         };
-        let awaited_slot = Slot::of(Kind::Reference, Payload::Reference(awaited));
+        let awaited = match awaited_slot.value {
+            Payload::Reference(inst) if awaited_slot.kind == Kind::Reference => inst,
+            _ => {
+                let error = self.build_error("TypeError", 0, 0);
+                return self.settle_capability(
+                    code,
+                    reaction.resolve,
+                    reaction.reject,
+                    error,
+                    true,
+                );
+            }
+        };
         let then_id = self.intern_key("then");
         self.install_pending_intrinsics();
         self.then_id = Some(then_id);
@@ -25951,9 +26019,23 @@ impl Interp {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
                 let error = self.build_error("TypeError", 0, 0);
-                return self.settle_promise(derived, error, true);
+                return self.settle_capability(
+                    code,
+                    reaction.resolve,
+                    reaction.reject,
+                    error,
+                    true,
+                );
             }
-            Err(error) => return self.settle_promise(derived, error, true),
+            Err(error) => {
+                return self.settle_capability(
+                    code,
+                    reaction.resolve,
+                    reaction.reject,
+                    error,
+                    true,
+                )
+            }
         };
         let await_reaction = PromiseReaction {
             on_fulfilled: original,
@@ -32557,7 +32639,7 @@ impl Interp {
                     Payload::Reference(r) if self.promises.contains_key(&r) => r,
                     _ => return Err(self.catchable_type_error()),
                 };
-                self.promise_then(promise, base)?
+                self.promise_then(code, promise, base)?
             }
             // `%GeneratorPrototype%.next/return/throw` (`fx_Generator_prototype_
             // aux`): resume the suspended body and return `{value, done}`. A
