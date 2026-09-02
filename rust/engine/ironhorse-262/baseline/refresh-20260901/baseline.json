@@ -1,0 +1,38 @@
+{
+ "note": "Ratchet refresh snapshot (2026-09-01): the authoritative whole-corpus totals at this PR head (round 2, PR #1113). Supersedes ../refresh-20260829 as the ratchet floor: no path in covered.txt may regress, and the `failures` list below is the complete permitted ironhorse-failure set (empty at this refresh).",
+ "provenance": {
+  "corpus_verified": true,
+  "runner": "endot-ih",
+  "test262_sha": "be13516fb6441b950ba8a3df97eb34062c186972",
+  "test262_ref": "tc39/test262@be13516fb644",
+  "endo_sha": "299b57fb3a8ed5bbabf63e21764cf5a37ead27e0",
+  "oracle": "moddable submodule @ 23b4d6b0a65f",
+  "command": "full-run.sh --subtree <all> --jobs 14 --oracle on",
+  "config": "oracle=on max-cases-per-batch=100 jobs=14 subtree=<all>",
+  "scope": "whole-corpus",
+  "oracle_mode": "on",
+  "ses_mode": "none",
+  "completion": "complete",
+  "run_id": "test262=be13516fb6441b950ba8a3df97eb34062c186972;endo=299b57fb3a8ed5bbabf63e21764cf5a37ead27e0;oracle=on;moddable=23b4d6b0a65f35209d9118c4c13c6c9b3e68784d;ses=none;cap=100;scope=<all>",
+  "started_at": "2026-09-02T00:49:43Z",
+  "finished_at": "2026-09-02T00:54:30Z",
+  "host": "redacted"
+ },
+ "total_cases": 51976,
+ "totals_by_category": {
+  "covered": 30232,
+  "ironhorse-failure": 0,
+  "unsupported": 13712,
+  "skipped": 7414,
+  "infrastructure": 618
+ },
+ "failures": [],
+ "infrastructure_reasons": {
+  "module:evaluation": 443,
+  "oracle-nontermination: oracle failed to terminate within 10s (ironhorse terminates alone)": 6,
+  "negative-oracle-unexpected": 5,
+  "module:compiler-rejected": 99,
+  "module:resolution-linking": 34,
+  "module:compiler-byte-divergence": 31
+ }
+}
