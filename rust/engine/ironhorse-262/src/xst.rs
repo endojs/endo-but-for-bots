@@ -582,6 +582,14 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // official case observes that ordering through a side
                     // effect. Do not make Ironhorse reproduce the XS defect.
                     Verdict::RunSkip("oracle-xs-super-arguments".into())
+                } else if oracle_misses_typed_array_set_detachment(run) {
+                    // Pinned XS continues reading an array-like source after a
+                    // getter detaches the target TypedArray's buffer. The spec
+                    // requires a TypeError immediately after coercing that
+                    // element; IronHorse follows that order and passes the
+                    // official assertion. Keep this exact oracle defect from
+                    // becoming a false over-acceptance.
+                    Verdict::RunSkip("oracle-xs-typedarray-set-detach".into())
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -678,6 +686,21 @@ fn oracle_skips_super_arguments(run: &DualRun) -> bool {
         && run.oracle_error == "Test262Error: performs ArgumentsListEvaluation"
         && run.source.contains("super(evaluatedArg = true)")
         && run.source.contains("Object.setPrototypeOf(C, parseInt)")
+}
+
+/// The pinned XS `%TypedArray.prototype.set%` detachment-order defect exercised
+/// by the official array-like source case. `Get(src, "1")` detaches the target
+/// buffer, after which the specification requires a TypeError before reading
+/// index 2. XS performs that later read and fails the harness assertion;
+/// IronHorse observes the required TypeError. Restrict the exclusion to the
+/// harness's Test262Error plus the distinctive detach, late-read sentinel, and
+/// `set` call so unrelated TypedArray failures remain gating.
+fn oracle_misses_typed_array_set_detachment(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run.source.contains("$DETACHBUFFER(sample.buffer)")
+        && run.source.contains("Should not get other values")
+        && run.source.contains("sample.set(obj)")
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -2268,6 +2291,39 @@ mod tests {
 
         run.source = "super(evaluatedArg = true)".to_string();
         assert!(!oracle_skips_super_arguments(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_typed_array_set_detachment_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all",
+        );
+        run.source = "Object.defineProperty(obj, 1, { get: function() { \
+            $DETACHBUFFER(sample.buffer); } }); \
+            Object.defineProperty(obj, 2, { get: function() { \
+            throw new Test262Error('Should not get other values'); } }); \
+            sample.set(obj);"
+            .to_string();
+        assert!(oracle_misses_typed_array_set_detachment(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-typedarray-set-detach".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-typedarray-set-detach"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source = "$DETACHBUFFER(sample.buffer); sample.set(obj);".to_string();
+        assert!(!oracle_misses_typed_array_set_detachment(&run));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(_)

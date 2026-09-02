@@ -2276,6 +2276,8 @@ pub enum NativeMethod {
     TypedArraySet,
     /// `%TypedArray%.prototype.reverse()`.
     TypedArrayReverse,
+    /// `%TypedArray%.prototype.join(separator)`.
+    TypedArrayJoin,
     /// Shared `%TypedArray%.prototype` view accessors.
     TypedArrayLengthGetter,
     TypedArrayByteLengthGetter,
@@ -5790,6 +5792,7 @@ impl Interp {
             ("fill", 1, NativeMethod::TypedArrayFill),
             ("set", 1, NativeMethod::TypedArraySet),
             ("reverse", 0, NativeMethod::TypedArrayReverse),
+            ("join", 1, NativeMethod::TypedArrayJoin),
         ] {
             let mf = self.alloc_named_method(method, name, arity);
             self.proto_methods.push((typed_array_proto, name, mf));
@@ -7823,6 +7826,14 @@ impl Interp {
         // Install the native prototype methods whose names this program
         // references, as own properties of their prototype (unmetered — an
         // inherited intrinsic method, present before the guest runs).
+        let typed_array_ctor = self.functions.iter().find_map(|(&function, info)| {
+            (info.native == Some(Native::TypedArrayBase)).then_some(function)
+        });
+        let typed_array_proto = typed_array_ctor
+            .and_then(|constructor| self.ctor_prototype.get(&constructor).copied());
+        let names_typed_array = TYPED_ARRAY_TYPES
+            .iter()
+            .any(|ty| self.symbol_ids.contains_key(ty.name));
         let methods = std::mem::take(&mut self.proto_methods);
         for &(proto, mname, mfunc) in &methods {
             // Constructor `prototype` is a mandatory own property even when
@@ -7850,6 +7861,18 @@ impl Interp {
                 // `getOwnPropertyDescriptor(Intl, 'NumberFormat')` reveals the
                 // real own data property. Non-Intl programs never enter this
                 // branch, so their metering is untouched.
+                Some(self.intern_key_unmetered(mname))
+            } else if names_typed_array
+                && (Some(proto) == typed_array_ctor || Some(proto) == typed_array_proto)
+            {
+                // `%TypedArray%` and `%TypedArray%.prototype` are not globals;
+                // tests and ordinary programs reach them through the concrete
+                // constructor inheritance chain and commonly name their own
+                // properties with runtime strings. Materialize the complete
+                // shared intrinsic surfaces once any concrete TypedArray is
+                // linked, just as the reflective Intl namespace path above
+                // does, so `hasOwnProperty` and descriptor operations do not
+                // depend on a coincidental static `.from`/`.set` reference.
                 Some(self.intern_key_unmetered(mname))
             } else {
                 None
@@ -15662,16 +15685,13 @@ impl Interp {
                 // exact int-boundary promotion to number (INT_MAX for
                 // increment, -(INT_MAX) for decrement). XS performs ToNumeric
                 // inside this opcode; the compiler does not emit a separate
-                // `to_numeric` for update expressions.
+                // `to_numeric` for update expressions. BigInt uses XS's
+                // `_inc`/`_dec`, which add/subtract the static BigInt one.
                 XS_CODE_INCREMENT | XS_CODE_DECREMENT => {
                     let inc = op == XS_CODE_INCREMENT;
                     let current = *self.stack.last().unwrap_or(&Slot::undefined());
                     let numeric = match current.kind {
-                        Kind::Integer | Kind::Number => current,
-                        // BigInt ± 1 needs the digit arithmetic/allocation
-                        // metering path, kept named until that specialized
-                        // update is modeled.
-                        Kind::BigInt => return Halt::Unsupported(op.name()),
+                        Kind::Integer | Kind::Number | Kind::BigInt => current,
                         _ => dispatch_result!(
                             self.to_number_value(code, current),
                             pc,
@@ -15679,6 +15699,14 @@ impl Interp {
                             return_depth
                         ),
                     };
+                    if let Payload::BigInt(off) = numeric.value {
+                        let result = self.bigint_update(off, inc);
+                        if let Some(top) = self.stack.last_mut() {
+                            *top = result;
+                        }
+                        pc += size as usize;
+                        continue;
+                    }
                     if let Some(top) = self.stack.last_mut() {
                         *top = numeric;
                     }
@@ -19501,9 +19529,10 @@ impl Interp {
                     // literal carries the default `Symbol.iterator`, so its
                     // direct dense element sequence IS the iterator result the
                     // spec-mandated protocol would yield — result-faithful. An
-                    // element needing `ToPrimitive`/`valueOf` (an object member),
-                    // or a BigInt-element view, self-names (the coercion
-                    // metering is a later increment).
+                    // element needing `ToPrimitive`/`valueOf` (an object member)
+                    // takes the general coercion path. BigInt-element sources
+                    // materialize real BigInt values so same-domain copies work
+                    // and cross-domain copies throw the required TypeError.
                     Payload::Reference(r)
                         if self.arrays.contains_key(&r) || self.typed_arrays.contains_key(&r) =>
                     {
@@ -19566,9 +19595,12 @@ impl Interp {
                                     .get(&r)
                                     .and_then(|src| src.items().get(&i).copied())
                                     .unwrap_or_else(Slot::undefined),
+                                Some(src) if src.kind <= 1 => {
+                                    self.typed_array_element_get_bigint(src, i)
+                                }
                                 Some(src) => self
                                     .typed_array_element_get(src, i)
-                                    .unwrap_or_else(Slot::undefined),
+                                    .expect("numeric TypedArray element decodes"),
                             };
                             self.typed_array_element_set(code, ta, i, v)?;
                             self.meter
@@ -29039,6 +29071,9 @@ impl Interp {
             | NativeMethod::TypedArrayReverse => {
                 self.typed_array_mutator(m, this, base, argc, code)?
             }
+            NativeMethod::TypedArrayJoin => {
+                self.typed_array_join(this, base, argc, code)?
+            }
             NativeMethod::TypedArrayLengthGetter
             | NativeMethod::TypedArrayByteLengthGetter
             | NativeMethod::TypedArrayByteOffsetGetter
@@ -30258,6 +30293,35 @@ impl Interp {
                     Some(i) => i,
                     None => return Err(Halt::Unsupported("join:non-dense-array")),
                 };
+                if argc > 0
+                    && arg0.kind != Kind::Undefined
+                    && arg0.kind != Kind::String
+                {
+                    // The calibrated fast path below keeps the historic exact
+                    // metering for the default/string separator. Other values
+                    // still follow ordinary ToString, including re-entrant
+                    // object conversion and abrupt Symbol/guest completions.
+                    // Capture length before separator coercion, then read each
+                    // element live so a conversion can mutate later indices.
+                    let length = self.arrays[&inst].length;
+                    let sep = self.to_string_units(code, arg0)?;
+                    let mut out = Vec::new();
+                    for i in 0..length {
+                        if i > 0 {
+                            out.extend_from_slice(&sep);
+                        }
+                        let item = self.arrays[&inst].items().get(&i).copied();
+                        if let Some(value) = item {
+                            if !matches!(value.kind, Kind::Undefined | Kind::Null) {
+                                out.extend_from_slice(&self.to_string_units(code, value)?);
+                            }
+                        }
+                    }
+                    self.stack.truncate(base);
+                    let result = self.new_string_units(&out);
+                    self.push(result);
+                    return Ok(());
+                }
                 let sep: Vec<u8> = if argc == 0 || arg0.kind == Kind::Undefined {
                     b",".to_vec()
                 } else if arg0.kind == Kind::String {
@@ -30266,7 +30330,7 @@ impl Interp {
                         _ => b",".to_vec(),
                     }
                 } else {
-                    return Err(Halt::Unsupported("join:non-string-separator"));
+                    unreachable!("non-string separators use the general path")
                 };
                 let length = self.arrays[&inst].length;
                 let items: Vec<Option<Slot>> = {
@@ -36053,6 +36117,48 @@ impl Interp {
             self.typed_array_element_set(code, ta, index as u32, value)?;
         }
         Ok(result)
+    }
+
+    /// `%TypedArray%.prototype.join`: validate the branded view before
+    /// coercing the separator, read the fixed internal length, and stringify
+    /// each numeric/BigInt element in index order. A buffer detached by
+    /// separator coercion makes subsequent integer-index reads `undefined`,
+    /// hence empty fields, as required by IntegerIndexedElementGet.
+    fn typed_array_join(
+        &mut self,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let ta = self.validate_typed_array(this)?;
+        let separator = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let sep = if argc == 0 || separator.kind == Kind::Undefined {
+            vec![u16::from(b',')]
+        } else {
+            self.to_string_units(code, separator)?
+        };
+        let mut out = Vec::new();
+        for index in 0..ta.length {
+            if index > 0 {
+                out.extend_from_slice(&sep);
+            }
+            if self.detached_buffers.contains(&ta.buffer) {
+                continue;
+            }
+            let value = if ta.kind <= 1 {
+                self.typed_array_element_get_bigint(ta, index)
+            } else {
+                self.typed_array_element_get(ta, index)
+                    .expect("numeric TypedArray element decodes")
+            };
+            out.extend_from_slice(&self.to_string_units_metered(value));
+        }
+        Ok(self.new_string_units(&out))
     }
 
     /// The four in-place `%TypedArray.prototype%` mutators. All receiver and
@@ -42979,6 +43085,33 @@ impl Interp {
             .tick_raw((size - 1) * crate::meter::BIGINT_METERING);
         self.meter.tick_raw(BIGINT_ARITH_FRAME_METERING);
         Ok(self.store_bigint(neg, mag))
+    }
+
+    /// BigInt `++`/`--` (`fxBigInt_inc`/`fxBigInt_dec`), which delegate to
+    /// addition/subtraction with XS's static `gxBigIntOne`. The constant does
+    /// not allocate; only the arithmetic result and digit work are charged.
+    fn bigint_update(&mut self, value: crate::value::ChunkOffset, increment: bool) -> Slot {
+        let (negative, magnitude) = self.read_bigint(value);
+        let one = [1u32];
+        let (result_negative, result_magnitude) = if increment {
+            bi_add(negative, &magnitude, false, &one)
+        } else {
+            bi_add(negative, &magnitude, true, &one)
+        };
+        let max = magnitude.len().max(one.len()) as u64;
+        let allocation_limbs = if increment {
+            if negative { max } else { max + 1 }
+        } else if negative {
+            max + 1
+        } else {
+            max
+        };
+        self.meter.tick_chunk_new(allocation_limbs * 4);
+        self.meter.tick_raw(
+            (result_magnitude.len() as u64 - 1) * crate::meter::BIGINT_METERING,
+        );
+        self.meter.tick_raw(BIGINT_ARITH_FRAME_METERING);
+        self.store_bigint(result_negative, result_magnitude)
     }
 
     /// If `a`/`b` involve a BigInt, dispatch the op: both BigInt → BigInt
