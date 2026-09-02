@@ -6,6 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[guest-native-invitations](guest-native-invitations.md) (added 2026-09-02;
+guest-native `invite`/`accept` so an `EndoGuest` onboards another guest with its
+own authority, accepting as its own handle with no minted replacement guest and
+reciprocal pet-name binding; daemon-node locator authority with daemon-sourced
+hints, narrow injected `registerPeer`/`writeRemoteAgentKey` daemon-core
+capabilities, pet-store de-reference as the durable consume-once record, and a
+shared `EndoAgent` invitation vocabulary; closes the daemon gap named by
+`kriscendobot/minion.town#56`),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -485,6 +493,8 @@ The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardi
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
 
 The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
+
+The 2026-09-02 rebase adds [guest-native-invitations](guest-native-invitations.md) (Not Started), increasing Not Started from 49 to 50 and the design count from 196 to 197.
 
 ## Roadmap
 
