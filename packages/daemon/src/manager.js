@@ -46,7 +46,12 @@ import { makeEndoRegistry, makeRegistryTable } from './registry.js';
 import { makeDirectoryMaker } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
-import { makeDeferredTasks } from './deferred-tasks.js';
+import { makeDeferredTasks, makePinTransientTask } from './deferred-tasks.js';
+import {
+  runAfterPersistBeforeCommitHook,
+  setPinTransientForTests,
+  setUnpinTransientForTests,
+} from './formula-commit-test-hooks.js';
 import { assertMailboxStoreName, makeMailboxMaker } from './mail.js';
 import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
@@ -546,9 +551,17 @@ const makeDaemonCore = async (
    * - Removal
    * - Provision
    * - Cancellation
+   *
+   * Context-aware lock: nested graph work may run inline only when it
+   * presents the currently owned FormulaGraphLockContext token. Callers
+   * without the token always enqueue (no depth-based fast path). The
+   * token is held across awaited persistence and CapTP name commits
+   * (intentional global serialization). Nested formulate / unpin must
+   * pass the token to avoid deadlocking the serial job queue.
    */
   const formulaGraphJobs = makeSerialJobs();
-  let formulaGraphLockDepth = 0;
+  /** @type {import('./types.js').FormulaGraphLockContext | null} */
+  let ownedFormulaGraphLockContext = null;
   /**
    * Async cleanup work scheduled by onCollect. Drained by
    * withFormulaGraphLock after each graph mutation completes.
@@ -557,27 +570,41 @@ const makeDaemonCore = async (
    */
   const pendingCollectionCleanup = [];
   /**
-   * @param {() => Promise<any>} [asyncFn]
+   * @param {(lockContext: import('./types.js').FormulaGraphLockContext) => Promise<any>} [asyncFn]
+   * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
    * @returns {Promise<any>}
    */
-  const withFormulaGraphLock = async (asyncFn = async () => undefined) => {
+  const withFormulaGraphLock = async (
+    asyncFn = async () => undefined,
+    lockContext = undefined,
+  ) => {
     await null;
-    if (formulaGraphLockDepth > 0) {
-      // Already holding the lock; avoid deadlock.
-      return asyncFn();
+    if (
+      lockContext !== undefined &&
+      lockContext === ownedFormulaGraphLockContext
+    ) {
+      // Nested work under the owned token runs inline.
+      return asyncFn(lockContext);
     }
-    formulaGraphLockDepth += 1;
-    let result;
-    try {
-      result = await formulaGraphJobs.enqueue(asyncFn);
-    } finally {
-      formulaGraphLockDepth -= 1;
+    // Same-job reentry without an explicit token: run under the owned
+    // context so nested formulate helpers (bootstrap, host deps) do not
+    // deadlock the serial queue. Callers that must not reenter during a
+    // CapTP commit (notably unpinTransient) pass through formulaGraphJobs
+    // exclusively instead of this path.
+    if (lockContext === undefined && ownedFormulaGraphLockContext !== null) {
+      return asyncFn(ownedFormulaGraphLockContext);
     }
-    // Drain any async collection cleanup scheduled during this
-    // graph operation. This runs AFTER the serial job token is
-    // released so that cleanup operations that need the lock
-    // (e.g., CapTP messages triggering graph mutations on a
-    // remote callback) can acquire it without deadlock.
+    const result = await formulaGraphJobs.enqueue(async () => {
+      const ctx = harden({});
+      ownedFormulaGraphLockContext = ctx;
+      try {
+        return await asyncFn(ctx);
+      } finally {
+        ownedFormulaGraphLockContext = null;
+      }
+    });
+    // Drain after the serial job token is released so cleanup that
+    // needs the lock can re-acquire without deadlock.
     // eslint-disable-next-line no-use-before-define
     await drainCollectionCleanup();
     return result;
@@ -1174,22 +1201,37 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Unpin a transient formula and drain any resulting collection
-   * cleanup. Returns a promise that resolves when all async
-   * cleanup (controller cancellation, worker termination) is done.
-   *
-   * Inside `withFormulaGraphLock`, cleanup is deferred to the lock's
-   * finally block. Outside the lock, cleanup runs immediately.
+   * Unpin a transient formula under the context-aware graph lock.
+   * Nested under the owned token, mutates immediately and defers cleanup
+   * until the outer lock section ends. Without a token, always exclusive
+   * enqueue (never the auto-reentry path) so concurrent unpin cannot
+   * collect mid-commit.
    *
    * @param {FormulaIdentifier} id
+   * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
    * @returns {Promise<void>}
    */
-  const unpinTransient = async id => {
-    formulaGraph.unpinTransient(id);
-    if (formulaGraphLockDepth === 0) {
+  const unpinTransient = async (id, lockContext = undefined) => {
+    if (
+      lockContext !== undefined &&
+      lockContext === ownedFormulaGraphLockContext
+    ) {
+      formulaGraph.unpinTransient(id);
+      return;
+    }
+    // Exclusive: no auto-reentry when a commit holds the lock.
+    await formulaGraphJobs.enqueue(async () => {
+      formulaGraph.unpinTransient(id);
+    });
+    // Drain only when no outer owner is mid-section.
+    if (ownedFormulaGraphLockContext === null) {
+      // eslint-disable-next-line no-use-before-define
       await drainCollectionCleanup();
     }
   };
+  // Test seams for concurrent-unpin-during-commit cases.
+  setUnpinTransientForTests(unpinTransient);
+  setPinTransientForTests(pinTransient);
 
   /** @type {WeakMap<object, FormulaIdentifier>} */
   const agentIdForHandle = new WeakMap();
@@ -1253,7 +1295,7 @@ const makeDaemonCore = async (
 
     const { number: fNum } = parseId(id);
     ({ formula } = await persistencePowers.readFormula(fNum));
-    await withFormulaGraphLock(async () => {
+    await withFormulaGraphLock(async lockContext => {
       formulaForId.set(id, formula);
       formulaGraph.onFormulaAdded(id, formula);
     });
@@ -1387,7 +1429,7 @@ const makeDaemonCore = async (
         return { id, formula };
       }),
     );
-    await withFormulaGraphLock(async () => {
+    await withFormulaGraphLock(async lockContext => {
       for (const { id, formula } of entries) {
         if (!formulaForId.has(id)) {
           formulaForId.set(id, formula);
@@ -1427,7 +1469,7 @@ const makeDaemonCore = async (
 
     // Load retention edges from SQLite into the graph.
     const agentKeys = persistencePowers.listAgentKeys();
-    await withFormulaGraphLock(async () => {
+    await withFormulaGraphLock(async lockContext => {
       for (const { publicKey, agentId } of agentKeys) {
         const retentionEntries = persistencePowers.listRetention(publicKey);
         const agentIdStr = /** @type {FormulaIdentifier} */ (agentId);
@@ -1443,10 +1485,28 @@ const makeDaemonCore = async (
       }
     });
 
+    // Seed provisional name-commit records as retention roots before
+    // sweeping, so a crash between formula persist and name commit cannot
+    // collect a formula that may already have a remote name write.
+    if (typeof persistencePowers.listPendingNameCommits === 'function') {
+      const pendingCommits = await persistencePowers.listPendingNameCommits();
+      await withFormulaGraphLock(async lockContext => {
+        for (const record of pendingCommits) {
+          const formulaId = /** @type {FormulaIdentifier} */ (record.formulaId);
+          if (formulaForId.has(formulaId)) {
+            // Use the formula id itself as a transient retention root for
+            // the duration of recovery; pinTransient keeps it until an
+            // explicit outcome or verified removal.
+            formulaGraph.pinTransient(formulaId);
+          }
+        }
+      });
+    }
+
     // One-time sweep for formulas unreachable after loading all edges.
     // Run inside the lock so that any resulting collection cleanup is
     // drained before the function returns.
-    await withFormulaGraphLock(async () => {
+    await withFormulaGraphLock(async lockContext => {
       formulaGraph.sweepUnreachable();
     });
   };
@@ -1654,7 +1714,7 @@ const makeDaemonCore = async (
             // First delta is the full snapshot.
             persistencePowers.replaceRetention(remoteNodeId, delta.add);
             if (agentIdStr !== undefined) {
-              await withFormulaGraphLock(async () => {
+              await withFormulaGraphLock(async lockContext => {
                 formulaGraph.replaceRetention(
                   agentIdStr,
                   delta.add.map(num =>
@@ -1675,7 +1735,7 @@ const makeDaemonCore = async (
               persistencePowers.deleteRetention(remoteNodeId, num);
             }
             if (agentIdStr !== undefined) {
-              await withFormulaGraphLock(async () => {
+              await withFormulaGraphLock(async lockContext => {
                 for (const num of delta.add) {
                   formulaGraph.addRetention(
                     agentIdStr,
@@ -3401,7 +3461,7 @@ const makeDaemonCore = async (
         policy: nextPolicy,
         revoked: nextRevoked,
       }) => {
-        await withFormulaGraphLock(async () => {
+        await withFormulaGraphLock(async lockContext => {
           const { number: formulaNumber, node: formulaNode } = parseId(id);
           const latestFormula = formulaForId.get(id) ?? currentFormula;
           if (latestFormula.type !== 'git-remote') {
@@ -4131,6 +4191,7 @@ const makeDaemonCore = async (
             request: disallowedFn,
             send: disallowedFn,
             evaluate: disallowedFn,
+            startEvaluate: disallowedFn,
             define: disallowedFn,
             form: disallowedFn,
             storeBlob: disallowedFn,
@@ -4349,7 +4410,7 @@ const makeDaemonCore = async (
       node: nodeNumber,
     });
     await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
-    await withFormulaGraphLock(async () => {
+    await withFormulaGraphLock(async lockContext => {
       if (formulaForId.has(id)) return;
       formulaForId.set(id, formula);
       formulaGraph.onFormulaAdded(id, formula);
@@ -4361,31 +4422,40 @@ const makeDaemonCore = async (
     return id;
   };
 
-  /** @type {DaemonCore['formulate']} */
-  const formulate = async (
+  /**
+   * Publish formula into in-memory maps and graph under an owned lock token.
+   * Does not persist or start construction.
+   *
+   * @param {FormulaIdentifier} id
+   * @param {FormulaNumber} formulaNumber
+   * @param {Formula} formula
+   * @param {string} nodeNumber
+   * @param {import('./types.js').FormulaGraphLockContext} lockContext
+   */
+  const registerFormulaInGraph = (
+    id,
     formulaNumber,
     formula,
-    nodeNumber = localNodeNumber,
+    nodeNumber,
+    lockContext,
   ) => {
-    const id = formatId({
-      number: formulaNumber,
-      node: nodeNumber,
-    });
-
-    // Persist to disk before the formula becomes visible in the graph.
-    // This ensures that retries and reincarnation can always read the
-    // formula JSON, even if evaluation fails immediately.
-    await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
-
-    await withFormulaGraphLock(async () => {
-      formulaForId.has(id) && assert.Fail`Formula already exists for id ${id}`;
-      formulaForId.set(id, formula);
-      formulaGraph.onFormulaAdded(id, formula);
-    });
+    void lockContext;
+    formulaForId.has(id) && assert.Fail`Formula already exists for id ${id}`;
+    formulaForId.set(id, formula);
+    formulaGraph.onFormulaAdded(id, formula);
     formulaChangeTopic.publisher.next(
       harden({ add: formulaNumber, node: nodeNumber }),
     );
+  };
 
+  /**
+   * Create controller and start construction (synchronous prelude).
+   *
+   * @param {FormulaIdentifier} id
+   * @param {FormulaNumber} formulaNumber
+   * @param {Formula} formula
+   */
+  const publishControllerAndConstruct = (id, formulaNumber, formula) => {
     logLifecycle(id, 'FORMULATE');
     const { promise, resolve } = /** @type {PromiseKit<unknown>} */ (
       makePromiseKit()
@@ -4401,7 +4471,7 @@ const makeDaemonCore = async (
     });
     controllerForId.set(id, controller);
 
-    // The controller _must_ be constructed in the synchronous prelude of this function.
+    // The controller _must_ be constructed in the synchronous prelude.
     const valuePromise = evaluateFormula(id, formulaNumber, formula, context);
     resolve(valuePromise);
 
@@ -4409,6 +4479,164 @@ const makeDaemonCore = async (
       id,
       value: controller.value,
     });
+  };
+
+  /** @type {DaemonCore['formulate']} */
+  const formulate = async (
+    formulaNumber,
+    formula,
+    nodeNumber = localNodeNumber,
+    lockContext = undefined,
+  ) => {
+    const id = formatId({
+      number: formulaNumber,
+      node: nodeNumber,
+    });
+
+    // Persist to disk before the formula becomes visible in the graph.
+    // This ensures that retries and reincarnation can always read the
+    // formula JSON, even if evaluation fails immediately.
+    await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
+
+    await withFormulaGraphLock(async ctx => {
+      registerFormulaInGraph(id, formulaNumber, formula, nodeNumber, ctx);
+    }, lockContext);
+
+    return publishControllerAndConstruct(id, formulaNumber, formula);
+  };
+
+  /**
+   * Persist formula + provisional name-commit record, run name commit under
+   * the context-aware lock, then register and optionally construct.
+   *
+   * @param {FormulaNumber} formulaNumber
+   * @param {Formula} formula
+   * @param {(
+   *   lockContext: import('./types.js').FormulaGraphLockContext,
+   * ) => Promise<import('./types.js').CommitOutcome>} commitAfterPersistence
+   * @param {NodeNumber} [nodeNumber]
+   * @param {{
+   *   resultNamePath?: string,
+   *   selectedFormulaId?: string,
+   *   pin?: (id: FormulaIdentifier) => void,
+   * }} [options]
+   * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
+   * @returns {FormulateResult<unknown>}
+   */
+  const formulateWithCommit = async (
+    formulaNumber,
+    formula,
+    commitAfterPersistence,
+    nodeNumber = localNodeNumber,
+    options = {},
+    lockContext = undefined,
+  ) => {
+    const id = formatId({
+      number: formulaNumber,
+      node: nodeNumber,
+    });
+    const resultNamePath = options.resultNamePath ?? '';
+    const selectedFormulaId = options.selectedFormulaId ?? id;
+    const commitId = /** @type {string} */ (await randomHex256());
+
+    // Hold the context-aware lock across persist, commit, and publish.
+    return withFormulaGraphLock(async ownedLockContext => {
+      // 1. Persist formula JSON and pending name-commit record together
+      // before any name write or graph publication.
+      await persistencePowers.writeFormula(formulaNumber, nodeNumber, formula);
+      await persistencePowers.writePendingNameCommit(
+        commitId,
+        id,
+        resultNamePath,
+        selectedFormulaId,
+        'pending',
+      );
+
+      /** @type {import('./types.js').CommitOutcome} */
+      let outcome = 'committed';
+      /** @type {Error | undefined} */
+      let commitError;
+      try {
+        // Test seam: pause/crash/reject between durable writes and name commit.
+        // Failures here are treated as commit outcomes so rejected-before-write
+        // can sweep and ambiguous/crash can retain the provisional record.
+        await runAfterPersistBeforeCommitHook();
+        // 2. Name commit while holding the lock token.
+        outcome = await commitAfterPersistence(ownedLockContext);
+      } catch (error) {
+        commitError = /** @type {Error} */ (error);
+        // @ts-expect-error optional tag
+        outcome = error.commitOutcome || 'ambiguous';
+        if (outcome !== 'rejected-before-write' && outcome !== 'ambiguous') {
+          outcome = 'ambiguous';
+        }
+      }
+
+      if (outcome === 'committed') {
+        // 3. Register formula and graph edges only after a successful name
+        // commit (or for ambiguous retention below). Proven rejected-before-
+        // write must not publish a controller or durable graph edges.
+        registerFormulaInGraph(
+          id,
+          formulaNumber,
+          formula,
+          nodeNumber,
+          ownedLockContext,
+        );
+        if (options.pin) {
+          options.pin(id);
+        }
+        // Local committed: drop provisional record when the name path is
+        // empty (no-op bag) or when a local path was written. Remote-capable
+        // multi-segment paths may keep the record as a durable edge; for
+        // simplicity we retain only when resultNamePath is non-empty and
+        // the design requires remote retention — multi-segment paths keep
+        // the record until verified removal.
+        const isRemoteCapable =
+          resultNamePath.includes('/') || resultNamePath.includes(',');
+        if (!isRemoteCapable) {
+          await persistencePowers.deletePendingNameCommit(commitId);
+        } else {
+          await persistencePowers.updatePendingNameCommitState(
+            commitId,
+            'committed',
+          );
+        }
+        // 4. Controller + construction only after successful name commit.
+        return publishControllerAndConstruct(id, formulaNumber, formula);
+      }
+
+      if (outcome === 'rejected-before-write') {
+        await persistencePowers.deletePendingNameCommit(commitId);
+        // Proven no name write: never publish the formula into the live
+        // graph; delete the orphan formula JSON and run an explicit sweep
+        // so any related unreachable residue is collected.
+        await persistencePowers.deleteFormula(formulaNumber);
+        formulaGraph.sweepUnreachable();
+        const error = commitError || Error('Name commit rejected before write');
+        // @ts-expect-error tag for tests
+        error.commitOutcome = 'rejected-before-write';
+        throw error;
+      }
+
+      // ambiguous: keep provisional record as retention root; register so
+      // recovery and in-memory graph agree, but do not construct.
+      registerFormulaInGraph(
+        id,
+        formulaNumber,
+        formula,
+        nodeNumber,
+        ownedLockContext,
+      );
+      if (options.pin) {
+        options.pin(id);
+      }
+      const error =
+        commitError || Error('Name commit failed with ambiguous outcome');
+      // @ts-expect-error tag
+      error.commitOutcome = 'ambiguous';
+      throw error;
+    }, lockContext);
   };
 
   /** @type {DaemonCore['provideController']} */
@@ -4484,8 +4712,9 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateReadableBlob']} */
   const formulateReadableBlob = async (readerRef, deferredTasks) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<FarRef<EndoReadable>>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
@@ -4500,12 +4729,13 @@ const makeDaemonCore = async (
           }),
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers1 = {
           readableBlobId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {ReadableBlobFormula} */
         const formula = {
@@ -4513,7 +4743,9 @@ const makeDaemonCore = async (
           content: contentSha256,
         };
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers1, ctx),
+        );
       })
     );
   };
@@ -4525,19 +4757,21 @@ const makeDaemonCore = async (
     deferredTasks,
     deniedSegments = undefined,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<EndoMount>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers2 = {
           mountId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         // The `deniedSegments` field is included only when overridden, so a
         // default mount keeps its historical persisted formula shape (the
@@ -4552,7 +4786,9 @@ const makeDaemonCore = async (
           ...(deniedSegments !== undefined ? { deniedSegments } : {}),
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers2, ctx),
+        );
       })
     );
   };
@@ -4563,19 +4799,21 @@ const makeDaemonCore = async (
     deferredTasks,
     deniedSegments = undefined,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<EndoMount>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers3 = {
           scratchMountId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').ScratchMountFormula} */
         const formula = harden({
@@ -4584,7 +4822,9 @@ const makeDaemonCore = async (
           ...(deniedSegments !== undefined ? { deniedSegments } : {}),
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers3, ctx),
+        );
       })
     );
   };
@@ -4596,8 +4836,9 @@ const makeDaemonCore = async (
     readOnly,
     deferredTasks,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<EndoMount>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         // Derive the child root from the parent mount's host path.  The
         // parent path comes from `getMountHostPath`, which rejects any id
@@ -4652,12 +4893,12 @@ const makeDaemonCore = async (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const identifiers = {
           mountId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
 
         /** @type {import('./types.js').MountFormula} */
         const formula = harden({
@@ -4667,7 +4908,14 @@ const makeDaemonCore = async (
           parent: parentMountId,
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(
+          formulaNumber,
+          formula,
+          ctx => deferredTasks.commit(identifiers, ctx),
+          localNodeNumber,
+          {},
+          lockContext,
+        );
       })
     );
   };
@@ -4679,19 +4927,21 @@ const makeDaemonCore = async (
     identity,
     deferredTasks,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<EndoGit>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers4 = {
           gitId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').GitFormula} */
         const formula = harden({
@@ -4701,7 +4951,9 @@ const makeDaemonCore = async (
           ...(identity && { identity }),
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers4, ctx),
+        );
       })
     );
   };
@@ -4729,19 +4981,21 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateShell']} */
   const formulateShell = async (mountId, policy, deferredTasks) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<import('./types.js').EndoShell>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers5 = {
           shellId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').ShellFormula} */
         const formula = harden({
@@ -4750,26 +5004,30 @@ const makeDaemonCore = async (
           policy,
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers5, ctx),
+        );
       })
     );
   };
 
   /** @type {DaemonCore['formulateHttpClient']} */
   const formulateHttpClient = async (policy, deferredTasks) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<import('@endo/exo-http-client').HttpClient>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers6 = {
           httpClientId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').HttpClientFormula} */
         const formula = harden({
@@ -4777,7 +5035,9 @@ const makeDaemonCore = async (
           policy,
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers6, ctx),
+        );
       })
     );
   };
@@ -4808,8 +5068,9 @@ const makeDaemonCore = async (
         X`Git credential material does not match kind ${q(kind)}`,
       );
     }
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<unknown>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
@@ -4819,7 +5080,8 @@ const makeDaemonCore = async (
           node: localNodeNumber,
         });
 
-        await deferredTasks.execute({ gitCredentialId });
+        const commitIdentifiers7 = { gitCredentialId };
+        // name commit deferred to formulateWithCommit
         gitCredentialMaterialForId.set(gitCredentialId, storedMaterial);
 
         /** @type {import('./types.js').GitCredentialFormula} */
@@ -4829,7 +5091,9 @@ const makeDaemonCore = async (
           audience,
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers7, ctx),
+        );
       })
     );
   };
@@ -4842,19 +5106,21 @@ const makeDaemonCore = async (
     policy,
     deferredTasks,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<import('@endo/exo-git').GitRemote>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers8 = {
           gitRemoteId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').GitRemoteFormula} */
         const formula = harden({
@@ -4865,15 +5131,18 @@ const makeDaemonCore = async (
           policy,
         });
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers8, ctx),
+        );
       })
     );
   };
 
   /** @type {DaemonCore['checkinTree']} */
   const checkinTree = async (remoteTree, deferredTasks) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<unknown>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         await null;
 
         const archiveTree =
@@ -4907,12 +5176,13 @@ const makeDaemonCore = async (
           await randomHex256()
         );
 
-        await deferredTasks.execute({
+        const commitIdentifiers9 = {
           readableTreeId: formatId({
             number: formulaNumber,
             node: localNodeNumber,
           }),
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').ReadableTreeFormula} */
         const formula = {
@@ -4920,7 +5190,9 @@ const makeDaemonCore = async (
           content: treeSha256,
         };
 
-        return formulate(formulaNumber, formula);
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers9, ctx),
+        );
       })
     );
   };
@@ -4937,8 +5209,9 @@ const makeDaemonCore = async (
     guestName,
     deferredTasks,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<Invitation>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const invitationNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
@@ -4946,9 +5219,10 @@ const makeDaemonCore = async (
           number: invitationNumber,
           node: localNodeNumber,
         });
-        await deferredTasks.execute({
+        const commitIdentifiers10 = {
           invitationId,
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {InvitationFormula} */
         const formula = {
@@ -4958,7 +5232,9 @@ const makeDaemonCore = async (
           guestName,
         };
 
-        return formulate(invitationNumber, formula);
+        return formulateWithCommit(invitationNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers10, ctx),
+        );
       })
     );
   };
@@ -4975,8 +5251,9 @@ const makeDaemonCore = async (
     channelProposedName,
     deferredTasks,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<import('./types.js').EndoChannel>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const channelNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
@@ -5004,9 +5281,10 @@ const makeDaemonCore = async (
           node: localNodeNumber,
         });
 
-        await deferredTasks.execute({
+        const commitIdentifiers11 = {
           channelId,
-        });
+        };
+        // name commit deferred to formulateWithCommit
 
         /** @type {import('./types.js').ChannelFormula} */
         const formula = {
@@ -5018,7 +5296,9 @@ const makeDaemonCore = async (
           proposedName: channelProposedName,
         };
 
-        return formulate(channelNumber, formula);
+        return formulateWithCommit(channelNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers11, ctx),
+        );
       })
     );
   };
@@ -5029,14 +5309,16 @@ const makeDaemonCore = async (
    * @param {import('./types.js').DeferredTasks<{ timerId: FormulaIdentifier }>} deferredTasks
    */
   const formulateTimer = async (intervalMs, label, deferredTasks) => {
-    return withFormulaGraphLock(async () => {
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
       const timerNumber = /** @type {FormulaNumber} */ (await randomHex256());
       const timerId = formatId({
         number: timerNumber,
         node: localNodeNumber,
       });
 
-      await deferredTasks.execute({ timerId });
+      const commitIdentifiers12 = { timerId };
+      // Name commit deferred to formulateWithCommit.
 
       /** @type {TimerFormula} */
       const formula = harden({
@@ -5045,7 +5327,14 @@ const makeDaemonCore = async (
         label,
       });
 
-      return formulate(timerNumber, formula);
+      return formulateWithCommit(
+        timerNumber,
+        formula,
+        ctx => deferredTasks.commit(commitIdentifiers12, ctx),
+        localNodeNumber,
+        {},
+        lockContext,
+      );
     });
   };
 
@@ -5078,7 +5367,7 @@ const makeDaemonCore = async (
       number: formulaNumber,
       node: nodeNumber,
     });
-    await withFormulaGraphLock(async () => {
+    await withFormulaGraphLock(async lockContext => {
       formulaForId.set(id, formula);
       formulaGraph.onFormulaAdded(id, formula);
     });
@@ -5091,18 +5380,20 @@ const makeDaemonCore = async (
    *
    * @param {FormulaNumber} formulaNumber - The formula number of the pet store to formulate.
    * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
+   * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
    * @returns {FormulateResult<PetStore>} The formulated pet store.
    */
   const formulateNumberedPetStore = async (
     formulaNumber,
     nodeNumber = localNodeNumber,
+    lockContext = undefined,
   ) => {
     /** @type {PetStoreFormula} */
     const formula = {
       type: 'pet-store',
     };
     return /** @type {FormulateResult<PetStore>} */ (
-      formulate(formulaNumber, formula, nodeNumber)
+      formulate(formulaNumber, formula, nodeNumber, lockContext)
     );
   };
 
@@ -5113,18 +5404,20 @@ const makeDaemonCore = async (
    *
    * @param {FormulaNumber} formulaNumber - The formula number of the mailbox store.
    * @param {NodeNumber} [nodeNumber] - The node number to use (defaults to localNodeNumber).
+   * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
    * @returns {FormulateResult<PetStore>} The formulated mailbox store.
    */
   const formulateNumberedMailboxStore = async (
     formulaNumber,
     nodeNumber = localNodeNumber,
+    lockContext = undefined,
   ) => {
     /** @type {MailboxStoreFormula} */
     const formula = {
       type: 'mailbox-store',
     };
     return /** @type {FormulateResult<PetStore>} */ (
-      formulate(formulaNumber, formula, nodeNumber)
+      formulate(formulaNumber, formula, nodeNumber, lockContext)
     );
   };
 
@@ -5156,12 +5449,16 @@ const makeDaemonCore = async (
   /**
    * @type {DaemonCore['formulateDirectory']}
    */
-  const formulateDirectory = async (nodeNumber = localNodeNumber) => {
+  const formulateDirectory = async (
+    nodeNumber = localNodeNumber,
+    outerLockContext = undefined,
+  ) => {
     return /** @type {FormulateResult<EndoDirectory>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const { id: petStoreId } = await formulateNumberedPetStore(
           /** @type {FormulaNumber} */ (await randomHex256()),
           nodeNumber,
+          lockContext,
         );
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
@@ -5171,10 +5468,15 @@ const makeDaemonCore = async (
           type: 'directory',
           petStore: petStoreId,
         };
-        const result = await formulate(formulaNumber, formula, nodeNumber);
+        const result = await formulate(
+          formulaNumber,
+          formula,
+          nodeNumber,
+          lockContext,
+        );
         pinTransient(result.id);
         return result;
-      })
+      }, outerLockContext)
     );
   };
 
@@ -5186,7 +5488,7 @@ const makeDaemonCore = async (
    */
   const formulateDirectoryForStore = async storeId => {
     return /** @type {FormulateResult<EndoDirectory>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const formulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
@@ -5195,7 +5497,12 @@ const makeDaemonCore = async (
           type: 'directory',
           petStore: storeId,
         };
-        const result = await formulate(formulaNumber, formula);
+        const result = await formulate(
+          formulaNumber,
+          formula,
+          localNodeNumber,
+          lockContext,
+        );
         pinTransient(result.id);
         return result;
       })
@@ -5212,6 +5519,7 @@ const makeDaemonCore = async (
    * @param {string} [options.label] - Human-readable label for status reporting.
    * @param {'locked' | 'node'} [options.kind] - Worker kind (locked for XS, node for Node.js).
    * @param {NodeNumber} [options.nodeNumber] - Node number (defaults to localNodeNumber).
+   * @param {import('./types.js').FormulaGraphLockContext} [lockContext]
    * @returns {ReturnType<DaemonCore['formulateWorker']>}
    */
   const formulateNumberedWorker = (
@@ -5222,6 +5530,7 @@ const makeDaemonCore = async (
       kind,
       nodeNumber = localNodeNumber,
     } = {},
+    lockContext = undefined,
   ) => {
     /** @type {WorkerFormula} */
     const formula = {
@@ -5234,7 +5543,7 @@ const makeDaemonCore = async (
     };
 
     return /** @type {FormulateResult<EndoWorker>} */ (
-      formulate(formulaNumber, formula, nodeNumber)
+      formulate(formulaNumber, formula, nodeNumber, lockContext)
     );
   };
 
@@ -5246,16 +5555,19 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     label = undefined,
   ) => {
-    return withFormulaGraphLock(async () => {
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
       const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
 
-      await deferredTasks.execute({
+      const commitIdentifiers13 = {
         workerId: formatId({
           number: formulaNumber,
           node: localNodeNumber,
         }),
-      });
+      };
+      // Commit deferred tasks while retaining the graph lock.
 
+      await deferredTasks.commit(commitIdentifiers13, lockContext);
       return formulateNumberedWorker(formulaNumber, { trustedShims, label });
     });
   };
@@ -5445,7 +5757,8 @@ const makeDaemonCore = async (
     hostHandleId,
     workerLabel,
   ) => {
-    return withFormulaGraphLock(async () => {
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
       const identifiers = await formulateHostDependencies({
         endoId,
         networksDirectoryId,
@@ -5455,14 +5768,16 @@ const makeDaemonCore = async (
         workerLabel,
       });
 
-      await deferredTasks.execute({
+      const commitIdentifiers14 = {
         agentId: identifiers.hostId,
         handleId: identifiers.handleId,
-      });
+      };
+      // Commit deferred tasks while retaining the graph lock.
 
+      await deferredTasks.commit(commitIdentifiers14, lockContext);
       const result = await formulateNumberedHost(identifiers);
       for (const id of identifiers.pinned) {
-        unpinTransient(id);
+        await unpinTransient(id, lockContext);
       }
       return result;
     });
@@ -5601,21 +5916,24 @@ const makeDaemonCore = async (
     deferredTasks,
     workerLabel,
   ) => {
-    return withFormulaGraphLock(async () => {
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
       );
 
-      await deferredTasks.execute({
+      const commitIdentifiers15 = {
         agentId: identifiers.guestId,
         handleId: identifiers.handleId,
-      });
+      };
+      // Commit deferred tasks while retaining the graph lock.
 
+      await deferredTasks.commit(commitIdentifiers15, lockContext);
       const result = await formulateNumberedGuest(identifiers);
       for (const id of identifiers.pinned) {
-        unpinTransient(id);
+        await unpinTransient(id, lockContext);
       }
       return result;
     });
@@ -5672,8 +5990,9 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateMarshalValue']} */
   async function formulateMarshalValue(value, deferredTasks, pin) {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<void>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const ownFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
@@ -5681,18 +6000,10 @@ const makeDaemonCore = async (
           number: ownFormulaNumber,
           node: localNodeNumber,
         });
-        // Pin before formulate so the formula is protected from
-        // collection even if the lock is bypassed via re-entrancy.
-        if (pin) {
-          pin(ownId);
-        }
-
         const identifiers = harden({
           marshalId: ownId,
           marshalFormulaNumber: ownFormulaNumber,
         });
-
-        await deferredTasks.execute(identifiers);
 
         const { body, slots } = marshaller.toCapData(value);
 
@@ -5702,14 +6013,20 @@ const makeDaemonCore = async (
           body,
           slots,
         };
-        return formulate(ownFormulaNumber, formula);
+        return formulateWithCommit(
+          ownFormulaNumber,
+          formula,
+          ctx => deferredTasks.commit(identifiers, ctx),
+          localNodeNumber,
+          { pin },
+        );
       })
     );
   }
 
   /** @type {DaemonCore['formulatePromise']} */
   const formulatePromise = async pin => {
-    return withFormulaGraphLock(async () => {
+    return withFormulaGraphLock(async lockContext => {
       const storeFormulaNumber = /** @type {FormulaNumber} */ (
         await randomHex256()
       );
@@ -5720,8 +6037,11 @@ const makeDaemonCore = async (
         await randomHex256()
       );
 
-      const { id: storeId } =
-        await formulateNumberedPetStore(storeFormulaNumber);
+      const { id: storeId } = await formulateNumberedPetStore(
+        storeFormulaNumber,
+        localNodeNumber,
+        lockContext,
+      );
 
       /** @type {PromiseFormula} */
       const promiseFormula = {
@@ -5738,6 +6058,8 @@ const makeDaemonCore = async (
       const { id: promiseId } = await formulate(
         promiseFormulaNumber,
         promiseFormula,
+        localNodeNumber,
+        lockContext,
       );
       if (pin) {
         pin(promiseId);
@@ -5745,6 +6067,8 @@ const makeDaemonCore = async (
       const { id: resolverId } = await formulate(
         resolverFormulaNumber,
         resolverFormula,
+        localNodeNumber,
+        lockContext,
       );
       if (pin) {
         pin(resolverId);
@@ -5756,7 +6080,7 @@ const makeDaemonCore = async (
 
   /** @type {DaemonCore['formulateMessage']} */
   const formulateMessage = async (messageFormula, pin) => {
-    return withFormulaGraphLock(async () => {
+    return withFormulaGraphLock(async lockContext => {
       const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
       // Pin before formulate so the formula is protected from
       // collection even if the lock is bypassed via re-entrancy.
@@ -5768,7 +6092,7 @@ const makeDaemonCore = async (
         pin(messageId);
       }
       return /** @type {FormulateResult<NameHub>} */ (
-        formulate(formulaNumber, messageFormula)
+        formulate(formulaNumber, messageFormula, localNodeNumber, lockContext)
       );
     });
   };
@@ -5784,8 +6108,9 @@ const makeDaemonCore = async (
     pin,
     workerLabel = undefined,
   ) => {
+    await deferredTasks.preflight();
     return /** @type {FormulateResult<unknown>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const ownFormulaNumber = /** @type {FormulaNumber} */ (
           await randomHex256()
         );
@@ -5793,12 +6118,6 @@ const makeDaemonCore = async (
           number: ownFormulaNumber,
           node: localNodeNumber,
         });
-        // Pin before formulate so the formula is protected from
-        // collection even if the lock is bypassed via re-entrancy.
-        if (pin) {
-          pin(ownId);
-        }
-
         const identifiers = harden({
           workerId: await provideWorkerId(
             specifiedWorkerId,
@@ -5827,7 +6146,6 @@ const makeDaemonCore = async (
           evalId: ownId,
           evalFormulaNumber: ownFormulaNumber,
         });
-        await deferredTasks.execute(identifiers);
 
         /** @type {EvalFormula} */
         const formula = {
@@ -5837,7 +6155,13 @@ const makeDaemonCore = async (
           names: codeNames,
           values: identifiers.endowmentIds,
         };
-        return formulate(identifiers.evalFormulaNumber, formula);
+        return formulateWithCommit(
+          identifiers.evalFormulaNumber,
+          formula,
+          ctx => deferredTasks.commit(identifiers, ctx),
+          localNodeNumber,
+          { pin },
+        );
       })
     );
   };
@@ -5953,14 +6277,10 @@ const makeDaemonCore = async (
       workerId,
       originalWorkerId,
     });
-    // Execute deferred tasks first (stores pet names, creating
-    // pet-store edges) so that the powers guest is reachable
-    // before we unpin its dependencies.
-    await deferredTasks.execute(identifiers);
-    for (const id of powersPinned) {
-      unpinTransient(id);
-    }
-    return identifiers;
+    // Defer name commit and powers unpin to the parent formulate*
+    // wrapper so the persist/commit window cannot collect the powers
+    // guest before the parent formula is registered.
+    return harden({ ...identifiers, powersPinned });
   };
 
   /** @type {DaemonCore['formulateUnconfined']} */
@@ -5975,18 +6295,25 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     workerLabel = undefined,
   ) => {
-    return withFormulaGraphLock(async () => {
-      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
-        await formulateCapletDependencies(
-          hostAgentId,
-          hostHandleId,
-          deferredTasks,
-          specifiedWorkerId,
-          specifiedPowersId,
-          trustedShims,
-          workerLabel,
-          'node',
-        );
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
+      const deps = await formulateCapletDependencies(
+        hostAgentId,
+        hostHandleId,
+        deferredTasks,
+        specifiedWorkerId,
+        specifiedPowersId,
+        trustedShims,
+        workerLabel,
+        'node',
+      );
+      const {
+        powersId,
+        capletFormulaNumber,
+        workerId,
+        originalWorkerId,
+        powersPinned,
+      } = deps;
 
       /** @type {MakeUnconfinedFormula} */
       const formula = {
@@ -5997,7 +6324,20 @@ const makeDaemonCore = async (
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
-      return formulate(capletFormulaNumber, formula);
+      try {
+        return await formulateWithCommit(
+          capletFormulaNumber,
+          formula,
+          ctx => deferredTasks.commit(deps, ctx),
+          localNodeNumber,
+          {},
+          lockContext,
+        );
+      } finally {
+        for (const id of powersPinned) {
+          await unpinTransient(id, lockContext);
+        }
+      }
     });
   };
 
@@ -6013,7 +6353,8 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     workerLabel = undefined,
   ) => {
-    return withFormulaGraphLock(async () => {
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
       // Pass workerKind=undefined so the worker inherits the
       // daemon's defaultWorkerKind.  Both the Node worker
       // (parseArchive) and the XS worker (hostImportArchive)
@@ -6021,16 +6362,22 @@ const makeDaemonCore = async (
       // needed — promoting unconditionally would spawn a Node
       // worker the Rust supervisor cannot run when no Node worker
       // binary is configured.
-      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
-        await formulateCapletDependencies(
-          hostAgentId,
-          hostHandleId,
-          deferredTasks,
-          specifiedWorkerId,
-          specifiedPowersId,
-          trustedShims,
-          workerLabel,
-        );
+      const deps = await formulateCapletDependencies(
+        hostAgentId,
+        hostHandleId,
+        deferredTasks,
+        specifiedWorkerId,
+        specifiedPowersId,
+        trustedShims,
+        workerLabel,
+      );
+      const {
+        powersId,
+        capletFormulaNumber,
+        workerId,
+        originalWorkerId,
+        powersPinned,
+      } = deps;
 
       /** @type {MakeArchiveFormula} */
       const formula = {
@@ -6041,7 +6388,20 @@ const makeDaemonCore = async (
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
-      return formulate(capletFormulaNumber, formula);
+      try {
+        return await formulateWithCommit(
+          capletFormulaNumber,
+          formula,
+          ctx => deferredTasks.commit(deps, ctx),
+          localNodeNumber,
+          {},
+          lockContext,
+        );
+      } finally {
+        for (const id of powersPinned) {
+          await unpinTransient(id, lockContext);
+        }
+      }
     });
   };
 
@@ -6057,22 +6417,29 @@ const makeDaemonCore = async (
     trustedShims = undefined,
     workerLabel = undefined,
   ) => {
-    return withFormulaGraphLock(async () => {
+    await deferredTasks.preflight();
+    return withFormulaGraphLock(async lockContext => {
       // Pass workerKind=undefined so the worker inherits the daemon's
       // defaultWorkerKind (Node by default, locked under the Rust
       // supervisor).  Unlike makeUnconfined, makeFromTree can run on
       // either kind: XS workers get the tree pre-packed into an
       // archive on the daemon side, then loaded via hostImportArchive.
-      const { powersId, capletFormulaNumber, workerId, originalWorkerId } =
-        await formulateCapletDependencies(
-          hostAgentId,
-          hostHandleId,
-          deferredTasks,
-          specifiedWorkerId,
-          specifiedPowersId,
-          trustedShims,
-          workerLabel,
-        );
+      const deps = await formulateCapletDependencies(
+        hostAgentId,
+        hostHandleId,
+        deferredTasks,
+        specifiedWorkerId,
+        specifiedPowersId,
+        trustedShims,
+        workerLabel,
+      );
+      const {
+        powersId,
+        capletFormulaNumber,
+        workerId,
+        originalWorkerId,
+        powersPinned,
+      } = deps;
 
       /** @type {MakeFromTreeFormula} */
       const formula = {
@@ -6083,7 +6450,20 @@ const makeDaemonCore = async (
         env,
         ...(originalWorkerId ? { cancelWithWorker: originalWorkerId } : {}),
       };
-      return formulate(capletFormulaNumber, formula);
+      try {
+        return await formulateWithCommit(
+          capletFormulaNumber,
+          formula,
+          ctx => deferredTasks.commit(deps, ctx),
+          localNodeNumber,
+          {},
+          lockContext,
+        );
+      } finally {
+        for (const id of powersPinned) {
+          await unpinTransient(id, lockContext);
+        }
+      }
     });
   };
 
@@ -6137,22 +6517,26 @@ const makeDaemonCore = async (
   };
 
   /** @type {DaemonCore['formulateLoopbackNetwork']} */
-  const formulateLoopbackNetwork = async () => {
+  const formulateLoopbackNetwork = async (lockContext = undefined) => {
     const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
     /** @type {LoopbackNetworkFormula} */
     const formula = {
       type: 'loopback-network',
     };
     return /** @type {FormulateResult<EndoNetwork>} */ (
-      formulate(formulaNumber, formula)
+      formulate(formulaNumber, formula, localNodeNumber, lockContext)
     );
   };
 
   /** @type {DaemonCore['formulateNetworksDirectory']} */
-  const formulateNetworksDirectory = async () => {
-    const { id, value } = await formulateDirectory();
+  const formulateNetworksDirectory = async (lockContext = undefined) => {
+    const { id, value } = await formulateDirectory(
+      localNodeNumber,
+      lockContext,
+    );
     // Make default networks.
-    const { id: loopbackNetworkId } = await formulateLoopbackNetwork();
+    const { id: loopbackNetworkId } =
+      await formulateLoopbackNetwork(lockContext);
     const loopbackType = await getTypeForId(loopbackNetworkId);
     const loopbackLocator = externalizeId(
       loopbackNetworkId,
@@ -6169,7 +6553,7 @@ const makeDaemonCore = async (
   /** @type {DaemonCore['formulateEndo']} */
   const formulateEndo = async specifiedFormulaNumber => {
     return /** @type {FormulateResult<FarRef<EndoBootstrap>>} */ (
-      withFormulaGraphLock(async () => {
+      withFormulaGraphLock(async lockContext => {
         const formulaNumber = /** @type {FormulaNumber} */ (
           await (specifiedFormulaNumber ?? randomHex256())
         );
@@ -6181,9 +6565,14 @@ const makeDaemonCore = async (
         const { id: defaultHostWorkerId } = await formulateNumberedWorker(
           /** @type {FormulaNumber} */ (await randomHex256()),
           { label: 'host' },
+          lockContext,
         );
-        const { id: networksDirectoryId } = await formulateNetworksDirectory();
-        const { id: pinsDirectoryId } = await formulateDirectory();
+        const { id: networksDirectoryId } =
+          await formulateNetworksDirectory(lockContext);
+        const { id: pinsDirectoryId } = await formulateDirectory(
+          localNodeNumber,
+          lockContext,
+        );
 
         // Ensure the default host is formulated and persisted.
         const { id: defaultHostId } = await formulateNumberedHost(
@@ -6205,7 +6594,12 @@ const makeDaemonCore = async (
           leastAuthority: leastAuthorityId,
         };
 
-        const result = await formulate(formulaNumber, formula);
+        const result = await formulate(
+          formulaNumber,
+          formula,
+          localNodeNumber,
+          lockContext,
+        );
         formulaGraph.addRoot(result.id);
         return result;
       })
@@ -6312,20 +6706,28 @@ const makeDaemonCore = async (
           }
           /** @type {DeferredTasks<ReadableTreeDeferredTaskParams>} */
           const tasks = makeDeferredTasks();
-          const { value } = await withFormulaGraphLock(async () => {
+          await tasks.preflight();
+          const { value } = await withFormulaGraphLock(async lockContext => {
             const formulaNumber = /** @type {FormulaNumber} */ (
               await randomHex256()
             );
-            await tasks.execute({
+            const identifiers = {
               readableTreeId: formatId({
                 number: formulaNumber,
                 node: localNodeNumber,
               }),
-            });
-            return formulate(formulaNumber, {
-              type: 'readable-tree',
-              content: treeHash,
-            });
+            };
+            return formulateWithCommit(
+              formulaNumber,
+              {
+                type: 'readable-tree',
+                content: treeHash,
+              },
+              ctx => tasks.commit(identifiers, ctx),
+              localNodeNumber,
+              {},
+              lockContext,
+            );
           });
           return /** @type {FarRef<EndoReadableTree>} */ (value);
         } catch (reason) {
@@ -6557,7 +6959,7 @@ const makeDaemonCore = async (
           if (isFirst) {
             persistencePowers.replaceRetention(nodeId, delta.add);
             if (peerAgentIdStr !== undefined) {
-              await withFormulaGraphLock(async () => {
+              await withFormulaGraphLock(async lockContext => {
                 formulaGraph.replaceRetention(
                   peerAgentIdStr,
                   delta.add.map(num =>
@@ -6578,7 +6980,7 @@ const makeDaemonCore = async (
               persistencePowers.deleteRetention(nodeId, num);
             }
             if (peerAgentIdStr !== undefined) {
-              await withFormulaGraphLock(async () => {
+              await withFormulaGraphLock(async lockContext => {
                 for (const num of delta.add) {
                   formulaGraph.addRetention(
                     peerAgentIdStr,
@@ -6734,7 +7136,7 @@ const makeDaemonCore = async (
       // Pin the guest handle to protect it from premature collection.
       /** @type {DeferredTasks<AgentDeferredTaskParams>} */
       const guestTasks = makeDeferredTasks();
-      guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
+      guestTasks.push(makePinTransientTask(pinTransient, ids => ids.handleId));
       const { id: localGuestId } = await formulateGuest(
         hostAgentId,
         hostHandleId,

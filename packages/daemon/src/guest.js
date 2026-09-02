@@ -10,8 +10,12 @@ import {
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import { makeDeferredTasks } from './deferred-tasks.js';
-import { idFromLocator } from './locator.js';
+import {
+  makeDeferredTasks,
+  makeStoreIdentifierTask,
+  makeLocalOrDirectoryStoreTask,
+} from './deferred-tasks.js';
+import { formatLocator, idFromLocator } from './locator.js';
 
 /** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
@@ -48,7 +52,7 @@ export const makeGuestMaker = ({
   makeDirectoryNode,
   isLocalKey,
   pinTransient = /** @param {any} _id */ _id => {},
-  unpinTransient = /** @param {any} _id */ _id => {},
+  unpinTransient = /** @param {any} _id */ async _id => {},
 }) => {
   /**
    * @param {FormulaIdentifier} guestId
@@ -208,10 +212,14 @@ export const makeGuestMaker = ({
       );
       if (workerId === undefined) {
         const { namePath, petName } = assertPetNamePath(workerNamePath);
-        deferTask(identifiers =>
-          namePath.length === 1
-            ? specialStore.storeIdentifier(petName, identifiers.workerId)
-            : E(directory).storeIdentifier(namePath, identifiers.workerId),
+        deferTask(
+          makeLocalOrDirectoryStoreTask(
+            specialStore,
+            (p, id) => E(directory).storeIdentifier(p, id),
+            namePath,
+            petName,
+            ids => ids.workerId,
+          ),
         );
         return undefined;
       }
@@ -219,16 +227,14 @@ export const makeGuestMaker = ({
     };
 
     /**
-     * Evaluate code directly in a worker, constrained only by reachable
-     * capabilities in the guest's namespace.
+     * Shared guest evaluate path returning `{ id, value }`.
      * @param {NameOrPath | undefined} workerName
      * @param {string} source
      * @param {Array<string>} codeNames
      * @param {NamesOrPaths} petNamesOrPaths
      * @param {NameOrPath} [resultName]
-     * @returns {Promise<unknown>}
      */
-    const evaluate = async (
+    const evaluateInternal = async (
       workerName,
       source,
       codeNames,
@@ -268,12 +274,16 @@ export const makeGuestMaker = ({
 
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);
-        tasks.push(identifiers =>
-          E(directory).storeIdentifier(resultNamePath, identifiers.evalId),
+        tasks.push(
+          makeStoreIdentifierTask(
+            (p, id) => E(directory).storeIdentifier(p, id),
+            resultNamePath,
+            ids => ids.evalId,
+          ),
         );
       }
 
-      const { id, value } = await formulateEval(
+      return formulateEval(
         guestId,
         source,
         codeNames,
@@ -281,6 +291,32 @@ export const makeGuestMaker = ({
         tasks,
         workerId,
         resultName === undefined ? pinTransient : undefined,
+      );
+    };
+
+    /**
+     * Evaluate code directly in a worker, constrained only by reachable
+     * capabilities in the guest's namespace.
+     * @param {NameOrPath | undefined} workerName
+     * @param {string} source
+     * @param {Array<string>} codeNames
+     * @param {NamesOrPaths} petNamesOrPaths
+     * @param {NameOrPath} [resultName]
+     * @returns {Promise<unknown>}
+     */
+    const evaluate = async (
+      workerName,
+      source,
+      codeNames,
+      petNamesOrPaths,
+      resultName,
+    ) => {
+      const { id, value } = await evaluateInternal(
+        workerName,
+        source,
+        codeNames,
+        petNamesOrPaths,
+        resultName,
       );
       if (resultName === undefined) {
         try {
@@ -290,6 +326,40 @@ export const makeGuestMaker = ({
         }
       }
       return value;
+    };
+
+    /**
+     * No-wait evaluate for guests. Requires a result name.
+     * @param {NameOrPath | undefined} workerName
+     * @param {string} source
+     * @param {Array<string>} codeNames
+     * @param {NamesOrPaths} petNamesOrPaths
+     * @param {NameOrPath} resultName
+     */
+    const startEvaluate = async (
+      workerName,
+      source,
+      codeNames,
+      petNamesOrPaths,
+      resultName,
+    ) => {
+      if (resultName === undefined) {
+        throw new TypeError(
+          'startEvaluate requires a result name for durable retention',
+        );
+      }
+      petNamePathFrom(resultName);
+      const { id } = await evaluateInternal(
+        workerName,
+        source,
+        codeNames,
+        petNamesOrPaths,
+        resultName,
+      );
+      return harden({
+        id,
+        locator: formatLocator(id, 'eval'),
+      });
     };
 
     /** @type {EndoGuest['define']} */
@@ -316,8 +386,12 @@ export const makeGuestMaker = ({
 
       /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.readableBlobId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.readableBlobId,
+        ),
       );
 
       const { value: blob } = await formulateReadableBlob(readerRef, tasks);
@@ -329,8 +403,12 @@ export const makeGuestMaker = ({
       const { namePath } = petNamePathFrom(petName);
       /** @type {DeferredTasks<MarshalDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        E(directory).storeIdentifier(namePath, identifiers.marshalId),
+      tasks.push(
+        makeStoreIdentifierTask(
+          (p, id) => E(directory).storeIdentifier(p, id),
+          namePath,
+          ids => ids.marshalId,
+        ),
       );
       const { id } = await formulateMarshalValue(value, tasks, pinTransient);
       await unpinTransient(id);
@@ -385,6 +463,7 @@ export const makeGuestMaker = ({
       editMessage,
       messageHistory,
       evaluate,
+      startEvaluate,
       // Define/Form
       define,
       form,

@@ -137,7 +137,7 @@ export const makeMailboxMaker = ({
   isLocalKey,
   randomHex256,
   pinTransient = () => {},
-  unpinTransient = () => {},
+  unpinTransient = async () => {},
 }) => {
   /**
     @type {MakeMailbox} */
@@ -337,6 +337,10 @@ export const makeMailboxMaker = ({
           ...envelopeRecord,
           source: envelope.source,
           slots: envelope.slots,
+          // Retain the promise/resolver pair so guest define + host endow
+          // cannot collect them between post and resolution.
+          promiseId: /** @type {FormulaIdentifier} */ (envelope.promiseId),
+          resolverId: /** @type {FormulaIdentifier} */ (envelope.resolverId),
         });
       }
 
@@ -536,7 +540,12 @@ export const makeMailboxMaker = ({
       }
 
       if (formula.messageType === 'definition') {
-        if (formula.source === undefined || formula.slots === undefined) {
+        if (
+          formula.source === undefined ||
+          formula.slots === undefined ||
+          formula.promiseId === undefined ||
+          formula.resolverId === undefined
+        ) {
           throw new Error('Definition message formula is incomplete');
         }
         return harden({
@@ -545,6 +554,8 @@ export const makeMailboxMaker = ({
           to: formula.to,
           source: formula.source,
           slots: formula.slots,
+          promiseId: formula.promiseId,
+          resolverId: formula.resolverId,
           messageId: formula.messageId,
           ...(formula.replyTo !== undefined && { replyTo: formula.replyTo }),
           number: messageNumber,

@@ -21,7 +21,10 @@ import {
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import { makeDeferredTasks } from './deferred-tasks.js';
+import {
+  makeDeferredTasks,
+  makeStoreIdentifierTask,
+} from './deferred-tasks.js';
 import { directoryHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface } from './interfaces.js';
@@ -547,8 +550,12 @@ export const makeDirectoryMaker = ({
         const readerRef = bytesReaderFromIterator([bytes]);
         /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
         const tasks = makeDeferredTasks();
-        tasks.push(identifiers =>
-          storeIdentifier(namePath, identifiers.readableBlobId),
+        tasks.push(
+          makeStoreIdentifierTask(
+            (p, id) => storeIdentifier(p, id),
+            namePath,
+            ids => ids.readableBlobId,
+          ),
         );
         await formulateReadableBlob(/** @type {any} */ (readerRef), tasks);
         return;

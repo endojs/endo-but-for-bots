@@ -61,6 +61,11 @@ export const makeDaemonicPersistencePowers = (
     listRetention,
     replaceRetention,
     deleteAllRetention,
+    writePendingNameCommit,
+    getPendingNameCommit,
+    updatePendingNameCommitState,
+    deletePendingNameCommit,
+    listPendingNameCommits,
   } = daemonDb;
 
   const initializePersistence = async () => {
@@ -163,6 +168,26 @@ export const makeDaemonicPersistencePowers = (
     listRetention,
     replaceRetention,
     deleteAllRetention,
+    writePendingNameCommit: async (
+      commitId,
+      formulaId,
+      resultNamePath,
+      selectedFormulaId,
+      state,
+    ) =>
+      writePendingNameCommit(
+        commitId,
+        formulaId,
+        resultNamePath,
+        selectedFormulaId,
+        state,
+      ),
+    getPendingNameCommit: async commitId => getPendingNameCommit(commitId),
+    updatePendingNameCommitState: async (commitId, state) =>
+      updatePendingNameCommitState(commitId, state),
+    deletePendingNameCommit: async commitId =>
+      deletePendingNameCommit(commitId),
+    listPendingNameCommits: async () => listPendingNameCommits(),
   });
 };
 harden(makeDaemonicPersistencePowers);

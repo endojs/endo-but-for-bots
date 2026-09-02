@@ -138,6 +138,10 @@ export const main = async rawArgs => {
       parseEnvOption,
       {},
     )
+    .option(
+      '--no-wait',
+      'Return after formula creation and naming; do not wait for construction',
+    )
     .action(async (filePath, options) => {
       const {
         UNCONFINED: importPath,
@@ -147,7 +151,10 @@ export const main = async rawArgs => {
         as: agentNames,
         powers: powersName = '@none',
         env = {},
+        wait,
       } = options;
+      // Commander maps --no-wait to wait=false.
+      const noWait = wait === false;
       const { makeCommand } = await import('./commands/make.js');
       return makeCommand({
         filePath,
@@ -158,6 +165,7 @@ export const main = async rawArgs => {
         agentNames,
         powersName,
         env,
+        noWait,
       });
     });
 
@@ -670,12 +678,19 @@ export const main = async rawArgs => {
       'Reuse an existing worker rather than create a new one',
     )
     .option(...commonOptions.name)
+    .option(
+      '--no-wait',
+      'Return after formula creation and naming; do not wait for construction',
+    )
     .action(async (source, names, options) => {
       const {
         name: resultName,
         worker: workerName = '@main',
         as: agentNames,
+        wait,
       } = options;
+      // Commander maps --no-wait to wait=false.
+      const noWait = wait === false;
       const { evalCommand } = await import('./commands/eval.js');
       return evalCommand({
         source,
@@ -683,6 +698,7 @@ export const main = async rawArgs => {
         resultName,
         workerName,
         agentNames,
+        noWait,
       });
     });
 

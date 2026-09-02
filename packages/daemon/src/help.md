@@ -323,6 +323,17 @@ For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
 Example: writeText(["my-mount", "output.txt"], "hello")
 
+## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
+
+Evaluate JavaScript code in a worker with named endowments.
+Same contract as host.evaluate; guests evaluate in their own namespace.
+
+## startEvaluate(workerName, source, codeNames, petNames, resultName) -> Promise<{ id, locator }>
+
+No-wait evaluate for guests. Requires a result name for durable retention.
+Returns { id, locator } once formula-plus-name is durable; construction may
+still be pending.
+
 # EndoHost - A privileged agent with full Endo capabilities.
 
 A host has all guest capabilities plus:
@@ -384,6 +395,22 @@ Evaluate JavaScript code in a worker with named endowments.
 Example: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])
   Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
 
+## startEvaluate(workerName, source, codeNames, petNames, resultName) -> Promise<{ id, locator }>
+
+No-wait evaluate: create a durable formula and name, return a receipt without
+awaiting construction. Requires a result name for durable retention.
+- workerName: Worker to use (undefined for new worker)
+- source: JavaScript code string
+- codeNames: Names visible in the code
+- petNames: Pet names providing values for those names
+- resultName: Required name or path to store the result
+
+Returns { id, locator } once formula-plus-name is durable. Construction may
+still be pending; look up the name later for the value or a construction error.
+
+Example: startEvaluate("w1", "slow()", [], [], "pending")
+  Creates the eval under "pending" and returns immediately with a receipt.
+
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 
 Load and instantiate an unconfined module (has access to Node.js APIs).
@@ -412,6 +439,34 @@ The module's make(powers, context, { env }) function is called.
 The archive bytes are streamed to the worker and parsed via
 `@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's
 workers read the same archive content directly from the CAS.
+
+## startMakeUnconfined(workerName, specifier, resultName, options?) -> Promise<{ id, locator }>
+
+No-wait makeUnconfined: create a durable formula and name, return a receipt
+without awaiting construction. Requires a result name.
+- workerName: Worker to use (undefined for new worker; defaults often use @node)
+- specifier: Module path or URL
+- resultName: Required pet name or path for the result
+- options: Optional object with powersName and env (no resultName; it is positional)
+
+## startMakeArchive(workerName, archiveName, resultName, options?) -> Promise<{ id, locator }>
+
+No-wait makeArchive: create a durable formula and name, return a receipt
+without awaiting construction. Requires a result name.
+- workerName: Worker to use
+- archiveName: Pet name of the readable blob holding the archive
+- resultName: Required pet name or path for the result
+- options: Optional object with powersName and env
+
+## startMakeFromTree(workerName, treeName, resultName, options?) -> Promise<{ id, locator }>
+
+No-wait makeFromTree: create a durable formula and name from a readable tree
+or mount laid out as a compartment-mapper archive. Requires a result name.
+
+## startMakeUnconfinedFromTree(workerName, treeName, resultName, options?) -> Promise<{ id, locator }>
+
+No-wait makeUnconfinedFromTree: stage a tree and run its entry as unconfined
+Node, returning a receipt without awaiting construction. Requires a result name.
 
 ## cancel(petNameOrPath, reason?) -> Promise<void>
 
