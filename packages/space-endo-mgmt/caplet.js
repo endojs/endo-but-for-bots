@@ -132,7 +132,9 @@ export const make = async (_powers, _context, options = {}) => {
       if (!logPath) return '';
       try {
         const text = await readFile(logPath, 'utf8');
-        return text.length > maxBytes ? text.slice(text.length - maxBytes) : text;
+        return text.length > maxBytes
+          ? text.slice(text.length - maxBytes)
+          : text;
       } catch {
         return '';
       }

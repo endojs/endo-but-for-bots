@@ -24,7 +24,8 @@ import { useEffect, useRef, useState } from 'preact/hooks';
  */
 
 /** @param {string | undefined} rev */
-const shortRev = rev => (rev && rev.length > 12 ? rev.slice(0, 12) : rev || '—');
+const shortRev = rev =>
+  rev && rev.length > 12 ? rev.slice(0, 12) : rev || '—';
 
 /** @param {string | undefined} phase */
 const phaseClass = phase => {
@@ -105,15 +106,16 @@ export const MgmtView = ({ powers }) => {
         : E(getController()).requestRestart();
     p.then(
       () => refresh(),
-      err =>
-        setError(
-          /** @type {Error} */ (err).message || String(err),
-        ),
+      err => setError(/** @type {Error} */ (err).message || String(err)),
     ).finally(() => setBusy(''));
   };
 
   if (loading) {
-    return h('div', { class: 'mgmt-root' }, h('p', { class: 'mgmt-muted' }, 'Loading…'));
+    return h(
+      'div',
+      { class: 'mgmt-root' },
+      h('p', { class: 'mgmt-muted' }, 'Loading…'),
+    );
   }
 
   const notConfigured = config && config.configured === false;
@@ -167,7 +169,11 @@ export const MgmtView = ({ powers }) => {
             'div',
             { class: 'mgmt-row' },
             h('span', { class: 'mgmt-label' }, 'Branch'),
-            h('code', { class: 'mgmt-value' }, (status && status.branch) || '—'),
+            h(
+              'code',
+              { class: 'mgmt-value' },
+              (status && status.branch) || '—',
+            ),
           ),
           h(
             'div',
