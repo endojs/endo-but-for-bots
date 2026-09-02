@@ -37,6 +37,13 @@ fn assert_oracle_result(source: &str, expected: &str) {
     assert_deterministic(source);
 }
 
+fn assert_ironhorse_result(source: &str, expected: &str) {
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+    assert_eq!(run.ironhorse_result, expected, "ironhorse result for {source}");
+    assert_deterministic(source);
+}
+
 /// Run `source` on both engines, assert they both complete with an agreeing
 /// completion value, and assert ironhorse's post-drain global `g` renders to
 /// `expected` — the resolved/observed value the combinator produced at the
@@ -215,6 +222,57 @@ fn finally_with_non_callable_invokes_a_generic_receivers_then() {
     assert_oracle_result(
         "var result={},seen='',o={then:function(a,b){seen=(this===o)+':'+(a===7)+':'+(b===7)+':'+arguments.length;return result}};var r=Promise.prototype.finally.call(o,7);seen+':'+(r===result)",
         "true:true:true:2:true",
+    );
+}
+
+#[test]
+fn finally_with_callable_invokes_a_generic_receivers_then_with_wrappers() {
+    assert_oracle_result(
+        "var a,b,result={},handler=function(){},anon=Object(function(){}).name,o={constructor:Promise,then:function(x,y){a=x;b=y;return result}};var returned=Promise.prototype.finally.call(o,handler,2,3);[returned===result,typeof a,a!==handler,a.length,a.name===anon,typeof b,b!==handler,b.length,b.name===anon].join(':')",
+        "true:function:true:1:true:function:true:1:true",
+    );
+}
+
+#[test]
+fn finally_generic_wrappers_restore_the_original_completion() {
+    assert_drains_to(
+        "var g='',o={constructor:Promise,then:function(a){return a(5)}};Promise.prototype.finally.call(o,function(){g+='h';return 9}).then(function(v){g+=':'+v},function(e){g+=':R'+e});undefined",
+        "h:5",
+    );
+    assert_drains_to(
+        "var g='',o={constructor:Promise,then:function(a,b){return b(6)}};Promise.prototype.finally.call(o,function(){g+='h';return 9}).then(function(v){g+=':F'+v},function(e){g+=':'+e});undefined",
+        "h:6",
+    );
+    assert_drains_to(
+        "var g='',o={constructor:Promise,then:function(a){return a(5)}};Promise.prototype.finally.call(o,function(){return Promise.reject(9)}).then(function(v){g='F'+v},function(e){g='R'+e});undefined",
+        "R9",
+    );
+}
+
+#[test]
+fn finally_generic_value_thunks_have_spec_metadata_and_completion() {
+    assert_oracle_result(
+        "var saved,result={},anon=Object(function(){}).name;function C(exec){exec(function(){},function(){});return {then:function(f){saved=f;return result}}}Object.defineProperty(C,Symbol.species,{value:C});var o={constructor:C,then:function(a){return a(5)}};var returned=Promise.prototype.finally.call(o,function(){return 9});[returned===result,saved.name===anon,saved.length,saved()].join(':')",
+        "true:true:0:5",
+    );
+    assert_oracle_result(
+        "var saved,result={},marker={},caught=false;function C(exec){exec(function(){},function(){});return {then:function(f){saved=f;return result}}}Object.defineProperty(C,Symbol.species,{value:C});var o={constructor:C,then:function(a,b){return b(marker)}};var returned=Promise.prototype.finally.call(o,function(){return 9});try{saved()}catch(e){caught=e===marker}[returned===result,saved.length,caught].join(':')",
+        "true:0:true",
+    );
+}
+
+#[test]
+fn finally_generic_wrappers_escape_and_propagate_handler_throws() {
+    assert_drains_to(
+        "var saved,g='',result={},o={constructor:Promise,then:function(a){saved=a;return result}};var returned=Promise.prototype.finally.call(o,function(){g+='h';return 1});saved(8).then(function(v){g+=':'+v});var same=returned===result;undefined",
+        "h:8",
+    );
+    // XS currently swallows this synchronous wrapper throw and returns false;
+    // ECMA-262 and the independent host control both propagate `marker` out of
+    // the custom `then`, so this is deliberately an accuracy-over-parity gate.
+    assert_ironhorse_result(
+        "var marker={},o={constructor:Promise,then:function(a){return a(1)}},same=false;try{Promise.prototype.finally.call(o,function(){throw marker})}catch(e){same=e===marker}same",
+        "true",
     );
 }
 

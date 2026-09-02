@@ -6,6 +6,7 @@ test/intrinsics/DataView/numeric-accessors.js
 test/intrinsics/GeneratorFunction/intrinsic-metadata.js
 test/intrinsics/IteratorPrototype/intrinsic-metadata.js
 test/intrinsics/MapIteratorPrototype/intrinsic-metadata.js
+test/intrinsics/PromisePrototype/intrinsic-metadata.js
 test/intrinsics/Proxy/intrinsic-metadata.js
 test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/TypedArray/copying-methods.js

@@ -901,6 +901,33 @@ fn poisoned_then_lookup_rejection_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn escaped_finally_wrapper_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-finally-custom-then-wrapper",
+        &[
+            "var saved=0;var g='';var result={};var o={constructor:Promise,then:function(a,b){saved=a;return result}}; \
+             Promise.prototype.finally.call(o,function(){g+='h';return 1})===result",
+            "saved(8).then(function(v){g+=':'+v});0",
+            "g",
+        ],
+    );
+    assert_eq!(last, "h:8");
+}
+
+#[test]
+fn escaped_finally_value_thunks_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-finally-custom-value-thunks",
+        &[
+            "var savedF=0;var savedR=0;var marker={};var phase=0;var result={};function C(exec){exec(function(){},function(){});return {then:function(f){if(phase++===0){savedF=f}else{savedR=f}return result}}}Object.defineProperty(C,Symbol.species,{value:C});var of={constructor:C,then:function(a){return a(8)}};var or={constructor:C,then:function(a,b){return b(marker)}};Promise.prototype.finally.call(of,function(){return 1})===result&&Promise.prototype.finally.call(or,function(){return 2})===result",
+            "var savedF;var savedR;var marker;typeof savedF+':'+savedF.name+':'+savedF.length+':'+typeof savedR+':'+savedR.name+':'+savedR.length",
+            "var savedF;var savedR;var marker;var caught=false;var value=savedF();try{savedR()}catch(e){caught=e===marker}value+':'+caught",
+        ],
+    );
+    assert_eq!(last, "8:true");
+}
+
+#[test]
 fn a_custom_species_finally_await_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "promise-custom-species-finally",

@@ -247,7 +247,8 @@ pub enum SideTable {
 
     /// `promises` — per-instance settlement STATUS/RESULT/THENS.
     Promises,
-    /// `promise_functions` — a resolve/reject function's bound home data.
+    /// `promise_functions` — bound state for runtime-minted Promise callables:
+    /// resolve/reject pairs, capability executors, and `finally` closures.
     PromiseFunctions,
     /// `promise_guards` — the per-pair `[[AlreadyResolved]]` flags.
     PromiseGuards,

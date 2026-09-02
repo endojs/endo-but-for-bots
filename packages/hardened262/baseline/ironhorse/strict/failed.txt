@@ -72,7 +72,6 @@ test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/JSON/intrinsic-metadata.js
 test/intrinsics/MapPrototype/intrinsic-metadata.js
 test/intrinsics/Math/intrinsic-metadata.js
-test/intrinsics/PromisePrototype/intrinsic-metadata.js
 test/intrinsics/Reflect/intrinsic-metadata.js
 test/intrinsics/RegExpPrototype/intrinsic-metadata.js
 test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js

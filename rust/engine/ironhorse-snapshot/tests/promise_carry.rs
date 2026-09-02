@@ -2,7 +2,7 @@
 //! cross-referencing side tables — `promises`, `promise_functions`,
 //! `promise_guards`, `combinators` — PERSIST across a suspend/resume,
 //! so a resumed machine's promises keep their identity, settlement
-//! state, pending reactions, resolving functions, and combinator
+//! state, pending reactions, runtime-minted functions, and combinator
 //! progress. This retires the round-3 P1: a resumed settled promise
 //! rendered `[object Object]` (its `promises` row silently dropped)
 //! where the uninterrupted machine rendered `[object Promise]`, and a
@@ -152,6 +152,45 @@ fn a_custom_capability_executor_survives_resume() {
              catch (e) { e instanceof TypeError }",
         ],
         &[(true, "function::2:r5"), (true, "true")],
+    );
+}
+
+/// A custom receiver may retain either anonymous callable that `finally`
+/// passes to its `then`. The closure's handler/constructor capture and later
+/// value thunk must survive both snapshot backends without losing function
+/// metadata or the original completion.
+#[test]
+fn a_generic_finally_wrapper_survives_resume() {
+    assert_twin(
+        "ih-prms-generic-finally-wrapper",
+        "var saved=0;var g='';var result={};var o={constructor:Promise,then:function(a,b){saved=a;return result}};var t=0; \
+         t=Promise.prototype.finally.call(o,function(){g+='h';return 1})===result;t",
+        &[
+            "var saved;var g;var result;var o;var t;typeof saved+':'+saved.name+':'+saved.length+':'+g",
+            "var saved;var g;var result;var o;var t;saved(8).then(function(v){g+=':'+v});0",
+            "var saved;var g;var result;var o;var t;g",
+        ],
+        &[
+            (true, "function::1:"),
+            (true, "0"),
+            (true, "h:8"),
+        ],
+    );
+}
+
+/// A custom species promise may retain the nested value/throw thunk made when
+/// an escaped finally handler eventually runs. Those length-0 closures carry
+/// the original completion independently of the outer finally wrappers.
+#[test]
+fn generic_finally_value_thunks_survive_resume() {
+    assert_twin(
+        "ih-prms-generic-finally-value-thunks",
+        "var savedF=0;var savedR=0;var marker={};var phase=0;var result={};function C(exec){exec(function(){},function(){});return {then:function(f){if(phase++===0){savedF=f}else{savedR=f}return result}}}Object.defineProperty(C,Symbol.species,{value:C});var of={constructor:C,then:function(a){return a(8)}};var or={constructor:C,then:function(a,b){return b(marker)}};var ok=Promise.prototype.finally.call(of,function(){return 1})===result&&Promise.prototype.finally.call(or,function(){return 2})===result;ok",
+        &[
+            "var savedF;var savedR;var marker;typeof savedF+':'+savedF.name+':'+savedF.length+':'+typeof savedR+':'+savedR.name+':'+savedR.length",
+            "var savedF;var savedR;var marker;var caught=false;var value=savedF();try{savedR()}catch(e){caught=e===marker}value+':'+caught",
+        ],
+        &[(true, "function::0:function::0"), (true, "8:true")],
     );
 }
 
