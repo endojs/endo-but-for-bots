@@ -185,7 +185,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // `@@toStringTag` getter are now boot-minted. Format unchanged.
         // Re-pinned 2026-09-02 for the shared `%TypedArray%.prototype.join`
         // native added to the boot heap. Format unchanged.
-        "f2ee06d27deff419cccfbb48a211f2cf850942e9fd2606ab2fc12cbb9424d619",
+        // Re-pinned 2026-09-02 for the shared TypedArray iterator and readonly
+        // method natives added to the boot heap. Format unchanged.
+        "1c611769d4ea44aa60af377a5171934773856a60641624ff000ac997de477d75",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -303,7 +305,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for `%TypedArray%.prototype.join`; its
         // boot-native row moves the manifest root and seal. Schema and format
         // remain unchanged.
-        "dcb4c827c8b7188befcb00200671e906f4dba724fdbb5cfcd4ad4ff45d01f461",
+        // Re-pinned with the blob for the shared TypedArray iterator and
+        // readonly method natives. Schema and format remain unchanged.
+        "2a4fdb16d6549ebaa82077a11fb78a9297c3847ca29051fd09406298131a97fc",
         "epoch-3 seal chain"
     );
 }
