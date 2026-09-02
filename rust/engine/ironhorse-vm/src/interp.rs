@@ -2263,12 +2263,9 @@ pub enum NativeMethod {
     /// `Array.prototype.toString()` (`fx_Array_prototype_toString`): delegates
     /// to `this.join()` with the default separator (spec 23.1.3.36).
     ArrayToString,
-    /// `Array.prototype.sort([cmp])` — an honest named skip: the quicksort's
-    /// comparison count (and thus its metering) is data- and comparator-
-    /// dependent, so it is not modeled to a clean constant this stage.
+    /// `Array.prototype.sort([comparator])`.
     ArraySort,
-    /// `Array.prototype.toSorted([cmp])` — an honest named skip for the same
-    /// data-dependent-comparison reason as `sort`.
+    /// `Array.prototype.toSorted([comparator])`.
     ArrayToSorted,
     /// `Array.prototype.toLocaleString()` — an honest named skip (locale-aware
     /// element stringification is out of this stage's scope).
@@ -5800,14 +5797,15 @@ impl Interp {
             ("flatMap", NativeMethod::ArrayFlatMap),
             ("toSpliced", NativeMethod::ArrayToSpliced),
             ("toString", NativeMethod::ArrayToString),
-            // Recognized-but-unimplemented methods, bound so a reference is an
-            // honest NAMED skip (`Halt::Unsupported`) rather than a completion
-            // divergence (`this.M is not a function`) or a wrong value.
             ("sort", NativeMethod::ArraySort),
             ("toSorted", NativeMethod::ArrayToSorted),
             ("toLocaleString", NativeMethod::ArrayToLocaleString),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = if matches!(m, NativeMethod::ArraySort | NativeMethod::ArrayToSorted) {
+                self.alloc_named_method(m, name, 1)
+            } else {
+                self.alloc_method(m)
+            };
             self.proto_methods.push((self.array_proto, name, mf));
         }
         // Shared `%TypedArray.prototype%` methods live on the abstract
@@ -24267,6 +24265,9 @@ impl Interp {
     /// 2^53 - 1 (the spec integer-index ceiling).
     fn to_length_value(&mut self, code: &[u8], value: Slot) -> Result<u64, Halt> {
         let slot = self.to_number_value(code, value)?;
+        if slot.kind == Kind::BigInt {
+            return Err(self.catchable_type_error());
+        }
         let n = to_number(&slot);
         if n.is_nan() || n <= 0.0 {
             return Ok(0);
@@ -30634,20 +30635,11 @@ impl Interp {
                 let off = self.alloc_str_text(&out);
                 Slot::of(Kind::String, Payload::String(off))
             }
-            // Recognized-but-unimplemented Array methods and statics: honest
-            // NAMED skips, so a reference is `Halt::Unsupported` (never a
-            // completion divergence or a wrong value). See each variant's doc.
             NativeMethod::ArraySort => {
-                let _ = (base, argc);
-                return Err(Halt::Unsupported(
-                    "Array.prototype.sort:data-dependent-comparison-metering",
-                ));
+                self.array_sort(this, base, argc, code, false)?
             }
             NativeMethod::ArrayToSorted => {
-                let _ = (base, argc);
-                return Err(Halt::Unsupported(
-                    "Array.prototype.toSorted:data-dependent-comparison-metering",
-                ));
+                self.array_sort(this, base, argc, code, true)?
             }
             NativeMethod::ArrayToLocaleString => {
                 self.array_to_locale_string(this, base, argc, code)?
@@ -35497,8 +35489,7 @@ impl Interp {
         };
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         let raw = self.mop_get(code, o, length_id, recv)?;
-        let num = self.to_number_value(code, raw)?;
-        Ok(to_length_u64(to_number(&num)))
+        self.to_length_value(code, raw)
     }
 
     /// `? HasProperty(O, ToString(k))`.
@@ -35652,6 +35643,23 @@ impl Interp {
             return Err(self.catchable_type_error());
         }
         let id = self.array_generic_index_id(index);
+        if self.arrays.contains_key(&target) {
+            let index = index as u32;
+            let ordinary = self.ordinary_get_own_descriptor(target, id);
+            let compact = self.arrays[&target].items().get(&index).copied();
+            let compact_is_default = compact.is_some_and(|item| {
+                item.flag & (XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG) == 0
+            });
+            let can_create_compact = compact.is_none()
+                && ordinary.is_none()
+                && self.instance_extensible(target)
+                && (index < self.arrays[&target].length
+                    || self.array_length_writable(target));
+            if compact_is_default || can_create_compact {
+                self.array_set_dense(target, index, value);
+                return Ok(());
+            }
+        }
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
             writable: Some(true),
@@ -36301,6 +36309,201 @@ impl Interp {
         })
     }
 
+    /// `CompareArrayElements(x, y, comparator)`. Undefined values sort after
+    /// every defined value without invoking the guest comparator. The default
+    /// ordering compares the UTF-16 code-unit sequences produced by `ToString`;
+    /// a custom comparator is called with `undefined` as its receiver and its
+    /// result crosses the `ToNumber` (not `ToNumeric`) boundary.
+    fn array_compare_elements(
+        &mut self,
+        code: &[u8],
+        comparator: Slot,
+        x: Slot,
+        y: Slot,
+    ) -> Result<std::cmp::Ordering, Halt> {
+        if x.kind == Kind::Undefined {
+            return Ok(if y.kind == Kind::Undefined {
+                std::cmp::Ordering::Equal
+            } else {
+                std::cmp::Ordering::Greater
+            });
+        }
+        if y.kind == Kind::Undefined {
+            return Ok(std::cmp::Ordering::Less);
+        }
+        if comparator.kind != Kind::Undefined {
+            let result = self.call_any(code, comparator, Slot::undefined(), &[x, y])?;
+            let number = self.to_number_value(code, result)?;
+            if number.kind == Kind::BigInt {
+                return Err(self.catchable_type_error());
+            }
+            let number = to_number(&number);
+            return Ok(if number < 0.0 {
+                std::cmp::Ordering::Less
+            } else if number > 0.0 {
+                std::cmp::Ordering::Greater
+            } else {
+                // `NaN`, +0, and -0 all compare equal.
+                std::cmp::Ordering::Equal
+            });
+        }
+        let x_string = self.to_string_units(code, x)?;
+        let y_string = self.to_string_units(code, y)?;
+        Ok(x_string.cmp(&y_string))
+    }
+
+    /// Stable, fallible merge sort for `SortIndexedProperties`. Rust's slice
+    /// sorting APIs require an infallible comparator, while ECMAScript permits
+    /// both the comparator call and its `ToNumber` coercion to throw.
+    fn array_stable_sort(
+        &mut self,
+        code: &[u8],
+        comparator: Slot,
+        mut values: Vec<Slot>,
+    ) -> Result<Vec<Slot>, Halt> {
+        if values.len() < 2 {
+            return Ok(values);
+        }
+        let mut scratch = values.clone();
+        let mut width = 1usize;
+        while width < values.len() {
+            let mut start = 0usize;
+            while start < values.len() {
+                let middle = start.saturating_add(width).min(values.len());
+                let end = middle.saturating_add(width).min(values.len());
+                let (mut left, mut right, mut out) = (start, middle, start);
+                while left < middle && right < end {
+                    let ordering = self.array_compare_elements(
+                        code,
+                        comparator,
+                        values[left],
+                        values[right],
+                    )?;
+                    if ordering == std::cmp::Ordering::Greater {
+                        scratch[out] = values[right];
+                        right += 1;
+                    } else {
+                        // Choosing the left item on equality preserves the
+                        // relative order mandated for a stable sort.
+                        scratch[out] = values[left];
+                        left += 1;
+                    }
+                    out += 1;
+                }
+                while left < middle {
+                    scratch[out] = values[left];
+                    left += 1;
+                    out += 1;
+                }
+                while right < end {
+                    scratch[out] = values[right];
+                    right += 1;
+                    out += 1;
+                }
+                start = end;
+            }
+            std::mem::swap(&mut values, &mut scratch);
+            width = width.saturating_mul(2);
+        }
+        Ok(values)
+    }
+
+    /// Shared `Array.prototype.sort` / `toSorted` implementation. `sort`
+    /// collects only present properties and writes the sorted values followed
+    /// by `DeletePropertyOrThrow`, preserving holes at the end. `toSorted`
+    /// creates its result before reading elements and uses read-through-holes,
+    /// materializing every missing index as an own `undefined` property.
+    fn array_sort(
+        &mut self,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        copying: bool,
+    ) -> Result<Slot, Halt> {
+        let comparator = if argc > 0 {
+            self.stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::undefined()
+        };
+        // Comparator validation precedes `ToObject(this)` in both algorithms.
+        if comparator.kind != Kind::Undefined && !self.is_callable_value(comparator) {
+            return Err(self.catchable_type_error());
+        }
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+
+        // A concrete Array cannot represent a length above 2^32-1. ArrayCreate
+        // performs this check before `toSorted` observes any indexed getter.
+        let result = if copying {
+            if length > u32::MAX as u64 {
+                return Err(self.catchable_range_error());
+            }
+            let result = self.new_array();
+            self.arrays.get_mut(&result).unwrap().length = length as u32;
+            Some(result)
+        } else {
+            None
+        };
+
+        // Avoid an unbounded host allocation or scan for an adversarial generic
+        // array-like. This retains the former named coverage gap outside the
+        // practical range while completing ordinary JavaScript arrays.
+        const ARRAY_SORT_CAP: u64 = 1 << 24;
+        if length > ARRAY_SORT_CAP {
+            return Err(Halt::Unsupported(if copying {
+                "Array.prototype.toSorted:oversized-array-like"
+            } else {
+                "Array.prototype.sort:oversized-array-like"
+            }));
+        }
+
+        let mut values = Vec::with_capacity(length as usize);
+        for index in 0..length {
+            self.meter.tick_builtin_some(1);
+            if copying || self.array_generic_has(code, inst, index)? {
+                values.push(self.array_generic_get(code, inst, index)?);
+            }
+        }
+        let values = self.array_stable_sort(code, comparator, values)?;
+
+        if let Some(result) = result {
+            for (index, value) in values.into_iter().enumerate() {
+                self.array_generic_create_data_property(code, result, index as u64, value)?;
+            }
+            return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
+        }
+
+        for (index, value) in values.iter().copied().enumerate() {
+            let id = self.array_generic_index_id(index as u64);
+            if !self.mop_set(code, inst, id, value, object)? {
+                return Err(self.catchable_type_error());
+            }
+        }
+        for index in values.len() as u64..length {
+            let id = self.array_generic_index_id(index);
+            if !self.mop_delete(code, inst, id)? {
+                return Err(self.catchable_type_error());
+            }
+        }
+        Ok(object)
+    }
+
     /// `Array.prototype.toLocaleString`: capture `LengthOfArrayLike`, then
     /// invoke each live element's `toLocaleString(locales, options)` and
     /// stringify its result. The comma is this deterministic embedding's list
@@ -36933,7 +37136,11 @@ impl Interp {
                         Slot::undefined(),
                         &[value, previous],
                     )?;
-                    let number = to_number(&self.to_number_value(code, result)?);
+                    let number = self.to_number_value(code, result)?;
+                    if number.kind == Kind::BigInt {
+                        return Err(self.catchable_type_error());
+                    }
+                    let number = to_number(&number);
                     if self.detached_buffers.contains(&typed_array.buffer) {
                         return Err(self.catchable_type_error());
                     }
@@ -39720,6 +39927,27 @@ impl Interp {
             if !self.is_compatible_descriptor(true, &descriptor, Some(&current)) {
                 return false;
             }
+            if descriptor.value.is_some()
+                && descriptor.writable.is_none()
+                && descriptor.get.is_none()
+                && descriptor.set.is_none()
+                && descriptor.enumerable.is_none()
+                && descriptor.configurable.is_none()
+            {
+                let mut replacement = descriptor.value.unwrap();
+                replacement.id = 0;
+                replacement.flag = value.flag;
+                replacement.next = crate::value::SlotIndex::NULL;
+                self.arrays
+                    .get_mut(&inst)
+                    .unwrap()
+                    .remove_item(&index, &mut self.side_refs);
+                self.arrays
+                    .get_mut(&inst)
+                    .unwrap()
+                    .insert_item(index, replacement, &mut self.side_refs);
+                return true;
+            }
             self.arrays
                 .get_mut(&inst)
                 .unwrap()
@@ -40539,21 +40767,25 @@ impl Interp {
                 },
             );
         }
-        if let Some(existing) = self.ordinary_get_own_descriptor(receiver_inst, id) {
+        let receiver_own = self
+            .ordinary_get_own_descriptor(receiver_inst, id)
+            .or_else(|| self.exotic_own_descriptor(receiver_inst, id));
+        if let Some(existing) = receiver_own {
             if existing.is_accessor() || existing.writable == Some(false) {
                 return Ok(false);
             }
             // OrdinarySetWithOwnDescriptor updates only [[Value]]. Preserve
             // the receiver property's existing attributes (notably a sealed
             // property's configurable:false bit).
-            return Ok(self.ordinary_define_own_property(
+            return self.mop_define_own_property(
+                code,
                 receiver_inst,
                 id,
                 OrdinaryDescriptor {
                     value: Some(value),
                     ..OrdinaryDescriptor::default()
                 },
-            ));
+            );
         }
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
@@ -40562,7 +40794,7 @@ impl Interp {
             configurable: Some(true),
             ..OrdinaryDescriptor::default()
         };
-        Ok(self.ordinary_define_own_property(receiver_inst, id, descriptor))
+        self.mop_define_own_property(code, receiver_inst, id, descriptor)
     }
 
     // =====================================================================
