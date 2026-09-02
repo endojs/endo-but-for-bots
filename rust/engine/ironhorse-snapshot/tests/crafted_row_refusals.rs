@@ -436,6 +436,17 @@ fn finally_await_fixture() -> Interp {
     )
 }
 
+/// A custom `NewPromiseCapability` constructor that retains its executor,
+/// plus an unrelated Array whose owner provides an honest in-bounds object
+/// for the missing-home-fields corruption arm below.
+fn capability_executor_fixture() -> Interp {
+    quiescent_machine(
+        "var ex = 0; var spare = []; var t = 0; \
+         function C(e) { ex = e; e(function () {}, function () {}); return {}; } \
+         Promise.resolve.call(C, 1); t = 7; t",
+    )
+}
+
 fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
     let crafted = write_machine(image);
     match from_snapshot_bytes(&crafted, &sig()) {
@@ -534,6 +545,61 @@ fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
     let mut null_chunk = image;
     null_chunk.promise_cluster.functions[0].name_chunk = u32::MAX;
     expect_container_refusal(&null_chunk, "chunk offset out of arena bounds");
+}
+
+#[test]
+fn a_crafted_capability_executor_home_is_refused() {
+    let m = capability_executor_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    let executor = image
+        .promise_cluster
+        .functions
+        .iter()
+        .position(|row| row.guard == u32::MAX)
+        .expect("the retained custom constructor executor persists");
+
+    let mut rejecting = image.clone();
+    rejecting.promise_cluster.functions[executor].reject = true;
+    expect_container_refusal(
+        &rejecting,
+        "promise cluster: malformed capability executor home",
+    );
+
+    let mut self_homed = image.clone();
+    self_homed.promise_cluster.functions[executor].promise =
+        self_homed.promise_cluster.functions[executor].function;
+    expect_container_refusal(
+        &self_homed,
+        "promise cluster: malformed capability executor home",
+    );
+
+    // Two executor functions cannot share one capture record: a call through
+    // either would mutate the other's `[[Resolve]]`/`[[Reject]]` pair. The
+    // decoder catches this before the cloned row's function identity matters.
+    let mut duplicate = image.clone();
+    let mut cloned = duplicate.promise_cluster.functions[executor];
+    cloned.function = duplicate.arrays[0].owner;
+    duplicate.promise_cluster.functions.push(cloned);
+    duplicate
+        .promise_cluster
+        .functions
+        .sort_unstable_by_key(|row| row.function);
+    expect_container_refusal(
+        &duplicate,
+        "promise cluster: malformed capability executor home",
+    );
+
+    // A merely in-bounds object is not a capability record. Adoption must
+    // verify both hidden capture fields rather than resurrecting a callable
+    // executor that reads unrelated heap state.
+    let mut missing_fields = image;
+    missing_fields.promise_cluster.functions[executor].promise =
+        missing_fields.arrays[0].owner;
+    expect_container_refusal(
+        &missing_fields,
+        "side-table restore: malformed promise cluster",
+    );
 }
 
 #[test]

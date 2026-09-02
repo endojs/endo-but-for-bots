@@ -2663,6 +2663,10 @@ pub enum NativeMethod {
     /// `alloc_method` name/length machinery uses.
     PromiseResolveFunction,
     PromiseRejectFunction,
+    /// The anonymous length-2 closure `NewPromiseCapability` passes to a
+    /// constructor. Its hidden home object captures the first resolve/reject
+    /// pair supplied by that constructor.
+    PromiseCapabilityExecutor,
     /// `RegExp.prototype.exec(string)` (`fx_RegExp_prototype_exec`): compile-
     /// once, drive the matcher from `lastIndex` (for `g`/`y`), and build the
     /// match-result array (`[whole, ...captures]` + `index`/`input`/`groups`),
@@ -3081,9 +3085,22 @@ enum ReactionKind {
 /// resolve/reject fires first, the second a metered no-op).
 #[derive(Copy, Clone, Debug)]
 struct PromiseFnData {
+    /// The promise settled by an ordinary resolving function, or the hidden
+    /// capability-record home of a [`NativeMethod::PromiseCapabilityExecutor`].
     promise: crate::value::SlotIndex,
     reject: bool,
+    /// `usize::MAX` identifies a capability executor; every other value is an
+    /// index into [`Interp::promise_guards`].
     guard: usize,
+}
+
+const PROMISE_CAPABILITY_EXECUTOR_GUARD: usize = usize::MAX;
+
+#[derive(Copy, Clone, Debug)]
+struct PromiseCapability {
+    promise: Slot,
+    resolve: Slot,
+    reject: Slot,
 }
 
 /// A queued microtask (XS's promise job, `fxQueueJob` onto `mxPendingJobs`).
@@ -5049,11 +5066,13 @@ pub struct PromiseRow {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PromiseFnRow {
     pub function: u32,
+    /// Settled promise for a resolving function; hidden record object for a
+    /// capability executor (`guard == u32::MAX`).
     pub promise: u32,
     /// `false` = the resolve function, `true` = the reject function.
     pub reject: bool,
     /// Index into [`PromiseClusterSnapshot::guards`], the pair's shared
-    /// `[[AlreadyResolved]]` boolean.
+    /// `[[AlreadyResolved]]` boolean. `u32::MAX` marks a capability executor.
     pub guard: u32,
     /// The interned empty-name chunk `make_resolving_functions` gave the
     /// pair. Carried (not re-interned) so restore mutates no arena.
@@ -10840,8 +10859,12 @@ impl Interp {
         // The live-index sets, exactly `compact_reaction_arenas`' rule
         // over the rows being emitted (the job queue, its other holder,
         // is empty at every persistable boundary).
-        let live_guards: std::collections::BTreeSet<usize> =
-            functions.iter().map(|(_, d)| d.guard).collect();
+        let live_guards: std::collections::BTreeSet<usize> = functions
+            .iter()
+            .filter_map(|(_, d)| {
+                (d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD).then_some(d.guard)
+            })
+            .collect();
         let live_comb: std::collections::BTreeSet<u32> = promises
             .iter()
             .flat_map(|(_, p)| p.reactions.iter())
@@ -10912,7 +10935,11 @@ impl Interp {
                     function: owner.0,
                     promise: data.promise.0,
                     reject: data.reject,
-                    guard: guard_map[&data.guard],
+                    guard: if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
+                        u32::MAX
+                    } else {
+                        guard_map[&data.guard]
+                    },
                     name_chunk: self.functions[&owner].name_chunk.0,
                 })
                 .collect(),
@@ -11009,7 +11036,8 @@ impl Interp {
             matches!(
                 (row_of(resolve), row_of(reject)),
                 (Some(res), Some(rej))
-                    if !res.reject
+                    if res.guard != u32::MAX
+                        && !res.reject
                         && rej.reject
                         && res.promise == rej.promise
                         && res.guard == rej.guard
@@ -11103,9 +11131,44 @@ impl Interp {
         // Guard coherence, the decoder's rule re-proved: one resolving
         // pair (or its surviving half) per guard, one promise per pair.
         let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; snap.guards.len()];
+        let mut executor_homes = std::collections::BTreeSet::new();
         for row in &snap.functions {
             let function = crate::value::SlotIndex(row.function);
-            if self.functions.contains_key(&function) || !owners.contains(&row.promise) {
+            if self.functions.contains_key(&function) {
+                return false;
+            }
+            if row.guard == u32::MAX {
+                let home = crate::value::SlotIndex(row.promise);
+                let resolve_id = self.symbol_ids.get("[[PromiseCapabilityResolve]]").copied();
+                let reject_id = self.symbol_ids.get("[[PromiseCapabilityReject]]").copied();
+                if row.reject
+                    || row.promise == row.function
+                    || !executor_homes.insert(row.promise)
+                    || resolve_id.and_then(|id| self.find_property(home, id)).is_none()
+                    || reject_id.and_then(|id| self.find_property(home, id)).is_none()
+                {
+                    return false;
+                }
+                self.functions.insert(
+                    function,
+                    FuncInfo {
+                        method: Some(NativeMethod::PromiseCapabilityExecutor),
+                        name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                        arity: 2,
+                        ..FuncInfo::default()
+                    },
+                );
+                self.promise_functions.insert(
+                    function,
+                    PromiseFnData {
+                        promise: crate::value::SlotIndex(row.promise),
+                        reject: false,
+                        guard: PROMISE_CAPABILITY_EXECUTOR_GUARD,
+                    },
+                );
+                continue;
+            }
+            if !owners.contains(&row.promise) {
                 return false;
             }
             let Some(entry) = guard_rows.get_mut(row.guard as usize) else {
@@ -15045,15 +15108,16 @@ impl Interp {
                         }
                     });
                     if let Some((f, base)) = promise_fn {
-                        match self.call_promise_function(f, base, argc) {
-                            Ok(()) => {
-                                if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
-                                }
-                                pc = ret_pc;
-                            }
-                            Err(h) => return h,
+                        dispatch_result!(
+                            self.call_promise_function(f, base, argc),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        if self.check_meter() == MeterCheck::Abort {
+                            return Halt::MeterAbort;
                         }
+                        pc = ret_pc;
                     } else if let Some((native, base)) = callee {
                         // A native (intrinsic) constructor callee.
                         dispatch_result!(
@@ -19272,6 +19336,9 @@ impl Interp {
             Some(d) => *d,
             None => return Err(Halt::Unsupported("async:bad-resolving-fn")),
         };
+        if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
+            return Err(Halt::Unsupported("async:capability-executor-as-resolver"));
+        }
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
             Ok(())
@@ -20535,7 +20602,13 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 self.meter.tick_raw(PROMISE_CTOR_FRAME_METERING);
-                let promise = self.new_promise_instance();
+                let proto = match new_target {
+                    Some(target) => {
+                        self.get_prototype_from_constructor(code, target, self.promise_proto)?
+                    }
+                    None => self.promise_proto,
+                };
+                let promise = self.new_promise_instance_with_proto(proto);
                 let (resolve, reject) = self.make_resolving_functions(promise);
                 // Invoke `executor(resolve, reject)` with `this = undefined`,
                 // re-entrant. A throw rejects the promise via `fxRejectException`
@@ -22002,10 +22075,16 @@ impl Interp {
     /// THENS-holder instance, RESULT, ENVIRONMENT). The native frame residual
     /// is charged by the caller.
     fn new_promise_instance(&mut self) -> crate::value::SlotIndex {
+        self.new_promise_instance_with_proto(self.promise_proto)
+    }
+
+    fn new_promise_instance_with_proto(
+        &mut self,
+        proto: crate::value::SlotIndex,
+    ) -> crate::value::SlotIndex {
         for _ in 0..6 {
             self.meter.tick_slot_alloc();
         }
-        let proto = self.promise_proto;
         let inst = self.slots.alloc(Slot::instance(proto));
         self.promises.insert(
             inst,
@@ -22111,6 +22190,80 @@ impl Interp {
         let derived = self.new_promise_instance();
         let (resolve, reject) = self.make_resolving_functions(derived);
         (derived, resolve, reject)
+    }
+
+    /// `NewPromiseCapability(C)` for an arbitrary constructor. The intrinsic
+    /// path retains its calibrated fast representation. A custom constructor
+    /// receives a real anonymous, length-2, non-constructable capability
+    /// executor whose hidden home captures the supplied resolve/reject values.
+    fn new_promise_capability_for(
+        &mut self,
+        code: &[u8],
+        constructor: Slot,
+    ) -> Result<PromiseCapability, Halt> {
+        if !self.is_constructor_value(constructor) {
+            return Err(self.catchable_type_error());
+        }
+        let intrinsic = self.intrinsics.get("Promise").copied();
+        if matches!(constructor.value,
+            Payload::Reference(c)
+                if constructor.kind == Kind::Reference && Some(c) == intrinsic)
+        {
+            let (promise, resolve, reject) = self.new_promise_capability();
+            return Ok(PromiseCapability {
+                promise: Slot::of(Kind::Reference, Payload::Reference(promise)),
+                resolve,
+                reject,
+            });
+        }
+
+        // The callback function (5 slots) and its hidden capability record
+        // (instance + two fields) are the same eight-slot cluster charged by
+        // the intrinsic capability path. The custom constructor's own work is
+        // metered by `construct_value`.
+        for _ in 0..8 {
+            self.meter.tick_slot_alloc();
+        }
+        self.meter.tick_raw(PROMISE_CAPABILITY_METERING);
+        let resolve_id = self.intern_key("[[PromiseCapabilityResolve]]");
+        let reject_id = self.intern_key("[[PromiseCapabilityReject]]");
+        let home = self
+            .slots
+            .alloc(Slot::instance(crate::value::SlotIndex::NULL));
+        self.set_own_unmetered(home, resolve_id, Slot::undefined());
+        self.set_own_unmetered(home, reject_id, Slot::undefined());
+
+        let empty_name = self.alloc_str_text(b"");
+        let function = self.slots.alloc(Slot::instance(self.function_proto));
+        self.functions.insert(
+            function,
+            FuncInfo {
+                method: Some(NativeMethod::PromiseCapabilityExecutor),
+                name_chunk: empty_name,
+                arity: 2,
+                ..FuncInfo::default()
+            },
+        );
+        self.promise_functions.insert(
+            function,
+            PromiseFnData {
+                promise: home,
+                reject: false,
+                guard: PROMISE_CAPABILITY_EXECUTOR_GUARD,
+            },
+        );
+        let executor = Slot::of(Kind::Reference, Payload::Reference(function));
+        let promise = self.construct_value(code, constructor, &[executor], constructor)?;
+        let resolve = self.instance_get(home, resolve_id);
+        let reject = self.instance_get(home, reject_id);
+        if !self.is_callable_value(resolve) || !self.is_callable_value(reject) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(PromiseCapability {
+            promise,
+            resolve,
+            reject,
+        })
     }
 
     /// The canonical flag string for a compiled flags word (`code[0]`), in
@@ -23793,6 +23946,30 @@ impl Interp {
         _argc: usize,
     ) -> Result<(), Halt> {
         let data = self.promise_functions[&f];
+        if data.guard == PROMISE_CAPABILITY_EXECUTOR_GUARD {
+            let resolve_id = self.intern_key("[[PromiseCapabilityResolve]]");
+            let reject_id = self.intern_key("[[PromiseCapabilityReject]]");
+            let resolve = self.instance_get(data.promise, resolve_id);
+            let reject = self.instance_get(data.promise, reject_id);
+            if resolve.kind != Kind::Undefined || reject.kind != Kind::Undefined {
+                return Err(self.catchable_type_error());
+            }
+            let supplied_resolve = self
+                .stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            let supplied_reject = self
+                .stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            self.set_own_unmetered(data.promise, resolve_id, supplied_resolve);
+            self.set_own_unmetered(data.promise, reject_id, supplied_reject);
+            self.stack.truncate(base);
+            self.push(Slot::undefined());
+            return Ok(());
+        }
         let value = self
             .stack
             .get(base + 4)
@@ -32431,18 +32608,13 @@ impl Interp {
             // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
             // whose observable constructor is the receiver is returned as-is;
             // otherwise a capability is built and its `resolve` called with
-            // `v`. The currently materialized capability path is the intrinsic
-            // Promise constructor; custom constructors remain a named gap.
+            // `v`. The intrinsic Promise keeps its calibrated fast path;
+            // arbitrary constructors go through `NewPromiseCapability`.
             NativeMethod::PromiseResolveStatic => {
                 if !self.is_constructor_value(this) {
                     return Err(self.catchable_type_error());
                 }
                 let intrinsic = self.intrinsics.get("Promise").copied();
-                if !matches!(this.value,
-                    Payload::Reference(c) if this.kind == Kind::Reference && Some(c) == intrinsic)
-                {
-                    return Err(Halt::Unsupported("promise:custom-capability"));
-                }
                 let same_constructor = if let Payload::Reference(promise) = arg0.value {
                     if arg0.kind == Kind::Reference && self.promises.contains_key(&promise) {
                         let constructor_id = self.intern_key("constructor");
@@ -32457,11 +32629,23 @@ impl Interp {
                 if same_constructor {
                     self.meter.tick_raw(PROMISE_RESOLVE_SAME_METERING);
                     arg0
-                } else {
+                } else if matches!(this.value,
+                    Payload::Reference(c)
+                        if this.kind == Kind::Reference && Some(c) == intrinsic)
+                {
                     self.meter.tick_raw(PROMISE_RESOLVE_STATIC_METERING);
                     let (derived, _resolve, _reject) = self.new_promise_capability();
                     self.settle_promise(derived, arg0, false)?;
                     Slot::of(Kind::Reference, Payload::Reference(derived))
+                } else {
+                    let capability = self.new_promise_capability_for(code, this)?;
+                    self.call_any(
+                        code,
+                        capability.resolve,
+                        Slot::undefined(),
+                        &[arg0],
+                    )?;
+                    capability.promise
                 }
             }
             // `Promise.reject(reason)` (`fx_Promise_reject`): a capability whose
@@ -32471,15 +32655,24 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 let intrinsic = self.intrinsics.get("Promise").copied();
-                if !matches!(this.value,
-                    Payload::Reference(c) if this.kind == Kind::Reference && Some(c) == intrinsic)
+                if matches!(this.value,
+                    Payload::Reference(c)
+                        if this.kind == Kind::Reference && Some(c) == intrinsic)
                 {
-                    return Err(Halt::Unsupported("promise:custom-capability"));
+                    self.meter.tick_raw(PROMISE_REJECT_STATIC_METERING);
+                    let (derived, _resolve, _reject) = self.new_promise_capability();
+                    self.settle_promise(derived, arg0, true)?;
+                    Slot::of(Kind::Reference, Payload::Reference(derived))
+                } else {
+                    let capability = self.new_promise_capability_for(code, this)?;
+                    self.call_any(
+                        code,
+                        capability.reject,
+                        Slot::undefined(),
+                        &[arg0],
+                    )?;
+                    capability.promise
                 }
-                self.meter.tick_raw(PROMISE_REJECT_STATIC_METERING);
-                let (derived, _resolve, _reject) = self.new_promise_capability();
-                self.settle_promise(derived, arg0, true)?;
-                Slot::of(Kind::Reference, Payload::Reference(derived))
             }
             // `Promise.prototype.catch(onRejected)`: Invoke the receiver's
             // observable `then` method with `(undefined, onRejected)`. The
@@ -32516,7 +32709,9 @@ impl Interp {
             }
             // The resolve/reject functions settle in the `RUN` dispatch
             // (`call_promise_function`) and never reach here.
-            NativeMethod::PromiseResolveFunction | NativeMethod::PromiseRejectFunction => {
+            NativeMethod::PromiseResolveFunction
+            | NativeMethod::PromiseRejectFunction
+            | NativeMethod::PromiseCapabilityExecutor => {
                 return Err(Halt::Unsupported("promise:resolving-fn-unexpected"))
             }
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
@@ -54099,8 +54294,13 @@ impl Interp {
                 }
             }
         }
-        let live_guards: BTreeSet<usize> =
-            self.promise_functions.values().map(|d| d.guard).collect();
+        let live_guards: BTreeSet<usize> = self
+            .promise_functions
+            .values()
+            .filter_map(|d| {
+                (d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD).then_some(d.guard)
+            })
+            .collect();
 
         // Fully-live arenas need no rewrite (every index below the
         // length is referenced, so every remap would be the identity).
@@ -54146,7 +54346,9 @@ impl Interp {
             }
         }
         for d in self.promise_functions.values_mut() {
-            d.guard = guard_map[&d.guard];
+            if d.guard != PROMISE_CAPABILITY_EXECUTOR_GUARD {
+                d.guard = guard_map[&d.guard];
+            }
         }
 
         let old = std::mem::take(&mut self.combinators);
