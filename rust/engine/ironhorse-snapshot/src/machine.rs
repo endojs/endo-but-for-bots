@@ -612,6 +612,11 @@ fn restore_side_tables(
             "side-table restore: malformed iterator cursor",
         ));
     }
+    // Semantic migrations run only after the persisted name floor, symbol-key
+    // map, and arguments brands have all been reinstated. They can therefore
+    // distinguish a never-installed implicit intrinsic from a guest deletion,
+    // and a legacy arguments layout from current guest customization.
+    interp.migrate_restored_layout();
     Ok(())
 }
 

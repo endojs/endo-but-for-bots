@@ -7777,6 +7777,11 @@ impl Interp {
         self.intern_key("toString");
         self.intern_key("valueOf");
         self.intern_key("join");
+        // A non-guest-reachable descriptor in the persisted symbol-key table
+        // marks the current arguments layout. Unlike a reserved string, this
+        // cannot be pre-interned or spoofed by guest JavaScript; no property
+        // uses the minted id. Reusing the table avoids a schema-only atom.
+        self.intern_symbol_key(self.template_cache);
         // ArraySpeciesCreate performs an implicit `Get(original,
         // "constructor")` for Array receivers. Reify the boot-default key
         // before fixing the installed-name floor whenever an allocating
@@ -9793,6 +9798,74 @@ impl Interp {
     pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) {
         for owner in owners {
             self.arguments_objects.insert(crate::value::SlotIndex(owner));
+        }
+    }
+
+    /// Upgrade semantic boot dependencies and object layouts that changed
+    /// without changing the snapshot container schema.
+    ///
+    /// `join` is safe to install only when its name lies above the restored
+    /// installed-name floor (or is absent): that proves no earlier install pass
+    /// could have created it. If its id is at or below the floor, a missing
+    /// `%Array.prototype%.join` may be a deliberate guest deletion and is left
+    /// alone.
+    ///
+    /// The arguments-layout marker is stronger than inspecting the restored
+    /// objects: a current guest can intentionally select `%Array.prototype%`
+    /// or delete its own `@@iterator`, producing the exact legacy shape. Only
+    /// marker-free snapshots are upgraded. Custom prototypes and own iterator
+    /// overrides remain untouched while the old default representation gains
+    /// `%Object.prototype%` and the standard own iterator.
+    pub fn migrate_restored_layout(&mut self) {
+        let legacy_arguments = !self.symbol_key_ids.contains_key(&self.template_cache);
+        // Raw-bytecode machines have no property-name table and therefore no
+        // linked language layout to migrate. Minting any marker would still
+        // change their otherwise table-free state and break byte-identical
+        // unlinked snapshot round trips.
+        if self.symbol_names.is_empty() || !legacy_arguments {
+            return;
+        }
+        let join_was_considered = self
+            .symbol_ids
+            .get("join")
+            .is_some_and(|id| *id as usize <= self.installed_names_len);
+
+        if !join_was_considered {
+            self.intern_key_unmetered("join");
+        }
+        self.intern_symbol_key(self.template_cache);
+        if !join_was_considered {
+            // The appended name id is above the restored floor. The ordinary
+            // create-only pending pass installs `join` and advances the floor
+            // without touching any already-considered guest property.
+            self.install_pending_intrinsics();
+        }
+
+        if self.arguments_objects.is_empty() {
+            return;
+        }
+        let iterator_id = self.well_known_symbol_property_id("iterator");
+        let values = self
+            .proto_methods
+            .iter()
+            .find(|(holder, name, _)| *holder == self.array_proto && *name == "values")
+            .map(|(_, _, method)| *method);
+        let owners: Vec<_> = self.arguments_objects.iter().copied().collect();
+        for owner in owners {
+            if self.instance_prototype(owner) == self.array_proto {
+                self.slots.get_mut(owner).value = Payload::Reference(self.object_proto);
+            }
+            let (Some(iterator_id), Some(values)) = (iterator_id, values) else {
+                continue;
+            };
+            if self.ordinary_get_own_descriptor(owner, iterator_id).is_none() {
+                self.set_own_unmetered_with_flag(
+                    owner,
+                    iterator_id,
+                    Slot::of(Kind::Reference, Payload::Reference(values)),
+                    XS_DONT_ENUM_FLAG,
+                );
+            }
         }
     }
 
@@ -49603,6 +49676,104 @@ mod tests {
             interp.dates.get(&instance).copied(),
             Some(5678.0),
             "ordinary Date instance rows still restore"
+        );
+    }
+
+    #[test]
+    fn marker_free_restore_installs_join_and_migrates_arguments_layout() {
+        let mut interp = Interp::new();
+        let old_names = vec![
+            "seed".to_string(),
+            "toString".to_string(),
+            "valueOf".to_string(),
+        ];
+        interp.bind_program_symbols(&old_names);
+        interp.install_intrinsic_bindings(&old_names, true, |_| true);
+
+        let default_args = interp.new_array_unmetered();
+        let custom_proto = interp.new_object();
+        let custom_args = interp.new_array_unmetered();
+        interp.slots.get_mut(custom_args).value = Payload::Reference(custom_proto);
+        let custom_missing_args = interp.new_array_unmetered();
+        interp.slots.get_mut(custom_missing_args).value = Payload::Reference(custom_proto);
+
+        let iterator_id = interp
+            .well_known_symbol_property_id("iterator")
+            .expect("boot iterator symbol");
+        interp.set_own_unmetered(custom_args, iterator_id, Slot::integer(17));
+        interp.restore_arguments_brands(vec![
+            default_args.0,
+            custom_args.0,
+            custom_missing_args.0,
+        ]);
+
+        interp.migrate_restored_layout();
+
+        let join_id = interp.symbol_ids["join"];
+        let join = interp
+            .ordinary_get_own_descriptor(interp.array_proto, join_id)
+            .and_then(|descriptor| descriptor.value)
+            .expect("legacy restore installs the implicit join dependency");
+        assert!(matches!(join.value, Payload::Reference(function)
+            if interp.method_of(function) == Some(NativeMethod::ArrayJoin)));
+        assert!(interp.symbol_key_ids.contains_key(&interp.template_cache));
+        assert_eq!(interp.installed_names_len, interp.symbol_names.len());
+
+        assert_eq!(interp.instance_prototype(default_args), interp.object_proto);
+        let default_iterator = interp
+            .ordinary_get_own_descriptor(default_args, iterator_id)
+            .and_then(|descriptor| descriptor.value)
+            .expect("legacy default arguments gains an own iterator");
+        assert!(matches!(default_iterator.value, Payload::Reference(_)));
+
+        assert_eq!(interp.instance_prototype(custom_args), custom_proto);
+        assert_eq!(
+            interp
+                .ordinary_get_own_descriptor(custom_args, iterator_id)
+                .and_then(|descriptor| descriptor.value),
+            Some(Slot::integer(17)),
+            "a legacy own iterator override survives"
+        );
+        assert_eq!(interp.instance_prototype(custom_missing_args), custom_proto);
+        assert!(
+            interp
+                .ordinary_get_own_descriptor(custom_missing_args, iterator_id)
+                .is_some(),
+            "a custom legacy prototype is preserved while the own iterator is added"
+        );
+    }
+
+    #[test]
+    fn current_restore_preserves_guest_join_and_arguments_edits() {
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&["seed".to_string()]);
+        let join_id = interp.symbol_ids["join"];
+        assert!(interp.delete_own_property(interp.array_proto, join_id));
+
+        let args = interp.new_array_unmetered();
+        let iterator_id = interp
+            .well_known_symbol_property_id("iterator")
+            .expect("boot iterator symbol");
+        interp.restore_arguments_brands(vec![args.0]);
+
+        interp.migrate_restored_layout();
+
+        assert!(
+            interp
+                .ordinary_get_own_descriptor(interp.array_proto, join_id)
+                .is_none(),
+            "a considered then deleted join must not be resurrected"
+        );
+        assert_eq!(
+            interp.instance_prototype(args),
+            interp.array_proto,
+            "the marker preserves a current guest-selected prototype"
+        );
+        assert!(
+            interp
+                .ordinary_get_own_descriptor(args, iterator_id)
+                .is_none(),
+            "the marker preserves a current guest-deleted own iterator"
         );
     }
 

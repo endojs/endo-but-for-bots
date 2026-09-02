@@ -221,7 +221,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 for Date's three locale-string aliases and
         // boot-minted `@@toPrimitive` method identity. The symbol-keyed
         // property remains lazy; snapshot format unchanged.
-        "ecc0c01b96d58d4c8d2db899bfa83f8ecbca3e0b5b32e51a2d15eb2ca356e628",
+        // Re-pinned 2026-09-02 for the internal arguments-layout generation
+        // marker carried by the symbol-key table. It lets restore distinguish
+        // legacy layouts from same-version guest edits without a
+        // container-format change.
+        "5bde70c6f5670b3f43364269feccffd895a2dcb1ae2e1987dafdd9bc9164b945",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -368,7 +372,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // installation. Schema and format remain unchanged.
         // Re-pinned with the blob for Date's locale aliases and
         // `@@toPrimitive` identity. Schema and format remain unchanged.
-        "9566b5cc4f5d18978bd5605a7b5df54f5c2018f52e2a44154dc69432160e0271",
+        // Re-pinned with the blob for the persisted arguments-layout marker.
+        // Schema and format remain unchanged.
+        "6c6b9fa0fdd7624e9c750ee954ff286eb015b0f575fc79d10e0a7a18b7575935",
         "epoch-3 seal chain"
     );
 }
