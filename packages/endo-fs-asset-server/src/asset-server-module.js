@@ -1,5 +1,5 @@
 // @ts-check
-/* global globalThis, Buffer */
+/* global Buffer */
 /**
  * Entry point for instantiating a static asset server as a formulated
  * Endo caplet via `host.makeUnconfined`.
