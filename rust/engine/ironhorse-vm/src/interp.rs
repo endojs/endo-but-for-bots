@@ -7258,7 +7258,6 @@ impl Interp {
         let Some(&ctor) = self.intrinsics.get("Date") else { return };
         let Some(proto) = self.prototype_of(ctor) else { return };
         self.date_proto = proto;
-        self.dates.insert(proto, f64::NAN);
         for (name, op, arity) in [
             ("parse", 0u8, 1u32), ("UTC", 1, 7), ("now", 2, 0),
         ] {
@@ -7280,6 +7279,13 @@ impl Interp {
             ("toGMTString", 22, 0), ("toString", 23, 0),
             ("toDateString", 24, 0), ("toTimeString", 25, 0),
             ("setTime", 26, 1), ("toJSON", 27, 1),
+            ("setMilliseconds", 28, 1), ("setUTCMilliseconds", 28, 1),
+            ("setSeconds", 29, 2), ("setUTCSeconds", 29, 2),
+            ("setMinutes", 30, 3), ("setUTCMinutes", 30, 3),
+            ("setHours", 31, 4), ("setUTCHours", 31, 4),
+            ("setDate", 32, 1), ("setUTCDate", 32, 1),
+            ("setMonth", 33, 2), ("setUTCMonth", 33, 2),
+            ("setFullYear", 34, 3), ("setUTCFullYear", 34, 3),
         ] {
             let f = self.alloc_named_method(NativeMethod::Date(op), name, arity);
             self.proto_methods.push((proto, name, f));
@@ -7945,6 +7951,13 @@ impl Interp {
             if self.done_id.is_none() {
                 self.done_id = Some(self.intern_key("done"));
             }
+        }
+        // `Date.prototype.toJSON` invokes the receiver's `toISOString`
+        // property even when the source never names that method directly.
+        // Intern it before the prototype-method pass so a Date receiver sees
+        // the intrinsic and an ordinary receiver can expose an override.
+        if self.symbol_ids.contains_key("toJSON") {
+            self.intern_key("toISOString");
         }
         // `Map.groupBy` / `Object.groupBy` drive `GetIterator(items)` from Rust,
         // reading the produced result object's `next`/`value`/`done` — even when
@@ -9759,14 +9772,12 @@ impl Interp {
     /// Quiescent snapshot of Date `[[DateValue]]` records, ascending by
     /// owning slot and carrying each IEEE-754 value as raw bits.
     ///
-    /// The untouched `%Date.prototype%` seed is re-derived by boot and is
-    /// omitted. A guest-mutated prototype is emitted like any other Date.
+    /// `%Date.prototype%` is not branded with `[[DateValue]]`; only Date
+    /// instances appear in this table.
     pub fn dates_snapshot(&self) -> Vec<(u32, u64)> {
-        let boot_bits = f64::NAN.to_bits();
         let mut out: Vec<(u32, u64)> = self
             .dates
             .iter()
-            .filter(|(owner, value)| **owner != self.date_proto || value.to_bits() != boot_bits)
             .map(|(owner, value)| (owner.0, value.to_bits()))
             .collect();
         out.sort_unstable_by_key(|(owner, _)| *owner);
@@ -27382,6 +27393,26 @@ impl Interp {
             }
             2 => Ok(Slot::number(0.0)),
             _ => {
+                if op == 27 {
+                    // Date.prototype.toJSON is intentionally generic:
+                    // ToObject, ToPrimitive(number), the non-finite Number
+                    // shortcut, then Invoke(O, "toISOString").
+                    let object = self.array_to_object(this)?;
+                    let primitive = self.to_primitive(code, object, false)?;
+                    if primitive.kind == Kind::Number && !to_number(&primitive).is_finite() {
+                        return Ok(Slot::null());
+                    }
+                    let Payload::Reference(inst) = object.value else {
+                        unreachable!("ToObject result")
+                    };
+                    let id = self
+                        .symbol_ids
+                        .get("toISOString")
+                        .copied()
+                        .ok_or(Halt::Unsupported("Date.toJSON:toISOString-key"))?;
+                    let method = self.mop_get(code, inst, id, object)?;
+                    return self.call_primitive_method(code, method, object, &[]);
+                }
                 let inst = match this.value {
                     Payload::Reference(r) if self.dates.contains_key(&r) => r,
                     _ => return Err(self.catchable_type_error()),
@@ -27393,8 +27424,78 @@ impl Interp {
                     self.dates.insert(inst, clipped);
                     return Ok(Slot::number(clipped));
                 }
-                if op == 27 {
-                    return if t.is_finite() { Ok(self.intl_string(&date_iso_string(t))) } else { Ok(Slot::null()) };
+                if (28..=34).contains(&op) {
+                    let arity = match op {
+                        28 | 32 => 1,
+                        29 | 33 => 2,
+                        30 | 34 => 3,
+                        31 => 4,
+                        _ => unreachable!(),
+                    };
+                    // Every setter has one required argument: an omitted first
+                    // argument is still `undefined` and therefore becomes NaN.
+                    // Optional arguments are coerced only when present, in
+                    // left-to-right order, before the Date value is changed.
+                    let count = argc.max(1).min(arity);
+                    let mut inputs = Vec::with_capacity(count);
+                    for i in 0..count {
+                        let n = self.to_number_value(code, arg(&self.stack, i))?;
+                        inputs.push(to_number(&n));
+                    }
+                    // SetFullYear alone recovers an invalid Date from +0. Every
+                    // other setter preserves NaN after performing the required
+                    // argument coercions above.
+                    let base_t = if t.is_finite() {
+                        t
+                    } else if op == 34 {
+                        0.0
+                    } else {
+                        self.dates.insert(inst, f64::NAN);
+                        return Ok(Slot::number(f64::NAN));
+                    };
+                    let (year, month, day, _, hour, minute, second, millis) =
+                        civil_fields(base_t, 0);
+                    let mut components = [
+                        year as f64,
+                        month as f64 - 1.0,
+                        day as f64,
+                        hour as f64,
+                        minute as f64,
+                        second as f64,
+                        millis as f64,
+                    ];
+                    match op {
+                        28 => components[6] = inputs[0],
+                        29 => {
+                            components[5] = inputs[0];
+                            if inputs.len() > 1 { components[6] = inputs[1]; }
+                        }
+                        30 => {
+                            components[4] = inputs[0];
+                            if inputs.len() > 1 { components[5] = inputs[1]; }
+                            if inputs.len() > 2 { components[6] = inputs[2]; }
+                        }
+                        31 => {
+                            components[3] = inputs[0];
+                            if inputs.len() > 1 { components[4] = inputs[1]; }
+                            if inputs.len() > 2 { components[5] = inputs[2]; }
+                            if inputs.len() > 3 { components[6] = inputs[3]; }
+                        }
+                        32 => components[2] = inputs[0],
+                        33 => {
+                            components[1] = inputs[0];
+                            if inputs.len() > 1 { components[2] = inputs[1]; }
+                        }
+                        34 => {
+                            components[0] = inputs[0];
+                            if inputs.len() > 1 { components[1] = inputs[1]; }
+                            if inputs.len() > 2 { components[2] = inputs[2]; }
+                        }
+                        _ => unreachable!(),
+                    }
+                    let clipped = date_from_components_exact(components);
+                    self.dates.insert(inst, clipped);
+                    return Ok(Slot::number(clipped));
                 }
                 if matches!(op, 10 | 11) { return Ok(Slot::number(t)); }
                 if !t.is_finite() {
@@ -46892,9 +46993,19 @@ fn time_clip(t: f64) -> f64 {
 }
 
 fn date_from_components(v: [f64; 7]) -> f64 {
-    if v.iter().any(|n| !n.is_finite()) { return f64::NAN; }
+    let mut v = v;
     let mut year = v[0].trunc();
     if (0.0..=99.0).contains(&year) { year += 1900.0; }
+    v[0] = year;
+    date_from_components_exact(v)
+}
+
+/// `MakeDate(MakeDay(...), MakeTime(...))` followed by `TimeClip`, with an
+/// exact year. Date construction/`Date.UTC` apply their legacy 0..99 →
+/// 1900..1999 adjustment before entering here; Date setters do not.
+fn date_from_components_exact(v: [f64; 7]) -> f64 {
+    if v.iter().any(|n| !n.is_finite()) { return f64::NAN; }
+    let year = v[0].trunc();
     if year < i64::MIN as f64 || year > i64::MAX as f64 { return f64::NAN; }
     let month = v[1].trunc();
     if month < i64::MIN as f64 || month > i64::MAX as f64 { return f64::NAN; }

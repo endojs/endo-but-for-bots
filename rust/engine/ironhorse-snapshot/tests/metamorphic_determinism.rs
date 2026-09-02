@@ -213,7 +213,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 because
         // Symbol.prototype[Symbol.toPrimitive] is now boot-minted. The
         // symbol-keyed property remains lazy; format unchanged.
-        "1a8fb89d8f80a00cb0f6e6adcef23192835dc18369a568755aa6dae338f17969",
+        // Re-pinned 2026-09-02 for the fourteen Date calendar/time setter
+        // natives added to the boot heap. Format unchanged.
+        "a928f228f56f0e3f98d78fbd14f83b7875cd544a522b3e55803f15eaa10588f0",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -354,7 +356,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for the boot-minted
         // Symbol.prototype[Symbol.toPrimitive] method. Schema and format
         // remain unchanged.
-        "c548b08e9010bf66e5b0b7b02035e9cf2bbc8cc04c941fc7365c0c3081586518",
+        // Re-pinned with the blob for the Date setter native functions.
+        // Schema and format remain unchanged.
+        "00cd2d51dfa9b7842c9bdfacb85c4006a645df21cc0bf5cba12079b662b371a0",
         "epoch-3 seal chain"
     );
 }
