@@ -3,18 +3,18 @@
 //! 5-slot native-reaction path (design [`designs/ironhorse-engine.md`] §
 //! promises; the review ledger's promise residuals).
 //!
-//! Each combinator builds a derived promise, consumes the input's live iterator,
-//! resolves each yielded value through the constructor's observable `resolve`
-//! method, and registers a native reaction whose drain behavior folds the
-//! element's settlement into the shared `remainingElementsCount` / results
-//! state — the same crank discipline the existing promise tests lock (reactions
-//! run at the pump-loop drain, never synchronously).
+//! Each combinator builds a result capability, consumes the input's live
+//! iterator, resolves each yielded value through the constructor's observable
+//! `resolve` method, and folds each element settlement into the shared
+//! `remainingElementsCount` / results state. Native Promise reactions run at
+//! the pump-loop drain; callbacks passed to an arbitrary custom `then` run when
+//! that method calls them, as required by the specification.
 //!
 //! Two gates per the accuracy-over-parity doctrine:
 //!   1. **Result agreement** — the program's completion value agrees with the
 //!      XS oracle where the oracle accepts it (`BothComplete` +
 //!      `result_agrees`); the combinator/finally programs complete `undefined`
-//!      synchronously (the derived promise settles at the drain), so this
+//!      synchronously (the native result promise settles at the drain), so this
 //!      certifies ironhorse reproduces the oracle's whole execution *including* the
 //!      microtask drain.
 //!   2. **Observable resolution** — the combinator's *resolved value* is read
@@ -400,6 +400,74 @@ fn static_combinator_does_not_consult_constructor_species() {
     assert!(
         run.result_agrees,
         "custom static capability result must agree"
+    );
+}
+
+#[test]
+fn static_combinators_build_and_return_custom_capabilities() {
+    assert_drains_to(
+        "var g='',same=false,calls=0,result={};function C(executor){calls++;executor(function(v){g=same+':'+calls+':r'+v.join(',')},function(e){g='j'+e});return result}C.resolve=function(v){return Promise.resolve(v)};var p=Promise.all.call(C,[1,2]);same=p===result;undefined",
+        "true:1:r1,2",
+    );
+    assert_drains_to(
+        "var g='',same=false,result={};function C(executor){executor(function(v){g=same+':r'+v[0].status+v[1].status},function(e){g='j'+e});return result}C.resolve=function(v){return Promise.resolve(v)};var p=Promise.allSettled.call(C,[1,Promise.reject(2)]);same=p===result;undefined",
+        "true:rfulfilledrejected",
+    );
+    assert_drains_to(
+        "var g='',same=false,result={};function C(executor){executor(function(v){g='r'+v},function(e){g=same+':j'+e.name+e.errors.join(',')});return result}C.resolve=function(v){return Promise.resolve(v)};var p=Promise.any.call(C,[Promise.reject(3),Promise.reject(4)]);same=p===result;undefined",
+        "true:jAggregateError3,4",
+    );
+}
+
+#[test]
+fn custom_combinator_capabilities_observe_each_specification_call() {
+    assert_drains_to(
+        "var g='',result={};function C(executor){executor(function(v){g+='r'+v+','},function(e){g+='j'+e+','});return result}C.resolve=function(v){return Promise.resolve(v)};Promise.race.call(C,[1,2]);undefined",
+        "r1,r2,",
+    );
+    assert_drains_to(
+        "var g='',result={};function C(executor){executor(function(v){g+='r'+v+','},function(e){g+='j'+e+','});return result}C.resolve=function(v){return Promise.resolve(v)};Promise.all.call(C,[Promise.reject(1),Promise.reject(2)]);undefined",
+        "j1,j2,",
+    );
+    assert_drains_to(
+        "var g='',result={};function C(executor){executor(function(v){g+='r'+v+','},function(e){g+='j'+e+','});return result}C.resolve=function(v){return Promise.resolve(v)};Promise.any.call(C,[1,2]);undefined",
+        "r1,r2,",
+    );
+}
+
+#[test]
+fn combinator_element_callbacks_run_synchronously_and_once() {
+    assert_oracle_result(
+        "var calls=0,element;function C(executor){executor(function(v){calls+=v[0]===1},function(){})}C.resolve=function(v){return v};var item={then:function(f){element=f;f(1);f(2)}};Promise.all.call(C,[item]);calls+':'+typeof element",
+        "1:function",
+    );
+    assert_oracle_result(
+        "var element;function C(executor){executor(function(){},function(){})}C.resolve=function(v){return v};Promise.all.call(C,[{then:function(f){element=f}}]);element.name+':'+element.length+':'+Object.prototype.hasOwnProperty.call(element,'prototype')",
+        ":1:false",
+    );
+    assert_oracle_result(
+        "var saved,seen='';function C(executor){executor(function(v){seen=v.join(',')},function(){})}C.resolve=function(v){return v};var a={then:function(f){saved=f}},b={then:function(f){saved('a');f('b')}},c={then:function(f){f('c')}};Promise.all.call(C,[a,b,c]);seen",
+        "a,b,c",
+    );
+    assert_oracle_result(
+        "var f;function C(executor){executor(function(){},function(){})}C.resolve=function(v){return v};Promise.allSettled.call(C,[{then:function(resolve){f=resolve}}]);try{new f();false}catch(e){e instanceof TypeError}",
+        "true",
+    );
+}
+
+#[test]
+fn custom_combinator_setup_failures_reject_the_new_capability() {
+    assert_oracle_result(
+        "var result={},seen='';function C(executor){executor(function(){},function(e){seen=e.name});return result}var p=Promise.all.call(C,[]);seen+':'+(p===result)",
+        "TypeError:true",
+    );
+    assert_oracle_result(
+        "var n=0;for(var v of [undefined,null,1,'x',()=>{}]){try{Promise.all.call(v,[])}catch(e){n+=e.name==='TypeError'}}n",
+        "5",
+    );
+    assert_oracle_result(
+        "var marker={};function C(){throw marker}try{Promise.race.call(C,[]);false}catch(e){e===marker}",
+        "true",
     );
 }
 

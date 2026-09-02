@@ -659,10 +659,10 @@ fn a_crafted_combinator_row_is_refused() {
 
     // The results accumulator must name an `ARRY` row — the element
     // drain writes through the dense store (the view-names-a-buffer-row
-    // discipline). The derived promise's slot is live and in bounds,
-    // but it is a promise, not an Array.
+    // discipline). A promise owner's slot is live and in bounds, but it is
+    // not an Array.
     let mut results = image;
-    results.promise_cluster.combinators[0].results = results.promise_cluster.combinators[0].derived;
+    results.promise_cluster.combinators[0].results = results.promise_cluster.promises[0].owner;
     expect_container_refusal(&results, "promise cluster: combinator's results Array has no row");
 }
 
@@ -719,6 +719,23 @@ fn a_crafted_combine_element_shape_is_refused() {
     r.b = u32::MAX;
     expect_container_refusal(&oor, "promise cluster: element index outside the results Array");
 
+    // A kind-byte mutation cannot turn an ordinary queued reaction into a
+    // synchronous callback. A direct callback must carry the private bridge's
+    // exact resolving pair, both naming its owning promise row.
+    let mut direct = image.clone();
+    direct
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 2)
+        .expect("a queued element reaction")
+        .kind = 12;
+    expect_container_refusal(
+        &direct,
+        "promise cluster: malformed direct combinator callback",
+    );
+
     // A duplicate (combinator, element) pair: draining both counts one
     // element twice, settling the combinator short of its total.
     let mut dup = image;
@@ -737,55 +754,31 @@ fn a_crafted_combine_element_shape_is_refused() {
 }
 
 #[test]
-fn a_combinator_done_state_that_disagrees_with_its_derived_promise_is_refused() {
-    // No `.then` on the combinator, so the derived promise carries no
-    // reactions and the settled-retains-reactions gate stays out of
-    // the way — isolating the done/derived-state cross-check.
-    let m = quiescent_machine(
-        "var p1 = 0; var p2 = 0; var r1 = 0; var r2 = 0; var all = 0; var t = 0; \
-         p1 = new Promise(function (rs, rj) { r1 = rs; }); \
-         p2 = new Promise(function (rs, rj) { r2 = rs; }); \
-         all = Promise.all([p1, p2]); t = 7; t",
-    );
+fn a_crafted_combinator_capability_is_refused() {
+    use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+
+    let m = combinator_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
-    let mut image = read_machine(&bytes, &sig()).expect("reads");
-    let derived = image.promise_cluster.combinators[0].derived;
-    assert!(
-        !image.promise_cluster.combinators[0].done,
-        "the fixture's combinator is mid-flight"
-    );
-    let derived_row = image
-        .promise_cluster
-        .promises
-        .iter()
-        .position(|p| p.owner == derived)
-        .expect("the derived promise's row");
-    // Fulfilled — but `done` never latched, so the drain would
-    // RE-settle it.
-    image.promise_cluster.promises[derived_row].state = 1;
+    let image = read_machine(&bytes, &sig()).expect("reads");
+
+    // Capability callbacks are reference-shaped in the atom itself.
+    let mut primitive = image.clone();
+    primitive.promise_cluster.combinators[0].resolve = Slot::undefined();
     expect_container_refusal(
-        &image,
-        "promise cluster: combinator done state disagrees with derived promise",
+        &primitive,
+        "promise cluster: combinator capability names no function",
     );
 
-    // The converse strands the derived promise: every surviving
-    // element reaction observes `done` and returns without settling it.
-    image.promise_cluster.promises[derived_row].state = 0;
-    image.promise_cluster.combinators[0].done = true;
+    // Cross-atom restoration must then prove actual callability after `FUNC`
+    // has restored guest functions. An Array reference is bounded but cannot
+    // serve as the callback the pending element reaction will invoke.
+    let mut non_callable = image;
+    let array = non_callable.arrays[0].owner;
+    non_callable.promise_cluster.combinators[0].reject =
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(array)));
     expect_container_refusal(
-        &image,
-        "promise cluster: combinator done state disagrees with derived promise",
-    );
-
-    // Once done and settlement agree, the remaining counter must still
-    // cover every pending element reaction. Completion only causes
-    // future reactions to short-circuit; it never rewrites the counter
-    // below the number that survive in the snapshot.
-    image.promise_cluster.promises[derived_row].state = 1;
-    image.promise_cluster.combinators[0].remaining = 0;
-    expect_container_refusal(
-        &image,
-        "promise cluster: remaining below its pending reactions",
+        &non_callable,
+        "side-table restore: malformed promise capability",
     );
 }
 
