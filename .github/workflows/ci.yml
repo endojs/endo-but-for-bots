@@ -53,6 +53,12 @@ jobs:
 
       # end macro
 
+      - name: Lint kebab-case file names
+        run: bash scripts/lint-kebab-case-file-names.sh
+
+      - name: Test kebab-case file-name linter
+        run: bash scripts/lint-kebab-case-file-names.test.sh
+
       - name: Run yarn build
         run: yarn build
 
