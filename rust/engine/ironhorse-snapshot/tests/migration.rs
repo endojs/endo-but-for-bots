@@ -1,8 +1,7 @@
-//! Cross-version migration locks: the committed v5 fixtures (frozen
-//! before the v6 root-tree bump) must open, migrate in place, verify,
-//! and resume under current code. These tests are the reason the
-//! fixtures exist; `migration_fixtures.rs` documents how they were
-//! frozen and pins the crank sources/results this file re-asserts.
+//! Store-schema migration locks for committed v5 fixtures. These exercise the
+//! storage ladder under the fixture's own legacy engine signature; ordinary
+//! current callers use `Signature::new`, whose engine-owned boot generation
+//! rejects these pre-current-boot fixtures before machine adoption.
 
 mod common;
 mod migration_fixtures;
@@ -19,7 +18,7 @@ use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::{Signature, SnapshotError};
 
 fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
+    Signature::decode(b"ironhorse-worker-v1").expect("frozen fixture signature")
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {

@@ -1,9 +1,8 @@
-//! Cross-version migration lock, SQLite backend: the committed v5
-//! fixture (frozen before the v6 root-tree bump) must open, migrate
-//! in place inside `SqliteHeapStore::open`, verify against the v6
-//! root, resume, and continue its commit chain under current code.
-//! `migration_fixtures.rs` documents how the fixture was frozen and
-//! pins the crank sources/results re-asserted here.
+//! Store-schema migration lock for the SQLite backend. This exercises the
+//! ladder under the committed v5 fixture's own legacy engine signature;
+//! ordinary current callers use `Signature::new`, whose engine-owned boot
+//! generation rejects this pre-current-boot fixture before machine adoption.
+//! `migration_fixtures.rs` documents how the fixture was frozen.
 
 mod common;
 
@@ -25,7 +24,7 @@ const READ_CRANK: &str = "var keep; var g; var i; var t; \
 const READ_RESULT: &str = "3";
 
 fn sig() -> Signature {
-    Signature::new("ironhorse-worker-v1")
+    Signature::decode(b"ironhorse-worker-v1").expect("frozen fixture signature")
 }
 
 #[test]
