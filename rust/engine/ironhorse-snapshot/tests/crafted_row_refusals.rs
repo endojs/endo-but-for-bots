@@ -427,6 +427,15 @@ fn combinator_fixture() -> Interp {
     )
 }
 
+/// A callable `finally` whose returned promise is still pending after the job
+/// drain, leaving one honest `FinallyAwait` row in the promise cluster.
+fn finally_await_fixture() -> Interp {
+    quiescent_machine(
+        "var release = 0; var gate = new Promise(function (rs) { release = rs; }); \
+         Promise.resolve(5).finally(function () { return gate; }); 0",
+    )
+}
+
 fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
     let crafted = write_machine(image);
     match from_snapshot_bytes(&crafted, &sig()) {
@@ -459,6 +468,22 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         ))) => {}
         other => panic!("the store path must share the reaction-kind gate: {other:?}"),
     }
+}
+
+#[test]
+fn a_finally_await_reaction_requires_a_boolean_payload() {
+    let m = finally_await_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let reaction = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 11)
+        .expect("the fixture holds a pending FinallyAwait reaction");
+    reaction.a = 2;
+    expect_container_refusal(&image, "promise cluster: unused reaction payload not zero");
 }
 
 #[test]
@@ -666,7 +691,7 @@ fn a_combinator_done_state_that_disagrees_with_its_derived_promise_is_refused() 
     );
 }
 
-/// The capability-graph review round: a `User`/`FinallyReturn`
+/// The capability-graph review round: a `User`/`FinallyReturn`/`FinallyAwait`
 /// reaction's capability must be ONE resolving pair (the drain
 /// recovers the derived promise through `resolve` alone, so a
 /// cross-wired capability silently settles whatever the crafted slot

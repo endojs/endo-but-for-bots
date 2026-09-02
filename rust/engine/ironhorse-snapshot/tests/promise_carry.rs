@@ -259,6 +259,27 @@ fn a_finally_reaction_passes_through_across_the_split() {
     );
 }
 
+/// The second half of `finally` crosses the split too: `onFinally` has run and
+/// returned a still-pending promise, so the carried `FinallyAwait` reaction
+/// must retain both the original settlement and the derived capability until
+/// the returned promise settles after resume.
+#[test]
+fn a_finally_await_reaction_restores_the_original_value_after_resume() {
+    assert_twin(
+        "ih-prms-finally-await",
+        "var gate = 0; var release = 0; var g = 0; var t = 0; \
+         gate = new Promise(function (rs) { release = rs; }); \
+         Promise.resolve(5).finally(function () { return gate; }) \
+          .then(function (v) { g = 'v:' + v; }, function (e) { g = 'e:' + e; }); \
+         t = 7; t",
+        &[
+            "var gate; var release; var g; var t; release(9); 0",
+            "var gate; var release; var g; var t; g",
+        ],
+        &[(true, "0"), (true, "v:5")],
+    );
+}
+
 /// The unhandled-rejection latch (`ever_handled`) travels: a rejection
 /// nothing observed stays reportable after the split, and a late
 /// `.catch` both reads the stored reason and clears the report — on
