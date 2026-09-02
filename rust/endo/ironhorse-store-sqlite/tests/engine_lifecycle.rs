@@ -673,6 +673,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
+                 q.join('|') + ':' + \
                  Array.prototype.slice.name + ':' + Array.prototype.slice.length + ':' + \
                  g[0] + ':' + g.length + ':' + \
                  Array.prototype.concat.name + ':' + Array.prototype.concat.length + ':' + \
@@ -684,7 +685,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:1||3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2"
     );
 }
 
