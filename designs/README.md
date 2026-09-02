@@ -494,7 +494,7 @@ The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root
 
 The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
 
-The 2026-09-02 rebase adds [guest-native-invitations](guest-native-invitations.md) (Not Started), increasing Not Started from 49 to 50 and the design count from 196 to 197.
+The 2026-09-02 rebase adds [guest-native-invitations](guest-native-invitations.md) (Not Started), increasing Not Started from 49 to 50 and the summary table from 199 to 200 rows (the authoritative 2026-08-29 totals block counts 196 designs; the difference from these row counts is the pre-existing reconciliation the totals block records, and this rebase adds exactly one row to it).
 
 ## Roadmap
 
@@ -763,8 +763,10 @@ flowchart TD
         adeep[familiar-deep-link-invitations<br/><i>PROPOSED</i>]
         ashare[endo-app-sharing<br/><i>PROPOSED</i>]
         auihost[familiar-app-ui-hosting<br/><i>PROPOSED</i>]
+        guestinv[guest-native-invitations<br/><i>NOT STARTED</i>]
         onoise --> adeep
         dnet --> adeep
+        guestinv --> adeep
         adeep --> aship
         exozip --> ashare
         dci --> ashare
@@ -1171,7 +1173,8 @@ deep-link -> P2 app + sandboxed UI -> P3 clone).
 | Design | Status | Pillar | Notes |
 |--------|--------|--------|-------|
 | app-sharing-milestone | Proposed | — | Milestone roadmap doc; verified current state + P0-P3 plan |
-| familiar-deep-link-invitations | Proposed | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete) |
+| familiar-deep-link-invitations | Proposed | 2 — connect peers | New: `endo://` capture in shell -> Chat confirm + naming modal -> `host.accept` (daemon `invite`/`accept` already Complete on the host facet; may move to the guest facet per guest-native-invitations) |
+| guest-native-invitations | Not Started | 2 — connect peers | New: `invite`/`accept` on `EndoGuest` so a guest onboards another guest with its own authority (accept-as-own-handle, no minted replacement guest); enables the deep-link consumer to route through the inviting guest instead of borrowing host authority |
 | endo-app-sharing | Proposed | 3 — make & share apps | New: app handle (source + exec + ui + `cloneable`); cross-daemon clone as a single streamed tree-archive into a pluggable durable backing (default zip) vs remote reference — no per-blob hashing |
 | familiar-app-ui-hosting | Proposed | 3 — sandboxed UI | New: app UI manifest + sandbox tiers (`isolated`/`connected`/`trusted`) over the weblet substrate |
 | ~~familiar-electron-shell~~ | **Complete** | 1 — distributable | The shell being distributed (counted under M1) |
