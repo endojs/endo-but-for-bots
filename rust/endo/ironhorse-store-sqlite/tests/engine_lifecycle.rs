@@ -636,7 +636,8 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
     let last = carry_scenario(
         "carry-array-sort",
          "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
-         Array.prototype.slice; a.slice; Array.prototype.concat; a.concat; \
+         Array.prototype.slice; a.slice; Array.prototype.splice; \
+         Array.prototype.concat; a.concat; \
          Array.prototype.push; Array.prototype.pop; \
          Array.prototype.shift; Array.prototype.unshift; \
          Array.prototype.with; Array.prototype.toReversed; \
@@ -665,6 +666,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              Array.prototype.sort.call(inst, function (x, y) { return x - y; }); \
              g = []; Reflect.set(inst, '0', 7, g); \
              q = q.slice(0, 3); \
+             s = Array.prototype.splice.call(q, 1, 1, 8, 9); \
              f = {length: 4294967297}; f[4294967296] = 5; \
              b = {length: 0}; Array.prototype.push.call(b, 6, 7); \
              h = {0: 2, length: 1}; Array.prototype.unshift.call(h, 1); \
@@ -673,7 +675,8 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
-                 q.join('|') + ':' + \
+                 q.join('|') + ':' + s.length + ':' + \
+                 Object.prototype.hasOwnProperty.call(s, 0) + ':' + \
                  Array.prototype.slice.name + ':' + Array.prototype.slice.length + ':' + \
                  g[0] + ':' + g.length + ':' + \
                  Array.prototype.concat.name + ':' + Array.prototype.concat.length + ':' + \
@@ -685,7 +688,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:1||3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:true:9:1|8|9|3:1:false:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2"
     );
 }
 
