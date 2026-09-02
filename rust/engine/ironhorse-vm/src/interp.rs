@@ -29022,31 +29022,29 @@ impl Interp {
                 self.object_assign(code, arg0, &sources)?
             }
             NativeMethod::ObjectFromEntries => self.object_from_entries(code, arg0)?,
-            // `Object.keys(o)`: a fresh `Array` of `o`'s own enumerable
-            // string-keyed property names, in creation order (XS's
-            // `fxOwnKeys` filtered to enumerable string keys, then wrapped in
-            // an array). Covered for ordinary objects; an exotic receiver
-            // (array/typed-array/collection/wrapper/error — whose own-key set
-            // includes indices/length or internal names) honest-skips.
+            // `Object.keys(o)`: `EnumerableOwnProperties(O, key)` over the
+            // receiver's complete MOP, including primitive wrappers, arrays,
+            // TypedArrays, and proxies.
             NativeMethod::ObjectKeys => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) => o,
-                    _ => return Err(Halt::Unsupported("Object.keys:non-object")),
+                let object = self.array_to_object(arg0)?;
+                let Payload::Reference(inst) = object.value else {
+                    unreachable!("ToObject returns a reference")
                 };
-                if self.arrays.contains_key(&inst)
-                    || self.collections.contains_key(&inst)
-                    || self.typed_arrays.contains_key(&inst)
-                    || self.array_buffers.contains_key(&inst)
-                    || self.data_views.contains_key(&inst)
-                    || self.wrapper_data.contains_key(&inst)
-                {
-                    return Err(Halt::Unsupported("Object.keys:exotic-object"));
+                let own_keys = self.mop_own_keys(code, inst)?;
+                let mut keys = Vec::new();
+                for key in own_keys {
+                    if key.kind != Kind::String {
+                        continue;
+                    }
+                    let id = self.to_property_id(code, key)?;
+                    if self
+                        .mop_get_own_property(code, inst, id)?
+                        .is_some_and(|descriptor| descriptor.enumerable == Some(true))
+                    {
+                        keys.push(key);
+                    }
                 }
-                let ids = match self.own_enumerable_ids(inst) {
-                    Some(v) => v,
-                    None => return Err(Halt::Unsupported("Object.keys:unclassified-property")),
-                };
-                let n = ids.len() as u32;
+                let n = keys.len() as u32;
                 // The fixed native frame + `fxNewArray(0)` base, the result
                 // array's item chunk grown once to hold `n` slots, and one
                 // `fxNewSlot` (the key-name string slot) per key. The key name
@@ -29057,18 +29055,7 @@ impl Interp {
                 for _ in 0..n {
                     self.meter.tick_slot_alloc();
                 }
-                let result = self.slots.alloc(Slot::instance(self.array_proto));
-                let mut data = ArrayData::default();
-                data.length = n;
-                for (i, &id) in ids.iter().enumerate() {
-                    let name = self
-                        .string_key_name(id)
-                        .ok_or(Halt::Unsupported("Object.keys:unknown-key"))?;
-                    let off = self.alloc_str_text(name.as_bytes());
-                    data.insert_item(i as u32, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
-                }
-                self.arrays.insert(result, data);
-                Slot::of(Kind::Reference, Payload::Reference(result))
+                self.array_from_slots(&keys)
             }
             // `Object.getOwnPropertyDescriptor(o, k)`: the data descriptor
             // object for `o`'s own property `k`, or `undefined` if absent.
@@ -29225,13 +29212,10 @@ impl Interp {
                 }
             }
             NativeMethod::ObjectGetOwnPropertyNames => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) => o,
-                    _ => return Err(Halt::Unsupported("getOwnPropertyNames:non-object")),
+                let object = self.array_to_object(arg0)?;
+                let Payload::Reference(inst) = object.value else {
+                    unreachable!("ToObject returns a reference")
                 };
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("getOwnPropertyNames:exotic-object"));
-                }
                 let keys: Vec<Slot> = self
                     .mop_own_keys(code, inst)?
                     .into_iter()
@@ -29297,25 +29281,19 @@ impl Interp {
                 arg0
             }
             NativeMethod::ObjectGetOwnPropertySymbols => {
-                let object = match arg0.value {
-                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
-                    _ => {
-                        return Err(Halt::Throw(
-                            "TypeError: getOwnPropertySymbols target".into(),
-                        ))
-                    }
+                let value = self.array_to_object(arg0)?;
+                let Payload::Reference(object) = value.value else {
+                    unreachable!("ToObject returns a reference")
                 };
-                let ids: Vec<u16> = self
-                    .own_property_slots(object)
+                let keys: Vec<Slot> = self
+                    .mop_own_keys(code, object)?
                     .into_iter()
-                    .map(|property| self.slots.get(property).id)
-                    .filter(|id| self.is_symbol_key_id(*id))
+                    .filter(|key| key.kind == Kind::Symbol)
                     .collect();
                 let result = self.new_array_unmetered();
                 let mut data = ArrayData::default();
-                for (index, id) in ids.into_iter().enumerate() {
-                    let key_slot = self.property_key_slot(id)?;
-                    data.insert_item(index as u32, key_slot, &mut self.side_refs);
+                for (index, key) in keys.into_iter().enumerate() {
+                    data.insert_item(index as u32, key, &mut self.side_refs);
                 }
                 data.length = data.items().len() as u32;
                 self.arrays.insert(result, data);
@@ -29571,47 +29549,32 @@ impl Interp {
                         .is_some_and(|descriptor| descriptor.enumerable == Some(true)),
                 )
             }
-            // `Object.values(o)` / `Object.entries(o)`: a fresh `Array` of the
-            // own enumerable string-keyed values (or `[key, value]` pairs), in
-            // creation order. Ordinary receivers only — an exotic one skips.
+            // `Object.values(o)` / `Object.entries(o)`: the value and key-value
+            // forms of `EnumerableOwnProperties`, using a snapshotted key list
+            // but live descriptors and Gets for each key.
             NativeMethod::ObjectValues | NativeMethod::ObjectEntries => {
                 let entries = matches!(m, NativeMethod::ObjectEntries);
-                let inst = match arg0.value {
-                    Payload::Reference(o) => o,
-                    _ => {
-                        return Err(Halt::Unsupported(if entries {
-                            "Object.entries:non-object"
-                        } else {
-                            "Object.values:non-object"
-                        }))
-                    }
+                let object = self.array_to_object(arg0)?;
+                let Payload::Reference(inst) = object.value else {
+                    unreachable!("ToObject returns a reference")
                 };
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported(if entries {
-                        "Object.entries:exotic-object"
-                    } else {
-                        "Object.values:exotic-object"
-                    }));
-                }
-                let ids = match self.own_enumerable_ids(inst) {
-                    Some(v) => v,
-                    None => {
-                        return Err(Halt::Unsupported(if entries {
-                            "Object.entries:unclassified-property"
-                        } else {
-                            "Object.values:unclassified-property"
-                        }))
+                let own_keys = self.mop_own_keys(code, inst)?;
+                let mut properties = Vec::new();
+                for key in own_keys {
+                    if key.kind != Kind::String {
+                        continue;
                     }
-                };
-                // Read each value now (the property chain is stable across the
-                // result build). An accessor own property would need a getter
-                // invocation; `own_enumerable_ids` already skips such objects.
-                let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
-                let mut values = Vec::with_capacity(ids.len());
-                for &id in &ids {
-                    values.push(self.ordinary_get(code, inst, id, receiver)?);
+                    let id = self.to_property_id(code, key)?;
+                    if !self
+                        .mop_get_own_property(code, inst, id)?
+                        .is_some_and(|descriptor| descriptor.enumerable == Some(true))
+                    {
+                        continue;
+                    }
+                    let value = self.mop_get(code, inst, id, object)?;
+                    properties.push((key, value));
                 }
-                let n = ids.len() as u32;
+                let n = properties.len() as u32;
                 self.meter.tick_raw(if entries {
                     OBJECT_ENTRIES_FRAME_METERING
                 } else {
@@ -29621,7 +29584,7 @@ impl Interp {
                 let result = self.slots.alloc(Slot::instance(self.array_proto));
                 let mut data = ArrayData::default();
                 data.length = n;
-                for (i, (&id, val)) in ids.iter().zip(values.iter()).enumerate() {
+                for (i, (key, val)) in properties.iter().enumerate() {
                     if entries {
                         self.meter.tick_raw(OBJECT_ENTRIES_PER_KEY_METERING);
                         // A `[key, value]` two-element array per own key.
@@ -29629,14 +29592,10 @@ impl Interp {
                         for _ in 0..2 {
                             self.meter.tick_slot_alloc();
                         }
-                        let name = self
-                            .string_key_name(id)
-                            .ok_or(Halt::Unsupported("Object.entries:unknown-key"))?;
-                        let off = self.alloc_str_text(name.as_bytes());
                         let pair = self.slots.alloc(Slot::instance(self.array_proto));
                         let mut pd = ArrayData::default();
                         pd.length = 2;
-                        pd.insert_item(0, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
+                        pd.insert_item(0, *key, &mut self.side_refs);
                         pd.insert_item(1, *val, &mut self.side_refs);
                         self.arrays.insert(pair, pd);
                         data.insert_item(i as u32, Slot::of(Kind::Reference, Payload::Reference(pair)), &mut self.side_refs);
@@ -29650,16 +29609,12 @@ impl Interp {
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             // `Object.getOwnPropertyDescriptors(o)`: a fresh object mapping
-            // each own property key to its full data descriptor. Ordinary
-            // receivers with ordinary data properties only.
+            // every own string or symbol key to its complete descriptor.
             NativeMethod::ObjectGetOwnPropertyDescriptors => {
-                let inst = match arg0.value {
-                    Payload::Reference(o) => o,
-                    _ => return Err(Halt::Unsupported("getOwnPropertyDescriptors:non-object")),
+                let object = self.array_to_object(arg0)?;
+                let Payload::Reference(inst) = object.value else {
+                    unreachable!("ToObject returns a reference")
                 };
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("getOwnPropertyDescriptors:exotic-object"));
-                }
                 let keys = self.mop_own_keys(code, inst)?;
                 let mut props: Vec<(u16, OrdinaryDescriptor)> = Vec::with_capacity(keys.len());
                 for key in keys {
@@ -32395,89 +32350,22 @@ impl Interp {
                     Ok(Slot::boolean(true))
                 }
             }
-            // `Reflect.ownKeys(target)`: a fresh `Array` of ALL own string keys
-            // (enumerable or not), in creation order. Ordinary receivers with
-            // string keys only; an exotic object or an unclassifiable key
-            // self-names.
+            // `Reflect.ownKeys(target)`: a fresh Array containing the target's
+            // complete `[[OwnPropertyKeys]]` result, including exotic indices,
+            // non-enumerable strings, symbols, and proxy trap results.
             NativeMethod::ReflectOwnKeys => {
                 let inst = match arg0.value {
                     Payload::Reference(o) if arg0.kind == Kind::Reference => o,
                     _ => return Err(Halt::Unsupported("Reflect.ownKeys:non-object")),
                 };
-                // The integer-indexed exotic `[[OwnPropertyKeys]]` (10.4.5.6):
-                // every in-range integer index (ascending, as a string) first,
-                // then the ordinary own string keys (non-index), then the own
-                // symbol keys.
-                if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    let element_count = ta.length;
-                    let mut ids: Vec<u16> = self
-                        .own_property_slots(inst)
-                        .into_iter()
-                        .map(|property| self.slots.get(property).id)
-                        .collect();
-                    ids.sort_by_key(|id| {
-                        if self.is_symbol_key_id(*id) {
-                            (1u8, 0)
-                        } else {
-                            (0u8, 0)
-                        }
-                    });
-                    let n = element_count + ids.len() as u32;
-                    self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
-                    self.meter.tick_raw(self.array_chunk_size_metering(n));
-                    for _ in 0..n {
-                        self.meter.tick_slot_alloc();
-                    }
-                    let mut items: Vec<Slot> = Vec::with_capacity(n as usize);
-                    for i in 0..element_count {
-                        let off = self.alloc_str_text(number_to_ecma_string(i as f64).as_bytes());
-                        items.push(Slot::of(Kind::String, Payload::String(off)));
-                    }
-                    for &id in &ids {
-                        items.push(self.property_key_slot(id)?);
-                    }
-                    let result = self.slots.alloc(Slot::instance(self.array_proto));
-                    let mut data = ArrayData::default();
-                    data.length = n;
-                    for (i, slot) in items.into_iter().enumerate() {
-                        data.insert_item(i as u32, slot, &mut self.side_refs);
-                    }
-                    self.arrays.insert(result, data);
-                    return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
-                }
-                if !self.is_ordinary_object(inst) {
-                    return Err(Halt::Unsupported("Reflect.ownKeys:exotic-object"));
-                }
-                let mut ids: Vec<u16> = self
-                    .own_property_slots(inst)
-                    .into_iter()
-                    .map(|property| self.slots.get(property).id)
-                    .collect();
-                ids.sort_by_key(|id| {
-                    if self.is_symbol_key_id(*id) {
-                        (2u8, 0)
-                    } else {
-                        self.string_key_name(*id)
-                            .and_then(|name| string_to_index(&name))
-                            .map(|index| (0u8, index))
-                            .unwrap_or((1u8, 0))
-                    }
-                });
-                let n = ids.len() as u32;
+                let keys = self.mop_own_keys(code, inst)?;
+                let n = keys.len() as u32;
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
                 self.meter.tick_raw(self.array_chunk_size_metering(n));
                 for _ in 0..n {
                     self.meter.tick_slot_alloc();
                 }
-                let result = self.slots.alloc(Slot::instance(self.array_proto));
-                let mut data = ArrayData::default();
-                data.length = n;
-                for (i, &id) in ids.iter().enumerate() {
-                    let key_slot = self.property_key_slot(id)?;
-                    data.insert_item(i as u32, key_slot, &mut self.side_refs);
-                }
-                self.arrays.insert(result, data);
-                Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
+                Ok(self.array_from_slots(&keys))
             }
             // `Reflect.has(target, key)`: the `key in target` chain walk as a
             // boolean (same soundness gate as `XS_CODE_IN`).
@@ -42421,46 +42309,6 @@ impl Interp {
             cur = s.next;
         }
         None
-    }
-
-    /// The ids of `inst`'s own enumerable string-keyed data properties, in
-    /// property-creation (insertion) order — XS's `fxOwnKeys` ordering for an
-    /// ordinary object with no integer-index keys. Returns `None` if the
-    /// object carries a property ironhorse cannot classify for enumeration (a
-    /// non-zero property flag — a non-enumerable / accessor / internal slot —
-    /// or an id with no program-symbol name), so the caller honest-skips
-    /// rather than emit a wrong key set.
-    fn own_enumerable_ids(&self, inst: crate::value::SlotIndex) -> Option<Vec<u16>> {
-        let mut ids = Vec::new();
-        let mut cur = self.slots.get(inst).next;
-        while !cur.is_null() {
-            let s = self.slots.get(cur);
-            // A symbol-keyed property is excluded from `Object.keys` (the
-            // string-key enumeration) — skip it, keeping the string keys.
-            if self.is_symbol_key_id(s.id) {
-                cur = s.next;
-                continue;
-            }
-            // A non-enumerable data property (an `Object.defineProperty` with
-            // `enumerable:false`) is present but excluded from the key set;
-            // an enumerable one — flag 0 or carrying only `writable`/
-            // `configurable`-false bits — is included in creation order.
-            if s.flag & XS_DONT_ENUM_FLAG == 0 {
-                if self.string_key_name(s.id).is_none() {
-                    return None;
-                }
-                ids.push(s.id);
-            }
-            cur = s.next;
-        }
-        ids.reverse();
-        ids.sort_by_key(|id| {
-            self.string_key_name(*id)
-                .and_then(|name| string_to_index(&name))
-                .map(|index| (0u8, index))
-                .unwrap_or((1u8, 0))
-        });
-        Some(ids)
     }
 
     /// Whether `inst` is an *ordinary* object — one whose whole own-property
