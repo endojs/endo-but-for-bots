@@ -215,7 +215,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // symbol-keyed property remains lazy; format unchanged.
         // Re-pinned 2026-09-02 for the fourteen Date calendar/time setter
         // natives added to the boot heap. Format unchanged.
-        "a928f228f56f0e3f98d78fbd14f83b7875cd544a522b3e55803f15eaa10588f0",
+        // Re-pinned 2026-09-02 because Array.prototype.join is now installed
+        // as an implicit dependency of ordinary Array string coercion. Boot
+        // heap content only; format unchanged.
+        "6313394ecc7525fd09bed44e2c17689323335cefa7d08cdae10a35e559dc6391",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -358,7 +361,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // remain unchanged.
         // Re-pinned with the blob for the Date setter native functions.
         // Schema and format remain unchanged.
-        "00cd2d51dfa9b7842c9bdfacb85c4006a645df21cc0bf5cba12079b662b371a0",
+        // Re-pinned with the blob for the implicit Array.prototype.join
+        // installation. Schema and format remain unchanged.
+        "9024f1492e2eafbd81b5b66e35bb74aa6ed619ea48b65f1b717a20e3d1460b96",
         "epoch-3 seal chain"
     );
 }

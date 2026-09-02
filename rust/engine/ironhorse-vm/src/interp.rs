@@ -7750,15 +7750,16 @@ impl Interp {
         // restored `symbol_names` without re-linking intrinsics (the
         // SymbolTables ledger row's restore-time rebuild).
         self.bind_program_symbols(names);
-        let array_to_string_linked = self.symbol_ids.contains_key("toString");
         // OrdinaryToPrimitive reaches these properties implicitly even when
         // the guest never names either one (for example, `String(new
-        // Number(3))`). They are XS boot default keys, so assigning realm ids
-        // here is unmetered. Include them in the full install's input/floor so
-        // their intrinsic prototype methods are present from realm creation
-        // and a later partial relink cannot resurrect a guest deletion.
+        // Number(3))`). Array's inherited `toString` in turn reaches `join`.
+        // They are XS boot default keys, so assigning realm ids here is
+        // unmetered. Include them in the full install's input/floor so their
+        // intrinsic prototype methods are present from realm creation and a
+        // later partial relink cannot resurrect a guest deletion.
         self.intern_key("toString");
         self.intern_key("valueOf");
+        self.intern_key("join");
         // ArraySpeciesCreate performs an implicit `Get(original,
         // "constructor")` for Array receivers. Reify the boot-default key
         // before fixing the installed-name floor whenever an allocating
@@ -7770,13 +7771,6 @@ impl Interp {
             .any(|name| self.symbol_ids.contains_key(*name))
         {
             self.intern_key("constructor");
-        }
-        // Array.prototype.toString performs an implicit Get of `join`.
-        // Establish that boot dependency during the initial link so a later
-        // guest deletion cannot be mistaken for a never-installed method and
-        // resurrected by a partial relink or generic fallback.
-        if array_to_string_linked {
-            self.intern_key("join");
         }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, true, |_| true);
@@ -12238,6 +12232,39 @@ impl Interp {
                     // indexed element storage is unchanged.
                     if op == XS_CODE_ARGUMENTS_SLOPPY || op == XS_CODE_ARGUMENTS_STRICT {
                         self.arguments_objects.insert(array);
+                        // Compact indexed storage is independent of the
+                        // language-visible prototype. Arguments objects start
+                        // on `%Object.prototype%`; keeping that prototype in
+                        // the instance slot also lets an explicit later
+                        // `%Array.prototype%` assignment expose inherited
+                        // Array methods normally.
+                        self.slots.get_mut(array).value = Payload::Reference(self.object_proto);
+                        // CreateMappedArgumentsObject and
+                        // CreateUnmappedArgumentsObject both install an own
+                        // @@iterator whose value is Array.prototype.values.
+                        // The former inherited implementation happened to
+                        // expose that method through the storage prototype;
+                        // reify the required own property now that storage and
+                        // language prototypes are distinct.
+                        if let Some(iterator_id) =
+                            self.well_known_symbol_property_id("iterator")
+                        {
+                            let values = self
+                                .proto_methods
+                                .iter()
+                                .find(|(holder, name, _)| {
+                                    *holder == self.array_proto && *name == "values"
+                                })
+                                .map(|(_, _, method)| *method);
+                            if let Some(values) = values {
+                                self.set_own_unmetered_with_flag(
+                                    array,
+                                    iterator_id,
+                                    Slot::of(Kind::Reference, Payload::Reference(values)),
+                                    XS_DONT_ENUM_FLAG,
+                                );
+                            }
+                        }
                         // Unlike an Array's exotic, non-configurable `length`,
                         // an arguments object's `length` is an ordinary own data
                         // property: writable and configurable, but not
@@ -28343,6 +28370,16 @@ impl Interp {
             // later increment). Allocates the result string chunk.
             NativeMethod::ObjectToString => {
                 self.meter.tick_raw(METHOD_OBJECT_TOSTRING_METERING);
+                // IsArray precedes Get(@@toStringTag) in
+                // Object.prototype.toString. Retain the result because a tag
+                // getter can observably revoke a Proxy after its Array brand
+                // has already been determined.
+                let is_array = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => {
+                        self.array_generic_is_array(r)?
+                    }
+                    _ => false,
+                };
                 // A `Symbol.toStringTag` string on the receiver's chain wins
                 // (`Object.prototype.toString` step 15). Only the Intl
                 // formatter/segmenter objects carry one in the frozen profile —
@@ -28375,12 +28412,6 @@ impl Interp {
                             }
                         }),
                         _ => None,
-                    };
-                    let is_array = match this.value {
-                        Payload::Reference(r) if this.kind == Kind::Reference => {
-                            self.array_generic_is_array(r)?
-                        }
-                        _ => false,
                     };
                     let text: &[u8] = match this.value {
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
@@ -36303,20 +36334,7 @@ impl Interp {
             unreachable!("ToObject result")
         };
         let join_id = self.intern_key("join");
-        // Arguments objects use the compact Array side table internally, and
-        // therefore carry `%Array.prototype%` as a storage implementation
-        // detail. Their language prototype is `%Object.prototype%`: do not
-        // expose Array.prototype.join unless the guest explicitly changed the
-        // prototype, while still observing an own `join` and Object-prototype
-        // accessors with the arguments object as receiver.
-        let join = if self.arguments_objects.contains(&inst)
-            && self.instance_prototype(inst) == self.array_proto
-            && self.find_property(inst, join_id).is_none()
-        {
-            self.ordinary_get(code, self.object_proto, join_id, object)?
-        } else {
-            self.mop_get(code, inst, join_id, object)?
-        };
+        let join = self.mop_get(code, inst, join_id, object)?;
         if self.is_callable_value(join) {
             return self.call_any(code, join, object, &[]);
         }
