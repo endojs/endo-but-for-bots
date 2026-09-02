@@ -785,6 +785,178 @@ test('recovery cancels revoked-factory runs before effect rearm', async t => {
   t.is(calls, 1, 'the hazardous invoke was not rearmed before cancellation');
 });
 
+test('failed live revocation quarantines settlements until a retry', async t => {
+  const { powers } = makeFakeAgent();
+  let crashArmed = false;
+  const wrapped = crashingPowers(
+    powers,
+    value => crashArmed && value.event?.type === 'cancel-requested',
+  );
+  const harness = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('live'),
+  });
+  t.teardown(harness.stop);
+  let finish;
+  let calls = 0;
+  const worker = Far('DeferredHazardousWorker', {
+    perform: async _effectId => {
+      calls += 1;
+      return new Promise(resolve => {
+        finish = resolve;
+      });
+    },
+  });
+  const chart = harden({
+    name: 'live-revocation-failure',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'worker',
+            method: 'perform',
+            outcome: 'worked',
+          },
+        ],
+        on: {
+          worked: [{ target: 'unsafe' }],
+          'cancel-requested': [{ target: 'safe' }],
+        },
+      },
+      unsafe: { final: true },
+      safe: { final: true, output: { status: 'revoked-safe' } },
+    },
+  });
+  const { factory } = await E(harness.service).makeFactory({
+    chart,
+    endowments: harden({ worker }),
+  });
+  const { runId } = await E(factory).start({});
+  const engine = harness.engines.get(runId);
+  await until(() => engine.fold.pending.size === 1, 'invoke pending');
+  t.is(calls, 1);
+
+  crashArmed = true;
+  await t.throwsAsync(() => E(factory).revoke('injected write failure'), {
+    message: /simulated crash/,
+  });
+  crashArmed = false;
+  finish('hazard completed after failed revocation');
+  await settle();
+  t.false(engine.fold.done);
+  t.is(engine.fold.configuration.state, 'working');
+  t.is(engine.fold.pending.size, 1);
+
+  await E(factory).revoke('retry');
+  t.true(engine.fold.done);
+  t.deepEqual(engine.fold.output, { status: 'revoked-safe' });
+  t.is(calls, 1);
+});
+
+test('partial descendant revocation denies starts until a retry', async t => {
+  const { powers } = makeFakeAgent();
+  let crashArmed = false;
+  /** @type {string | undefined} */
+  let blockedFid;
+  const wrapped = crashingPowers(
+    powers,
+    value => crashArmed && value.revoked === true && value.fid === blockedFid,
+  );
+  const harness = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('records'),
+  });
+  t.teardown(harness.stop);
+  const chart = harden({
+    name: 'factory-record-failure',
+    version: 1,
+    initial: 'done',
+    states: { done: { final: true } },
+  });
+  const { factory } = await E(harness.service).makeFactory({ chart });
+  const derived = await E(factory).with({});
+  blockedFid = (await E(derived).describe()).fid;
+
+  crashArmed = true;
+  await t.throwsAsync(() => E(factory).revoke('injected record failure'), {
+    message: /simulated crash/,
+  });
+  await t.throwsAsync(() => E(derived).start({}), {
+    message: /is revoked/,
+  });
+
+  crashArmed = false;
+  await E(factory).revoke('retry');
+  t.true((await E(derived).describe()).revoked);
+});
+
+test('handled cancellation durably suppresses later child spawns', async t => {
+  const { powers, controls } = makeFakeAgent();
+  const h1 = await makeWorkflowService({
+    powers,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('before'),
+  });
+  const childChart = harden({
+    name: 'must-not-start',
+    version: 1,
+    initial: 'unsafe',
+    states: { unsafe: { final: true } },
+  });
+  const chart = harden({
+    name: 'cancel-before-spawn',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: {
+        on: {
+          'cancel-requested': [{}],
+          go: [{ target: 'spawning' }],
+        },
+      },
+      spawning: {
+        entry: [
+          {
+            kind: 'spawn',
+            chart: childChart,
+            params: {},
+            outcome: 'child-done',
+            failure: 'child-failed',
+          },
+        ],
+        on: {
+          'child-done': [{ target: 'unsafe' }],
+          'child-failed': [{ target: 'safe' }],
+        },
+      },
+      unsafe: { final: true },
+      safe: { final: true, output: { status: 'spawn-suppressed' } },
+    },
+  });
+  const { runId, control } = await E(h1.service).start(chart, {});
+  await E(control).cancel('withdraw authority');
+  t.true(h1.engines.get(runId).fold.cancellationRequested);
+  h1.stop();
+
+  const h2 = await makeWorkflowService({
+    powers: controls.restart(),
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('after'),
+  });
+  t.teardown(h2.stop);
+  const recoveredControl = await E(h2.service).control(runId);
+  await E(recoveredControl).signal(harden({ type: 'go' }));
+  const recovered = h2.engines.get(runId);
+  await until(() => recovered.fold.done, 'suppressed spawn reconciled');
+  t.deepEqual(recovered.fold.output, { status: 'spawn-suppressed' });
+  t.is(h2.engines.size, 1, 'no child run was created');
+});
+
 test('a lost emit delivery is re-dispatched from its journaled obligation', async t => {
   const { powers, controls } = makeFakeAgent();
   let crashArmed = true;
