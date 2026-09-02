@@ -21,7 +21,7 @@ const params = harden({
   summary: 'One component and its test.',
   reviewers: ['alice', 'bob'],
   base: 'main',
-  rounds: 2,
+  rounds: 2n,
 });
 
 const pendingOf = (sim, kind, extra = {}) =>
@@ -81,7 +81,8 @@ test('the public chart boundary rejects unusable panels and budgets', t => {
   const invalidParams = [
     harden({ ...params, reviewers: [] }),
     harden({ ...params, reviewers: Array(33).fill('alice') }),
-    harden({ ...params, rounds: 0 }),
+    harden({ ...params, rounds: 0n }),
+    harden({ ...params, rounds: 1.5 }),
     harden({ ...params, rounds: Infinity }),
     harden({
       title: params.title,
@@ -99,12 +100,12 @@ test('the public chart boundary rejects unusable panels and budgets', t => {
   const portShape = reviewedChangeChart.ports.initiator;
   t.true(
     matches(
-      harden({ type: 'set-remaining', value: { remaining: 0 } }),
+      harden({ type: 'set-remaining', value: { remaining: 0n } }),
       portShape,
     ),
     'zero is a valid absolute remainder and means no retry',
   );
-  for (const remaining of [-1, Infinity, 0x1_0000_0000]) {
+  for (const remaining of [-1n, 0.1, Infinity, 0x1_0000_0000n]) {
     t.false(
       matches(
         harden({ type: 'set-remaining', value: { remaining } }),
@@ -121,8 +122,8 @@ test('a unanimous panel carries the head to approved', t => {
   // `boot` seeds the budget from params and hands straight on: a chart's
   // initial context is literal data, so `rounds` cannot be read there.
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.remaining, 2);
-  t.is(sim.status().context.round, 0);
+  t.is(sim.status().context.remaining, 2n);
+  t.is(sim.status().context.round, 0n);
 
   submitHead(sim);
   t.is(sim.status().state, 'review');
@@ -132,9 +133,9 @@ test('a unanimous panel carries the head to approved', t => {
   const status = sim.status();
   t.true(status.done);
   t.is(status.outcome, 'completed');
-  t.deepEqual(status.output, { head: HEAD, round: 0 });
+  t.deepEqual(status.output, { head: HEAD, round: 0n });
   // The happy path never enters the budget gate, so nothing was burnt.
-  t.is(status.context.remaining, 2);
+  t.is(status.context.remaining, 2n);
 });
 
 test('the panel is waited out in full before a dissent loops back', t => {
@@ -159,8 +160,8 @@ test('the panel is waited out in full before a dissent loops back', t => {
   );
 
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.round, 1);
-  t.is(sim.status().context.remaining, 1, 'the round cost one of two');
+  t.is(sim.status().context.round, 1n);
+  t.is(sim.status().context.remaining, 1n, 'the round cost one of two');
 
   const feedback = sim.status().context.feedback;
   t.is(feedback.length, 2, 'both verdicts reach the implementer');
@@ -189,7 +190,7 @@ test('a malformed reviewer answer is a dissent, not a failed run', t => {
   sim.settle(ask.effectId, 'fulfilled', harden({ approve: true }));
 
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.remaining, 1);
+  t.is(sim.status().context.remaining, 1n);
   t.deepEqual(sim.status().context.feedback, [
     {
       index: 0,
@@ -206,7 +207,7 @@ test('a malformed reviewer answer is a dissent, not a failed run', t => {
 
 test('the budget burns down, exhausts, and the operator can extend it', t => {
   const sim = makeSimulator(reviewedChangeChart, {
-    params: harden({ ...params, rounds: 1 }),
+    params: harden({ ...params, rounds: 1n }),
   });
 
   submitHead(sim);
@@ -214,27 +215,27 @@ test('the budget burns down, exhausts, and the operator can extend it', t => {
   // The single round is spent, so the gate parks the run rather than
   // asking the implementer again.
   t.is(sim.status().state, 'exhausted');
-  t.is(sim.status().context.remaining, 0);
+  t.is(sim.status().context.remaining, 0n);
 
   const form = pendingOf(sim, 'ask', { to: 'operator' });
   t.true(form.effect.form.description.includes('review budget'));
   t.is(form.effect.form.fields[0].label, 'Review rounds still available');
 
-  sim.settle(form.effectId, 'fulfilled', harden({ remaining: 2 }));
+  sim.settle(form.effectId, 'fulfilled', harden({ remaining: 2n }));
   t.is(sim.status().state, 'implement', 'extending the budget resumes');
-  t.is(sim.status().context.remaining, 2);
+  t.is(sim.status().context.remaining, 2n);
 
   // And declining abandons the change with a stated reason. Each round is
   // a fresh submission followed by a fresh panel, so both granted rounds
   // have to be spent before the gate parks the run again.
   submitHead(sim, NEXT_HEAD);
   verdict(sim, false, 'still no');
-  t.is(sim.status().context.remaining, 1);
+  t.is(sim.status().context.remaining, 1n);
   submitHead(sim, NEXT_HEAD);
   verdict(sim, false, 'still no');
   t.is(sim.status().state, 'exhausted');
   const second = pendingOf(sim, 'ask', { to: 'operator' });
-  sim.settle(second.effectId, 'fulfilled', harden({ remaining: 0 }));
+  sim.settle(second.effectId, 'fulfilled', harden({ remaining: 0n }));
   t.true(sim.status().done);
   t.is(sim.status().outcome, 'completed');
   t.is(
@@ -247,17 +248,23 @@ test('the initiator can raise the budget mid-round without disturbing the ask', 
   const sim = makeSimulator(reviewedChangeChart, { params });
 
   const before = pendingOf(sim, 'ask', { to: 'developer' });
-  t.is(sim.status().context.remaining, 2);
+  t.is(sim.status().context.remaining, 2n);
 
   // An internal transition: it assigns context without exiting the state,
   // so the implementer's pending ask and its deadline survive untouched.
-  sim.inject(harden({ type: 'set-remaining', value: { remaining: 9 } }));
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 9n } }));
 
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.remaining, 9);
+  t.is(sim.status().context.remaining, 9n);
   const after = pendingOf(sim, 'ask', { to: 'developer' });
   t.is(after.effectId, before.effectId, 'the ask was not re-sent');
   t.is(sim.pending().length, 2, 'ask and deadline both still pending');
+
+  // WorkflowControl is intentionally more general than a port, so the chart
+  // repeats its public boundary guard and ignores an invalid direct signal.
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 0.5 } }));
+  t.is(sim.status().context.remaining, 9n);
+  t.is(pendingOf(sim, 'ask', { to: 'developer' }).effectId, before.effectId);
 });
 
 test('the budget can be raised while the run waits in review', t => {
@@ -266,8 +273,8 @@ test('the budget can be raised while the run waits in review', t => {
   t.is(sim.status().state, 'review');
   const seats = reviewerAsks(sim).map(record => record.effectId);
 
-  sim.inject(harden({ type: 'set-remaining', value: { remaining: 5 } }));
-  t.is(sim.status().context.remaining, 5);
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 5n } }));
+  t.is(sim.status().context.remaining, 5n);
   t.deepEqual(
     reviewerAsks(sim).map(record => record.effectId),
     seats,
@@ -277,15 +284,15 @@ test('the budget can be raised while the run waits in review', t => {
 
 test('a raise delivered to an exhausted run resumes it', t => {
   const sim = makeSimulator(reviewedChangeChart, {
-    params: harden({ ...params, rounds: 1 }),
+    params: harden({ ...params, rounds: 1n }),
   });
   submitHead(sim);
   verdict(sim, false, 'no');
   t.is(sim.status().state, 'exhausted');
 
-  sim.inject(harden({ type: 'set-remaining', value: { remaining: 3 } }));
+  sim.inject(harden({ type: 'set-remaining', value: { remaining: 3n } }));
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.remaining, 3);
+  t.is(sim.status().context.remaining, 3n);
 });
 
 test('a malformed submission costs a round instead of failing the run', t => {
@@ -294,7 +301,7 @@ test('a malformed submission costs a round instead of failing the run', t => {
   sim.settle(ask.effectId, 'fulfilled', harden({ notes: 'forgot the head' }));
 
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.remaining, 1);
+  t.is(sim.status().context.remaining, 1n);
   t.is(sim.status().context.feedback[0].feedback.includes('no head ref'), true);
 });
 
@@ -325,7 +332,7 @@ test('a silent reviewer times out into a withheld approval', t => {
   sim.fireTimer(deadline.effectId);
 
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.round, 1);
+  t.is(sim.status().context.round, 1n);
   const withheld = sim
     .status()
     .context.feedback.find(entry => entry.output.approve === false);
@@ -354,7 +361,7 @@ test('preview CI is a slot: off by default, gating when enabled', t => {
     harden({ ok: false, log: 'tests failed' }),
   );
   t.is(on.status().state, 'implement');
-  t.is(on.status().context.remaining, 1);
+  t.is(on.status().context.remaining, 1n);
 });
 
 test('green preview CI carries the change on to approval', t => {
@@ -366,7 +373,7 @@ test('green preview CI carries the change on to approval', t => {
   const ci = pendingOf(sim, 'invoke', { method: 'perform' });
   sim.settle(ci.effectId, 'fulfilled', harden({ ok: true, log: 'green' }));
   t.true(sim.status().done);
-  t.deepEqual(sim.status().output, { head: HEAD, round: 0 });
+  t.deepEqual(sim.status().output, { head: HEAD, round: 0n });
 });
 
 test('a deploy is proposed only through a passed review', t => {
@@ -421,9 +428,39 @@ test('the gated endo-release chart spawns its deploy with the reviewed head', t 
   t.is(spawned.effect.params.rev, HEAD);
   t.deepEqual(spawned.effect.endowments, ['performer', 'operator']);
 
-  sim.settle(spawned.effectId, 'fulfilled', harden({ status: 'completed' }));
+  sim.settle(
+    spawned.effectId,
+    'fulfilled',
+    harden({ status: 'completed', output: { status: 'landed', rev: HEAD } }),
+  );
   t.true(sim.status().done);
-  t.deepEqual(sim.status().output, { head: HEAD, round: 0 });
+  t.deepEqual(sim.status().output, { head: HEAD, round: 0n });
+});
+
+test('a completed but non-landed deploy cannot report the review as landed', t => {
+  const sim = makeSimulator(reviewedEndoReleaseChart, { params });
+  submitHead(sim);
+  verdict(sim, true, 'lgtm');
+
+  const spawned = pendingOf(sim, 'spawn');
+  sim.settle(
+    spawned.effectId,
+    'fulfilled',
+    harden({
+      status: 'completed',
+      output: { status: 'abandoned', reason: 'declined' },
+    }),
+  );
+
+  t.true(sim.status().done);
+  t.is(sim.status().state, 'deploy-unsettled');
+  t.deepEqual(sim.status().output, {
+    head: HEAD,
+    reason: {
+      status: 'completed',
+      output: { status: 'abandoned', reason: 'declined' },
+    },
+  });
 });
 
 test('the gated nixos chart requires staged files before the panel sees them', t => {
@@ -434,7 +471,7 @@ test('the gated nixos chart requires staged files before the panel sees them', t
   const ask = pendingOf(sim, 'ask', { to: 'developer' });
   sim.settle(ask.effectId, 'fulfilled', harden({ head: HEAD }));
   t.is(sim.status().state, 'implement');
-  t.is(sim.status().context.remaining, 1);
+  t.is(sim.status().context.remaining, 1n);
 
   const files = harden([{ path: 'modules/firewall.nix', text: '{ }\n' }]);
   const retry = pendingOf(sim, 'ask', { to: 'developer' });

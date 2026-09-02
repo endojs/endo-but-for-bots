@@ -45,6 +45,19 @@ const approvedValue = M.splitRecord({
 const attestedLanded = M.splitRecord({
   value: M.splitRecord({ landed: M.eq(true) }),
 });
+const stagedRevision = M.splitRecord({
+  value: M.splitRecord({ rev: M.string(), previous: M.string() }),
+});
+const PreviousFileShape = M.splitRecord({
+  path: M.string(),
+  text: M.or(M.string(), M.null()),
+});
+const stagedFiles = M.splitRecord({
+  value: M.splitRecord({
+    paths: M.arrayOf(M.string()),
+    previous: M.arrayOf(PreviousFileShape),
+  }),
+});
 
 // Performer re-validates /^[0-9a-f]{40}$/ at its boundary; the chart's
 // params pattern keeps the shape check cheap and early.
@@ -89,8 +102,16 @@ export const endoReleaseChart = harden({
       on: {
         staged: [
           {
+            when: stagedRevision,
             target: 'prebuild',
             assign: { previous: { $event: 'value.previous' } },
+          },
+          {
+            target: 'staging-unsettled',
+            assign: {
+              reason:
+                'stageRev returned without a valid revision and rollback ref',
+            },
           },
         ],
         'stage-failed': [{ target: 'failed' }],
@@ -170,6 +191,7 @@ export const endoReleaseChart = harden({
             ],
           },
           outcome: 'operator-decided',
+          failure: 'approval-failed',
         },
         { kind: 'after', ms: WEEK_MS, emit: { type: 'approval-expired' } },
       ],
@@ -180,6 +202,9 @@ export const endoReleaseChart = harden({
         ],
         'approval-expired': [
           { target: 'unpinning', assign: { reason: 'approval-expired' } },
+        ],
+        'approval-failed': [
+          { target: 'unpinning', assign: { reason: 'approval-failed' } },
         ],
       },
     },
@@ -221,6 +246,7 @@ export const endoReleaseChart = harden({
           outcome: 'verified',
           failure: 'verify-failed',
         },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'verify-timed-out' } },
       ],
       on: {
         verified: [
@@ -228,6 +254,7 @@ export const endoReleaseChart = harden({
           { target: 'needs-attention' },
         ],
         'verify-failed': [{ target: 'needs-attention' }],
+        'verify-timed-out': [{ target: 'needs-attention' }],
       },
     },
     // Every post-stage exit that will not apply — build rejection, decline,
@@ -243,10 +270,12 @@ export const endoReleaseChart = harden({
           outcome: 'unpinned',
           failure: 'unpin-failed',
         },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'unpin-timed-out' } },
       ],
       on: {
         unpinned: [{ target: 'abandoned' }],
         'unpin-failed': [{ target: 'compensation-attention' }],
+        'unpin-timed-out': [{ target: 'compensation-attention' }],
       },
     },
     // Post-apply problems only (apply failed or timed out, or the readback
@@ -275,6 +304,7 @@ export const endoReleaseChart = harden({
             ],
           },
           outcome: 'operator-attested',
+          failure: 'attention-failed',
         },
       ],
       on: {
@@ -283,6 +313,12 @@ export const endoReleaseChart = harden({
           {
             target: 'unpinning',
             assign: { reason: 'operator-reported-not-landed' },
+          },
+        ],
+        'attention-failed': [
+          {
+            target: 'operator-unreachable',
+            assign: { reason: 'post-apply attention request failed' },
           },
         ],
       },
@@ -301,14 +337,50 @@ export const endoReleaseChart = harden({
               '({$params.title}) failed; see the run log. Reply to retry.',
           },
           outcome: 'operator-resumed',
+          failure: 'compensation-help-failed',
         },
       ],
-      on: { 'operator-resumed': [{ target: 'unpinning' }] },
+      on: {
+        'operator-resumed': [{ target: 'unpinning' }],
+        'compensation-help-failed': [
+          {
+            target: 'compensation-unsettled',
+            assign: { reason: 'compensation attention request failed' },
+          },
+        ],
+      },
     },
-    done: { final: true, output: { rev: { $params: 'rev' } } },
-    'auto-rolled-back': { final: true, output: { report: { $ctx: 'report' } } },
-    failed: { final: true, output: { reason: 'stage-failed' } },
-    abandoned: { final: true, output: { reason: { $ctx: 'reason' } } },
+    done: {
+      final: true,
+      output: { status: 'landed', rev: { $params: 'rev' } },
+    },
+    'auto-rolled-back': {
+      final: true,
+      output: { status: 'auto-rolled-back', report: { $ctx: 'report' } },
+    },
+    failed: {
+      final: true,
+      output: { status: 'failed', reason: 'stage-failed' },
+    },
+    abandoned: {
+      final: true,
+      output: { status: 'abandoned', reason: { $ctx: 'reason' } },
+    },
+    'staging-unsettled': {
+      final: true,
+      output: { status: 'staging-unsettled', reason: { $ctx: 'reason' } },
+    },
+    'operator-unreachable': {
+      final: true,
+      output: { status: 'operator-unreachable', reason: { $ctx: 'reason' } },
+    },
+    'compensation-unsettled': {
+      final: true,
+      output: {
+        status: 'compensation-unsettled',
+        reason: { $ctx: 'reason' },
+      },
+    },
   },
 });
 
@@ -345,10 +417,18 @@ export const nixosConfigChangeChart = harden({
       on: {
         staged: [
           {
+            when: stagedFiles,
             target: 'build',
             assign: {
               previous: { $event: 'value.previous' },
               paths: { $event: 'value.paths' },
+            },
+          },
+          {
+            target: 'staging-unsettled',
+            assign: {
+              reason:
+                'stageFiles returned without valid paths and rollback contents',
             },
           },
         ],
@@ -401,6 +481,7 @@ export const nixosConfigChangeChart = harden({
             ],
           },
           outcome: 'operator-decided',
+          failure: 'approval-failed',
         },
         { kind: 'after', ms: WEEK_MS, emit: { type: 'approval-expired' } },
       ],
@@ -411,6 +492,9 @@ export const nixosConfigChangeChart = harden({
         ],
         'approval-expired': [
           { target: 'reverting', assign: { reason: 'approval-expired' } },
+        ],
+        'approval-failed': [
+          { target: 'reverting', assign: { reason: 'approval-failed' } },
         ],
       },
     },
@@ -455,10 +539,12 @@ export const nixosConfigChangeChart = harden({
           outcome: 'reverted',
           failure: 'revert-failed',
         },
+        { kind: 'after', ms: HOUR_MS, emit: { type: 'revert-timed-out' } },
       ],
       on: {
         reverted: [{ target: 'abandoned' }],
         'revert-failed': [{ target: 'compensation-attention' }],
+        'revert-timed-out': [{ target: 'compensation-attention' }],
       },
     },
     // Post-apply problems only (apply failed or timed out). There is no
@@ -488,6 +574,7 @@ export const nixosConfigChangeChart = harden({
             ],
           },
           outcome: 'operator-attested',
+          failure: 'attention-failed',
         },
       ],
       on: {
@@ -496,6 +583,12 @@ export const nixosConfigChangeChart = harden({
           {
             target: 'reverting',
             assign: { reason: 'operator-reported-not-landed' },
+          },
+        ],
+        'attention-failed': [
+          {
+            target: 'operator-unreachable',
+            assign: { reason: 'post-apply attention request failed' },
           },
         ],
       },
@@ -514,14 +607,47 @@ export const nixosConfigChangeChart = harden({
               'failed; see the run log. Reply to retry.',
           },
           outcome: 'operator-resumed',
+          failure: 'compensation-help-failed',
         },
       ],
-      on: { 'operator-resumed': [{ target: 'reverting' }] },
+      on: {
+        'operator-resumed': [{ target: 'reverting' }],
+        'compensation-help-failed': [
+          {
+            target: 'compensation-unsettled',
+            assign: { reason: 'compensation attention request failed' },
+          },
+        ],
+      },
     },
-    done: { final: true },
-    'auto-rolled-back': { final: true, output: { report: { $ctx: 'report' } } },
-    failed: { final: true, output: { reason: 'stage-failed' } },
-    abandoned: { final: true, output: { reason: { $ctx: 'reason' } } },
+    done: { final: true, output: { status: 'landed' } },
+    'auto-rolled-back': {
+      final: true,
+      output: { status: 'auto-rolled-back', report: { $ctx: 'report' } },
+    },
+    failed: {
+      final: true,
+      output: { status: 'failed', reason: 'stage-failed' },
+    },
+    abandoned: {
+      final: true,
+      output: { status: 'abandoned', reason: { $ctx: 'reason' } },
+    },
+    'staging-unsettled': {
+      final: true,
+      output: { status: 'staging-unsettled', reason: { $ctx: 'reason' } },
+    },
+    'operator-unreachable': {
+      final: true,
+      output: { status: 'operator-unreachable', reason: { $ctx: 'reason' } },
+    },
+    'compensation-unsettled': {
+      final: true,
+      output: {
+        status: 'compensation-unsettled',
+        reason: { $ctx: 'reason' },
+      },
+    },
   },
 });
 

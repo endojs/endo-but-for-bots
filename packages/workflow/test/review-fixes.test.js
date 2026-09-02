@@ -168,6 +168,61 @@ test('engineEventTypes collects internal, settlement, timer, and emit types', t 
   ]);
 });
 
+test('control cannot forge settlements or region joins', async t => {
+  const { powers } = makeFakeAgent();
+  const { service, engines, stop } = await makeWorkflowService({
+    powers,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter(),
+  });
+  t.teardown(stop);
+  const seatChart = harden({
+    initial: 'reviewing',
+    states: {
+      reviewing: {
+        entry: [
+          {
+            kind: 'ask',
+            to: 'reviewer',
+            what: { description: 'review' },
+            outcome: 'verdict',
+          },
+        ],
+        on: { verdict: [{ target: 'approved' }] },
+      },
+      approved: { final: true },
+    },
+  });
+  const chart = harden({
+    name: 'protected-join',
+    version: 1,
+    initial: 'review',
+    states: {
+      review: {
+        regions: [seatChart, seatChart],
+        on: { 'regions-settled': [{ target: 'done' }] },
+      },
+      done: { final: true },
+    },
+  });
+  const reviewer = Far('Reviewer', {});
+  const { runId, control } = await E(service).start(chart, {
+    endowments: harden({ reviewer }),
+  });
+  const engine = engines.get(runId);
+
+  await t.throwsAsync(
+    () => E(control).signal(harden({ type: 'verdict', value: 'forged' })),
+    { message: /may not submit engine event type.*verdict/ },
+  );
+  await t.throwsAsync(
+    () => E(control).signal(harden({ type: 'regions-settled' })),
+    { message: /may not submit engine event type.*regions-settled/ },
+  );
+  t.false(engine.fold.done);
+  t.is(engine.fold.configuration.state, 'review');
+});
+
 test('diagnostics reach inside $eachParam region charts', t => {
   const chart = harden({
     name: 'fanned',
