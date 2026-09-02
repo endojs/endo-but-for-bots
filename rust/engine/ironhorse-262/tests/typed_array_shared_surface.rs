@@ -80,3 +80,34 @@ fn shared_join_handles_number_bigint_and_detachment() {
         agrees(source);
     }
 }
+
+#[test]
+fn shared_iterators_validate_and_yield_each_element_domain() {
+    for source in [
+        "var a=new Uint8Array([4,5]); var i=a.values(); i.next().value+':'+i.next().value+':'+i.next().done",
+        "var a=new Uint8Array([4,5]); var i=a.keys(); i.next().value+':'+i.next().value+':'+i.next().done",
+        "var a=new BigInt64Array([4n,-5n]); var i=a.entries(); var x=i.next().value; var y=i.next().value; x[0]+':'+x[1]+':'+y[0]+':'+y[1]",
+        "var P=Object.getPrototypeOf(Int8Array.prototype); P.values===P[Symbol.iterator]",
+        "var a=new Uint8Array(1); $262.detachArrayBuffer(a.buffer); try { a.values(); false } catch (e) { e instanceof TypeError }",
+        "try { Uint8Array.prototype.values.call({}); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn shared_readonly_methods_observe_live_elements_and_iteration_order() {
+    for source in [
+        "var a=new Uint8Array([42]); Reflect.set(a,0,7)+':'+a[0]",
+        "var a=new Uint8Array([5]); [Reflect.get(a,0),Reflect.has(a,0),Reflect.getOwnPropertyDescriptor(a,0).value,Reflect.defineProperty(a,0,{value:9}),a[0],Reflect.deleteProperty(a,0)].join(':')",
+        "var a=new Uint8Array([42,43,44]); var n=0; var r=a.every(function(v,i){Reflect.set(a,i,n++); return true}); r+':'+a.join(',')",
+        "var a=new Uint8Array([1,2,3]); var seen=[]; a.forEach(function(v,i){seen.push(v+':'+i); if(i===0)a[1]=9}); seen.join(',')",
+        "var a=new Uint8Array([1,2,3]); a.some(function(v){return v===2})+':'+a.find(function(v){return v>1})+':'+a.findIndex(function(v){return v>2})",
+        "var a=new Float64Array([NaN,0,-0]); a.includes(NaN)+':'+a.indexOf(NaN)+':'+a.indexOf(0)+':'+a.lastIndexOf(0)",
+        "var a=new Uint8Array(); var x={valueOf:function(){throw new Error('unreached')}}; a.includes(0,x)+':'+a.indexOf(0,x)",
+        "var a=new BigInt64Array([1n,2n,3n]); a.reduce(function(x,y){return x+y},0n)+':'+a.reduceRight(function(x,y){return x-y})",
+        "var a=new Uint8Array([1,2]); var seen=[]; a.forEach(function(v,i){seen.push(String(v));if(i===0)$262.detachArrayBuffer(a.buffer)});seen.join(',')",
+    ] {
+        agrees(source);
+    }
+}

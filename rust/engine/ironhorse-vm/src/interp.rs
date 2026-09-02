@@ -2278,6 +2278,14 @@ pub enum NativeMethod {
     TypedArrayReverse,
     /// `%TypedArray%.prototype.join(separator)`.
     TypedArrayJoin,
+    /// `%TypedArray%.prototype.values()` / `keys()` / `entries()`.
+    TypedArrayValues,
+    TypedArrayKeys,
+    TypedArrayEntries,
+    /// Non-allocating shared TypedArray methods. Operation ids select
+    /// `forEach`, `every`, `some`, `find`, `findIndex`, `includes`, `indexOf`,
+    /// `lastIndexOf`, `reduce`, and `reduceRight`, in that order.
+    TypedArrayReadonly(u8),
     /// Shared `%TypedArray%.prototype` view accessors.
     TypedArrayLengthGetter,
     TypedArrayByteLengthGetter,
@@ -5798,6 +5806,38 @@ impl Interp {
             self.proto_methods.push((typed_array_proto, name, mf));
         }
         for (name, method) in [
+            ("values", NativeMethod::TypedArrayValues),
+            ("keys", NativeMethod::TypedArrayKeys),
+            ("entries", NativeMethod::TypedArrayEntries),
+        ] {
+            let method = self.alloc_named_method(method, name, 0);
+            self.proto_methods
+                .push((typed_array_proto, name, method));
+        }
+        for (operation, (name, arity)) in [
+            ("forEach", 1u32),
+            ("every", 1),
+            ("some", 1),
+            ("find", 1),
+            ("findIndex", 1),
+            ("includes", 1),
+            ("indexOf", 1),
+            ("lastIndexOf", 1),
+            ("reduce", 1),
+            ("reduceRight", 1),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let method = self.alloc_named_method(
+                NativeMethod::TypedArrayReadonly(operation as u8),
+                name,
+                arity,
+            );
+            self.proto_methods
+                .push((typed_array_proto, name, method));
+        }
+        for (name, method) in [
             ("length", NativeMethod::TypedArrayLengthGetter),
             ("byteLength", NativeMethod::TypedArrayByteLengthGetter),
             ("byteOffset", NativeMethod::TypedArrayByteOffsetGetter),
@@ -8131,6 +8171,26 @@ impl Interp {
                     Slot::of(Kind::Reference, Payload::Reference(values)),
                     XS_DONT_ENUM_FLAG,
                 );
+            }
+            // `%TypedArray%.prototype[@@iterator]` is likewise the exact same
+            // function object as its `values` method on the shared abstract
+            // prototype.
+            if let Some(typed_array_proto) = typed_array_proto {
+                if let Some((_, _, values)) = self
+                    .proto_methods
+                    .iter()
+                    .find(|(holder, name, _)| {
+                        *holder == typed_array_proto && *name == "values"
+                    })
+                    .copied()
+                {
+                    self.set_own_unmetered_with_flag(
+                        typed_array_proto,
+                        id,
+                        Slot::of(Kind::Reference, Payload::Reference(values)),
+                        XS_DONT_ENUM_FLAG,
+                    );
+                }
             }
             self.set_own_unmetered_with_flag(
                 self.string_proto,
@@ -29074,6 +29134,30 @@ impl Interp {
             NativeMethod::TypedArrayJoin => {
                 self.typed_array_join(this, base, argc, code)?
             }
+            NativeMethod::TypedArrayValues
+            | NativeMethod::TypedArrayKeys
+            | NativeMethod::TypedArrayEntries => {
+                let typed_array = match this.value {
+                    Payload::Reference(typed_array)
+                        if this.kind == Kind::Reference
+                            && self.typed_arrays.contains_key(&typed_array) =>
+                    {
+                        typed_array
+                    }
+                    _ => return Err(self.catchable_type_error()),
+                };
+                self.validate_typed_array(this)?;
+                let kind = match m {
+                    NativeMethod::TypedArrayValues => 0,
+                    NativeMethod::TypedArrayKeys => 1,
+                    NativeMethod::TypedArrayEntries => 2,
+                    _ => unreachable!(),
+                };
+                self.make_array_iterator(typed_array, kind)
+            }
+            NativeMethod::TypedArrayReadonly(operation) => {
+                self.typed_array_readonly(operation, this, base, argc, code)?
+            }
             NativeMethod::TypedArrayLengthGetter
             | NativeMethod::TypedArrayByteLengthGetter
             | NativeMethod::TypedArrayByteOffsetGetter
@@ -31269,10 +31353,11 @@ impl Interp {
                 // The integer-indexed exotic `[[GetOwnProperty]]` (10.4.5.1),
                 // identical to `Object.getOwnPropertyDescriptor`.
                 if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    let descriptor = if let Some(n) = self.ta_numeric_index(arg1) {
+                    let key = self.to_property_key_slot(code, arg1)?;
+                    let descriptor = if let Some(n) = self.ta_numeric_index(key) {
                         self.ta_index_own_descriptor(ta, n)
                     } else {
-                        let id = self.to_property_id(code, arg1)?;
+                        let id = self.to_property_id(code, key)?;
                         self.ordinary_get_own_descriptor(inst, id)
                     };
                     return Ok(match descriptor {
@@ -31316,6 +31401,7 @@ impl Interp {
                 if let Payload::Reference(inst) = arg0.value {
                     if arg0.kind == Kind::Reference && self.typed_arrays.contains_key(&inst) {
                         let ta = self.typed_arrays[&inst];
+                        let key = self.to_property_key_slot(code, arg1)?;
                         let descriptor_object = match arg2.value {
                             Payload::Reference(d) if arg2.kind == Kind::Reference => d,
                             _ => {
@@ -31326,10 +31412,10 @@ impl Interp {
                         };
                         let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                         self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
-                        let accepted = if let Some(n) = self.ta_numeric_index(arg1) {
+                        let accepted = if let Some(n) = self.ta_numeric_index(key) {
                             self.ta_index_define(code, ta, n, descriptor)?
                         } else {
-                            let id = self.to_property_id(code, arg1)?;
+                            let id = self.to_property_id(code, key)?;
                             self.ordinary_define_own_property(inst, id, descriptor)
                         };
                         return Ok(Slot::boolean(accepted));
@@ -31540,11 +31626,12 @@ impl Interp {
                 // canonical numeric index is present iff it is a valid integer
                 // index; any other key walks the chain ordinarily.
                 if let Some(&ta) = self.typed_arrays.get(&inst) {
-                    if let Some(n) = self.ta_numeric_index(arg1) {
+                    let key = self.to_property_key_slot(code, arg1)?;
+                    if let Some(n) = self.ta_numeric_index(key) {
                         self.meter.tick_raw(REFLECT_FRAME_METERING);
                         return Ok(Slot::boolean(self.ta_valid_index(ta, n).is_some()));
                     }
-                    let id = self.to_property_id(code, arg1)?;
+                    let id = self.to_property_id(code, key)?;
                     let (present, recursions) = self.instance_has(inst, id);
                     self.meter.tick_raw(REFLECT_FRAME_METERING);
                     self.meter.tick_code_n(recursions);
@@ -31572,11 +31659,12 @@ impl Interp {
                 // non-canonical key is an ordinary chain `[[Get]]`.
                 if let Some(&ta) = self.typed_arrays.get(&inst) {
                     let receiver = if argc >= 3 { arg2 } else { arg0 };
+                    let key = self.to_property_key_slot(code, arg1)?;
                     self.meter.tick_raw(REFLECT_FRAME_METERING);
-                    if let Some(n) = self.ta_numeric_index(arg1) {
+                    if let Some(n) = self.ta_numeric_index(key) {
                         return Ok(self.ta_indexed_element_get(ta, n));
                     }
-                    let id = self.to_property_id(code, arg1)?;
+                    let id = self.to_property_id(code, key)?;
                     return self.ordinary_get(code, inst, id, receiver);
                 }
                 if !self.is_ordinary_object(inst) {
@@ -31605,8 +31693,9 @@ impl Interp {
                 // non-canonical key is an ordinary `[[Set]]`.
                 if let Some(&ta) = self.typed_arrays.get(&inst) {
                     let receiver = if argc >= 4 { arg3 } else { arg0 };
+                    let key = self.to_property_key_slot(code, arg1)?;
                     self.meter.tick_raw(REFLECT_FRAME_METERING);
-                    if let Some(n) = self.ta_numeric_index(arg1) {
+                    if let Some(n) = self.ta_numeric_index(key) {
                         if self.same_value(arg0, receiver) {
                             self.ta_indexed_element_set(code, ta, n, arg2)?;
                             return Ok(Slot::boolean(true));
@@ -31615,10 +31704,10 @@ impl Interp {
                             return Ok(Slot::boolean(true));
                         }
                         return Ok(Slot::boolean(
-                            self.set_data_on_receiver(code, receiver, arg1, arg2)?,
+                            self.set_data_on_receiver(code, receiver, key, arg2)?,
                         ));
                     }
-                    let id = self.to_property_id(code, arg1)?;
+                    let id = self.to_property_id(code, key)?;
                     return Ok(Slot::boolean(
                         self.ordinary_set(code, inst, id, arg2, receiver)?,
                     ));
@@ -31646,11 +31735,12 @@ impl Interp {
                 // canonical numeric index deletes vacuously (`true`); a
                 // non-canonical key deletes ordinarily.
                 if let Some(&ta) = self.typed_arrays.get(&inst) {
+                    let key = self.to_property_key_slot(code, arg1)?;
                     self.meter.tick_raw(REFLECT_FRAME_METERING);
-                    if let Some(n) = self.ta_numeric_index(arg1) {
+                    if let Some(n) = self.ta_numeric_index(key) {
                         return Ok(Slot::boolean(self.ta_valid_index(ta, n).is_none()));
                     }
-                    let id = self.to_property_id(code, arg1)?;
+                    let id = self.to_property_id(code, key)?;
                     return Ok(Slot::boolean(self.delete_own_property(inst, id)));
                 }
                 if !self.is_ordinary_object(inst) {
@@ -34988,6 +35078,12 @@ impl Interp {
                 && !self.arguments_objects.contains(&st.iterable)
             {
                 u64::from(self.arrays[&st.iterable].length)
+            } else if let Some(typed_array) = self.typed_arrays.get(&st.iterable) {
+                if self.detached_buffers.contains(&typed_array.buffer) {
+                    0
+                } else {
+                    u64::from(typed_array.length)
+                }
             } else {
                 self.array_generic_length(code, st.iterable)?
             };
@@ -34999,7 +35095,17 @@ impl Interp {
                 if st.kind == 0 || st.kind == 2 {
                     self.meter.tick_raw(ARRAY_ITERATOR_ELEMENT_READ);
                 }
-                let direct_element = if !self.arguments_objects.contains(&st.iterable) {
+                let direct_element = if (st.kind == 0 || st.kind == 2)
+                    && self.typed_arrays.contains_key(&st.iterable)
+                {
+                    let typed_array = self.typed_arrays[&st.iterable];
+                    Some(if typed_array.kind <= 1 {
+                        self.typed_array_element_get_bigint(typed_array, st.index)
+                    } else {
+                        self.typed_array_element_get(typed_array, st.index)
+                            .expect("numeric TypedArray iterator element decodes")
+                    })
+                } else if !self.arguments_objects.contains(&st.iterable) {
                     self.arrays
                         .get(&st.iterable)
                         .and_then(|array| array.items().get(&st.index).copied())
@@ -36161,6 +36267,187 @@ impl Interp {
         Ok(self.new_string_units(&out))
     }
 
+    /// The non-allocating `%TypedArray%.prototype` iteration/search/fold
+    /// family. These algorithms validate the integer-indexed receiver once,
+    /// capture its internal length, and then `Get` every index (TypedArrays
+    /// have no holes). If a callback detaches the buffer, later indexed reads
+    /// become `undefined` while the captured iteration range remains fixed.
+    fn typed_array_readonly(
+        &mut self,
+        operation: u8,
+        this: Slot,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        let ta = self.validate_typed_array(this)?;
+        let length = ta.length;
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg1 = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+
+        if matches!(operation, 0..=4 | 8..=9) && !self.is_callable_value(arg0) {
+            return Err(self.catchable_type_error());
+        }
+
+        match operation {
+            // forEach / every / some
+            0..=2 => {
+                let mut answer = operation == 1;
+                for index in 0..length {
+                    let value = self.ta_indexed_element_get(ta, index as f64);
+                    let result = self.run_callback(
+                        code,
+                        arg0,
+                        arg1,
+                        &[value, Slot::integer(index as i32), this],
+                    )?;
+                    if operation == 1 && !self.truthy(&result) {
+                        answer = false;
+                        break;
+                    }
+                    if operation == 2 && self.truthy(&result) {
+                        answer = true;
+                        break;
+                    }
+                }
+                Ok(if operation == 0 {
+                    Slot::undefined()
+                } else {
+                    Slot::boolean(answer)
+                })
+            }
+            // find / findIndex
+            3..=4 => {
+                for index in 0..length {
+                    let value = self.ta_indexed_element_get(ta, index as f64);
+                    let result = self.run_callback(
+                        code,
+                        arg0,
+                        arg1,
+                        &[value, Slot::integer(index as i32), this],
+                    )?;
+                    if self.truthy(&result) {
+                        return Ok(if operation == 3 {
+                            value
+                        } else {
+                            Slot::integer(index as i32)
+                        });
+                    }
+                }
+                Ok(if operation == 3 {
+                    Slot::undefined()
+                } else {
+                    Slot::integer(-1)
+                })
+            }
+            // includes / indexOf
+            5..=6 => {
+                if length == 0 {
+                    return Ok(if operation == 5 {
+                        Slot::boolean(false)
+                    } else {
+                        Slot::integer(-1)
+                    });
+                }
+                let start = if argc >= 2 {
+                    let relative = self.array_to_integer_or_infinity(code, arg1)?;
+                    Self::typed_array_relative_index(relative, length)
+                } else {
+                    0
+                };
+                for index in start..length {
+                    let value = self.ta_indexed_element_get(ta, index as f64);
+                    let equal = if operation == 5 {
+                        self.same_value_zero(&arg0, &value)
+                    } else {
+                        self.strict_equal(&arg0, &value)
+                    };
+                    if equal {
+                        return Ok(if operation == 5 {
+                            Slot::boolean(true)
+                        } else {
+                            Slot::integer(index as i32)
+                        });
+                    }
+                }
+                Ok(if operation == 5 {
+                    Slot::boolean(false)
+                } else {
+                    Slot::integer(-1)
+                })
+            }
+            // lastIndexOf
+            7 => {
+                if length == 0 {
+                    return Ok(Slot::integer(-1));
+                }
+                let relative = if argc >= 2 {
+                    self.array_to_integer_or_infinity(code, arg1)?
+                } else {
+                    f64::INFINITY
+                };
+                if relative == f64::NEG_INFINITY {
+                    return Ok(Slot::integer(-1));
+                }
+                let mut index = if relative >= 0.0 {
+                    (relative as i128).min(length as i128 - 1)
+                } else {
+                    length as i128 + relative as i128
+                };
+                while index >= 0 {
+                    let value = self.ta_indexed_element_get(ta, index as f64);
+                    if self.strict_equal(&arg0, &value) {
+                        return Ok(Slot::integer(index as i32));
+                    }
+                    index -= 1;
+                }
+                Ok(Slot::integer(-1))
+            }
+            // reduce / reduceRight
+            8..=9 => {
+                let right = operation == 9;
+                let mut cursor = 0u32;
+                let index_at = |cursor: u32| {
+                    if right {
+                        length - 1 - cursor
+                    } else {
+                        cursor
+                    }
+                };
+                let mut accumulator = if argc >= 2 {
+                    arg1
+                } else if length == 0 {
+                    return Err(self.catchable_type_error());
+                } else {
+                    let value = self.ta_indexed_element_get(ta, index_at(cursor) as f64);
+                    cursor += 1;
+                    value
+                };
+                while cursor < length {
+                    let index = index_at(cursor);
+                    cursor += 1;
+                    let value = self.ta_indexed_element_get(ta, index as f64);
+                    accumulator = self.run_callback(
+                        code,
+                        arg0,
+                        Slot::undefined(),
+                        &[accumulator, value, Slot::integer(index as i32), this],
+                    )?;
+                }
+                Ok(accumulator)
+            }
+            _ => Err(Halt::Unsupported("TypedArray.prototype:readonly-operation")),
+        }
+    }
+
     /// The four in-place `%TypedArray.prototype%` mutators. All receiver and
     /// detachment failures are realm-local TypeErrors; argument coercions run
     /// in specification order and may execute guest code.
@@ -36474,11 +36761,13 @@ impl Interp {
     /// `IsValidIntegerIndex(O, index)` (ECMA-262 10.4.5.14) for the numeric
     /// index `n` a canonical numeric index string named: `Some(index)` when
     /// `n` is an integral non-negative value (`-0` excluded) strictly below
-    /// the view length, else `None`. Buffer detach is a host-only concern the
-    /// XS oracle build does not model (it exposes no `$262`), so it is not
-    /// checked here. The integer/number fast kinds keep this on the inline
-    /// arithmetic path so the meter-exact corpus is untouched.
+    /// the view length and the viewed buffer is attached, else `None`. The
+    /// integer/number fast kinds keep this on the inline arithmetic path so the
+    /// meter-exact corpus is untouched.
     fn ta_valid_index(&self, ta: TypedArrayData, n: f64) -> Option<u32> {
+        if self.detached_buffers.contains(&ta.buffer) {
+            return None;
+        }
         // Integral, finite, not -0, and in `[0, length)`.
         if !n.is_finite() || n.fract() != 0.0 {
             return None;
@@ -40347,6 +40636,11 @@ impl Interp {
         // forwards `[[Get]]` here — but only if the target does not carry an
         // ordinary own slot for the same id (a user-defined override wins).
         if self.find_property(inst, id).is_none() {
+            if let Some(&typed_array) = self.typed_arrays.get(&inst) {
+                if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                    return Ok(self.ta_indexed_element_get(typed_array, index));
+                }
+            }
             if let Some(d) = self.exotic_own_descriptor(inst, id) {
                 if d.is_data() {
                     return Ok(d.value.unwrap_or_else(Slot::undefined));
