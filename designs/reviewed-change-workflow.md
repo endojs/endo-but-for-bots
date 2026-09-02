@@ -11,8 +11,8 @@
 
 The chart layer is complete: three reviewed-change charts, the two deploy
 charts used by the gated variants, and their simulator suites
-(`packages/floot/test/review-charts.test.js`, 18 tests, and
-`packages/floot/test/deploy-charts.test.js`, 22 tests).
+(`packages/floot/test/review-charts.test.js` and
+`packages/floot/test/deploy-charts.test.js`).
 Nothing is wired into a live host yet, and — see § "What blocks a live
 run" — a Fae agent **cannot answer a workflow ask today**, so the loop is
 currently exercisable only by the simulator or a programmatic service client.
@@ -255,9 +255,9 @@ During or after apply they retain the post-apply attention gate, because an
 in-flight outside mutation cannot truthfully be labelled cancelled.
 Repeated cancellation requests in compensation and attention states are
 internal no-ops that preserve the pending reconciliation effect.
-The reviewed parent handles the same request while `proposing`; the service
-forwards it durably to the deploy child and keeps the spawn pending until the
-child reports its reconciled terminal.
+The reviewed parent handles the same request while `proposing`; the service has
+the deploy child journal it before the parent transition and keeps the spawn
+pending until the child reports its reconciled terminal.
 
 ## What blocks a live run
 

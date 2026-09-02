@@ -615,19 +615,25 @@ export const makeWorkflowService = async ({
      *
      * @param {any} envelope
      * @param {number} depth
-     * @param {{ replays?: bigint, settles?: any }} [options]
+     * @param {{ replays?: bigint, settles?: any, unpauses?: boolean, deferNoFire?: boolean }} [options]
      * @returns {Promise<boolean>} whether the event fired a transition (or
      *   failed the run while attempting one)
      */
     const stepEnvelope = async (envelope, depth, options = {}) => {
       await null;
-      const { replays, settles } = options;
+      const {
+        replays,
+        settles,
+        unpauses = false,
+        deferNoFire = false,
+      } = options;
       const base = harden({
         kind: 'event',
         by: envelope.by,
         event: envelope,
         ...(replays !== undefined ? { replays } : {}),
         ...(settles !== undefined ? { settles } : {}),
+        ...(unpauses ? { unpauses: true } : {}),
       });
       const machineState = {
         configuration: fold.configuration,
@@ -649,6 +655,9 @@ export const makeWorkflowService = async ({
         return true;
       }
       if (!result.fired) {
+        if (deferNoFire) {
+          return false;
+        }
         const { by } = envelope;
         const settlement =
           envelope.effectId !== undefined &&
@@ -1233,62 +1242,48 @@ export const makeWorkflowService = async ({
         if (fold.done) {
           return;
         }
-        if (fold.paused) {
-          // Cancellation supersedes a pause, but it must not replay the events
-          // that accumulated behind that pause before cleanup gets control.
-          // Discharge them as explicitly discarded replay obligations so a
-          // restart cannot later drain stale approval or settlement envelopes
-          // into the reconciliation states.
-          await append({ kind: 'resumed', by: 'control' });
-          const queued = [...fold.queuedEvents.entries()].sort(([a], [b]) => {
-            const left = BigInt(a);
-            const right = BigInt(b);
-            return left < right ? -1 : left > right ? 1 : 0;
-          });
-          for (const [seqName, envelope] of queued) {
-            // eslint-disable-next-line no-await-in-loop
-            await append({
-              kind: 'event',
-              by: envelope.by,
-              event: envelope,
-              replays: BigInt(seqName),
-              discarded: 'cancel-requested',
-            });
+        // A child must durably receive cancellation before its parent records
+        // the request. If the process dies at any later boundary, the child is
+        // already in a safe reconciliation state; its eventual settlement can
+        // still drive the parent's pending spawn after recovery.
+        /** @type {Promise<void>[]} */
+        const childRequests = [];
+        for (const [childRunId, link] of [...parentLinks]) {
+          if (link.runId === runId) {
+            const child = engines.get(childRunId);
+            if (child !== undefined && !child.fold.done) {
+              childRequests.push(
+                child.cancel(`parent run ${runId} cancellation requested`),
+              );
+            }
           }
         }
+        await Promise.all(childRequests);
         // Give the chart the first chance to reconcile cancellation through
         // ordinary, durable states. A handled request leaves the run live and
         // keeps all of its pending-effect and recovery guarantees; cancellation
         // also propagates to linked children without severing the links their
         // eventual settlements need. Charts that do not handle this reserved
         // engine event retain the immediate-cancel behavior below.
-        const handled = await stepEnvelope(
-          harden({
-            type: 'cancel-requested',
-            value: harden({ ...(reason !== undefined ? { reason } : {}) }),
-            by: 'control',
-            at: isoNow(),
-          }),
-          0,
-        );
+        const cancelEnvelope = harden({
+          type: 'cancel-requested',
+          value: harden({ ...(reason !== undefined ? { reason } : {}) }),
+          by: 'control',
+          at: isoNow(),
+        });
+        const handled = await stepEnvelope(cancelEnvelope, 0, {
+          unpauses: fold.paused,
+          deferNoFire: true,
+        });
         if (handled) {
-          if (!fold.done) {
-            /** @type {Promise<void>[]} */
-            const childRequests = [];
-            for (const [childRunId, link] of [...parentLinks]) {
-              if (link.runId === runId) {
-                const child = engines.get(childRunId);
-                if (child !== undefined && !child.fold.done) {
-                  childRequests.push(
-                    child.cancel(`parent run ${runId} cancellation requested`),
-                  );
-                }
-              }
-            }
-            // Each child journals its own request before this call returns.
-            // That closes the crash window between a durable parent request
-            // and an in-memory-only propagation to its cleanup workflow.
-            await Promise.all(childRequests);
+          if (!fold.done && fold.queuedEvents.size > 0) {
+            // `unpauses` and the cancellation transition landed atomically.
+            // Replay queued events, including real settlements, only after the
+            // chart has entered its reconciliation state. Routed stale
+            // approvals harmlessly miss, while an already-settled compensation
+            // or child spawn can finish. Recovery observes the same unpaused
+            // fold and resumes this drain.
+            await drainQueuedEvents();
           }
           return;
         }
@@ -1324,6 +1319,7 @@ export const makeWorkflowService = async ({
         await append({
           kind: 'cancelled',
           by: 'control',
+          event: cancelEnvelope,
           ...(reason !== undefined ? { reason } : {}),
         });
         settleTerminal('cancelled');

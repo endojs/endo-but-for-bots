@@ -581,6 +581,141 @@ test('a crash mid-resume strands nothing: recovery drains the queue', async t =>
   t.deepEqual(engine.fold.output, { hops: 2 });
 });
 
+test('paused cancellation and unpause recover as one durable step', async t => {
+  const { powers, controls } = makeFakeAgent();
+  let crashArmed = false;
+  const wrapped = crashingPowers(
+    powers,
+    value => crashArmed && value.replays !== undefined,
+  );
+  const h1 = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('a'),
+  });
+  const chart = harden({
+    name: 'cancel-recovery',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        on: { 'cancel-requested': [{ target: 'reconciling' }] },
+      },
+      reconciling: { on: { 'cleanup-done': [{ target: 'done' }] } },
+      done: { final: true, output: { status: 'reconciled' } },
+    },
+  });
+  const { runId, control } = await E(h1.service).start(chart, {});
+  await E(control).pause();
+  await E(control).signal(harden({ type: 'cleanup-done' }));
+  await settle();
+  crashArmed = true;
+  // The atomic cancel transition lands, but the first queued replay does not.
+  await t.throwsAsync(() => E(control).cancel('test crash'), {
+    message: /simulated crash/,
+  });
+  h1.stop();
+
+  const h2 = await makeWorkflowService({
+    powers: controls.restart(),
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('b'),
+  });
+  t.teardown(h2.stop);
+  const engine = h2.engines.get(runId);
+  await until(() => engine.fold.done, 'cancel queue drained on recovery');
+  t.is(engine.fold.outcome, 'completed');
+  t.deepEqual(engine.fold.output, { status: 'reconciled' });
+  const journal = await E(engine.runFacet).journal();
+  const cancellation = journal.find(
+    entry => entry.event?.type === 'cancel-requested',
+  );
+  t.true(cancellation.unpauses);
+  t.is(cancellation.fired.configuration.state, 'reconciling');
+});
+
+test('child cancellation is durable before the parent request', async t => {
+  const { powers, controls } = makeFakeAgent();
+  let crashArmed = false;
+  let parentRunId = '';
+  const wrapped = crashingPowers(
+    powers,
+    (value, path) =>
+      crashArmed &&
+      value.event?.type === 'cancel-requested' &&
+      Array.isArray(path) &&
+      path.includes(parentRunId),
+  );
+  const h1 = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('a'),
+  });
+  const childChart = harden({
+    name: 'safe-child',
+    version: 1,
+    initial: 'live',
+    states: {
+      live: { on: { 'cancel-requested': [{ target: 'safe' }] } },
+      safe: { final: true, output: { status: 'safe' } },
+    },
+  });
+  const chart = harden({
+    name: 'safe-parent',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: {
+        entry: [
+          {
+            kind: 'spawn',
+            chart: childChart,
+            params: {},
+            outcome: 'child-done',
+          },
+        ],
+        on: {
+          'child-done': [{ target: 'safe' }],
+          'cancel-requested': [{}],
+        },
+      },
+      safe: { final: true, output: { status: 'child-safe' } },
+    },
+  });
+  const started = await E(h1.service).start(chart, {});
+  parentRunId = started.runId;
+  const parent = h1.engines.get(parentRunId);
+  await until(
+    () =>
+      [...parent.fold.pending.values()].some(
+        record => record.childRunId !== undefined,
+      ),
+    'child spawned',
+  );
+  const childRunId = [...parent.fold.pending.values()].find(
+    record => record.childRunId !== undefined,
+  ).childRunId;
+  crashArmed = true;
+  // The child request lands; the immediately following parent request does not.
+  await t.throwsAsync(() => E(started.control).cancel('test crash'), {
+    message: /simulated crash/,
+  });
+  h1.stop();
+
+  const h2 = await makeWorkflowService({
+    powers: controls.restart(),
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('b'),
+  });
+  t.teardown(h2.stop);
+  const child = h2.engines.get(childRunId);
+  t.true(child.fold.done);
+  t.deepEqual(child.fold.output, { status: 'safe' });
+  const recoveredParent = h2.engines.get(parentRunId);
+  await until(() => recoveredParent.fold.done, 'safe child settles parent');
+  t.deepEqual(recoveredParent.fold.output, { status: 'child-safe' });
+});
+
 test('a lost emit delivery is re-dispatched from its journaled obligation', async t => {
   const { powers, controls } = makeFakeAgent();
   let crashArmed = true;

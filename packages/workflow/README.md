@@ -152,12 +152,14 @@ await E(control).cancel('changed my mind');
 ```
 
 `cancel()` first delivers the reserved engine event `cancel-requested`.
-If the active chart handles it, the run stays live while ordinary durable
-states perform cleanup or collect an operator attestation; linked children
-receive and journal the same request before `cancel()` returns.
-Cancellation supersedes a pause and durably discards events queued behind it,
-so stale approvals or settlements cannot replay into reconciliation after a
-restart.
+Linked children receive and journal cancellation before the parent records its
+own request, closing the crash window in the safe direction.
+If the active chart handles the request, the run stays live while ordinary
+durable states perform cleanup or collect an operator attestation.
+Cancellation supersedes a pause atomically with that state transition, then
+replays queued envelopes against the reconciliation state: routed stale
+approvals miss their exited path, while already-settled compensation or child
+work can still finish.
 If no transition handles the event, the service retains its immediate
 cancellation behavior: active exit effects are sent, the run becomes
 `cancelled`, and children are cancelled.
