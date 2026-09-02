@@ -7911,6 +7911,13 @@ impl Interp {
             self.intern_key("then");
             self.intern_key("constructor");
         }
+        // `Promise.resolve` performs both the branded-promise constructor
+        // identity read and thenable assimilation even when neither property
+        // name appears in source text.
+        if self.symbol_ids.contains_key("resolve") {
+            self.intern_key("constructor");
+            self.intern_key("then");
+        }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, true, |_| true);
     }
@@ -14628,6 +14635,13 @@ impl Interp {
                     // plain `function` (a method shape) has none.
                     if op == XS_CODE_CONSTRUCTOR_FUNCTION {
                         self.install_own_function_prototype(f);
+                    } else {
+                        // Methods and arrows have [[Call]] but no
+                        // [[Construct]]. `new_function` materializes the
+                        // default prototype allocation shared with the
+                        // constructor opcode for metering; discard the
+                        // semantic link for the non-constructor opcode.
+                        self.ctor_prototype.remove(&f);
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
@@ -23954,14 +23968,11 @@ impl Interp {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_callable(r))
     }
 
-    /// `IsConstructor(v)` (ECMA-262 7.2.4), conservatively: every callable is a
-    /// constructor **except** a native prototype **method** (`method.is_some()`
-    /// — e.g. `Array.prototype.map`, and the `Intl.NumberFormat.prototype.format`
-    /// accessor getter / its bound function), which has no `[[Construct]]`. A
-    /// bound/proxy callable follows its target. This is the check
-    /// `Reflect.construct` and the harness `isConstructor` require; it only
-    /// *tightens* the prior callable test (which wrongly admitted methods), so
-    /// no case that constructed a genuine constructor changes.
+    /// `IsConstructor(v)` (ECMA-262 7.2.4). A bound/proxy callable follows its
+    /// target. Native prototype methods, `eval`, `Symbol`, and `BigInt` have no
+    /// `[[Construct]]`. A user function has it only when its constructor opcode
+    /// retained a default-prototype link; generator functions use that link for
+    /// their generator instances but are themselves non-constructable.
     fn is_constructor_value(&self, v: Slot) -> bool {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_constructor(r))
     }
@@ -23974,7 +23985,11 @@ impl Interp {
             return self.slot_is_constructor(data.target);
         }
         match self.functions.get(&r) {
-            Some(fi) => fi.method.is_none(),
+            Some(fi) if fi.method.is_some() => false,
+            Some(fi) if fi.native.is_some() => {
+                !matches!(fi.native, Some(Native::Eval | Native::Symbol | Native::BigInt))
+            }
+            Some(fi) => !fi.is_generator && self.ctor_prototype.contains_key(&r),
             None => false,
         }
     }
@@ -32414,18 +32429,32 @@ impl Interp {
             }
             NativeMethod::AsyncIteratorIdentity => this,
             // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
-            // whose constructor is `Promise` is returned as-is; otherwise a
-            // capability is built and its `resolve` called with `v`. Resolving
-            // with a reference whose `.then` is callable adopts it as a thenable
-            // (the keystone path, handled in `settle_promise`); a non-thenable
-            // reference fulfills with the object.
+            // whose observable constructor is the receiver is returned as-is;
+            // otherwise a capability is built and its `resolve` called with
+            // `v`. The currently materialized capability path is the intrinsic
+            // Promise constructor; custom constructors remain a named gap.
             NativeMethod::PromiseResolveStatic => {
-                let is_native_promise = matches!(arg0.value,
-                    Payload::Reference(r) if self.promises.contains_key(&r));
-                if is_native_promise {
-                    // `v.constructor === Promise` for a native promise: return
-                    // `v` unchanged (the `Promise.resolve` identity fast path,
-                    // `fx_Promise_resolveAux`).
+                if !self.is_constructor_value(this) {
+                    return Err(self.catchable_type_error());
+                }
+                let intrinsic = self.intrinsics.get("Promise").copied();
+                if !matches!(this.value,
+                    Payload::Reference(c) if this.kind == Kind::Reference && Some(c) == intrinsic)
+                {
+                    return Err(Halt::Unsupported("promise:custom-capability"));
+                }
+                let same_constructor = if let Payload::Reference(promise) = arg0.value {
+                    if arg0.kind == Kind::Reference && self.promises.contains_key(&promise) {
+                        let constructor_id = self.intern_key("constructor");
+                        let constructor = self.mop_get(code, promise, constructor_id, arg0)?;
+                        self.same_value(constructor, this)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if same_constructor {
                     self.meter.tick_raw(PROMISE_RESOLVE_SAME_METERING);
                     arg0
                 } else {
@@ -32438,6 +32467,15 @@ impl Interp {
             // `Promise.reject(reason)` (`fx_Promise_reject`): a capability whose
             // `reject` is called with `reason` (any value).
             NativeMethod::PromiseRejectStatic => {
+                if !self.is_constructor_value(this) {
+                    return Err(self.catchable_type_error());
+                }
+                let intrinsic = self.intrinsics.get("Promise").copied();
+                if !matches!(this.value,
+                    Payload::Reference(c) if this.kind == Kind::Reference && Some(c) == intrinsic)
+                {
+                    return Err(Halt::Unsupported("promise:custom-capability"));
+                }
                 self.meter.tick_raw(PROMISE_REJECT_STATIC_METERING);
                 let (derived, _resolve, _reject) = self.new_promise_capability();
                 self.settle_promise(derived, arg0, true)?;

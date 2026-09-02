@@ -524,6 +524,34 @@ fn promise_then_requires_a_branded_promise_receiver() {
 }
 
 #[test]
+fn promise_statics_require_constructor_receivers() {
+    assert_oracle_result(
+        "var n=0;for(var v of [undefined,null,1,'x',true,Symbol(),eval,()=>{},function*(){},async function(){},async function*(){},({m(){}}).m]){try{Promise.resolve.call(v,1)}catch(e){n+=e.name==='TypeError'}}n",
+        "12",
+    );
+    assert_oracle_result(
+        "var n=0;for(var v of [undefined,null,1,'x',true,Symbol(),eval,()=>{},function*(){},async function(){},async function*(){},({m(){}}).m]){try{Promise.reject.call(v,1)}catch(e){n+=e.name==='TypeError'}}n",
+        "12",
+    );
+}
+
+#[test]
+fn promise_resolve_observes_native_promises_constructor_for_identity() {
+    assert_oracle_result(
+        "var p=Promise.resolve(1),q=Promise.resolve(p);''+(p===q)",
+        "true",
+    );
+    assert_oracle_result(
+        "var p=Promise.resolve(1);p.constructor=null;var q=Promise.resolve(p);''+(p===q)",
+        "false",
+    );
+    assert_oracle_result(
+        "var p=Promise.resolve(1),marker={},seen='';Object.defineProperty(p,'constructor',{get:function(){throw marker}});try{Promise.resolve(p)}catch(e){seen=''+(e===marker)}seen",
+        "true",
+    );
+}
+
+#[test]
 fn promise_catch_invokes_the_observable_then_method() {
     assert_oracle_result(
         "var log='',result={},o={then:function(a,b){log+=(this===o)+':'+(a===undefined)+':'+b+':'+arguments.length;return result}};var r=Promise.prototype.catch.call(o,7);log+':'+(r===result)",
