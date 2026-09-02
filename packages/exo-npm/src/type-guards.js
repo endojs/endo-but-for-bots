@@ -4,13 +4,17 @@
  * Method-guard shapes for package-registry directory trees and the deprecated
  * EndoRegistry compatibility capability.
  *
- * This guard is what crosses the worker boundary, mirroring the
- * `EndoRegistry` interface in the Capability shape section of
- * `designs/registry-capability.md`.
+ * The directory-tree guards (`RegistryHubInterface`,
+ * `RegistryDirectoryInterface`, `RegistrySnapshotTreeInterface`) are what
+ * crosses the worker boundary now; per this feature's amendment in
+ * `designs/daemon-worker-import-from-mount.md`, the tree itself does not cross,
+ * only already-adapted lookup/list/has calls do. The Node and Endor adapters
+ * present the same guards so callers cannot tell which backend resolved a
+ * request.
  *
- * The compatibility exo uses `EndoRegistryInterface`; the Node and Endor
- * adapters present the directory-tree guards below so callers cannot tell
- * which backend resolved a request.
+ * `EndoRegistryInterface` is retained only for the explicit compatibility exo
+ * (`makeDeprecatedEndoRegistryAdapter`); it mirrors the now-`Deprecated`
+ * `EndoRegistry` method protocol from `designs/registry-capability.md`.
  *
  * The CAS interface guard (`CasInterface`) lives in `@endo/mem-cas`;
  * see that package's `./src/interfaces.js`.

@@ -189,6 +189,75 @@ test('resolveRegistryTree preserves workspace-wins and mismatch diagnostics', as
   ]);
 });
 
+test('resolveRegistryTree upgrades an earlier selection within one major', async t => {
+  // Two importers require the same package at overlapping ranges in the same
+  // major slot: the first pins the low exact version, the second demands a
+  // higher one. Eager MVS must upgrade the earlier selection to the greater.
+  // A "never upgrade once selected" regression leaves shared@1.0.0.
+  const records = harden({
+    low: harden({
+      '1.0.0': harden({
+        integrity: 'sha512-low',
+        packageJson: JSON.stringify({
+          name: 'low',
+          version: '1.0.0',
+          dependencies: { shared: '1.0.0' },
+        }),
+      }),
+    }),
+    high: harden({
+      '1.0.0': harden({
+        integrity: 'sha512-high',
+        packageJson: JSON.stringify({
+          name: 'high',
+          version: '1.0.0',
+          dependencies: { shared: '^1.2.0' },
+        }),
+      }),
+    }),
+    shared: harden({
+      '1.0.0': harden({
+        integrity: 'sha512-shared-1',
+        packageJson: JSON.stringify({ name: 'shared', version: '1.0.0' }),
+      }),
+      '1.2.0': harden({
+        integrity: 'sha512-shared-12',
+        packageJson: JSON.stringify({ name: 'shared', version: '1.2.0' }),
+      }),
+    }),
+  });
+  const resolution = await resolveRegistryTree(
+    JSON.stringify({ dependencies: { low: '^1.0.0', high: '^1.0.0' } }),
+    makeFixtureRoot(records),
+  );
+  t.deepEqual(resolution.keys, ['high@1.0.0', 'low@1.0.0', 'shared@1.2.0']);
+});
+
+test('resolveRegistryTree tolerates malformed dependency tables', async t => {
+  // Registry-supplied package.json fields are third-party JSON: a null table
+  // or a non-string range must be skipped, not crash resolution with a raw
+  // TypeError outside the PackageRegistryError family.
+  const records = harden({
+    malformed: harden({
+      '1.0.0': harden({
+        integrity: 'sha512-malformed',
+        packageJson: JSON.stringify({
+          name: 'malformed',
+          version: '1.0.0',
+          dependencies: null,
+          peerDependencies: { misdeclared: 5 },
+          optionalDependencies: ['not', 'an', 'object'],
+        }),
+      }),
+    }),
+  });
+  const resolution = await resolveRegistryTree(
+    JSON.stringify({ dependencies: { malformed: '^1.0.0' } }),
+    makeFixtureRoot(records),
+  );
+  t.deepEqual(resolution.keys, ['malformed@1.0.0']);
+});
+
 test('resolveRegistryTree preserves multiple major selections', async t => {
   const records = harden({
     one: harden({

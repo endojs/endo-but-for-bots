@@ -127,11 +127,21 @@ export const resolveRegistryTree = async (
       'peerDependencies',
       'optionalDependencies',
     ]) {
-      const dependencies = /** @type {Record<string, string> | undefined} */ (
-        packageJson[source]
-      );
-      if (dependencies === undefined) continue;
+      const dependencies = packageJson[source];
+      // Registry-supplied `package.json` fields are third-party JSON. Shape
+      // each dependency table before iterating: `null` would throw a raw
+      // `TypeError` from `Object.entries`, and a non-string range would throw
+      // later at `range.startsWith`, both outside the `PackageRegistryError`
+      // family. A malformed table is skipped rather than crashing resolution.
+      if (
+        dependencies === null ||
+        typeof dependencies !== 'object' ||
+        Array.isArray(dependencies)
+      ) {
+        continue;
+      }
       for (const [name, range] of Object.entries(dependencies)) {
+        if (typeof range !== 'string') continue;
         frontier.push({ name, range, source, importer });
       }
     }
@@ -297,8 +307,12 @@ export const resolveRegistryTree = async (
     }
   }
 
-  /** @type {Record<string, RegistryResolutionEntry>} */
-  const packagesByKey = {};
+  // Null-prototype so a registry-derived key (`constructor`, `toString`) is a
+  // plain data slot rather than an inherited intrinsic when read back by index
+  // in `makeMountReadPowers` after crossing the worker boundary.
+  const packagesByKey = /** @type {Record<string, RegistryResolutionEntry>} */ (
+    Object.create(null)
+  );
   for (const [name, slots] of selections) {
     for (const selection of slots.values()) {
       const key = selection.isWorkspace ? name : `${name}@${selection.version}`;

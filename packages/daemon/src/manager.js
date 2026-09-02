@@ -2044,6 +2044,11 @@ const makeDaemonCore = async (
         if (segments.length === 0) return tree;
         let current = tree;
         for (const segment of segments) {
+          // Once a segment has resolved to a blob (which has no `sha256`),
+          // a deeper path descends *through* a file. Return not-found rather
+          // than throwing a raw method-missing `TypeError`, matching the
+          // `!result.found` branch below and `has`'s no-throw contract.
+          if (typeof current.sha256 !== 'function') return undefined;
           const currentHash = current.sha256();
           const result = unwrapEndorTreeHost(
             endorRegistryPowers.lookupTree(currentHash, segment),

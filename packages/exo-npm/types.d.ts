@@ -37,13 +37,19 @@ export interface EndoReadableTree {
 
 export type RegistryTemporal = 'stable' | 'live' | 'immutable';
 
-export interface RegistryNodeInfo {
+// A `type` alias, not an `interface`: `RegistryVersionTree` narrows the
+// inherited optional `getInfo?(): ... | Record<string, unknown>` from
+// `EndoReadableTree` down to this shape, and an object *type* gets the implicit
+// index signature that makes it assignable to `Record<string, unknown>`. An
+// interface would not, and `RegistryVersionTree extends EndoReadableTree` would
+// silently fail TS2430 (silent because `skipLibCheck` skips `.d.ts`).
+export type RegistryNodeInfo = {
   temporal: RegistryTemporal;
   integrity?: string;
   algorithm?: string;
   hash?: string;
   size?: bigint;
-}
+};
 
 export interface RegistryHub {
   help(method?: string): string;

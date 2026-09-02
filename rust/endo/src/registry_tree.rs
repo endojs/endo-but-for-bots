@@ -114,10 +114,17 @@ impl<'a, H: HttpClient + ?Sized> EndorRegistryTreeAdapter<'a, H> {
             .and_then(serde_json::Value::as_object)
             .ok_or_else(|| RegistryTreeError::NotFound(name.to_string()))?;
         let mut names: Vec<String> = versions.keys().cloned().collect();
+        // Total order across the mixed set: parseable versions sort by semver
+        // and strictly before any unparseable spelling, which then sort
+        // lexicographically among themselves. A per-pair `left.cmp(right)`
+        // fallback would be intransitive, which `sort_by` may resolve into an
+        // arbitrary order driven by registry-supplied key order.
         names.sort_by(
             |left, right| match (Version::parse(left), Version::parse(right)) {
                 (Some(left_version), Some(right_version)) => left_version.cmp(&right_version),
-                _ => left.cmp(right),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => left.cmp(right),
             },
         );
         Ok(names)
