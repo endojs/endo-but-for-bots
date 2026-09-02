@@ -278,6 +278,19 @@ impl Decimal {
         }
     }
 
+    /// An exact non-negative decimal integer. `digits` contains only ASCII
+    /// decimal digits and may contain leading or trailing zeroes.
+    fn from_integer_ascii(digits: &str) -> Decimal {
+        let digits = digits.trim_start_matches('0');
+        if digits.is_empty() {
+            return Decimal::zero();
+        }
+        let exponent = digits.len() as i32 - 1;
+        let mut digits: Vec<u8> = digits.bytes().map(|b| b - b'0').collect();
+        trim_trailing_zeros(&mut digits);
+        Decimal { digits, exponent }
+    }
+
     /// Multiply by `10^shift` — just moves the point.
     fn scale_pow10(&mut self, shift: i32) {
         if !self.is_zero() {
@@ -928,17 +941,27 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
         return (with_percent_suffix(opts, parts), false);
     }
 
-    let mut value = x.abs();
-    if opts.style == Style::Percent {
-        value *= 100.0;
-    }
-
+    let value = x.abs();
     if value.is_infinite() {
         parts.push(Part::new(PartType::Infinity, "∞"));
         return (with_percent_suffix(opts, parts), false);
     }
 
-    let mut dec = Decimal::from_f64(value);
+    finite_body_parts(opts, Decimal::from_f64(value), negative)
+}
+
+/// Build the body for an exact finite decimal magnitude. Keeping this path
+/// independent of `f64` lets BigInt locale formatting preserve every digit.
+fn finite_body_parts(
+    opts: &NfResolved,
+    mut dec: Decimal,
+    negative: bool,
+) -> (Vec<Part>, bool) {
+    let mut parts = Vec::new();
+    if opts.style == Style::Percent {
+        dec.scale_pow10(2);
+    }
+    let original = dec.clone();
     let notation_exp = if dec.is_zero() {
         0
     } else {
@@ -955,7 +978,7 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
     let mut notation_exp = notation_exp;
     if opts.notation == Notation::Scientific && rendered.int_digits.len() > 1 {
         notation_exp += rendered.int_digits.len() as i32 - 1;
-        let mut d2 = Decimal::from_f64(value);
+        let mut d2 = original;
         d2.scale_pow10(-notation_exp);
         rendered = render_magnitude(opts, &d2, negative);
     }
@@ -1010,6 +1033,27 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
     (with_percent_suffix(opts, parts), rounded_is_zero)
 }
 
+/// Partition an exact BigInt magnitude into locale-aware parts.
+fn partition_bigint(opts: &NfResolved, negative: bool, digits: &str) -> Vec<Part> {
+    let dec = Decimal::from_integer_ascii(digits);
+    let is_zero = dec.is_zero();
+    let (mut body, rounded_is_zero) = finite_body_parts(opts, dec, negative);
+    let sign = resolve_sign(opts.sign_display, negative && !is_zero, rounded_is_zero);
+    let mut parts = Vec::new();
+    if let Some(minus) = sign {
+        parts.push(Part::new(
+            if minus {
+                PartType::MinusSign
+            } else {
+                PartType::PlusSign
+            },
+            if minus { "-" } else { "+" },
+        ));
+    }
+    parts.append(&mut body);
+    parts
+}
+
 /// Append the percent sign for a percent-style number (en/latin placement:
 /// suffix with no space).
 fn with_percent_suffix(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
@@ -1024,6 +1068,14 @@ pub fn format_to_string(opts: &NfResolved, x: f64) -> String {
     partition_number(opts, x)
         .into_iter()
         .map(|p| p.value)
+        .collect()
+}
+
+/// Format an exact BigInt magnitude without narrowing through `f64`.
+pub fn format_bigint_to_string(opts: &NfResolved, negative: bool, digits: &str) -> String {
+    partition_bigint(opts, negative, digits)
+        .into_iter()
+        .map(|part| part.value)
         .collect()
 }
 
@@ -1080,6 +1132,24 @@ mod tests {
         assert_eq!(format_to_string(&f, 100000.0), "1,00,000");
         assert_eq!(format_to_string(&f, 10000.0), "10,000");
         assert_eq!(format_to_string(&f, 1000.0), "1,000");
+    }
+
+    #[test]
+    fn bigint_formatting_preserves_all_digits() {
+        let mut f = decimal("en-IN");
+        assert_eq!(
+            format_bigint_to_string(&f, false, "123456789012345678901234567890"),
+            "1,23,45,67,89,01,23,45,67,89,01,23,45,67,890",
+        );
+        assert_eq!(
+            format_bigint_to_string(&f, true, "123456789012345678901234567890"),
+            "-1,23,45,67,89,01,23,45,67,89,01,23,45,67,890",
+        );
+        f.numbering_system = "thai".to_string();
+        assert_eq!(
+            format_bigint_to_string(&f, false, "12345678901234567890"),
+            "๑,๒๓,๔๕,๖๗,๘๙,๐๑,๒๓,๔๕,๖๗,๘๙๐",
+        );
     }
 
     #[test]

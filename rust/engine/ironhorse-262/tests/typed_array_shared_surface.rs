@@ -138,3 +138,41 @@ fn shared_allocating_methods_honor_species_copy_and_view_semantics() {
         agrees(source);
     }
 }
+
+#[test]
+fn shared_locale_string_validates_and_invokes_each_numeric_domain() {
+    for source in [
+        "var calls=[]; BigInt.prototype.toLocaleString=function(){calls.push(this);return 'b'+this}; var a=new BigInt64Array([1n,2n]); a.toLocaleString()+':'+calls.join('|')",
+        "var a=new Uint8Array([1,2]); var calls=0; Number.prototype.toLocaleString=function(){calls++;if(calls===1)$262.detachArrayBuffer(a.buffer);return this}; a.toLocaleString()+':'+calls",
+        "var a=new Uint8Array(1); $262.detachArrayBuffer(a.buffer); try{a.toLocaleString();false}catch(e){e instanceof TypeError}",
+        "try{Uint8Array.prototype.toLocaleString.call({});false}catch(e){e instanceof TypeError}",
+        "var P=Object.getPrototypeOf(Int8Array.prototype); P.toLocaleString.name+':'+P.toLocaleString.length",
+    ] {
+        agrees(source);
+    }
+
+    // XS has no ECMA-402 NumberFormat host and its Array locale-string path
+    // does not forward locales/options. Pin the modern behavior directly on
+    // IronHorse while retaining oracle coverage for invocation and errors.
+    for (source, expected) in [
+        ("new Uint8Array([1,2,255]).toLocaleString()", "1,2,255"),
+        (
+            "new BigInt64Array([1234567890123456789n,-2n]).toLocaleString()",
+            "1,234,567,890,123,456,789,-2",
+        ),
+        (
+            "var calls=[]; Number.prototype.toLocaleString=function(l,o){calls.push(this+':'+l+':'+o.x);return 'v'+this}; var a=new Uint8Array([1,2]); a.toLocaleString('zz',{x:4})+':'+calls.join('|')",
+            "v1,v2:1:zz:4|2:zz:4",
+        ),
+    ] {
+        let run = dual_run(source).expect("the pinned XS oracle must start");
+        assert!(
+            matches!(
+                run.agreement,
+                Agreement::BothComplete | Agreement::IronhorseOnlyComplete
+            ),
+            "{run:?}",
+        );
+        assert_eq!(run.ironhorse_result, expected, "for `{source}`");
+    }
+}
