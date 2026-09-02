@@ -173,6 +173,24 @@ fn strings_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "seed-growseed-grow");
 }
 
+/// Stateful RegExp matching persists a UTF-16 `lastIndex` while its matcher
+/// resumes over XS-style CESU-8, including an astral code point that spans two
+/// code units. The final crank also covers non-ASCII regexp splitting after a
+/// full SQLite close/reopen.
+#[test]
+fn unicode_regexp_state_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "unicode-regexp",
+        &[
+            "var s='a'+String.fromCodePoint(0x1F600)+'é';var r=/./gu;var seen=r.exec(s)[0];",
+            "seen=seen+':'+r.lastIndex+':'+r.exec(s)[0].length+':'+r.lastIndex;",
+            "seen=seen+':'+r.exec(s)[0]+':'+r.lastIndex;",
+            "seen+':'+s.split(/(?:)/u).length",
+        ],
+    );
+    assert_eq!(last, "a:1:2:3:é:4:3");
+}
+
 /// Object graphs: instance + property slots round-trip; properties
 /// written before a suspend are read and mutated after it.
 #[test]
