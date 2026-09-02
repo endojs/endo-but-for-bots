@@ -3,7 +3,8 @@
 //! `Symbol.isConcatSpreadable`, and uses `ArraySpeciesCreate` for Array
 //! receivers.
 
-use ironhorse_262::{dual_run, Agreement};
+use ironhorse_262::{dual_run, ironhorse_only_run, Agreement};
+use ironhorse_vm::Halt;
 
 fn agrees(source: &str) {
     let run = dual_run(source).expect("the pinned XS oracle must start");
@@ -28,6 +29,8 @@ fn accepts_generic_and_primitive_receivers() {
         "var o={0:'a',length:1}; var r=Array.prototype.concat.call(o,['b']); (r[0]===o)+':'+r[1]+':'+r.length",
         "var r=Array.prototype.concat.call('ab'); typeof r[0]+':'+String(r[0])+':'+r.length",
         "Array.prototype.concat.call(17,'x').length",
+        "(function(){var r=Array.prototype.concat.call(arguments);return r.length+':'+(r[0]===arguments)})(1,2)",
+        "(function(){var r=[0].concat(arguments);return r.length+':'+(r[1]===arguments)})(1,2)",
     ] {
         agrees(source);
     }
@@ -67,6 +70,31 @@ fn array_species_constructor_receives_zero() {
     agrees(
         "var seen=-1; function Species(n){seen=n;this.tag='species'} var a=[1,,3]; a.constructor={}; a.constructor[Symbol.species]=Species; var r=a.concat([4]); seen+':'+r.tag+':'+r.length+':'+r[0]+':'+Object.prototype.hasOwnProperty.call(r,1)+':'+r[2]+':'+r[3]+':'+(r instanceof Array)",
     );
+}
+
+#[test]
+fn custom_species_results_accept_wide_ordinary_properties() {
+    for source in [
+        "var a=[]; function S(){return {}} a.constructor={}; a.constructor[Symbol.species]=S; var o={length:4294967296}; o[Symbol.isConcatSpreadable]=true; o[4294967295]='edge'; var r=a.concat(o); if(r.length!==4294967296||r[4294967295]!=='edge')throw 'wrong'",
+        "var a=[]; function S(){return {}} a.constructor={}; a.constructor[Symbol.species]=S; var o={length:4294967297}; o[Symbol.isConcatSpreadable]=true; o[4294967296]='wide'; var r=a.concat(o); if(r.length!==4294967297||r[4294967296]!=='wide')throw 'wrong'",
+    ] {
+        assert_eq!(
+            ironhorse_only_run(source),
+            Halt::Return,
+            "IronHorse must complete sparse wide-key concat probe `{source}`",
+        );
+    }
+}
+
+#[test]
+fn spreadable_typed_arrays_copy_elements_and_honor_fake_length() {
+    for source in [
+        "var a=new Uint16Array([3,4]); a[Symbol.isConcatSpreadable]=true; var r=[1].concat(a); r.join(',')+':'+r.length",
+        "var a=new Uint8Array([7]); Object.defineProperty(a,'length',{value:3}); a[Symbol.isConcatSpreadable]=true; var r=[].concat(a); r.length+':'+r[0]+':'+Object.prototype.hasOwnProperty.call(r,1)+':'+Object.prototype.hasOwnProperty.call(r,2)",
+        "var ta=new Uint8Array([7,8]); ta[Symbol.isConcatSpreadable]=true; var log=[]; function S(){return new Proxy({},{defineProperty:function(t,k,d){log.push(String(k));if(k==='0')$262.detachArrayBuffer(ta.buffer);return Reflect.defineProperty(t,k,d)}})} var a=[]; a.constructor={}; a.constructor[Symbol.species]=S; var r=a.concat(ta); log.join(',')+':'+r.length+':'+Object.prototype.hasOwnProperty.call(r,0)+':'+Object.prototype.hasOwnProperty.call(r,1)",
+    ] {
+        agrees(source);
+    }
 }
 
 #[test]
