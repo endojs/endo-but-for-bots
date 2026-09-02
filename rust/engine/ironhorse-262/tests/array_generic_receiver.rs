@@ -147,6 +147,39 @@ fn sparse_lastIndexOf_over_preallocated() {
 }
 
 #[test]
+fn large_sparse_arrays_skip_holes_without_losing_live_semantics() {
+    agrees(
+        "var a = []; a[0] = 0; a[999999] = 9; var seen = []; \
+         a.forEach(function (v, i) { seen.push(i); if (i === 0) a[500000] = 5; }); \
+         seen.join(',')",
+    );
+    agrees(
+        "var a = []; a[0] = 1; a[999999] = 2; \
+         a.every(function (v, i) { if (i === 0) a[500000] = 3; return v > 0; }) + ':' + \
+         a.some(function (v) { return v === 3; })",
+    );
+    agrees(
+        "var a = []; a[999999] = 'far'; \
+         a.indexOf('far') + ':' + a.lastIndexOf('far') + ':' + a.indexOf('missing')",
+    );
+    agrees(
+        "var a = new Array(1000000); Object.defineProperty(a, '0', { \
+           configurable: true, get: function () { a[500000] = 'made'; return 'first'; } \
+         }); a.indexOf('made')",
+    );
+    agrees(
+        "var a = new Array(1000000); a[500000] = 'delete-me'; \
+         Object.defineProperty(a, '999999', { configurable: true, get: function () { \
+           delete a[500000]; return 'last'; \
+         }}); a.lastIndexOf('delete-me')",
+    );
+    agrees(
+        "var a = new Array(1000000); Array.prototype[750000] = 'inherited'; \
+         var result = a.indexOf('inherited'); delete Array.prototype[750000]; result",
+    );
+}
+
+#[test]
 fn prototype_inherited_hole_is_visited() {
     // A hole whose index resolves through the prototype chain IS present to
     // HasProperty, so forEach visits it and indexOf can find it.
