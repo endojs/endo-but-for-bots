@@ -621,6 +621,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
         "carry-array-sort",
          "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
          Array.prototype.slice; a.slice; Array.prototype.concat; a.concat; \
+         Array.prototype.push; Array.prototype.pop; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
@@ -648,6 +649,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              g = []; Reflect.set(inst, '0', 7, g); \
              q = q.slice(0, 3); \
              f = {length: 4294967297}; f[4294967296] = 5; \
+             b = {length: 0}; Array.prototype.push.call(b, 6, 7); \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
@@ -655,12 +657,13 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  g[0] + ':' + g.length + ':' + \
                  Array.prototype.concat.name + ':' + Array.prototype.concat.length + ':' + \
                  v.join(',') + ':' + Array.prototype.slice.call(f, 4294967296).join(',') + ':' + \
-                 Object.prototype.hasOwnProperty.call(Array.prototype, k); t",
+                 Object.prototype.hasOwnProperty.call(Array.prototype, k) + ':' + \
+                 Array.prototype.pop.call(b) + ':' + b.length + ':' + b[0]; t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6"
     );
 }
 

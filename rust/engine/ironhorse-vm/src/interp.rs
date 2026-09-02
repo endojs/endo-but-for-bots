@@ -5805,6 +5805,8 @@ impl Interp {
                 NativeMethod::ArraySort | NativeMethod::ArrayToSorted => {
                     self.alloc_named_method(m, name, 1)
                 }
+                NativeMethod::ArrayPush => self.alloc_named_method(m, name, 1),
+                NativeMethod::ArrayPop => self.alloc_named_method(m, name, 0),
                 NativeMethod::ArraySlice => self.alloc_named_method(m, name, 2),
                 NativeMethod::ArrayConcat => self.alloc_named_method(m, name, 1),
                 NativeMethod::ArrayWith | NativeMethod::ArrayToSpliced => {
@@ -13514,7 +13516,7 @@ impl Interp {
                             // `arr.length`: the exotic-array length accessor
                             // getter (`fxArrayLengthGetter`).
                             self.meter.tick_raw(ARRAY_LENGTH_GET_METERING);
-                            Slot::integer(self.arrays[&inst].length as i32)
+                            Self::array_index_number(u64::from(self.arrays[&inst].length))
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.length_id
@@ -29326,11 +29328,19 @@ impl Interp {
             NativeMethod::TypedArrayFrom | NativeMethod::TypedArrayOf => {
                 self.typed_array_static(m, this, base, argc, code)?
             }
-            // `Array.prototype.push(...items)` — dense fast path only.
+            // `Array.prototype.push(...items)` — retain the exact-metered
+            // packed path only when the writes cannot observe descriptors or
+            // the prototype chain; all other receivers use the generic MOP.
             NativeMethod::ArrayPush => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("push:non-dense-array")),
+                    Some(i) if self.array_push_fast_safe(i, argc) => i,
+                    _ => {
+                        let result =
+                            self.array_generic_push_pop(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let args: Vec<Slot> = (0..argc)
                     .map(|i| {
@@ -29363,13 +29373,20 @@ impl Interp {
                 let a = self.arrays.get_mut(&inst).unwrap();
                 a.length = length + c;
                 self.meter.tick_builtin_some(2);
-                Slot::integer((length + c) as i32)
+                Self::array_index_number(u64::from(length + c))
             }
-            // `Array.prototype.pop()` — dense fast path only.
+            // `Array.prototype.pop()` — likewise, a non-writable length or
+            // non-configurable last element must take the throwing MOP path.
             NativeMethod::ArrayPop => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("pop:non-dense-array")),
+                    Some(i) if self.array_pop_fast_safe(i) => i,
+                    _ => {
+                        let result =
+                            self.array_generic_push_pop(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 self.meter.tick_raw(ARRAY_POP_FRAME_METERING);
                 let length = self.arrays[&inst].length;
@@ -35466,6 +35483,64 @@ impl Interp {
         }
     }
 
+    /// Whether `push` can use the packed exact-metering path without skipping
+    /// an observable Array constraint. A writable length and extensible
+    /// receiver are required for every appended element, and an inherited
+    /// property (or Proxy in the prototype chain) at any destination index
+    /// must be handled by ordinary `[[Set]]` instead.
+    fn array_push_fast_safe(&mut self, inst: crate::value::SlotIndex, argc: usize) -> bool {
+        if !self.array_length_writable(inst) {
+            return false;
+        }
+        let length = u64::from(self.arrays[&inst].length);
+        let Some(new_length) = length.checked_add(argc as u64) else {
+            return false;
+        };
+        if new_length > u64::from(u32::MAX) {
+            return false;
+        }
+        if argc == 0 {
+            return true;
+        }
+        if !self.instance_extensible(inst) {
+            return false;
+        }
+        for index in length..new_length {
+            let name = index.to_string();
+            let Some(&id) = self.symbol_ids.get(&name) else {
+                continue;
+            };
+            let mut owner = self.instance_prototype(inst);
+            while !owner.is_null() {
+                if self.proxies.contains_key(&owner)
+                    || self.ordinary_get_own_descriptor(owner, id).is_some()
+                    || self.exotic_own_descriptor(owner, id).is_some()
+                {
+                    return false;
+                }
+                owner = self.instance_prototype(owner);
+            }
+        }
+        true
+    }
+
+    /// Whether `pop` can delete its packed last item and set the Array length
+    /// without an observable failure. A zero-length pop still performs a
+    /// throwing write of `length = 0`, so a non-writable length is never fast.
+    fn array_pop_fast_safe(&self, inst: crate::value::SlotIndex) -> bool {
+        if !self.array_length_writable(inst) {
+            return false;
+        }
+        let array = &self.arrays[&inst];
+        if array.length == 0 {
+            return true;
+        }
+        array
+            .items()
+            .get(&(array.length - 1))
+            .is_some_and(|item| item.flag & XS_DONT_DELETE_FLAG == 0)
+    }
+
     /// Whether a dense allocating method may use its compact result path.
     /// A custom/accessor `constructor`, or a `Symbol.species` override on the
     /// resolved intrinsic Array constructor, requires the observable generic
@@ -35628,6 +35703,95 @@ impl Interp {
         let id = self.array_generic_index_id(k);
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         self.mop_get(code, o, id, recv)
+    }
+
+    /// Generic `Array.prototype.push` / `pop` over an arbitrary object. The
+    /// methods use `LengthOfArrayLike`, throwing `Set`, `Get`, and
+    /// `DeletePropertyOrThrow` in specification order, so sparse Arrays,
+    /// inherited indices, accessors, Proxies, and primitive wrappers are all
+    /// observable through the same MOP used by the rest of the generic Array
+    /// surface.
+    fn array_generic_push_pop(
+        &mut self,
+        code: &[u8],
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+        let length_id = self.intern_key("length");
+
+        match method {
+            NativeMethod::ArrayPush => {
+                let new_length = length
+                    .checked_add(argc as u64)
+                    .filter(|new_length| *new_length <= 9_007_199_254_740_991)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                let args: Vec<Slot> = (0..argc)
+                    .map(|index| {
+                        self.stack
+                            .get(base + 4 + index)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
+                    .collect();
+                for (offset, value) in args.into_iter().enumerate() {
+                    let id = self.array_generic_index_id(length + offset as u64);
+                    if !self.mop_set(code, inst, id, value, object)? {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                if !self.mop_set(
+                    code,
+                    inst,
+                    length_id,
+                    Self::array_index_number(new_length),
+                    object,
+                )? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(Self::array_index_number(new_length))
+            }
+            NativeMethod::ArrayPop => {
+                if length == 0 {
+                    if !self.mop_set(code, inst, length_id, Slot::integer(0), object)? {
+                        return Err(self.catchable_type_error());
+                    }
+                    return Ok(Slot::undefined());
+                }
+                let new_length = length - 1;
+                let id = self.array_generic_index_id(new_length);
+                let value = self.mop_get(code, inst, id, object)?;
+                if !self.mop_delete(code, inst, id)? {
+                    return Err(self.catchable_type_error());
+                }
+                if !self.mop_set(
+                    code,
+                    inst,
+                    length_id,
+                    Self::array_index_number(new_length),
+                    object,
+                )? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(value)
+            }
+            _ => unreachable!("generic push/pop method"),
+        }
     }
 
     /// `ToIntegerOrInfinity(? ToNumber(v))` (ECMA-262 7.1.5): `NaN` → 0,
@@ -39945,7 +40109,9 @@ impl Interp {
             && !self.arguments_objects.contains(&inst)
         {
             self.meter.tick_raw(ARRAY_LENGTH_GET_METERING);
-            Ok(Slot::integer(self.arrays[&inst].length as i32))
+            Ok(Self::array_index_number(u64::from(
+                self.arrays[&inst].length,
+            )))
         } else {
             self.ordinary_get(code, inst, id, obj)
         }
@@ -41210,7 +41376,10 @@ impl Interp {
                 if self.proxies.contains_key(&prototype) {
                     return self.proxy_set(code, prototype, id, value, receiver);
                 }
-                if let Some(descriptor) = self.ordinary_get_own_descriptor(prototype, id) {
+                if let Some(descriptor) = self
+                    .ordinary_get_own_descriptor(prototype, id)
+                    .or_else(|| self.exotic_own_descriptor(prototype, id))
+                {
                     if descriptor.is_accessor() {
                         let setter = descriptor.set.unwrap_or_else(Slot::undefined);
                         if setter.kind == Kind::Undefined {
@@ -41517,7 +41686,7 @@ impl Interp {
         receiver: Slot,
     ) -> Result<Slot, Halt> {
         if let Some(a) = self.arrays.get(&inst) {
-            return Ok(Slot::integer(a.length as i32));
+            return Ok(Self::array_index_number(u64::from(a.length)));
         }
         if let Some(Slot {
             kind: Kind::String,
@@ -42206,7 +42375,7 @@ impl Interp {
             && !self.arguments_objects.contains(&inst)
         {
             return Some(OrdinaryDescriptor {
-                value: Some(Slot::integer(a.length as i32)),
+                value: Some(Self::array_index_number(u64::from(a.length))),
                 writable: Some(self.array_length_writable(inst)),
                 enumerable: Some(false),
                 configurable: Some(false),
