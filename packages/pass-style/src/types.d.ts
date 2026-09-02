@@ -42,12 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  | AtomStyle
-  | ContainerStyle
-  | 'remotable'
-  | 'error'
-  | 'promise'
-  | 'sturdyRef';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
