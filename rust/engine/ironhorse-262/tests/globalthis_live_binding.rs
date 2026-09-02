@@ -104,3 +104,15 @@ fn intrinsic_typeof_through_globalthis() {
     assert_result_agrees("typeof globalThis.Object");
     assert_result_agrees("typeof globalThis.Math");
 }
+
+#[test]
+fn runtime_created_global_names_materialize_complete_intrinsics() {
+    for source in [
+        "var D=Reflect.get(globalThis,'Da'+'te');var s='U'+'TC';var m='get'+'Time';typeof D+':'+D.hasOwnProperty(s)+':'+typeof D.prototype[m]",
+        "var A=Reflect.get(globalThis,'Arr'+'ay');A.hasOwnProperty('from')+':'+typeof A.prototype.map",
+        "var N=Reflect.get(globalThis,'Num'+'ber');N.hasOwnProperty('isNaN')+':'+typeof N.prototype.toString",
+        "var O=Reflect.get(globalThis,'Obj'+'ect');O.hasOwnProperty('keys')+':'+typeof O.prototype.valueOf",
+    ] {
+        assert_result_agrees(source);
+    }
+}

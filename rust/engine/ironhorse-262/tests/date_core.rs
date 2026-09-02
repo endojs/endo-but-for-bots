@@ -74,6 +74,11 @@ fn parsing_and_set_time_match_xs() {
         "var d=new Date('-000001-07-01T00:00Z');d.toDateString().split(' ')[3]+':'+d.toUTCString().split(' ')[3]",
         "var d=new Date(0);Date.parse(d.toString())+':'+Date.parse(d.toUTCString())",
         "new Date('2000-02-29T12:34:56.789Z').toISOString()",
+        "Date.parse('2019-02-29')",
+        "Date.parse('2019-13-01')",
+        "Date.parse('2019-01-01T24:01:00Z')",
+        "Date.parse('2019-01-01T01:02:03.1234Z')",
+        "Date.parse('2019-01-01T00:00:00+09')",
         "var d=new Date(1); d.setTime(null) === 0 && d.getTime() === 0",
         "new Date(0).toJSON()",
         "new Date(NaN).toJSON()",
@@ -110,6 +115,8 @@ fn date_to_primitive_and_locale_surface_match_xs() {
         "try{Date.prototype[Symbol.toPrimitive].call({},'invalid');false}catch(e){e instanceof TypeError}",
         "try{Date.prototype[Symbol.toPrimitive].call(1,'number');false}catch(e){e instanceof TypeError}",
         "Date.prototype[Symbol.toPrimitive].name+':'+Date.prototype[Symbol.toPrimitive].length",
+        "Object.getOwnPropertySymbols(Date.prototype).map(String).join(',')",
+        "var k=Object.getOwnPropertySymbols(Date.prototype)[0];var d=Object.getOwnPropertyDescriptor(Date.prototype,k);d.value===Date.prototype[k]&&!d.writable&&!d.enumerable&&d.configurable",
         "typeof Date.prototype.toLocaleString+':'+Date.prototype.toLocaleString.name+':'+Date.prototype.toLocaleString.length",
         "typeof Date.prototype.toLocaleDateString+':'+Date.prototype.toLocaleDateString.name+':'+Date.prototype.toLocaleDateString.length",
         "typeof Date.prototype.toLocaleTimeString+':'+Date.prototype.toLocaleTimeString.name+':'+Date.prototype.toLocaleTimeString.length",
@@ -123,6 +130,10 @@ fn reflect_construct_date_uses_new_target_prototype() {
     for source in [
         "var C=function(){};var d=Reflect.construct(Date,[64],C);Object.getPrototypeOf(d)===C.prototype&&Date.prototype.getTime.call(d)===64",
         "var C=function(){};C.prototype=null;var d=Reflect.construct(Date,[64],C);Object.getPrototypeOf(d)===Date.prototype&&d.getTime()===64",
+        "var log=[],p={};var C=new Proxy(function(){},{get:function(t,k,r){log.push(String(k));return k==='prototype'?p:Reflect.get(t,k,r)}});var d=Reflect.construct(Date,[64],C);log.join(',')+':'+(Object.getPrototypeOf(d)===p)+':'+Date.prototype.getTime.call(d)",
+        "var C=new Proxy(function(){},{get:function(t,k,r){if(k==='prototype')throw 17;return Reflect.get(t,k,r)}});try{Reflect.construct(Date,[],C);false}catch(e){e===17}",
+        "var log=[],p={};var C=new Proxy(function(){},{get:function(t,k,r){log.push(String(k));return k==='prototype'?p:Reflect.get(t,k,r)}});var o=Reflect.construct(Object,[],C);log.join(',')+':'+(Object.getPrototypeOf(o)===p)",
+        "var C=new Proxy(function(){},{get:function(t,k,r){if(k==='prototype')throw 17;return Reflect.get(t,k,r)}});try{Reflect.construct(Object,[],C);false}catch(e){e===17}",
     ] {
         agrees(source);
     }

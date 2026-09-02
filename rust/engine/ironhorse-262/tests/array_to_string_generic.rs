@@ -92,6 +92,8 @@ fn join_accepts_every_callable_shape() {
     for source in [
         "var join=new Proxy(function(){return 'base'},{apply:function(){return 'ok'}});Array.prototype.toString.call({join:join})",
         "var a=[1,2];var join=Array.prototype.join.bind(a,'-');Array.prototype.toString.call({join:join})",
+        "var o={join:Function.prototype.call.bind(function(){return 'ok'})};Array.prototype.toString.call(o)",
+        "var o={join:Function.prototype.apply.bind(function(){return 'ok'})};Array.prototype.toString.call(o)",
     ] {
         agrees(source);
     }

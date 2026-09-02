@@ -225,7 +225,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // marker carried by the symbol-key table. It lets restore distinguish
         // legacy layouts from same-version guest edits without a
         // container-format change.
-        "5bde70c6f5670b3f43364269feccffd895a2dcb1ae2e1987dafdd9bc9164b945",
+        // Re-pinned 2026-09-03 because the standard own `@@toPrimitive`
+        // properties on Symbol.prototype and Date.prototype are now installed
+        // during the initial link, before guest reflection can enumerate them.
+        // This moves boot-heap content only; the snapshot format is unchanged.
+        "85ed0e30739ec65485d6e7e0f962bb74ee7b4603ba9ecb2edb9ba6e340d5b621",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -374,7 +378,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // `@@toPrimitive` identity. Schema and format remain unchanged.
         // Re-pinned with the blob for the persisted arguments-layout marker.
         // Schema and format remain unchanged.
-        "6c6b9fa0fdd7624e9c750ee954ff286eb015b0f575fc79d10e0a7a18b7575935",
+        // Re-pinned with the blob for eager installation of the standard own
+        // Symbol.prototype and Date.prototype `@@toPrimitive` properties.
+        // Schema and format remain unchanged.
+        "f69021410d6da3b459207d7350b4b748e5d294c04337e22407ef0d8647828d9f",
         "epoch-3 seal chain"
     );
 }
