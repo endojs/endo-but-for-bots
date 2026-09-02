@@ -6,6 +6,12 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[endopen](endopen.md) (added 2026-05-15; OpenCode comparative analysis with
+four gap-closing spin-outs: [endopen-concurrent-subagents](endopen-concurrent-subagents.md),
+[endopen-openrouter](endopen-openrouter.md),
+[endopen-tui-shell](endopen-tui-shell.md), and
+[endopen-acp-server](endopen-acp-server.md); mirrors the
+[endoclaw](endoclaw.md) precedent),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -364,6 +370,11 @@ LLM-agent stack).*
 | [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-24 | In Progress |
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
 | [endoclaw](endoclaw.md) | 2026-03-03 | 2026-03-03 | Reference |
+| [endopen](endopen.md) | 2026-05-15 | 2026-05-15 | Reference |
+| [endopen-concurrent-subagents](endopen-concurrent-subagents.md) | 2026-05-15 | 2026-05-15 | Not Started |
+| [endopen-openrouter](endopen-openrouter.md) | 2026-05-15 | 2026-05-15 | Not Started |
+| [endopen-tui-shell](endopen-tui-shell.md) | 2026-05-15 | 2026-05-15 | Not Started |
+| [endopen-acp-server](endopen-acp-server.md) | 2026-05-15 | 2026-05-20 | Not Started |
 | [endopi](endopi.md) | 2026-05-15 | 2026-06-25 | Reference |
 | [endopi-edit-tool](endopi-edit-tool.md) | 2026-05-15 | 2026-07-10 | In Progress |
 | [endopi-jsonl-transcript-format](endopi-jsonl-transcript-format.md) | 2026-05-15 | 2026-05-15 | Proposed |
@@ -475,7 +486,7 @@ LLM-agent stack).*
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Current totals (2026-08-29, rolling index refresh):** 48 Complete/Implemented, 36 In Progress, 49 Not Started, 37 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (196 designs). This supersedes every count above, including the running **Totals:** line; the buckets are reproducible by tallying the Status column of the summary table. This pass added six previously-unindexed design files to the summary table: the Ironhorse trio [ironhorse-engine](ironhorse-engine.md) (Approved), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) (Not Started), and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (In Progress) — also folded into the M11 (Rust Daemon `endor`) table alongside their `ironhorse-snapshot-store-seam` / `ironhorse-debugger-recovery-and-uncaught` siblings — plus [platform-neutral-hash](platform-neutral-hash.md) (In Progress), [conservative-regexp-subset](conservative-regexp-subset.md) (Not Started), and [readableblob-range-attenuation](readableblob-range-attenuation.md) (Proposed). It also reconciled stale Status cells against each design file's own Status field: the four-layer importLocation stack ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md), [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md)) Proposed -> Not Started (applying the 2026-07-10 flip the prose above already recorded but the table never carried); the git trio ([daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [daemon-git-next-steps](daemon-git-next-steps.md)) Proposed -> In Progress (accepted 2026-07-11, phases landed); [daemon-agent-network-identity](daemon-agent-network-identity.md) and [daemon-locator-terminology](daemon-locator-terminology.md) Not Started -> In Progress; [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and [endopi-edit-tool](endopi-edit-tool.md) Proposed -> In Progress; and [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) Proposed -> **Complete**. The 2026-08-23 pass flips [cli-edit-verb](cli-edit-verb.md) from Proposed to In Progress because its daemon-side pure core landed in #796.
+**Current totals (2026-08-29, rolling index refresh):** 48 Complete/Implemented, 36 In Progress, 53 Not Started, 37 Proposed, 2 Active, 14 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (201 designs). This supersedes every count above, including the running **Totals:** line; the buckets are reproducible by tallying the Status column of the summary table. This pass added six previously-unindexed design files to the summary table: the Ironhorse trio [ironhorse-engine](ironhorse-engine.md) (Approved), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) (Not Started), and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (In Progress) — also folded into the M11 (Rust Daemon `endor`) table alongside their `ironhorse-snapshot-store-seam` / `ironhorse-debugger-recovery-and-uncaught` siblings — plus [platform-neutral-hash](platform-neutral-hash.md) (In Progress), [conservative-regexp-subset](conservative-regexp-subset.md) (Not Started), and [readableblob-range-attenuation](readableblob-range-attenuation.md) (Proposed). It also reconciled stale Status cells against each design file's own Status field: the four-layer importLocation stack ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md), [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md)) Proposed -> Not Started (applying the 2026-07-10 flip the prose above already recorded but the table never carried); the git trio ([daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [daemon-git-next-steps](daemon-git-next-steps.md)) Proposed -> In Progress (accepted 2026-07-11, phases landed); [daemon-agent-network-identity](daemon-agent-network-identity.md) and [daemon-locator-terminology](daemon-locator-terminology.md) Not Started -> In Progress; [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and [endopi-edit-tool](endopi-edit-tool.md) Proposed -> In Progress; and [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) Proposed -> **Complete**. The 2026-08-23 pass flips [cli-edit-verb](cli-edit-verb.md) from Proposed to In Progress because its daemon-side pure core landed in #796.
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
@@ -616,12 +627,17 @@ flowchart TD
         eskill[endoclaw-skill-registry]
         evoice[endoclaw-voice]
         esheets[exo-google-sheets]
+        enopr[endopen-openrouter]
+        enopanel[endopen-concurrent-subagents]
+        enacp[endopen-acp-server]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
         eoauth --> ebridge
         eoauth --> eproactive
         eoauth --> esheets
+        ereminder --> enopanel
+        enopr --> enopanel
     end
 
     subgraph OCapN
@@ -658,9 +674,11 @@ flowchart TD
         cliedit[cli-edit-verb]
         finsp[formula-inspector]
         invgt[inventory-grouping-by-type]
+        enotui[endopen-tui-shell]
         dcmd --> cpend
         dmount --> cvedit
         dmount --> cliedit
+        dmount --> enotui
         dmstream[daemon-message-streaming<br/><i>COMPLETE</i>] --> cemui
         invgt --> finsp
         cicmenu[chat-inventory-create-menu]
@@ -895,6 +913,7 @@ capabilities available to agents.
 | daemon-xs-worker-snapshot | In Progress | XS heap snapshot/restore; Phases 1-2 implemented — streaming CAS write/read, suspend/resume supervisor integration, CBOR control verbs; 12 passing tests; Phase 2 integration test and ephemeral GC roots remaining |
 | endo-reminder (supersedes endoclaw-timer) | Not Started | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
 | endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
+| endopen-openrouter | Not Started | OpenRouter provider for Lal plus registry refactor; first cut is one new file. From the OpenCode comparative analysis ([endopen](endopen.md)). |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
 | ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake removed; guest eval delegates directly to `formulateEval`. Type-system cleanup and regression test in PR #92. |
 
@@ -1124,6 +1143,8 @@ automation.
 | endoclaw-notifications | Not Started | `Notify` exo -> Electron `Notification`; needs daemon<->Electron bridge |
 | endoclaw-webhooks | Not Started | Gateway webhook endpoints -> agent inbox as messages |
 | endoclaw-voice | Not Started | Web Speech API or Whisper in Chat UI; UI feature only |
+| endopen-acp-server | Not Started | ACP (Agent Client Protocol) server adapter; lets Zed and other ACP clients drive Endo while preserving the capability story. From [endopen](endopen.md). |
+| endopen-concurrent-subagents | Not Started | First-class panel-of-subagents UX surface; Endo's capability/formula model makes this concurrent by construction. From [endopen](endopen.md). |
 
 **Exit criterion:** Users can install and interact with weblets. Agents
 can authenticate to external services (Gmail, Calendar, etc.) via OAuth
@@ -1215,6 +1236,7 @@ star.)
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
+| endopen-tui-shell | Not Started | Browser-side opencode-shaped *space kind*: file-tree sidebar, inline diff, todo pane, status bar. Browser-side complement of M6 `endor-tui`. From [endopen](endopen.md). |
 
 **Exit criterion:** Chat UI feature-complete for current design scope.
 Commands are non-blocking with visible pending state. Developer tools
@@ -1611,6 +1633,11 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endopi-prompt-templates | S | 1-2 days | 9 | Reusable user-prompt scaffolds with `{{var}}` expansion; shares skills' discovery walker |
 | endopi-stdio-rpc-bridge | M | 4-5 days | 3 | LF-delimited JSONL RPC for embedding the Lal/Fae agent in another process; short-term shape before `endor-bus-tui` |
 | endopi-extension-package-manifest | S-M | 3 days | 10 | `package.json` `endo` keyword bundling guests + skills + prompts + providers in one install |
+| endopen | — | — | — | Reference comparative analysis (OpenCode); spin-outs carry the work |
+| endopen-openrouter | S-M | 3 days | 3 | OpenRouter provider for Lal; Phase 1 minimal (1 day), Phase 2 registry refactor (2 days), Phase 3 form deferred |
+| endopen-concurrent-subagents | M | 3-4 weeks | 7 | Panel guest pattern + Chat widget + CLI `endo panel` verb |
+| endopen-acp-server | M-L | 4-5 weeks | 7 | ACP adapter (7 phases); MCP-server adapter sibling deferred |
+| endopen-tui-shell | M-L | 4-5 weeks | 9 | New `coding` space kind in Chat; layout shell, file-tree, diff viewer, todo pane, status bar |
 | app-sharing-milestone | — | — | 8 | Roadmap doc; no implementation of its own (reference for the P0-P3 sequencing) |
 | familiar-deep-link-invitations | S-M | 3 days | 8 | `endo://` capture in shell + Chat confirm/naming modal; daemon `invite`/`accept` already Complete |
 | endo-app-sharing | M | 4-5 days | 8 | App handle + cross-daemon `endo clone` (hash-verified) vs remote reference (1.2x bump) |
@@ -1625,21 +1652,26 @@ PR-merge velocity (S: 0.7, M: 1.2, L: 1.3, XL: 1.3 conservative; see the
 ready-to-merge and actually-merged for the in-flight backlog.
 Item counts are reconciled against the milestone tables above on the
 date of this pass.
+The four EndOpen spin-outs carry explicit phase-summed estimates rather
+than pure size-ratio figures: `endopen-openrouter` adds 3 days to M3,
+`endopen-concurrent-subagents` and `endopen-acp-server` add 7-9 weeks
+to M7, and `endopen-tui-shell` adds 4-5 weeks to M9. The milestone and
+total bands below include those estimates explicitly.
 
 | Milestone | Items remaining | Effort Estimate | Plus Review Queue (current rate) |
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
 | M2: Project Hygiene (was M½) | 0 | **Complete** | — |
-| M3: Remote Access & Tools (was M1) | 19 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
+| M3: Remote Access & Tools (was M1) | 20 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `exo-git-follow-root-advancement`, `daemon-mount`, `daemon-worker-import-from-mount`, `npm-registry-as-directory-tree`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`, `endopen-openrouter`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 8 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrup-framing`, `cbor-frame`, `cbor-codec`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`, `ocapn-orthogonal-persistence`) | 5-6 weeks | 6-8 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
 | M6: MCP Bridge Hosting (was Milestone B) | 2 net-new (`endo-gateway-mcp` impl, `endo-claude`); cross-milestone slices in M3 (P0) and M5 (P2/P3/P4 gaps) | ~3-3.5 weeks own work (endo-gateway-mcp ~2 weeks + endo-claude ~1-1.5 weeks) + ~6-9 weeks across P0-P4 | gated by M3 gateway-package phases 2/7/8 merge cadence |
-| M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
+| M7: Weblets & Integrations (was M3) | 14 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`, `endopen-concurrent-subagents`, `endopen-acp-server`) | 13-17 weeks | 15-20 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
-| M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
+| M9: UX & Tooling (was M4) | 14 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`, `endopen-tui-shell`) | 13-17 weeks | 15-19 weeks |
 | M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **68** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~73-98 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~86-116 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
@@ -1680,13 +1712,13 @@ gantt
     MCP Bridge Hosting            :m6, after m5, 2w
 
     section Milestone 7
-    Weblets & Integrations        :m7, after m6, 8w
+    Weblets & Integrations        :m7, after m6, 15w
 
     section Milestone 8
     Peer App Sharing              :m8, after m7, 3w
 
     section Milestone 9
-    UX & Tooling                  :m9, after m8, 11w
+    UX & Tooling                  :m9, after m8, 15w
 
     section Milestone 10
     Confinement & Ecosystem       :m10, after m9, 20w
@@ -1715,11 +1747,11 @@ dates project from that anchor at the upper-bound effort.
 | M4: Networking (was M2) | 5-6 weeks | 13-16 weeks | Late August to mid September 2026 |
 | M5: Public Hosting & Billing (was M7) | 4-6 weeks (designs + impl) + AWS-stack merge cadence | 17-22 weeks | Late September to mid November 2026 (gated by M3 gateway-package merge cadence and PRs #343 / #356) |
 | M6: MCP Bridge Hosting (was Milestone B) | ~2 weeks own work | 19-24 weeks | Mid October to late November 2026 (gated by M3 gateway-package phases 2/7/8 merge cadence) |
-| M7: Weblets & Integrations (was M3) | 6-8 weeks | 25-32 weeks | Mid December 2026 to mid January 2027 |
-| M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 27-35 weeks | Late December 2026 to early February 2027 |
-| M9: UX & Tooling (was M4) | 9-12 weeks | 36-47 weeks | Mid February to mid April 2027 |
-| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 50-67 weeks | Late May to early September 2027 |
-| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 65-89 weeks | Q3 to Q4 2027 (research-heavy; may run in parallel) |
+| M7: Weblets & Integrations (was M3) | 13-17 weeks | 32-41 weeks | Late January to mid March 2027 |
+| M8: Peer App Sharing (was Milestone A) | 2-3 weeks | 34-44 weeks | Mid February to early April 2027 |
+| M9: UX & Tooling (was M4) | 13-17 weeks | 47-61 weeks | Mid May to mid August 2027 |
+| M10: Confinement & Ecosystem (was M5) | 14-20 weeks | 61-81 weeks | Late August 2027 to mid January 2028 |
+| M11: Rust Daemon (`endor`) (was M6) | 15-22 weeks | 76-103 weeks | Q1 to Q3 2028 (research-heavy; may run in parallel) |
 
 *M3 and M7 (weblets) are less order-dependent and can be interleaved
 once their respective dependencies have landed; the M5/M6 hosted-Gateway
