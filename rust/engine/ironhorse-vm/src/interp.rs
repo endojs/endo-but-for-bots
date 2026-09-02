@@ -7893,6 +7893,16 @@ impl Interp {
                 self.intern_key(name);
             }
         }
+        // `catch` performs Invoke(this, "then", ...), while `finally` first
+        // performs SpeciesConstructor(this, %Promise%) and then the same
+        // observable Invoke. These are implicit boot-default property reads.
+        if ["catch", "finally"]
+            .iter()
+            .any(|name| self.symbol_ids.contains_key(*name))
+        {
+            self.intern_key("then");
+            self.intern_key("constructor");
+        }
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, true, |_| true);
     }
@@ -20480,22 +20490,15 @@ impl Interp {
             // ([`PROMISE_FUNCTIONS_METERING`]), and the native frame residual is
             // [`PROMISE_CTOR_FRAME_METERING`]; the executor body is metered by
             // the re-entrant `run_callback`. A non-user-function executor, and a
-            // non-`new` `Promise(...)` call (a TypeError in XS), self-name.
+            // non-`new` `Promise(...)` call throws a TypeError. Callability is
+            // checked before allocating the promise (and therefore before
+            // consulting `newTarget.prototype`), as required by the constructor
+            // algorithm.
             Native::Promise if has_target => {
                 let executor = arg(0);
-                let ef = match executor.value {
-                    Payload::Reference(ef)
-                        if self
-                            .functions
-                            .get(&ef)
-                            .map_or(false, |fi| fi.native.is_none() && fi.method.is_none())
-                            && !self.bound_functions.contains_key(&ef) =>
-                    {
-                        ef
-                    }
-                    _ => return Err(Halt::Unsupported("promise:non-user-executor")),
-                };
-                let _ = ef;
+                if !self.is_callable_value(executor) {
+                    return Err(self.catchable_type_error());
+                }
                 self.meter.tick_raw(PROMISE_CTOR_FRAME_METERING);
                 let promise = self.new_promise_instance();
                 let (resolve, reject) = self.make_resolving_functions(promise);
@@ -25533,6 +25536,87 @@ impl Interp {
         };
         self.register_native_reaction(promise, reaction);
         Ok(Slot::of(Kind::Reference, Payload::Reference(derived)))
+    }
+
+    /// `SpeciesConstructor(promise, %Promise%)` for
+    /// `Promise.prototype.finally`. The constructor and `@@species` reads are
+    /// observable through accessors and proxies; `undefined` constructor and
+    /// nullish species select the realm's intrinsic Promise constructor.
+    fn promise_species_constructor(
+        &mut self,
+        code: &[u8],
+        promise: Slot,
+    ) -> Result<Slot, Halt> {
+        let promise_inst = match promise.value {
+            Payload::Reference(inst) if promise.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let default_ref = *self
+            .intrinsics
+            .get("Promise")
+            .expect("Promise intrinsic is linked");
+        let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
+        let constructor_id = self.intern_key("constructor");
+        let constructor = self.mop_get(code, promise_inst, constructor_id, promise)?;
+        if constructor.kind == Kind::Undefined {
+            return Ok(default);
+        }
+        let constructor_inst = match constructor.value {
+            Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let species_id = self
+            .well_known_symbol_property_id("species")
+            .expect("well-known species symbol");
+        let species = self.mop_get(code, constructor_inst, species_id, constructor)?;
+        let selected = if matches!(species.kind, Kind::Null | Kind::Undefined) {
+            default
+        } else {
+            species
+        };
+        if !self.is_constructor_value(selected) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(selected)
+    }
+
+    /// Observable entry path for `Promise.prototype.finally`. A non-callable
+    /// handler is fully generic and is forwarded unchanged to the receiver's
+    /// once-read `then`. The callable/default-native path keeps the existing
+    /// persistent native reaction; callable custom-then/species wrappers need
+    /// their own persisted function state and remain an honest named gap.
+    fn promise_finally_dispatch(
+        &mut self,
+        code: &[u8],
+        promise: Slot,
+        on_finally: Slot,
+    ) -> Result<Slot, Halt> {
+        let promise_inst = match promise.value {
+            Payload::Reference(inst) if promise.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let constructor = self.promise_species_constructor(code, promise)?;
+        let then_id = self.intern_key("then");
+        let then = self.mop_get(code, promise_inst, then_id, promise)?;
+        if !self.is_callable_value(then) {
+            return Err(self.catchable_type_error());
+        }
+        if !self.is_callable_value(on_finally) {
+            self.meter.tick_raw(PROMISE_FINALLY_FRAME_METERING);
+            return self.call_any(code, then, promise, &[on_finally, on_finally]);
+        }
+
+        let intrinsic_promise = self.intrinsics.get("Promise").copied();
+        let default_constructor = matches!(constructor.value,
+            Payload::Reference(inst)
+                if constructor.kind == Kind::Reference && Some(inst) == intrinsic_promise);
+        let intrinsic_then = matches!(then.value,
+            Payload::Reference(function)
+                if self.method_of(function) == Some(NativeMethod::PromiseThen));
+        if self.promises.contains_key(&promise_inst) && default_constructor && intrinsic_then {
+            return self.promise_finally(promise_inst, on_finally);
+        }
+        Err(Halt::Unsupported("finally:callable-custom-dispatch"))
     }
 
     /// The drain behavior of a `Promise.prototype.finally` reaction: recover the
@@ -32156,7 +32240,7 @@ impl Interp {
             NativeMethod::PromiseThen => {
                 let promise = match this.value {
                     Payload::Reference(r) if self.promises.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("then:non-promise-this")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 self.promise_then(promise, base)?
             }
@@ -32236,29 +32320,21 @@ impl Interp {
                 self.settle_promise(derived, arg0, true)?;
                 Slot::of(Kind::Reference, Payload::Reference(derived))
             }
-            // `Promise.prototype.catch(onRejected)`: `this.then(undefined,
-            // onRejected)`. XS routes through the actual `then` method (a
-            // `mxGetID(_then)` + `mxRunCount(2)`), so it carries a small frame
-            // over the `then` cost.
+            // `Promise.prototype.catch(onRejected)`: Invoke the receiver's
+            // observable `then` method with `(undefined, onRejected)`. The
+            // method is deliberately generic: primitive receivers use GetV,
+            // accessors and proxies are observable, and a missing/non-callable
+            // `then` throws synchronously.
             NativeMethod::PromiseCatch => {
-                let promise = match this.value {
-                    Payload::Reference(r) if self.promises.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("catch:non-promise-this")),
-                };
                 self.meter.tick_raw(PROMISE_CATCH_FRAME_METERING);
-                self.promise_then_with(promise, Slot::undefined(), arg0)?
+                self.invoke_value_method(code, this, "then", &[Slot::undefined(), arg0])?
             }
             // `Promise.prototype.finally(onFinally)` (`fx_Promise_prototype_
-            // finally`): register a native FINALLY reaction that runs
-            // `onFinally` and passes the settlement through, returning a fresh
-            // derived promise (no synchronous re-entry — `onFinally` runs at
-            // the drain).
+            // finally`): observable SpeciesConstructor + Invoke dispatch, with
+            // the default native path registering a FINALLY reaction whose
+            // callback runs at the drain.
             NativeMethod::PromiseFinally => {
-                let promise = match this.value {
-                    Payload::Reference(r) if self.promises.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("finally:non-promise-this")),
-                };
-                self.promise_finally(promise, arg0)?
+                self.promise_finally_dispatch(code, this, arg0)?
             }
             // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
             // the derived promise, resolve each (dense-Array) element to a
