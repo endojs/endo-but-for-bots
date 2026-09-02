@@ -133,6 +133,7 @@ fn shared_allocating_methods_honor_species_copy_and_view_semantics() {
         "new BigInt64Array([3n,-1n,2n]).sort().join(',')",
         "var a=new Float64Array([NaN,3,-0,0,-2]).sort(); a[0]+':'+Object.is(a[1],-0)+':'+Object.is(a[2],0)+':'+a[3]+':'+String(a[4])",
         "new Uint8Array([7,6,5,4,3,2,1,0]).sort(function(a,b){return (a>>2)-(b>>2)}).join(',')",
+        "try{new Uint8Array([2,1]).sort(function(){return 0n});false}catch(e){e instanceof TypeError}",
         "var P=Object.getPrototypeOf(Int8Array.prototype); P.toString===Array.prototype.toString",
         "var a=new Uint8Array([1,2]); a.toString()",
     ] {

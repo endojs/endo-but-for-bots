@@ -191,7 +191,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // method natives added to the boot heap. Format unchanged.
         // Re-pinned 2026-09-02 for the Object, Number, BigInt, and TypedArray
         // locale-string natives added to the boot heap. Format unchanged.
-        "1e33ea82d4e37e30e10a6ea079055fed6d1ebca76309cec2e7aeb0c60226c694",
+        // Re-pinned 2026-09-02 because Array's sort and toSorted natives now
+        // carry their standard observable names and arities. This moves boot
+        // heap content only; the snapshot format remains unchanged.
+        "2975be0b539d4dec067076745d5b484da34c8aa4c52497da323c398a49a493ba",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -315,7 +318,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // sort method natives. Schema and format remain unchanged.
         // Re-pinned with the blob for the locale-string natives. Schema and
         // format remain unchanged.
-        "855544055792875392ea1062fcac4dcd755f82eae948b42dcdcf28f315268190",
+        // Re-pinned with the blob for Array sort/toSorted's standard function
+        // metadata. Schema and format remain unchanged.
+        "f5fa645545576213d4451921282530543b560027746e2166b21f20e7143f4436",
         "epoch-3 seal chain"
     );
 }

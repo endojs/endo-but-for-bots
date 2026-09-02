@@ -612,6 +612,26 @@ fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn array_sort_natives_and_compact_results_survive_sqlite_sleep_cycles() {
+    // The methods are boot-rebuilt natives, while the source Array and its
+    // compact element side table cross a full close/reopen before each sort.
+    // The final join calls ensure Set/CreateDataProperty kept ordinary array
+    // elements compact instead of degrading them into unsupported sparse rows.
+    let last = carry_scenario(
+        "carry-array-sort",
+        "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
+         a.join; a.length; (function (y) { return y; });",
+        &[
+            "a = [3, 1, 2]; t = 7;",
+            "a.sort(function (x, y) { return x - y; }); t = a.join(','); t",
+            "b = a.toSorted(function (x, y) { return y - x; }); \
+             t = b.join(',') + ':' + a.join(','); t",
+        ],
+    );
+    assert_eq!(last, "3,2,1:1,2,3");
+}
+
+#[test]
 fn tagged_template_registry_survives_sqlite_sleep_cycles() {
     // The hidden realm template registry lives in the ordinary boot heap.
     // This exercises both halves of its contract through real full closes:
