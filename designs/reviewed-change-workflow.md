@@ -114,10 +114,13 @@ wrapping compound root or the handler repeated on the states that matter.
 The chart takes the second option because a compound root would force every
 terminal transition through `state-done` plumbing for no gain.
 `set-remaining` is an internal transition on `implement`, `review`, `preview`,
-and the zero-remainder branch of `exhausted`.
-The transient `gate` and `ready` states instead self-transition: that prunes
-their already-materialized `budget` or `ci-policy` emit and regenerates it from
-the updated context, preventing a stale queued envelope from winning a race.
+`ready`, and the zero-remainder branch of `exhausted`.
+At `gate`, a valid update decides the branch directly and leaves the gate.
+An older routed `budget` envelope then names a dead path and cannot win the
+queue race; a positive remainder resumes implementation and zero enters
+`exhausted`.
+The pending `ci-policy` envelope at `ready` depends only on immutable params, so
+its internal budget assignment safely preserves that delivery.
 Once `proposing` begins, review has passed and the review budget no longer
 affects the run.
 
@@ -244,6 +247,17 @@ Apply and compensation fulfillments also require explicit result shapes before
 they can report rollback or restoration, and every final deploy output carries
 a discriminated status so callers cannot confuse process completion with a
 landed change.
+
+Cancellation uses the workflow engine's reserved `cancel-requested` event.
+Before apply, the deploy charts restore the captured revision or file contents
+through their normal awaited compensation states.
+During or after apply they retain the post-apply attention gate, because an
+in-flight outside mutation cannot truthfully be labelled cancelled.
+Repeated cancellation requests in compensation and attention states are
+internal no-ops that preserve the pending reconciliation effect.
+The reviewed parent handles the same request while `proposing`; the service
+forwards it durably to the deploy child and keeps the spawn pending until the
+child reports its reconciled terminal.
 
 ## What blocks a live run
 

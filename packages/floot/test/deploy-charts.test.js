@@ -108,6 +108,73 @@ test('silent staging stops truthfully and prunes the pending invoke', t => {
   }
 });
 
+test('cancellation reconciles staged changes and preserves uncertain applies', t => {
+  const staging = makeSimulator(endoReleaseChart, { params: releaseParams });
+  const stagingFinal = staging.inject(harden({ type: 'cancel-requested' }));
+  t.true(stagingFinal.done);
+  t.deepEqual(stagingFinal.output, {
+    status: 'staging-unsettled',
+    reason: 'cancelled while stageRev was unsettled',
+  });
+
+  const release = makeSimulator(endoReleaseChart, { params: releaseParams });
+  release.settle(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    'fulfilled',
+    harden({ rev: REV, previous: PREVIOUS }),
+  );
+  const prebuild = pendingOf(release, 'invoke', 'prebuildRev');
+  release.inject(harden({ type: 'cancel-requested' }));
+  t.is(release.status().state, 'unpinning');
+  t.is(
+    release.pending().find(record => record.effectId === prebuild.effectId),
+    undefined,
+  );
+  const unpin = pendingOf(release, 'invoke', 'stageRev');
+  release.inject(harden({ type: 'cancel-requested' }));
+  t.is(
+    pendingOf(release, 'invoke', 'stageRev').effectId,
+    unpin.effectId,
+    'a repeated request does not prune in-flight compensation',
+  );
+  const releaseFinal = release.settle(
+    unpin.effectId,
+    'fulfilled',
+    harden({ rev: PREVIOUS, previous: REV }),
+  );
+  t.deepEqual(releaseFinal.output, {
+    status: 'abandoned',
+    reason: 'cancelled',
+  });
+
+  const nixos = makeSimulator(nixosConfigChangeChart, { params: changeParams });
+  const previous = harden([{ path: 'modules/firewall.nix', text: null }]);
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'stageFiles').effectId,
+    'fulfilled',
+    harden({ paths: ['modules/firewall.nix'], previous }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'invoke', 'build').effectId,
+    'fulfilled',
+    harden({ ok: true }),
+  );
+  nixos.settle(
+    pendingOf(nixos, 'ask').effectId,
+    'fulfilled',
+    harden({ approved: true, note: '' }),
+  );
+  const apply = pendingOf(nixos, 'invoke', 'apply');
+  nixos.inject(harden({ type: 'cancel-requested' }));
+  t.is(nixos.status().state, 'needs-attention');
+  t.is(
+    nixos.pending().find(record => record.effectId === apply.effectId),
+    undefined,
+    'an uncertain apply is pruned only after entering operator reconciliation',
+  );
+  t.truthy(pendingOf(nixos, 'ask'));
+});
+
 test('approval dispatch failures compensate staged changes', t => {
   const release = makeSimulator(endoReleaseChart, { params: releaseParams });
   release.settle(
@@ -326,7 +393,7 @@ test('compensation-attention cannot reach a landed terminal', t => {
   for (const chart of deployCharts) {
     const graph = renderGraph(chart);
     const exits = graph.edges.filter(
-      edge => edge.from === 'compensation-attention',
+      edge => edge.from === 'compensation-attention' && edge.to !== edge.from,
     );
     t.is(exits.length, 2, `${chart.name} compensation-attention exits`);
     t.true(

@@ -318,12 +318,25 @@ test('a budget raise survives preview CI and transient policy states', t => {
     event,
   );
   t.true(gate.fired);
-  t.is(gate.configuration.state, 'gate');
+  t.is(gate.configuration.state, 'implement');
   t.is(gate.context.remaining, 4n);
-  t.deepEqual(gate.effects[0].effect.event, {
-    type: 'budget',
-    value: { remaining: 4n },
-  });
+  const staleBudget = transition(
+    reviewedChangeChart,
+    harden({
+      configuration: gate.configuration,
+      context: gate.context,
+      params,
+    }),
+    harden({
+      type: 'budget',
+      value: { remaining: 0n },
+      path: ['gate'],
+      by: 'engine',
+      at: 'earlier',
+    }),
+  );
+  t.false(staleBudget.fired);
+  t.is(staleBudget.configuration.state, 'implement');
 
   const ready = transition(
     reviewedChangeChart,
@@ -333,7 +346,7 @@ test('a budget raise survives preview CI and transient policy states', t => {
   t.true(ready.fired);
   t.is(ready.configuration.state, 'ready');
   t.is(ready.context.remaining, 4n);
-  t.is(ready.effects[0].effect.event.type, 'ci-policy');
+  t.deepEqual(ready.effects, []);
 });
 
 test('a raise delivered to an exhausted run resumes it', t => {
@@ -441,7 +454,9 @@ test('a deploy is proposed only through a passed review', t => {
   for (const chart of [reviewedEndoReleaseChart, reviewedNixosChangeChart]) {
     const graph = renderGraph(chart);
 
-    const inbound = graph.edges.filter(edge => edge.to === 'proposing');
+    const inbound = graph.edges.filter(
+      edge => edge.to === 'proposing' && edge.from !== edge.to,
+    );
     t.deepEqual(
       [...new Set(inbound.map(edge => edge.from))].sort(),
       ['preview', 'ready'],
@@ -449,8 +464,8 @@ test('a deploy is proposed only through a passed review', t => {
     );
 
     // `ready` — the head of that chain — is entered from another state only by
-    // the panel's unanimous approval. Its self-edge refreshes a pending policy
-    // emit after a budget adjustment and does not bypass the gate.
+    // the panel's unanimous approval. Its internal budget assignment preserves
+    // the immutable pending policy emit and does not add an inbound edge.
     const intoReady = graph.edges.filter(
       edge => edge.to === 'ready' && edge.from !== 'ready',
     );

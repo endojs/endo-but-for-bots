@@ -26,6 +26,13 @@
 // the pending invoke, so a late settlement is dropped rather than
 // re-routed. The test suite asserts the single-entry-to-apply and
 // compensation-attention-exit properties from the rendered graph.
+//
+// CANCELLATION IS A RECONCILIATION REQUEST. The workflow service first offers
+// its reserved `cancel-requested` event to a chart. Before apply, these charts
+// restore captured staging data; during or after apply, they preserve a human
+// attention gate because the outside result is uncertain. Repeated requests
+// in reconciliation states are internal no-ops, so generic terminal
+// cancellation can never prune the invoke or ask that makes the result known.
 
 import { M } from '@endo/patterns';
 
@@ -129,6 +136,12 @@ export const endoReleaseChart = harden({
             assign: { reason: 'stageRev did not settle before its deadline' },
           },
         ],
+        'cancel-requested': [
+          {
+            target: 'staging-unsettled',
+            assign: { reason: 'cancelled while stageRev was unsettled' },
+          },
+        ],
       },
     },
     // Build the RELEASE (fetch + yarn install + package builds) without
@@ -158,6 +171,9 @@ export const endoReleaseChart = harden({
         'prebuild-timed-out': [
           { target: 'unpinning', assign: { reason: 'prebuild-timed-out' } },
         ],
+        'cancel-requested': [
+          { target: 'unpinning', assign: { reason: 'cancelled' } },
+        ],
       },
     },
     build: {
@@ -182,6 +198,9 @@ export const endoReleaseChart = harden({
         ],
         'build-timed-out': [
           { target: 'unpinning', assign: { reason: 'build-timed-out' } },
+        ],
+        'cancel-requested': [
+          { target: 'unpinning', assign: { reason: 'cancelled' } },
         ],
       },
     },
@@ -220,6 +239,9 @@ export const endoReleaseChart = harden({
         'approval-failed': [
           { target: 'unpinning', assign: { reason: 'approval-failed' } },
         ],
+        'cancel-requested': [
+          { target: 'unpinning', assign: { reason: 'cancelled' } },
+        ],
       },
     },
     apply: {
@@ -250,6 +272,7 @@ export const endoReleaseChart = harden({
         ],
         'apply-failed': [{ target: 'needs-attention' }],
         'apply-timed-out': [{ target: 'needs-attention' }],
+        'cancel-requested': [{ target: 'needs-attention' }],
       },
     },
     verify: {
@@ -271,6 +294,7 @@ export const endoReleaseChart = harden({
         ],
         'verify-failed': [{ target: 'needs-attention' }],
         'verify-timed-out': [{ target: 'needs-attention' }],
+        'cancel-requested': [{ target: 'needs-attention' }],
       },
     },
     // Every post-stage exit that will not apply — build rejection, decline,
@@ -295,6 +319,7 @@ export const endoReleaseChart = harden({
         ],
         'unpin-failed': [{ target: 'compensation-attention' }],
         'unpin-timed-out': [{ target: 'compensation-attention' }],
+        'cancel-requested': [{}],
       },
     },
     // Post-apply problems only (apply failed or timed out, or the readback
@@ -340,6 +365,7 @@ export const endoReleaseChart = harden({
             assign: { reason: 'post-apply attention request failed' },
           },
         ],
+        'cancel-requested': [{}],
       },
     },
     // Compensation failed or returned without evidence of an un-pin. A reply
@@ -367,6 +393,7 @@ export const endoReleaseChart = harden({
             assign: { reason: 'compensation attention request failed' },
           },
         ],
+        'cancel-requested': [{}],
       },
     },
     done: {
@@ -459,6 +486,12 @@ export const nixosConfigChangeChart = harden({
             assign: { reason: 'stageFiles did not settle before its deadline' },
           },
         ],
+        'cancel-requested': [
+          {
+            target: 'staging-unsettled',
+            assign: { reason: 'cancelled while stageFiles was unsettled' },
+          },
+        ],
       },
     },
     build: {
@@ -483,6 +516,9 @@ export const nixosConfigChangeChart = harden({
         ],
         'build-timed-out': [
           { target: 'reverting', assign: { reason: 'build-timed-out' } },
+        ],
+        'cancel-requested': [
+          { target: 'reverting', assign: { reason: 'cancelled' } },
         ],
       },
     },
@@ -522,6 +558,9 @@ export const nixosConfigChangeChart = harden({
         'approval-failed': [
           { target: 'reverting', assign: { reason: 'approval-failed' } },
         ],
+        'cancel-requested': [
+          { target: 'reverting', assign: { reason: 'cancelled' } },
+        ],
       },
     },
     apply: {
@@ -552,6 +591,7 @@ export const nixosConfigChangeChart = harden({
         ],
         'apply-failed': [{ target: 'needs-attention' }],
         'apply-timed-out': [{ target: 'needs-attention' }],
+        'cancel-requested': [{ target: 'needs-attention' }],
       },
     },
     // The staged edit is journaled data; an abandoned change restores the
@@ -576,6 +616,7 @@ export const nixosConfigChangeChart = harden({
         ],
         'revert-failed': [{ target: 'compensation-attention' }],
         'revert-timed-out': [{ target: 'compensation-attention' }],
+        'cancel-requested': [{}],
       },
     },
     // Post-apply problems only (apply failed or timed out). There is no
@@ -622,6 +663,7 @@ export const nixosConfigChangeChart = harden({
             assign: { reason: 'post-apply attention request failed' },
           },
         ],
+        'cancel-requested': [{}],
       },
     },
     // Compensation failed or returned without evidence of a revert. A reply
@@ -649,6 +691,7 @@ export const nixosConfigChangeChart = harden({
             assign: { reason: 'compensation attention request failed' },
           },
         ],
+        'cancel-requested': [{}],
       },
     },
     done: { final: true, output: { status: 'landed' } },

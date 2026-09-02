@@ -616,6 +616,8 @@ export const makeWorkflowService = async ({
      * @param {any} envelope
      * @param {number} depth
      * @param {{ replays?: bigint, settles?: any }} [options]
+     * @returns {Promise<boolean>} whether the event fired a transition (or
+     *   failed the run while attempting one)
      */
     const stepEnvelope = async (envelope, depth, options = {}) => {
       await null;
@@ -644,7 +646,7 @@ export const makeWorkflowService = async ({
           }),
         });
         settleTerminal('failed');
-        return;
+        return true;
       }
       if (!result.fired) {
         const { by } = envelope;
@@ -668,7 +670,7 @@ export const makeWorkflowService = async ({
         } else {
           await append(base);
         }
-        return;
+        return fold.done;
       }
       const effects = effectRecordsFor(fold.nextSeq, result.effects);
       const internals = harden(
@@ -699,7 +701,7 @@ export const makeWorkflowService = async ({
       });
       if (result.terminal !== undefined) {
         settleTerminal('completed');
-        return;
+        return true;
       }
       clearStaleSideEffects();
       await dispatchEffects(effects, depth);
@@ -710,6 +712,7 @@ export const makeWorkflowService = async ({
         );
       }
       await maybeSnapshot();
+      return true;
     };
 
     /**
@@ -1226,7 +1229,67 @@ export const makeWorkflowService = async ({
 
     engine.cancel = reason =>
       jobs.enqueue(async () => {
+        await null;
         if (fold.done) {
+          return;
+        }
+        if (fold.paused) {
+          // Cancellation supersedes a pause, but it must not replay the events
+          // that accumulated behind that pause before cleanup gets control.
+          // Discharge them as explicitly discarded replay obligations so a
+          // restart cannot later drain stale approval or settlement envelopes
+          // into the reconciliation states.
+          await append({ kind: 'resumed', by: 'control' });
+          const queued = [...fold.queuedEvents.entries()].sort(([a], [b]) => {
+            const left = BigInt(a);
+            const right = BigInt(b);
+            return left < right ? -1 : left > right ? 1 : 0;
+          });
+          for (const [seqName, envelope] of queued) {
+            // eslint-disable-next-line no-await-in-loop
+            await append({
+              kind: 'event',
+              by: envelope.by,
+              event: envelope,
+              replays: BigInt(seqName),
+              discarded: 'cancel-requested',
+            });
+          }
+        }
+        // Give the chart the first chance to reconcile cancellation through
+        // ordinary, durable states. A handled request leaves the run live and
+        // keeps all of its pending-effect and recovery guarantees; cancellation
+        // also propagates to linked children without severing the links their
+        // eventual settlements need. Charts that do not handle this reserved
+        // engine event retain the immediate-cancel behavior below.
+        const handled = await stepEnvelope(
+          harden({
+            type: 'cancel-requested',
+            value: harden({ ...(reason !== undefined ? { reason } : {}) }),
+            by: 'control',
+            at: isoNow(),
+          }),
+          0,
+        );
+        if (handled) {
+          if (!fold.done) {
+            /** @type {Promise<void>[]} */
+            const childRequests = [];
+            for (const [childRunId, link] of [...parentLinks]) {
+              if (link.runId === runId) {
+                const child = engines.get(childRunId);
+                if (child !== undefined && !child.fold.done) {
+                  childRequests.push(
+                    child.cancel(`parent run ${runId} cancellation requested`),
+                  );
+                }
+              }
+            }
+            // Each child journals its own request before this call returns.
+            // That closes the crash window between a durable parent request
+            // and an in-memory-only propagation to its cleanup workflow.
+            await Promise.all(childRequests);
+          }
           return;
         }
         const compensation = exitEffects(chart, {

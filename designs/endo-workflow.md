@@ -891,7 +891,7 @@ WorkflowRun: {
 WorkflowControl: {
   signal(event)                      → seq                // no static engine types; strips routing marks
   pause() / resume()                 → void
-  cancel(reason?)                    → void               // compensations, then terminal
+  cancel(reason?)                    → void               // chart reconciliation or terminal cancel
   help()
 }
 
@@ -991,12 +991,27 @@ duplicate firing dedupes on `effectId`.
 no world contact, exactly-once trivially.
 
 **Cancellation and compensation.**
-`cancel` journals `cancelled`, runs the active states' `exit` effects
-(bounded: exit effects may not `ask` — compensation must not block on
-humans; long goodbyes belong in explicit states), settles the run
-terminal, cancels child runs, and — where the integration granted a
-context — the run's worker teardown follows the daemon's normal
-cancellation cascade (`context.cancel`, `src/context.js:49`).
+`cancel` first journals and steps the reserved `cancel-requested` engine event.
+If the chart handles it, the run stays live: cleanup invokes, deadlines, and
+human attention are ordinary recoverable state transitions rather than a
+fire-and-forget epilogue.
+The service propagates a handled request to linked children and waits until each
+child has journaled it before returning, while retaining the spawn links that
+carry their eventual truthful terminals back to the parent.
+If the run was paused, cancellation first resumes it and journals every queued
+event as discarded rather than replaying those stale envelopes before or after
+reconciliation.
+This is the required policy for workflows whose effects can leave outside
+state ambiguous.
+
+If the active chart does not handle `cancel-requested`, `cancel` journals
+`cancelled`, sends the active states' `exit` effects (bounded: exit effects may
+not `ask` — compensation must not block on humans), settles the run terminal,
+and cancels child runs.
+This compatibility path is suitable only when immediate abandonment and
+fire-and-forget compensation are safe.
+Where the integration granted a context, the run's worker teardown follows the
+daemon's normal cancellation cascade (`context.cancel`, `src/context.js:49`).
 The journal survives; a cancelled run remains queryable like any other
 terminal run (retention policy is a named gap, below).
 

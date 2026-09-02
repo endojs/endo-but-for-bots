@@ -151,16 +151,29 @@ await E(control).signal({ type: 'nudge' });
 await E(control).cancel('changed my mind');
 ```
 
+`cancel()` first delivers the reserved engine event `cancel-requested`.
+If the active chart handles it, the run stays live while ordinary durable
+states perform cleanup or collect an operator attestation; linked children
+receive and journal the same request before `cancel()` returns.
+Cancellation supersedes a pause and durably discards events queued behind it,
+so stale approvals or settlements cannot replay into reconciliation after a
+restart.
+If no transition handles the event, the service retains its immediate
+cancellation behavior: active exit effects are sent, the run becomes
+`cancelled`, and children are cancelled.
+Charts that can mutate the outside world should handle cancellation explicitly
+rather than rely on fire-and-forget exit effects.
+
 The facets split caretaker-style: `run` is observation only (status,
 explain, journal, follow, chart) and freely shareable; `control` (held
 by the starter) injects signals, pauses/resumes/cancels, mints
 pattern-checked participant `port`s, and is the only holder that can
 `resolveRef` a redacted capability out of the run's refs store — an
 access that is itself journaled as an `admin` entry.
-Control signals are external events: `signal` rejects statically named effect
-settlement, timer, emit, and region-join event types, and strips engine-owned
-routing and settlement metadata (`path`, `effectId`, `compensation`, and
-`delivers`).
+Control signals are external events: `signal` rejects `cancel-requested` and
+statically named effect settlement, timer, emit, and region-join event types,
+and strips engine-owned routing and settlement metadata (`path`, `effectId`,
+`compensation`, and `delivers`).
 Types containing interpolation syntax cannot be enumerated by this protection;
 security-sensitive charts must use literal engine event types.
 
