@@ -1,0 +1,75 @@
+{
+  "name": "@endo/workflow",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Durable, composable workflow system for the Endo daemon. Workflow definitions (charts) are passable, pattern-guarded statechart data interpreted by a pure kernel; a service packaged as an unconfined plugin persists each run as a numbered-marshal journal in its agent pet store, revives via `@pins`, performs effects as durable mail asks (request/form) or idempotency-keyed invokes, and exposes a passable status snapshot plus a seq-cursored follow stream. The journal doubles as the attributed audit log.",
+  "keywords": [
+    "endo",
+    "exo",
+    "workflow",
+    "statechart",
+    "state-machine",
+    "orchestration",
+    "durable",
+    "plugin"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/workflow"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./machine.js": "./machine.js",
+    "./src/machine.js": "./src/machine.js",
+    "./src/template.js": "./src/template.js",
+    "./src/journal.js": "./src/journal.js",
+    "./src/service.js": "./src/service.js",
+    "./src/interfaces.js": "./src/interfaces.js",
+    "./src/simulate.js": "./src/simulate.js",
+    "./src/graph.js": "./src/graph.js",
+    "./src/sync.js": "./src/sync.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava --serial",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/hex": "workspace:^",
+    "@endo/pass-style": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/sha256": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/init": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "120s"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ]
+  }
+}

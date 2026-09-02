@@ -1695,6 +1695,7 @@ __metadata:
     "@endo/space-inventory-graph": "workspace:^"
     "@endo/space-peers": "workspace:^"
     "@endo/space-whylip": "workspace:^"
+    "@endo/space-workflow": "workspace:^"
     "@endo/spaces-util": "workspace:^"
     "@endo/where": "workspace:^"
     "@playwright/test": "npm:^1.62.1"
@@ -2412,6 +2413,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/workflow": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -3425,6 +3427,20 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/space-workflow@workspace:^, @endo/space-workflow@workspace:packages/space-workflow":
+  version: 0.0.0-use.local
+  resolution: "@endo/space-workflow@workspace:packages/space-workflow"
+  dependencies:
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/harden": "workspace:^"
+    "@endo/spaces-util": "workspace:^"
+    "@endo/workflow": "workspace:^"
+    eslint: "catalog:dev"
+    preact: "npm:^10.29.2"
+  languageName: unknown
+  linkType: soft
+
 "@endo/spaces-util@workspace:^, @endo/spaces-util@workspace:packages/spaces-util":
   version: 0.0.0-use.local
   resolution: "@endo/spaces-util@workspace:packages/spaces-util"
@@ -3603,6 +3619,25 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/workflow@workspace:^, @endo/workflow@workspace:packages/workflow":
+  version: 0.0.0-use.local
+  resolution: "@endo/workflow@workspace:packages/workflow"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/sha256": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
   languageName: unknown
   linkType: soft
 
@@ -15775,7 +15810,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"preact@npm:^10.29.8":
+"preact@npm:^10.29.2, preact@npm:^10.29.8":
   version: 10.29.8
   resolution: "preact@npm:10.29.8"
   peerDependencies:
