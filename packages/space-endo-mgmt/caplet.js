@@ -1,5 +1,5 @@
 // @ts-check
-/* global harden, process */
+/* global process */
 
 // Hosted-Endo management caplet.
 //
