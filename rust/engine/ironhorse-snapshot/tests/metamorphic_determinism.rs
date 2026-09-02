@@ -233,7 +233,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // The heap and wire schema are unchanged; the SIGN payload moved.
         // Re-pinned for Object.assign/Object.hasOwn boot function identities
         // and boot-layout signature generation 3.
-        "e09159cd2250cbb1bdaebc18af608a6ecda455de0c103da588c0fa13e85b55ea",
+        // Re-pinned because JSON.parse/stringify now carry their standard
+        // function names and arities, with boot-layout signature generation 4.
+        // Boot-heap content only; format unchanged.
+        "1d5f85d1f2f76224a962e64ba56454258d2ab18c30672411ae412b6672c48869",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -388,7 +391,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for the engine-owned boot-layout signature generation.
         // Re-pinned with the blob for Object.assign/Object.hasOwn and boot
         // generation 3.
-        "c22b309182fe8b4041e49912af75918ec117f809c3b87aa711d987b4c2a08a76",
+        // Re-pinned with the blob for JSON.parse/stringify's standard function
+        // metadata and boot-layout signature generation 4. Schema and format
+        // remain unchanged.
+        "467518d817e4958e85699256b267335ca51c83ae74bfd0ed602c153437832e04",
         "epoch-3 seal chain"
     );
 }
