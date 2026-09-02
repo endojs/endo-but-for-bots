@@ -194,7 +194,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 because Array's sort and toSorted natives now
         // carry their standard observable names and arities. This moves boot
         // heap content only; the snapshot format remains unchanged.
-        "2975be0b539d4dec067076745d5b484da34c8aa4c52497da323c398a49a493ba",
+        // Re-pinned 2026-09-02 because Array's with, toReversed, and
+        // toSpliced natives now likewise carry their standard names and
+        // arities. This is another boot-heap content move; format unchanged.
+        "fccf38d79bfb28ed3bca2e3e1790299c297dc1a966478cdad47308f8302ca7e7",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -320,7 +323,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // format remain unchanged.
         // Re-pinned with the blob for Array sort/toSorted's standard function
         // metadata. Schema and format remain unchanged.
-        "f5fa645545576213d4451921282530543b560027746e2166b21f20e7143f4436",
+        // Re-pinned with the blob for Array with/toReversed/toSpliced's
+        // standard function metadata. Schema and format remain unchanged.
+        "0a9c9c82dc66c25506f30c2c8fe38c4de319ec9e36aa2cc50ee8103a5621d10c",
         "epoch-3 seal chain"
     );
 }
