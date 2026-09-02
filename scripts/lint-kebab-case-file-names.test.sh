@@ -12,6 +12,7 @@
 #   5. a non-kebab file at the REPOSITORY ROOT is still evaluated (the matcher
 #      does not require a leading `/`);
 #   6. an all-caps-first-segment name like README.md is left alone.
+#   7. the linter finds the repository root when invoked from scripts/.
 #
 # Run: bash scripts/lint-kebab-case-file-names.test.sh
 set -ueo pipefail
@@ -19,9 +20,9 @@ set -ueo pipefail
 script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 linter="$script_directory/lint-kebab-case-file-names.sh"
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-cd "$work"
+working_directory="$(mktemp -d)"
+trap 'rm -rf "$working_directory"' EXIT
+cd "$working_directory"
 
 git init -q
 git config user.email test@example.com
@@ -63,12 +64,12 @@ git add -A
 git commit -qm fixtures
 
 set +e
-found="$(bash scripts/lint-kebab-case-file-names.sh 2>&1)"
+found="$(cd scripts && bash lint-kebab-case-file-names.sh 2>&1)"
 exit_code=$?
 set -e
 
 failures=0
-check() { # description  present|absent  needle
+expect_report() { # description  present|absent  needle
   local description="$1" mode="$2" needle="$3"
   if printf '%s\n' "$found" | grep -qF -- "$needle"; then
     if [ "$mode" = present ]; then echo "ok:   $description"; else
@@ -84,34 +85,34 @@ printf '%s\n' "$found"
 echo "--------------------------------------"
 
 # 1. corpus file exempted by directory prefix
-check "corpus file exempted by dir prefix" absent \
+expect_report "corpus file exempted by dir prefix" absent \
   packages/test262-runner/test262/harness/compareArray.js
 # 1a. a test262 fixture is covered by the directory pattern without being listed
-check "test262 _FIXTURE exempted by dir prefix" absent \
+expect_report "test262 _FIXTURE exempted by dir prefix" absent \
   packages/test262-runner/test262/harness/compareArray_FIXTURE.js
 # 1b. _FIXTURE OUTSIDE the corpus exempted by the glob (proves `*` spans `/`)
-check "_FIXTURE exempted by *_FIXTURE.js glob" absent \
+expect_report "_FIXTURE exempted by *_FIXTURE.js glob" absent \
   packages/somepkg/test/some_FIXTURE.js
 # 2. genuine non-kebab file outside every pattern still reported
-check "non-exempt camelCase file reported" present \
+expect_report "non-exempt camelCase file reported" present \
   packages/otherpkg/src/badCamelName.js
 # 3. exact-path exemption honored (back-compat)
-check "exact-path exemption honored" absent \
+expect_report "exact-path exemption honored" absent \
   packages/marshal/src/rankOrder.js
 # 4. kebab file under a CAPITALIZED directory is NOT falsely flagged
-check "kebab file under capitalized dir not flagged" absent \
+expect_report "kebab file under capitalized dir not flagged" absent \
   packages/CapitalDir/src/good-kebab-name.js
 # 4b. a plain kebab file is never flagged
-check "plain kebab-case file not reported" absent \
+expect_report "plain kebab-case file not reported" absent \
   packages/otherpkg/src/good-kebab-name.js
 # 5. a non-kebab file at the repository ROOT is still evaluated...
-check "root-level camelCase file reported" present \
+expect_report "root-level camelCase file reported" present \
   rootCamelName.js
 # 5b. ...and a root-level exact exemption still works
-check "root-level exact exemption honored" absent \
+expect_report "root-level exact exemption honored" absent \
   RootExact.js
 # 6. README.md (all-caps first segment) is left alone
-check "README.md not reported" absent \
+expect_report "README.md not reported" absent \
   docs/README.md
 
 # The genuine violations must make the linter exit non-zero.

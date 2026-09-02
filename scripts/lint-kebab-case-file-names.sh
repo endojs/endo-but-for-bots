@@ -19,7 +19,11 @@
 # the `_` currently tolerated in many names; that is left for later.
 set -ueo pipefail
 
-EXEMPTIONS=scripts/lint-kebab-case-exemptions.txt
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repository_root="$(git -C "$script_directory" rev-parse --show-toplevel)"
+cd "$repository_root"
+
+exemptions_path=scripts/lint-kebab-case-exemptions.txt
 
 # Turn each non-blank, non-comment exemption line into a git exclude pathspec.
 exclude_pathspecs=()
@@ -28,7 +32,7 @@ while IFS= read -r pattern || [ -n "$pattern" ]; do
   '' | '#'*) continue ;;
   esac
   exclude_pathspecs+=(":(exclude)$pattern")
-done <"$EXEMPTIONS"
+done <"$exemptions_path"
 
 # Tracked files that violate the convention and match no exemption pathspec. The
 # positive `*` pathspec selects every tracked file; the excludes subtract the
@@ -52,6 +56,6 @@ found="$(violators)"
 if [ -n "$found" ]; then
   printf '%s\n' "$found" >&2
   echo >&2
-  echo "The above file names must be kebab-case or added to $EXEMPTIONS" >&2
+  echo "The above file names must be kebab-case or added to $exemptions_path" >&2
   exit 1
 fi
