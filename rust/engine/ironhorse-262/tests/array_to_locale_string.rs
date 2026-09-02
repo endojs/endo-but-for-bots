@@ -58,4 +58,24 @@ fn number_locale_string_uses_the_frozen_intl_profile() {
         "(123456789012345678901234567890n).toLocaleString('en-IN')",
         "1,23,45,67,89,01,23,45,67,89,01,23,45,67,890",
     );
+    for (source, expected) in [
+        (
+            "(1).toLocaleString('en-US',{style:'currency',currency:'USD'})",
+            "$1.00",
+        ),
+        (
+            "(1n).toLocaleString('en-US',{style:'currency',currency:'USD'})",
+            "$1.00",
+        ),
+        (
+            "(1).toLocaleString('en-US',{style:'unit',unit:'meter'})",
+            "1 m",
+        ),
+        (
+            "(1n).toLocaleString('en-US',{style:'unit',unit:'meter'})",
+            "1 m",
+        ),
+    ] {
+        ironhorse_result(source, expected);
+    }
 }

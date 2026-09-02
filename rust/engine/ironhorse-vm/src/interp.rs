@@ -36937,16 +36937,27 @@ impl Interp {
             .get(base + 5)
             .copied()
             .unwrap_or_else(Slot::undefined);
+        // IntegerIndexedObjectLength returns zero for a detached view. Keep
+        // the stored byte offset (the species constructor must still observe
+        // it), but calculate both relative indices against that effective
+        // zero length rather than the pre-detachment internal slot.
+        let source_length = if method == NativeMethod::TypedArraySubarray
+            && self.detached_buffers.contains(&source.buffer)
+        {
+            0
+        } else {
+            source.length
+        };
         let begin = Self::typed_array_relative_index(
             self.array_to_integer_or_infinity(code, begin_arg)?,
-            source.length,
+            source_length,
         );
         let end = if argc < 2 || end_arg.kind == Kind::Undefined {
-            source.length
+            source_length
         } else {
             Self::typed_array_relative_index(
                 self.array_to_integer_or_infinity(code, end_arg)?,
-                source.length,
+                source_length,
             )
         };
         let count = end.saturating_sub(begin);

@@ -711,7 +711,8 @@ fn oracle_skips_super_arguments(run: &DualRun) -> bool {
 /// `set` call so unrelated TypedArray failures remain gating.
 fn oracle_misses_typed_array_set_detachment(run: &DualRun) -> bool {
     run.oracle_parsed
-        && run.oracle_error == "Test262Error: Expected a TypeError but got a Test262Error"
+        && run.oracle_error
+            == "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)"
         && run.source.contains("$DETACHBUFFER(sample.buffer)")
         && run.source.contains("Should not get other values")
         && run.source.contains("sample.set(obj)")
@@ -725,7 +726,11 @@ fn oracle_misses_typed_array_set_detachment(run: &DualRun) -> bool {
 /// all distinctive source operations so no unrelated sort failure is hidden.
 fn oracle_misses_typed_array_sort_detachment(run: &DualRun) -> bool {
     run.oracle_parsed
-        && run.oracle_error == "Test262Error: Expected a TypeError but got a Test262Error"
+        && matches!(
+            run.oracle_error.as_str(),
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)"
+                | "Test262Error: Expected a TypeError but got a Test262Error (Testing with BigInt64Array.)"
+        )
         && run.source.contains("$DETACHBUFFER(sample.buffer)")
         && run.source.contains("sample.sort(comparefn)")
         && run.source.contains("assert.throws(TypeError")
@@ -739,7 +744,7 @@ fn oracle_misses_typed_array_sort_detachment(run: &DualRun) -> bool {
 fn oracle_misses_typed_array_sort_post_coercion_detachment(run: &DualRun) -> bool {
     run.oracle_parsed
         && run.oracle_error
-            == "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+            == "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all (Testing with Float64Array.)"
         && run.source.contains("$DETACHBUFFER(ab)")
         && run.source.contains("[Symbol.toPrimitive]() { called = true; }")
         && run.source.contains("ta.sort(function(a, b)")
@@ -2345,7 +2350,7 @@ mod tests {
     fn oracle_typed_array_set_detachment_bug_is_a_precise_exclusion() {
         let mut run = synthetic_ironhorse_only_complete(
             true,
-            "Test262Error: Expected a TypeError but got a Test262Error",
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)",
         );
         run.source = "Object.defineProperty(obj, 1, { get: function() { \
             $DETACHBUFFER(sample.buffer); } }); \
@@ -2391,7 +2396,7 @@ mod tests {
     fn oracle_typed_array_sort_detachment_bug_is_a_precise_exclusion() {
         let mut run = synthetic_ironhorse_only_complete(
             true,
-            "Test262Error: Expected a TypeError but got a Test262Error",
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)",
         );
         run.source = "var calls = 0; var comparefn = function() { \
             if (calls++) throw new Test262Error('second comparator call'); \
@@ -2411,6 +2416,11 @@ mod tests {
             crate::report::Category::Infrastructure
         );
 
+        run.oracle_error =
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with BigInt64Array.)"
+                .to_string();
+        assert!(oracle_misses_typed_array_sort_detachment(&run));
+
         run.oracle_error = "Test262Error: a different assertion failed".to_string();
         assert!(!oracle_misses_typed_array_sort_detachment(&run));
         assert!(matches!(
@@ -2423,7 +2433,7 @@ mod tests {
     fn oracle_typed_array_sort_post_coercion_detachment_bug_is_a_precise_exclusion() {
         let mut run = synthetic_ironhorse_only_complete(
             true,
-            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all",
+            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all (Testing with Float64Array.)",
         );
         run.source = "assert.throws(TypeError, function() { \
             ta.sort(function(a, b) { $DETACHBUFFER(ab); return { \
@@ -2446,6 +2456,41 @@ mod tests {
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(_)
         ));
+    }
+
+    #[test]
+    fn assembled_typed_array_oracle_exclusions_include_constructor_suffixes() {
+        let Some((test_root, harness)) = crate::test262::locate_test262() else {
+            eprintln!("test262 subset absent; skipping assembled oracle-exclusion regression");
+            return;
+        };
+        for (relative, expected_skip) in [
+            (
+                "built-ins/TypedArray/prototype/set/array-arg-targetbuffer-detached-on-get-src-value-throws.js",
+                "oracle-xs-typedarray-set-detach",
+            ),
+            (
+                "built-ins/TypedArray/prototype/sort/detached-buffer-comparefn.js",
+                "oracle-xs-typedarray-sort-detach",
+            ),
+            (
+                "built-ins/TypedArray/prototype/sort/BigInt/detached-buffer-comparefn.js",
+                "oracle-xs-typedarray-sort-detach",
+            ),
+            (
+                "built-ins/TypedArray/prototype/sort/sort-tonumber.js",
+                "oracle-xs-typedarray-sort-post-coercion-detach",
+            ),
+        ] {
+            let source = std::fs::read_to_string(test_root.join(relative))
+                .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+            let result = run_case(&Config::default(), &harness, &source);
+            assert_eq!(
+                result.verdict,
+                Verdict::RunSkip(expected_skip.to_string()),
+                "assembled official case {relative}",
+            );
+        }
     }
 
     #[test]

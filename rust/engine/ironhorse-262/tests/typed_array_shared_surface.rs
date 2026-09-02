@@ -126,6 +126,7 @@ fn shared_allocating_methods_honor_species_copy_and_view_semantics() {
     for source in [
         "var a=new Uint8Array([1,2,3]); var b=a.slice(1); a[1]=9; b.join(',')+':'+(b.buffer!==a.buffer)",
         "var a=new Uint8Array([1,2,3]); var b=a.subarray(1); a[1]=9; b.join(',')+':'+(b.buffer===a.buffer)",
+        "var seen=''; function C(buffer,offset,length){seen=offset+':'+length;return new Uint8Array(0)} var a=new Uint8Array(new ArrayBuffer(8),2,4); a.constructor={[Symbol.species]:C}; $262.detachArrayBuffer(a.buffer); try{a.subarray(1,3)}catch(_error){} seen",
         "var a=new Uint8Array([1,255]); a.constructor={[Symbol.species]:Int16Array}; var b=a.slice(); (b instanceof Int16Array)+':'+b.join(',')",
         "var log=[]; function S(n){log.push('species:'+n);return new Uint8Array(n)} var a=new Uint8Array([1,2]); a.constructor={[Symbol.species]:S}; var b=a.map(function(v){log.push('map:'+v);return v+1}); log.join(',')+':'+b.join(',')",
         "var log=[]; function S(n){log.push('species:'+n);return new Uint8Array(n)} var a=new Uint8Array([1,2,3]); a.constructor={[Symbol.species]:S}; var b=a.filter(function(v){log.push('filter:'+v);return v>1}); log.join(',')+':'+b.join(',')",
@@ -161,6 +162,22 @@ fn shared_locale_string_validates_and_invokes_each_numeric_domain() {
         (
             "new BigInt64Array([1234567890123456789n,-2n]).toLocaleString()",
             "1,234,567,890,123,456,789,-2",
+        ),
+        (
+            "new Uint8Array([1,2]).toLocaleString('en-US',{style:'currency',currency:'USD'})",
+            "$1.00,$2.00",
+        ),
+        (
+            "new BigInt64Array([1n,2n]).toLocaleString('en-US',{style:'currency',currency:'USD'})",
+            "$1.00,$2.00",
+        ),
+        (
+            "new Uint8Array([1,2]).toLocaleString('en-US',{style:'unit',unit:'meter'})",
+            "1 m,2 m",
+        ),
+        (
+            "new BigInt64Array([1n,2n]).toLocaleString('en-US',{style:'unit',unit:'meter'})",
+            "1 m,2 m",
         ),
         (
             "var calls=[]; Number.prototype.toLocaleString=function(l,o){calls.push(this+':'+l+':'+o.x);return 'v'+this}; var a=new Uint8Array([1,2]); a.toLocaleString('zz',{x:4})+':'+calls.join('|')",
