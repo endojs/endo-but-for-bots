@@ -252,10 +252,7 @@ test('breaking out of a streamGrep for-await leaves the remaining files unread',
   }
   t.is(seen, 1);
   const readsAtBreak = counters.readFileText;
-  t.true(
-    readsAtBreak < total,
-    "the break left later files' contents unread",
-  );
+  t.true(readsAtBreak < total, "the break left later files' contents unread");
 
   // Let any stray continuation settle; ava fails the test on an unhandled
   // rejection, and the read counter must not advance after the break.
@@ -371,8 +368,9 @@ test('a sparse streamGrep observes a mid-stream revoke without reading to the en
   // whole tree of non-matching files.
   t.true(
     counters.readFileText <= readsAtRevoke + 2,
-    `post-revoke reads are bounded to one path batch: ${counters.readFileText -
-      readsAtRevoke} more after revoke, of ${total - 1} remaining files`,
+    `post-revoke reads are bounded to one path batch: ${
+      counters.readFileText - readsAtRevoke
+    } more after revoke, of ${total - 1} remaining files`,
   );
 });
 
