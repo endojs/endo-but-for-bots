@@ -38,6 +38,24 @@ const until = async (fn, label = 'condition', tries = 400) => {
 };
 
 /**
+ * @param {any} powers
+ * @param {(value: any, path: any) => Promise<any>} storeValue
+ */
+const powersWithStore = (powers, storeValue) =>
+  harden({
+    has: (...segments) => E(powers).has(...segments),
+    list: (...segments) => E(powers).list(...segments),
+    lookup: nameOrPath => E(powers).lookup(nameOrPath),
+    maybeLookup: nameOrPath => E(powers).maybeLookup(nameOrPath),
+    makeDirectory: nameOrPath => E(powers).makeDirectory(nameOrPath),
+    storeValue,
+    request: (...args) => E(powers).request(...args),
+    form: (...args) => E(powers).form(...args),
+    listMessages: () => E(powers).listMessages(),
+    followMessages: () => E(powers).followMessages(),
+  });
+
+/**
  * Wrap agent powers so `storeValue` throws when `shouldCrash` matches —
  * the write never lands, simulating a process death at that exact
  * durable boundary.
@@ -46,22 +64,11 @@ const until = async (fn, label = 'condition', tries = 400) => {
  * @param {(value: any, path: any) => boolean} shouldCrash
  */
 const crashingPowers = (powers, shouldCrash) =>
-  harden({
-    has: (...segments) => E(powers).has(...segments),
-    list: (...segments) => E(powers).list(...segments),
-    lookup: nameOrPath => E(powers).lookup(nameOrPath),
-    maybeLookup: nameOrPath => E(powers).maybeLookup(nameOrPath),
-    makeDirectory: nameOrPath => E(powers).makeDirectory(nameOrPath),
-    storeValue: async (value, nameOrPath) => {
-      if (shouldCrash(value, nameOrPath)) {
-        throw Error('simulated crash before durable write');
-      }
-      return E(powers).storeValue(value, nameOrPath);
-    },
-    request: (...args) => E(powers).request(...args),
-    form: (...args) => E(powers).form(...args),
-    listMessages: () => E(powers).listMessages(),
-    followMessages: () => E(powers).followMessages(),
+  powersWithStore(powers, async (value, nameOrPath) => {
+    if (shouldCrash(value, nameOrPath)) {
+      throw Error('simulated crash before durable write');
+    }
+    return E(powers).storeValue(value, nameOrPath);
   });
 
 // #region kernel findings
@@ -900,6 +907,335 @@ test('partial descendant revocation denies starts until a retry', async t => {
   t.true((await E(derived).describe()).revoked);
 });
 
+test('failed live revocation quarantines timer delivery', async t => {
+  const { powers } = makeFakeAgent();
+  const clock = makeFakeClock();
+  let crashArmed = false;
+  const wrapped = crashingPowers(
+    powers,
+    value => crashArmed && value.event?.type === 'cancel-requested',
+  );
+  const harness = await makeWorkflowService({
+    powers: wrapped,
+    clock,
+    makeId: makeIdCounter('timer'),
+  });
+  t.teardown(harness.stop);
+  const chart = harden({
+    name: 'revoked-timer',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: {
+        entry: [{ kind: 'after', ms: 100, emit: { type: 'elapsed' } }],
+        on: {
+          elapsed: [{ target: 'unsafe' }],
+          'cancel-requested': [{ target: 'safe' }],
+        },
+      },
+      unsafe: { final: true },
+      safe: { final: true, output: { status: 'revoked-safe' } },
+    },
+  });
+  const { factory } = await E(harness.service).makeFactory({ chart });
+  const { runId } = await E(factory).start({});
+  const engine = harness.engines.get(runId);
+
+  crashArmed = true;
+  await t.throwsAsync(() => E(factory).revoke('injected write failure'), {
+    message: /simulated crash/,
+  });
+  crashArmed = false;
+  await clock.advance(100);
+  t.false(engine.fold.done);
+  t.is(engine.fold.configuration.state, 'waiting');
+  t.is(engine.fold.pending.size, 1);
+
+  await E(factory).revoke('retry');
+  t.true(engine.fold.done);
+  t.deepEqual(engine.fold.output, { status: 'revoked-safe' });
+});
+
+test('revocation returning before a stalled start prevents all effects', async t => {
+  const { powers } = makeFakeAgent();
+  let stall = false;
+  /** @type {() => void} */
+  let enteredResolve = () => {};
+  const entered = new Promise(resolve => {
+    enteredResolve = resolve;
+  });
+  /** @type {() => void} */
+  let release = () => {};
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  const wrapped = powersWithStore(powers, async (value, nameOrPath) => {
+    await null;
+    if (
+      stall &&
+      value.name === 'start-revoke-race' &&
+      Array.isArray(nameOrPath) &&
+      nameOrPath.at(-1) === 'chart'
+    ) {
+      stall = false;
+      enteredResolve();
+      await gate;
+    }
+    return E(powers).storeValue(value, nameOrPath);
+  });
+  const harness = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('race'),
+  });
+  t.teardown(harness.stop);
+  let calls = 0;
+  const worker = Far('StartRaceWorker', {
+    perform: async _effectId => {
+      calls += 1;
+      return 'unsafe';
+    },
+  });
+  const chart = harden({
+    name: 'start-revoke-race',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'worker',
+            method: 'perform',
+            outcome: 'worked',
+          },
+        ],
+        on: { worked: [{ target: 'done' }] },
+      },
+      done: { final: true },
+    },
+  });
+  const { factory } = await E(harness.service).makeFactory({
+    chart,
+    endowments: harden({ worker }),
+  });
+  stall = true;
+  const starting = E(factory).start({});
+  await entered;
+  await E(factory).revoke('wins the race');
+  release();
+  await t.throwsAsync(() => starting, { message: /is revoked/ });
+  t.is(calls, 0);
+});
+
+test('a queued quarantine barrier rejects a racing signal', async t => {
+  const { powers } = makeFakeAgent();
+  const harness = await makeWorkflowService({
+    powers,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('signal'),
+  });
+  t.teardown(harness.stop);
+  const chart = harden({
+    name: 'signal-barrier-race',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: { on: { go: [{ target: 'unsafe' }] } },
+      unsafe: { final: true },
+    },
+  });
+  const { runId, control } = await E(harness.service).start(chart, {});
+  const engine = harness.engines.get(runId);
+  const barrier = engine.quarantine();
+  const submitted = E(control).signal(harden({ type: 'go' }));
+  await barrier;
+  await t.throwsAsync(() => submitted, { message: /is quarantined/ });
+  t.false(engine.fold.done);
+  const journal = await E(engine.runFacet).journal();
+  t.false(journal.some(entry => entry.event?.type === 'go'));
+});
+
+test('parent terminal waits for a durable child cancellation', async t => {
+  const { powers } = makeFakeAgent();
+  let crashArmed = false;
+  let childRunId = '';
+  const wrapped = crashingPowers(
+    powers,
+    (value, path) =>
+      crashArmed &&
+      value.event?.type === 'cancel-requested' &&
+      Array.isArray(path) &&
+      path.includes(childRunId),
+  );
+  const harness = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('terminal'),
+  });
+  t.teardown(harness.stop);
+  const childChart = harden({
+    name: 'terminal-child',
+    version: 1,
+    initial: 'live',
+    states: { live: {} },
+  });
+  const parentChart = harden({
+    name: 'terminal-parent',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        entry: [{ kind: 'spawn', chart: childChart, outcome: 'child-done' }],
+        on: { finish: [{ target: 'done' }] },
+      },
+      done: { final: true },
+    },
+  });
+  const { runId, control } = await E(harness.service).start(parentChart, {});
+  const parent = harness.engines.get(runId);
+  await until(
+    () =>
+      [...parent.fold.pending.values()].some(
+        record => record.childRunId !== undefined,
+      ),
+    'child linked',
+  );
+  childRunId = [...parent.fold.pending.values()][0].childRunId;
+  const child = harness.engines.get(childRunId);
+  crashArmed = true;
+  await t.throwsAsync(() => E(control).signal(harden({ type: 'finish' })), {
+    message: /simulated crash/,
+  });
+  t.false(parent.fold.done);
+  t.false(child.fold.done);
+
+  crashArmed = false;
+  await E(control).signal(harden({ type: 'finish' }));
+  t.true(parent.fold.done);
+  t.is(child.fold.outcome, 'cancelled');
+});
+
+test('revocation releases a child reconciliation after parent finality', async t => {
+  const { powers } = makeFakeAgent();
+  const harness = await makeWorkflowService({
+    powers,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('tree'),
+  });
+  t.teardown(harness.stop);
+  let calls = 0;
+  const janitor = Far('TreeJanitor', {
+    clean: async _effectId => {
+      calls += 1;
+      return 'clean';
+    },
+  });
+  const childChart = harden({
+    name: 'reconciling-tree-child',
+    version: 1,
+    initial: 'live',
+    states: {
+      live: { on: { 'cancel-requested': [{ target: 'cleaning' }] } },
+      cleaning: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'janitor',
+            method: 'clean',
+            outcome: 'cleaned',
+          },
+        ],
+        on: { cleaned: [{ target: 'done' }] },
+      },
+      done: { final: true, output: { status: 'clean' } },
+    },
+  });
+  const parentChart = harden({
+    name: 'final-tree-parent',
+    version: 1,
+    initial: 'live',
+    states: {
+      live: {
+        entry: [
+          {
+            kind: 'spawn',
+            chart: childChart,
+            endowments: ['janitor'],
+            outcome: 'child-done',
+          },
+        ],
+        on: {
+          'cancel-requested': [{ target: 'done' }],
+          'child-done': [{ target: 'done' }],
+        },
+      },
+      done: { final: true },
+    },
+  });
+  const { factory } = await E(harness.service).makeFactory({
+    chart: parentChart,
+    endowments: harden({ janitor }),
+  });
+  const { runId } = await E(factory).start({});
+  const parent = harness.engines.get(runId);
+  await until(
+    () => [...parent.fold.pending.values()].some(r => r.childRunId),
+    'child linked',
+  );
+  const childRunId = [...parent.fold.pending.values()][0].childRunId;
+  const child = harness.engines.get(childRunId);
+
+  await E(factory).revoke('clean the tree');
+  t.true(parent.fold.done);
+  await until(() => child.fold.done, 'child cleanup rearmed');
+  t.deepEqual(child.fold.output, { status: 'clean' });
+  t.true(calls >= 1);
+});
+
+test('synthetic cancelled spawns obey the cascade bound', async t => {
+  t.timeout(5000);
+  const { powers } = makeFakeAgent();
+  const harness = await makeWorkflowService({
+    powers,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('cascade'),
+  });
+  t.teardown(harness.stop);
+  const childChart = harden({
+    name: 'never-created-child',
+    version: 1,
+    initial: 'done',
+    states: { done: { final: true } },
+  });
+  const chart = harden({
+    name: 'cancelled-spawn-cycle',
+    version: 1,
+    initial: 'waiting',
+    states: {
+      waiting: { on: { 'cancel-requested': [{ target: 'spawning' }] } },
+      spawning: {
+        entry: [
+          {
+            kind: 'spawn',
+            chart: childChart,
+            outcome: 'child-done',
+            failure: 'child-failed',
+          },
+        ],
+        on: { 'child-failed': [{ target: 'spawning' }] },
+      },
+    },
+  });
+  const { runId, control } = await E(harness.service).start(chart, {});
+  await E(control).cancel('bound the cycle');
+  const engine = harness.engines.get(runId);
+  t.true(engine.fold.done);
+  t.is(engine.fold.outcome, 'failed');
+  t.regex(engine.fold.reason, /cascade exceeded/);
+  t.is(harness.engines.size, 1);
+});
+
 test('handled cancellation durably suppresses later child spawns', async t => {
   const { powers, controls } = makeFakeAgent();
   const h1 = await makeWorkflowService({
@@ -920,10 +1256,10 @@ test('handled cancellation durably suppresses later child spawns', async t => {
     states: {
       waiting: {
         on: {
-          'cancel-requested': [{}],
-          go: [{ target: 'spawning' }],
+          'cancel-requested': [{ target: 'reconciling' }],
         },
       },
+      reconciling: { on: { go: [{ target: 'spawning' }] } },
       spawning: {
         entry: [
           {
@@ -946,6 +1282,8 @@ test('handled cancellation durably suppresses later child spawns', async t => {
   const { runId, control } = await E(h1.service).start(chart, {});
   await E(control).cancel('withdraw authority');
   t.true(h1.engines.get(runId).fold.cancellationRequested);
+  await E(control).cancel('duplicate request');
+  t.is(h1.engines.get(runId).fold.configuration.state, 'reconciling');
   h1.stop();
 
   const h2 = await makeWorkflowService({
@@ -960,6 +1298,49 @@ test('handled cancellation durably suppresses later child spawns', async t => {
   await until(() => recovered.fold.done, 'suppressed spawn reconciled');
   t.deepEqual(recovered.fold.output, { status: 'spawn-suppressed' });
   t.is(h2.engines.size, 1, 'no child run was created');
+});
+
+test('repeated cancellation resumes an interrupted queued drain', async t => {
+  const { powers } = makeFakeAgent();
+  let crashArmed = false;
+  const wrapped = crashingPowers(
+    powers,
+    value => crashArmed && value.replays !== undefined,
+  );
+  const harness = await makeWorkflowService({
+    powers: wrapped,
+    clock: makeFakeClock(),
+    makeId: makeIdCounter('retry'),
+  });
+  t.teardown(harness.stop);
+  const chart = harden({
+    name: 'cancel-drain-retry',
+    version: 1,
+    initial: 'working',
+    states: {
+      working: {
+        on: { 'cancel-requested': [{ target: 'reconciling' }] },
+      },
+      reconciling: { on: { cleaned: [{ target: 'done' }] } },
+      done: { final: true, output: { status: 'clean' } },
+    },
+  });
+  const { runId, control } = await E(harness.service).start(chart, {});
+  await E(control).pause();
+  await E(control).signal(harden({ type: 'cleaned' }));
+  crashArmed = true;
+  await t.throwsAsync(() => E(control).cancel('first request'), {
+    message: /simulated crash/,
+  });
+  const engine = harness.engines.get(runId);
+  t.true(engine.fold.cancellationRequested);
+  t.is(engine.fold.queuedEvents.size, 1);
+
+  crashArmed = false;
+  await E(control).cancel('retry');
+  t.true(engine.fold.done);
+  t.deepEqual(engine.fold.output, { status: 'clean' });
+  t.is(engine.fold.queuedEvents.size, 0);
 });
 
 test('a lost emit delivery is re-dispatched from its journaled obligation', async t => {
@@ -1022,15 +1403,14 @@ test('a lost emit delivery is re-dispatched from its journaled obligation', asyn
 test('a spawn crash window adopts the child instead of duplicating it', async t => {
   const { powers, controls } = makeFakeAgent();
   let crashArmed = true;
-  // A real crash kills every write from that moment on: the `spawned`
-  // linkage entry AND the failed-settlement conversion the engine now
-  // attempts for the dispatch throw. Both must die for the crash
-  // window to stay open.
-  const wrapped = crashingPowers(
-    powers,
-    value =>
-      crashArmed && (value.kind === 'spawned' || value.settles !== undefined),
-  );
+  const wrapped = powersWithStore(powers, async (value, nameOrPath) => {
+    if (crashArmed && value.kind === 'spawned') {
+      // Model process death while the parent linkage write is in flight:
+      // unlike a live rejection, no failed-settlement job gets a turn.
+      return new Promise(() => {});
+    }
+    return E(powers).storeValue(value, nameOrPath);
+  });
   const h1 = await makeWorkflowService({
     powers: wrapped,
     clock: makeFakeClock(),
@@ -1057,12 +1437,14 @@ test('a spawn crash window adopts the child instead of duplicating it', async t 
       ok: { final: true },
     },
   });
-  // The child run is created durably; the parent's `spawned` linkage
-  // write dies, and so does the failed-settlement conversion — the
-  // parent is left with the spawn pending and unlinked.
-  const parent1 = await E(h1.service).start(parentChart, {});
-  const engine1 = h1.engines.get(parent1.runId);
-  await settle();
+  // The child run is created durably while the parent's `spawned` linkage
+  // write never returns. The next incarnation must adopt it by deterministic
+  // id even though no parent journal entry names it yet.
+  E(h1.service)
+    .start(parentChart, {})
+    .catch(() => {});
+  await until(() => h1.engines.has('r-a1-c0-0'), 'child durably created');
+  const engine1 = h1.engines.get('r-a1');
   const journal1 = await E(engine1.runFacet).journal();
   t.false(journal1.some(entry => entry.kind === 'spawned'));
   t.false(journal1.some(entry => entry.settles !== undefined));
