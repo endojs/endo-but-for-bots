@@ -2,7 +2,7 @@
   "name": "@endo/space-endo-mgmt",
   "version": "0.1.0",
   "private": true,
-  "description": "Hosted Endo management Space for Endo Chat — update and restart a self-hosted daemon from the UI",
+  "description": "Hosted Endo management Space for Endo Chat \u2014 update and restart a self-hosted daemon from the UI",
   "keywords": [
     "endo",
     "chat",
@@ -42,14 +42,5 @@
   },
   "devDependencies": {
     "eslint": "catalog:dev"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "env": {
-      "browser": true,
-      "node": true
-    }
   }
 }

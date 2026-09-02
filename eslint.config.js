@@ -132,6 +132,7 @@ export default defineConfig(
       'packages/preact-social/**',
       'packages/space-channel/**',
       'packages/space-chat/**',
+      'packages/space-endo-mgmt/src/**',
       'packages/space-file-explorer/**',
       'packages/space-floot/**',
       'packages/space-inventory-graph/**',

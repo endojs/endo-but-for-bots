@@ -1,5 +1,4 @@
 // @ts-check
-/* global harden */
 
 import { E } from '@endo/far';
 import { h } from 'preact';
@@ -95,7 +94,6 @@ export const MgmtView = ({ powers }) => {
       live = false;
       clearInterval(id);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   /** @param {'update' | 'restart'} kind */
