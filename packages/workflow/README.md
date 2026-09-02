@@ -151,15 +151,16 @@ await E(control).signal({ type: 'nudge' });
 await E(control).cancel('changed my mind');
 ```
 
-`cancel()` first delivers the reserved engine event `cancel-requested`.
+`cancel()` is represented by the reserved engine event `cancel-requested`.
 Linked children receive and journal cancellation before the parent records its
 own request, closing the crash window in the safe direction.
 If the active chart handles the request, the run stays live while ordinary
 durable states perform cleanup or collect an operator attestation.
 Cancellation supersedes a pause atomically with that state transition, then
 replays queued envelopes against the reconciliation state: routed stale
-approvals miss their exited path, while already-settled compensation or child
-work can still finish.
+approvals whose owner path was exited are journaled as stale rather than
+fail-loud, while already-settled compensation or child work on an active path
+can still finish.
 If no transition handles the event, the service retains its immediate
 cancellation behavior: active exit effects are sent, the run becomes
 `cancelled`, and children are cancelled.
@@ -206,6 +207,10 @@ await E(factory).revoke('rotation'); // cascades to derived factories and cancel
 
 Factory records, bindings, and parent links live in the pet store, so
 factories — including revocation — survive restarts.
+Revocation awaits each live run's durable cancellation request.
+Recovery reconstructs spawn links and reasserts every revoked factory's
+cancellation before rearming effects; a cancellation write failure quarantines
+that run tree instead of redispatching pre-revocation work.
 
 ## Layout and durability
 

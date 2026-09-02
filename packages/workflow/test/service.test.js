@@ -668,6 +668,74 @@ test('paused cancellation replays an already-settled child outcome', async t => 
   t.deepEqual(engine.fold.output, { status: 'child-settled' });
 });
 
+test('paused cancellation drops a settlement routed to the exited state', async t => {
+  const { controls, service, engines, stop } = await makeHarness();
+  t.teardown(stop);
+  const { target, calls } = makeRecordingTarget(['restored']);
+  const chart = harden({
+    name: 'cancel-stale-settlement',
+    version: 1,
+    initial: 'approval',
+    states: {
+      approval: {
+        entry: [
+          {
+            kind: 'ask',
+            to: 'operator',
+            what: { description: 'approve?' },
+            outcome: 'decided',
+          },
+        ],
+        on: {
+          decided: [{ target: 'unsafe' }],
+          'cancel-requested': [{ target: 'cleaning' }],
+        },
+      },
+      cleaning: {
+        entry: [
+          {
+            kind: 'invoke',
+            target: 'janitor',
+            method: 'perform',
+            args: ['restore'],
+            outcome: 'cleaned',
+          },
+        ],
+        on: {
+          cleaned: [{ target: 'safe' }],
+          'cancel-requested': [{}],
+        },
+      },
+      unsafe: { final: true },
+      safe: { final: true, output: { status: 'restored' } },
+    },
+  });
+  const { runId, control } = await E(service).start(chart, {
+    endowments: harden({ operator: harden({}), janitor: target }),
+  });
+  const engine = engines.get(runId);
+  await until(
+    () => controls.findMessage('request', `[workflow ${runId}`) !== undefined,
+    'approval sent',
+  );
+  await E(control).pause();
+  await controls.resolveRequest(
+    controls.findMessage('request', `[workflow ${runId}`),
+    'approved before cancellation',
+  );
+  await until(() => engine.fold.queuedEvents.size === 1, 'approval queued');
+
+  await E(control).cancel('withdrawn');
+  await until(() => engine.fold.done, 'cleanup completed');
+  t.is(engine.fold.outcome, 'completed');
+  t.deepEqual(engine.fold.output, { status: 'restored' });
+  t.is(calls.length, 1);
+  const journal = await E(engine.runFacet).journal();
+  const replay = journal.find(entry => entry.replays !== undefined);
+  t.true(replay.stale);
+  t.is(replay.terminal, undefined);
+});
+
 test('the service start facet ignores a caller-supplied runId', async t => {
   // `runId` is the internal spawn path's parameter. A caller-chosen id
   // could clobber an existing run's store and mint duplicate
