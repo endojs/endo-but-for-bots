@@ -95,12 +95,32 @@ fn currency_and_unit_patterns_are_exact() {
             "2.00 US dollars",
         ),
         (
+            "new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',currencyDisplay:'name'}).format(1)",
+            "1.00 US dollars",
+        ),
+        (
             "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter'}).format(1)",
             "1 m",
         ),
         (
             "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long'}).format(2)",
             "2 meters",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',minimumFractionDigits:2}).format(1)",
+            "1.00 meters",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'percent',unitDisplay:'long'}).format(12)",
+            "12 percent",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'celsius',unitDisplay:'long'}).format(12)",
+            "12 degrees Celsius",
+        ),
+        (
+            "new Intl.NumberFormat('fr-FR',{style:'unit',unit:'percent'}).format(12)",
+            "12\u{202f}%",
         ),
         (
             "new Intl.NumberFormat('en-US',{style:'unit',unit:'kilometer-per-hour'}).format(3)",

@@ -104,6 +104,16 @@ fn sort_uses_throwing_set_and_delete_operations() {
 }
 
 #[test]
+fn borrowed_sort_writes_typed_array_integer_indexed_elements() {
+    for source in [
+        "var a=new Uint8Array([2,1]); Array.prototype.sort.call(a,function(x,y){return x-y}); a.join(',')+':'+Reflect.ownKeys(a).join(',')",
+        "var a=new BigInt64Array([2n,1n]); Array.prototype.sort.call(a,function(x,y){return Number(x-y)}); a.join(',')+':'+Reflect.ownKeys(a).join(',')",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
 fn proxy_traps_observe_collection_then_writeback() {
     agrees(
         "var log=[]; var target={length:3,0:'b',2:'a'}; var p=new Proxy(target,{has:function(t,k){log.push('h'+k);return k in t},get:function(t,k){log.push('g'+k);return t[k]},set:function(t,k,v){log.push('s'+k);t[k]=v;return true},deleteProperty:function(t,k){log.push('d'+k);return delete t[k]}}); Array.prototype.sort.call(p); target[0]+target[1]+':'+('2' in target)+':'+(log.indexOf('h1')>=0)+':'+(log.indexOf('g2')>=0)+':'+(log.indexOf('s0')>=0)+':'+(log.indexOf('d2')>=0)",
