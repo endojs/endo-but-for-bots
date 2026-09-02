@@ -1,6 +1,8 @@
 // @ts-check
 /* eslint-disable no-underscore-dangle */
 
+/** @import { RegistryDirectory, RegistryHub, RegistryVersionTree } from '../types.js' */
+
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 
@@ -150,27 +152,24 @@ for (const backend of backends) {
     });
     t.false(isPackageRegistryError(absentListError));
 
-    const alpha = /** @type {import('../types.js').RegistryDirectory} */ (
-      await npm.lookup('alpha')
-    );
+    const alpha = /** @type {RegistryDirectory} */ (await npm.lookup('alpha'));
     t.deepEqual(await alpha.list(), ['1.0.0', '2.0.0']);
     t.deepEqual(await alpha.getInfo(), { temporal: 'live' });
     t.true(await npm.has('alpha'));
     t.false(await npm.has('absent'));
-    const alphaLeaf = /** @type {import('../types.js').RegistryVersionTree} */ (
+    const alphaLeaf = /** @type {RegistryVersionTree} */ (
       await alpha.lookup('1.0.0')
     );
     t.is(alphaLeaf.sha256(), 'sha256-alpha-1.0.0');
-    const alphaLeafAgain =
-      /** @type {import('../types.js').RegistryVersionTree} */ (
-        await alpha.lookup('1.0.0')
-      );
+    const alphaLeafAgain = /** @type {RegistryVersionTree} */ (
+      await alpha.lookup('1.0.0')
+    );
     t.is(alphaLeafAgain.sha256(), alphaLeaf.sha256());
     t.like(await alphaLeaf.getInfo(), {
       temporal: 'immutable',
       integrity: 'sha512-alpha-1',
     });
-    const ordering = /** @type {import('../types.js').RegistryDirectory} */ (
+    const ordering = /** @type {RegistryDirectory} */ (
       await npm.lookup('ordering')
     );
     t.deepEqual(await ordering.list(), [
@@ -181,9 +180,7 @@ for (const backend of backends) {
 
     const scopedByName = await npm.lookup('@scope/package');
     const scopedByPath = await npm.lookup(['@scope', 'package']);
-    const scope = /** @type {import('../types.js').RegistryHub} */ (
-      await npm.lookup('@scope')
-    );
+    const scope = /** @type {RegistryHub} */ (await npm.lookup('@scope'));
     const scopedStepwise = await scope.lookup('package');
     t.is(scopedByName, scopedByPath);
     t.is(scopedByName, scopedStepwise);
@@ -239,9 +236,7 @@ test('offline exact-version lookup has the shared registry error family', async 
   const npm = makeNpmRegistryTree(
     makeOperations({ offline: true, cachedNames: ['alpha'] }),
   );
-  const alpha = /** @type {import('../types.js').RegistryDirectory} */ (
-    await npm.lookup('alpha')
-  );
+  const alpha = /** @type {RegistryDirectory} */ (await npm.lookup('alpha'));
   const error = await t.throwsAsync(() => alpha.lookup('1.0.0'));
   t.is(registryErrorName(error), 'RegistryOfflineError');
   t.true(isPackageRegistryError(error));

@@ -14,17 +14,16 @@
  */
 
 import { makeError, X } from '@endo/errors';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { RegistryNotFoundError } from './errors.js';
 import { parseRangeMajor, satisfiesRange } from './mvs-resolver.js';
 import { comparePublishedVersions } from './registry-tree.js';
 
-const textDecoder = new TextDecoder();
-const textEncoder = new TextEncoder();
-
 /** @param {string | Uint8Array} source */
 const parsePackageJson = source => {
-  const text = typeof source === 'string' ? source : textDecoder.decode(source);
+  const text = typeof source === 'string' ? source : decodeUtf8(source);
   let packageJson;
   try {
     packageJson = JSON.parse(text);
@@ -176,7 +175,7 @@ export const resolveRegistryTree = async (
             packageJson:
               typeof workspace.packageJson === 'string'
                 ? workspace.packageJson
-                : textDecoder.decode(workspace.packageJson),
+                : decodeUtf8(workspace.packageJson),
             isWorkspace: true,
           });
           enqueueDependencies(workspacePackageJson, name);
@@ -319,7 +318,7 @@ export const resolveRegistryTree = async (
     .map(key => `${key}\t${packagesByKey[key].integrity}`)
     .join('\n');
   const resolutionHash = await (options.sha256 ?? fallbackHash)(
-    textEncoder.encode(hashPreimage),
+    encodeUtf8(hashPreimage),
   );
 
   return harden({

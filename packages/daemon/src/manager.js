@@ -1,6 +1,6 @@
 // @ts-check
 /** @import { EndoGit, WritableGitWorktree } from '@endo/exo-git' */
-/** @import { RegistryFormula } from './types.js' */
+/** @import { RegistryFormula, RegistryPowers } from './types.js' */
 /* eslint-disable no-await-in-loop */
 /* global clearTimeout, process, setTimeout */
 
@@ -493,7 +493,7 @@ const makeDaemonCore = async (
     hostTools,
   } = powers;
   const endorRegistryPowers =
-    /** @type {Extract<import('./types.js').RegistryPowers, { adapter: 'endor' }>} */ (
+    /** @type {Extract<RegistryPowers, { adapter: 'endor' }>} */ (
       registryPowers
     );
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;

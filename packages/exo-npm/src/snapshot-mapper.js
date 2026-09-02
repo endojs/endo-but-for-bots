@@ -23,12 +23,11 @@
  */
 
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { satisfiesRange } from './mvs-resolver.js';
 import { lookupPackageVersion } from './registry-tree.js';
-
-const utf8Decoder = new TextDecoder();
-const utf8Encoder = new TextEncoder();
 
 /**
  * Read a module from either the mapper's legacy one-shot tree adapter or a
@@ -68,7 +67,7 @@ const readTreeBytes = async (tree, modulePath) => {
     return bytes;
   }
   if (typeof (/** @type {any} */ (blob).text) === 'function') {
-    return utf8Encoder.encode(await /** @type {any} */ (blob).text());
+    return encodeUtf8(await /** @type {any} */ (blob).text());
   }
   throw Error(
     `mapSnapshot read: module at ${String(modulePath)} is not readable`,
@@ -113,8 +112,7 @@ harden(readTreeBytes);
  * @param {Uint8Array | string} payload
  */
 const decodePackageJson = payload => {
-  const text =
-    typeof payload === 'string' ? payload : utf8Decoder.decode(payload);
+  const text = typeof payload === 'string' ? payload : decodeUtf8(payload);
   return JSON.parse(text);
 };
 harden(decodePackageJson);

@@ -21,6 +21,7 @@ import { createHash } from 'crypto';
 import { gzipSync } from 'zlib';
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import {
   tarEndMarker,
   tarFileHeader,
@@ -33,10 +34,8 @@ const fixturePackageJson = JSON.stringify({
   name: 'fixture',
   version: '1.0.0',
 });
-const textEncoder = new TextEncoder();
-
 const makeFixtureTarball = () => {
-  const body = textEncoder.encode(fixturePackageJson);
+  const body = encodeUtf8(fixturePackageJson);
   const chunks = [
     tarFileHeader('package/package.json', body.byteLength),
     body,

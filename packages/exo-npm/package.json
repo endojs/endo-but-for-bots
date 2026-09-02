@@ -58,7 +58,8 @@
     "@endo/far": "workspace:^",
     "@endo/mem-cas": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/platform": "workspace:^"
+    "@endo/platform": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
     "@endo/bytes": "workspace:^",

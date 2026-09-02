@@ -1,6 +1,8 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Far } from '@endo/far';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import {
   buildCompartmentMap,
@@ -11,8 +13,6 @@ import {
   makeNpmRegistryTree,
   makePackageRegistryTree,
 } from '../src/registry-tree.js';
-
-const utf8Encoder = new TextEncoder();
 
 /**
  * Build a minimal `EndoReadableTree`-shaped exo that reads from an
@@ -36,7 +36,7 @@ const makeFakeTree = files => {
       if (body === undefined) {
         throw Error(`FakeTree: no file at ${key}`);
       }
-      return utf8Encoder.encode(body);
+      return encodeUtf8(body);
     },
   });
 };
@@ -235,7 +235,7 @@ test('makeMountReadPowers reads from entry compartment', async t => {
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('./index.js');
-  t.is(new TextDecoder().decode(bytes), 'export const x = 1;');
+  t.is(decodeUtf8(bytes), 'export const x = 1;');
 });
 
 test('makeMountReadPowers reads from a registry-resolved peer directory', async t => {
@@ -256,7 +256,7 @@ test('makeMountReadPowers reads from a registry-resolved peer directory', async 
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('ses@1.0.0/lockdown.js');
-  t.is(new TextDecoder().decode(bytes), 'export const lockdown = () => {};');
+  t.is(decodeUtf8(bytes), 'export const lockdown = () => {};');
 });
 
 test('makeMountReadPowers reads from a scoped-package peer directory', async t => {
@@ -277,7 +277,7 @@ test('makeMountReadPowers reads from a scoped-package peer directory', async t =
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('@endo/patterns@1.2.1/src/main.js');
-  t.is(new TextDecoder().decode(bytes), 'export const M = {};');
+  t.is(decodeUtf8(bytes), 'export const M = {};');
 });
 
 test('makeMountReadPowers reads from a workspace member compartment', async t => {
@@ -298,7 +298,7 @@ test('makeMountReadPowers reads from a workspace member compartment', async t =>
   });
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('lib-b/index.js');
-  t.is(new TextDecoder().decode(bytes), 'module.exports = 42;');
+  t.is(decodeUtf8(bytes), 'module.exports = 42;');
 });
 
 test('makeMountReadPowers late-binds through a registry tree', async t => {
@@ -334,7 +334,7 @@ test('makeMountReadPowers late-binds through a registry tree', async t => {
     registryRoot,
   });
   const bytes = await powers.read('late@1.0.0/index.js');
-  t.is(new TextDecoder().decode(bytes), 'export const late = true;');
+  t.is(decodeUtf8(bytes), 'export const late = true;');
 });
 
 test('mapSnapshot produces the {compartmentMap, resolution, readPowers} trio', async t => {
@@ -365,10 +365,10 @@ test('mapSnapshot produces the {compartmentMap, resolution, readPowers} trio', a
   t.is(result.resolution.resolutionHash, 'h-snapshot');
   // The read powers can read the entry.
   const bytes = await result.readPowers.read('./main.js');
-  t.is(new TextDecoder().decode(bytes), "import 'ses';");
+  t.is(decodeUtf8(bytes), "import 'ses';");
   // And the registry-resolved compartment.
   const sesBytes = await result.readPowers.read('ses@1.5.0/index.js');
-  t.is(new TextDecoder().decode(sesBytes), '/* ses */');
+  t.is(decodeUtf8(sesBytes), '/* ses */');
 });
 
 test('mapSnapshot canonical preserves the input location', async t => {

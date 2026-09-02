@@ -2,6 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 import {
   makeNpmRegistryTree,
@@ -94,7 +95,7 @@ test('resolveRegistryTree preserves eager MVS and same-vat traversal', async t =
     dependencies: { alpha: '^1.0.0' },
   });
   const resolution = await resolveRegistryTree(entry, root, {
-    sha256: async bytes => `hash:${new TextDecoder().decode(bytes)}`,
+    sha256: async bytes => `hash:${decodeUtf8(bytes)}`,
   });
   t.deepEqual(resolution.keys, ['alpha@1.2.0', 'shared@1.0.0']);
   t.is(

@@ -1,5 +1,7 @@
 // @ts-check
 
+/** @import { RegistryDirectory, RegistryHub } from '@endo/exo-npm' */
+
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { isPackageRegistryError, registryErrorName } from '@endo/exo-npm';
@@ -44,10 +46,8 @@ test('Node adapter preserves manifest and exact-version table caching', async t 
     table: makeRegistryTable(),
     registryUrl: 'https://registry.example',
   });
-  const npm = /** @type {import('@endo/exo-npm').RegistryHub} */ (
-    await root.lookup('npm')
-  );
-  const fixture = /** @type {import('@endo/exo-npm').RegistryDirectory} */ (
+  const npm = /** @type {RegistryHub} */ (await root.lookup('npm'));
+  const fixture = /** @type {RegistryDirectory} */ (
     await npm.lookup('fixture')
   );
   t.deepEqual(await fixture.list(), ['1.0.0']);
@@ -73,10 +73,8 @@ test('Endor adapter preserves the integrity-failure contract', async t => {
       makeTreeRef: () => makeTree(),
     }),
   );
-  const npm = /** @type {import('@endo/exo-npm').RegistryHub} */ (
-    await root.lookup('npm')
-  );
-  const fixture = /** @type {import('@endo/exo-npm').RegistryDirectory} */ (
+  const npm = /** @type {RegistryHub} */ (await root.lookup('npm'));
+  const fixture = /** @type {RegistryDirectory} */ (
     await npm.lookup('fixture')
   );
   const error = await t.throwsAsync(() => fixture.lookup('1.0.0'));
@@ -101,17 +99,13 @@ test('Node adapter preserves offline lookup distinctions', async t => {
     registryUrl: 'https://registry.example',
     offline: true,
   });
-  const npm = /** @type {import('@endo/exo-npm').RegistryHub} */ (
-    await root.lookup('npm')
-  );
+  const npm = /** @type {RegistryHub} */ (await root.lookup('npm'));
   t.false(await npm.has('uncached'));
   const packageError = await t.throwsAsync(() => npm.lookup('uncached'));
   t.is(registryErrorName(packageError), 'RegistryOfflineError');
   t.true(isPackageRegistryError(packageError));
 
-  const cached = /** @type {import('@endo/exo-npm').RegistryDirectory} */ (
-    await npm.lookup('cached')
-  );
+  const cached = /** @type {RegistryDirectory} */ (await npm.lookup('cached'));
   const versionError = await t.throwsAsync(() => cached.lookup('1.0.0'));
   t.is(registryErrorName(versionError), 'RegistryOfflineError');
   t.true(isPackageRegistryError(versionError));
@@ -134,15 +128,9 @@ test('Node adapter re-provides a tree after table eviction', async t => {
   const root = makeNodePackageRegistryTree(backend, {
     table: makeRegistryTable({ maxEntries: 1 }),
   });
-  const npm = /** @type {import('@endo/exo-npm').RegistryHub} */ (
-    await root.lookup('npm')
-  );
-  const first = /** @type {import('@endo/exo-npm').RegistryDirectory} */ (
-    await npm.lookup('first')
-  );
-  const second = /** @type {import('@endo/exo-npm').RegistryDirectory} */ (
-    await npm.lookup('second')
-  );
+  const npm = /** @type {RegistryHub} */ (await root.lookup('npm'));
+  const first = /** @type {RegistryDirectory} */ (await npm.lookup('first'));
+  const second = /** @type {RegistryDirectory} */ (await npm.lookup('second'));
   await first.lookup('1.0.0');
   await second.lookup('1.0.0');
   await first.lookup('1.0.0');
