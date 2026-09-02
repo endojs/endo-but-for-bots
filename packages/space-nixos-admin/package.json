@@ -1,0 +1,61 @@
+{
+  "name": "@endo/space-nixos-admin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "NixOS machine-admin caplet for hosted Endo — edit and apply the host's NixOS configuration through a privilege-separated spool",
+  "keywords": [
+    "endo",
+    "nixos",
+    "admin",
+    "self-hosted"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/space-nixos-admin"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    "./setup.js": "./setup.js",
+    "./caplet.js": "./caplet.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "test": "ava"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/far": "workspace:^",
+    "@endo/harden": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  },
+  "eslintConfig": {
+    "extends": [
+      "plugin:@endo/internal"
+    ],
+    "env": {
+      "node": true
+    }
+  }
+}
