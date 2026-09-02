@@ -231,7 +231,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // This moves boot-heap content only; the snapshot format is unchanged.
         // Re-pinned for the engine-owned boot-layout signature generation.
         // The heap and wire schema are unchanged; the SIGN payload moved.
-        "8d4d26e36f137cdca365792a5a6c719f864ddfe505ef42ae1ddacf0ac1009389",
+        // Re-pinned for Object.assign/Object.hasOwn boot function identities
+        // and boot-layout signature generation 3.
+        "e09159cd2250cbb1bdaebc18af608a6ecda455de0c103da588c0fa13e85b55ea",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -384,7 +386,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Symbol.prototype and Date.prototype `@@toPrimitive` properties.
         // Schema and format remain unchanged.
         // Re-pinned for the engine-owned boot-layout signature generation.
-        "c0a45ddd933d3ab8e20add9479ac25ac4a863b4644fc8a957265a37f97f65834",
+        // Re-pinned with the blob for Object.assign/Object.hasOwn and boot
+        // generation 3.
+        "c22b309182fe8b4041e49912af75918ec117f809c3b87aa711d987b4c2a08a76",
         "epoch-3 seal chain"
     );
 }

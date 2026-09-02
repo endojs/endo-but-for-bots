@@ -76,6 +76,7 @@ fn parsing_and_set_time_match_xs() {
         "new Date('2000-02-29T12:34:56.789Z').toISOString()",
         "Date.parse('2019-02-29')",
         "Date.parse('2019-13-01')",
+        "Date.parse('2019-00-01')",
         "Date.parse('2019-01-01T24:01:00Z')",
         "Date.parse('2019-01-01T01:02:03.1234Z')",
         "Date.parse('2019-01-01T00:00:00+09')",

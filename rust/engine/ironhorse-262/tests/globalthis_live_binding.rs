@@ -116,3 +116,23 @@ fn runtime_created_global_names_materialize_complete_intrinsics() {
         assert_result_agrees(source);
     }
 }
+
+#[test]
+fn own_key_reflection_materializes_complete_runtime_intrinsics() {
+    for source in [
+        "var A=Reflect.get(globalThis,'Arr'+'ay');Object.getOwnPropertyNames(A).join(',')",
+        "var N=Reflect.get(globalThis,'Num'+'ber');Object.getOwnPropertyNames(N).join(',')",
+        "var O=Reflect.get(globalThis,'Obj'+'ect');Object.getOwnPropertyNames(O).join(',')",
+        "var D=Reflect.get(globalThis,'Da'+'te');Object.getOwnPropertyNames(D).join(',')",
+        "var A=Reflect.get(globalThis,'Arr'+'ay');Object.keys(Object.getOwnPropertyDescriptors(A)).join(',')",
+    ] {
+        assert_result_agrees(source);
+    }
+}
+
+#[test]
+fn own_key_materialization_preserves_guest_deletion() {
+    assert_result_agrees(
+        "var A=Reflect.get(globalThis,'Arr'+'ay');Object.getOwnPropertyNames(A);var k='o'+'f';delete A[k];Object.getOwnPropertyNames(A);typeof A[k]",
+    );
+}
