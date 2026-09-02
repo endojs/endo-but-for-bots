@@ -587,10 +587,11 @@ impl SideTable {
             SideTable::Modules => ("module::ModuleGraph", Pending),
             // Wave-6 W6-25: the ledger UNDERSTATED this coverage — the
             // engine keeps hardened-ness purely as slot FLAGS
-            // (`XS_DONT_MARSHALL`/`PATCH`/`DELETE`/`SET` on the slots
-            // themselves, `harden_freeze_and_traverse`); there is no
-            // side-table field at all, so the state rides the HEAP atom
-            // structurally and a resumed hardened graph stays hardened.
+            // (`XS_DONT_MARSHALL`/`PATCH`/`MODIFY` on instance heads and
+            // `DELETE`/`SET` on property slots themselves,
+            // `harden_freeze_and_traverse`); there is no side-table field at
+            // all, so the state rides the HEAP atom structurally and a resumed
+            // hardened or petrified graph retains its integrity state.
             SideTable::HardenState => ("harden slot flags (no side table)", InArena),
             // The installed-names floor (`NFLR`, store schema 12): the
             // W6-7 register travels so a resumed machine's partial

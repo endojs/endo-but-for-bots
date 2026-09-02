@@ -532,6 +532,12 @@ pub const XS_SETTER_FLAG: u8 = 64;
 /// spends on `XS_METHOD_FLAG`/`XS_GETTER_FLAG` — the two are never the same
 /// slot, so the overlap is harmless. Only the extensibility bit is modeled.
 pub const XS_DONT_PATCH_FLAG: u8 = 16;
+/// XS instance/internal-slot flag bit (`xsAll.h` `XS_DONT_MODIFY_FLAG = 8`).
+/// `petrify` applies the corresponding `XS_DONT_SET_FLAG` to mutable internal
+/// data slots (Date, Map/Set/weak collections, and ArrayBuffer). IronHorse's
+/// internal data lives in side tables, so the instance head carries this bit
+/// as the persisted read-only marker checked by those mutators.
+pub const XS_DONT_MODIFY_FLAG: u8 = 8;
 /// XS instance-slot flag bit (`xsAll.h` `XS_DONT_MARSHALL_FLAG = 64`): the
 /// marker `harden`/`lockdown` stamp on a *hardened* (transitively frozen)
 /// instance's own `XS_INSTANCE_KIND` slot. `fx_hardenQueue` skips an instance
@@ -27791,6 +27797,9 @@ impl Interp {
                 };
                 let t = self.dates[&inst];
                 if op == 26 {
+                    if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
+                        return Err(self.catchable_type_error());
+                    }
                     let clipped = time_clip(self.to_number_f64(code, arg(&self.stack, 0))?);
                     self.dates.insert(inst, clipped);
                     return Ok(Slot::number(clipped));
@@ -27811,6 +27820,9 @@ impl Interp {
                     let mut inputs = Vec::with_capacity(count);
                     for i in 0..count {
                         inputs.push(self.to_number_f64(code, arg(&self.stack, i))?);
+                    }
+                    if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
+                        return Err(self.catchable_type_error());
                     }
                     // SetFullYear alone recovers an invalid Date from +0. Every
                     // other setter preserves NaN after performing the required
@@ -29695,9 +29707,9 @@ impl Interp {
             }
             // The global `harden(x)` (`fx_harden`, `xsLockdown.c`): the
             // transitive freeze worklist. Returns `x`.
-            NativeMethod::GlobalHarden => self.do_harden(arg0)?,
+            NativeMethod::GlobalHarden => self.do_harden(code, arg0)?,
             // The global `petrify(x)` (`fx_petrify`): the single-object freeze.
-            NativeMethod::GlobalPetrify => self.do_petrify(arg0)?,
+            NativeMethod::GlobalPetrify => self.do_petrify(code, arg0)?,
             NativeMethod::Test262DetachArrayBuffer => {
                 let buffer = match arg0.value {
                     Payload::Reference(r)
@@ -31479,6 +31491,9 @@ impl Interp {
                     CollKind::Map | CollKind::Set => {}
                     _ => return Err(Halt::Unsupported("collection-clear:weak")),
                 }
+                if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
+                    return Err(self.catchable_type_error());
+                }
                 self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
                 self.collections.get_mut(&inst).unwrap().clear_entries(&mut self.side_refs);
                 // `fxResizeEntries` with size 0 shrinks the address chunk back
@@ -32246,6 +32261,20 @@ impl Interp {
             _ => return Err(self.catchable_type_error()),
         };
         if kind != expected_kind {
+            return Err(self.catchable_type_error());
+        }
+        if matches!(
+            m,
+            NativeMethod::MapSet
+                | NativeMethod::WeakMapSet
+                | NativeMethod::SetAdd
+                | NativeMethod::WeakSetAdd
+                | NativeMethod::MapDelete
+                | NativeMethod::WeakMapDelete
+                | NativeMethod::SetDelete
+                | NativeMethod::WeakSetDelete
+        ) && self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0
+        {
             return Err(self.catchable_type_error());
         }
         let weak = matches!(kind, CollKind::WeakMap | CollKind::WeakSet);
@@ -34904,6 +34933,9 @@ impl Interp {
             Some(i) if self.collections[&i].kind == expected_kind => i,
             _ => return Err(self.catchable_type_error()),
         };
+        if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
+            return Err(self.catchable_type_error());
+        }
         let key_arg = self
             .stack
             .get(base + 4)
@@ -41928,9 +41960,9 @@ impl Interp {
     /// ordinary objects for MOP purposes: their `message`/`cause` properties
     /// live entirely in this same slot chain; `error_data` only accelerates
     /// Error.prototype.toString.
-    /// statics and integrity operations are modeled only over ordinary
-    /// receivers; an exotic one carries indices/`length`/internal names the
-    /// slot chain does not enumerate, so the caller honest-skips.
+    /// Callers use this only when they specifically require a slot-chain-only
+    /// receiver; reflection and integrity operations instead route through the
+    /// complete `mop_*` dispatchers.
     fn is_ordinary_object(&self, inst: crate::value::SlotIndex) -> bool {
         !(self.arrays.contains_key(&inst)
             || self.collections.contains_key(&inst)
@@ -41976,7 +42008,7 @@ impl Interp {
     /// the allocation constants; computron parity over a transitive walk into
     /// ironhorse's sparse intrinsics is structurally unavailable, so the corpus is
     /// result-gated (the freeze *result* is faithful).
-    fn do_harden(&mut self, arg0: Slot) -> Result<Slot, Halt> {
+    fn do_harden(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Halt> {
         if arg0.kind != Kind::Reference {
             return Ok(arg0);
         }
@@ -41984,6 +42016,13 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(arg0),
         };
+        // RegExp's synthetic `lastIndex` is still side-table backed rather
+        // than exposed through the complete MOP. Freezing it as if it had no
+        // own property would be observably wrong; keep this precise boundary
+        // until that descriptor is unified.
+        if self.regexps.contains_key(&inst) {
+            return Err(Halt::Unsupported("harden:regexp-lastIndex"));
+        }
         // Already hardened: XS short-circuits (`slot->flag & flag`).
         if self.slots.get(inst).flag & XS_DONT_MARSHALL_FLAG != 0 {
             return Ok(arg0);
@@ -41992,7 +42031,16 @@ impl Interp {
         self.harden_enqueue(inst, &mut list);
         let mut i = 0;
         while i < list.len() {
-            self.harden_freeze_and_traverse(list[i], &mut list)?;
+            if let Err(halt) = self.harden_freeze_and_traverse(code, list[i], &mut list) {
+                // `fx_harden` clears the visited/hardened bit from every item
+                // accumulated in its worklist when any proxy trap or property
+                // definition fails. A later harden attempt must retry rather
+                // than short-circuit a partially frozen graph.
+                for &queued in &list {
+                    self.slots.get_mut(queued).flag &= !XS_DONT_MARSHALL_FLAG;
+                }
+                return Err(halt);
+            }
             i += 1;
         }
         Ok(arg0)
@@ -42021,56 +42069,75 @@ impl Interp {
     }
 
     /// `fx_hardenFreezeAndTraverse`: freeze one instance and queue its
-    /// referents. Prevent extensions; stamp every own property `DONT_DELETE`
-    /// (and, for a data property, `DONT_SET`); then queue the prototype and
-    /// every reference-valued own property.
+    /// referents. Both passes route through the full internal-method seam, so
+    /// Proxy traps and exotic own properties are observed exactly where XS
+    /// observes them. XS deliberately skips integer-indexed TypedArray
+    /// elements: their descriptors cannot be made non-writable, while the
+    /// receiver itself and any ordinary expandos are still hardened.
     fn harden_freeze_and_traverse(
         &mut self,
+        code: &[u8],
         inst: crate::value::SlotIndex,
         list: &mut Vec<crate::value::SlotIndex>,
     ) -> Result<(), Halt> {
-        // XS's `mxBehaviorPreventExtensions` fails only for an exotic instance
-        // that refuses it (throwing "extensible object"). Ironhorse models the
-        // integrity flags on ordinary instances; an exotic instance in the
-        // hardened graph self-names rather than mis-freeze.
-        if !self.is_ordinary_object(inst) {
-            return Err(Halt::Unsupported("harden:exotic-object"));
+        if self.regexps.contains_key(&inst) {
+            return Err(Halt::Unsupported("harden:regexp-lastIndex"));
         }
         self.meter.tick_raw(HARDEN_OBJECT_BASE_METERING);
-        self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
-        let slots = self.own_property_slots(inst);
-        for &p in &slots {
-            self.meter.tick_raw(HARDEN_PER_KEY_METERING);
-            let s = self.slots.get_mut(p);
-            s.flag |= XS_DONT_DELETE_FLAG;
-            if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0 {
-                s.flag |= XS_DONT_SET_FLAG;
+        if !self.mop_prevent_extensions(code, inst)? {
+            return Err(self.catchable_type_error());
+        }
+        let skip_indexes = self.typed_arrays.contains_key(&inst);
+        for key in self.mop_own_keys(code, inst)? {
+            self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
+            let id = self.to_property_id(code, key)?;
+            if skip_indexes
+                && self
+                    .string_key_name(id)
+                    .is_some_and(|name| string_to_index(&name).is_some())
+            {
+                continue;
+            }
+            let Some(current) = self.mop_get_own_property(code, inst, id)? else {
+                continue;
+            };
+            let frozen = if current.is_accessor() {
+                OrdinaryDescriptor {
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                }
+            } else {
+                OrdinaryDescriptor {
+                    writable: Some(false),
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                }
+            };
+            if !self.mop_define_own_property(code, inst, id, frozen)? {
+                return Err(self.catchable_type_error());
             }
         }
-        // Traverse: queue the prototype and every reference-valued own property
-        // (a data property holding a reference, or — deferred — an accessor's
-        // getter/setter). The instance is already marked (enqueue), so a cycle
-        // back to it is skipped.
-        let proto = self.instance_prototype(inst);
-        self.harden_enqueue(proto, list);
-        for &p in &slots {
-            let s = self.slots.get(p);
-            if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
-                let accessor = self
-                    .accessors
-                    .get(&(inst, s.id))
-                    .copied()
-                    .unwrap_or_default();
-                for function in [accessor.get, accessor.set].into_iter().flatten() {
+
+        let keys = self.mop_own_keys(code, inst)?;
+        let proto = self.mop_get_prototype(code, inst)?;
+        if let Payload::Reference(proto) = proto.value {
+            self.harden_enqueue(proto, list);
+        }
+        for key in keys {
+            self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
+            let id = self.to_property_id(code, key)?;
+            let Some(descriptor) = self.mop_get_own_property(code, inst, id)? else {
+                continue;
+            };
+            if let Some(value) = descriptor.value {
+                if let Payload::Reference(referent) = value.value {
+                    self.harden_enqueue(referent, list);
+                }
+            } else {
+                for function in [descriptor.get, descriptor.set].into_iter().flatten() {
                     if let Payload::Reference(function) = function.value {
                         self.harden_enqueue(function, list);
                     }
-                }
-                continue;
-            }
-            if s.kind == Kind::Reference {
-                if let Payload::Reference(r) = s.value {
-                    self.harden_enqueue(r, list);
                 }
             }
         }
@@ -42079,12 +42146,12 @@ impl Interp {
 
     /// The global `petrify(x)` (`fx_petrify`, `xsLockdown.c`): a *single*-object
     /// freeze (non-transitive, no prototype walk). Prevent extensions and stamp
-    /// every own property non-writable/non-configurable. XS additionally stamps
-    /// the internal data slots (ArrayBuffer/Date/Map/Set/WeakMap/WeakSet)
-    /// `DONT_SET`; ironhorse models those as exotic instances (not ordinary
-    /// property slots), so a petrify of such a receiver self-names rather than
-    /// half-stamp. Returns `x`.
-    fn do_petrify(&mut self, arg0: Slot) -> Result<Slot, Halt> {
+    /// every configurable own property non-writable/non-configurable. XS skips
+    /// immutable String indices and integer-indexed TypedArray elements, and
+    /// separately marks mutable internal data read-only; IronHorse persists
+    /// that state on the instance head because its internal data is side-table
+    /// backed. Returns `x`.
+    fn do_petrify(&mut self, code: &[u8], arg0: Slot) -> Result<Slot, Halt> {
         if arg0.kind != Kind::Reference {
             return Ok(arg0);
         }
@@ -42092,19 +42159,52 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(arg0),
         };
-        if !self.is_ordinary_object(inst) {
-            return Err(Halt::Unsupported("petrify:exotic-object"));
+        if self.regexps.contains_key(&inst) {
+            return Err(Halt::Unsupported("petrify:regexp-lastIndex"));
         }
         self.meter.tick_raw(PETRIFY_OBJECT_BASE_METERING);
-        self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
-        let slots = self.own_property_slots(inst);
-        for &p in &slots {
+        if !self.mop_prevent_extensions(code, inst)? {
+            return Err(self.catchable_type_error());
+        }
+        let skip_indexes = self.typed_arrays.contains_key(&inst)
+            || self
+                .wrapper_data
+                .get(&inst)
+                .is_some_and(|value| value.kind == Kind::String);
+        for key in self.mop_own_keys(code, inst)? {
             self.meter.tick_raw(PETRIFY_PER_KEY_METERING);
-            let s = self.slots.get_mut(p);
-            s.flag |= XS_DONT_DELETE_FLAG;
-            if s.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0 {
-                s.flag |= XS_DONT_SET_FLAG;
+            let id = self.to_property_id(code, key)?;
+            if skip_indexes
+                && self
+                    .string_key_name(id)
+                    .is_some_and(|name| string_to_index(&name).is_some())
+            {
+                continue;
             }
+            let Some(current) = self.mop_get_own_property(code, inst, id)? else {
+                continue;
+            };
+            let frozen = if current.is_accessor() {
+                OrdinaryDescriptor {
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                }
+            } else {
+                OrdinaryDescriptor {
+                    writable: Some(false),
+                    configurable: Some(false),
+                    ..OrdinaryDescriptor::default()
+                }
+            };
+            if !self.mop_define_own_property(code, inst, id, frozen)? {
+                return Err(self.catchable_type_error());
+            }
+        }
+        if self.array_buffers.contains_key(&inst)
+            || self.dates.contains_key(&inst)
+            || self.collections.contains_key(&inst)
+        {
+            self.slots.get_mut(inst).flag |= XS_DONT_MODIFY_FLAG;
         }
         Ok(arg0)
     }
@@ -50497,7 +50597,7 @@ mod tests {
         // `XS_DONT_MARSHALL_FLAG` (the visited set). harden returns its argument.
         let (mut interp, outer, inner, id_a, _id_b, id_c) = build_harden_graph();
         let arg = Slot::of(Kind::Reference, Payload::Reference(outer));
-        let r = interp.do_harden(arg).expect("harden ok");
+        let r = interp.do_harden(&[], arg).expect("harden ok");
         assert!(matches!(r.value, Payload::Reference(x) if x == outer));
         // The target: non-extensible + hardened-marked.
         let of = interp.slots.get(outer).flag;
@@ -50514,10 +50614,12 @@ mod tests {
         let pc = interp.find_property(inner, id_c).expect("c present");
         assert!(interp.slots.get(pc).flag & XS_DONT_SET_FLAG != 0);
         // Idempotent: a second harden is a no-op (still frozen, no panic).
-        let r2 = interp.do_harden(arg).expect("re-harden ok");
+        let r2 = interp.do_harden(&[], arg).expect("re-harden ok");
         assert!(matches!(r2.value, Payload::Reference(x) if x == outer));
         // A non-reference argument passes through unchanged.
-        let prim = interp.do_harden(Slot::number(3.0)).expect("harden prim ok");
+        let prim = interp
+            .do_harden(&[], Slot::number(3.0))
+            .expect("harden prim ok");
         assert_eq!(prim.kind, Kind::Number);
     }
 
@@ -50529,7 +50631,7 @@ mod tests {
         // non-transitive and does not mark `XS_DONT_MARSHALL_FLAG`).
         let (mut interp, outer, inner, id_a, _id_b, _id_c) = build_harden_graph();
         let arg = Slot::of(Kind::Reference, Payload::Reference(outer));
-        let r = interp.do_petrify(arg).expect("petrify ok");
+        let r = interp.do_petrify(&[], arg).expect("petrify ok");
         assert!(matches!(r.value, Payload::Reference(x) if x == outer));
         let of = interp.slots.get(outer).flag;
         assert!(of & XS_DONT_PATCH_FLAG != 0, "target non-extensible");
@@ -50554,7 +50656,7 @@ mod tests {
         // adds no `unsafe`; this pins the walk under `cargo +nightly miri test`.
         let (mut interp, outer, _inner, _id_a, _id_b, _id_c) = build_harden_graph();
         let arg = Slot::of(Kind::Reference, Payload::Reference(outer));
-        let _ = interp.do_harden(arg).expect("harden ok");
+        let _ = interp.do_harden(&[], arg).expect("harden ok");
     }
 
     #[test]

@@ -271,6 +271,22 @@ fn date_setters_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "2000-01-01T00:00:00.001Z");
 }
 
+/// SES integrity state is carried entirely by arena flags. This scenario
+/// proves both visible property attributes and `petrify`'s read-only internal
+/// Date/Map marker survive a complete SQLite close/reopen, rather than merely
+/// matching in an uninterrupted process.
+#[test]
+fn harden_and_petrify_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "harden-petrify",
+        &[
+            "var child={x:1};var a=[child];harden(a);var m=new Map([['x',1]]);petrify(m);var d=new Date(0);petrify(d);",
+            "var child;var a;var m;var d;var mapThrow=false;var dateThrow=false;a[0]=0;child.x=2;try{m.set('y',2)}catch(e){mapThrow=e instanceof TypeError}try{d.setTime(1)}catch(e){dateThrow=e instanceof TypeError}Object.isFrozen(a)+':'+Object.isFrozen(child)+':'+child.x+':'+(a[0]===child)+':'+mapThrow+':'+m.size+':'+dateThrow+':'+d.getTime()",
+        ],
+    );
+    assert_eq!(last, "true:true:1:true:true:1:true:0");
+}
+
 /// Arrow-specific function metadata and closure-environment captures survive
 /// a full SQLite close/reopen cycle. This covers all three lexical bindings
 /// stored by `STORE_ARROW`: `this`, `new.target`, and the method home object

@@ -903,7 +903,9 @@ are queued, each reached instance marked `XS_DONT_MARSHALL_FLAG` (the visited
 set), so the object graph is walked once; it returns its argument, and a
 non-reference / already-hardened / no-arg call passes through per XS.
 **`petrify(x)`** (`fx_petrify`) is the single-object, non-transitive freeze (no
-prototype walk, `XS_DONT_MARSHALL_FLAG` left clear). The **oracle shim** is
+prototype walk, `XS_DONT_MARSHALL_FLAG` left clear); its read-only internal
+data marker is persisted for Date, ArrayBuffer, and keyed collections. The
+**oracle shim** is
 extended minimally to install the harden/lockdown/petrify/mutabilities globals
 `xst.c`/`xstFuzz.c` install (the bare `fxCreateMachine` boot does not, so an
 `harden(x)` program was an undefined-reference throw) — the audited FFI-seam
@@ -965,11 +967,13 @@ covered=176 divergent=0 skipped=2951` (unchanged from child 1). **Scope fold
 shared intrinsics, the error/`Date.now`/`Math.random` compartment-safety
 taming, and the repeated-lockdown idempotence throw — and **`mutabilities`**
 (the `fxVerify*` mutable-residue report) are sized as a follow-up child on this
-now-landed harden substrate; an **exotic receiver** (array/typed-array/
-collection/wrapper/error) to `harden`/`petrify` self-names
-`harden:exotic-object`/`petrify:exotic-object` rather than mis-freeze. GC roots
-were not touched (no run-loop/allocation-pressure wiring), so the GC-roots
-ledger note carries forward untouched.
+now-landed harden substrate. Arrays, TypedArrays, collections, buffers/views,
+wrappers, and proxies now route through the complete internal-method seam,
+including the two observable own-key passes and failure cleanup XS performs.
+The remaining exotic boundary is RegExp's side-table-backed `lastIndex`, which
+self-names `harden:regexp-lastIndex`/`petrify:regexp-lastIndex` rather than
+mis-freezing it. GC roots were not touched (no run-loop/allocation-pressure
+wiring), so the GC-roots ledger note carries forward untouched.
 
 ### Stage-4 acceptance evidence (closure child 5/5)
 
@@ -1068,7 +1072,7 @@ this closure point).**
 | `Compartment` intrinsic global surface | 4b-3 | `compartment:intrinsic-surface` (confirmed by the ses-xs-parity `ironhorse-aborted` skip above) |
 | `await`-in-`try` | 4b-2 | `await:await-in-try` |
 | `lockdown()` + `mutabilities` | 4b-4 | `Halt::Unsupported` (Ironhorse); `oracle-shim-unsafe:lockdown` (oracle shim); confirmed by the ses-xs-parity guard above |
-| `harden`/`petrify` exotic receiver | 4b-4 | `harden:exotic-object` / `petrify:exotic-object` |
+| `harden`/`petrify` RegExp receiver | 4b-4 | `harden:regexp-lastIndex` / `petrify:regexp-lastIndex` pending the side-table descriptor unification |
 | daemon boot bundle (`globalThis` + downstream) | 4b-5 | boot-bundle gap ledger above |
 
 The stage-3 built-ins reach
