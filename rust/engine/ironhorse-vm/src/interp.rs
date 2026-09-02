@@ -3052,8 +3052,15 @@ enum ReactionKind {
     /// A `Promise.all`/`allSettled`/`race`/`any` element reaction: `(combinator
     /// index into [`Interp::combinators`], element index)`. At the drain each
     /// settled element updates the shared [`CombinatorState`] and, on the
-    /// completing element, settles the combinator's derived promise.
+    /// completing element, invokes the combinator's result capability.
     Combine(u32, u32),
+    /// The synchronous per-element callback passed to a custom `then` method.
+    /// It is represented by a private promise resolving pair so it has the
+    /// required anonymous, length-1, non-constructable, one-shot shape, but its
+    /// settlement folds into the combinator immediately rather than queuing a
+    /// promise reaction job. The reaction carries that pair in `resolve` and
+    /// `reject`, allowing snapshot validation to prove this is a real bridge.
+    CombineDirect(u32, u32),
     /// An `Array.fromAsync` await point (ECMA-262 sec-array.fromasync), keyed by
     /// the [`FromAsyncData`] index in [`Interp::from_async`]. `fromAsync` is a
     /// native async state machine driven entirely by these native reactions
@@ -3157,24 +3164,22 @@ enum CombinatorKind {
 /// elements (`all`/`allSettled` resolve when it reaches 0; `any` rejects when
 /// it reaches 0); `results` is the accumulator Array (values for `all`,
 /// `{status,value|reason}` records for `allSettled`, errors for `any`; unused
-/// for `race`). `done` latches the derived's first settlement so later element
-/// reactions are no-ops — ironhorse's stand-in for the shared `[[AlreadyResolved]]`
-/// guard XS's element functions trip through the one capability.
+/// for `race`). The result capability's callbacks are retained explicitly:
+/// custom constructors may supply arbitrary functions, so repeated element
+/// settlements must remain observable instead of being hidden behind a native
+/// promise's `[[AlreadyResolved]]` guard.
 #[derive(Clone, Debug)]
 struct CombinatorState {
     kind: CombinatorKind,
-    /// The derived promise the combinator returns. Settled directly through
-    /// [`Interp::settle_promise`] (guarded by `done` — ironhorse's stand-in for the
-    /// shared `[[AlreadyResolved]]` guard XS's element functions trip), so the
-    /// capability's resolve/reject functions are built but never re-invoked.
-    derived: crate::value::SlotIndex,
+    /// The result capability callbacks. Native resolving functions carry their
+    /// own shared one-shot guard; custom callbacks are invoked whenever the
+    /// specification calls them.
+    resolve: Slot,
+    reject: Slot,
     /// Count of elements not yet settled (drives the completion latch).
     remaining: u32,
     /// The accumulator Array instance (values/records/errors; unused for race).
     results: crate::value::SlotIndex,
-    /// Set once the derived promise is settled — subsequent element reactions
-    /// short-circuit (the shared-capability guard).
-    done: bool,
 }
 
 /// The captured closure state of one in-flight `Array.fromAsync` call (its
@@ -5023,6 +5028,7 @@ pub struct GeneratorRow {
 /// | 2 | `Combine` | combinator index | element index |
 /// | 3–10 | the async-flavored kinds | | |
 /// | 11 | `FinallyAwait` | original rejection boolean | — |
+/// | 12 | `CombineDirect` | combinator index | element index |
 ///
 /// Bytes 3–10 (`AsyncAwait`, the three `AsyncGenerator*`s, the four
 /// `FromAsync*`s) name suspended async machinery whose instance rows
@@ -5084,10 +5090,10 @@ pub struct PromiseFnRow {
 pub struct CombinatorRow {
     /// 0 = All, 1 = AllSettled, 2 = Race, 3 = Any.
     pub kind: u8,
-    pub derived: u32,
+    pub resolve: Slot,
+    pub reject: Slot,
     pub remaining: u32,
     pub results: u32,
-    pub done: bool,
 }
 
 /// The atomic promise cluster: the four side tables whose rows
@@ -9539,6 +9545,7 @@ impl Interp {
                         | ReactionKind::FinallyReturn
                         | ReactionKind::FinallyAwait(_)
                         | ReactionKind::Combine(_, _)
+                        | ReactionKind::CombineDirect(_, _)
                 )
             });
         if async_reaction {
@@ -9662,11 +9669,9 @@ impl Interp {
                 .any(|r| names(&r.resource) || names(&r.method))
             || self.wrapper_data.values().any(names)
             // The promise cluster's Slot-bearing state: a settlement
-            // result and a reaction's handler/capability slots can all
-            // hold function references. The cluster's raw INDEX fields
-            // (a resolving function's promise, a combinator's derived
-            // promise and results Array) name instances that are never
-            // function slots, so the Slot walk covers it.
+            // result, reaction slots, and combinator capability slots can all
+            // hold function references. The remaining raw INDEX fields name
+            // instances that are never function slots.
             || self.promises.values().any(|p| {
                 names(&p.result)
                     || p.reactions.iter().any(|r| {
@@ -9675,7 +9680,11 @@ impl Interp {
                             || names(&r.resolve)
                             || names(&r.reject)
                     })
-            });
+            })
+            || self
+                .combinators
+                .iter()
+                .any(|c| names(&c.resolve) || names(&c.reject));
         if side_hit {
             return Some("a stored reference to a non-persisted native function");
         }
@@ -10868,7 +10877,7 @@ impl Interp {
             .iter()
             .flat_map(|(_, p)| p.reactions.iter())
             .filter_map(|r| match r.kind {
-                ReactionKind::Combine(ci, _) => Some(ci),
+                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => Some(ci),
                 _ => None,
             })
             .collect();
@@ -10903,6 +10912,9 @@ impl Interp {
                                 ReactionKind::User => (0, 0, 0),
                                 ReactionKind::FinallyReturn => (1, 0, 0),
                                 ReactionKind::Combine(ci, elem) => (2, comb_map[&ci], elem),
+                                ReactionKind::CombineDirect(ci, elem) => {
+                                    (12, comb_map[&ci], elem)
+                                }
                                 ReactionKind::AsyncAwait(i) => (3, i.0, 0),
                                 ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
                                 ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
@@ -10957,10 +10969,10 @@ impl Interp {
                             CombinatorKind::Race => 2,
                             CombinatorKind::Any => 3,
                         },
-                        derived: c.derived.0,
+                        resolve: c.resolve,
+                        reject: c.reject,
                         remaining: c.remaining,
                         results: c.results.0,
-                        done: c.done,
                     }
                 })
                 .collect(),
@@ -10979,23 +10991,15 @@ impl Interp {
     pub fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
         let owners: std::collections::BTreeSet<u32> =
             snap.promises.iter().map(|row| row.owner).collect();
-        let state_of = |owner: u32| -> Option<u8> {
-            snap.promises
-                .binary_search_by_key(&owner, |row| row.owner)
-                .ok()
-                .map(|i| snap.promises[i].state)
-        };
         // Per-combinator results-Array length, for the element-index
         // bound below (the bulk side tables restore before this verb,
-        // so the rows are in hand). An undone combinator's derived must
-        // still be PENDING — `done` latches exactly its settlement, and
-        // the drain's `settle_promise` overwrites unconditionally.
+        // so the rows are in hand). Capability callability is checked
+        // after retained function state has restored.
         let mut results_lengths = Vec::with_capacity(snap.combinators.len());
         for c in &snap.combinators {
-            let derived_pending = state_of(c.derived) == Some(0);
             if c.kind > 3
-                || !owners.contains(&c.derived)
-                || c.done == derived_pending
+                || c.resolve.kind != Kind::Reference
+                || c.reject.kind != Kind::Reference
             {
                 return false;
             }
@@ -11019,6 +11023,23 @@ impl Interp {
         // function state has been restored.
         let capability_ok = |resolve: &Slot, reject: &Slot| -> bool {
             resolve.kind == Kind::Reference && reject.kind == Kind::Reference
+        };
+        let direct_pair_ok = |owner: u32, resolve: &Slot, reject: &Slot| -> bool {
+            let row_for = |slot: &Slot| match slot.value {
+                Payload::Reference(function) if slot.kind == Kind::Reference => snap
+                    .functions
+                    .binary_search_by_key(&function.0, |row| row.function)
+                    .ok()
+                    .map(|index| &snap.functions[index]),
+                _ => None,
+            };
+            matches!((row_for(resolve), row_for(reject)), (Some(a), Some(b))
+                if a.promise == owner
+                    && b.promise == owner
+                    && !a.reject
+                    && b.reject
+                    && a.guard != u32::MAX
+                    && a.guard == b.guard)
         };
         for row in &snap.promises {
             let state = match row.state {
@@ -11064,8 +11085,8 @@ impl Interp {
                         // `any` aggregate walk iterates `0..length`),
                         // each `(combinator, element)` pair appears at
                         // most once (a duplicate would count one
-                        // element twice at the drain), and a native
-                        // element reaction carries NO capability slots.
+                        // element twice at the drain), and a queued
+                        // native element reaction carries NO callback slots.
                         2 if (r.a as usize) < snap.combinators.len()
                             && r.b < results_lengths[r.a as usize]
                             && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
@@ -11075,6 +11096,18 @@ impl Interp {
                         {
                             comb_pending[r.a as usize] += 1;
                             ReactionKind::Combine(r.a, r.b)
+                        }
+                        // A direct element callback is a private promise whose
+                        // carried resolving pair must name this exact owner.
+                        12 if (r.a as usize) < snap.combinators.len()
+                            && r.b < results_lengths[r.a as usize]
+                            && r.on_fulfilled.kind == Kind::Undefined
+                            && r.on_rejected.kind == Kind::Undefined
+                            && direct_pair_ok(row.owner, &r.resolve, &r.reject)
+                            && elem_seen.insert((r.a, r.b)) =>
+                        {
+                            comb_pending[r.a as usize] += 1;
+                            ReactionKind::CombineDirect(r.a, r.b)
                         }
                         // The async-flavored kinds name machinery no
                         // atom carries yet; the decoder refuses them
@@ -11201,10 +11234,10 @@ impl Interp {
                     2 => CombinatorKind::Race,
                     _ => CombinatorKind::Any,
                 },
-                derived: crate::value::SlotIndex(c.derived),
+                resolve: c.resolve,
+                reject: c.reject,
                 remaining: c.remaining,
                 results: crate::value::SlotIndex(c.results),
-                done: c.done,
             })
             .collect();
         true
@@ -11226,6 +11259,12 @@ impl Interp {
                         && self.is_callable_value(reaction.reject)
                         && self.is_constructor_value(reaction.on_rejected)
                 }
+                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => self
+                    .combinators
+                    .get(ci as usize)
+                    .is_some_and(|c| {
+                        self.is_callable_value(c.resolve) && self.is_callable_value(c.reject)
+                    }),
                 _ => true,
             })
         })
@@ -15113,8 +15152,13 @@ impl Interp {
                         }
                     });
                     if let Some((f, base)) = promise_fn {
+                        let result = if has_target {
+                            Err(self.catchable_type_error())
+                        } else {
+                            self.call_promise_function(code, f, base, argc)
+                        };
                         dispatch_result!(
-                            self.call_promise_function(f, base, argc),
+                            result,
                             pc,
                             self,
                             return_depth
@@ -23976,6 +24020,7 @@ impl Interp {
     /// frame `[THIS, FUNCTION, RESULT, FRAME, arg0?]` from `base`.
     fn call_promise_function(
         &mut self,
+        code: &[u8],
         f: crate::value::SlotIndex,
         base: usize,
         _argc: usize,
@@ -24017,7 +24062,32 @@ impl Interp {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
         } else {
             self.promise_guards[data.guard] = true;
-            self.settle_promise(data.promise, value, data.reject)?;
+            let direct = self.promises.get(&data.promise).and_then(|promise| {
+                if promise.state != PromiseState::Pending || promise.reactions.len() != 1 {
+                    return None;
+                }
+                match promise.reactions[0].kind {
+                    ReactionKind::CombineDirect(ci, ei) => Some((ci, ei)),
+                    _ => None,
+                }
+            });
+            if let Some((ci, ei)) = direct {
+                // This private bridge is the representation of a combinator
+                // element closure, not a promise-resolution boundary. Record
+                // its one-shot completion, then run the element algorithm in
+                // the same call stack as the custom `then` invocation.
+                let promise = self.promises.get_mut(&data.promise).unwrap();
+                promise.state = if data.reject {
+                    PromiseState::Rejected
+                } else {
+                    PromiseState::Fulfilled
+                };
+                promise.result = value;
+                promise.reactions.clear();
+                self.run_combine_reaction(code, ci as usize, ei as usize, value, data.reject)?;
+            } else {
+                self.settle_promise(data.promise, value, data.reject)?;
+            }
         }
         self.stack.truncate(base);
         self.push(Slot::undefined());
@@ -24352,9 +24422,9 @@ impl Interp {
         }
         // A combinator element reaction: fold this element's settlement into
         // the shared `Promise.all`/`allSettled`/`race`/`any` state.
-        if let ReactionKind::Combine(ci, ei) = reaction.kind {
+        if let ReactionKind::Combine(ci, ei) | ReactionKind::CombineDirect(ci, ei) = reaction.kind {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
-            return self.run_combine_reaction(ci as usize, ei as usize, value, rejected);
+            return self.run_combine_reaction(code, ci as usize, ei as usize, value, rejected);
         }
         // An `Array.fromAsync` native async-machine await resumption.
         if let ReactionKind::FromAsyncNext(id) = reaction.kind {
@@ -26067,13 +26137,13 @@ impl Interp {
     }
 
     /// `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build the
-    /// derived promise and its shared [`CombinatorState`], consume the input's
+    /// result capability and its shared [`CombinatorState`], consume the input's
     /// live iterator protocol, resolve each yielded value through the
-    /// constructor's once-read `resolve` method, and register a native COMBINE
-    /// reaction on each ordinary Promise result. Iterator advancement errors
-    /// reject without closing; abrupt completions after a value is obtained
-    /// close the iterator before rejecting. Each element reaction settles into
-    /// the shared state at the drain ([`Self::run_combine_reaction`]).
+    /// constructor's once-read `resolve` method, and register an element
+    /// reaction on each result. Iterator advancement errors reject without
+    /// closing; abrupt completions after a value is obtained close the iterator
+    /// before rejecting. Native Promise inputs settle into shared state at the
+    /// drain; callbacks invoked by a custom `then` do so synchronously.
     fn promise_combinator(
         &mut self,
         code: &[u8],
@@ -26081,13 +26151,19 @@ impl Interp {
         iterable: Slot,
         constructor: Slot,
     ) -> Result<Slot, Halt> {
+        // `NewPromiseCapability(C)` is outside the algorithm's rejection
+        // conversion. Its abrupt completion must reach the caller's active
+        // `try` statement synchronously.
+        self.meter.tick_raw(PROMISE_COMBINATOR_FRAME_METERING);
+        let capability = self.new_promise_capability_for(code, constructor)?;
         // Promise combinator algorithms catch every abrupt completion after
         // capability construction and reject that capability. Temporarily
         // hide the caller's jump targets so a getter/callback throw escapes to
         // the native boundary as a value instead of synchronously resuming the
         // caller's surrounding `try` statement.
         let saved_jumps = std::mem::take(&mut self.jumps);
-        let outcome = self.promise_combinator_inner(code, kind, iterable, constructor);
+        let outcome =
+            self.promise_combinator_inner(code, kind, iterable, constructor, capability);
         self.jumps = saved_jumps;
         outcome
     }
@@ -26098,28 +26174,15 @@ impl Interp {
         kind: CombinatorKind,
         iterable: Slot,
         constructor: Slot,
+        capability: PromiseCapability,
     ) -> Result<Slot, Halt> {
         // Static combinators use their `this` value directly as the capability
         // constructor; unlike `.then`, they must not consult `@@species`.
-        // Preserve that observable distinction for the custom-constructor
-        // species probes even while the general re-entrant capability path is
-        // outside the modeled subset.
-        if let Payload::Reference(c) = constructor.value {
-            let intrinsic = self.intrinsics.get("Promise").copied();
-            let has_own_species = self
-                .well_known_symbol_property_id("species")
-                .and_then(|id| self.find_property(c, id))
-                .is_some();
-            if intrinsic != Some(c) && has_own_species {
-                return Ok(Slot::of(
-                    Kind::Reference,
-                    Payload::Reference(self.new_object()),
-                ));
-            }
-        }
-        self.meter.tick_raw(PROMISE_COMBINATOR_FRAME_METERING);
-        let (derived, resolve, reject) = self.new_promise_capability();
-        let result_promise = Slot::of(Kind::Reference, Payload::Reference(derived));
+        // Capability construction happens before every caught algorithm step,
+        // so a constructor failure remains a synchronous abrupt completion.
+        let result_promise = capability.promise;
+        let resolve = capability.resolve;
+        let reject = capability.reject;
 
         // GetPromiseResolve(C) precedes GetIterator in the current algorithm.
         // In particular, a throwing `resolve` getter must not invoke the
@@ -26128,7 +26191,7 @@ impl Interp {
             Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
             _ => {
                 let error = self.build_error("TypeError", 0, 0);
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
         };
@@ -26140,11 +26203,11 @@ impl Interp {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
                 let error = self.build_error("TypeError", 0, 0);
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
             Err(error) => {
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
         };
@@ -26169,7 +26232,7 @@ impl Interp {
                 })? {
                     Ok(method) => method,
                     Err(error) => {
-                        self.settle_via_function(reject, error)?;
+                        self.settle_capability(code, resolve, reject, error, true)?;
                         return Ok(result_promise);
                     }
                 }
@@ -26195,7 +26258,7 @@ impl Interp {
                     })? {
                         Ok(method) => method,
                         Err(error) => {
-                            self.settle_via_function(reject, error)?;
+                            self.settle_capability(code, resolve, reject, error, true)?;
                             return Ok(result_promise);
                         }
                     }
@@ -26204,18 +26267,18 @@ impl Interp {
         };
         if !self.is_callable_value(iterator_method) {
             let error = self.build_error("TypeError", 0, 0);
-            self.settle_via_function(reject, error)?;
+            self.settle_capability(code, resolve, reject, error, true)?;
             return Ok(result_promise);
         }
         let iterator = match self.call_any_catching_throw(code, iterator_method, iterable, &[])? {
             Ok(iterator) if iterator.kind == Kind::Reference => iterator,
             Ok(_) => {
                 let error = self.build_error("TypeError", 0, 0);
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
             Err(error) => {
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
         };
@@ -26230,11 +26293,11 @@ impl Interp {
             Ok(method) if self.is_callable_value(method) => method,
             Ok(_) => {
                 let error = self.build_error("TypeError", 0, 0);
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
             Err(error) => {
-                self.settle_via_function(reject, error)?;
+                self.settle_capability(code, resolve, reject, error, true)?;
                 return Ok(result_promise);
             }
         };
@@ -26246,10 +26309,10 @@ impl Interp {
         let comb_idx = self.combinators.len();
         self.combinators.push(CombinatorState {
             kind,
-            derived,
+            resolve,
+            reject,
             remaining: 1,
             results,
-            done: false,
         });
 
         for index in 0..1_000_000u32 {
@@ -26258,8 +26321,7 @@ impl Interp {
                 Err(error) => {
                     // IteratorStepValue failures set [[Done]] and reject
                     // directly; IteratorClose must not run.
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26267,8 +26329,7 @@ impl Interp {
                 Payload::Reference(inst) if step.kind == Kind::Reference => inst,
                 _ => {
                     let error = self.build_error("TypeError", 0, 0);
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26277,8 +26338,7 @@ impl Interp {
             {
                 Ok(done) => done,
                 Err(error) => {
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26286,7 +26346,14 @@ impl Interp {
                 self.arrays.get_mut(&results).unwrap().length = index;
                 self.combinators[comb_idx].remaining -= 1;
                 if self.combinators[comb_idx].remaining == 0 {
-                    self.settle_empty_combinator(comb_idx)?;
+                    match self
+                        .array_from_try(|this| this.settle_empty_combinator(code, comb_idx))?
+                    {
+                        Ok(()) => {}
+                        Err(error) => {
+                            self.settle_capability(code, resolve, reject, error, true)?;
+                        }
+                    }
                 }
                 return Ok(result_promise);
             }
@@ -26295,8 +26362,7 @@ impl Interp {
             {
                 Ok(value) => value,
                 Err(error) => {
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26315,8 +26381,7 @@ impl Interp {
                 Ok(value) => value,
                 Err(error) => {
                     let error = self.array_from_close(code, iterator, error)?;
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26325,8 +26390,7 @@ impl Interp {
                 _ => {
                     let error = self.build_error("TypeError", 0, 0);
                     let error = self.array_from_close(code, iterator, error)?;
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26340,14 +26404,12 @@ impl Interp {
                 Ok(_) => {
                     let error = self.build_error("TypeError", 0, 0);
                     let error = self.array_from_close(code, iterator, error)?;
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
                 Err(error) => {
                     let error = self.array_from_close(code, iterator, error)?;
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             };
@@ -26371,11 +26433,11 @@ impl Interp {
             // Promise resolving functions already provide exactly the
             // anonymous, length-1, non-constructable, one-shot callback shape
             // the per-element algorithms require. For all/allSettled/any, a
-            // private bridge promise turns those callbacks into the existing
-            // native COMBINE reaction. Race passes the result capability pair
-            // itself, as specified. The bridge also naturally keeps callbacks
-            // captured by a custom `then` live after this call returns and is
-            // already represented by the promise snapshot cluster.
+            // private bridge promise gives those callbacks a shared one-shot
+            // guard while `CombineDirect` folds their calls into the shared
+            // state synchronously. Race passes the result capability pair
+            // itself, as specified. The bridge also keeps callbacks captured
+            // by a custom `then` live and is represented by the promise cluster.
             let handlers = if kind == CombinatorKind::Race {
                 (resolve, reject)
             } else {
@@ -26383,9 +26445,9 @@ impl Interp {
                 let reaction = PromiseReaction {
                     on_fulfilled: Slot::undefined(),
                     on_rejected: Slot::undefined(),
-                    resolve: Slot::undefined(),
-                    reject: Slot::undefined(),
-                    kind: ReactionKind::Combine(comb_idx as u32, index),
+                    resolve: bridge_resolve,
+                    reject: bridge_reject,
+                    kind: ReactionKind::CombineDirect(comb_idx as u32, index),
                 };
                 self.register_native_reaction(bridge, reaction);
                 match kind {
@@ -26404,8 +26466,7 @@ impl Interp {
                 Ok(_) => continue,
                 Err(error) => {
                     let error = self.array_from_close(code, iterator, error)?;
-                    self.combinators[comb_idx].done = true;
-                    self.settle_via_function(reject, error)?;
+                    self.settle_capability(code, resolve, reject, error, true)?;
                     return Ok(result_promise);
                 }
             }
@@ -26416,59 +26477,54 @@ impl Interp {
     /// Settle a combinator whose iterable was empty: `all`/`allSettled` resolve
     /// with the empty results Array; `any` rejects with a zero-error
     /// `AggregateError`; `race` stays pending forever (no settlement).
-    fn settle_empty_combinator(&mut self, ci: usize) -> Result<(), Halt> {
+    fn settle_empty_combinator(&mut self, code: &[u8], ci: usize) -> Result<(), Halt> {
         let kind = self.combinators[ci].kind;
-        match kind {
+        let completion = match kind {
             CombinatorKind::All | CombinatorKind::AllSettled => {
-                let (derived, results) =
-                    (self.combinators[ci].derived, self.combinators[ci].results);
-                self.combinators[ci].done = true;
-                self.settle_promise(
-                    derived,
-                    Slot::of(Kind::Reference, Payload::Reference(results)),
-                    false,
-                )
+                let results = self.combinators[ci].results;
+                Some((Slot::of(Kind::Reference, Payload::Reference(results)), false))
             }
-            CombinatorKind::Race => Ok(()),
+            CombinatorKind::Race => None,
             CombinatorKind::Any => {
-                let derived = self.combinators[ci].derived;
-                self.combinators[ci].done = true;
                 let agg = self.new_aggregate_error(Vec::new());
-                self.settle_promise(derived, agg, true)
+                Some((agg, true))
             }
+        };
+        if let Some((value, rejected)) = completion {
+            let resolve = self.combinators[ci].resolve;
+            let reject = self.combinators[ci].reject;
+            self.settle_capability(code, resolve, reject, value, rejected)?;
         }
+        Ok(())
     }
 
     /// The drain behavior of one combinator element reaction (XS's per-element
-    /// resolve/reject closures over the shared `remainingElementsCount`). A
-    /// combinator whose derived is already settled (`done`) short-circuits.
+    /// resolve/reject closures over the shared `remainingElementsCount`).
     fn run_combine_reaction(
         &mut self,
+        code: &[u8],
         ci: usize,
         ei: usize,
         value: Slot,
         rejected: bool,
     ) -> Result<(), Halt> {
-        if self.combinators[ci].done {
-            return Ok(());
-        }
+        let resolve = self.combinators[ci].resolve;
+        let reject = self.combinators[ci].reject;
         match self.combinators[ci].kind {
             // `all`: reject on the first rejection; otherwise store the value
             // and resolve with the results Array once all have fulfilled.
             CombinatorKind::All => {
                 if rejected {
-                    let derived = self.combinators[ci].derived;
-                    self.combinators[ci].done = true;
-                    self.settle_promise(derived, value, true)
+                    self.settle_capability(code, resolve, reject, value, true)
                 } else {
                     let results = self.combinators[ci].results;
                     self.array_set_dense(results, ei as u32, value);
                     self.combinators[ci].remaining -= 1;
                     if self.combinators[ci].remaining == 0 {
-                        let derived = self.combinators[ci].derived;
-                        self.combinators[ci].done = true;
-                        self.settle_promise(
-                            derived,
+                        self.settle_capability(
+                            code,
+                            resolve,
+                            reject,
                             Slot::of(Kind::Reference, Payload::Reference(results)),
                             false,
                         )
@@ -26485,10 +26541,10 @@ impl Interp {
                 self.array_set_dense(results, ei as u32, record);
                 self.combinators[ci].remaining -= 1;
                 if self.combinators[ci].remaining == 0 {
-                    let derived = self.combinators[ci].derived;
-                    self.combinators[ci].done = true;
-                    self.settle_promise(
-                        derived,
+                    self.settle_capability(
+                        code,
+                        resolve,
+                        reject,
                         Slot::of(Kind::Reference, Payload::Reference(results)),
                         false,
                     )
@@ -26497,18 +26553,12 @@ impl Interp {
                 }
             }
             // `race`: the first element to settle (fulfill or reject) wins.
-            CombinatorKind::Race => {
-                let derived = self.combinators[ci].derived;
-                self.combinators[ci].done = true;
-                self.settle_promise(derived, value, rejected)
-            }
+            CombinatorKind::Race => self.settle_capability(code, resolve, reject, value, rejected),
             // `any`: the first fulfillment wins; store each rejection's reason
             // and reject with an `AggregateError` once all have rejected.
             CombinatorKind::Any => {
                 if !rejected {
-                    let derived = self.combinators[ci].derived;
-                    self.combinators[ci].done = true;
-                    self.settle_promise(derived, value, false)
+                    self.settle_capability(code, resolve, reject, value, false)
                 } else {
                     let results = self.combinators[ci].results;
                     self.array_set_dense(results, ei as u32, value);
@@ -26521,9 +26571,7 @@ impl Interp {
                                 .collect()
                         };
                         let agg = self.new_aggregate_error(errs);
-                        let derived = self.combinators[ci].derived;
-                        self.combinators[ci].done = true;
-                        self.settle_promise(derived, agg, true)
+                        self.settle_capability(code, resolve, reject, agg, true)
                     } else {
                         Ok(())
                     }
@@ -44431,7 +44479,7 @@ impl Interp {
             for a in args {
                 self.push(*a);
             }
-            return match self.call_promise_function(f, base, args.len()) {
+            return match self.call_promise_function(code, f, base, args.len()) {
                 Ok(()) => Ok(self.pop()),
                 Err(h) => {
                     self.stack.truncate(base);
@@ -44531,6 +44579,9 @@ impl Interp {
             Payload::Reference(f) if func.kind == Kind::Reference => f,
             _ => return Err(self.catchable_type_error()),
         };
+        if !self.is_constructor_value(func) {
+            return Err(self.catchable_type_error());
+        }
         if self.proxies.contains_key(&f) {
             return self.proxy_construct(code, f, args, new_target);
         }
@@ -53576,9 +53627,10 @@ impl Interp {
                         | ReactionKind::AsyncGeneratorAwait(inst)
                         | ReactionKind::AsyncGeneratorYield(inst)
                         | ReactionKind::AsyncGeneratorReturn(inst) => roots.push(inst),
-                        ReactionKind::Combine(ci, _) => {
+                        ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                             if let Some(c) = self.combinators.get(ci as usize) {
-                                roots.push(c.derived);
+                                slot_roots(&c.resolve, &mut roots);
+                                slot_roots(&c.reject, &mut roots);
                                 roots.push(c.results);
                             }
                         }
@@ -53883,16 +53935,17 @@ impl Interp {
                         // leaves unused): an `AsyncAwait` reaction's
                         // only reference to the suspended async
                         // instance is here, and a `Combine` reaction
-                        // will index the combinator's derived promise
+                        // will index the combinator's capability callbacks
                         // and accumulator Array at the drain.
                         match r.kind {
                             ReactionKind::AsyncAwait(inst)
                             | ReactionKind::AsyncGeneratorAwait(inst)
                             | ReactionKind::AsyncGeneratorYield(inst)
                             | ReactionKind::AsyncGeneratorReturn(inst) => visit(inst),
-                            ReactionKind::Combine(ci, _) => {
+                            ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                                 if let Some(c) = self.combinators.get(ci as usize) {
-                                    visit(c.derived);
+                                    c.resolve.each_ref_slot(&mut *visit);
+                                    c.reject.each_ref_slot(&mut *visit);
                                     visit(c.results);
                                 }
                             }
@@ -54354,7 +54407,7 @@ impl Interp {
         let mut live_fa: BTreeSet<u32> = BTreeSet::new();
         {
             let mut note = |kind: &ReactionKind| match *kind {
-                ReactionKind::Combine(ci, _) => {
+                ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                     live_comb.insert(ci);
                 }
                 ReactionKind::FromAsyncNext(fa)
@@ -54410,7 +54463,9 @@ impl Interp {
             .collect();
 
         let repoint = |kind: &mut ReactionKind| match kind {
-            ReactionKind::Combine(ci, _) => *ci = comb_map[ci],
+            ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
+                *ci = comb_map[ci]
+            }
             ReactionKind::FromAsyncNext(fa)
             | ReactionKind::FromAsyncElem(fa)
             | ReactionKind::FromAsyncMap(fa)
@@ -54831,9 +54886,10 @@ impl Interp {
                     | ReactionKind::AsyncGeneratorAwait(inst)
                     | ReactionKind::AsyncGeneratorYield(inst)
                     | ReactionKind::AsyncGeneratorReturn(inst) => visit(inst),
-                    ReactionKind::Combine(ci, _) => {
+                    ReactionKind::Combine(ci, _) | ReactionKind::CombineDirect(ci, _) => {
                         if let Some(c) = self.combinators.get(ci as usize) {
-                            visit(c.derived);
+                            slot_refs(&c.resolve, visit);
+                            slot_refs(&c.reject, visit);
                             visit(c.results);
                         }
                     }

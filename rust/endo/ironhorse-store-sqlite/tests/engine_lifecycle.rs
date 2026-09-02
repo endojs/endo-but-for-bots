@@ -882,6 +882,43 @@ fn a_custom_species_finally_await_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn a_custom_capability_combinator_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-custom-combinator",
+        &[
+            "var p=0;var res=0;var q=0;var result={tag:9};var log=''; \
+             function C(executor){executor(function(v){log='r'+v[0]}, \
+                                           function(e){log='j'+e});return result} \
+             C.resolve=function(v){return Promise.resolve(v)}; \
+             p=new Promise(function(resolve){res=resolve}); \
+             q=Promise.all.call(C,[p]);q===result",
+            "(q===result)+':'+q.tag+':'+log",
+            "res(42);0",
+            "log",
+        ],
+    );
+    assert_eq!(last, "r42");
+}
+
+#[test]
+fn a_retained_custom_then_element_callback_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-direct-combinator",
+        &[
+            "var fulfill=0;var result={};var log=''; \
+             function C(executor){executor(function(v){log='r'+v[0]}, \
+                                           function(e){log='j'+e});return result} \
+             C.resolve=function(){return {then:function(resolve){fulfill=resolve}}}; \
+             Promise.all.call(C,[1]);typeof fulfill",
+            "typeof fulfill+':'+fulfill.name+':'+fulfill.length+':'+log",
+            "fulfill(42);fulfill(9);0",
+            "log",
+        ],
+    );
+    assert_eq!(last, "r42");
+}
+
+#[test]
 fn a_pending_finally_result_survives_sqlite_sleep_cycles() {
     // `onFinally` runs in crank 1 but its returned promise remains pending.
     // The `FinallyAwait` row, original fulfillment, and derived capability all

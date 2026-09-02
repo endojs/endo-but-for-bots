@@ -271,6 +271,49 @@ fn promise_all_mid_flight_completes_after_resume() {
     );
 }
 
+/// A static combinator can retain callbacks supplied by an arbitrary result
+/// constructor. The custom result object and the pending accumulator survive
+/// both snapshot backends, then the restored callback receives the final Array.
+#[test]
+fn a_custom_capability_combinator_survives_resume() {
+    assert_twin(
+        "ih-prms-custom-combinator",
+        "var p=0;var res=0;var q=0;var result={tag:9};var log='';var t=0; \
+         function C(executor){executor(function(v){log='r'+v[0]}, \
+                                       function(e){log='j'+e});return result} \
+         C.resolve=function(v){return Promise.resolve(v)}; \
+         p=new Promise(function(resolve){res=resolve}); \
+         q=Promise.all.call(C,[p]);t=7;t",
+        &[
+            "var p;var res;var q;var result;var log;var t;(q===result)+':'+q.tag+':'+log",
+            "var p;var res;var q;var result;var log;var t;res(42);0",
+            "var p;var res;var q;var result;var log;var t;log",
+        ],
+        &[(true, "true:9:"), (true, "0"), (true, "r42")],
+    );
+}
+
+/// A custom `then` may retain the engine's per-element callback beyond the
+/// combinator call. Its one-shot guard and direct combinator reaction must
+/// survive a checkpoint before the guest eventually invokes it.
+#[test]
+fn a_retained_custom_then_element_callback_survives_resume() {
+    assert_twin(
+        "ih-prms-direct-combinator",
+        "var fulfill=0;var result={};var log='';var t=0; \
+         function C(executor){executor(function(v){log='r'+v[0]}, \
+                                       function(e){log='j'+e});return result} \
+         C.resolve=function(){return {then:function(resolve){fulfill=resolve}}}; \
+         Promise.all.call(C,[1]);t=7;t",
+        &[
+            "var fulfill;var result;var log;var t;typeof fulfill+':'+fulfill.name+':'+fulfill.length+':'+log",
+            "var fulfill;var result;var log;var t;fulfill(42);fulfill(9);0",
+            "var fulfill;var result;var log;var t;log",
+        ],
+        &[(true, "function::1:"), (true, "0"), (true, "r42")],
+    );
+}
+
 /// `Promise.race` and `Promise.any` mid-flight, in one machine: the
 /// race settles with whichever element settles first after the split;
 /// the `any` — one element already rejected before it — rejects only
