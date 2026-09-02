@@ -236,7 +236,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned because JSON.parse/stringify now carry their standard
         // function names and arities, with boot-layout signature generation 4.
         // Boot-heap content only; format unchanged.
-        "1d5f85d1f2f76224a962e64ba56454258d2ab18c30672411ae412b6672c48869",
+        // Re-pinned for Promise method metadata and the boot-minted
+        // `@@species` getter. Boot-heap content only; format unchanged.
+        "3713eaa76176c70dbad1660779440313923e2c9fa546ee390257dd93c0a38baf",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -394,7 +396,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for JSON.parse/stringify's standard function
         // metadata and boot-layout signature generation 4. Schema and format
         // remain unchanged.
-        "467518d817e4958e85699256b267335ca51c83ae74bfd0ed602c153437832e04",
+        // Re-pinned with the blob for Promise method metadata and the
+        // `@@species` getter. Schema and format remain unchanged.
+        "b8d3fe44443231cb0c0120f6d85ad20344724bcc31e91e9fd0974eab24078f28",
         "epoch-3 seal chain"
     );
 }

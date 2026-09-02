@@ -865,6 +865,27 @@ fn a_custom_species_reaction_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn promise_intrinsic_metadata_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "promise-intrinsic-metadata",
+        &[
+            "var p=Promise.resolve(1);p.then(function(){});0",
+            "Promise.all([]);0",
+            "var s=Object.getOwnPropertyDescriptor(Promise,Symbol.species); \
+             var t=Object.getOwnPropertyDescriptor(Promise.prototype,Symbol.toStringTag); \
+             [Promise.all.name,Promise.all.length,Promise.prototype.then.name, \
+              Promise.prototype.then.length,s.get.name,s.get.length, \
+              s.get.call(Promise)===Promise,t.value,t.writable,t.enumerable, \
+              t.configurable].join(':')",
+        ],
+    );
+    assert_eq!(
+        last,
+        "all:1:then:2:get [Symbol.species]:0:true:Promise:false:false:true"
+    );
+}
+
+#[test]
 fn a_custom_species_finally_await_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "promise-custom-species-finally",
