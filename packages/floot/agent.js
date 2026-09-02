@@ -40,6 +40,7 @@ import {
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
+import { runHostedTurn } from './src/hosted-turn.js';
 import { makeReplyChannel } from './src/stream.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
@@ -461,7 +462,7 @@ const provisionPresetObjects = async (
  *
  * @param {any} powers - Guest powers (petstore for conversation history)
  * @param {Promise<object> | object | undefined} _context
- * @param {ProviderConstructorConfig | InjectedProviderConfig | ClaudeClientConfig} providerConfig
+ * @param {ProviderConstructorConfig | InjectedProviderConfig | ClaudeClientConfig | { hostedClient: any }} providerConfig
  * @param {string} [systemPrompt]
  * @returns {Promise<{
  *   converse: (
@@ -482,15 +483,17 @@ export const makeStreamingAgent = async (
   systemPrompt,
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
+  const hostedClient = /** @type {any} */ (providerConfig).hostedClient;
   /** @type {any} */
-  const provider = claudeClient
-    ? null
-    : /** @type {any} */ (providerConfig).provider ||
-      createStreamingProvider({
-        LAL_HOST: /** @type {any} */ (providerConfig).host,
-        LAL_MODEL: /** @type {any} */ (providerConfig).model,
-        LAL_AUTH_TOKEN: /** @type {any} */ (providerConfig).authToken,
-      });
+  const provider =
+    claudeClient || hostedClient
+      ? null
+      : /** @type {any} */ (providerConfig).provider ||
+        createStreamingProvider({
+          LAL_HOST: /** @type {any} */ (providerConfig).host,
+          LAL_MODEL: /** @type {any} */ (providerConfig).model,
+          LAL_AUTH_TOKEN: /** @type {any} */ (providerConfig).authToken,
+        });
 
   const effectivePrompt = systemPrompt || defaultSystemPrompt;
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
@@ -500,9 +503,29 @@ export const makeStreamingAgent = async (
   const USAGE_NAME = 'floot-usage';
   /** @type {{ inputTokens: number, outputTokens: number, turns: number } | undefined} */
   let usage;
+  const findRecordedUsage = async () => {
+    let nodeId = await getOrCreateLeaf();
+    while (nodeId) {
+      const node = await tree.getNode(nodeId);
+      if (!node) break;
+      const recorded = /** @type {any} */ (node.metadata?.usageTotals);
+      if (recorded) {
+        return {
+          inputTokens: Number(recorded.inputTokens) || 0,
+          outputTokens: Number(recorded.outputTokens) || 0,
+          turns: Number(recorded.turns) || 0,
+        };
+      }
+      nodeId = node.parentId;
+    }
+    return undefined;
+  };
   const loadUsage = async () => {
     if (usage) return usage;
-    if (await E(powers).has(USAGE_NAME)) {
+    const recorded = await findRecordedUsage();
+    if (recorded) {
+      usage = recorded;
+    } else if (await E(powers).has(USAGE_NAME)) {
       const stored = /** @type {any} */ (await E(powers).lookup(USAGE_NAME));
       usage = {
         inputTokens: Number(stored?.inputTokens) || 0,
@@ -514,13 +537,15 @@ export const makeStreamingAgent = async (
     }
     return usage;
   };
-  // Serialize writes: storeValue can't overwrite, so each save removes then
-  // stores, and concurrent saves would interleave (see saveRegistry).
+  // Serialize writes to the legacy summary cache. The authoritative totals are
+  // also committed in conversation-node metadata, so a crash or cache write
+  // failure can be recovered by walking back from the durable leaf.
   let usageWrite = Promise.resolve();
   const saveUsage = () => {
     const snapshot = harden({ ...usage });
     usageWrite = usageWrite
       .then(async () => {
+        await null;
         if (await E(powers).has(USAGE_NAME)) await E(powers).remove(USAGE_NAME);
         await E(powers).storeValue(snapshot, USAGE_NAME);
       })
@@ -651,12 +676,49 @@ export const makeStreamingAgent = async (
   const runTurn = async (input, writer, meta, signal) => {
     const text = await resolveUserText(input);
     const baseLeafId = await getOrCreateLeaf();
-    // `meta` rides along on the user node (the provider ignores unknown fields)
-    // so getHistory can mark, e.g., turns that arrived via mail rather than the
-    // local UI.
-    const userNode = await tree.addNode(baseLeafId, [
-      { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
-    ]);
+
+    const commitExternalTurn = async (replyText, turnUsage, toolCalls = []) => {
+      const current = await loadUsage();
+      const nextUsage = {
+        inputTokens: current.inputTokens + (turnUsage?.inputTokens || 0),
+        outputTokens: current.outputTokens + (turnUsage?.outputTokens || 0),
+        turns: current.turns + 1,
+      };
+      const messages = [
+        { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
+      ];
+      if (toolCalls.length > 0) {
+        messages.push({
+          role: 'assistant',
+          content: '',
+          tool_calls: toolCalls.map(call => ({
+            id: call.id,
+            type: 'function',
+            function: { name: call.name, arguments: call.args },
+          })),
+        });
+        messages.push(
+          ...toolCalls.map(call => ({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: call.result ?? '',
+          })),
+        );
+      }
+      messages.push({ role: 'assistant', content: replyText });
+      // One addNode commits the external turn as a unit. A failed/cancelled
+      // runtime call therefore cannot leave a deeper orphaned user branch that
+      // recovery mistakes for committed history.
+      const finalNode = await tree.addNode(baseLeafId, messages, {
+        usageTotals: harden({ ...nextUsage }),
+      });
+      cachedLeaf = finalNode.id;
+      usage = nextUsage;
+      await saveUsage();
+      writer.usage(nextUsage);
+      writer.final(replyText);
+      writer.end();
+    };
 
     if (claudeClient) {
       // Claude-CLI turn: one send to the ClaudeClient capability. The CLI runs
@@ -668,20 +730,34 @@ export const makeStreamingAgent = async (
         { client: claudeClient, text, writer, signal },
       );
       if (signal?.aborted) return;
-      const finalNode = await tree.addNode(userNode.id, [
-        { role: 'assistant', content: replyText },
-      ]);
-      cachedLeaf = finalNode.id;
-      const totals = await loadUsage();
-      totals.inputTokens += turnUsage?.inputTokens || 0;
-      totals.outputTokens += turnUsage?.outputTokens || 0;
-      totals.turns += 1;
-      saveUsage();
-      writer.usage(totals);
-      writer.final(replyText);
-      writer.end();
+      await commitExternalTurn(replyText, turnUsage);
       return;
     }
+
+    if (hostedClient) {
+      writer.setPhase('thinking');
+      const {
+        finalContent: replyText,
+        usage: turnUsage,
+        toolCalls,
+      } = await runHostedTurn({
+        client: hostedClient,
+        text,
+        writer,
+        signal,
+        systemPrompt: effectivePrompt,
+      });
+      if (signal?.aborted) return;
+      await commitExternalTurn(replyText, turnUsage, toolCalls);
+      return;
+    }
+
+    // `meta` rides along on the user node (the provider ignores unknown fields)
+    // so getHistory can mark, e.g., turns that arrived via mail rather than the
+    // local UI.
+    const userNode = await tree.addNode(baseLeafId, [
+      { role: 'user', content: `${text}`, ...(meta ? { meta } : {}) },
+    ]);
 
     // Agentic loop: stream a reply; if it calls tools, run them, persist the
     // assistant turn plus tool results, and loop again until the model returns a
@@ -833,14 +909,19 @@ export const makeStreamingAgent = async (
       );
     }
 
-    cachedLeaf = leafId;
     // Fold this turn's token usage into the session total, persist it, and emit
     // it so the UI can surface per-session cost.
     const totals = await loadUsage();
     totals.inputTokens += turnInput;
     totals.outputTokens += turnOutput;
     totals.turns += 1;
-    saveUsage();
+    // The empty accounting node does not alter model/UI history, but makes the
+    // cumulative total recoverable atomically from the durable leaf.
+    const accountingNode = await tree.addNode(leafId, [], {
+      usageTotals: harden({ ...totals }),
+    });
+    cachedLeaf = accountingNode.id;
+    await saveUsage();
     writer.usage(totals);
     writer.final(finalContent);
     writer.end();
@@ -957,17 +1038,20 @@ export const makeStreamingAgent = async (
   const getHistory = async () => {
     const leafId = await getOrCreateLeaf();
     const path = await tree.getPath(leafId);
-    // Index tool outputs by call id so each assistant tool_call can carry its
-    // result. The raw 'tool' messages are model-wire records; the UI wants the
-    // call and its result joined.
-    const resultById = new Map();
+    const out = [];
+    // Call IDs are provider-local and may repeat in later turns. Pair each raw
+    // tool result with the earliest unmatched call of that ID as the linear
+    // path is replayed, rather than globally indexing by ID and overwriting an
+    // earlier turn's result.
+    const pendingById = new Map();
     for (const m of path) {
       if (m.role === 'tool' && m.tool_call_id != null) {
-        resultById.set(m.tool_call_id, m.content);
+        const pending = pendingById.get(m.tool_call_id);
+        const index = pending?.shift();
+        if (index !== undefined) out[index].result = m.content;
+        // eslint-disable-next-line no-continue
+        continue;
       }
-    }
-    const out = [];
-    for (const m of path) {
       if (m.role !== 'user' && m.role !== 'assistant') {
         // eslint-disable-next-line no-continue
         continue;
@@ -982,12 +1066,16 @@ export const makeStreamingAgent = async (
       if (m.role === 'assistant' && Array.isArray(m.tool_calls)) {
         for (const tc of m.tool_calls) {
           const args = tc.function?.arguments;
+          const index = out.length;
           out.push({
             role: 'tool',
             name: tc.function?.name || 'tool',
             args: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
-            result: resultById.has(tc.id) ? resultById.get(tc.id) : null,
+            result: null,
           });
+          const pending = pendingById.get(tc.id) || [];
+          pending.push(index);
+          pendingById.set(tc.id, pending);
         }
       }
     }
@@ -1126,7 +1214,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
     }
     return clientP;
   };
-
   // Hand a session only the authority its turns need. A session runs prompts;
   // it has no business interrupting or terminating the sandbox session out
   // from under the factory that provisioned it, so the client is attenuated to
@@ -1258,7 +1345,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // instead of a streaming API provider.
         const agentConfig =
           entry?.model === CLAUDE_CLI_MODEL_ID
-            ? { claudeClient: makeSendOnlyClient(await getClaudeClient(id)) }
+            ? {
+                claudeClient: makeSendOnlyClient(await getClaudeClient(id)),
+              }
             : { provider: await getProvider(entry?.model) };
         const agent = await makeStreamingAgent(
           sessionGuest,

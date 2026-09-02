@@ -1,0 +1,52 @@
+{
+  "name": "@endo/codex-sandbox",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A bounded Endo capability adapter for a Codex CLI process running in an externally managed sandbox slice.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/codex-sandbox"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "src/codex-client.js",
+  "exports": {
+    ".": "./src/codex-client.js",
+    "./app-server-transport.js": "./app-server-transport.js",
+    "./protocol.js": "./protocol.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint '**/*.js'",
+    "lint:types": "tsc --build tsconfig.composite.json"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/sandbox": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/init": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "60s"
+  }
+}

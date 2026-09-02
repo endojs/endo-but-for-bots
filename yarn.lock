@@ -1813,6 +1813,22 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/codex-sandbox@workspace:packages/codex-sandbox":
+  version: 0.0.0-use.local
+  resolution: "@endo/codex-sandbox@workspace:packages/codex-sandbox"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/sandbox": "workspace:^"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/common@workspace:^, @endo/common@workspace:packages/common":
   version: 0.0.0-use.local
   resolution: "@endo/common@workspace:packages/common"
