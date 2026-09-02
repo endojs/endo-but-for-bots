@@ -146,7 +146,7 @@ test('streamGlob on a subView is scoped to the sub-root, like glob', async t => 
 // --- Incrementality: grep reads only as far as the consumer pulls ---
 
 test('streamGrep is incremental: closing after one match leaves later files unread', async t => {
-  const root = makeTemporaryRoot(t, 'mount-stream-incr-');
+  const root = makeTemporaryRoot(t, 'mount-stream-incremental-');
   const total = 40;
   for (let i = 0; i < total; i += 1) {
     // Zero-padded so the sorted walk order is stable and every file matches.
@@ -192,7 +192,7 @@ test('streamGrep is incremental: closing after one match leaves later files unre
 // --- Backpressure: buffer 0 reads exactly one file per pull, none ahead ---
 
 test('streamGrep with buffer 0 does not read ahead of demand', async t => {
-  const root = makeTemporaryRoot(t, 'mount-stream-bp-');
+  const root = makeTemporaryRoot(t, 'mount-stream-backpressure-');
   const total = 20;
   for (let i = 0; i < total; i += 1) {
     fs.writeFileSync(
@@ -222,9 +222,11 @@ test('streamGrep with buffer 0 does not read ahead of demand', async t => {
   await iterator.return();
 });
 
-// --- Cancellation: break out of for-await; walk stops, no unhandled rejection ---
+// --- Cancellation: break out of for-await; content reads stop, no unhandled rejection ---
+// The eager directory walk is already complete by the first match; what early
+// close abandons is the *content* reads of the still-unread files, not the walk.
 
-test('breaking out of a streamGrep for-await stops the walk cleanly', async t => {
+test('breaking out of a streamGrep for-await leaves the remaining files unread', async t => {
   const root = makeTemporaryRoot(t, 'mount-stream-cancel-');
   const total = 30;
   for (let i = 0; i < total; i += 1) {
@@ -245,12 +247,15 @@ test('breaking out of a streamGrep for-await stops the walk cleanly', async t =>
     t.is(typeof match.file, 'string');
     seen += 1;
     if (seen === 1) {
-      break; // triggers iterator.return() -> stops the remote walk
+      break; // triggers iterator.return() -> stops the remaining content reads
     }
   }
   t.is(seen, 1);
   const readsAtBreak = counters.readFileText;
-  t.true(readsAtBreak < total, 'the break abandoned the walk before the end');
+  t.true(
+    readsAtBreak < total,
+    "the break left later files' contents unread",
+  );
 
   // Let any stray continuation settle; ava fails the test on an unhandled
   // rejection, and the read counter must not advance after the break.
@@ -298,6 +303,77 @@ test('streamGlob throws synchronously at invocation on an already-revoked mount'
   await t.throwsAsync(() => E(mount).streamGrep('x'), {
     message: /Mount has been revoked/,
   });
+});
+
+// streamGlob had no mid-stream revoke test: the prover deleted its per-yield
+// assertLive() and all tests still passed. Pin that a revoke between pulls cuts
+// the stream (the sorted path list is already materialized, so without the
+// liveness check the stream would keep yielding paths post-revoke).
+test('streamGlob rejects the next pull after a mid-stream revoke', async t => {
+  const root = makeTemporaryRoot(t, 'mount-stream-revoke-glob-');
+  for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt']) {
+    fs.writeFileSync(path.join(root, name), 'x\n');
+  }
+  const { mount, control } = makeRevocableMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers,
+  });
+
+  const iterator = iterateReader(E(mount).streamGlob('**'));
+  const first = await iterator.next();
+  t.false(first.done, 'a first path arrives before revocation');
+
+  await E(control).revoke();
+
+  await t.throwsAsync(() => iterator.next(), {
+    message: /Mount has been revoked/,
+  });
+});
+
+// A sparse streamGrep (one match up front, then many non-matching files) must
+// observe a mid-stream revoke rather than reading every remaining file to the
+// end of the walk. Without the per-path-batch liveness check the per-yield
+// assertLive() never fires again (no further match), so the daemon would drain
+// the whole tree and the stream would end { done: true }, never observing the
+// revoke (assessor finding: 199 further readFileText calls, consumer saw done).
+test('a sparse streamGrep observes a mid-stream revoke without reading to the end of the walk', async t => {
+  const root = makeTemporaryRoot(t, 'mount-stream-sparse-revoke-');
+  const total = 200;
+  for (let i = 0; i < total; i += 1) {
+    // Zero-padded so the sorted walk order is stable; only the first file
+    // matches, so after the first pull no further yield ever occurs.
+    fs.writeFileSync(
+      path.join(root, `f${String(i).padStart(3, '0')}.txt`),
+      i === 0 ? 'needle here\n' : 'no match on this line\n',
+    );
+  }
+  const { powers, counters } = countingPowers();
+  const { mount, control } = makeRevocableMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers: powers,
+  });
+
+  const iterator = iterateReader(E(mount).streamGrep('needle'));
+  const first = await iterator.next();
+  t.false(first.done, 'the single match arrives before revocation');
+  t.is(/** @type {any} */ (first.value).file, 'f000.txt');
+
+  const readsAtRevoke = counters.readFileText;
+  await E(control).revoke();
+
+  // The next pull rejects — the stream never ends clean past a revoke.
+  await t.throwsAsync(() => iterator.next(), {
+    message: /Mount has been revoked/,
+  });
+  // And the revoke was observed within one path batch, not after draining the
+  // whole tree of non-matching files.
+  t.true(
+    counters.readFileText <= readsAtRevoke + 2,
+    `post-revoke reads are bounded to one path batch: ${counters.readFileText -
+      readsAtRevoke} more after revoke, of ${total - 1} remaining files`,
+  );
 });
 
 // --- Confinement and denial parity: secrets and escapes never surface ---
@@ -392,6 +468,56 @@ test('a stream element that violates the readPattern breaks the stream with an e
   await t.throwsAsync(() => collect(badReader), {
     message: /Must be a string/,
   });
+});
+
+// --- Long lines: the readPattern must not cap match length below eager grep ---
+// The reader pump enforces readPattern with mustMatch on every element; a bare
+// M.string() caps at 100,000 chars and a throw there aborts the whole stream.
+// Eager grep has no such cap, so an over-limit match line is a stream-only
+// parity break unless the readPattern carries an explicit large stringLengthLimit.
+
+test('streamGrep streams a match line longer than the default string-length limit', async t => {
+  const root = makeTemporaryRoot(t, 'mount-stream-long-line-');
+  const atLimit = 'a'.repeat(100_000); // exactly the default M.string() limit
+  const overLimit = 'b'.repeat(100_001); // one past it — the regression boundary
+  // ok / big / ok: a short match, then the over-limit match, then two more short
+  // matches. Under a bare M.string() the over-limit element throws in the pump
+  // and every later match is lost; all four must arrive here, in order.
+  const source = [
+    'needle short-one',
+    `needle ${overLimit}`,
+    `needle ${atLimit}`,
+    'needle short-two',
+  ].join('\n');
+  fs.writeFileSync(path.join(root, 'big.txt'), `${source}\n`);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  const records = await collect(E(mount).streamGrep('needle'));
+  t.is(records.length, 4, 'every matching line streams, long lines included');
+  const longText = /** @type {string} */ (records[1].text);
+  t.true(
+    longText.length > 100_000,
+    'the over-limit fixture line is genuinely past the default limit',
+  );
+  t.is(
+    longText,
+    `needle ${overLimit}`,
+    'the > 100,000-char match line streams whole, untruncated',
+  );
+
+  // Parity with eager grep on the same fixture: same count, same text.
+  const eager = await E(mount).grep('needle');
+  t.is(
+    records.length,
+    eager.length,
+    'stream and eager grep agree on match count',
+  );
+  t.deepEqual(
+    records.map(record => /** @type {any} */ (record).text),
+    eager.map(match => match.text),
+    'stream and eager grep agree on match text, the long line included',
+  );
 });
 
 // --- Record correspondence: { line, text } identifies the matched source line ---
@@ -599,7 +725,7 @@ test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
   t.timeout(120_000);
   const root = makeTemporaryRoot(t, 'mount-stream-clamp-');
   // More one-match files than the ceiling, so "clamped to 1024" is observably
-  // distinct from "reads them all". One matching line per file ⇒ one element
+  // distinct from "reads them all". One matching line per file => one element
   // (and one readFileText) per file.
   const total = STREAM_BUFFER_MAX + 100;
   for (let i = 0; i < total; i += 1) {
@@ -649,7 +775,7 @@ test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
 // still eventually rejects. [breaker finding 1]
 
 test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buffer', async t => {
-  const root = makeTemporaryRoot(t, 'mount-stream-revoke-buf-');
+  const root = makeTemporaryRoot(t, 'mount-stream-revoke-buffer-');
   const total = 40;
   for (let i = 0; i < total; i += 1) {
     fs.writeFileSync(
