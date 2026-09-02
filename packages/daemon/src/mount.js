@@ -286,7 +286,7 @@ const assertValidSegment = segment => {
     segment.includes('\0')
   ) {
     throw new Error(
-      `Path segment must not contain '/', '\\', or '\\0' (a string is one segment; pass ["dir", "file.txt"] or entry("dir/file.txt") for nested paths): ${q(segment)}`,
+      `Path segment must not contain '/', '\\', or '\\0' (a string is one segment; pass ["dir", "file.txt"] for nested paths): ${q(segment)}`,
     );
   }
 };
@@ -667,25 +667,17 @@ const makeMountExo = ctx => {
   };
 
   /**
-   * `entry()` is the one mount API where a string is a slash-joined
-   * selector rather than a single name.  Other path-bearing convenience
-   * methods keep their existing single-name string compatibility.
-   *
-   * @param {string | readonly string[]} pathArg
+   * @param {string | readonly string[]} pathArgument
    * @returns {string[]}
    */
-  const segmentsFromEntryPathArg = pathArg => {
-    if (Array.isArray(pathArg)) {
-      return normalizeSegments(currentSegments, pathArg, deniedSegments);
+  const segmentsFromEntryPathArgument = pathArgument => {
+    if (Array.isArray(pathArgument)) {
+      return normalizeSegments(currentSegments, pathArgument, deniedSegments);
     }
-    if (typeof pathArg !== 'string') {
+    if (typeof pathArgument !== 'string') {
       throw new Error('entry() path must be a string or array');
     }
-    return normalizeSegments(
-      currentSegments,
-      pathArg.split('/'),
-      deniedSegments,
-    );
+    return normalizeSegments(currentSegments, [pathArgument], deniedSegments);
   };
 
   /**
@@ -963,7 +955,7 @@ const makeMountExo = ctx => {
       if (typeof pathArg === 'string' && pathArg.includes('/')) {
         const cause = /** @type {Error} */ (error);
         throw new Error(
-          `${cause.message}; use an array of path segments or entry() for a slash-joined path`,
+          `${cause.message}; use an array of path segments for a nested path`,
           { cause: error },
         );
       }
@@ -1026,9 +1018,9 @@ const makeMountExo = ctx => {
     });
   };
 
-  const entry = pathArg => {
+  const entry = pathArgument => {
     assertLive();
-    return makeEntry(segmentsFromEntryPathArg(pathArg));
+    return makeEntry(segmentsFromEntryPathArgument(pathArgument));
   };
 
   const makeDirectory = async pathArg => {

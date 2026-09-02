@@ -294,14 +294,22 @@ test('EndoMount.makeDirectory returns a sub-mount (Directory.makeDirectory shape
   );
 });
 
-test('EndoMount.entry accepts slash-joined string selectors', async t => {
+test('EndoMount.entry treats a string as one path segment', async t => {
   const { mount } = makeConfiguredMount(t);
-  const entry = await E(mount).entry('a/b/../c.txt');
-  t.deepEqual(await E(entry).segments(), ['a', 'c.txt']);
-  t.is(await E(entry).displayPath(), 'a/c.txt');
+  const entryFromString = await E(mount).entry('c.txt');
+  const entryFromArray = await E(mount).entry(['c.txt']);
+  t.deepEqual(
+    await E(entryFromString).segments(),
+    await E(entryFromArray).segments(),
+  );
+  t.is(await E(entryFromString).displayPath(), 'c.txt');
 
-  await E(mount).writeText(entry, 'via-entry');
-  t.is(await E(mount).readText(['a', 'c.txt']), 'via-entry');
+  await E(mount).writeText(entryFromString, 'via-entry');
+  t.is(await E(mount).readText(['c.txt']), 'via-entry');
+
+  await t.throwsAsync(() => E(mount).entry('a/c.txt'), {
+    message: /must not contain/,
+  });
 });
 
 test('EndoMount.readOnly listTree recursively lists a sub-tree', async t => {
