@@ -1,5 +1,5 @@
 // @ts-check
-/* global clearInterval, process, setInterval, setTimeout */
+/* global clearInterval, setInterval, setTimeout */
 
 /**
  * Test-only seam for the persist-then-commit window in formulateWithCommit.
@@ -22,9 +22,13 @@
  * unit tests of manager internals.
  */
 
-import fs from 'fs';
-
 /** @import { FormulaIdentifier } from './types.js' */
+
+// Node exposes this escape hatch without adding a builtin import to the XS
+// compartment graph.  XS has no `process` or `getBuiltinModule`, so the test
+// seam remains a no-op there.
+/** @type {typeof import('fs') | undefined} */
+const fs = globalThis.process?.getBuiltinModule?.('fs');
 
 /** @type {() => Promise<void>} */
 let afterPersistBeforeCommit = async () => {};
@@ -67,8 +71,8 @@ export const setPinTransientForTests = fn => {
     clearInterval(pinPollTimer);
     pinPollTimer = null;
   }
-  const hookPath = process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
-  if (!hookPath || !fn) {
+  const hookPath = globalThis.process?.env?.ENDO_FORMULA_COMMIT_HOOK_PATH;
+  if (!fs || !hookPath || !fn) {
     return;
   }
   const pinTransient = fn;
@@ -171,8 +175,8 @@ const waitForRelease = async hookPath => {
  * @returns {Promise<void>}
  */
 const runEnvFileHook = async () => {
-  const hookPath = process.env.ENDO_FORMULA_COMMIT_HOOK_PATH;
-  if (!hookPath) {
+  const hookPath = globalThis.process?.env?.ENDO_FORMULA_COMMIT_HOOK_PATH;
+  if (!fs || !hookPath) {
     return;
   }
   let text = '';
