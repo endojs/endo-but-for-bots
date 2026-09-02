@@ -161,7 +161,7 @@ export const MgmtView = ({ powers }) => {
             h('span', { class: 'mgmt-label' }, 'Status'),
             h(
               'span',
-              { class: phaseClass(status && status.phase) },
+              { class: phaseClass(status?.phase) },
               (status && status.phase) || 'unknown',
             ),
           ),
@@ -179,7 +179,7 @@ export const MgmtView = ({ powers }) => {
             'div',
             { class: 'mgmt-row' },
             h('span', { class: 'mgmt-label' }, 'Revision'),
-            h('code', { class: 'mgmt-value' }, shortRev(status && status.rev)),
+            h('code', { class: 'mgmt-value' }, shortRev(status?.rev)),
           ),
           status && status.message
             ? h(
