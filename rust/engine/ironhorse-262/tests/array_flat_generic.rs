@@ -63,6 +63,10 @@ fn flat_propagates_receiver_depth_proxy_and_target_failures() {
         "var c={}; Object.defineProperty(c,Symbol.species,{value:function(){return Object.preventExtensions({})}}); var a=[1];a.constructor=c;var caught=false;try{a.flat()}catch(e){caught=e instanceof TypeError} caught",
         "true",
     );
+    assert_result_agrees(
+        "var q=Proxy.revocable([],{});var p=q.proxy;q.revoke();var z=[p].flat(0)[0]===p;var n=[p].flat(-1)[0]===p;var t=false;try{[p].flat(1)}catch(e){t=e instanceof TypeError}''+z+','+n+','+t",
+        "true,true,true",
+    );
 }
 
 #[test]
