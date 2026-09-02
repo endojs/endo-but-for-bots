@@ -249,7 +249,7 @@ therefore begins by parsing each raw hint **once** into an internal
 alone crosses the return boundary, `scope` a `ScopeTag | undefined` recovered by
 splitting the `#scope=` fragment on its first colon (§ 1), or read from the flat
 `scope` key of the record-form hint (§ 3). This `parseHint` step is the one
-place the string↔struct boundary is crossed; every branch below reads the parsed
+place the string<->struct boundary is crossed; every branch below reads the parsed
 `scope`, while `h` stays a `ConnectionHint` throughout, so both the input and the
 output type are `ConnectionHint[]` and no parsed-struct type leaks into the
 public shape. `parseHint` classifies each hint into one of three dispositions:
@@ -301,7 +301,7 @@ selectRoutes(hints, localScope, order = defaultLocalityOrder):
 `costOf(kind, order)` takes a bare `<kind>` string at every call site; the
 `via=` and global branches pass a literal (`"gateway"`, `"global"`) while the
 ordinary branch passes `scope.kind`. `order` is the **configurable locality
-order**, a `LocalityOrder` (`Record<string, number>`, `<kind>` → cost) threaded
+order**, a `LocalityOrder` (`Record<string, number>`, `<kind>` -> cost) threaded
 in as a parameter — defaulted to the table below, overridden per deployment by
 the `order` argument to `makeLocalScope`/`selectRoutes` (the documented
 configuration surface for the LAN-client-isolation example above). Its default:
@@ -505,12 +505,12 @@ except where noted as deferred to the follow-on that owns the mechanism.
 | Case 4 — loopback/same-host | Connector holding `host:<H>` keeps a `#scope=host:<H>` `127.0.0.1` hint; a connector without it drops the scoped form. |
 | Case 5 — home hub | Connector holding `lan:<L>` + `hub:<K>` ranks the direct LAN address below the hub relay, both below global. |
 | Case 6 — gateway's children | A `via=`/`dest=gateway:<G>` compound hint is always kept and ranked at `gateway` cost regardless of local scope; its embedded gateway locator's hints are filtered recursively. (Introduction-protocol behavior itself deferred to the gateway-relayed-introduction follow-on.) |
-| § 3 scope-blind tolerance | A scope-blind parser fed a `#scope=…` hint recovers the same working transport-locator it would today (fragment ignored, no worse). |
+| § 3 scope-blind tolerance | A scope-blind parser fed a `#scope=...` hint recovers the same working transport-locator it would today (fragment ignored, no worse). |
 | Unscoped-loopback transition (§ 4) | An **absent-scope** `127.0.0.1`/`10.x`/domain-socket hint is ranked at `host` cost, **not** `global` — never the works-anywhere tail; an absent-scope public address stays `global`. |
 | Unknown-kind fallback (§ 4) | A hint carrying a `<kind>` absent from the connector's `order` costs the `global` cost (fail closed), and the cheapest-first sort stays total. |
 | Malformed scope fail-safe (§ 4) | A hint with a `#scope=` fragment that does not split into non-empty `<kind>:<id>` is dropped, never promoted to global. |
 | ScopeTag equality (§ 1–2) | Two independently-built tags with equal `kind`/`id` compare equal through `localScope.has` and the wire-string-keyed `tags` map (no referential-equality false-negative). |
-| Security — no reach by travel | A narrow-scope hint reaching a connector without the tag is dropped; the co-location→authority separation is asserted at the design level and verified structurally on the eventual implementation PR (handshake gating is out of `selectRoutes`' unit scope). |
+| Security — no reach by travel | A narrow-scope hint reaching a connector without the tag is dropped; the co-location->authority separation is asserted at the design level and verified structurally on the eventual implementation PR (handshake gating is out of `selectRoutes`' unit scope). |
 
 The async-discovery re-rank (a tag learned via `onChange` after `selectRoutes`
 ran promotes a now-cheaper local route) is called out in Open Questions and its
