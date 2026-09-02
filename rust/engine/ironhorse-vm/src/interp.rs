@@ -17694,6 +17694,20 @@ impl Interp {
         Ok(body_start)
     }
 
+    /// Invoke a callback through the shared, complete ECMAScript `Call`
+    /// dispatcher. Native algorithms use this name at callback-taking sites;
+    /// keeping it as a thin wrapper prevents those sites from growing their
+    /// own incompatible callable-shape subsets.
+    fn run_callback(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Halt> {
+        self.invoke_value(code, func, this, args)
+    }
+
     /// Synchronously invoke a user-function callback `func` with receiver
     /// `this` and `args`, running its body to `END` and returning its
     /// completion value — the re-entrant substrate the callback-taking
@@ -17704,7 +17718,7 @@ impl Interp {
     /// exactly as an ordinary return does. A non-user-function callback (a
     /// native, or a non-callable) self-names an honest skip. Propagates a
     /// callback throw / meter abort to the caller.
-    fn run_callback(
+    fn run_user_callback(
         &mut self,
         code: &[u8],
         func: Slot,
@@ -23940,12 +23954,10 @@ impl Interp {
         }
     }
 
-    /// A fully general `Call(F, thisArg, args)` mirroring the `RUN`-opcode
-    /// dispatch: a **promise resolving function** settles its bound promise, a
-    /// native prototype method / plain native / bound function each take their
-    /// dedicated path, and a user function enters its bytecode body. The
-    /// value-stack frame `[THIS, FUNCTION, RESULT, FRAME, args…]` is built and
-    /// the single result popped. `F` must already be verified callable.
+    /// Compatibility alias for the shared `Call(F, thisArg, args)` dispatcher.
+    /// Kept at the iterator/Promise sites so their abstract-operation naming
+    /// remains readable; all callable shapes are dispatched by
+    /// [`Self::invoke_value`].
     fn call_any(
         &mut self,
         code: &[u8],
@@ -23953,67 +23965,7 @@ impl Interp {
         this: Slot,
         args: &[Slot],
     ) -> Result<Slot, Halt> {
-        let f = match func.value {
-            Payload::Reference(r) if func.kind == Kind::Reference => r,
-            _ => return Err(self.catchable_type_error()),
-        };
-        // A promise resolve/reject function (a capability's settler): it carries
-        // a method marker for `typeof`, but is dispatched by its
-        // `promise_functions` entry, not `call_native_method`.
-        if self.promise_functions.contains_key(&f) {
-            let base = self.stack.len();
-            self.push(this);
-            self.push(func);
-            self.push(Slot::undefined());
-            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-            for a in args {
-                self.push(*a);
-            }
-            return match self.call_promise_function(f, base, args.len()) {
-                Ok(()) => Ok(self.pop()),
-                Err(h) => {
-                    self.stack.truncate(base);
-                    Err(h)
-                }
-            };
-        }
-        if let Some(nm) = self.method_of(f) {
-            let base = self.stack.len();
-            self.push(this);
-            self.push(func);
-            self.push(Slot::undefined());
-            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-            for a in args {
-                self.push(*a);
-            }
-            return match self.call_native_method(nm, base, args.len(), code) {
-                Ok(()) => Ok(self.pop()),
-                Err(h) => {
-                    self.stack.truncate(base);
-                    Err(h)
-                }
-            };
-        }
-        if self.native_of(f).is_some() && !self.bound_functions.contains_key(&f) {
-            let n = self.native_of(f).unwrap();
-            let base = self.stack.len();
-            self.push(this);
-            self.push(func);
-            self.push(Slot::undefined());
-            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-            for a in args {
-                self.push(*a);
-            }
-            return match self.call_native(n, base, args.len(), false, code) {
-                Ok(()) => Ok(self.pop()),
-                Err(h) => {
-                    self.stack.truncate(base);
-                    Err(h)
-                }
-            };
-        }
-        // A user (bytecode) or bound function.
-        self.run_callback(code, func, this, args)
+        self.invoke_value(code, func, this, args)
     }
 
     /// [`Self::call_any`] with a JS throw captured as `Ok(Err(thrown))` (a real
@@ -28475,6 +28427,11 @@ impl Interp {
                     }
                     _ => false,
                 };
+                // IsCallable is also part of the builtin-tag selection and
+                // precedes the observable Get(@@toStringTag). A tag getter may
+                // revoke a callable Proxy, but that cannot retroactively change
+                // the already-selected Function builtin tag.
+                let is_callable = self.is_callable_value(this);
                 // A `Symbol.toStringTag` string on the receiver's chain wins
                 // (`Object.prototype.toString` step 15). Only the Intl
                 // formatter/segmenter objects carry one in the frozen profile —
@@ -28521,7 +28478,7 @@ impl Interp {
                         Payload::Reference(_) if is_array => b"[object Array]",
                         Payload::BigInt(_) => b"[object BigInt]",
                         _ if wrapper_tag.is_some() => wrapper_tag.unwrap(),
-                        _ if self.is_callable_value(this) => b"[object Function]",
+                        _ if is_callable => b"[object Function]",
                         _ => b"[object Object]",
                     };
                     self.meter.tick_chunk_new(text.len() as u64);
@@ -42973,10 +42930,10 @@ impl Interp {
         Ok(Some(m))
     }
 
-    /// Invoke any callable value with an explicit `this` and argument list —
-    /// the substrate a trap dispatch and `Reflect.apply` need. Routes a user /
-    /// bound function through `run_callback`, a native or native-method through
-    /// its stack-frame dispatch, and a callable proxy through its `apply` trap.
+    /// The single complete `Call(F, thisArg, args)` dispatcher. Promise
+    /// resolving functions, bound chains, native functions/methods, bytecode
+    /// functions, and callable proxies all route through this operation so
+    /// abstract `Call` sites cannot recognize incompatible callable subsets.
     fn invoke_value(
         &mut self,
         code: &[u8],
@@ -42991,13 +42948,42 @@ impl Interp {
         if self.proxies.contains_key(&f) {
             return self.proxy_call(code, f, this, args);
         }
+        // Promise resolve/reject functions carry a native-method marker for
+        // reflection, but their [[Call]] settles the captured promise.
+        if self.promise_functions.contains_key(&f) {
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_promise_function(f, base, args.len()) {
+                Ok(()) => Ok(self.pop()),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
+        }
+        // BoundFunctionExoticObject.[[Call]] prepends this level's arguments,
+        // substitutes its bound this, and redispatches the target. Recursing
+        // naturally supports bound chains and every callable target shape.
+        if let Some(data) = self.bound_functions.get(&f).cloned() {
+            let mut combined = data.args;
+            combined.extend_from_slice(args);
+            self.meter
+                .tick_raw(BIND_CALL_METERING + combined.len() as u64 * BIND_CALL_PER_ARG);
+            let target = Slot::of(Kind::Reference, Payload::Reference(data.target));
+            return self.invoke_value(code, target, data.this_arg, &combined);
+        }
         let fi = match self.functions.get(&f) {
             Some(fi) => fi,
             None => return Err(self.catchable_type_error()),
         };
         let native = fi.native;
         let method = fi.method;
-        let is_bound = self.bound_functions.contains_key(&f);
         if native.is_some() || method.is_some() {
             // Native / native-method: build the [THIS, FUNCTION, RESULT, FRAME]
             // frame + args, dispatch, and take the pushed result.
@@ -43009,15 +42995,20 @@ impl Interp {
             for a in args {
                 self.push(*a);
             }
-            if let Some(n) = native {
-                self.call_native(n, base, args.len(), false, code)?;
+            let result = if let Some(n) = native {
+                self.call_native(n, base, args.len(), false, code)
             } else {
-                self.call_native_method(method.unwrap(), base, args.len(), code)?;
-            }
-            return Ok(self.pop());
+                self.call_native_method(method.unwrap(), base, args.len(), code)
+            };
+            return match result {
+                Ok(()) => Ok(self.pop()),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
         }
-        let _ = is_bound; // run_callback trampolines a bound target itself.
-        self.run_callback(code, func, this, args)
+        self.run_user_callback(code, func, this, args)
     }
 
     /// Construct any constructor value with an explicit argument list — the
@@ -45798,9 +45789,8 @@ impl Interp {
         Ok(())
     }
 
-    /// Invoke one of the callable methods selected by `ToPrimitive`.  User
-    /// functions re-enter the bytecode interpreter; the three intrinsic
-    /// conversion methods are evaluated directly with their real receiver.
+    /// Invoke one of the callable methods selected by `ToPrimitive` through
+    /// the shared `Call` dispatcher.
     fn call_primitive_method(
         &mut self,
         code: &[u8],
@@ -45808,36 +45798,13 @@ impl Interp {
         receiver: Slot,
         args: &[Slot],
     ) -> Result<Slot, Halt> {
-        let f = match method.value {
-            Payload::Reference(f) if self.functions.contains_key(&f) => f,
+        if !self.is_callable_value(method) {
             // GetMethod/Call requires a callable conversion hook. A present
             // non-callable `@@toPrimitive`, `valueOf`, or `toString` throws a
             // realm-local TypeError that surrounding JS can catch.
-            _ => return Err(self.catchable_type_error()),
-        };
-        match self.method_of(f) {
-            Some(native_method) => {
-                let base = self.stack.len();
-                self.push(receiver);
-                self.push(method);
-                self.push(Slot::undefined());
-                self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                for argument in args {
-                    self.push(*argument);
-                }
-                match self.call_native_method(native_method, base, args.len(), code) {
-                    Ok(()) => Ok(self.pop()),
-                    Err(halt) => {
-                        self.stack.truncate(base);
-                        Err(halt)
-                    }
-                }
-            }
-            None if self.functions[&f].native.is_some() => {
-                Err(Halt::Unsupported("to_primitive:native-method"))
-            }
-            None => self.run_callback(code, method, receiver, args),
+            return Err(self.catchable_type_error());
         }
+        self.invoke_value(code, method, receiver, args)
     }
 
     /// ECMAScript `ToPrimitive`, including `@@toPrimitive` and the ordinary
