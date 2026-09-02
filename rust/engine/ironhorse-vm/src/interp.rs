@@ -2929,6 +2929,29 @@ enum JsonSource {
     Object(Vec<(u16, JsonSource)>),
 }
 
+/// One string property name retained by `JSON.stringify`.  The id drives the
+/// VM's property MOP, `key` is the exact String value passed to `toJSON` and a
+/// replacer callback, and `units` preserves the UTF-16 spelling used in the
+/// emitted JSON text (including a lone surrogate supplied by a replacer list).
+#[derive(Clone, Debug)]
+struct JsonPropertyName {
+    id: u16,
+    key: Slot,
+    units: Vec<u16>,
+}
+
+/// Transient state for one `JSON.stringify` invocation.  This deliberately
+/// lives outside the persistent VM state: the spec's Stack/Indent/Gap and
+/// PropertyList exist only for the duration of the native call.
+#[derive(Clone, Debug, Default)]
+struct JsonStringifyState {
+    replacer: Option<Slot>,
+    property_list: Option<Vec<JsonPropertyName>>,
+    gap: Vec<u16>,
+    indent: Vec<u16>,
+    stack: Vec<crate::value::SlotIndex>,
+}
+
 /// The program-local symbol ids of the RegExp accessor getters, resolved at
 /// [`Interp::link_intrinsics`]. Each is `None` when the program never names
 /// that getter.
@@ -7216,11 +7239,11 @@ impl Interp {
         let object_proto = self.object_proto;
         let json = self.slots.alloc(Slot::instance(object_proto));
         self.intrinsics.insert("JSON", json);
-        for (name, m) in [
-            ("stringify", NativeMethod::JsonStringify),
-            ("parse", NativeMethod::JsonParse),
+        for (name, m, arity) in [
+            ("stringify", NativeMethod::JsonStringify, 3),
+            ("parse", NativeMethod::JsonParse, 2),
         ] {
-            let mf = self.alloc_method(m);
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((json, name, mf));
         }
     }
@@ -33320,9 +33343,6 @@ impl Interp {
         };
         match m {
             NativeMethod::JsonStringify => {
-                // A replacer/space argument (2nd/3rd) changes the output and
-                // the traversal; ironhorse models the no-replacer / no-space subset
-                // and self-names the rest.
                 let arg1 = self
                     .stack
                     .get(base + 5)
@@ -33333,34 +33353,51 @@ impl Interp {
                     .get(base + 6)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                if (argc > 1 && arg1.kind != Kind::Undefined && arg1.kind != Kind::Null)
-                    || (argc > 2 && arg2.kind != Kind::Undefined && arg2.kind != Kind::Null)
-                {
-                    return Err(Halt::Unsupported("JSON.stringify:replacer-or-space"));
-                }
-                // A callable top-level value serializes to nothing but still
-                // runs the reference branch's `toJSON` probe, a corner ironhorse
-                // does not meter — self-name it rather than risk a divergence.
-                if arg0.kind == Kind::Reference {
-                    if let Payload::Reference(r) = arg0.value {
-                        if self.functions.contains_key(&r) {
-                            return Err(Halt::Unsupported("JSON.stringify:callable-top"));
-                        }
-                    }
-                }
+                let (replacer, property_list) =
+                    self.json_stringify_replacer(code, arg1)?;
+                let gap = self.json_stringify_gap(code, arg2)?;
+                let mut state = JsonStringifyState {
+                    replacer,
+                    property_list,
+                    gap,
+                    ..JsonStringifyState::default()
+                };
                 self.meter.tick_raw(JSON_STRINGIFY_SETUP_METERING);
-                let mut visited: Vec<crate::value::SlotIndex> = Vec::new();
                 // `cost` accumulates the recursive `fxStringifyJSONProperty` node
                 // metering (exclusive of the result chunk); a top-level
                 // reference pays [`JSON_STRINGIFY_TOP_REFERENCE_METERING`] once.
                 let mut cost: u64 = 0;
-                let out = self.json_serialize(arg0, &mut visited, &mut cost)?;
+                let empty_id = self.intern_key("");
+                let empty_key = self.property_key_slot(empty_id)?;
+                let root_name = JsonPropertyName {
+                    id: empty_id,
+                    key: empty_key,
+                    units: Vec::new(),
+                };
+                // A replacer function observes the spec-created wrapper as its
+                // root receiver.  Without one, no callback can observe that
+                // wrapper, so pass the already-known root value directly and
+                // avoid retaining a semantically invisible heap object.
+                let out = if state.replacer.is_some() {
+                    let holder = self.slots.alloc(Slot::instance(self.object_proto));
+                    self.set_own_unmetered(holder, empty_id, arg0);
+                    self.json_stringify_property(code, holder, &root_name, &mut state, &mut cost)?
+                } else {
+                    self.json_stringify_value(
+                        code,
+                        arg0,
+                        &root_name,
+                        None,
+                        &mut state,
+                        &mut cost,
+                    )?
+                };
                 if arg0.kind == Kind::Reference && out.is_some() {
                     cost += JSON_STRINGIFY_TOP_REFERENCE_METERING;
                 }
                 self.meter.tick_raw(cost);
                 match out {
-                    Some(bytes) => Ok(self.new_string_metered(&bytes)),
+                    Some(units) => Ok(self.new_string_units(&units)),
                     // A value that serializes to nothing (undefined / symbol)
                     // yields `undefined`, with no chunk (setup metered only).
                     None => Ok(Slot::undefined()),
@@ -33413,206 +33450,407 @@ impl Interp {
         }
     }
 
-    /// `SerializeJSONProperty` (`fxStringifyJSONProperty`, no replacer/space):
-    /// the JSON text of `value`, or `None` when it serializes to nothing
-    /// (undefined / callable / symbol). Builds into a plain byte buffer with no
-    /// metering — XS's working buffer is an unmetered C-malloc, and only the
-    /// final result chunk (charged by the caller) meters.
-    fn json_serialize(
+    /// Resolve JSON.stringify's replacer argument into either a callback or
+    /// the de-duplicated PropertyList created from an Array (including an
+    /// Array Proxy).  Reads are live and ordered; String/Number wrappers use
+    /// their observable coercions exactly where the abstract operation does.
+    fn json_stringify_replacer(
         &mut self,
-        value: Slot,
-        visited: &mut Vec<crate::value::SlotIndex>,
+        code: &[u8],
+        replacer: Slot,
+    ) -> Result<(Option<Slot>, Option<Vec<JsonPropertyName>>), Halt> {
+        if self.is_callable_value(replacer) {
+            return Ok((Some(replacer), None));
+        }
+        let inst = match replacer.value {
+            Payload::Reference(inst) if replacer.kind == Kind::Reference => inst,
+            _ => return Ok((None, None)),
+        };
+        if !self.array_generic_is_array(inst)? {
+            return Ok((None, None));
+        }
+        let length_value = self.arraylike_length(code, inst, replacer)?;
+        let length = self.to_length_value(code, length_value)?;
+        if length > u64::from(u32::MAX) {
+            return Err(Halt::Unsupported("JSON.stringify:oversized-replacer"));
+        }
+        let mut property_list = Vec::new();
+        for index in 0..length {
+            let id = self.intern_key(&index.to_string());
+            let item = self.mop_get(code, inst, id, replacer)?;
+            let string = match item.kind {
+                Kind::String => Some(item),
+                Kind::Integer | Kind::Number => Some(self.to_string_slot_metered(item)),
+                Kind::Reference => {
+                    let wrapped = match item.value {
+                        Payload::Reference(object) => self.wrapper_data.get(&object).copied(),
+                        _ => None,
+                    };
+                    match wrapped.map(|value| value.kind) {
+                        Some(Kind::String) => Some(self.to_string_slot(code, item)?),
+                        // PropertyList uses ToString on a Number wrapper
+                        // directly.  Its `toString` override therefore wins;
+                        // routing through ToNumber/valueOf reverses the
+                        // required coercion order and can throw spuriously.
+                        Some(Kind::Integer | Kind::Number) => {
+                            Some(self.to_string_slot(code, item)?)
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            let Some(key) = string else {
+                continue;
+            };
+            let units = match key.value {
+                Payload::String(offset) if key.kind == Kind::String => self.str_units(offset),
+                _ => continue,
+            };
+            if property_list
+                .iter()
+                .any(|existing: &JsonPropertyName| existing.units == units)
+            {
+                continue;
+            }
+            let id = self.to_property_id(code, key)?;
+            property_list.push(JsonPropertyName { id, key, units });
+        }
+        Ok((None, Some(property_list)))
+    }
+
+    /// Produce JSON.stringify's Gap string from the third argument.  A Number
+    /// (or Number wrapper) becomes at most ten spaces; a String (or String
+    /// wrapper) is truncated to ten UTF-16 code units, not Unicode scalars.
+    fn json_stringify_gap(&mut self, code: &[u8], space: Slot) -> Result<Vec<u16>, Halt> {
+        let wrapped_kind = match space.value {
+            Payload::Reference(object) if space.kind == Kind::Reference => {
+                self.wrapper_data.get(&object).map(|value| value.kind)
+            }
+            _ => None,
+        };
+        if matches!(space.kind, Kind::Integer | Kind::Number)
+            || matches!(wrapped_kind, Some(Kind::Integer | Kind::Number))
+        {
+            let number = self.to_number_value(code, space)?;
+            let n = numeric_of(&number).unwrap_or(f64::NAN);
+            let count = if n.is_nan() || n <= 0.0 {
+                0
+            } else if n >= 10.0 {
+                10
+            } else {
+                n.trunc() as usize
+            };
+            return Ok(vec![0x20; count]);
+        }
+        if space.kind == Kind::String || wrapped_kind == Some(Kind::String) {
+            let mut units = self.to_string_units(code, space)?;
+            units.truncate(10);
+            return Ok(units);
+        }
+        Ok(Vec::new())
+    }
+
+    /// `SerializeJSONProperty(key, holder)`: perform the live `Get`, then the
+    /// shared transformation and serialization path.
+    fn json_stringify_property(
+        &mut self,
+        code: &[u8],
+        holder: crate::value::SlotIndex,
+        name: &JsonPropertyName,
+        state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u8>>, Halt> {
+    ) -> Result<Option<Vec<u16>>, Halt> {
+        let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
+        let value = self.mop_get(code, holder, name.id, holder_slot)?;
+        self.json_stringify_value(code, value, name, Some(holder_slot), state, cost)
+    }
+
+    /// `GetV(value, id)` for the object/BigInt `toJSON` probe.  BigInt is the
+    /// sole primitive admitted by the specification at this step.
+    fn json_stringify_get_v(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+        id: u16,
+    ) -> Result<Slot, Halt> {
+        match value.value {
+            Payload::Reference(inst) if value.kind == Kind::Reference => {
+                self.mop_get(code, inst, id, value)
+            }
+            Payload::BigInt(_) if !self.bigint_proto.is_null() => {
+                self.mop_get(code, self.bigint_proto, id, value)
+            }
+            _ => Ok(Slot::undefined()),
+        }
+    }
+
+    /// The complete `SerializeJSONProperty` value phase: invoke an observable
+    /// `toJSON`, then the replacer callback, unwrap primitive wrapper objects,
+    /// reject BigInt, and finally emit a scalar, array, or ordinary object.
+    fn json_stringify_value(
+        &mut self,
+        code: &[u8],
+        mut value: Slot,
+        name: &JsonPropertyName,
+        holder: Option<Slot>,
+        state: &mut JsonStringifyState,
+        cost: &mut u64,
+    ) -> Result<Option<Vec<u16>>, Halt> {
+        if value.kind == Kind::Reference || value.kind == Kind::BigInt {
+            let to_json_id = self.intern_key("toJSON");
+            let to_json = self.json_stringify_get_v(code, value, to_json_id)?;
+            if self.is_callable_value(to_json) {
+                value = self.run_callback(code, to_json, value, &[name.key])?;
+            }
+        }
+        if let Some(replacer) = state.replacer {
+            let receiver = holder.expect("a replacer callback always has a holder");
+            value = self.run_callback(code, replacer, receiver, &[name.key, value])?;
+        }
+
+        if let Payload::Reference(object) = value.value {
+            if value.kind == Kind::Reference {
+                if let Some(wrapped) = self.wrapper_data.get(&object).copied() {
+                    value = match wrapped.kind {
+                        Kind::Boolean | Kind::BigInt => wrapped,
+                        Kind::Integer | Kind::Number => self.to_number_value(code, value)?,
+                        Kind::String => self.to_string_slot(code, value)?,
+                        _ => value,
+                    };
+                }
+            }
+        }
+
         match value.kind {
             Kind::Null => {
                 *cost += JSON_STRINGIFY_SCALAR_METERING;
-                Ok(Some(b"null".to_vec()))
+                Ok(Some("null".encode_utf16().collect()))
             }
-            Kind::Undefined => Ok(None),
+            Kind::Undefined | Kind::Symbol => Ok(None),
             Kind::Boolean => {
                 *cost += JSON_STRINGIFY_SCALAR_METERING;
-                Ok(Some(if matches!(value.value, Payload::Boolean(true)) {
-                    b"true".to_vec()
+                let text = if matches!(value.value, Payload::Boolean(true)) {
+                    "true"
                 } else {
-                    b"false".to_vec()
-                }))
+                    "false"
+                };
+                Ok(Some(text.encode_utf16().collect()))
             }
             Kind::Integer => match value.value {
-                Payload::Integer(i) => {
+                Payload::Integer(integer) => {
                     *cost += JSON_STRINGIFY_SCALAR_METERING;
-                    Ok(Some(i.to_string().into_bytes()))
+                    Ok(Some(integer.to_string().encode_utf16().collect()))
                 }
                 _ => Ok(None),
             },
             Kind::Number => match value.value {
-                Payload::Number(n) => {
+                Payload::Number(number) => {
                     *cost += JSON_STRINGIFY_SCALAR_METERING;
-                    Ok(Some(if n.is_finite() {
-                        number_to_ecma_string(n).into_bytes()
+                    let text = if number.is_finite() {
+                        number_to_ecma_string(number)
                     } else {
-                        b"null".to_vec()
-                    }))
+                        "null".to_string()
+                    };
+                    Ok(Some(text.encode_utf16().collect()))
                 }
                 _ => Ok(None),
             },
             Kind::String => match value.value {
-                Payload::String(off) => {
+                Payload::String(offset) => {
                     *cost += JSON_STRINGIFY_SCALAR_METERING;
-                    let units = self.str_units(off);
-                    Ok(Some(json_escape_string(&units)))
+                    Ok(Some(json_escape_string(&self.str_units(offset))))
                 }
                 _ => Ok(None),
             },
+            Kind::BigInt => Err(self.catchable_type_error()),
             Kind::Reference => {
                 let inst = match value.value {
-                    Payload::Reference(r) => r,
+                    Payload::Reference(inst) => inst,
                     _ => return Ok(None),
                 };
-                // A callable value serializes to nothing (`{}` / `null`), but XS
-                // still runs the reference branch's `mxGetID(_toJSON)` probe,
-                // whose cost ironhorse does not model here — self-name the corner
-                // rather than risk a computron divergence.
-                if self.functions.contains_key(&inst) {
-                    return Err(Halt::Unsupported("JSON.stringify:callable-value"));
+                if self.is_callable_value(value) {
+                    return Ok(None);
                 }
-                // A boxed wrapper (Number/String/Boolean object) unwraps to its
-                // primitive in XS — not modeled here; self-name.
-                if self.wrapper_data.contains_key(&inst) {
-                    return Err(Halt::Unsupported("JSON.stringify:wrapper-object"));
-                }
-                // A `toJSON` method would redirect the value; self-name if the
-                // object carries one.
-                if let Some(&tid) = self.symbol_ids.get("toJSON") {
-                    if self.find_property(inst, tid).is_some() {
-                        return Err(Halt::Unsupported("JSON.stringify:toJSON"));
-                    }
-                }
-                if visited.contains(&inst) {
-                    return Err(self.catchable_type_error());
-                }
-                visited.push(inst);
-                let out = if let Some((a_length, a_items)) = self
-                    .arrays
-                    .get(&inst)
-                    .map(|a| (a.length, a.items().clone()))
-                {
-                    // `fxIsArray` branch: enter cost, then one iteration body per
-                    // index (paid for holes too — they serialize as `null`), plus
-                    // the recursive child cost each element adds through `cost`.
-                    *cost += JSON_STRINGIFY_ARRAY_ENTER_METERING;
-                    if a_length > 0 {
-                        *cost += JSON_STRINGIFY_ARRAY_NONEMPTY_METERING;
-                    }
-                    let mut buf = vec![b'['];
-                    for i in 0..a_length {
-                        if i > 0 {
-                            buf.push(b',');
-                        }
-                        *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
-                        let elem = a_items
-                            .get(&i)
-                            .map(|s| Slot::of(s.kind, s.value))
-                            .unwrap_or_else(Slot::undefined);
-                        // A hole / undefined element serializes as `null` in
-                        // array context (a callable element self-names inside
-                        // `json_serialize`).
-                        match self.json_serialize(elem, visited, cost)? {
-                            Some(b) => buf.extend_from_slice(&b),
-                            None => buf.extend_from_slice(b"null"),
-                        }
-                    }
-                    buf.push(b']');
-                    buf
+                if self.array_generic_is_array(inst)? {
+                    self.json_stringify_array(code, inst, value, state, cost)
                 } else {
-                    // A runtime-interned key (a `JSON.parse`d object whose key
-                    // is neither a program symbol nor a boot default) has no
-                    // resolvable name in `symbol_names` — child-5's known
-                    // interned-key rendering gap. It would silently drop from
-                    // the key set and mis-serialize the object, so self-name
-                    // rather than emit a wrong result.
-                    if self.object_has_unnamed_own_key(inst) {
-                        visited.pop();
-                        return Err(Halt::Unsupported("JSON.stringify:interned-key"));
-                    }
-                    // An ordinary object: its own enumerable string-named
-                    // properties in insertion order, skipping values that
-                    // serialize to nothing.
-                    let keys = self.object_own_string_keys(inst);
-                    // Enter cost, one `XS_AT_KIND` keys-list slot per own key, and
-                    // the non-empty setup when the keys list is non-empty.
-                    *cost += JSON_STRINGIFY_OBJECT_ENTER_METERING;
-                    *cost += keys.len() as u64 * JSON_STRINGIFY_OBJECT_KEY_SLOT_METERING;
-                    if !keys.is_empty() {
-                        *cost += JSON_STRINGIFY_OBJECT_NONEMPTY_METERING;
-                    }
-                    let mut buf = vec![b'{'];
-                    let mut first = true;
-                    for (id, key) in keys {
-                        // Each enumerable own key runs the loop body
-                        // (`getOwnProperty`/`getAll`/`fxPushKeyString`) whether or
-                        // not its value emits; the key-string chunk is
-                        // `fxNewChunk(len+1)` rounded to 8-byte alignment.
-                        *cost += JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
-                            + (((key.len() as u64 + 1) + 7) & !7);
-                        let v = self.instance_get(inst, id);
-                        if let Some(vb) = self.json_serialize(v, visited, cost)? {
-                            if !first {
-                                buf.push(b',');
-                            }
-                            first = false;
-                            buf.extend_from_slice(&json_escape_string(
-                                &key.encode_utf16().collect::<Vec<u16>>(),
-                            ));
-                            buf.push(b':');
-                            buf.extend_from_slice(&vb);
-                        }
-                    }
-                    buf.push(b'}');
-                    buf
-                };
-                visited.pop();
-                Ok(Some(out))
+                    self.json_stringify_object(code, inst, value, state, cost)
+                }
             }
             _ => Ok(None),
         }
     }
 
-    /// An object's own **string-named** enumerable properties in insertion
-    /// order, as `(id, name)` — the `mxBehaviorOwnKeys(XS_EACH_NAME_FLAG)`
-    /// subset JSON serializes. Array-index keys and non-program symbols are
-    /// excluded (JSON keys are string names).
-    /// Whether `inst` carries an own property whose id resolves to no name in
-    /// `symbol_names` — a runtime-interned key (e.g. from `JSON.parse`) that
-    /// [`Self::object_own_string_keys`] would silently drop.
-    fn object_has_unnamed_own_key(&self, inst: crate::value::SlotIndex) -> bool {
-        let mut p = self.slots.get(inst).next;
-        while !p.is_null() {
-            let s = self.slots.get(p);
-            if s.id != crate::value::XS_NO_ID
-                && self.symbol_names.get((s.id - 1) as usize).is_none()
-            {
-                return true;
-            }
-            p = s.next;
+    /// `SerializeJSONArray`: snapshot `length`, then perform a live Get and
+    /// full value transformation for every index.  Missing/unsupported values
+    /// become `null`; indentation follows the invocation's UTF-16 Gap.
+    fn json_stringify_array(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+        state: &mut JsonStringifyState,
+        cost: &mut u64,
+    ) -> Result<Option<Vec<u16>>, Halt> {
+        if state.stack.contains(&inst) {
+            return Err(self.catchable_type_error());
         }
-        false
+        state.stack.push(inst);
+        let length_value = self.arraylike_length(code, inst, receiver)?;
+        let length = self.to_length_value(code, length_value)?;
+        if length > u64::from(u32::MAX) {
+            return Err(Halt::Unsupported("JSON.stringify:oversized-array"));
+        }
+        *cost += JSON_STRINGIFY_ARRAY_ENTER_METERING;
+        if length > 0 {
+            *cost += JSON_STRINGIFY_ARRAY_NONEMPTY_METERING;
+        }
+        let stepback = state.indent.clone();
+        state.indent.extend_from_slice(&state.gap);
+        let mut partial = Vec::with_capacity(length as usize);
+        for index in 0..length {
+            *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
+            let text = index.to_string();
+            let id = self.intern_key(&text);
+            let key = self.property_key_slot(id)?;
+            let name = JsonPropertyName {
+                id,
+                key,
+                units: text.encode_utf16().collect(),
+            };
+            partial.push(
+                self.json_stringify_property(code, inst, &name, state, cost)?
+                    .unwrap_or_else(|| "null".encode_utf16().collect()),
+            );
+        }
+        let indent = state.indent.clone();
+        state.indent = stepback.clone();
+        state.stack.pop();
+        let mut out = vec![b'[' as u16];
+        if !partial.is_empty() {
+            if state.gap.is_empty() {
+                for (index, element) in partial.iter().enumerate() {
+                    if index > 0 {
+                        out.push(b',' as u16);
+                    }
+                    out.extend_from_slice(element);
+                }
+            } else {
+                out.push(b'\n' as u16);
+                out.extend_from_slice(&indent);
+                for (index, element) in partial.iter().enumerate() {
+                    if index > 0 {
+                        out.push(b',' as u16);
+                        out.push(b'\n' as u16);
+                        out.extend_from_slice(&indent);
+                    }
+                    out.extend_from_slice(element);
+                }
+                out.push(b'\n' as u16);
+                out.extend_from_slice(&stepback);
+            }
+        }
+        out.push(b']' as u16);
+        Ok(Some(out))
     }
 
-    fn object_own_string_keys(&self, inst: crate::value::SlotIndex) -> Vec<(u16, String)> {
-        let mut names: Vec<(u16, String)> = Vec::new();
-        let mut p = self.slots.get(inst).next;
-        while !p.is_null() {
-            let s = self.slots.get(p);
-            if s.id != crate::value::XS_NO_ID {
-                if let Some(name) = self.symbol_names.get((s.id - 1) as usize) {
-                    names.push((s.id, name.clone()));
-                }
+    /// Snapshot the enumerable own String keys for SerializeJSONObject.  The
+    /// key list, each descriptor read, and later value Get all route through
+    /// the MOP, preserving Proxy traps and mutation between those operations.
+    fn json_stringify_own_names(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Vec<JsonPropertyName>, Halt> {
+        let mut names = Vec::new();
+        for key in self.mop_own_keys(code, inst)? {
+            if key.kind == Kind::Symbol {
+                continue;
             }
-            p = s.next;
+            let units = match key.value {
+                Payload::String(offset) if key.kind == Kind::String => self.str_units(offset),
+                _ => return Err(self.catchable_type_error()),
+            };
+            let id = self.to_property_id(code, key)?;
+            if self
+                .mop_get_own_property(code, inst, id)?
+                .is_some_and(|descriptor| descriptor.enumerable == Some(true))
+            {
+                names.push(JsonPropertyName { id, key, units });
+            }
         }
-        names.reverse();
-        names
+        Ok(names)
+    }
+
+    /// `SerializeJSONObject`: use the replacer PropertyList when present,
+    /// otherwise enumerate own string keys once, then Get each value live.
+    fn json_stringify_object(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        _receiver: Slot,
+        state: &mut JsonStringifyState,
+        cost: &mut u64,
+    ) -> Result<Option<Vec<u16>>, Halt> {
+        if state.stack.contains(&inst) {
+            return Err(self.catchable_type_error());
+        }
+        state.stack.push(inst);
+        let names = match &state.property_list {
+            Some(property_list) => property_list.clone(),
+            None => self.json_stringify_own_names(code, inst)?,
+        };
+        *cost += JSON_STRINGIFY_OBJECT_ENTER_METERING;
+        *cost += names.len() as u64 * JSON_STRINGIFY_OBJECT_KEY_SLOT_METERING;
+        if !names.is_empty() {
+            *cost += JSON_STRINGIFY_OBJECT_NONEMPTY_METERING;
+        }
+        let stepback = state.indent.clone();
+        state.indent.extend_from_slice(&state.gap);
+        let mut partial = Vec::new();
+        for name in &names {
+            *cost += JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
+                + (((name.units.len() as u64 + 1) + 7) & !7);
+            if let Some(value) = self.json_stringify_property(code, inst, name, state, cost)? {
+                let mut member = json_escape_string(&name.units);
+                member.push(b':' as u16);
+                if !state.gap.is_empty() {
+                    member.push(b' ' as u16);
+                }
+                member.extend_from_slice(&value);
+                partial.push(member);
+            }
+        }
+        let indent = state.indent.clone();
+        state.indent = stepback.clone();
+        state.stack.pop();
+        let mut out = vec![b'{' as u16];
+        if !partial.is_empty() {
+            if state.gap.is_empty() {
+                for (index, member) in partial.iter().enumerate() {
+                    if index > 0 {
+                        out.push(b',' as u16);
+                    }
+                    out.extend_from_slice(member);
+                }
+            } else {
+                out.push(b'\n' as u16);
+                out.extend_from_slice(&indent);
+                for (index, member) in partial.iter().enumerate() {
+                    if index > 0 {
+                        out.push(b',' as u16);
+                        out.push(b'\n' as u16);
+                        out.extend_from_slice(&indent);
+                    }
+                    out.extend_from_slice(member);
+                }
+                out.push(b'\n' as u16);
+                out.extend_from_slice(&stepback);
+            }
+        }
+        out.push(b'}' as u16);
+        Ok(Some(out))
     }
 
     /// Skip JSON whitespace (`fxParseJSONToken`'s space/tab/CR/LF cases). Never
@@ -49895,33 +50133,41 @@ fn cesu8_to_units(bytes: &[u8]) -> Vec<u16> {
 /// `fxStringifyJSONString` (`xsJSON.c`): the JSON-escaped, double-quoted form
 /// of a string, over its UTF-16 code `units`. Control characters below 0x20
 /// map to the short escapes (`\b\t\n\f\r`) or `\uXXXX`; `"` and `\` are
-/// backslash-escaped; any surrogate code unit becomes `\uXXXX` (matching the
-/// per-code-unit CESU-8 build — surrogate pairs are not recombined here);
-/// every other code unit is copied verbatim as its UTF-8 bytes. Output is a
-/// UTF-8 text buffer.
-fn json_escape_string(units: &[u16]) -> Vec<u8> {
-    let mut out = vec![b'"'];
-    let mut buf = [0u8; 4];
-    for &u in units {
+/// backslash-escaped; an unpaired surrogate code unit becomes `\uXXXX`, while
+/// a valid high/low pair is copied as the corresponding astral character;
+/// every other code unit is copied verbatim. Output remains UTF-16 so the
+/// optional indentation string can retain a code-unit truncation (and even a
+/// resulting lone surrogate) without a lossy Rust `String` round trip.
+fn json_escape_string(units: &[u16]) -> Vec<u16> {
+    let mut out = vec![b'"' as u16];
+    let mut index = 0;
+    while index < units.len() {
+        let u = units[index];
         match u {
-            8 => out.extend_from_slice(b"\\b"),
-            9 => out.extend_from_slice(b"\\t"),
-            10 => out.extend_from_slice(b"\\n"),
-            12 => out.extend_from_slice(b"\\f"),
-            13 => out.extend_from_slice(b"\\r"),
-            0x22 => out.extend_from_slice(b"\\\""),
-            0x5C => out.extend_from_slice(b"\\\\"),
+            8 => out.extend("\\b".encode_utf16()),
+            9 => out.extend("\\t".encode_utf16()),
+            10 => out.extend("\\n".encode_utf16()),
+            12 => out.extend("\\f".encode_utf16()),
+            13 => out.extend("\\r".encode_utf16()),
+            0x22 => out.extend("\\\"".encode_utf16()),
+            0x5C => out.extend("\\\\".encode_utf16()),
+            high if (0xD800..=0xDBFF).contains(&high)
+                && units
+                    .get(index + 1)
+                    .is_some_and(|low| (0xDC00..=0xDFFF).contains(low)) =>
+            {
+                out.push(high);
+                out.push(units[index + 1]);
+                index += 1;
+            }
             c if c < 0x20 || (0xD800..=0xDFFF).contains(&c) => {
-                out.extend_from_slice(format!("\\u{:04x}", c).as_bytes());
+                out.extend(format!("\\u{:04x}", c).encode_utf16());
             }
-            c => {
-                // A BMP scalar (surrogates handled above): its UTF-8 bytes.
-                let ch = char::from_u32(c as u32).unwrap_or('\u{FFFD}');
-                out.extend_from_slice(ch.encode_utf8(&mut buf).as_bytes());
-            }
+            c => out.push(c),
         }
+        index += 1;
     }
-    out.push(b'"');
+    out.push(b'"' as u16);
     out
 }
 

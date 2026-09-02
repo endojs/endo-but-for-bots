@@ -248,11 +248,21 @@ object node `8` steps + one instance slot for the `fxNewInstance` keys holder,
 one `XS_AT_KIND` slot per own key, `65528` for the non-empty setup, `4` steps +
 the `fxPushKeyString` chunk (`rup8(len+1)`) per key body; primitives the `1`-step
 leaf; the wobble the child-4 measurements saw is entirely the final result
-`fxNewChunk(offset)` (output length + NUL), metered once by `new_string_metered`.
-A **callable value** (function) — whose reference branch runs an unmodeled
-`mxGetID(_toJSON)` probe — and the `toJSON`/wrapper/replacer/space corners remain
-honest named skips (`JSON.stringify:callable-value`, …), never a wrong value or a
-divergence.
+`fxNewChunk(offset)` (output length + NUL), metered once by `new_string_units`.
+The later compatibility pass completes the observable algorithm: live property
+reads and descriptor filtering through the object MOP, Array and object Proxy
+handling, `toJSON` before the replacer, callable and Array replacers, the
+deduplicated PropertyList, Number/String/Boolean/BigInt wrappers, BigInt errors,
+UTF-16 Gap truncation and pretty printing, post-hook cycle detection, and
+well-formed escaping that preserves valid surrogate pairs while escaping lone
+halves.
+The original no-hook structured corpus remains bit-exact; callback, Proxy, and
+coercion paths are covered for observable agreement rather than exact
+computrons.
+The focused official `built-ins/JSON/stringify` subtree now covers 60 of 63
+files with zero failures. Two remaining skips require cross-realm abort-value
+support, and the ASCII stress case reaches an unrelated front-end binding
+regression after serialization rather than a stringifier gap.
 
 The same child implements **`JSON.parse`** (`fx_JSON_parse` — the tokenizer,
 recursive value construction, and per-node allocation metering), bit-exact
@@ -272,15 +282,11 @@ abrupt completion, the correct holder receiver, and the modern third-argument
 context whose `source` property preserves the original primitive token.
 The no-reviver path retains its bit-exact metering; callback traversal is
 covered for observable agreement rather than exact computrons.
-Remaining honest named skips include a surrogate/astral `\u` escape
-(`JSON.parse:astral`), malformed input whose `SyntaxError` partial metering is
-unmodeled (`JSON.parse:syntax`), and re-serializing a parsed object's
-runtime-interned key (`JSON.stringify:interned-key`, child-5's interned-key
-rendering gap). Together
-this lifts `built-ins/JSON` to `total=138 covered=15 divergent=0` (from 2 before
-this child), and the curated `stage3b-json-metering.js` corpus + the
-`gen_json_structured_program` and `gen_json_parse_program` differential fuzz arms
-all agree bit-exactly.
+Remaining honest named skips include a surrogate/astral `\u` escape in
+`JSON.parse` (`JSON.parse:astral`) and malformed input whose `SyntaxError`
+partial metering is unmodeled (`JSON.parse:syntax`). The curated
+`stage3b-json-metering.js` corpus plus the `gen_json_structured_program` and
+`gen_json_parse_program` differential fuzz arms remain bit-exact.
 
 One neighbouring **pre-existing** observation the parse child (or an object-
 literal child) should note: a *large/deep* nested **object literal**
