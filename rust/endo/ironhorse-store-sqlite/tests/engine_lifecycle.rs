@@ -625,10 +625,10 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
          Array.prototype.toSpliced; Array.prototype.with.name; \
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
          Object.prototype.hasOwnProperty; Symbol.isConcatSpreadable; \
-         a.join; a.length; \
+         a.join; a.length; 'con'; 'structor'; \
          (function (y) { return y; });",
         &[
-            "a = [3, 1, 2]; t = 7;",
+            "a = [3, 1, 2]; k = 'con' + 'structor'; delete Array.prototype[k]; t = 7;",
             "a.sort(function (x, y) { return x - y; }); t = a.join(','); t",
             "b = a.toSorted(function (x, y) { return y - x; }); \
              t = b.join(',') + ':' + a.join(','); t",
@@ -647,18 +647,20 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              Array.prototype.sort.call(inst, function (x, y) { return x - y; }); \
              g = []; Reflect.set(inst, '0', 7, g); \
              q = q.slice(0, 3); \
+             f = {length: 4294967297}; f[4294967296] = 5; \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
             "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
                  q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
                  Array.prototype.slice.name + ':' + Array.prototype.slice.length + ':' + \
                  g[0] + ':' + g.length + ':' + \
                  Array.prototype.concat.name + ':' + Array.prototype.concat.length + ':' + \
-                 v.join(','); t",
+                 v.join(',') + ':' + Array.prototype.slice.call(f, 4294967296).join(',') + ':' + \
+                 Object.prototype.hasOwnProperty.call(Array.prototype, k); t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false"
     );
 }
 

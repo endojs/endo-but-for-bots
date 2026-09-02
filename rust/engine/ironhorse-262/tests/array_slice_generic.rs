@@ -82,6 +82,30 @@ fn array_species_constructor_receives_the_result_length() {
 }
 
 #[test]
+fn dense_arrays_observe_live_intrinsic_array_species() {
+    for source in [
+        "var log=[]; Object.defineProperty(Array,Symbol.species,{get:function(){log.push('species');return Array},configurable:true}); try{[1,2].slice();log.join(',')}finally{delete Array[Symbol.species]}",
+        "function Species(n){this.seen=n} Object.defineProperty(Array,Symbol.species,{value:Species,configurable:true}); try{var r=[4,5].slice(1);r.seen+':'+r[0]+':'+(r instanceof Array)}finally{delete Array[Symbol.species]}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn custom_species_receives_lengths_above_the_array_index_range() {
+    agrees(
+        "var called=false; function Species(n){called=n;return {}} var source=[]; source.constructor={}; source.constructor[Symbol.species]=Species; var proxy=new Proxy(source,{get:function(t,k){if(k==='length')return 4294967296;return t[k]},has:function(){throw 'stop'}}); try{Array.prototype.slice.call(proxy)}catch(_err){} called",
+    );
+}
+
+#[test]
+fn sparse_array_like_indices_can_exceed_the_array_index_range() {
+    agrees(
+        "var source={length:4294967297}; source[4294967296]='x'; var result=Array.prototype.slice.call(source,4294967296); result.length+':'+result[0]",
+    );
+}
+
+#[test]
 fn species_lookup_and_result_failures_are_observable() {
     for source in [
         "var log=[]; var c={}; Object.defineProperty(c,Symbol.species,{get:function(){log.push('species');return function S(n){log.push('construct:'+n)}}}); var a=[1,2]; Object.defineProperty(a,'constructor',{get:function(){log.push('constructor');return c}}); a.slice(0,1); log.join(',')",
