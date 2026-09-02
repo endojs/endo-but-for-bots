@@ -157,10 +157,17 @@ by the starter) injects signals, pauses/resumes/cancels, mints
 pattern-checked participant `port`s, and is the only holder that can
 `resolveRef` a redacted capability out of the run's refs store — an
 access that is itself journaled as an `admin` entry.
+Control signals are external events: `signal` rejects every event type the
+chart can synthesize as an effect settlement, timer, emit, or region join, and
+strips engine-owned routing and settlement metadata (`path`, `effectId`,
+`compensation`, and `delivers`).
 
-Asks land in the recipients' ordinary inboxes — `endo inbox`, `endo
-resolve` / `endo reject`, and `endo submit` are the human approval
-surface; nothing new to learn.
+Asks land in the recipients' ordinary inboxes.
+`endo resolve` / `endo reject` answer unstructured requests.
+The current `endo submit --field name:value` CLI sends field values as strings,
+so structured forms with boolean, bigint, or other non-string patterns require
+a typed UI or programmatic submitter; the CLI is sufficient only for
+string-pattern fields.
 
 ### Factories
 

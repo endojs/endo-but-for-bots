@@ -154,8 +154,9 @@ findings were all fixed and regression-tested (81 tests):
    terminal outcome (a completed run can no longer flip to failed).
 3. **Ocap tightening.** Charts asserted capability-free (an embedded
    remotable would have leaked through the shareable run facet's
-   `chart()`); ports refuse engine-producible event types (no forged
-   `state-done` / quorum joins / other participants' settlements);
+   `chart()`); ports and control signals refuse engine-producible event types
+   (no forged `state-done` / quorum joins / other participants' settlements)
+   and strip engine-owned routing and settlement metadata;
    factory start/revoke and derive/revoke races closed by durable
    re-checks; depth caps on redaction/encoding with unencodable
    settlement values converted to loud effect failures.
@@ -886,7 +887,7 @@ WorkflowRun: {
 
 // Control — held by whoever started the run (and the service holder).
 WorkflowControl: {
-  signal(event)                      → seq                // inject an event, by='control'
+  signal(event)                      → seq                // external type only; strips engine routing marks
   pause() / resume()                 → void
   cancel(reason?)                    → void               // compensations, then terminal
   help()

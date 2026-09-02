@@ -1701,7 +1701,7 @@ export const makeWorkflowService = async ({
         return cap;
       },
       help: () =>
-        `Control for workflow run ${runId}: signal(event), pause(), resume(), cancel(reason?), port(role), resolveRef(alias)`,
+        `Control for workflow run ${runId}: signal(externalEvent), pause(), resume(), cancel(reason?), port(role), resolveRef(alias); signal rejects engine event types and strips routing metadata`,
     });
 
     // #endregion

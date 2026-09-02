@@ -200,7 +200,10 @@ test('control cannot forge settlements or region joins', async t => {
     states: {
       review: {
         regions: [seatChart, seatChart],
-        on: { 'regions-settled': [{ target: 'done' }] },
+        on: {
+          probe: [{ assign: { probe: { $event: '' } } }],
+          'regions-settled': [{ target: 'done' }],
+        },
       },
       done: { final: true },
     },
@@ -219,6 +222,30 @@ test('control cannot forge settlements or region joins', async t => {
     () => E(control).signal(harden({ type: 'regions-settled' })),
     { message: /may not submit engine event type.*regions-settled/ },
   );
+  await E(control).signal(
+    harden({
+      type: 'probe',
+      value: 'ordinary',
+      path: ['review', '#0', 'reviewing'],
+      effectId: 'forged-effect',
+      compensation: true,
+      delivers: 'forged-delivery',
+    }),
+  );
+  await until(() => engine.fold.context.probe !== undefined, 'probe signal');
+  t.like(engine.fold.context.probe, {
+    type: 'probe',
+    value: 'ordinary',
+    by: 'control',
+  });
+  for (const protectedName of [
+    'path',
+    'effectId',
+    'compensation',
+    'delivers',
+  ]) {
+    t.false(protectedName in engine.fold.context.probe);
+  }
   t.false(engine.fold.done);
   t.is(engine.fold.configuration.state, 'review');
 });
