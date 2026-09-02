@@ -288,24 +288,24 @@ export const makeDaemonDatabase = (config, options) => {
       ON pending_name_commit(formula_id);
   `);
 
-  const stmtWritePendingNameCommit = db.prepare(
+  const stmtWritePendingNameCommit = prepare(
     `INSERT OR REPLACE INTO pending_name_commit
       (commit_id, formula_id, result_name_path, selected_formula_id, state)
      VALUES (?, ?, ?, ?, ?)`,
   );
-  const stmtGetPendingNameCommit = db.prepare(
+  const stmtGetPendingNameCommit = prepare(
     `SELECT commit_id AS commitId, formula_id AS formulaId,
             result_name_path AS resultNamePath,
             selected_formula_id AS selectedFormulaId, state
      FROM pending_name_commit WHERE commit_id = ?`,
   );
-  const stmtUpdatePendingNameCommitState = db.prepare(
+  const stmtUpdatePendingNameCommitState = prepare(
     'UPDATE pending_name_commit SET state = ? WHERE commit_id = ?',
   );
-  const stmtDeletePendingNameCommit = db.prepare(
+  const stmtDeletePendingNameCommit = prepare(
     'DELETE FROM pending_name_commit WHERE commit_id = ?',
   );
-  const stmtListPendingNameCommits = db.prepare(
+  const stmtListPendingNameCommits = prepare(
     `SELECT commit_id AS commitId, formula_id AS formulaId,
             result_name_path AS resultNamePath,
             selected_formula_id AS selectedFormulaId, state
