@@ -270,6 +270,26 @@ export const makeWorkflowService = async ({
   const formCorrelations = new Map();
   /** @type {Map<string, { runId: string, effectId: string }>} */
   const parentLinks = new Map();
+  /** Run trees held inert after a revocation operation loses durability. */
+  const quarantinedRuns = new Set();
+  /** Factories denied new authority as soon as a revocation sweep begins. */
+  const revokingFactories = new Set();
+  const quarantineRunTree = rootRunId => {
+    quarantinedRuns.add(rootRunId);
+    for (const [childRunId, link] of parentLinks) {
+      if (link.runId === rootRunId && !quarantinedRuns.has(childRunId)) {
+        quarantineRunTree(childRunId);
+      }
+    }
+  };
+  const releaseRunTree = rootRunId => {
+    quarantinedRuns.delete(rootRunId);
+    for (const [childRunId, link] of parentLinks) {
+      if (link.runId === rootRunId) {
+        releaseRunTree(childRunId);
+      }
+    }
+  };
   const runsTopic = makeChangeTopic();
   let stopped = false;
   /** @type {Set<any>} */
@@ -559,6 +579,7 @@ export const makeWorkflowService = async ({
         context: fold.context,
         pending: harden([...fold.pending.values()]),
         internals: harden([...fold.pendingInternals]),
+        cancellationRequested: fold.cancellationRequested,
       });
       lastSnapshotAt = fold.nextSeq;
     };
@@ -745,7 +766,7 @@ export const makeWorkflowService = async ({
      */
     const processEnvelope = async (envelope, depth) => {
       await null;
-      if (fold.done || stopped) {
+      if (fold.done || stopped || quarantinedRuns.has(runId)) {
         return fold.nextSeq;
       }
       if (depth > MAX_CASCADE_DEPTH) {
@@ -785,6 +806,8 @@ export const makeWorkflowService = async ({
       !fold.done ||
         Fail`workflow run ${q(runId)} is ${q(fold.outcome)}; no further events`;
       !stopped || Fail`workflow service is stopped`;
+      !quarantinedRuns.has(runId) ||
+        Fail`workflow run ${q(runId)} is quarantined`;
       return jobs.enqueue(() => processEnvelope(envelope, depth));
     };
 
@@ -795,75 +818,86 @@ export const makeWorkflowService = async ({
     // refuse (too deep, unencodable) becomes a failed settlement
     // instead of a silently rejected append. The settlement and the
     // transition it fires commit as ONE entry.
-    const settleEffect = (effectId, status, value) =>
-      jobs.enqueue(async () => {
-        await null;
-        const record = fold.pending.get(effectId);
-        if (stopped || fold.done || record === undefined) {
-          return;
-        }
-        let effectiveStatus = status;
-        let redacted;
-        try {
-          redacted = await redact(value);
-          canonicalStringify(redacted);
-        } catch (error) {
-          effectiveStatus = 'failed';
-          redacted = `settlement value rejected: ${/** @type {Error} */ (error).message}`;
-        }
-        clearTimer(effectId);
-        clearStaleSideEffects();
-        const { effect } = record;
-        const type =
-          effectiveStatus === 'fulfilled'
-            ? effect.outcome
-            : (effect.failure ?? 'effect-failed');
-        const by =
-          effect.kind === 'ask'
-            ? `ask:${effect.to}`
-            : effect.kind === 'invoke'
-              ? `invoke:${effect.target}`
-              : effect.kind === 'spawn'
-                ? 'spawn'
-                : effect.kind === 'after'
-                  ? 'timer'
-                  : 'engine';
-        const settles = harden({
-          effectId,
-          status: effectiveStatus,
-          ...(effectiveStatus === 'fulfilled'
-            ? { value: redacted }
-            : { reason: redacted }),
-        });
-        const envelope = harden({
-          type,
-          value:
-            effectiveStatus === 'fulfilled'
-              ? redacted
-              : harden({ reason: redacted }),
-          by,
-          at: isoNow(),
-          path: record.path,
-          effectId,
-          ...(record.exit === true ? { compensation: true } : {}),
-        });
-        if (fold.paused) {
-          await append({ kind: 'event', by, event: envelope, settles });
-          return;
-        }
-        await stepEnvelope(envelope, 0, { settles });
+    const settleEffectNow = async (effectId, status, value) => {
+      await null;
+      const record = fold.pending.get(effectId);
+      if (stopped || fold.done || record === undefined) {
+        return;
+      }
+      let effectiveStatus = status;
+      let redacted;
+      try {
+        redacted = await redact(value);
+        canonicalStringify(redacted);
+      } catch (error) {
+        effectiveStatus = 'failed';
+        redacted = `settlement value rejected: ${/** @type {Error} */ (error).message}`;
+      }
+      clearTimer(effectId);
+      clearStaleSideEffects();
+      const { effect } = record;
+      const type =
+        effectiveStatus === 'fulfilled'
+          ? effect.outcome
+          : (effect.failure ?? 'effect-failed');
+      const by =
+        effect.kind === 'ask'
+          ? `ask:${effect.to}`
+          : effect.kind === 'invoke'
+            ? `invoke:${effect.target}`
+            : effect.kind === 'spawn'
+              ? 'spawn'
+              : effect.kind === 'after'
+                ? 'timer'
+                : 'engine';
+      const settles = harden({
+        effectId,
+        status: effectiveStatus,
+        ...(effectiveStatus === 'fulfilled'
+          ? { value: redacted }
+          : { reason: redacted }),
       });
+      const envelope = harden({
+        type,
+        value:
+          effectiveStatus === 'fulfilled'
+            ? redacted
+            : harden({ reason: redacted }),
+        by,
+        at: isoNow(),
+        path: record.path,
+        effectId,
+        ...(record.exit === true ? { compensation: true } : {}),
+      });
+      if (fold.paused) {
+        await append({ kind: 'event', by, event: envelope, settles });
+        return;
+      }
+      await stepEnvelope(envelope, 0, { settles });
+    };
+    const settleEffect = (effectId, status, value) =>
+      jobs.enqueue(() =>
+        quarantinedRuns.has(runId)
+          ? undefined
+          : settleEffectNow(effectId, status, value),
+      );
     engine.settleEffect = settleEffect;
-    engine.settleChild = (effectId, outcome) =>
+    const settleChildNow = (effectId, outcome) =>
       outcome.status === 'completed'
-        ? settleEffect(effectId, 'fulfilled', outcome)
-        : settleEffect(
+        ? settleEffectNow(effectId, 'fulfilled', outcome)
+        : settleEffectNow(
             effectId,
             'failed',
             `child run ${outcome.status}${
               outcome.reason !== undefined ? `: ${outcome.reason}` : ''
             }`,
           );
+    engine.settleChild = (effectId, outcome) =>
+      jobs.enqueue(() =>
+        quarantinedRuns.has(runId)
+          ? undefined
+          : settleChildNow(effectId, outcome),
+      );
 
     // #region effect dispatch
 
@@ -1098,6 +1132,13 @@ export const makeWorkflowService = async ({
     const dispatchSpawn = async record => {
       await null;
       const { effectId, effect } = record;
+      if (fold.cancellationRequested) {
+        await settleChildNow(effectId, {
+          status: 'cancelled',
+          reason: 'parent cancellation preceded child start',
+        });
+        return;
+      }
       // The child's run id is a pure function of the parent and the
       // effect, so re-dispatch after a crash between child creation and
       // the parent's `spawned` linkage ADOPTS the existing child (which
@@ -1297,6 +1338,24 @@ export const makeWorkflowService = async ({
             // or child spawn can finish. Recovery observes the same unpaused
             // fold and resumes this drain.
             await drainQueuedEvents();
+          }
+          if (!fold.done) {
+            // A cancellation that the chart handles permanently closes the
+            // authority to begin child work. Resolve every spawn that was
+            // durable but not yet linked as a synthetic cancellation failure;
+            // its declared failure transition chooses the reconciliation path.
+            for (const [effectId, record] of [...fold.pending]) {
+              if (
+                record.effect.kind === 'spawn' &&
+                record.childRunId === undefined
+              ) {
+                // eslint-disable-next-line no-await-in-loop
+                await settleChildNow(effectId, {
+                  status: 'cancelled',
+                  reason: 'parent cancellation preceded child start',
+                });
+              }
+            }
           }
           return;
         }
@@ -1970,6 +2029,7 @@ export const makeWorkflowService = async ({
   };
 
   const loadFactoryBindings = async fid => {
+    !revokingFactories.has(fid) || Fail`workflow factory ${q(fid)} is revoked`;
     const record = await loadFactoryRecord(fid);
     !record.revoked || Fail`workflow factory ${q(fid)} is revoked`;
     const chart = await E(powers).lookup(factoryPath(fid, CHART_NAME));
@@ -2047,40 +2107,65 @@ export const makeWorkflowService = async ({
     const records = await loadFactoryRecords();
     records.has(fid) || Fail`no workflow factory ${q(fid)}`;
     const condemned = descendantsOf(records, [fid]);
+    for (const each of condemned) {
+      revokingFactories.add(each);
+    }
+    const affected = [...engines.values()].filter(
+      engine => condemned.has(engine.fold.factory) && !engine.fold.done,
+    );
+    for (const engine of affected) {
+      quarantineRunTree(engine.runId);
+    }
     const revokedAt = isoNow();
+    /** @type {Error[]} */
+    const failures = [];
     for (const each of condemned) {
       const record = records.get(each);
       if (!record.revoked) {
-        // eslint-disable-next-line no-await-in-loop
-        await E(powers).storeValue(
-          harden({
-            ...record,
-            revoked: true,
-            revokedAt,
-            ...(reason !== undefined ? { revokedReason: reason } : {}),
-          }),
-          factoryPath(each, FACTORY_RECORD),
-        );
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await E(powers).storeValue(
+            harden({
+              ...record,
+              revoked: true,
+              revokedAt,
+              ...(reason !== undefined ? { revokedReason: reason } : {}),
+            }),
+            factoryPath(each, FACTORY_RECORD),
+          );
+        } catch (error) {
+          failures.push(/** @type {Error} */ (error));
+        }
       }
     }
     // Cancel every live run started through a condemned factory before
     // revocation returns. Each cancellation request is durable at this point;
     // recovery repeats the sweep before rearming in case a process died between
     // the durable records above and these run journals.
-    /** @type {Promise<void>[]} */
-    const cancellations = [];
-    for (const engine of [...engines.values()]) {
-      if (!engine.fold.done && condemned.has(engine.fold.factory)) {
-        cancellations.push(
-          engine.cancel(
-            `factory ${engine.fold.factory} revoked${
-              reason !== undefined ? `: ${reason}` : ''
-            }`,
-          ),
+    for (const engine of affected) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await engine.cancel(
+          `factory ${engine.fold.factory} revoked${
+            reason !== undefined ? `: ${reason}` : ''
+          }`,
         );
+        if (failures.length === 0) {
+          releaseRunTree(engine.runId);
+        }
+      } catch (error) {
+        failures.push(/** @type {Error} */ (error));
       }
     }
-    await Promise.all(cancellations);
+    if (failures.length === 0) {
+      for (const engine of engines.values()) {
+        if (condemned.has(engine.fold.factory) && engine.fold.done) {
+          releaseRunTree(engine.runId);
+        }
+      }
+    } else {
+      throw failures[0];
+    }
   };
 
   /** @type {(fid: string) => any} */
@@ -2104,8 +2189,17 @@ export const makeWorkflowService = async ({
         // registered after the sweep re-reads the durable record here —
         // one side always sees the other.
         const recheck = await loadFactoryRecord(fid);
-        if (recheck.revoked) {
-          await engine.cancel(`factory ${fid} revoked`);
+        if (recheck.revoked || revokingFactories.has(fid)) {
+          quarantineRunTree(engine.runId);
+          try {
+            await engine.cancel(`factory ${fid} revoked`);
+            releaseRunTree(engine.runId);
+          } catch (error) {
+            console.error(
+              `workflow run ${engine.runId}: revoked-run cancellation failed`,
+              error,
+            );
+          }
           throw Fail`workflow factory ${q(fid)} is revoked`;
         }
         // The starter through a factory observes; it does not control.
@@ -2129,7 +2223,7 @@ export const makeWorkflowService = async ({
         // derivation was in flight condemns the fresh child too (its
         // record may have been stored after the cascade's sweep).
         const recheck = await loadFactoryRecord(fid);
-        if (recheck.revoked) {
+        if (recheck.revoked || revokingFactories.has(fid)) {
           await revokeFactory(derived, `parent ${fid} revoked`);
           throw Fail`workflow factory ${q(fid)} is revoked`;
         }
@@ -2262,16 +2356,6 @@ export const makeWorkflowService = async ({
     }
   }
 
-  /** @type {Set<string>} */
-  const quarantinedRuns = new Set();
-  const quarantineRunTree = rootRunId => {
-    quarantinedRuns.add(rootRunId);
-    for (const [childRunId, link] of parentLinks) {
-      if (link.runId === rootRunId && !quarantinedRuns.has(childRunId)) {
-        quarantineRunTree(childRunId);
-      }
-    }
-  };
   for (const engine of engines.values()) {
     if (
       !engine.fold.done &&

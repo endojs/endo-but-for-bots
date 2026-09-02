@@ -52,8 +52,8 @@
  * | `cancelled`        | reason?                                                       |
  * | `completed`        | output? (legacy; live engines use `terminal`)                 |
  * | `failed`           | reason (standalone failures, e.g. cascade overflow)           |
- * | `snapshot`         | configuration, context, pending, internals (replay shortener; |
- * |                    | the engine only snapshots at rest)                            |
+ * | `snapshot`         | configuration, context, pending, internals, cancellation state |
+ * |                    | (replay shortener; the engine only snapshots at rest)          |
  * | `admin`            | action, detail — journaled administrative access (for         |
  * |                    | example `resolve-ref`); no effect on the fold                 |
  *
@@ -137,6 +137,8 @@ harden(effectRecordsFor);
  *   delivered as their own entries, keyed by internalId / effectId; the
  *   recovery path re-dispatches whatever remains
  * @property {boolean} paused
+ * @property {boolean} cancellationRequested - a handled engine cancellation
+ *   has durably entered the chart; unstarted child work must not begin
  * @property {Map<string, any>} queuedEvents - envelopes journaled while
  *   paused and not yet stepped, keyed by decimal seq
  * @property {boolean} done
@@ -160,6 +162,7 @@ export const initialFoldState = () => ({
   pending: new Map(),
   pendingInternals: new Map(),
   paused: false,
+  cancellationRequested: false,
   queuedEvents: new Map(),
   done: false,
   outcome: undefined,
@@ -259,6 +262,9 @@ export const applyEntry = (state, entry) => {
       state.queuedEvents.delete(String(entry.replays));
     }
     if (entry.fired !== undefined) {
+      if (entry.event?.type === 'cancel-requested') {
+        state.cancellationRequested = true;
+      }
       state.configuration = entry.fired.configuration;
       state.context = entry.fired.context;
       pruneExited(state, entry.fired.exited);
@@ -323,6 +329,8 @@ export const applyEntry = (state, entry) => {
       entry.pending.map(record => [record.effectId, record]),
     );
     state.pendingInternals = new Map(entry.internals ?? []);
+    state.cancellationRequested =
+      entry.cancellationRequested ?? state.cancellationRequested;
   }
   // `admin` entries are audit-only: they take the common envelope
   // bookkeeping above and change nothing else.
