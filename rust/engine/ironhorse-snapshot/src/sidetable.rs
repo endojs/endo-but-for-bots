@@ -108,10 +108,10 @@
 //!   rebuilds the table empty is observationally exact.
 //! - `regexp_last_names` — the last-match named-group scratch (a global
 //!   `Vec<i32>`, not slot-keyed): per-crank match state consumed by the
-//!   legacy result accessors within the crank; its primary row
-//!   (`RegExps`) is Serialized since schema 11 (source/flags/lastIndex
-//!   travel; the program recompiles), while this scratch stays honest
-//!   per-crank state.
+//!   legacy result accessors within the crank; its primary row (`RegExps`) is
+//!   Serialized since schema 11 (source/flags plus the legacy numeric
+//!   lastIndex fallback travel; current lastIndex is a HEAP property and the
+//!   program recompiles), while this scratch stays honest per-crank state.
 //! - `arguments_objects` — the arguments-exotic brand set, riding its
 //!   primary row (`Arrays`, Serialized). Since store schema 11 the brand
 //!   itself TRAVELS (the `ARGB` atom / small-state arguments section), so
