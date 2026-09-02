@@ -28801,13 +28801,17 @@ impl Interp {
                     crate::intl_number::format_bigint_to_string(&resolved, negative, &digits);
                 self.intl_string(&rendered)
             }
-            // `Symbol.for(key)`: the registry symbol for `key` — the same
-            // symbol identity on repeat calls. `key` must be a string in the
-            // covered grammar (a non-string ToString is a later increment).
+            // `Symbol.for(key)`: apply ToString, then return the registry
+            // symbol for that key — the same symbol identity on repeat calls.
             NativeMethod::SymbolFor => {
-                let key = match arg0.value {
+                let primitive = self.to_primitive(code, arg0, true)?;
+                if primitive.kind == Kind::Symbol {
+                    return Err(self.catchable_type_error());
+                }
+                let string = self.to_string_slot_metered(primitive);
+                let key = match string.value {
                     Payload::String(off) => self.str_content(off).to_vec(),
-                    _ => return Err(Halt::Unsupported("Symbol.for:non-string-key")),
+                    _ => unreachable!("ToString returns a String slot"),
                 };
                 self.meter.tick_raw(SYMBOL_FOR_METERING);
                 let d = if let Some(&d) = self.symbol_registry.get(&key) {
@@ -28830,7 +28834,7 @@ impl Interp {
             // interned under, or `undefined` for a non-registered symbol.
             NativeMethod::SymbolKeyFor => {
                 if arg0.kind != Kind::Symbol {
-                    return Err(Halt::Unsupported("Symbol.keyFor:non-symbol"));
+                    return Err(self.catchable_type_error());
                 }
                 self.meter.tick_raw(SYMBOL_KEYFOR_METERING);
                 match arg0.value {
