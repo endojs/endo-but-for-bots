@@ -197,7 +197,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 because Array's with, toReversed, and
         // toSpliced natives now likewise carry their standard names and
         // arities. This is another boot-heap content move; format unchanged.
-        "fccf38d79bfb28ed3bca2e3e1790299c297dc1a966478cdad47308f8302ca7e7",
+        // Re-pinned 2026-09-02 because Array.prototype.slice now carries its
+        // standard name and arity. Boot-heap content only; format unchanged.
+        "27e14b2b6a9728bbc1165c05b809b456d9636f48b335e8995fdac779916f3f94",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -325,7 +327,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // metadata. Schema and format remain unchanged.
         // Re-pinned with the blob for Array with/toReversed/toSpliced's
         // standard function metadata. Schema and format remain unchanged.
-        "0a9c9c82dc66c25506f30c2c8fe38c4de319ec9e36aa2cc50ee8103a5621d10c",
+        // Re-pinned with the blob for Array.prototype.slice's standard
+        // function metadata. Schema and format remain unchanged.
+        "1b2bce481165ccb72498275b840dfeb89cb6b777e8571faa85f91193c7e6b38f",
         "epoch-3 seal chain"
     );
 }

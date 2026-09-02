@@ -620,9 +620,11 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
     let last = carry_scenario(
         "carry-array-sort",
          "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
+         Array.prototype.slice; a.slice; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; \
+         Object.prototype.hasOwnProperty; \
          a.join; a.length; \
          (function (y) { return y; });",
         &[
@@ -632,6 +634,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              t = b.join(',') + ':' + a.join(','); t",
             "v = b.with(1, 9); s = v.toReversed(); \
              o = s.toSpliced(1, 1, 8); \
+             q = [1, , 3]; \
              t = o.join(',') + ':' + Array.prototype.with.name + ':' + \
                  Array.prototype.with.length + ':' + \
                  Array.prototype.toReversed.name + ':' + \
@@ -640,13 +643,16 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  Array.prototype.toSpliced.length; t",
             "inst = new Uint8Array([2, 1]); \
              Array.prototype.sort.call(inst, function (x, y) { return x - y; }); \
+             q = q.slice(0, 3); \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
-            "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
+            "t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t + ':' + \
+                 q[0] + ':' + Object.prototype.hasOwnProperty.call(q, 1) + ':' + q[2] + ':' + \
+                 Array.prototype.slice.name + ':' + Array.prototype.slice.length; t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2"
     );
 }
 
