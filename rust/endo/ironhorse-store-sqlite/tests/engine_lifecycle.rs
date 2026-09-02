@@ -596,6 +596,22 @@ fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn boxed_symbols_survive_sqlite_sleep_cycles() {
+    let last = carry_scenario(
+        "carry-symbol-wrapper",
+        "Symbol.prototype[Symbol.toPrimitive]; Object(Symbol('s')); \
+         w.valueOf; w.toString; Reflect.get; Object.getOwnPropertySymbols; length;",
+        &[
+            "sym = Symbol('s'); w = Object(sym); target = {}; t = 7;",
+            "target[w] = 3; t = (w.valueOf() === sym) + ':' + w.toString(); t",
+            "t = (Reflect.get(target, sym) === 3) + ':' + \
+                 Object.getOwnPropertySymbols(target).length; t",
+        ],
+    );
+    assert_eq!(last, "true:1");
+}
+
+#[test]
 fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
     // `%TypedArray%` and `%TypedArray.prototype%` are boot-rebuilt shared
     // intermediates. Concrete constructors, prototypes, instances, and their

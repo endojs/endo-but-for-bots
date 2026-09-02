@@ -210,7 +210,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned 2026-09-02 because Array.prototype.flat and flatMap now
         // carry their standard names and arities. Boot-heap content only;
         // format unchanged.
-        "1a870f97a04ad846708e287672737f02b66fa10707f7bb029e8a53c5d0abda3c",
+        // Re-pinned 2026-09-02 because
+        // Symbol.prototype[Symbol.toPrimitive] is now boot-minted. The
+        // symbol-keyed property remains lazy; format unchanged.
+        "1a8fb89d8f80a00cb0f6e6adcef23192835dc18369a568755aa6dae338f17969",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -348,7 +351,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // standard function metadata. Schema and format remain unchanged.
         // Re-pinned with the blob for Array.prototype.flat and flatMap's
         // standard function metadata. Schema and format remain unchanged.
-        "d5cadc5cf32c3174a5701399a4212868db10facb49dfeea8bd56404fd93d3d37",
+        // Re-pinned with the blob for the boot-minted
+        // Symbol.prototype[Symbol.toPrimitive] method. Schema and format
+        // remain unchanged.
+        "c548b08e9010bf66e5b0b7b02035e9cf2bbc8cc04c941fc7365c0c3081586518",
         "epoch-3 seal chain"
     );
 }

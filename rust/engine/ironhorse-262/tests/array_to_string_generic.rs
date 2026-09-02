@@ -47,10 +47,23 @@ fn non_callable_join_falls_back_to_object_to_string() {
     for source in [
         "var a=[];a.join=0;Array.prototype.toString.call(a)",
         "var saved=Array.prototype.join;delete Array.prototype.join;var r=[].toString();Array.prototype.join=saved;r",
+        "Reflect.deleteProperty(Array.prototype,'join');[].toString()",
         "Array.prototype.toString.call({join:null})",
         "var o={join:0};o[Symbol.toStringTag]='Tagged';Array.prototype.toString.call(o)",
         "var a=new Uint8Array([1]);a.join=0;Array.prototype.toString.call(a)",
         "Object.prototype.toString.call([])",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn fallback_retains_the_object_intrinsic_and_proxy_array_brand() {
+    for source in [
+        "var saved=Object.prototype.toString;Object.prototype.toString=function(){return 'patched'};var a=[];a.join=0;var r=Array.prototype.toString.call(a);Object.prototype.toString=saved;r",
+        "var saved=Object.prototype.toString;delete Object.prototype.toString;var a=[];a.join=0;var r=Array.prototype.toString.call(a);Object.prototype.toString=saved;r",
+        "var a=[];a.join=1;Array.prototype.toString.call(new Proxy(a,{}))",
+        "var q=Proxy.revocable([],{});q.revoke();try{Array.prototype.toString.call(q.proxy);false}catch(e){e instanceof TypeError}",
     ] {
         agrees(source);
     }
