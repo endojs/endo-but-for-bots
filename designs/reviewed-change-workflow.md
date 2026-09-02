@@ -9,14 +9,17 @@
 
 ## Status
 
-Phase 1 landed: the charts and their simulator suite
-(`packages/floot/review-charts.js`, `packages/floot/test/review-charts.test.js`,
-14 tests).
+The chart layer is complete: three reviewed-change charts, the two deploy
+charts used by the gated variants, and their simulator suites
+(`packages/floot/test/review-charts.test.js`, 16 tests, and
+`packages/floot/test/deploy-charts.test.js`, 16 tests).
 Nothing is wired into a live host yet, and — see § "What blocks a live
 run" — a Fae agent **cannot answer a workflow ask today**, so the loop is
 currently exercisable only by the simulator and by humans answering from
 `endo inbox`.
-Phases 2 and 3 below are the remaining work.
+The chart implementation in this change is complete; phases 2 and 3 are
+separate live-integration follow-ups because their hosted-management packages
+are not present on the `llm` base.
 
 ## The ask
 
@@ -41,10 +44,12 @@ motivating use case, and `packages/workflow/test/feature-change.test.js`
 encodes it as a *test fixture*: an implementer ask, two reviewer regions
 joined on `counts`, a changes-requested loop-back, a CI invoke, an
 operator approval, a merge.
-[floot-admin-deploy-workflows](floot-admin-deploy-workflows.md) turned the
-hazardous half of a deployment into production charts
-(`packages/floot/deploy-charts.js`: `endo-release`, `nixos-config-change`)
-bound to a reshaped `NixosAdmin` performer.
+The source branch also carried the hazardous half of a deployment as the
+`endo-release` and `nixos-config-change` charts.
+Those capability-free chart definitions and their simulator tests are included
+in this port because the reviewed gated variants embed them literally; their
+host-specific `NixosAdmin` performer and provisioning remain live-integration
+work.
 
 So the gap was never the engine.
 It was three things the fixture does not have: a **bounded** loop, a
@@ -150,6 +155,17 @@ That contradicts the ask, so both branches here wait for the whole panel.
 of the region chart (`machine.js:581-591`), so "everyone approved" is
 `{ changesRequested: M.eq(0), pending: M.eq(0) }` — no `M.gte(2)`, no
 panel-size literal to drift out of sync with `params.reviewers`.
+The public params pattern nevertheless requires at least one reviewer and caps
+the panel at 32 seats, preventing both a vacuous unanimous result and unbounded
+fan-out from one run.
+
+**The budget is bounded at the public boundary.**
+An initial run requires one through `2**32 - 1` review rounds; later absolute
+adjustments admit zero through the same upper bound.
+This is a deliberate four-byte profile for a human review-loop quantity, keeps
+the chart's number-valued `$inc` arithmetic exact, and rejects negative,
+non-finite, and oversized inputs before a run starts or a port signal lands.
+`base` is required because every implementer and reviewer ask names it.
 
 **A silent reviewer cannot wedge the run.**
 Waiting for all seats costs a full panel round per dissent, so each seat
@@ -171,6 +187,9 @@ and a developer deadline each have an explicit candidate.
 All three cost a round, which is what bounds a developer that cannot
 produce a well-formed submission — the budget does double duty as a
 liveness bound.
+A reviewer answer must carry both a boolean `approve` and string `feedback`;
+an incomplete or malformed answer becomes an explicit changes-requested
+verdict instead of failing the run during feedback assignment.
 
 **Preview CI is a slot, not a stage.**
 `params.previewCi` gates it through the same emit trick as the budget, so
@@ -226,23 +245,22 @@ general-purpose `exec` escape hatch, through which an agent *could* call
 The fix is Phase 2: branch the loop on `request` / `form`, put the
 description (and form fields) into the user node, and add first-class
 `resolveRequest` / `rejectRequest` / `submitForm` tools.
-A **typed** verdict matters — the panel guard matches
-`M.splitRecord({ value: M.splitRecord({ approve: M.eq(true) }) })`, and
-prose-parsing a verdict is the failure mode to avoid.
+A **typed** verdict matters — the panel guards require `approve: boolean` and
+`feedback: string`, and prose-parsing a verdict is the failure mode to avoid.
 
-**`space-endo-mgmt` is not an invoke target.**
-Its guards are exact-arity (`M.call().optional(M.string())`) while the
-engine appends a run-qualified `${runId}:${effectId}` key as the final
-argument (`service.js:1038`), so the call is rejected outright.
-It is also fire-and-forget, so the engine's at-least-once re-dispatch
-after a restart would re-submit a deploy.
-It needs the settlement-shaped, key-deduped reshape `space-nixos-admin`
-already received.
+**`space-endo-mgmt` is not on the `llm` base.**
+The source PR's version is not an invoke target either: its guards are
+exact-arity (`M.call().optional(M.string())`) while the engine appends a
+run-qualified `${runId}:${effectId}` key as the final argument
+(`service.js:1038`), and its fire-and-forget methods would re-submit after an
+at-least-once recovery dispatch.
+A live integration needs a settlement-shaped, key-deduped performer rather
+than carrying the hosted-management package into this chart-only port.
 
 ## Phases
 
-- **Phase 1 (done).** `packages/floot/review-charts.js` and its simulator
-  suite.
+- **Phase 1 (done).** The reviewed-change and prerequisite deploy charts,
+  boundary hardening, structural-gate assertions, and simulator suites.
 - **Phase 2.** Fae ask-answering: request/form rendering and the
   `resolveRequest` / `rejectRequest` / `submitForm` tools.
   Without this nothing but a human can close the loop.
