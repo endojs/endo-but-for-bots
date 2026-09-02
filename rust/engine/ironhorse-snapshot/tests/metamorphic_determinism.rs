@@ -229,7 +229,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // properties on Symbol.prototype and Date.prototype are now installed
         // during the initial link, before guest reflection can enumerate them.
         // This moves boot-heap content only; the snapshot format is unchanged.
-        "85ed0e30739ec65485d6e7e0f962bb74ee7b4603ba9ecb2edb9ba6e340d5b621",
+        // Re-pinned for the engine-owned boot-layout signature generation.
+        // The heap and wire schema are unchanged; the SIGN payload moved.
+        "8d4d26e36f137cdca365792a5a6c719f864ddfe505ef42ae1ddacf0ac1009389",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -381,7 +383,8 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for eager installation of the standard own
         // Symbol.prototype and Date.prototype `@@toPrimitive` properties.
         // Schema and format remain unchanged.
-        "f69021410d6da3b459207d7350b4b748e5d294c04337e22407ef0d8647828d9f",
+        // Re-pinned for the engine-owned boot-layout signature generation.
+        "c0a45ddd933d3ab8e20add9479ac25ac4a863b4644fc8a957265a37f97f65834",
         "epoch-3 seal chain"
     );
 }

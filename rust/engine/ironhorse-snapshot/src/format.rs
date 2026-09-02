@@ -311,10 +311,18 @@ pub enum VersionError {
     UnsupportedEndian(u8),
 }
 
-/// The ENGINE-COMPATIBILITY signature (`SIGN`). Identifies the engine
-/// build a snapshot was written against, and gates adoption fail-closed:
-/// a reader whose signature differs from the snapshot's refuses the read
-/// before any restore runs, exactly as `fxReadSnapshot` does.
+/// The current boot-object layout generation. Bump this whenever
+/// `Interp::create_intrinsics` changes any boot-derived slot identity or
+/// metadata table. The engine-owned suffix prevents a host from accidentally
+/// reusing its callback signature across an incompatible boot change.
+pub const BOOT_LAYOUT_VERSION: u32 = 2;
+
+const BOOT_LAYOUT_SIGNATURE_KEY: &str = "|ironhorse-boot=";
+
+/// The ENGINE-COMPATIBILITY signature (`SIGN`). Identifies the engine build a
+/// snapshot was written against, and gates adoption fail-closed: a reader
+/// whose signature differs from the snapshot's refuses the read before any
+/// restore runs, exactly as `fxReadSnapshot` does.
 ///
 /// It covers two layouts, and a change to EITHER must bump it:
 ///
@@ -335,20 +343,22 @@ pub enum VersionError {
 ///    `VERS` versions the WIRE SCHEMA (the atom set), not the heap the
 ///    atoms describe.
 ///
-/// Store-backed workers and exported containers are expected to survive
-/// daemon replacement and compatible engine upgrades, so "same build
-/// only" is not an acceptable contract; this is what makes the
-/// cross-build promise checkable. While this branch is unreleased and
-/// every container is regenerated, a boot-layout change is taken as a
-/// golden-pin content re-pin; at release the signature must move with
-/// it. Locked by
+/// [`Signature::new`] appends the engine-owned boot-layout generation to the
+/// host-provided callback-table signature. Store-backed workers and exported
+/// containers are expected to survive daemon replacement and compatible
+/// engine upgrades, so "same build only" is not an acceptable contract; this
+/// makes the cross-build promise checkable without relying on every host to
+/// remember a separate bump. Locked by
 /// `crafted_row_refusals::a_container_from_a_foreign_boot_layout_is_refused`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Signature(pub String);
+pub struct Signature(String);
 
 impl Signature {
     pub fn new(s: impl Into<String>) -> Signature {
-        Signature(s.into())
+        Signature(format!(
+            "{}{BOOT_LAYOUT_SIGNATURE_KEY}{BOOT_LAYOUT_VERSION}",
+            s.into()
+        ))
     }
 
     /// Serialize the `SIGN` payload (the raw signature bytes).
@@ -493,6 +503,11 @@ mod tests {
     #[test]
     fn signature_round_trips_and_gates() {
         let s = Signature::new("ironhorse-worker-v1");
+        assert_eq!(
+            s.encode(),
+            b"ironhorse-worker-v1|ironhorse-boot=2",
+            "the engine-owned boot generation travels with every host signature"
+        );
         assert_eq!(Signature::decode(&s.encode()).unwrap(), s);
         assert!(s.is_compatible_with(&Signature::new("ironhorse-worker-v1")));
         assert!(!s.is_compatible_with(&Signature::new("ironhorse-worker-v2")));
