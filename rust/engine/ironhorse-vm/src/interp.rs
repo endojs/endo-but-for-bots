@@ -5801,10 +5801,15 @@ impl Interp {
             ("toSorted", NativeMethod::ArrayToSorted),
             ("toLocaleString", NativeMethod::ArrayToLocaleString),
         ] {
-            let mf = if matches!(m, NativeMethod::ArraySort | NativeMethod::ArrayToSorted) {
-                self.alloc_named_method(m, name, 1)
-            } else {
-                self.alloc_method(m)
+            let mf = match m {
+                NativeMethod::ArraySort | NativeMethod::ArrayToSorted => {
+                    self.alloc_named_method(m, name, 1)
+                }
+                NativeMethod::ArrayWith | NativeMethod::ArrayToSpliced => {
+                    self.alloc_named_method(m, name, 2)
+                }
+                NativeMethod::ArrayToReversed => self.alloc_named_method(m, name, 0),
+                _ => self.alloc_method(m),
             };
             self.proto_methods.push((self.array_proto, name, mf));
         }
@@ -29804,8 +29809,13 @@ impl Interp {
             // path, calibrated against the pin.
             NativeMethod::ArrayWith => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("with:non-dense-array")),
+                    Some(i) if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) => i,
+                    _ => {
+                        let result = self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 let raw = match numeric_of(&arg0) {
@@ -29814,8 +29824,7 @@ impl Interp {
                 };
                 let index = if raw < 0 { length as i64 + raw } else { raw };
                 if index < 0 || index >= length as i64 {
-                    // RangeError — its abort-value/metering is a later increment.
-                    return Err(Halt::Unsupported("with:range"));
+                    return Err(self.catchable_range_error());
                 }
                 let value = self
                     .stack
@@ -30215,7 +30224,12 @@ impl Interp {
             NativeMethod::ArrayToReversed => {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
-                    None => return Err(Halt::Unsupported("toReversed:non-dense-array")),
+                    None => {
+                        let result = self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_TOREVERSED_FRAME_METERING);
@@ -30344,8 +30358,20 @@ impl Interp {
             // plus a trailing `mxMeterSome(4)` and the result item chunk.
             NativeMethod::ArrayToSpliced => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("toSpliced:non-dense-array")),
+                    Some(i)
+                        if (argc == 0
+                            || matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined))
+                            && (argc < 2
+                                || matches!(
+                                    self.stack.get(base + 5).map(|slot| slot.kind),
+                                    Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                                )) => i,
+                    _ => {
+                        let result = self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 let start = self.arg_to_index(base, 0, 0, length);
@@ -36406,6 +36432,173 @@ impl Interp {
             width = width.saturating_mul(2);
         }
         Ok(values)
+    }
+
+    /// Generic `Array.prototype.with`, `toReversed`, and `toSpliced` slow
+    /// paths. Each method uses `ToObject`/`LengthOfArrayLike`, creates a fresh
+    /// ordinary Array (never species), and reads through holes with `Get`, so
+    /// inherited properties, accessors, primitive wrappers, and Proxy traps
+    /// remain observable in specification order.
+    fn array_generic_change_by_copy(
+        &mut self,
+        code: &[u8],
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        let args: Vec<Slot> = (0..argc)
+            .map(|index| {
+                self.stack
+                    .get(base + 4 + index)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined)
+            })
+            .collect();
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+
+        // Clamp a relative integer to the inclusive `[0, length]` range used
+        // for `start`/`skipCount` calculations. `length` is at most 2^53-1,
+        // so its f64 representation is exact.
+        let relative_index = |integer: f64| -> u64 {
+            if integer == f64::NEG_INFINITY {
+                0
+            } else if integer < 0.0 {
+                (length as f64 + integer).max(0.0) as u64
+            } else {
+                integer.min(length as f64) as u64
+            }
+        };
+
+        let (result_length, with_index, splice_start, splice_skip, insertions) = match method {
+            NativeMethod::ArrayWith => {
+                let relative = self.array_to_integer_or_infinity(
+                    code,
+                    args.first().copied().unwrap_or_else(Slot::undefined),
+                )?;
+                let actual = if relative >= 0.0 {
+                    relative
+                } else {
+                    length as f64 + relative
+                };
+                if !actual.is_finite() || actual < 0.0 || actual >= length as f64 {
+                    return Err(self.catchable_range_error());
+                }
+                (length, Some(actual as u64), 0, 0, 0)
+            }
+            NativeMethod::ArrayToReversed => (length, None, 0, 0, 0),
+            NativeMethod::ArrayToSpliced => {
+                let start = if argc == 0 {
+                    0
+                } else {
+                    let relative = self.array_to_integer_or_infinity(code, args[0])?;
+                    relative_index(relative)
+                };
+                let insertions = argc.saturating_sub(2) as u64;
+                let skip = if argc == 0 {
+                    0
+                } else if argc == 1 {
+                    length - start
+                } else {
+                    let requested = self.array_to_integer_or_infinity(code, args[1])?;
+                    if requested <= 0.0 || requested == f64::NEG_INFINITY {
+                        0
+                    } else {
+                        (requested.min((length - start) as f64)) as u64
+                    }
+                };
+                let result_length = length
+                    .checked_sub(skip)
+                    .and_then(|remaining| remaining.checked_add(insertions))
+                    .ok_or_else(|| self.catchable_type_error())?;
+                if result_length > 9_007_199_254_740_991 {
+                    return Err(self.catchable_type_error());
+                }
+                (result_length, None, start, skip, insertions)
+            }
+            _ => unreachable!("change-by-copy method"),
+        };
+
+        // ArrayCreate rejects lengths above the Array length domain before
+        // any source index getter is observed.
+        if result_length > u32::MAX as u64 {
+            return Err(self.catchable_range_error());
+        }
+        const ARRAY_COPY_CAP: u64 = 1 << 24;
+        let source_reads = match method {
+            NativeMethod::ArrayWith | NativeMethod::ArrayToReversed => length,
+            NativeMethod::ArrayToSpliced => length - splice_skip,
+            _ => unreachable!(),
+        };
+        if source_reads > ARRAY_COPY_CAP {
+            return Err(Halt::Unsupported(match method {
+                NativeMethod::ArrayWith => "Array.prototype.with:oversized-array-like",
+                NativeMethod::ArrayToReversed => {
+                    "Array.prototype.toReversed:oversized-array-like"
+                }
+                NativeMethod::ArrayToSpliced => {
+                    "Array.prototype.toSpliced:oversized-array-like"
+                }
+                _ => unreachable!(),
+            }));
+        }
+
+        let result = self.new_array();
+        self.arrays.get_mut(&result).unwrap().length = result_length as u32;
+        match method {
+            NativeMethod::ArrayWith => {
+                let replacement = args.get(1).copied().unwrap_or_else(Slot::undefined);
+                let replace = with_index.expect("with index");
+                for index in 0..length {
+                    let value = if index == replace {
+                        replacement
+                    } else {
+                        self.array_generic_get(code, inst, index)?
+                    };
+                    self.array_generic_create_data_property(code, result, index, value)?;
+                }
+            }
+            NativeMethod::ArrayToReversed => {
+                for index in 0..length {
+                    let value = self.array_generic_get(code, inst, length - index - 1)?;
+                    self.array_generic_create_data_property(code, result, index, value)?;
+                }
+            }
+            NativeMethod::ArrayToSpliced => {
+                let mut target = 0u64;
+                for source in 0..splice_start {
+                    let value = self.array_generic_get(code, inst, source)?;
+                    self.array_generic_create_data_property(code, result, target, value)?;
+                    target += 1;
+                }
+                for insertion in 0..insertions {
+                    let value = args[2 + insertion as usize];
+                    self.array_generic_create_data_property(code, result, target, value)?;
+                    target += 1;
+                }
+                for source in splice_start + splice_skip..length {
+                    let value = self.array_generic_get(code, inst, source)?;
+                    self.array_generic_create_data_property(code, result, target, value)?;
+                    target += 1;
+                }
+                debug_assert_eq!(target, result_length);
+            }
+            _ => unreachable!("change-by-copy method"),
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 
     /// Shared `Array.prototype.sort` / `toSorted` implementation. `sort`

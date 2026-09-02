@@ -612,23 +612,34 @@ fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
-fn array_sort_natives_and_compact_results_survive_sqlite_sleep_cycles() {
+fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
     // The methods are boot-rebuilt natives, while the source Array and its
-    // compact element side table cross a full close/reopen before each sort.
-    // The final join calls ensure Set/CreateDataProperty kept ordinary array
-    // elements compact instead of degrading them into unsupported sparse rows.
+    // compact element side table cross a full close/reopen before each method.
+    // The join calls ensure Set/CreateDataProperty kept ordinary array elements
+    // compact instead of degrading them into unsupported sparse rows.
     let last = carry_scenario(
         "carry-array-sort",
-        "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
-         a.join; a.length; (function (y) { return y; });",
+         "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
+         Array.prototype.with; Array.prototype.toReversed; \
+         Array.prototype.toSpliced; Array.prototype.with.name; \
+         a.join; a.length; \
+         (function (y) { return y; });",
         &[
             "a = [3, 1, 2]; t = 7;",
             "a.sort(function (x, y) { return x - y; }); t = a.join(','); t",
             "b = a.toSorted(function (x, y) { return y - x; }); \
              t = b.join(',') + ':' + a.join(','); t",
+            "v = b.with(1, 9); s = v.toReversed(); \
+             o = s.toSpliced(1, 1, 8); \
+             t = o.join(',') + ':' + Array.prototype.with.name + ':' + \
+                 Array.prototype.with.length + ':' + \
+                 Array.prototype.toReversed.name + ':' + \
+                 Array.prototype.toReversed.length + ':' + \
+                 Array.prototype.toSpliced.name + ':' + \
+                 Array.prototype.toSpliced.length; t",
         ],
     );
-    assert_eq!(last, "3,2,1:1,2,3");
+    assert_eq!(last, "1,8,3:with:2:toReversed:0:toSpliced:2");
 }
 
 #[test]
