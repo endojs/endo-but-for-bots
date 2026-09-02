@@ -864,16 +864,16 @@ Search file contents for a regular expression across selected files.
 pattern: string — an ECMAScript RegExp source, evaluated as `new RegExp(pattern)`
 with no flags. NOTE: a caller-supplied source may catastrophically backtrack and
 stall the daemon; supply trusted patterns.
-paths: string[] | Promise<string[]> — which files to search. Pass a glob result to
-compose the two: `grep(pattern, glob("src/**/*.js"))`. Omit it to search every file
-under the mount face.
+paths: string[] | Promise<string[]> — which files to search. Await a glob result
+to compose the two: `grep(pattern, await glob("src/**/*.js"))`.
+Omit it to search every file under the mount face.
 options.maxResults: number — non-negative safe-integer cap on match records
 (default 1000). NaN, Infinity, negatives, and fractions are rejected.
 Each match yields one `{ file, line, text }` record: file is the mount-relative
 path, line is 1-based, text is the whole line with a trailing carriage return
 stripped. A path that is denied, escapes the mount, resolves into a denied
 directory, is a directory, or cannot be read is skipped silently.
-Example: grep("TODO", glob("src/**/*.js")) returns every TODO line under src.
+Example: grep("TODO", await glob("src/**/*.js")) returns every TODO line under src.
 
 ## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -889,7 +889,7 @@ the same confinement and deny-pattern filtering. The glob enumeration is capped 
 options.maxResults: number — non-negative safe-integer cap on match records (default 1000).
 `glorp(g, p)` is the fused equivalent of `grep(p, glob(g))`; prefer it when you have both
 patterns up front.
-Example: glorp("src/**/*.js", "TODO") returns every TODO line under src.
+Example: glorp("src/**/*.js", "TODO") returns every TODO line in a .js file under src.
 
 ## readOnly() -> ReadableTree
 
