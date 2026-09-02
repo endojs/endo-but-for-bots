@@ -213,3 +213,46 @@ fn arguments_length_attributes_survive_suspend_resume() {
     assert_eq!(resumed.result, baseline.result);
     assert_eq!(resumed.computrons, baseline.computrons);
 }
+
+/// A sloppy arguments object's indexed aliases are compact ARRY entries whose
+/// values are closure-cell references. The blob writer and decoder must retain
+/// those semantic edges so writes through an index still update the captured
+/// formal after a complete byte-snapshot reconstruction.
+#[test]
+fn mapped_arguments_cells_survive_blob_restore() {
+    let (crank1, names1) = compile(
+        "var saved, read; function capture(a,b) { saved=arguments; \
+         read=function(){return a+':'+b+':'+saved[0]+':'+saved[1]}; b='z'; } \
+         capture(1,2); 0",
+    );
+    let (crank2, names2) = compile("saved[0]='q'; read()");
+
+    let run_second = |machine: &mut Interp| {
+        let relinked = machine
+            .relink_crank(&crank2, &names2)
+            .expect("second crank relinks onto the persisted name table");
+        machine.run(&relinked)
+    };
+
+    let mut uninterrupted = Interp::new();
+    uninterrupted.link_intrinsics(&names1);
+    assert!(uninterrupted.run(&crank1).completed, "baseline crank 1");
+    let baseline = run_second(&mut uninterrupted);
+    assert!(baseline.completed, "baseline crank 2");
+    assert_eq!(baseline.result, "q:z:q:z");
+
+    let mut before_snapshot = Interp::new();
+    before_snapshot.link_intrinsics(&names1);
+    assert!(before_snapshot.run(&crank1).completed, "snapshot crank 1");
+    let bytes = before_snapshot
+        .write_snapshot(&sig())
+        .expect("mapped arguments snapshot");
+    drop(before_snapshot);
+
+    let mut restored =
+        from_snapshot_bytes(&bytes, &sig()).expect("mapped arguments restore from bytes");
+    let resumed = run_second(&mut restored);
+    assert!(resumed.completed, "resumed crank 2");
+    assert_eq!(resumed.result, baseline.result);
+    assert_eq!(resumed.computrons, baseline.computrons);
+}

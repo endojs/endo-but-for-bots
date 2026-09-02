@@ -29593,7 +29593,12 @@ impl Interp {
             NativeMethod::ArrayReverse => {
                 let inst = match self.dense_array_this(this) {
                     Some(i) => i,
-                    None => return Err(Halt::Unsupported("reverse:non-dense-array")),
+                    None => {
+                        let result = self.array_generic_reverse(code, this)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_REVERSE_FRAME_METERING);
@@ -30684,8 +30689,18 @@ impl Interp {
             // to a fresh chunk + a built-in step) + the final `fxNewChunk`.
             NativeMethod::ArrayJoin => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("join:non-dense-array")),
+                    Some(i)
+                        if self.array_join_fast_safe(i)
+                            && self.array_join_separator_fast_safe(arg0, argc) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_join(code, this, arg0, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 if argc > 0
                     && arg0.kind != Kind::Undefined
@@ -35536,16 +35551,19 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
 
-    /// The array instance behind `this` **iff** it is a dense array (every
-    /// index in `[0, length)` present, no holes) — the receiver shape XS's
-    /// `fxCheckArray` fast path accepts. A sparse array (holes) or a
-    /// non-array returns `None`, and the caller self-names an honest skip
-    /// (XS's generic slow path is a later increment).
+    /// The array instance behind `this` **iff** it is an ordinary dense Array
+    /// (every index in `[0, length)` present, no holes). Arguments objects use
+    /// the same compact storage but mapped elements hold internal closure-cell
+    /// edges, so they must always take a MOP path that projects live values and
+    /// preserves each index's mapping identity.
     fn dense_array_this(&self, this: Slot) -> Option<crate::value::SlotIndex> {
         let inst = match this.value {
             Payload::Reference(i) => i,
             _ => return None,
         };
+        if self.arguments_objects.contains(&inst) {
+            return None;
+        }
         let a = self.arrays.get(&inst)?;
         if a.items().len() as u32 == a.length {
             Some(inst)
@@ -35677,6 +35695,50 @@ impl Interp {
             return false;
         }
         self.array_new_index_writes_fast_safe(inst, length, new_length)
+    }
+
+    /// Whether `join` can snapshot the compact item table and use the
+    /// calibrated primitive-only path. Mapped arguments must read through
+    /// their live parameter cells, objects and Symbols require the general
+    /// `ToString` machinery, and a string containing surrogate code units must
+    /// avoid the fast path's UTF-8 text round-trip.
+    fn array_join_fast_safe(&self, inst: crate::value::SlotIndex) -> bool {
+        if self.arguments_objects.contains(&inst) {
+            return false;
+        }
+        self.arrays[&inst].items().values().all(|item| match item.kind {
+            Kind::Undefined
+            | Kind::Null
+            | Kind::Boolean
+            | Kind::Integer
+            | Kind::Number
+            | Kind::BigInt => true,
+            Kind::String => match item.value {
+                Payload::String(off) => !self
+                    .str_units(off)
+                    .iter()
+                    .any(|unit| (0xD800..=0xDFFF).contains(unit)),
+                _ => false,
+            },
+            _ => false,
+        })
+    }
+
+    /// The dense path carries separator strings through UTF-8 text. Direct
+    /// String values containing UTF-16 surrogate code units therefore use the
+    /// generic code-unit path; non-String values are converted by that path
+    /// inside the dense arm already.
+    fn array_join_separator_fast_safe(&self, separator: Slot, argc: usize) -> bool {
+        if argc == 0 || separator.kind == Kind::Undefined || separator.kind != Kind::String {
+            return true;
+        }
+        match separator.value {
+            Payload::String(off) => !self
+                .str_units(off)
+                .iter()
+                .any(|unit| (0xD800..=0xDFFF).contains(unit)),
+            _ => false,
+        }
     }
 
     /// Whether a dense allocating method may use its compact result path.
@@ -35841,6 +35903,76 @@ impl Interp {
         let id = self.array_generic_index_id(k);
         let recv = Slot::of(Kind::Reference, Payload::Reference(o));
         self.mop_get(code, o, id, recv)
+    }
+
+    /// Generic `Array.prototype.join`: `ToObject` and `LengthOfArrayLike`,
+    /// then separator coercion, followed by a live `Get` and `ToString` for
+    /// every indexed element. This is the observable path for sparse Arrays,
+    /// arguments objects, typed arrays, primitive wrappers, Proxies, accessors,
+    /// and object/Symbol elements on an otherwise dense Array.
+    fn array_generic_join(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        separator: Slot,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+        let separator = if argc == 0 || separator.kind == Kind::Undefined {
+            vec![u16::from(b',')]
+        } else {
+            self.to_string_units(code, separator)?
+        };
+
+        // The loop performs an observable `Get` at every index, so a Proxy or
+        // accessor-backed pathological length cannot be skipped ahead. Keep
+        // the same bounded-completion policy as the other generic Array
+        // methods; any abrupt completion in the reachable prefix still wins.
+        const GENERIC_JOIN_CAP: u64 = 1 << 24;
+        const GENERIC_JOIN_OUTPUT_CAP: usize = 1 << 24;
+        let mut result = Vec::new();
+        for index in 0..length {
+            if index >= GENERIC_JOIN_CAP {
+                return Err(Halt::Unsupported("join:oversized-array-like"));
+            }
+            self.meter.tick_builtin_some(1);
+            if index > 0 {
+                if result
+                    .len()
+                    .checked_add(separator.len())
+                    .map_or(true, |length| length > GENERIC_JOIN_OUTPUT_CAP)
+                {
+                    return Err(Halt::Unsupported("join:oversized-result"));
+                }
+                result.extend_from_slice(&separator);
+            }
+            let element = self.array_generic_get(code, inst, index)?;
+            if !matches!(element.kind, Kind::Undefined | Kind::Null) {
+                let units = self.to_string_units(code, element)?;
+                if result
+                    .len()
+                    .checked_add(units.len())
+                    .map_or(true, |length| length > GENERIC_JOIN_OUTPUT_CAP)
+                {
+                    return Err(Halt::Unsupported("join:oversized-result"));
+                }
+                result.extend_from_slice(&units);
+            }
+        }
+        Ok(self.new_string_units(&result))
     }
 
     /// Generic `Array.prototype.push` / `pop` over an arbitrary object. The
@@ -36058,6 +36190,72 @@ impl Interp {
             }
             _ => unreachable!("generic shift/unshift method"),
         }
+    }
+
+    /// Generic `Array.prototype.reverse`. Read and write every paired index
+    /// through the object MOP so sparse/inherited properties, Proxies, and
+    /// mapped arguments observe the specified Has/Get/Set/Delete order.
+    fn array_generic_reverse(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+        const GENERIC_REVERSE_CAP: u64 = 1 << 24;
+        for lower in 0..length / 2 {
+            if lower >= GENERIC_REVERSE_CAP {
+                return Err(Halt::Unsupported("reverse:oversized-array-like"));
+            }
+            let upper = length - lower - 1;
+            let lower_id = self.array_generic_index_id(lower);
+            let upper_id = self.array_generic_index_id(upper);
+            let lower_exists = self.mop_has(code, inst, lower_id)?;
+            let lower_value = if lower_exists {
+                Some(self.mop_get(code, inst, lower_id, object)?)
+            } else {
+                None
+            };
+            let upper_exists = self.mop_has(code, inst, upper_id)?;
+            let upper_value = if upper_exists {
+                Some(self.mop_get(code, inst, upper_id, object)?)
+            } else {
+                None
+            };
+            match (lower_value, upper_value) {
+                (Some(lower_value), Some(upper_value)) => {
+                    if !self.mop_set(code, inst, lower_id, upper_value, object)?
+                        || !self.mop_set(code, inst, upper_id, lower_value, object)?
+                    {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                (None, Some(upper_value)) => {
+                    if !self.mop_set(code, inst, lower_id, upper_value, object)?
+                        || !self.mop_delete(code, inst, upper_id)?
+                    {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                (Some(lower_value), None) => {
+                    if !self.mop_delete(code, inst, lower_id)?
+                        || !self.mop_set(code, inst, upper_id, lower_value, object)?
+                    {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                (None, None) => {}
+            }
+        }
+        Ok(object)
     }
 
     /// `ToIntegerOrInfinity(? ToNumber(v))` (ECMA-262 7.1.5): `NaN` → 0,
