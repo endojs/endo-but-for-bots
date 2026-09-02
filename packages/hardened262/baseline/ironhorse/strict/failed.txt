@@ -79,8 +79,6 @@ test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/ThrowTypeError/intrinsic-metadata.js
-test/intrinsics/TypedArray/copying-methods.js
-test/intrinsics/TypedArray/in-place-methods.js
 test/intrinsics/TypedArray/intrinsic-metadata.js
 test/intrinsics/WeakMapPrototype/intrinsic-metadata.js
 test/intrinsics/WeakSetPrototype/intrinsic-metadata.js
