@@ -154,6 +154,12 @@ await E(control).cancel('changed my mind');
 `cancel()` is represented by the reserved engine event `cancel-requested`.
 Linked children receive and journal cancellation before the parent records its
 own request, closing the crash window in the safe direction.
+The same child-first rule applies to every parent terminal, not only an
+explicit `cancel()`: a parent cannot truthfully commit completion or failure
+while a linked child cancellation write is still fallible.
+If that child write rejects, the parent remains nonterminal with its spawn
+obligation intact, so retry or recovery can converge without orphaning child
+authority.
 If the active chart handles the request, the run stays live while ordinary
 durable states perform cleanup or collect an operator attestation.
 That durable request also closes authority to begin child runs: pending or
