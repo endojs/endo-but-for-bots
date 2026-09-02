@@ -107,6 +107,14 @@ fn new_on_call_apply_throws_type_error() {
     );
 }
 
+#[test]
+fn reflect_construct_rejects_every_non_constructor_function_shape() {
+    agrees(
+        "var n=0;var values=[()=>{},function*(){},async function(){},async function*(){},({m(){}}).m,(()=>{}).bind(null),new Proxy(()=>{},{})];\
+         for(var v of values){try{Reflect.construct(v,[])}catch(e){n+=e instanceof TypeError}}n",
+    );
+}
+
 // -------------------------------------------------------------------------
 // §5  A **native callable** passed as an Array-method callback — routed
 //     through `call_native` (previously `callback:non-user-function`).
