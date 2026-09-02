@@ -1,21 +1,50 @@
 // @ts-check
 
 /**
- * Method-guard shape for the EndoRegistry capability.
+ * Method-guard shapes for package-registry directory trees and the deprecated
+ * EndoRegistry compatibility capability.
  *
  * This guard is what crosses the worker boundary, mirroring the
  * `EndoRegistry` interface in the Capability shape section of
  * `designs/registry-capability.md`.
  *
- * The runtime exo (built by `makeNpmReferenceRegistry`) uses
- * `EndoRegistryInterface`; a future Rust-backed wrapper presents the
- * same guard so callers cannot tell which backend resolved a request.
+ * The compatibility exo uses `EndoRegistryInterface`; the Node and Endor
+ * adapters present the directory-tree guards below so callers cannot tell
+ * which backend resolved a request.
  *
  * The CAS interface guard (`CasInterface`) lives in `@endo/mem-cas`;
  * see that package's `./src/interfaces.js`.
  */
 
 import { M } from '@endo/patterns';
+import {
+  enumerableTreeMethodGuards,
+  getInfoMethodGuard,
+  lookupTreeMethodGuards,
+  readableTreeMethodGuards,
+} from '@endo/platform/fs/lite';
+
+export const RegistryHubInterface = M.interface('RegistryHub', {
+  ...lookupTreeMethodGuards,
+  ...getInfoMethodGuard,
+});
+harden(RegistryHubInterface);
+
+export const RegistryDirectoryInterface = M.interface('RegistryDirectory', {
+  ...enumerableTreeMethodGuards,
+  ...getInfoMethodGuard,
+});
+harden(RegistryDirectoryInterface);
+
+export const RegistrySnapshotTreeInterface = M.interface(
+  'RegistrySnapshotTree',
+  {
+    ...readableTreeMethodGuards,
+    ...getInfoMethodGuard,
+    sha256: M.call().returns(M.string()),
+  },
+);
+harden(RegistrySnapshotTreeInterface);
 
 // Shapes shared between guards. The narrow value shapes (resolution
 // records, tree refs, etc.) are documented in `types.d.ts`; the

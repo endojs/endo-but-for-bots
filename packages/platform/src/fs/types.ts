@@ -79,13 +79,26 @@ export type SnapshotBlob = ReadableBlob & {
   getInfo: () => Promise<BlobInfo>;
 };
 
-/**
- * A ReadableTree presents an immutable directory-like interface.
- */
-export interface ReadableTree {
+/** The least tree authority: lookup without enumeration. */
+export interface LookupTree {
   has: (...petNamePath: string[]) => Promise<boolean>;
-  list: (...petNamePath: string[]) => Promise<readonly string[]>;
   lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+  // Existing structural tree types predate the conventional `help` facet.
+  // Concrete guarded capabilities expose it, while keeping it optional here
+  // preserves source compatibility for local structural implementations.
+  help?: (method?: string) => string;
+}
+
+/** A tree that permits immediate-child enumeration. */
+export interface EnumerableTree extends LookupTree {
+  list: (...petNamePath: string[]) => Promise<readonly string[]>;
+}
+
+/**
+ * A ReadableTree presents an immutable directory-like interface and adds a
+ * recursive listing convenience to the enumerable surface.
+ */
+export interface ReadableTree extends EnumerableTree {
   /**
    * Recursive counterpart to `list`: every descendant under the sub-path
    * `petNamePath` (a single name, a path of segments, or `[]` for the whole

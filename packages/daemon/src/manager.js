@@ -12,7 +12,7 @@ import { makeMarshal } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { makeError, q, X } from '@endo/errors';
 import { ZipWriter } from '@endo/zip/writer.js';
-import { encodeBase64 } from '@endo/base64';
+import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { mapReader } from '@endo/stream';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
@@ -42,7 +42,11 @@ import {
   tarEndMarker,
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
-import { makeEndoRegistry, makeRegistryTable } from './registry.js';
+import { makeRegistryTable } from './registry.js';
+import {
+  makeEndorPackageRegistryTree,
+  makeNodePackageRegistryTree,
+} from './registry-tree.js';
 import { makeDirectoryMaker } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
@@ -488,6 +492,10 @@ const makeDaemonCore = async (
     registry: registryPowers,
     hostTools,
   } = powers;
+  const endorRegistryPowers =
+    /** @type {Extract<import('./types.js').RegistryPowers, { adapter: 'endor' }>} */ (
+      registryPowers
+    );
   const { randomHex256, generateEd25519Keypair } = cryptoPowers;
   // `git` and `shell` formulas spawn host processes.  The supervisor
   // injects the implementations rather than the daemon core importing
@@ -1920,6 +1928,146 @@ const makeDaemonCore = async (
       }),
     );
 
+  /** @type {Map<string, object>} */
+  const endorTreeByHash = new Map();
+  /** @type {Map<string, object>} */
+  const endorBlobByHash = new Map();
+
+  /**
+   * Decode the JSON envelope returned by one synchronous Rust registry host
+   * callback. Package-level error mapping lives in registry-tree.js; this
+   * helper is for traversing an already-provided immutable CAS tree.
+   *
+   * @template T
+   * @param {string} encoded
+   * @returns {{ found: true, value: T } | { found: false }}
+   */
+  const unwrapEndorTreeHost = encoded => {
+    /** @type {{ ok: boolean, value?: T, error?: { kind: string, message: string } }} */
+    const envelope = JSON.parse(encoded);
+    if (envelope.ok) {
+      return harden({
+        found: /** @type {const} */ (true),
+        value: /** @type {T} */ (envelope.value),
+      });
+    }
+    if (envelope.error?.kind === 'not-found') {
+      return harden({ found: /** @type {const} */ (false) });
+    }
+    throw makeError(
+      X`Endor registry tree host failed: ${q(
+        envelope.error?.message ?? 'unknown failure',
+      )}`,
+    );
+  };
+
+  /**
+   * Project a Rust CAS blob into the daemon's ordinary readable-blob shape.
+   * The host call returns the immutable bytes as base64; range reads are then
+   * served locally in XS.
+   *
+   * @param {string} hash
+   * @param {number | undefined} advertisedSize
+   */
+  const makeEndorReadableBlob = (hash, advertisedSize) => {
+    const cached = endorBlobByHash.get(hash);
+    if (cached !== undefined) return cached;
+    const read = () => {
+      const result = unwrapEndorTreeHost(endorRegistryPowers.readBlob(hash));
+      if (!result.found)
+        throw makeError(X`Endor CAS blob ${q(hash)} is absent`);
+      return decodeBase64(/** @type {string} */ (result.value));
+    };
+    const blob = makeExo('EndorRegistryBlob', BlobInterface, {
+      help: () => `Immutable Endor registry blob ${hash}`,
+      text: async () => decodeUtf8(read()),
+      json: async () => JSON.parse(decodeUtf8(read())),
+      streamBase64(synPromise) {
+        const pump = makeReaderPump([encodeBase64(read())]);
+        return pump(/** @type {any} */ (synPromise));
+      },
+      async getInfo() {
+        const size = advertisedSize ?? read().byteLength;
+        return harden({
+          algorithm: 'sha256',
+          hash: encodeBase64(fromHex(hash)),
+          size: BigInt(size),
+        });
+      },
+      async fetch(offset, length) {
+        const bytes = read();
+        const start = toSafeNumber(offset, 'offset');
+        const count = toSafeNumber(length, 'length');
+        return bytesFromRange(bytes.slice(start, start + count));
+      },
+    });
+    endorBlobByHash.set(hash, blob);
+    return blob;
+  };
+
+  /**
+   * Project one immutable Rust CAS tree node into the SnapshotTree vocabulary
+   * consumed by the shared registry adapter.
+   *
+   * @param {string} hash
+   */
+  const makeEndorReadableTree = hash => {
+    const cached = endorTreeByHash.get(hash);
+    if (cached !== undefined) return cached;
+    /** @type {any} */
+    const tree = Far('EndorRegistryTree', {
+      help: () => `Immutable Endor registry tree ${hash}`,
+      async has(...path) {
+        try {
+          if (path.length === 0) return true;
+          return (await tree.lookup(path)) !== undefined;
+        } catch {
+          return false;
+        }
+      },
+      async list(...path) {
+        if (path.length > 0) {
+          const nested = await tree.lookup(path);
+          if (nested === undefined || typeof nested.list !== 'function') {
+            throw new TypeError(
+              `Endor registry node ${path.join('/')} is not a tree`,
+            );
+          }
+          return nested.list();
+        }
+        const result = unwrapEndorTreeHost(endorRegistryPowers.listTree(hash));
+        if (!result.found) return harden([]);
+        return harden(/** @type {string[]} */ (result.value));
+      },
+      async lookup(path) {
+        const segments = typeof path === 'string' ? [path] : [...path];
+        if (segments.length === 0) return tree;
+        let current = tree;
+        for (const segment of segments) {
+          const currentHash = current.sha256();
+          const result = unwrapEndorTreeHost(
+            endorRegistryPowers.lookupTree(currentHash, segment),
+          );
+          if (!result.found) return undefined;
+          const entry =
+            /** @type {{ kind: string, hash: string, size?: number }} */ (
+              result.value
+            );
+          current =
+            entry.kind === 'tree'
+              ? makeEndorReadableTree(entry.hash)
+              : makeEndorReadableBlob(entry.hash, entry.size);
+        }
+        return current;
+      },
+      sha256: () => hash,
+      getInfo: async () =>
+        harden({ algorithm: 'sha256', hash: encodeBase64(fromHex(hash)) }),
+    });
+    endorTreeByHash.set(hash, tree);
+    return tree;
+  };
+
   /** The daemon's configured registry location. */
   const registryDefaultUrl = registryPowers.registryUrl;
 
@@ -1937,23 +2085,32 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Construct an `EndoRegistry` capability over the injected backend.
+   * Construct the package-registry directory tree over the injected backend.
    * Construction does no I/O;
-   * network access happens lazily on `resolve`/`fetch`, so incarnating the
-   * `@registry` slot never blocks daemon start.
+   * network access happens lazily when a package is listed or selected, so
+   * incarnating the `@registry` slot never blocks daemon start.
    *
    * @param {string} registryUrl
    */
   const makeRegistry = registryUrl => {
+    if (registryPowers.adapter === 'endor') {
+      return makeEndorPackageRegistryTree({
+        hasPackage: endorRegistryPowers.hasPackage,
+        listVersions: endorRegistryPowers.listVersions,
+        providePackageTree: endorRegistryPowers.providePackageTree,
+        makeTreeRef: makeEndorReadableTree,
+      });
+    }
     const backend = registryPowers.makeRegistryBackend({
       contentStore,
       makeReadableTree,
       sha256Hex: registrySha256Hex,
       registryUrl,
     });
-    return makeEndoRegistry(backend, {
+    return makeNodePackageRegistryTree(backend, {
       table: makeRegistryTable(),
       registryUrl,
+      offline: registryPowers.offline,
     });
   };
 
@@ -4707,8 +4864,8 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulate an `EndoRegistry` capability formula.  Used at host
-   * formulation to populate the required `@registry` special name.
+   * Formulate a package-registry tree formula. Used at host formulation to
+   * populate the required `@registry` special name.
    *
    * @param {FormulaNumber} formulaNumber
    * @param {NodeNumber} [nodeNumber]
@@ -5368,9 +5525,9 @@ const makeDaemonCore = async (
         'node',
       ),
     );
-    // The @registry special name is backed by a host-scoped EndoRegistry
-    // capability, required on every host (mirroring @node) so callers never
-    // branch on its presence.  See designs/registry-capability.md.
+    // The @registry special name is backed by a host-scoped package-registry
+    // root tree, required on every host (mirroring @node) so callers never
+    // branch on its presence. See designs/npm-registry-as-directory-tree.md.
     const registryId = pin(
       (
         await formulateNumberedRegistry(
@@ -6247,7 +6404,12 @@ const makeDaemonCore = async (
   // A content plane is selected by its sharing-capability name when producing
   // a locator, then by its magnet source letter when loading one.
   const contentDataPlaneRegistry = makeContentDataPlaneRegistry();
-  contentDataPlaneRegistry.register(makeHttpContentDataPlane());
+  // XS delegates npm traffic to narrow Rust host powers and intentionally has
+  // no ambient Web `fetch`. The optional HTTP web-seed plane is installed only
+  // on managers that actually received that authority.
+  if (typeof globalThis.fetch === 'function') {
+    contentDataPlaneRegistry.register(makeHttpContentDataPlane());
+  }
 
   /** @type {DaemonCore['getAllContentSources']} */
   const getAllContentSources = async (planesDirectoryId, identity) => {

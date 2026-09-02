@@ -1,9 +1,10 @@
 // @ts-nocheck
+/* eslint-disable no-underscore-dangle */
 
 // Integration test: the `@registry` special name is populated on every host
 // (mirroring `@node`), so `E(host).lookup('@registry')` returns the host's
-// EndoRegistry capability without the caller branching on its presence.  See
-// designs/registry-capability.md § Host special name.
+// package-registry directory tree without the caller branching on its
+// presence. See designs/npm-registry-as-directory-tree.md.
 //
 // The socket path lives under a short os.tmpdir() directory to stay within
 // the ~104-char unix-domain-socket limit regardless of the checkout path.
@@ -15,11 +16,42 @@ import test from 'ava';
 import os from 'os';
 import path from 'path';
 import fsp from 'fs/promises';
+import http from 'http';
+import { createHash } from 'crypto';
+import { gzipSync } from 'zlib';
 import { E } from '@endo/eventual-send';
 import { makeCancelKit } from '@endo/cancel';
+import {
+  tarEndMarker,
+  tarFileHeader,
+  tarFilePadding,
+} from '@endo/tar/writer.js';
 import { start, stop, purge, makeEndoClient } from '../index.js';
 
 const contexts = [];
+const fixturePackageJson = JSON.stringify({
+  name: 'fixture',
+  version: '1.0.0',
+});
+const textEncoder = new TextEncoder();
+
+const makeFixtureTarball = () => {
+  const body = textEncoder.encode(fixturePackageJson);
+  const chunks = [
+    tarFileHeader('package/package.json', body.byteLength),
+    body,
+    tarFilePadding(body.byteLength),
+    tarEndMarker(),
+  ];
+  const size = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
+  const archive = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    archive.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return gzipSync(archive);
+};
 
 test.afterEach.always(async () => {
   while (contexts.length > 0) {
@@ -32,7 +64,7 @@ test.afterEach.always(async () => {
   }
 });
 
-const prepare = async t => {
+const prepare = async (t, registryUrl = undefined) => {
   const { cancel, cancelled } = makeCancelKit();
   const root = await fsp.mkdtemp(path.join(os.tmpdir(), 'endo-reg-'));
   const config = {
@@ -43,6 +75,7 @@ const prepare = async t => {
     address: '127.0.0.1:0',
     pets: new Map(),
     values: new Map(),
+    registryUrl,
   };
   await purge(config);
   await start(config);
@@ -58,26 +91,78 @@ const prepare = async t => {
   return { host, cancelled };
 };
 
-test.serial('E(host).lookup("@registry") resolves an EndoRegistry', async t => {
-  const { host } = await prepare(t);
-  const registry = await E(host).lookup('@registry');
-  t.truthy(registry, '@registry is populated on the host');
-  const help = await E(registry).help();
-  t.true(
-    typeof help === 'string' && help.includes('EndoRegistry'),
-    'the registry reports its help',
+const makeMetadataRegistry = async t => {
+  const tarball = makeFixtureTarball();
+  const integrity = `sha512-${createHash('sha512')
+    .update(tarball)
+    .digest('base64')}`;
+  let registryUrl;
+  const server = http.createServer((request, response) => {
+    if (request.url === '/fixture/-/fixture-1.0.0.tgz') {
+      response.setHeader('content-type', 'application/octet-stream');
+      response.end(tarball);
+      return;
+    }
+    response.setHeader('content-type', 'application/json');
+    response.end(
+      JSON.stringify({
+        versions: {
+          '2.0.0': {
+            dist: {
+              integrity,
+              tarball: `${registryUrl}/fixture/-/fixture-1.0.0.tgz`,
+            },
+          },
+          '1.0.0': {
+            dist: {
+              integrity,
+              tarball: `${registryUrl}/fixture/-/fixture-1.0.0.tgz`,
+            },
+          },
+        },
+      }),
+    );
+  });
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', resolve);
+  });
+  t.teardown(
+    () =>
+      new Promise(resolve => {
+        server.close(resolve);
+      }),
   );
-});
+  const address = server.address();
+  if (address === null || typeof address === 'string') {
+    throw new Error('test registry did not bind a TCP port');
+  }
+  registryUrl = `http://127.0.0.1:${address.port}`;
+  return registryUrl;
+};
 
 test.serial(
-  '@registry lookup(name, version) is undefined before any fetch',
+  'E(host).lookup("@registry") resolves a registry root tree',
   async t => {
     const { host } = await prepare(t);
     const registry = await E(host).lookup('@registry');
-    const missing = await E(registry).lookup('ses', '1.0.0');
-    t.is(missing, undefined, 'an unfetched package is absent from the table');
-    const listed = await E(registry).list();
-    t.deepEqual(listed, [], 'the registry table starts empty');
+    t.truthy(registry, '@registry is populated on the host');
+    const help = await E(registry).help();
+    t.true(typeof help === 'string' && help.includes('package registries'));
+    t.deepEqual(await E(registry).list(), ['npm']);
+  },
+);
+
+test.serial(
+  '@registry exposes a non-enumerable npm package-name hub',
+  async t => {
+    const { host } = await prepare(t);
+    const registry = await E(host).lookup('@registry');
+    const npm = await E(registry).lookup('npm');
+    const methods = await E(npm).__getMethodNames__();
+    t.true(methods.includes('lookup'));
+    t.true(methods.includes('has'));
+    t.false(methods.includes('list'));
   },
 );
 
@@ -98,5 +183,34 @@ test.serial(
     const host2 = E(getBootstrap()).host();
     const again = await E(host2).lookup('@registry');
     t.truthy(again, '@registry resolves for a second client');
+  },
+);
+
+test.serial(
+  '@registry lists metadata through the configured backend without fetching a tarball',
+  async t => {
+    const registryUrl = await makeMetadataRegistry(t);
+    const { host } = await prepare(t, registryUrl);
+    const registry = await E(host).lookup('@registry');
+    const npm = await E(registry).lookup('npm');
+    const fixture = await E(npm).lookup('fixture');
+    t.deepEqual(await E(fixture).list(), ['1.0.0', '2.0.0']);
+  },
+);
+
+test.serial(
+  '@registry provides an integrity-checked immutable package tree',
+  async t => {
+    const registryUrl = await makeMetadataRegistry(t);
+    const { host } = await prepare(t, registryUrl);
+    const registry = await E(host).lookup('@registry');
+    const npm = await E(registry).lookup('npm');
+    const fixture = await E(npm).lookup('fixture');
+    const leaf = await E(fixture).lookup('1.0.0');
+    const packageJson = await E(leaf).lookup('package.json');
+    t.is(await E(packageJson).text(), fixturePackageJson);
+    t.like(await E(leaf).getInfo(), {
+      temporal: 'immutable',
+    });
   },
 );

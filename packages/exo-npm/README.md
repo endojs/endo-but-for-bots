@@ -1,58 +1,37 @@
 # @endo/exo-npm
 
-The `EndoRegistry` exo capability shape and an npm-scoped reference backend.
+Package registries presented as Endo directory trees, together with eager MVS
+resolution and snapshot mapping.
 
-The `exo-` prefix indicates that this package imports and exports passable
-interfaces over CapTP; the `npm` suffix names the package's scope
-(npm-style package resolution against the npm registry's metadata schema).
-A different registry backend (a Rust-backed wrapper, a workspace-only
-resolver) would carry its own scope-naming.
+The registry root is enumerable and initially contains `npm`. The npm and scope
+hubs are deliberately lookup-only capabilities: they have no `list` method.
+Package directories enumerate exact published versions, and an exact version
+is the immutable content-addressed package tree.
 
-## What this package provides
+## Main exports
 
-- The `EndoRegistryInterface` method guard and the typescript types that
-  describe the capability shape (`EndoRegistry`, `RegistryResolution`).
-- Structured error classes (`RegistryTamperedError`,
-  `RegistryMissingPackageError`, `RegistryNetworkError`,
-  `RegistryOfflineError`) tagged via `@endo/errors`'s `errorName` so
-  callers can branch on the failure class without inspecting message
-  text.
-- An npm-scoped reference backend (`makeNpmReferenceRegistry`) that wires
-  the capability boundary together.
-  It accepts a caller-supplied
-  `PackageCacheTable` (sortable by dewey-decimal version) and delegates
-  the MVS resolution algorithm to an injected `resolveHook`, so a
-  caller can substitute the resolver implementation without touching the
-  capability surface.
-- A reference MVS resolve hook (`makeMvsResolveHook`) that implements
-  Go-like Minimum Version Selection over an npm-shaped dependency graph.
-  The hook takes a caller-supplied `fetch` power (so the package itself
-  does not bind to a particular HTTP client) and walks `dependencies`,
-  `peerDependencies`, and `optionalDependencies` together, observing
-  `workspace:` specifiers when the caller supplies a workspace root.
-- An in-memory reference `PackageCacheTable`
-  (`makeMemoryPackageCacheTable`) suitable for tests and small in-process
-  consumers.
-  A SQLite-backed implementation projects the same shape over
-  a `(name, major, minor, patch, integrity, treeRef)` relational table
-  sorted by the three integer columns; it is tracked separately.
+- `makeNpmRegistryTree(operations)` adapts narrow `listVersions` and
+  `providePackageTree` mechanics to the npm lookup hub.
+- `makeEndorNpmRegistryTree(hostPowers)` presents the identical surface over
+  Endor's Rust host powers.
+- `makePackageRegistryTree({ npm })` builds the stable registry-family root.
+- `resolveRegistryTree(entryPackageJson, registryRoot, options)` performs an
+  eager, same-vat MVS walk and emits a reusable `RegistryResolution`.
+- `makeLookupTreeView(tree)` attenuates an enumerable fixture tree for
+  production-shape tests.
+- `makeDeprecatedEndoRegistryAdapter(root, options)` is the explicitly obtained
+  compatibility path for the old `lookup(name, version)` and `list()` protocol.
 
-The CAS-backed store interface (`CasStore` shape, `CasInterface` runtime
-guard, `makeMemoryCasStore`, `sha256HexWebCrypto`, `makeRetentionLinkSet`)
-lives in [`@endo/mem-cas`](../mem-cas/README.md).
-This package depends on `@endo/mem-cas`; consumers wire the two together
-via the reference backend's `cas` option.
+The tree reports its read consistency through `getInfo().temporal`: `stable` at
+the configured root, `live` at package-name and version-listing nodes, and
+`immutable` at an exact package version. A version leaf also reports the npm
+`dist.integrity` used by `RegistryResolution.resolutionHash`, separately from
+the leaf's CAS content hash.
 
-## What this package does not provide
+The original `makeNpmReferenceRegistry` and `makeMvsResolveHook` exports remain
+available during migration. New integrations should use the directory tree and
+the ordinary `resolveRegistryTree` function.
 
-- A Rust-backed `EndoRegistry` wrapping `endor-npm-registry-proxy`.
-- A SQLite-backed `PackageCacheTable` implementation.
-  The interface is in place; a SQLite projection lands separately.
-
-## Status
-
-The npm-scoped reference backend and the JS MVS resolve hook are wired
-together.
-See [`designs/registry-capability.md`](../../designs/registry-capability.md)
-and [`designs/mvs-resolver.md`](../../designs/mvs-resolver.md) for the
-design rationale.
+See
+[`designs/npm-registry-as-directory-tree.md`](../../designs/npm-registry-as-directory-tree.md)
+for the capability, error, locality, and compatibility contracts.

@@ -1,13 +1,14 @@
 // @ts-check
 
 /**
- * Structured error classes for the EndoRegistry capability.
+ * Structured error factories for package-registry trees and the deprecated
+ * EndoRegistry compatibility surface.
  *
- * The four failure classes come from the Failure surface section of
- * `designs/registry-capability.md`. They are tagged via `@endo/errors`'s
- * `errorName` option so callers branch on the failure class without
- * inspecting message text, which is fragile across both the JS and the
- * future Rust-backed lanes.
+ * The legacy four classes come from `designs/registry-capability.md`. The
+ * tree-originated not-found, path-syntax, and offline failures additionally
+ * share the `PackageRegistryError` discriminant from
+ * `designs/npm-registry-as-directory-tree.md` while retaining distinct native
+ * constructors and concrete names.
  *
  * Eviction-driven re-fetch that succeeds is silent; an eviction-driven
  * re-fetch that fails surfaces as `RegistryNetworkError` or
@@ -21,6 +22,43 @@ const TAMPERED = 'RegistryTamperedError';
 const MISSING = 'RegistryMissingPackageError';
 const NETWORK = 'RegistryNetworkError';
 const OFFLINE = 'RegistryOfflineError';
+const PACKAGE_REGISTRY = 'PackageRegistryError';
+
+const annotateRegistryFailure = (error, concreteName) => {
+  Object.defineProperties(error, {
+    errorName: { value: PACKAGE_REGISTRY, enumerable: true },
+    registryErrorName: { value: concreteName, enumerable: true },
+  });
+  return harden(error);
+};
+
+/**
+ * A registry path names no published node.
+ * @param {string} path
+ */
+export const RegistryNotFoundError = path =>
+  annotateRegistryFailure(
+    new RangeError(
+      makeError(X`Package registry has no entry at ${path}`).message,
+    ),
+    'RegistryNotFoundError',
+  );
+harden(RegistryNotFoundError);
+
+/**
+ * A slash-bearing segment is not npm's one accepted scoped-name spelling.
+ * @param {string} segment
+ */
+export const RegistryPathSyntaxError = segment =>
+  annotateRegistryFailure(
+    new SyntaxError(
+      makeError(
+        X`Invalid package-registry path segment ${segment}; use @scope/package or a string-array path`,
+      ).message,
+    ),
+    'RegistryPathSyntaxError',
+  );
+harden(RegistryPathSyntaxError);
 
 /**
  * The fetched tarball's hash did not match the upstream registry's
@@ -120,18 +158,27 @@ harden(RegistryNetworkError);
  * @returns {Error}
  */
 export const RegistryOfflineError = (nameOrReason, version) => {
+  let error;
   if (version === undefined) {
-    return makeError(X`Registry is offline: ${nameOrReason}`, undefined, {
-      errorName: OFFLINE,
-    });
+    error = makeError(X`Registry is offline: ${nameOrReason}`);
+  } else {
+    error = makeError(
+      X`Registry is in offline mode and ${nameOrReason}@${version} is not cached`,
+    );
   }
-  return makeError(
-    X`Registry is in offline mode and ${nameOrReason}@${version} is not cached`,
-    undefined,
-    { errorName: OFFLINE },
-  );
+  return annotateRegistryFailure(new Error(error.message), OFFLINE);
 };
 harden(RegistryOfflineError);
+
+/**
+ * Whether an error belongs to the directory-tree registry contract family.
+ * @param {unknown} error
+ */
+export const isPackageRegistryError = error =>
+  error !== null &&
+  typeof error === 'object' &&
+  /** @type {{ errorName?: unknown }} */ (error).errorName === PACKAGE_REGISTRY;
+harden(isPackageRegistryError);
 
 /**
  * Tag interrogation: returns the registry error class of `err`, or
@@ -154,6 +201,7 @@ export const registryErrorName = err => {
   // runtime error's `.name` reflects the constructor.  We probe
   // multiple properties to stay resilient across SES versions.
   const candidates = [
+    /** @type {{ registryErrorName?: unknown }} */ (err).registryErrorName,
     /** @type {{ errorName?: unknown }} */ (err).errorName,
     /** @type {{ name?: unknown }} */ (err).name,
   ];
@@ -163,7 +211,9 @@ export const registryErrorName = err => {
       (candidate === TAMPERED ||
         candidate === MISSING ||
         candidate === NETWORK ||
-        candidate === OFFLINE)
+        candidate === OFFLINE ||
+        candidate === 'RegistryNotFoundError' ||
+        candidate === 'RegistryPathSyntaxError')
     ) {
       return candidate;
     }

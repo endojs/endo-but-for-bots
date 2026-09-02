@@ -16,7 +16,10 @@
    loop, timer id allocation, and URL polyfill constructor-only
    side-effect probe. */
 /// <reference path="./bus-xs-host-globals.d.ts" />
-/* global hostSendRawFrame, hostTrace, hostGetPid, hostGetEnv, hostDecodeUtf8 */
+/* global hostSendRawFrame, hostTrace, hostGetPid, hostGetEnv, hostDecodeUtf8,
+  hostRegistryHasPackage, hostRegistryListVersions,
+  hostRegistryProvidePackageTree, hostRegistryListTree,
+  hostRegistryLookupTree, hostRegistryReadBlob */
 
 /**
  * XS daemon bootstrap — entry point for the Endo daemon running in the
@@ -46,8 +49,6 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader, makePipe } from '@endo/stream';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
-import { makeError, X } from '@endo/errors';
-
 import { makeDaemon } from './manager.js';
 import { makeDaemonicPersistencePowers } from './manager-persistence-powers.js';
 import { makeDaemonDatabase } from './manager-database.js';
@@ -643,20 +644,17 @@ let shouldTerminate = false;
 /** @type {Awaited<ReturnType<typeof import('./manager.js').makeDaemon>> | null} */
 let _daemonResult = null;
 
-const makeRegistryUnavailablePowers = unavailableRegistryUrl => {
-  const unavailable = () => {
-    throw makeError(
-      X`registry: no registry transport is available on this platform`,
-    );
-  };
+const makeEndorRegistryPowers = endorRegistryUrl => {
   return harden({
-    registryUrl: unavailableRegistryUrl,
-    makeRegistryBackend: () => ({
-      fetchVersions: unavailable,
-      provideTree: unavailable,
-      readPackageJson: unavailable,
-      sha256Hex: unavailable,
-    }),
+    adapter: 'endor',
+    offline: hostGetEnv('ENDO_REGISTRY_OFFLINE') === '1',
+    registryUrl: endorRegistryUrl,
+    hasPackage: hostRegistryHasPackage,
+    listVersions: hostRegistryListVersions,
+    providePackageTree: hostRegistryProvidePackageTree,
+    listTree: hostRegistryListTree,
+    lookupTree: hostRegistryLookupTree,
+    readBlob: hostRegistryReadBlob,
   });
 };
 
@@ -687,7 +685,7 @@ const main = async () => {
     persistence: daemonicPersistencePowers,
     control: controlPowers,
     filePowers,
-    registry: makeRegistryUnavailablePowers(config.registryUrl),
+    registry: makeEndorRegistryPowers(config.registryUrl),
   });
 
   const gcEnabled = hostGetEnv('ENDO_GC') === '1';

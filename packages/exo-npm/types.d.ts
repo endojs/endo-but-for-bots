@@ -26,11 +26,49 @@ export interface EndoReadableTree {
   /** Lists names at the given path. */
   list(...path: string[]): Promise<string[]>;
   /** Resolves a single entry. */
-  lookup(path: string | string[]): Promise<unknown>;
+  lookup(path: string | readonly string[]): Promise<unknown>;
   /** Tests for an entry. */
   has(...path: string[]): Promise<boolean>;
   /** Documentation string. */
   help(text?: string): string;
+  /** Uniform content identity when supplied by the backing tree. */
+  getInfo?(): Promise<Record<string, unknown>> | Record<string, unknown>;
+}
+
+export type RegistryTemporal = 'stable' | 'live' | 'immutable';
+
+export interface RegistryNodeInfo {
+  temporal: RegistryTemporal;
+  integrity?: string;
+  algorithm?: string;
+  hash?: string;
+  size?: bigint;
+}
+
+export interface RegistryHub {
+  help(method?: string): string;
+  has(...path: string[]): Promise<boolean>;
+  lookup(path: string | readonly string[]): Promise<unknown>;
+  getInfo(): RegistryNodeInfo | Promise<RegistryNodeInfo>;
+}
+
+export interface RegistryDirectory extends RegistryHub {
+  list(...path: string[]): Promise<readonly string[]>;
+}
+
+export interface RegistryVersionTree extends EndoReadableTree {
+  getInfo(): RegistryNodeInfo | Promise<RegistryNodeInfo>;
+}
+
+/** Narrow mechanics boundary shared by the Node and Endor adapters. */
+export interface RegistryTreeOperations {
+  /** Optional fast no-throw membership power supplied by the Endor host. */
+  hasPackage?(name: string): boolean | Promise<boolean>;
+  listVersions(name: string): Promise<readonly string[] | undefined>;
+  providePackageTree(
+    name: string,
+    version: string,
+  ): Promise<{ treeRef: EndoReadableTree; integrity: string }>;
 }
 
 /**
@@ -51,6 +89,14 @@ export interface ResolveOptions {
    * `workspace:` specifier resolution per `designs/mvs-resolver.md`.
    */
   workspaceRoot?: string | EndoMount;
+  /** Direct workspace adapter for same-vat tree resolution. */
+  workspaceLookup?: (
+    name: string,
+  ) => Promise<
+    { packageJson: string | Uint8Array; treeRef: EndoReadableTree } | undefined
+  >;
+  /** Hash power for byte-identical resolution hashes. */
+  sha256?: (bytes: Uint8Array) => Promise<string>;
 }
 
 /**
@@ -284,4 +330,78 @@ export type RegistryErrorName =
   | 'RegistryTamperedError'
   | 'RegistryMissingPackageError'
   | 'RegistryNetworkError'
-  | 'RegistryOfflineError';
+  | 'RegistryOfflineError'
+  | 'RegistryNotFoundError'
+  | 'RegistryPathSyntaxError';
+
+export type PackageRegistryError = Error & {
+  errorName: 'PackageRegistryError';
+  registryErrorName: Extract<
+    RegistryErrorName,
+    'RegistryOfflineError' | 'RegistryNotFoundError' | 'RegistryPathSyntaxError'
+  >;
+};
+
+/** Construct a registry family root with a non-enumerable npm hub. */
+export function makePackageRegistryTree(
+  registries: Record<string, RegistryHub>,
+): RegistryDirectory;
+
+/** Construct the npm tree presentation over injected mechanics. */
+export function makeNpmRegistryTree(
+  operations: RegistryTreeOperations,
+  options?: { label?: string },
+): RegistryHub;
+
+/** Construct the XS-hosted Endor npm tree over narrow Rust host powers. */
+export function makeEndorNpmRegistryTree(
+  hostPowers: RegistryTreeOperations,
+): RegistryHub;
+
+/** Attenuate an enumerable tree so holders cannot enumerate it. */
+export function makeLookupTreeView(
+  tree: RegistryDirectory,
+  temporal?: 'live' | 'stable',
+): RegistryHub;
+
+/** Traverse the standard npm/name/version path. */
+export function lookupPackageVersion(
+  root: RegistryDirectory,
+  name: string,
+  version: string,
+): Promise<unknown>;
+
+/** Resolve an eager package graph through same-vat tree dispatch. */
+export function resolveRegistryTree(
+  entryPackageJson: string | Uint8Array | Record<string, unknown>,
+  registryRoot: RegistryDirectory,
+  options?: ResolveOptions,
+): Promise<RegistryResolution>;
+
+/** Explicit compatibility adapter for the superseded method protocol. */
+export function makeDeprecatedEndoRegistryAdapter(
+  registryRoot: RegistryDirectory,
+  options?: { resolve?: EndoRegistry['resolve'] },
+): EndoRegistry;
+
+export function RegistryNotFoundError(
+  path: string,
+): RangeError & PackageRegistryError;
+export function RegistryTamperedError(
+  nameOrReason: string,
+  version?: string,
+  expectedIntegrity?: string,
+  actualHash?: string,
+): Error;
+export function RegistryPathSyntaxError(
+  segment: string,
+): SyntaxError & PackageRegistryError;
+export function RegistryOfflineError(
+  nameOrReason: string,
+  version?: string,
+): PackageRegistryError;
+export function isPackageRegistryError(error: unknown): boolean;
+export function registryErrorName(
+  error: unknown,
+): RegistryErrorName | undefined;
+export function isRegistryError(error: unknown): boolean;

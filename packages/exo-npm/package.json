@@ -2,7 +2,7 @@
   "name": "@endo/exo-npm",
   "version": "0.1.0",
   "private": true,
-  "description": "EndoRegistry exo capability, MVS resolver, and snapshot-mapper for the daemon-worker importLocation flow",
+  "description": "Package-registry directory trees, MVS resolution, and snapshot mapping",
   "keywords": [
     "endo",
     "exo",
@@ -33,6 +33,8 @@
     "./errors.js": "./src/errors.js",
     "./type-guards.js": "./src/type-guards.js",
     "./reference-backend.js": "./src/reference-backend.js",
+    "./registry-tree.js": "./src/registry-tree.js",
+    "./registry-tree-resolver.js": "./src/registry-tree-resolver.js",
     "./mvs-resolver.js": "./src/mvs-resolver.js",
     "./snapshot-mapper.js": "./src/snapshot-mapper.js",
     "./package.json": "./package.json"
@@ -52,9 +54,11 @@
   "dependencies": {
     "@endo/errors": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/mem-cas": "workspace:^",
-    "@endo/patterns": "workspace:^"
+    "@endo/patterns": "workspace:^",
+    "@endo/platform": "workspace:^"
   },
   "devDependencies": {
     "@endo/bytes": "workspace:^",

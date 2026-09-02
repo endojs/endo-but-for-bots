@@ -154,8 +154,9 @@ type GitReadableBlobSource = {
 };
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
-    list: (...petNamePath: string[]) => Promise<readonly string[]>;
     lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+    help?: (method?: string) => string;
+    list: (...petNamePath: string[]) => Promise<readonly string[]>;
     listTree?: (petNamePath: string | readonly string[], options?: {
         ignore?: readonly string[];
     }) => Promise<{
@@ -677,8 +678,9 @@ type GitStreamNode<Y = undefined, R = undefined> = GitStreamYieldNode<Y, R> | {
 type GitNodeKind = 'file' | 'directory';
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
-    list: (...petNamePath: string[]) => Promise<readonly string[]>;
     lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+    help?: (method?: string) => string;
+    list: (...petNamePath: string[]) => Promise<readonly string[]>;
     listTree?: (petNamePath: string | readonly string[], options?: {
         ignore?: readonly string[];
     }) => Promise<{
