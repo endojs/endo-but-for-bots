@@ -3,8 +3,8 @@
 # exemptions. Builds a throwaway git repo, drops the real linter in with a
 # synthetic exemptions file, and asserts the load-bearing behaviors:
 #
-#   1. a test262-named file (an `_FIXTURE.js` under a test262 directory) is
-#      exempted BY PATTERN, not by enumeration;
+#   1. test262 corpus files, including an `_FIXTURE.js` under the vendored
+#      directory, are exempted BY PATTERN, not by enumeration;
 #   2. a non-kebab file OUTSIDE any exempt pattern is still reported;
 #   3. an exact-path exemption still works (back-compat with the old exact list);
 #   4. a kebab-cased file under a CAPITALIZED directory is NOT falsely flagged
@@ -50,6 +50,7 @@ mkdir -p packages/test262-runner/test262/harness \
   packages/CapitalDir/src docs
 touch \
   packages/test262-runner/test262/harness/compareArray.js \
+  packages/test262-runner/test262/harness/compareArray_FIXTURE.js \
   packages/somepkg/test/some_FIXTURE.js \
   packages/marshal/src/rankOrder.js \
   packages/otherpkg/src/badCamelName.js \
@@ -85,6 +86,9 @@ echo "--------------------------------------"
 # 1. corpus file exempted by directory prefix
 check "corpus file exempted by dir prefix" absent \
   packages/test262-runner/test262/harness/compareArray.js
+# 1a. a test262 fixture is covered by the directory pattern without being listed
+check "test262 _FIXTURE exempted by dir prefix" absent \
+  packages/test262-runner/test262/harness/compareArray_FIXTURE.js
 # 1b. _FIXTURE OUTSIDE the corpus exempted by the glob (proves `*` spans `/`)
 check "_FIXTURE exempted by *_FIXTURE.js glob" absent \
   packages/somepkg/test/some_FIXTURE.js
