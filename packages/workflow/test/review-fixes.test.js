@@ -837,8 +837,10 @@ test('failed live revocation quarantines settlements until a retry', async t => 
   });
   const { runId } = await E(factory).start({});
   const engine = harness.engines.get(runId);
+  const control = await E(harness.service).control(runId);
   await until(() => engine.fold.pending.size === 1, 'invoke pending');
   t.is(calls, 1);
+  await E(control).pause();
 
   crashArmed = true;
   await t.throwsAsync(() => E(factory).revoke('injected write failure'), {
@@ -847,6 +849,9 @@ test('failed live revocation quarantines settlements until a retry', async t => 
   crashArmed = false;
   finish('hazard completed after failed revocation');
   await settle();
+  await t.throwsAsync(() => E(control).resume(), {
+    message: /is quarantined/,
+  });
   t.false(engine.fold.done);
   t.is(engine.fold.configuration.state, 'working');
   t.is(engine.fold.pending.size, 1);
