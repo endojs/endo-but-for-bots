@@ -29128,7 +29128,11 @@ impl Interp {
                             Slot::undefined()
                         }
                     }
-                } else if self.wrapper_data.contains_key(&inst) {
+                } else if self.wrapper_data.contains_key(&inst)
+                    || self.collections.contains_key(&inst)
+                    || self.array_buffers.contains_key(&inst)
+                    || self.data_views.contains_key(&inst)
+                {
                     let id = self.to_property_id(code, arg1)?;
                     match self.mop_get_own_property(code, inst, id)? {
                         Some(descriptor) => {
@@ -29140,11 +29144,6 @@ impl Interp {
                             Slot::undefined()
                         }
                     }
-                } else if self.collections.contains_key(&inst)
-                    || self.array_buffers.contains_key(&inst)
-                    || self.data_views.contains_key(&inst)
-                {
-                    return Err(Halt::Unsupported("getOwnPropertyDescriptor:exotic-object"));
                 } else {
                 // A symbol key resolves to its interned key id; a string key
                 // interns as a name (an index-valued string is the exotic-index
@@ -29243,14 +29242,12 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if properties.kind != Kind::Undefined {
-                    let descriptors = match properties.value {
-                        Payload::Reference(descriptors) if properties.kind == Kind::Reference => {
-                            descriptors
-                        }
-                        _ => return Err(Halt::Throw("TypeError: Object.create properties".into())),
+                    let descriptors = self.array_to_object(properties)?;
+                    let Payload::Reference(descriptors) = descriptors.value else {
+                        unreachable!("ToObject returns a reference")
                     };
                     if !self.define_properties_from_object(code, object, descriptors)? {
-                        return Err(Halt::Throw("TypeError: cannot define properties".into()));
+                        return Err(self.catchable_type_error());
                     }
                 }
                 Slot::of(Kind::Reference, Payload::Reference(object))
@@ -29265,18 +29262,12 @@ impl Interp {
                     .get(base + 5)
                     .copied()
                     .unwrap_or_else(Slot::undefined);
-                let descriptors = match properties.value {
-                    Payload::Reference(descriptors) if properties.kind == Kind::Reference => {
-                        descriptors
-                    }
-                    _ => {
-                        return Err(Halt::Throw(
-                            "TypeError: defineProperties descriptors".into(),
-                        ))
-                    }
+                let descriptors = self.array_to_object(properties)?;
+                let Payload::Reference(descriptors) = descriptors.value else {
+                    unreachable!("ToObject returns a reference")
                 };
                 if !self.define_properties_from_object(code, target, descriptors)? {
-                    return Err(Halt::Throw("TypeError: cannot define properties".into()));
+                    return Err(self.catchable_type_error());
                 }
                 arg0
             }
@@ -29319,7 +29310,13 @@ impl Interp {
                 if target == self.global_obj {
                     return Err(Halt::Unsupported("defineProperty:global-object"));
                 }
-                if self.is_ordinary_object(target) || self.arrays.contains_key(&target) {
+                if self.is_ordinary_object(target)
+                    || self.arrays.contains_key(&target)
+                    || self.collections.contains_key(&target)
+                    || self.array_buffers.contains_key(&target)
+                    || self.data_views.contains_key(&target)
+                    || self.wrapper_data.contains_key(&target)
+                {
                     let key = self
                         .stack
                         .get(base + 5)
@@ -29331,6 +29328,7 @@ impl Interp {
                         .copied()
                         .unwrap_or_else(Slot::undefined);
                     let object = target;
+                    let id = self.to_property_id(code, key)?;
                     let descriptor_object = match descriptor_value.value {
                         Payload::Reference(descriptor)
                             if descriptor_value.kind == Kind::Reference =>
@@ -29343,7 +29341,6 @@ impl Interp {
                             ))
                         }
                     };
-                    let id = self.to_property_id(code, key)?;
                     let descriptor = self.descriptor_from_object(code, descriptor_object)?;
                     self.meter.tick_raw(DEFINE_PROPERTY_NEW_RESIDUAL_METERING);
                     if !self.mop_define_own_property(code, object, id, descriptor)? {
@@ -29368,6 +29365,7 @@ impl Interp {
                         .get(base + 6)
                         .copied()
                         .unwrap_or_else(Slot::undefined);
+                    let key = self.to_property_key_slot(code, key)?;
                     let descriptor_object = match descriptor_value.value {
                         Payload::Reference(descriptor)
                             if descriptor_value.kind == Kind::Reference =>
@@ -44560,28 +44558,12 @@ impl Interp {
                 Ok(proxy_slot)
             }
             NativeMethod::ObjectDefineProperties => {
-                let props = match arg(self, 1).value {
-                    Payload::Reference(p) if arg(self, 1).kind == Kind::Reference => p,
-                    _ => return Err(self.catchable_type_error()),
+                let props = self.array_to_object(arg(self, 1))?;
+                let Payload::Reference(props) = props.value else {
+                    unreachable!("ToObject returns a reference")
                 };
-                // Own enumerable keys of the descriptor map, each defined.
-                let ids = self.ordered_own_key_ids(props);
-                for pid in ids {
-                    let enumerable = self
-                        .ordinary_get_own_descriptor(props, pid)
-                        .map(|d| d.enumerable == Some(true))
-                        .unwrap_or(false);
-                    if !enumerable {
-                        continue;
-                    }
-                    let descref = match self.instance_get(props, pid).value {
-                        Payload::Reference(d) => d,
-                        _ => return Err(self.catchable_type_error()),
-                    };
-                    let desc = self.descriptor_from_object(code, descref)?;
-                    if !self.mop_define_own_property(code, proxy, pid, desc)? {
-                        return Err(self.catchable_type_error());
-                    }
+                if !self.define_properties_from_object(code, proxy, props)? {
+                    return Err(self.catchable_type_error());
                 }
                 Ok(proxy_slot)
             }
@@ -44811,40 +44793,26 @@ impl Interp {
         target: crate::value::SlotIndex,
         descriptors: crate::value::SlotIndex,
     ) -> Result<bool, Halt> {
-        let mut ids: Vec<u16> = self
-            .own_property_slots(descriptors)
-            .into_iter()
-            .filter_map(|property| {
-                let slot = self.slots.get(property);
-                (slot.flag & XS_DONT_ENUM_FLAG == 0).then_some(slot.id)
-            })
-            .collect();
-        ids.sort_by_key(|id| {
-            if self.is_symbol_key_id(*id) {
-                (2u8, 0)
-            } else {
-                self.string_key_name(*id)
-                    .and_then(|name| string_to_index(&name))
-                    .map(|index| (0u8, index))
-                    .unwrap_or((1u8, 0))
-            }
-        });
         let receiver = Slot::of(Kind::Reference, Payload::Reference(descriptors));
-        let mut pending = Vec::with_capacity(ids.len());
-        for id in ids {
-            let value = self.ordinary_get(code, descriptors, id, receiver)?;
+        let keys = self.mop_own_keys(code, descriptors)?;
+        let mut pending = Vec::with_capacity(keys.len());
+        for key in keys {
+            let id = self.to_property_id(code, key)?;
+            let enumerable = self
+                .mop_get_own_property(code, descriptors, id)?
+                .is_some_and(|descriptor| descriptor.enumerable == Some(true));
+            if !enumerable {
+                continue;
+            }
+            let value = self.mop_get(code, descriptors, id, receiver)?;
             let descriptor_object = match value.value {
                 Payload::Reference(object) if value.kind == Kind::Reference => object,
-                _ => {
-                    return Err(Halt::Throw(
-                        "TypeError: property descriptor is not an object".into(),
-                    ))
-                }
+                _ => return Err(self.catchable_type_error()),
             };
             pending.push((id, self.descriptor_from_object(code, descriptor_object)?));
         }
         for (id, descriptor) in pending {
-            if !self.ordinary_define_own_property(target, id, descriptor) {
+            if !self.mop_define_own_property(code, target, id, descriptor)? {
                 return Ok(false);
             }
         }
