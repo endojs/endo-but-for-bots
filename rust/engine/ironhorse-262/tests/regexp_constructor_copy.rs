@@ -25,6 +25,7 @@ fn bare_call_returns_only_the_same_constructor_regexp() {
         "var n=0;var r=/x/;Object.defineProperty(r,'constructor',{get:function(){n++;return RegExp}});(RegExp(r)===r)+':'+n",
         "var r=/ab/g;r[Symbol.match]=false;var c=RegExp(r);(c!==r)+':'+c.test('/ab/g')",
         "var o={source:'x',flags:'i',constructor:RegExp};o[Symbol.match]=true;RegExp(o)===o",
+        "var n=0;var r=/x/;var p=new Proxy(RegExp.prototype,{get:function(){n++;return RegExp}});Object.setPrototypeOf(r,p);(RegExp(r)===r)+':'+n",
     ] {
         agrees(source);
     }
@@ -40,6 +41,7 @@ fn construction_and_flag_overrides_create_a_fresh_regexp() {
         "var log=[];var o={get source(){log.push('s');return 'ab'},get flags(){log.push('f');return 'i'}};o[Symbol.match]=true;var c=new RegExp(o);c.test('AB')+':'+log.join('')",
         "var o={};o[Symbol.match]=true;var c=new RegExp(o);c.source+':'+c.flags+':'+c.test('undefined')",
         "var o={source:undefined,flags:undefined};o[Symbol.match]=true;var c=new RegExp(o);c.source+':'+c.flags+':'+c.test('undefined')",
+        "var n=0;var r=/x/;var p=new Proxy(RegExp.prototype,{get:function(){n++;return n===1?'ab':'i'}});Object.setPrototypeOf(r,p);var c=new RegExp(r);c.test('AB')+':'+n",
         "var r=/x/g;var p=Object.create(RegExp.prototype);Object.defineProperty(p,'source',{get:function(){return 'ab'}});Object.defineProperty(p,'flags',{get:function(){return 'i'}});Object.setPrototypeOf(r,p);var c=new RegExp(r);c.test('AB')+':'+c.flags",
         "var r=/x/g;Object.defineProperty(r,'source',{value:'ab'});Object.defineProperty(r,'flags',{value:'i'});var c=new RegExp(r);c.test('AB')+':'+c.flags",
     ] {
