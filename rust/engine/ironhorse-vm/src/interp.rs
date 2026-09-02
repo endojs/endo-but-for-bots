@@ -38205,10 +38205,13 @@ impl Interp {
                 return None;
             }
             if let Some(array) = self.arrays.get(&current) {
-                for index in array.items().keys().copied() {
-                    let index = u64::from(index);
-                    if index >= start && index < len && next.map_or(true, |found| index < found) {
-                        next = Some(index);
+                if start <= u64::from(u32::MAX) {
+                    let start = start as u32;
+                    if let Some((&index, _)) = array.items().range(start..).next() {
+                        let index = u64::from(index);
+                        if index < len && next.is_none_or(|found| index < found) {
+                            next = Some(index);
+                        }
                     }
                 }
             }
@@ -38226,6 +38229,51 @@ impl Interp {
             current = self.instance_prototype(current);
         }
         Some(next)
+    }
+
+    /// The reverse counterpart of [`Self::array_generic_next_present_index`].
+    /// For an ordinary prototype chain, return the greatest currently present
+    /// integer index no larger than `start`. Exotic `[[HasProperty]]` paths
+    /// request the observable one-by-one fallback.
+    fn array_generic_previous_present_index(
+        &self,
+        o: crate::value::SlotIndex,
+        start: u64,
+    ) -> Option<Option<u64>> {
+        let mut current = o;
+        let mut previous: Option<u64> = None;
+        while !current.is_null() {
+            if self.proxies.contains_key(&current)
+                || self.typed_arrays.contains_key(&current)
+                || self.wrapper_data.get(&current).is_some_and(|value| {
+                    value.kind == Kind::String && matches!(value.value, Payload::String(_))
+                })
+            {
+                return None;
+            }
+            if let Some(array) = self.arrays.get(&current) {
+                let upper = start.min(u64::from(u32::MAX)) as u32;
+                if let Some((&index, _)) = array.items().range(..=upper).next_back() {
+                    let index = u64::from(index);
+                    if previous.is_none_or(|found| index > found) {
+                        previous = Some(index);
+                    }
+                }
+            }
+            for property in self.own_property_slots(current) {
+                let id = self.slots.get(property).id;
+                if let Some(index) = self
+                    .string_key_name(id)
+                    .and_then(|name| string_to_array_like_index(&name))
+                {
+                    if index <= start && previous.is_none_or(|found| index > found) {
+                        previous = Some(index);
+                    }
+                }
+            }
+            current = self.instance_prototype(current);
+        }
+        Some(previous)
     }
 
     /// Generic `map`/`filter` over sparse Arrays, arguments, array-like
@@ -38363,16 +38411,30 @@ impl Interp {
                 if !self.is_callable_value(callback) {
                     return Err(self.catchable_type_error());
                 }
-                for k in 0..len {
-                    if k >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
+                let mut k = 0u64;
+                let mut linear_steps = 0u64;
+                while k < len {
+                    let present = match self.array_generic_next_present_index(o, k, len) {
+                        Some(Some(next)) => {
+                            k = next;
+                            true
+                        }
+                        Some(None) => break,
+                        None => {
+                            if linear_steps >= GENERIC_ITER_CAP {
+                                return Err(over_cap);
+                            }
+                            linear_steps += 1;
+                            self.array_generic_has(code, o, k)?
+                        }
+                    };
                     self.meter.tick_builtin_some(1);
-                    if self.array_generic_has(code, o, k)? {
+                    if present {
                         let kv = self.array_generic_get(code, o, k)?;
                         let cb_args = [kv, Self::array_index_number(k), recv];
                         self.run_callback(code, callback, this_arg, &cb_args)?;
                     }
+                    k += 1;
                 }
                 Ok(Slot::undefined())
             }
@@ -38383,12 +38445,25 @@ impl Interp {
                 if !self.is_callable_value(callback) {
                     return Err(self.catchable_type_error());
                 }
-                for k in 0..len {
-                    if k >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
+                let mut k = 0u64;
+                let mut linear_steps = 0u64;
+                while k < len {
+                    let present = match self.array_generic_next_present_index(o, k, len) {
+                        Some(Some(next)) => {
+                            k = next;
+                            true
+                        }
+                        Some(None) => break,
+                        None => {
+                            if linear_steps >= GENERIC_ITER_CAP {
+                                return Err(over_cap);
+                            }
+                            linear_steps += 1;
+                            self.array_generic_has(code, o, k)?
+                        }
+                    };
                     self.meter.tick_builtin_some(1);
-                    if self.array_generic_has(code, o, k)? {
+                    if present {
                         let kv = self.array_generic_get(code, o, k)?;
                         let cb_args = [kv, Self::array_index_number(k), recv];
                         let r = self.run_callback(code, callback, this_arg, &cb_args)?;
@@ -38400,6 +38475,7 @@ impl Interp {
                             return Ok(Slot::boolean(true));
                         }
                     }
+                    k += 1;
                 }
                 Ok(Slot::boolean(is_every))
             }
@@ -38562,13 +38638,24 @@ impl Interp {
                         from as u64
                     }
                 };
-                let start = k;
+                let mut linear_steps = 0u64;
                 while k < len {
-                    if k - start >= GENERIC_ITER_CAP {
-                        return Err(over_cap);
-                    }
+                    let present = match self.array_generic_next_present_index(o, k, len) {
+                        Some(Some(next)) => {
+                            k = next;
+                            true
+                        }
+                        Some(None) => break,
+                        None => {
+                            if linear_steps >= GENERIC_ITER_CAP {
+                                return Err(over_cap);
+                            }
+                            linear_steps += 1;
+                            self.array_generic_has(code, o, k)?
+                        }
+                    };
                     self.meter.tick_builtin_some(1);
-                    if self.array_generic_has(code, o, k)? {
+                    if present {
                         let ek = self.array_generic_get(code, o, k)?;
                         if self.strict_equal(&search, &ek) {
                             return Ok(Self::array_index_number(k));
@@ -38597,14 +38684,26 @@ impl Interp {
                 } else {
                     len as i128 + n as i128
                 };
-                let start = k;
+                let mut linear_steps = 0u64;
                 while k >= 0 {
-                    if start - k >= GENERIC_ITER_CAP as i128 {
-                        return Err(over_cap);
-                    }
-                    let ku = k as u64;
+                    let mut ku = k as u64;
+                    let present = match self.array_generic_previous_present_index(o, ku) {
+                        Some(Some(previous)) => {
+                            ku = previous;
+                            k = previous as i128;
+                            true
+                        }
+                        Some(None) => break,
+                        None => {
+                            if linear_steps >= GENERIC_ITER_CAP {
+                                return Err(over_cap);
+                            }
+                            linear_steps += 1;
+                            self.array_generic_has(code, o, ku)?
+                        }
+                    };
                     self.meter.tick_builtin_some(1);
-                    if self.array_generic_has(code, o, ku)? {
+                    if present {
                         let ek = self.array_generic_get(code, o, ku)?;
                         if self.strict_equal(&search, &ek) {
                             return Ok(Self::array_index_number(ku));
