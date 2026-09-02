@@ -25,6 +25,18 @@
 
 use ironhorse_262::{dual_run, Agreement};
 
+fn assert_oracle_result(source: &str, expected: &str) {
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+    assert!(run.result_agrees, "{source}: {run:?}");
+    assert_eq!(run.oracle_result, expected, "oracle result for {source}");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse result for {source}"
+    );
+    assert_deterministic(source);
+}
+
 /// Run `source` on both engines, assert they both complete with an agreeing
 /// completion value, and assert ironhorse's post-drain global `g` renders to
 /// `expected` — the resolved/observed value the combinator produced at the
@@ -111,6 +123,26 @@ fn finally_with_non_callable_is_a_pass_through() {
     assert_drains_to(
         "var g; Promise.resolve(3).finally(undefined).then(function(v){g=''+v;}); undefined",
         "3",
+    );
+}
+
+#[test]
+fn finally_with_non_callable_invokes_a_generic_receivers_then() {
+    assert_oracle_result(
+        "var result={},seen='',o={then:function(a,b){seen=(this===o)+':'+(a===7)+':'+(b===7)+':'+arguments.length;return result}};var r=Promise.prototype.finally.call(o,7);seen+':'+(r===result)",
+        "true:true:true:2:true",
+    );
+}
+
+#[test]
+fn finally_rejects_primitive_receivers_and_observes_then_failures() {
+    assert_oracle_result(
+        "var n=0;for(var v of [undefined,null,1,'x']){try{Promise.prototype.finally.call(v)}catch(e){n+=e.name==='TypeError'}}n",
+        "4",
+    );
+    assert_oracle_result(
+        "var marker={},p=Promise.resolve(1),r='';Object.defineProperty(p,'then',{get:function(){throw marker}});try{Promise.prototype.finally.call(p)}catch(e){r=''+(e===marker)}r",
+        "true",
     );
 }
 
@@ -404,5 +436,41 @@ fn captured_element_callback_remains_live_after_iteration() {
     assert_drains_to(
         "var g,fulfill; Promise.resolve=function(){return {then:function(f){fulfill=f}}}; var p=Promise.all([1]); fulfill(4); fulfill(5); p.then(function(v){g=v.join(',')}); undefined",
         "4",
+    );
+}
+
+#[test]
+fn promise_constructor_rejects_non_callable_executors() {
+    assert_oracle_result(
+        "var n=0;for(var v of [undefined,null,1,'x',{}]){try{new Promise(v)}catch(e){n+=e.name==='TypeError'}}n",
+        "5",
+    );
+}
+
+#[test]
+fn promise_then_requires_a_branded_promise_receiver() {
+    assert_oracle_result(
+        "var n=0;for(var v of [undefined,null,{},Promise.prototype]){try{Promise.prototype.then.call(v)}catch(e){n+=e.name==='TypeError'}}n",
+        "4",
+    );
+}
+
+#[test]
+fn promise_catch_invokes_the_observable_then_method() {
+    assert_oracle_result(
+        "var log='',result={},o={then:function(a,b){log+=(this===o)+':'+(a===undefined)+':'+b+':'+arguments.length;return result}};var r=Promise.prototype.catch.call(o,7);log+':'+(r===result)",
+        "true:true:7:2:true",
+    );
+    assert_oracle_result(
+        "var log='';Number.prototype.then=function(a,b){log=this.valueOf()+':'+(a===undefined)+':'+b};Promise.prototype.catch.call(3,9);delete Number.prototype.then;log",
+        "3:true:9",
+    );
+}
+
+#[test]
+fn promise_catch_propagates_get_and_call_failures() {
+    assert_oracle_result(
+        "var marker={},a={},b={then:function(){throw marker}},r='';Object.defineProperty(a,'then',{get:function(){throw marker}});try{Promise.prototype.catch.call(a)}catch(e){r+=(e===marker)}try{Promise.prototype.catch.call(b)}catch(e){r+=':'+(e===marker)}try{Promise.prototype.catch.call({})}catch(e){r+=':'+(e.name==='TypeError')}r",
+        "true:true:true",
     );
 }
