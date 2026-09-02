@@ -384,6 +384,7 @@ export const makeAssetServer = async ({
       return plainResponse(404, 'Not found\n');
     }
 
+    /** @type {NonNullable<HttpResponse['headers']>} */
     const headers = [
       ['Content-Type', contentTypeForName(fileName)],
       ['Content-Length', String(size)],
