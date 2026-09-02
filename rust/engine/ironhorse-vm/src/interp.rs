@@ -9778,11 +9778,16 @@ impl Interp {
         out
     }
 
-    /// Reinstate validated Date `[[DateValue]]` records.
+    /// Reinstate validated Date `[[DateValue]]` records. Snapshots written
+    /// before `%Date.prototype%` lost its incorrect Date brand can contain a
+    /// row for that boot object; drop it as a semantic migration so restoring
+    /// the legacy representation cannot reintroduce the obsolete brand.
     pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) {
         for (owner, value_bits) in rows {
-            self.dates
-                .insert(crate::value::SlotIndex(owner), f64::from_bits(value_bits));
+            let owner = crate::value::SlotIndex(owner);
+            if owner != self.date_proto {
+                self.dates.insert(owner, f64::from_bits(value_bits));
+            }
         }
     }
 
@@ -19172,20 +19177,20 @@ impl Interp {
                                     let text = match primitive.value { Payload::String(o) => self.str_text(o), _ => String::new() };
                                     parse_date_string(&text).unwrap_or(f64::NAN)
                                 } else {
-                                    time_clip(to_number(&self.to_number_value(code, primitive)?))
+                                    time_clip(self.to_number_f64(code, primitive)?)
                                 }
                             }
                         } else if value.kind == Kind::String {
                             let text = match value.value { Payload::String(o) => self.str_text(o), _ => String::new() };
                             parse_date_string(&text).unwrap_or(f64::NAN)
                         } else {
-                            time_clip(to_number(&self.to_number_value(code, value)?))
+                            time_clip(self.to_number_f64(code, value)?)
                         }
                     } else {
                         let mut values = [0.0; 7];
                         let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
                         for (value, v) in values.iter_mut().zip(inputs) {
-                            *value = to_number(&self.to_number_value(code, v)?);
+                            *value = self.to_number_f64(code, v)?;
                         }
                         date_from_components(values)
                     };
@@ -27414,7 +27419,7 @@ impl Interp {
                 let inputs: Vec<Slot> = (0..7).map(|i| if i < argc { arg(&self.stack, i) } else if i == 2 { Slot::integer(1) } else { Slot::integer(0) }).collect();
                 let mut values = [0.0; 7];
                 for (value, input) in values.iter_mut().zip(inputs) {
-                    *value = to_number(&self.to_number_value(code, input)?);
+                    *value = self.to_number_f64(code, input)?;
                 }
                 Ok(Slot::number(date_from_components(values)))
             }
@@ -27438,7 +27443,7 @@ impl Interp {
                         .copied()
                         .ok_or(Halt::Unsupported("Date.toJSON:toISOString-key"))?;
                     let method = self.mop_get(code, inst, id, object)?;
-                    return self.call_primitive_method(code, method, object, &[]);
+                    return self.invoke_value(code, method, object, &[]);
                 }
                 let inst = match this.value {
                     Payload::Reference(r) if self.dates.contains_key(&r) => r,
@@ -27446,8 +27451,7 @@ impl Interp {
                 };
                 let t = self.dates[&inst];
                 if op == 26 {
-                    let n = self.to_number_value(code, arg(&self.stack, 0))?;
-                    let clipped = time_clip(to_number(&n));
+                    let clipped = time_clip(self.to_number_f64(code, arg(&self.stack, 0))?);
                     self.dates.insert(inst, clipped);
                     return Ok(Slot::number(clipped));
                 }
@@ -27466,8 +27470,7 @@ impl Interp {
                     let count = argc.max(1).min(arity);
                     let mut inputs = Vec::with_capacity(count);
                     for i in 0..count {
-                        let n = self.to_number_value(code, arg(&self.stack, i))?;
-                        inputs.push(to_number(&n));
+                        inputs.push(self.to_number_f64(code, arg(&self.stack, i))?);
                     }
                     // SetFullYear alone recovers an invalid Date from +0. Every
                     // other setter preserves NaN after performing the required
@@ -45892,6 +45895,16 @@ impl Interp {
         }
     }
 
+    /// ECMAScript `ToNumber`: run the shared observable primitive conversion,
+    /// then reject the BigInt value that `ToNumeric` deliberately preserves.
+    fn to_number_f64(&mut self, code: &[u8], value: Slot) -> Result<f64, Halt> {
+        let number = self.to_number_value(code, value)?;
+        if number.kind == Kind::BigInt {
+            return Err(self.catchable_type_error());
+        }
+        Ok(to_number(&number))
+    }
+
     /// `XS_CODE_ADD` with the string/reference cases (xsRun.c's
     /// `XS_CODE_ADD_GENERAL`): a reference operand needs `ToPrimitive`
     /// (unsupported); a string operand means concatenation
@@ -47032,7 +47045,12 @@ fn date_from_components_exact(v: [f64; 7]) -> f64 {
     let norm_month = total_month.rem_euclid(12) as u32 + 1;
     let Ok(norm_year) = i64::try_from(norm_year) else { return f64::NAN };
     let Some(first) = days_from_civil(norm_year, norm_month, 1) else { return f64::NAN };
-    let days = first + v[2].trunc() as i128 - 1;
+    let Some(days) = first
+        .checked_add(v[2].trunc() as i128)
+        .and_then(|days| days.checked_sub(1))
+    else {
+        return f64::NAN;
+    };
     time_clip(days as f64 * 86_400_000.0 + v[3].trunc() * 3_600_000.0
         + v[4].trunc() * 60_000.0 + v[5].trunc() * 1_000.0 + v[6].trunc())
 }
@@ -48300,13 +48318,16 @@ fn days_from_civil(year: i64, month: u32, day: u32) -> Option<i128> {
         _ => return None,
     };
     if day == 0 || day > month_days { return None; }
-    let y = year - i64::from(month <= 2);
+    // Use i128 throughout: Date accepts finite components up to the Number
+    // range, and the i64 boundary values admitted above must become an invalid
+    // TimeClip result rather than overflowing debug arithmetic here.
+    let y = i128::from(year) - i128::from(month <= 2);
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = y - era * 400;
-    let mp = month as i64 + if month > 2 { -3 } else { 9 };
-    let doy = (153 * mp + 2) / 5 + day as i64 - 1;
+    let mp = i128::from(month) + if month > 2 { -3 } else { 9 };
+    let doy = (153 * mp + 2) / 5 + i128::from(day) - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some((era * 146097 + doe - 719468) as i128)
+    Some(era * 146097 + doe - 719468)
 }
 
 fn civil_from_days(days: i128) -> (i64, u32, u32) {
@@ -49398,6 +49419,26 @@ mod tests {
 
     fn b(op: Opcode) -> u8 {
         op as u8
+    }
+
+    #[test]
+    fn legacy_date_prototype_snapshot_row_is_migrated_away() {
+        let mut interp = Interp::new();
+        let date_proto = interp.date_proto;
+        let instance = interp.slots.alloc(Slot::instance(date_proto));
+        interp.restore_dates(vec![
+            (date_proto.0, 1234.0f64.to_bits()),
+            (instance.0, 5678.0f64.to_bits()),
+        ]);
+        assert!(
+            !interp.dates.contains_key(&date_proto),
+            "a legacy row must not re-brand %Date.prototype%"
+        );
+        assert_eq!(
+            interp.dates.get(&instance).copied(),
+            Some(5678.0),
+            "ordinary Date instance rows still restore"
+        );
     }
 
     /// Wave-6 W6-17: `NEW_PROPERTY_AT` is a 1-byte opcode followed by a

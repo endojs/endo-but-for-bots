@@ -26,6 +26,8 @@ fn constructor_utc_and_time_clip_match_xs() {
         "Date.UTC(1970, 0, 1)",
         "Date.UTC(99, 11, 31, 23, 59, 59, 999)",
         "Date.UTC(2016, 12, 1) === Date.UTC(2017, 0, 1)",
+        "try{new Date(1n);false}catch(e){e instanceof TypeError}",
+        "try{Date.UTC(1n);false}catch(e){e instanceof TypeError}",
     ] {
         agrees(source);
     }
@@ -54,6 +56,7 @@ fn parsing_and_set_time_match_xs() {
         "var d=new Date(1); d.setTime(null) === 0 && d.getTime() === 0",
         "new Date(0).toJSON()",
         "new Date(NaN).toJSON()",
+        "var d=new Date(0);try{d.setTime(1n);false}catch(e){e instanceof TypeError&&d.getTime()===0}",
     ] {
         agrees(source);
     }
@@ -67,6 +70,7 @@ fn to_json_is_generic_and_observable() {
         "var o={toString:function(){return 'x'},valueOf:function(){return {}},toISOString:function(){return this===o&&arguments.length===0}};Date.prototype.toJSON.call(o)",
         "var ok=false;try{Date.prototype.toJSON.call(null)}catch(e){ok=e instanceof TypeError}ok",
         "Number.prototype.toISOString=function(){return this.valueOf()+1};Date.prototype.toJSON.call(4)",
+        "var o;var fn=new Proxy(function(){return 'base'},{apply:function(target,self,args){return self===o&&args.length===0?'ok':'bad'}});o={valueOf:function(){return 1},toISOString:fn};Date.prototype.toJSON.call(o)",
     ] {
         agrees(source);
     }
@@ -103,6 +107,12 @@ fn date_setters_preserve_validation_and_coercion_order() {
         "var d=new Date(0),calls=0;try{d.setUTCMonth({valueOf:function(){throw 'x'}},{valueOf:function(){calls++;return 1}})}catch(e){}calls+':'+d.getTime()",
         "var d=new Date(NaN),calls=0;var r=d.setUTCMonth(1,{valueOf:function(){calls++;return 2}});calls+':'+(r!==r)+':'+(d.getTime()!==d.getTime())",
         "var d=new Date(0);var r=d.setUTCDate();(r!==r)+':'+(d.getTime()!==d.getTime())",
+        "var d=new Date(0);try{d.setUTCDate(1n);false}catch(e){e instanceof TypeError&&d.getTime()===0}",
+        "var d=new Date(0);try{d.setDate({valueOf:function(){return 1n}});false}catch(e){e instanceof TypeError&&d.getTime()===0}",
+        "var d=new Date(0);var r=d.setUTCDate(-1e300);(r!==r)+':'+(d.getTime()!==d.getTime())",
+        "var d=new Date(0);var r=d.setUTCDate(1e300);(r!==r)+':'+(d.getTime()!==d.getTime())",
+        "var d=new Date(0);var r=d.setUTCFullYear(-1e300);(r!==r)+':'+(d.getTime()!==d.getTime())",
+        "var d=new Date(0);var r=d.setUTCFullYear(1e300);(r!==r)+':'+(d.getTime()!==d.getTime())",
     ] {
         agrees(source);
     }
