@@ -445,10 +445,9 @@ fn carry_scenario(name: &str, mentions: &str, bodies: &[&str]) -> String {
         })
         .collect();
     let refs: Vec<&str> = cranks.iter().map(String::as_str).collect();
-    // Enforce the discipline this file documents instead of trusting
-    // it: ids are positional, so one name interned by only some cranks
-    // shifts every id after it and the unrelinked baseline silently
-    // resolves the wrong property (an `undefined` read, not an error).
+    // Keep these broad carry-matrix rows on the aligned-symbol fast path.
+    // A separate lifecycle regression below deliberately reorders and extends
+    // the symbol table to exercise production relinking across reopen.
     let anchor = compile(refs[0]).1;
     for (i, crank) in refs.iter().enumerate().skip(1) {
         assert_eq!(
@@ -459,6 +458,25 @@ fn carry_scenario(name: &str, mentions: &str, bodies: &[&str]) -> String {
         );
     }
     run_scenario(name, &refs)
+}
+
+#[test]
+fn carried_closure_survives_reordered_and_extended_symbol_tables() {
+    let cranks = [
+        "var saved; var out; saved = function (alpha) { return alpha + 1; }; out = 0;",
+        "var fresh; var out; var saved; fresh = { marker: 40 }; out = saved(fresh.marker); out",
+        "var another; var saved; var out; another = 1; out = saved(out + another); out",
+    ];
+    let symbols: Vec<_> = cranks.iter().map(|source| compile(source).1).collect();
+    assert_ne!(symbols[0], symbols[1], "crank 2 must require relinking");
+    assert_ne!(symbols[1], symbols[2], "crank 3 must require relinking");
+    assert!(
+        symbols[1].iter().any(|name| name == "fresh")
+            && symbols[1].iter().any(|name| name == "marker"),
+        "crank 2 must extend the persisted realm's symbol set"
+    );
+
+    assert_eq!(run_scenario("carry-relinked-closure", &cranks), "43");
 }
 
 #[test]

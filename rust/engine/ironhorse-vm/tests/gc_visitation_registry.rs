@@ -360,6 +360,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("segments_iterator_method", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %Segments.prototype%"),
     ("segment_iterator_identity", &[Req::DocumentedOnly], "identity cache; the method is a property of the rooted %SegmentIterator.prototype%"),
     ("error_stack_accessor", &[Req::DocumentedOnly], "identity cache; the proto and both accessor functions are boot slots, and the installed pair is a property of the rooted %Error.prototype%"),
+    ("this_captures", &[Req::DocumentedOnly], "non-owning property-slot indices; each property is owned by a closure environment reachable through its rooted arrow function"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::DocumentedOnly], "armed by SUPER, consumed/disarmed before every boundary (W6-15); collections run only at quiescent boundaries"),
 ];

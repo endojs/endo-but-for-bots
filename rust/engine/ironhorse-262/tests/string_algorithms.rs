@@ -312,6 +312,9 @@ fn replace_invokes_function_and_custom_symbol_protocol() {
 fn replace_handles_regexp_functions_and_global_collection() {
     for source in [
         "'abc12 def34'.replace(/([a-z]+)([0-9]+)/,function(){return arguments[2]+arguments[1]})",
+        "var seen; 'éa'.replace(/a/,function(m,p){seen=p;return ''}); seen",
+        "var seen; (String.fromCodePoint(0x1F600)+'a').replace(/a/,function(m,p){seen=p;return ''}); seen",
+        "'a'.replace(/a/,function(){return String.fromCharCode(0xD800)}).charCodeAt(0)",
         "'123abc'.replace(/\\d/g, 'x')",
         "'abc'.replace(/(?:)/g, '-')",
         "'abc123def456'.replace(/([a-z]+)(\\d+)/g, '[$2:$1]')",

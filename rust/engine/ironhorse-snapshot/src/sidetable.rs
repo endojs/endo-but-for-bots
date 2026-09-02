@@ -714,7 +714,7 @@ mod tests {
             "regexp_last_names", "arguments_objects", "side_refs",
         ];
         const TRANSIENTS: &[&str] = &[
-            "args", "this_val", "cur_func", "cur_target", "target_func",
+            "args", "this_val", "this_captures", "cur_func", "cur_target", "target_func",
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",

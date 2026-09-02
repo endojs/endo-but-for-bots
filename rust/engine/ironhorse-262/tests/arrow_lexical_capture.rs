@@ -23,6 +23,22 @@ fn arrow_uses_lexical_this() {
 }
 
 #[test]
+fn arrow_before_super_observes_the_initialized_binding() {
+    assert_result_agrees(
+        "class C extends Object { constructor() { var f = () => this; super(); return f(); } } new C() instanceof C",
+        "true",
+    );
+    assert_result_agrees(
+        "var before=false; class C extends Object { constructor() { var f=()=>this; try { f() } catch (e) { before=e instanceof ReferenceError } super(); this.ok=f()===this; } } var c=new C(); before+':'+c.ok",
+        "true:true",
+    );
+    assert_result_agrees(
+        "function side(){return 1} class C extends Object { constructor() { var f=()=>this; super(side()); return f(); } } new C() instanceof C",
+        "true",
+    );
+}
+
+#[test]
 fn arrow_uses_lexical_new_target() {
     assert_result_agrees(
         "function F() { this.ok = (() => new.target === F)(); } new F().ok",

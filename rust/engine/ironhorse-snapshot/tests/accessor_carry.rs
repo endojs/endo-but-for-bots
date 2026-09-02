@@ -135,7 +135,10 @@ fn malformed_accessor_rows_are_refused() {
     assert!(machine.run(&bytecode).completed);
     let bytes = machine.write_snapshot(&sig()).expect("snapshot");
     let image = read_machine(&bytes, &sig()).expect("read ACCS");
-    assert_eq!(image.accessors.len(), 1);
+    assert!(
+        image.accessors.len() >= 2,
+        "guest accessor and boot TypedArray tag accessor must be present"
+    );
 
     let mut duplicate = image.clone();
     duplicate.accessors.push(duplicate.accessors[0].clone());
