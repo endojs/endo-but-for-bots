@@ -828,3 +828,21 @@ fn the_promise_cluster_survives_sqlite_sleep_cycles() {
     );
     assert_eq!(last, "42");
 }
+
+#[test]
+fn a_pending_finally_result_survives_sqlite_sleep_cycles() {
+    // `onFinally` runs in crank 1 but its returned promise remains pending.
+    // The `FinallyAwait` row, original fulfillment, and derived capability all
+    // cross a complete SQLite close/reopen before crank 2 releases the gate.
+    let last = run_scenario(
+        "promise-finally-await",
+        &[
+            "var release = 0; var g = 0; var gate = new Promise(function (rs) { release = rs; }); \
+             Promise.resolve(5).finally(function () { return gate; }) \
+              .then(function (v) { g = 'v:' + v; }, function (e) { g = 'e:' + e; });",
+            "release(9); 0",
+            "g",
+        ],
+    );
+    assert_eq!(last, "v:5");
+}

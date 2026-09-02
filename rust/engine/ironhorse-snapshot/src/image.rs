@@ -2351,7 +2351,8 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 ///
 /// - an async-flavored reaction kind (bytes 3–10) is refused by name —
 ///   it would resume machinery no atom carries, and the persist gate
-///   refuses the machine before an honest writer can emit one;
+///   refuses the machine before an honest writer can emit one; byte 11 is the
+///   resumable second half of `Promise.prototype.finally`;
 /// - a settled promise carries no reactions (settlement drains them,
 ///   and quiescence requires the job queue empty);
 /// - a `Combine` reaction indexes a combinator row; a resolving
@@ -2407,7 +2408,7 @@ pub(crate) fn decode_promise_cluster(
             let resolve = c.slot()?;
             let reject = c.slot()?;
             let kind = c.u8()?;
-            if kind > 2 {
+            if kind > 2 && kind != 11 {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction kind does not resume",
                 ));
@@ -2522,7 +2523,8 @@ pub(crate) fn decode_promise_cluster(
             "promise cluster: guards not densely referenced",
         ));
     }
-    // A reaction's capability slots. `User` and `FinallyReturn`
+    // A reaction's capability slots. `User`, `FinallyReturn`, and
+    // `FinallyAwait`
     // reactions always carry a full `new_promise_capability` pair —
     // both halves alive while the reaction is pending (the reaction's
     // own slots mark them), both naming one promise and one guard with
@@ -2588,10 +2590,15 @@ pub(crate) fn decode_promise_cluster(
                     "promise cluster: reaction capability is not one resolving pair",
                 ));
             }
-            // The `a`/`b` payload belongs to `Combine` alone; the
-            // writer zeroes it on every other kind, so a non-zero
-            // value is a second encoding of the same machine.
-            if r.a != 0 || r.b != 0 {
+            // `FinallyAwait.a` is its original-rejection boolean. The
+            // `a`/`b` payload is otherwise zero outside `Combine`, so a
+            // different value is a second encoding of the same machine.
+            let payload_ok = if r.kind == 11 {
+                r.a <= 1 && r.b == 0 && r.on_rejected.kind == Kind::Undefined
+            } else {
+                r.a == 0 && r.b == 0
+            };
+            if !payload_ok {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: unused reaction payload not zero",
                 ));

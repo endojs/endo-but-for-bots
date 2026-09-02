@@ -118,6 +118,74 @@ fn finally_return_value_is_ignored() {
 }
 
 #[test]
+fn finally_awaits_returned_promises_before_restoring_the_original_settlement() {
+    assert_drains_to(
+        "var g; Promise.resolve(7).finally(function(){return Promise.resolve(99);}).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "F7",
+    );
+    assert_drains_to(
+        "var g; Promise.reject(8).finally(function(){return Promise.resolve(99);}).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "R8",
+    );
+}
+
+#[test]
+fn finally_returned_rejection_overrides_the_original_settlement() {
+    assert_drains_to(
+        "var g; Promise.resolve(7).finally(function(){return Promise.reject(9);}).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "R9",
+    );
+    assert_drains_to(
+        "var g; Promise.reject(8).finally(function(){return Promise.reject(9);}).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "R9",
+    );
+}
+
+#[test]
+fn finally_observes_a_returned_promises_custom_then() {
+    assert_drains_to(
+        "var g,calls=0,p=Promise.resolve(11); p.then=function(resolve){calls++;resolve(12);}; Promise.resolve(7).finally(function(){return p;}).then(function(v){g=calls+':F'+v;},function(e){g=calls+':R'+e;}); undefined",
+        "1:F7",
+    );
+    assert_drains_to(
+        "var g,calls=0,p=Promise.resolve(11); p.then=function(resolve,reject){calls++;reject(12);resolve(13);}; Promise.resolve(7).finally(function(){return p;}).then(function(v){g=calls+':F'+v;},function(e){g=calls+':R'+e;}); undefined",
+        "1:R12",
+    );
+}
+
+#[test]
+fn finally_assimilates_returned_thenables() {
+    assert_drains_to(
+        "var g; Promise.resolve(7).finally(function(){return {then:function(resolve){resolve(12);}};}).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "F7",
+    );
+    assert_drains_to(
+        "var g; Promise.resolve(7).finally(function(){return {then:function(resolve,reject){reject(12);}};}).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "R12",
+    );
+}
+
+#[test]
+fn finally_rejects_when_returned_promise_observation_throws() {
+    assert_drains_to(
+        "var g,marker={},p=Promise.resolve(1); Object.defineProperty(p,'constructor',{get:function(){throw marker}}); Promise.resolve(7).finally(function(){return p;}).then(function(){g='F';},function(e){g='R'+(e===marker);}); undefined",
+        "Rtrue",
+    );
+    assert_drains_to(
+        "var g,marker={},p=Promise.resolve(1); Object.defineProperty(p,'then',{get:function(){throw marker}}); Promise.resolve(7).finally(function(){return p;}).then(function(){g='F';},function(e){g='R'+(e===marker);}); undefined",
+        "Rtrue",
+    );
+}
+
+#[test]
+fn finally_accepts_bound_callable_handlers_returning_promises() {
+    assert_drains_to(
+        "var g,f=Promise.resolve.bind(Promise,13); Promise.resolve(7).finally(f).then(function(v){g='F'+v;},function(e){g='R'+e;}); undefined",
+        "F7",
+    );
+}
+
+#[test]
 fn finally_with_non_callable_is_a_pass_through() {
     // A non-callable `onFinally` (`this.then(x, x)`): pure pass-through.
     assert_drains_to(

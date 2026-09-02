@@ -3006,8 +3006,8 @@ struct PromiseReaction {
     /// function pair `fxPromiseThen` registered). A `User` reaction runs its
     /// `on_fulfilled`/`on_rejected` handler and settles the derived promise via
     /// `resolve`/`reject` (the ordinary `.then` path). A **native** reaction
-    /// (`AsyncAwait` — and later `FinallyReturn`/`Combine`) leaves those slots
-    /// unused and instead drives dedicated C behavior at the drain: an
+    /// drives dedicated C behavior at the drain; its four slots carry only the
+    /// values that behavior needs (and are undefined when it needs none). An
     /// `AsyncAwait(inst)` reaction resumes the suspended async instance via
     /// [`Interp::step_async`]. `fxPromiseThen` allocates only **5** reaction
     /// slots for a native reaction (no derived-promise `__result__` slot),
@@ -3040,6 +3040,12 @@ enum ReactionKind {
     /// result is ignored — the pass-through). Drives
     /// [`Interp::run_finally_reaction`].
     FinallyReturn,
+    /// The second half of a callable `Promise.prototype.finally` reaction:
+    /// wait for `PromiseResolve(C, onFinally())` and then restore the original
+    /// settlement carried in `on_fulfilled`. The boolean records whether that
+    /// original settlement was a rejection. A rejection from the awaited
+    /// promise overrides the original settlement, as required by `finally`.
+    FinallyAwait(bool),
     /// A `Promise.all`/`allSettled`/`race`/`any` element reaction: `(combinator
     /// index into [`Interp::combinators`], element index)`. At the drain each
     /// settled element updates the shared [`CombinatorState`] and, on the
@@ -5000,14 +5006,16 @@ pub struct GeneratorRow {
 /// | 1 | `FinallyReturn` | — | — |
 /// | 2 | `Combine` | combinator index | element index |
 /// | 3–10 | the async-flavored kinds | | |
+/// | 11 | `FinallyAwait` | original rejection boolean | — |
 ///
 /// Bytes 3–10 (`AsyncAwait`, the three `AsyncGenerator*`s, the four
 /// `FromAsync*`s) name suspended async machinery whose instance rows
 /// are still Pending in the snapshot ledger, so the persist gate
 /// refuses a machine holding one
 /// ([`Interp::stored_unpersistable_row`]) and the decoder refuses the
-/// byte — the encoding is total so the refusal lives at the boundary,
-/// not in a lossy encoder.
+/// byte. `FinallyAwait` is resumable from the ordinary promise cluster.
+/// The encoding is total so every refusal lives at the boundary, not in a
+/// lossy encoder.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct PromiseReactionRow {
     pub on_fulfilled: Slot,
@@ -9502,7 +9510,10 @@ impl Interp {
             .any(|r| {
                 !matches!(
                     r.kind,
-                    ReactionKind::User | ReactionKind::FinallyReturn | ReactionKind::Combine(_, _)
+                    ReactionKind::User
+                        | ReactionKind::FinallyReturn
+                        | ReactionKind::FinallyAwait(_)
+                        | ReactionKind::Combine(_, _)
                 )
             });
         if async_reaction {
@@ -10871,6 +10882,9 @@ impl Interp {
                                 ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
                                 ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
                                 ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
+                                ReactionKind::FinallyAwait(rejected) => {
+                                    (11, rejected as u32, 0)
+                                }
                             };
                             PromiseReactionRow {
                                 on_fulfilled: r.on_fulfilled,
@@ -10967,7 +10981,7 @@ impl Interp {
         }
         let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
         let mut comb_pending = vec![0u32; snap.combinators.len()];
-        // A `User`/`FinallyReturn` reaction's capability must be one
+        // A `User`/`FinallyReturn`/`FinallyAwait` reaction's capability must be one
         // resolving pair (the decoder's rule, re-proved here): both
         // slots reference cluster rows naming one promise and one
         // guard with opposite polarity.
@@ -11017,6 +11031,13 @@ impl Interp {
                         }
                         1 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
                             ReactionKind::FinallyReturn
+                        }
+                        11 if fn_pair_ok(&r.resolve, &r.reject)
+                            && r.a <= 1
+                            && r.b == 0
+                            && r.on_rejected.kind == Kind::Undefined =>
+                        {
+                            ReactionKind::FinallyAwait(r.a != 0)
                         }
                         // The element index must sit inside the results
                         // Array's carried length (the creation preset —
@@ -24084,6 +24105,25 @@ impl Interp {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
             return self.run_finally_reaction(code, reaction, value, rejected);
         }
+        // The promise returned by `onFinally` has now settled. Its rejection
+        // overrides the original completion; fulfillment restores the
+        // original value/reason captured in `on_fulfilled`.
+        if let ReactionKind::FinallyAwait(original_rejected) = reaction.kind {
+            self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
+            let (settle_value, settle_reject) = if rejected {
+                (value, true)
+            } else {
+                (reaction.on_fulfilled, original_rejected)
+            };
+            let derived = match reaction.resolve.value {
+                Payload::Reference(rf) => match self.promise_functions.get(&rf) {
+                    Some(d) => d.promise,
+                    None => return Err(Halt::Unsupported("promise:finally-bad-capability")),
+                },
+                _ => return Err(Halt::Unsupported("promise:finally-bad-capability")),
+            };
+            return self.settle_promise(derived, settle_value, settle_reject);
+        }
         // A combinator element reaction: fold this element's settlement into
         // the shared `Promise.all`/`allSettled`/`race`/`any` state.
         if let ReactionKind::Combine(ci, ei) = reaction.kind {
@@ -25623,9 +25663,9 @@ impl Interp {
     /// derived promise, run `onFinally()` (a user function, no args) when
     /// callable, then settle the derived with the ORIGINAL `(value, rejected)`
     /// pass-through. A non-callable `onFinally` is a pure pass-through
-    /// (`this.then(x, x)`). `onFinally` returning a thenable (whose settlement
-    /// the derived would await) and `onFinally` throwing (the re-entrant
-    /// unwind the reaction-handler path already defers) both self-name.
+    /// (`this.then(x, x)`). A callable result is normalized through the
+    /// intrinsic Promise constructor and a persisted `FinallyAwait` reaction
+    /// sequences the derived promise behind it.
     fn run_finally_reaction(
         &mut self,
         code: &[u8],
@@ -25642,30 +25682,113 @@ impl Interp {
         };
         let on_finally = reaction.on_fulfilled;
         if self.is_callable_value(on_finally) {
-            if !self.is_user_function_value(on_finally) {
-                return Err(Halt::Unsupported("finally:native-onfinally"));
-            }
-            match self.run_callback_catching_throw(code, on_finally, Slot::undefined(), &[])? {
-                Ok(r) => {
-                    // A thenable return would sequence the derived's settlement
-                    // behind it (XS's `thenFinally`/`catchFinally`); not modeled.
-                    if let Payload::Reference(ro) = r.value {
-                        if r.kind == Kind::Reference {
-                            let has_then = self
-                                .then_id
-                                .map(|tid| self.is_callable_value(self.instance_get(ro, tid)))
-                                .unwrap_or(false);
-                            if has_then {
-                                return Err(Halt::Unsupported("finally:thenable-return"));
-                            }
-                        }
-                    }
-                    self.settle_promise(derived, value, rejected)
-                }
+            match self.call_any_catching_throw(code, on_finally, Slot::undefined(), &[])? {
+                Ok(r) => self.await_finally_result(code, reaction, r, value, rejected),
                 Err(thrown) => self.settle_promise(derived, thrown, true),
             }
         } else {
             self.settle_promise(derived, value, rejected)
+        }
+    }
+
+    /// Perform the default-native `PromiseResolve(C, result)` and
+    /// `resultPromise.then(valueThunk, thrower)` portion of `finally` without
+    /// allocating non-persisted closure state. Native promises use a
+    /// `FinallyAwait` reaction directly. An observable custom `then` is called
+    /// with a private resolving pair whose bridge promise carries that same
+    /// reaction, retaining one-shot behavior and snapshot resumability.
+    fn await_finally_result(
+        &mut self,
+        code: &[u8],
+        reaction: PromiseReaction,
+        result: Slot,
+        original: Slot,
+        original_rejected: bool,
+    ) -> Result<(), Halt> {
+        let derived = match reaction.resolve.value {
+            Payload::Reference(rf) => match self.promise_functions.get(&rf) {
+                Some(d) => d.promise,
+                None => return Err(Halt::Unsupported("promise:finally-bad-capability")),
+            },
+            _ => return Err(Halt::Unsupported("promise:finally-bad-capability")),
+        };
+        let intrinsic_promise = *self
+            .intrinsics
+            .get("Promise")
+            .expect("Promise intrinsic is linked");
+        let intrinsic_promise_slot =
+            Slot::of(Kind::Reference, Payload::Reference(intrinsic_promise));
+
+        // PromiseResolve returns an already-native promise unchanged only when
+        // its observable constructor is the selected constructor.
+        let identity = if let Payload::Reference(inst) = result.value {
+            if result.kind == Kind::Reference && self.promises.contains_key(&inst) {
+                let constructor_id = self.intern_key("constructor");
+                match self.array_from_try(|this| {
+                    this.mop_get(code, inst, constructor_id, result)
+                })? {
+                    Ok(constructor) => self.same_value(constructor, intrinsic_promise_slot),
+                    Err(error) => {
+                        return self.settle_promise(derived, error, true);
+                    }
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let awaited = if identity {
+            match result.value {
+                Payload::Reference(inst) => inst,
+                _ => unreachable!(),
+            }
+        } else {
+            let (promise, _resolve, _reject) = self.new_promise_capability();
+            self.settle_promise(promise, result, false)?;
+            promise
+        };
+        let awaited_slot = Slot::of(Kind::Reference, Payload::Reference(awaited));
+        let then_id = self.intern_key("then");
+        self.install_pending_intrinsics();
+        self.then_id = Some(then_id);
+        let then = match self
+            .array_from_try(|this| this.mop_get(code, awaited, then_id, awaited_slot))?
+        {
+            Ok(method) if self.is_callable_value(method) => method,
+            Ok(_) => {
+                let error = self.build_error("TypeError", 0, 0);
+                return self.settle_promise(derived, error, true);
+            }
+            Err(error) => return self.settle_promise(derived, error, true),
+        };
+        let await_reaction = PromiseReaction {
+            on_fulfilled: original,
+            on_rejected: Slot::undefined(),
+            resolve: reaction.resolve,
+            reject: reaction.reject,
+            kind: ReactionKind::FinallyAwait(original_rejected),
+        };
+        if self.promises.contains_key(&awaited)
+            && matches!(then.value,
+                Payload::Reference(function)
+                    if self.method_of(function) == Some(NativeMethod::PromiseThen))
+        {
+            self.register_native_reaction(awaited, await_reaction);
+            return Ok(());
+        }
+
+        let (bridge, bridge_resolve, bridge_reject) = self.new_promise_capability();
+        self.register_native_reaction(bridge, await_reaction);
+        match self.call_any_catching_throw(
+            code,
+            then,
+            awaited_slot,
+            &[bridge_resolve, bridge_reject],
+        )? {
+            Ok(_) => Ok(()),
+            Err(error) => self.settle_via_function(bridge_reject, error),
         }
     }
 
@@ -53166,7 +53289,9 @@ impl Interp {
                                 slot_roots(&d.close_error, &mut roots);
                             }
                         }
-                        ReactionKind::User | ReactionKind::FinallyReturn => {}
+                        ReactionKind::User
+                        | ReactionKind::FinallyReturn
+                        | ReactionKind::FinallyAwait(_) => {}
                     }
                 }
                 PromiseJob::Thenable {
@@ -53472,7 +53597,9 @@ impl Interp {
                                     d.close_error.each_ref_slot(&mut *visit);
                                 }
                             }
-                            ReactionKind::User | ReactionKind::FinallyReturn => {}
+                            ReactionKind::User
+                            | ReactionKind::FinallyReturn
+                            | ReactionKind::FinallyAwait(_) => {}
                         }
                     }
                 }
@@ -54404,7 +54531,9 @@ impl Interp {
                             slot_refs(&d.close_error, visit);
                         }
                     }
-                    ReactionKind::User | ReactionKind::FinallyReturn => {}
+                    ReactionKind::User
+                    | ReactionKind::FinallyReturn
+                    | ReactionKind::FinallyAwait(_) => {}
                 }
             }
         }
