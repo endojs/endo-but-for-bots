@@ -722,3 +722,19 @@ fn promise_catch_propagates_get_and_call_failures() {
         "true:true:true",
     );
 }
+
+#[test]
+fn promise_intrinsic_metadata_matches_ecmascript() {
+    assert_oracle_result(
+        "[Promise.all.name,Promise.all.length,Promise.allSettled.name,Promise.allSettled.length,Promise.race.name,Promise.race.length,Promise.resolve.name,Promise.resolve.length,Promise.reject.name,Promise.reject.length,Promise.prototype.then.name,Promise.prototype.then.length,Promise.prototype.catch.name,Promise.prototype.catch.length,Promise.prototype.finally.name,Promise.prototype.finally.length].join(':')",
+        "all:1:allSettled:1:race:1:resolve:1:reject:1:then:2:catch:1:finally:1",
+    );
+    assert_oracle_result(
+        "var d=Object.getOwnPropertyDescriptor(Promise,Symbol.species),x={};[d.get.name,d.get.length,d.set===undefined,d.enumerable,d.configurable,d.get.call(x)===x,Promise[Symbol.species]===Promise].join(':')",
+        "get [Symbol.species]:0:true:false:true:true:true",
+    );
+    assert_oracle_result(
+        "var d=Object.getOwnPropertyDescriptor(Promise.prototype,Symbol.toStringTag);[d.value,d.writable,d.enumerable,d.configurable].join(':')",
+        "Promise:false:false:true",
+    );
+}

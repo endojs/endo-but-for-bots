@@ -327,7 +327,9 @@ fn small_state_stays_small_with_a_large_free_list() {
     assert!(manifest.free_len > 3000, "free list is genuinely large");
     let small_len = store.read_small_state().unwrap().len();
     assert!(
-        small_len < 512,
+        // The Promise @@species getter is one additional boot function row;
+        // keep a tight constant ceiling while allowing that fixed metadata.
+        small_len < 544,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len

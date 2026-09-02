@@ -2623,6 +2623,8 @@ pub enum NativeMethod {
     /// `onFinally` and pass the settlement through — a later increment
     /// (self-names until then).
     PromiseFinally,
+    /// `get Promise[@@species]`: the standard accessor returns its receiver.
+    PromiseSpeciesGetter,
     /// `%GeneratorPrototype%.next(v)` (`fx_Generator_prototype_next`): resume
     /// the suspended body with `v` as the yield expression's value, running
     /// to the next `yield` or completion; returns `{value, done}`.
@@ -6270,7 +6272,8 @@ impl Interp {
             ("catch", NativeMethod::PromiseCatch),
             ("finally", NativeMethod::PromiseFinally),
         ] {
-            let mf = self.alloc_method(m);
+            let arity = if name == "then" { 2 } else { 1 };
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((self.promise_proto, name, mf));
         }
         // `%GeneratorPrototype%` (`xsGenerator.c`'s `fxBuildGenerator`): a boot
@@ -6409,9 +6412,16 @@ impl Interp {
                 ("allSettled", NativeMethod::PromiseAllSettled),
                 ("any", NativeMethod::PromiseAny),
             ] {
-                let mf = self.alloc_method(m);
+                let mf = self.alloc_named_method(m, name, 1);
                 self.proto_methods.push((promise_ctor, name, mf));
             }
+            // Installed under the well-known symbol key during the full
+            // intrinsic-link pass, once that realm-local key id is available.
+            let _ = self.alloc_named_method(
+                NativeMethod::PromiseSpeciesGetter,
+                "get [Symbol.species]",
+                0,
+            );
         }
         // `%RegExp.prototype%`: `exec`/`test`/`toString`, bound at link time
         // only when the program references the name. The per-instance compiled
@@ -8412,6 +8422,7 @@ impl Interp {
                 // "DataView" with the same non-writable/non-enumerable/
                 // configurable descriptor.
                 (self.dataview_proto, "DataView"),
+                (self.promise_proto, "Promise"),
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
                 (self.async_generator_proto, "AsyncGenerator"),
@@ -8441,6 +8452,23 @@ impl Interp {
                     tag_id,
                     Slot::of(Kind::String, Payload::String(off)),
                     XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                );
+            }
+        }
+        // `Promise[@@species]` is a configurable, non-enumerable accessor
+        // whose getter returns its receiver and whose setter is undefined.
+        if let (Some(species_id), Some(&promise_ctor)) = (
+            self.well_known_symbol_property_id("species"),
+            self.intrinsics.get("Promise"),
+        ) {
+            if let Some(getter) = self.functions.iter().find_map(|(&function, info)| {
+                (info.method == Some(NativeMethod::PromiseSpeciesGetter)).then_some(function)
+            }) {
+                self.set_own_accessor_unmetered(
+                    promise_ctor,
+                    species_id,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    None,
                 );
             }
         }
@@ -32820,6 +32848,7 @@ impl Interp {
             NativeMethod::PromiseFinally => {
                 self.promise_finally_dispatch(code, this, arg0)?
             }
+            NativeMethod::PromiseSpeciesGetter => this,
             // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
             // the derived promise, resolve each (dense-Array) element to a
             // promise, and register a native COMBINE reaction on it; the shared
@@ -44617,6 +44646,8 @@ impl Interp {
     /// argument list, returning the constructed object (ECMA-262 Ordinary
     /// [[Construct]] shape, modeled on [`Self::run_callback`] but with the
     /// construct flag set so the callee body's `this` is a fresh instance).
+    /// A constructor retained from an earlier crank executes against its own
+    /// persisted code segment, just like an ordinary cross-crank callback.
     fn run_callback_construct(
         &mut self,
         code: &[u8],
@@ -44647,7 +44678,23 @@ impl Interp {
         let body_start = self.enter_call(argc, 0, true)?;
         let return_depth = self.call_stack.len();
         self.callback_return_depth = None;
-        match self.dispatch_at(code, body_start, return_depth) {
+        let callee_seg = self.callee_segment(f);
+        let seg_buf = if callee_seg == self.active_segment {
+            None
+        } else {
+            self.segment_buffer(callee_seg)
+        };
+        let saved_segment = self.active_segment;
+        if seg_buf.is_some() {
+            self.active_segment = callee_seg;
+        }
+        let body_code: &[u8] = match &seg_buf {
+            Some(buf) => &buf[..],
+            None => code,
+        };
+        let outcome = self.dispatch_at(body_code, body_start, return_depth);
+        self.active_segment = saved_segment;
+        match outcome {
             Halt::Return if self.callback_return_depth != Some(return_depth) => Err(Halt::Return),
             Halt::Return => Ok(self.pop()),
             other => Err(other),
