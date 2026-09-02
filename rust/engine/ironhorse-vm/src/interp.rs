@@ -31683,7 +31683,7 @@ impl Interp {
             NativeMethod::IteratorHelper(_) => {
                 return Err(Halt::Unsupported("Iterator.helper"));
             }
-            NativeMethod::Math(id) => self.call_math(id, base, argc)?,
+            NativeMethod::Math(id) => self.call_math(id, base, argc, code)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
             | NativeMethod::ReflectIsExtensible
@@ -32826,9 +32826,9 @@ impl Interp {
 
     /// Dispatch a `Math.*` static (`xsMath.c`). Reads the positional
     /// arguments off the call frame (`stack[base + 4 + i]`), coerces each to a
-    /// number (`fxToNumber` — free for a number/integer/boolean/undefined/null
-    /// operand; a string operand routes through ToNumber, which ironhorse does not
-    /// yet model here, so a string argument self-names an honest skip), and
+    /// number (`fxToNumber`, including observable object-to-primitive
+    /// conversion, complete string-number parsing, and catchable Symbol/BigInt
+    /// errors), and
     /// meters the single native host frame ([`MATH_FRAME_METERING`]). No
     /// `mxMeterSome` and no chunk — the pin's bodies carry neither. A NaN
     /// result is the canonical `f64::NAN`.
@@ -32848,75 +32848,62 @@ impl Interp {
     /// is a full determinism break (results feed guest branches, so
     /// computrons diverge transitively). See the design's Remaining
     /// ledger for the decision record.
-    fn call_math(&mut self, id: MathId, base: usize, argc: usize) -> Result<Slot, Halt> {
-        let arg = |i: usize| -> Option<Slot> {
-            if i < argc {
-                Some(
-                    self.stack
-                        .get(base + 4 + i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined),
-                )
-            } else {
-                None
-            }
-        };
-        // ToNumber that self-names on a string/reference operand (ironhorse does
-        // not yet model string→number coercion in the Math built-ins).
-        let num = |s: Slot| -> Result<f64, Halt> {
-            match s.kind {
-                Kind::String | Kind::Reference | Kind::Symbol => {
-                    Err(Halt::Unsupported("Math:non-numeric-argument"))
-                }
-                _ => Ok(to_number(&s)),
-            }
-        };
+    fn call_math(
+        &mut self,
+        id: MathId,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
         use MathId::*;
-        // Unary functions taking one argument, NaN when called with none
-        // (the `mxNanResultIfNoArg` macro).
-        let unary = |f: fn(f64) -> f64, a: Option<Slot>| -> Result<Slot, Halt> {
-            match a {
-                None => Ok(Slot::number(f64::NAN)),
-                Some(s) => Ok(Slot::number(f(num(s)?))),
-            }
-        };
         self.meter.tick_raw(MATH_FRAME_METERING);
         let r = match id {
-            Abs => unary(f64::abs, arg(0))?,
-            Acos => unary(f64::acos, arg(0))?,
-            Acosh => unary(f64::acosh, arg(0))?,
-            Asin => unary(f64::asin, arg(0))?,
-            Asinh => unary(f64::asinh, arg(0))?,
-            Atan => unary(f64::atan, arg(0))?,
-            Atanh => unary(f64::atanh, arg(0))?,
-            Cbrt => unary(f64::cbrt, arg(0))?,
-            Ceil => unary(f64::ceil, arg(0))?,
-            Cos => unary(f64::cos, arg(0))?,
-            Cosh => unary(f64::cosh, arg(0))?,
-            Exp => unary(f64::exp, arg(0))?,
-            Expm1 => unary(f64::exp_m1, arg(0))?,
-            Floor => unary(f64::floor, arg(0))?,
-            Log => unary(f64::ln, arg(0))?,
-            Log1p => unary(f64::ln_1p, arg(0))?,
-            Log10 => unary(f64::log10, arg(0))?,
+            Abs => self.math_unary(code, base, argc, f64::abs)?,
+            Acos => self.math_unary(code, base, argc, f64::acos)?,
+            Acosh => self.math_unary(code, base, argc, f64::acosh)?,
+            Asin => self.math_unary(code, base, argc, f64::asin)?,
+            Asinh => self.math_unary(code, base, argc, f64::asinh)?,
+            Atan => self.math_unary(code, base, argc, f64::atan)?,
+            Atanh => self.math_unary(code, base, argc, f64::atanh)?,
+            Cbrt => self.math_unary(code, base, argc, f64::cbrt)?,
+            Ceil => self.math_unary(code, base, argc, f64::ceil)?,
+            Cos => self.math_unary(code, base, argc, f64::cos)?,
+            Cosh => self.math_unary(code, base, argc, f64::cosh)?,
+            Exp => self.math_unary(code, base, argc, f64::exp)?,
+            Expm1 => self.math_unary(code, base, argc, f64::exp_m1)?,
+            Floor => self.math_unary(code, base, argc, f64::floor)?,
+            Log => self.math_unary(code, base, argc, f64::ln)?,
+            Log1p => self.math_unary(code, base, argc, f64::ln_1p)?,
+            Log10 => self.math_unary(code, base, argc, f64::log10)?,
             // The pin computes `log2` as `c_log(x) / c_log(2)` only under
             // `mxNoFunctionLength`-style configs it does not enable here; the
             // default build calls `c_log2`, so ironhorse uses `f64::log2`.
-            Log2 => unary(f64::log2, arg(0))?,
-            Sin => unary(f64::sin, arg(0))?,
-            Sinh => unary(f64::sinh, arg(0))?,
-            Sqrt => unary(f64::sqrt, arg(0))?,
-            Tan => unary(f64::tan, arg(0))?,
-            Tanh => unary(f64::tanh, arg(0))?,
-            Atan2 => match (arg(0), arg(1)) {
-                (Some(y), Some(x)) => Slot::number(num(y)?.atan2(num(x)?)),
+            Log2 => self.math_unary(code, base, argc, f64::log2)?,
+            Sin => self.math_unary(code, base, argc, f64::sin)?,
+            Sinh => self.math_unary(code, base, argc, f64::sinh)?,
+            Sqrt => self.math_unary(code, base, argc, f64::sqrt)?,
+            Tan => self.math_unary(code, base, argc, f64::tan)?,
+            Tanh => self.math_unary(code, base, argc, f64::tanh)?,
+            Atan2 => match (
+                self.math_arg(base, argc, 0),
+                self.math_arg(base, argc, 1),
+            ) {
+                (Some(y), Some(x)) => {
+                    let y = self.to_number_f64(code, y)?;
+                    let x = self.to_number_f64(code, x)?;
+                    Slot::number(y.atan2(x))
+                }
                 _ => Slot::number(f64::NAN),
             },
             // `fx_Math_pow` → `fx_pow`: `(±1) ** ±Infinity` is NaN (the pin's
             // explicit special-case), otherwise `c_pow`.
-            Pow => match (arg(0), arg(1)) {
+            Pow => match (
+                self.math_arg(base, argc, 0),
+                self.math_arg(base, argc, 1),
+            ) {
                 (Some(x), Some(y)) => {
-                    let (x, y) = (num(x)?, num(y)?);
+                    let x = self.to_number_f64(code, x)?;
+                    let y = self.to_number_f64(code, y)?;
                     let v = if !y.is_finite() && x.abs() == 1.0 {
                         f64::NAN
                     } else {
@@ -32929,9 +32916,11 @@ impl Interp {
             // `fx_Math_hypot`: no arg → 0; XS special-cases the 2-argument
             // `c_hypot`, else sums the squares and takes the sqrt.
             Hypot => {
-                let vals: Vec<f64> = (0..argc)
-                    .map(|i| num(arg(i).unwrap()))
-                    .collect::<Result<_, _>>()?;
+                let mut vals = Vec::with_capacity(argc);
+                for i in 0..argc {
+                    let value = self.math_arg(base, argc, i).unwrap();
+                    vals.push(self.to_number_f64(code, value)?);
+                }
                 let v = match vals.len() {
                     0 => 0.0,
                     2 => vals[0].hypot(vals[1]),
@@ -32941,10 +32930,10 @@ impl Interp {
             }
             // `fx_Math_sign`: NaN→NaN, <0→-1, >0→1, else the argument (±0),
             // then `fx_Math_toInteger` folds an exact integer to integer kind.
-            Sign => match arg(0) {
+            Sign => match self.math_arg(base, argc, 0) {
                 None => Slot::number(f64::NAN),
                 Some(s) => {
-                    let a = num(s)?;
+                    let a = self.to_number_f64(code, s)?;
                     let r = if a.is_nan() {
                         f64::NAN
                     } else if a < 0.0 {
@@ -32960,11 +32949,11 @@ impl Interp {
             // `fx_Math_round`: an integer argument passes through; otherwise
             // XS rounds half-up (`floor(x + 0.5)`) inside the ±(2^52-1) normal
             // window, with the ±0 corners, then folds to integer kind.
-            Round => match arg(0) {
+            Round => match self.math_arg(base, argc, 0) {
                 None => Slot::number(f64::NAN),
                 Some(s) if s.kind == Kind::Integer => s,
                 Some(s) => {
-                    let mut a = num(s)?;
+                    let mut a = self.to_number_f64(code, s)?;
                     if a.is_normal() && (-4503599627370495.0 < a) && (a < 4503599627370495.0) {
                         if a < -0.5 || 0.5 <= a {
                             a = (a + 0.5).floor();
@@ -32978,50 +32967,81 @@ impl Interp {
                 }
             },
             // `fx_Math_trunc`: `c_trunc`, then fold to integer kind.
-            Trunc => match arg(0) {
+            Trunc => match self.math_arg(base, argc, 0) {
                 None => Slot::number(f64::NAN),
-                Some(s) => math_to_integer(num(s)?.trunc()),
+                Some(s) => math_to_integer(self.to_number_f64(code, s)?.trunc()),
             },
             // `fx_Math_fround`: an integer passes through; otherwise round to
             // the nearest `f32` and widen back.
-            Fround => match arg(0) {
+            Fround => match self.math_arg(base, argc, 0) {
                 None => Slot::number(f64::NAN),
                 Some(s) if s.kind == Kind::Integer => s,
-                Some(s) => Slot::number(num(s)? as f32 as f64),
+                Some(s) => Slot::number(self.to_number_f64(code, s)? as f32 as f64),
             },
             // `fx_Math_clz32`: count leading zeros of ToUint32(arg); 32 for 0.
             Clz32 => {
-                let x = match arg(0) {
+                let x = match self.math_arg(base, argc, 0) {
                     None => 0u32,
-                    Some(s) => to_int32(num(s)?) as u32,
+                    Some(s) => to_int32(self.to_number_f64(code, s)?) as u32,
                 };
                 Slot::integer(x.leading_zeros() as i32)
             }
             // `fx_Math_imul`: (ToInt32(a) * ToInt32(b)) as a 32-bit product.
             Imul => {
-                let a = arg(0).map(num).transpose()?.map(to_int32).unwrap_or(0);
-                let b = arg(1).map(num).transpose()?.map(to_int32).unwrap_or(0);
+                let a = match self.math_arg(base, argc, 0) {
+                    Some(value) => to_int32(self.to_number_f64(code, value)?),
+                    None => 0,
+                };
+                let b = match self.math_arg(base, argc, 1) {
+                    Some(value) => to_int32(self.to_number_f64(code, value)?),
+                    None => 0,
+                };
                 Slot::integer(a.wrapping_mul(b))
             }
-            Max => self.math_extremum(argc, base, true)?,
-            Min => self.math_extremum(argc, base, false)?,
+            Max => self.math_extremum(code, argc, base, true)?,
+            Min => self.math_extremum(code, argc, base, false)?,
         };
         Ok(r)
+    }
+
+    /// Copy one positional Math argument out of the native call frame.
+    fn math_arg(&self, base: usize, argc: usize, index: usize) -> Option<Slot> {
+        (index < argc).then(|| {
+            self.stack
+                .get(base + 4 + index)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        })
+    }
+
+    /// A one-argument Math operation, including the no-argument NaN case and
+    /// the shared observable ToNumber conversion.
+    fn math_unary(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+        operation: fn(f64) -> f64,
+    ) -> Result<Slot, Halt> {
+        match self.math_arg(base, argc, 0) {
+            None => Ok(Slot::number(f64::NAN)),
+            Some(value) => Ok(Slot::number(operation(self.to_number_f64(code, value)?))),
+        }
     }
 
     /// `fx_Math_max`/`fx_Math_min`: the running extremum over the arguments,
     /// preserving XS's integer-kind fast path (an all-integer argument list
     /// stays integer) and its ±0 tie-break (`max(+0,-0)===+0`,
     /// `min(+0,-0)===-0`), with a NaN argument poisoning the result (after
-    /// still coercing the remaining arguments — a no-op for ironhorse's numeric
-    /// operands). `max` seeds `-Infinity`, `min` seeds `+Infinity`.
-    fn math_extremum(&mut self, argc: usize, base: usize, is_max: bool) -> Result<Slot, Halt> {
-        let a = |i: usize| {
-            self.stack
-                .get(base + 4 + i)
-                .copied()
-                .unwrap_or_else(Slot::undefined)
-        };
+    /// still coercing the remaining arguments, so a later abrupt completion
+    /// takes precedence). `max` seeds `-Infinity`, `min` seeds `+Infinity`.
+    fn math_extremum(
+        &mut self,
+        code: &[u8],
+        argc: usize,
+        base: usize,
+        is_max: bool,
+    ) -> Result<Slot, Halt> {
         if argc == 0 {
             return Ok(Slot::number(if is_max {
                 f64::NEG_INFINITY
@@ -33030,7 +33050,7 @@ impl Interp {
             }));
         }
         // Integer fast path while every argument seen so far is an integer.
-        let first = a(0);
+        let first = self.math_arg(base, argc, 0).unwrap();
         let mut int_acc: Option<i32> = if first.kind == Kind::Integer {
             match first.value {
                 Payload::Integer(v) => Some(v),
@@ -33045,8 +33065,9 @@ impl Interp {
             f64::INFINITY
         };
         let start = if int_acc.is_some() { 1 } else { 0 };
+        let mut saw_nan = false;
         for i in start..argc {
-            let s = a(i);
+            let s = self.math_arg(base, argc, i).unwrap();
             if let Some(iv) = int_acc {
                 if s.kind == Kind::Integer {
                     if let Payload::Integer(v) = s.value {
@@ -33058,12 +33079,12 @@ impl Interp {
                 acc = iv as f64;
                 int_acc = None;
             }
-            if matches!(s.kind, Kind::String | Kind::Reference | Kind::Symbol) {
-                return Err(Halt::Unsupported("Math:non-numeric-argument"));
-            }
-            let n = to_number(&s);
+            let n = self.to_number_f64(code, s)?;
             if n.is_nan() {
-                return Ok(Slot::number(f64::NAN));
+                // Math.max/min still ToNumber-coerce every later argument, so
+                // a subsequent abrupt completion must outrank the NaN result.
+                saw_nan = true;
+                continue;
             }
             if is_max {
                 if acc < n {
@@ -33077,9 +33098,13 @@ impl Interp {
                 acc = -0.0;
             }
         }
-        Ok(match int_acc {
-            Some(v) => Slot::integer(v),
-            None => Slot::number(acc),
+        Ok(if saw_nan {
+            Slot::number(f64::NAN)
+        } else {
+            match int_acc {
+                Some(v) => Slot::integer(v),
+                None => Slot::number(acc),
+            }
         })
     }
 
