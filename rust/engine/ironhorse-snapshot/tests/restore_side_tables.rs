@@ -4,9 +4,12 @@
 //! `SymbolTables` were covered by the arena / serialized atoms, but
 //! `Interp::restore_snapshot_state` reinstates arenas + stack + `symbol_names`
 //! + meter only — the `global_props` id→slot index and the `symbol_ids`
-//! inverse map + `next_intern_id` counter (all derived, HashMap-resident, not
-//! arena state) stayed at their empty fresh-boot values. A runtime global
-//! materialized in an earlier crank then vanished after suspend/resume.
+//! inverse map + the then-extant `next_intern_id` counter (all derived,
+//! HashMap-resident, not arena state) stayed at their empty fresh-boot
+//! values. A runtime global materialized in an earlier crank then vanished
+//! after suspend/resume. (The counter has since retired: the 2026-08-26
+//! id-space unification made runtime string keys `symbol_names` appends and
+//! moved symbol-key minting to the SYMB-carried `next_symbol_key_id`.)
 //!
 //! These tests lock the fix in the shape the review used: a real guest crank
 //! materializes a runtime global, the machine is suspended via
@@ -62,7 +65,7 @@ fn runtime_global_survives_suspend_resume() {
     let mut m1 = Interp::new();
     m1.link_intrinsics(&names1);
     m1.run(&crank1);
-    let bytes = m1.write_snapshot(&sig());
+    let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
     drop(m1);
 
     let mut m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
@@ -81,12 +84,12 @@ fn runtime_global_survives_suspend_resume() {
 
 /// **Finding 3 — `SymbolTables`.** Only `symbol_names` is serialized; the
 /// inverse `symbol_ids` map (which `global_string` — and every native
-/// built-in that relinks a well-known property name — consults) and the
-/// `next_intern_id` runtime-key counter are derived from it and were never
-/// rebuilt at restore, so they stayed at fresh-boot values (empty / `1`).
-/// After the fix `restore_snapshot_state` re-derives them via
-/// `bind_program_symbols`, so a global materialized before the snapshot reads
-/// back **by name** on the restored machine.
+/// built-in that relinks a well-known property name — consults) is derived
+/// from it and was never rebuilt at restore, so it stayed at its fresh-boot
+/// value (empty; so did the runtime-key counter of the day, since retired
+/// by the id-space unification). After the fix `restore_snapshot_state`
+/// re-derives it via `bind_program_symbols`, so a global materialized before
+/// the snapshot reads back **by name** on the restored machine.
 #[test]
 fn symbol_tables_rebuilt_at_restore() {
     let (crank1, names1) = compile("var x = 5;");
@@ -97,15 +100,18 @@ fn symbol_tables_rebuilt_at_restore() {
     // Sanity: the live machine reads the global by name (uses `symbol_ids`).
     assert_eq!(m1.global_string("x").as_deref(), Some("5"));
 
-    let bytes = m1.write_snapshot(&sig());
+    let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
     drop(m1);
     let m2 = from_snapshot_bytes(&bytes, &sig()).expect("machine restores from bytes");
 
-    // `symbol_names` round-trips …
+    // `symbol_names` round-trips — the MACHINE's table, which since the
+    // id-space unification includes any name the boot link appended
+    // (constructor `prototype`, iterator-protocol atoms) beyond the
+    // compiled `names1`. The compiled prefix must survive verbatim.
     assert_eq!(
-        m2.program_symbol_names(),
+        &m2.program_symbol_names()[..names1.len()],
         names1.as_slice(),
-        "the forward symbol_names table round-trips through the snapshot",
+        "the compiled name-table prefix round-trips through the snapshot",
     );
     // … and the *derived* inverse `symbol_ids` is rebuilt, so name-keyed
     // resolution works after resume. Before the fix this was `None` (empty

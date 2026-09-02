@@ -22,6 +22,8 @@ after filing the 17 unattended documents and recording the merged
 
 ## Historical groom notes
 
+*Layered on 2026-07-30: added [cbor-encode-decode](cbor-encode-decode.md) to M4 (Networking): a packaging refactor that splits `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports over an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds, so decoding consumers retain no encoding machinery and encoding consumers retain no decoding machinery; the root `.` re-export is preserved; follow-up to kriskowal's approving review of #885; summary table, M4 row, and per-design estimate synced.*
+
 *Layered on 2026-08-24 (rolling index refresh): indexed six design files that had
 landed on `llm` without a summary-table row — the Ironhorse trio
 [ironhorse-engine](ironhorse-engine.md), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md),

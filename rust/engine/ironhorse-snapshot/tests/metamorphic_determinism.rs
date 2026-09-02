@@ -10,6 +10,8 @@ use ironhorse_snapshot::store::MemoryStore;
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::store_suite::{lazy_working_set_bound, metamorphic_suite};
 
+mod common;
+
 #[test]
 fn memory_store_agrees_seven_ways() {
     metamorphic_suite(MemoryStore::new);
@@ -24,22 +26,19 @@ fn memory_store_lazy_resume_faults_only_the_working_set() {
 /// the end (leaked temp dirs are the usual cause of local-only
 /// flakes).
 fn with_file_stores(name: &str, run: impl FnOnce(&mut dyn FnMut() -> FileStore)) {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = common::TempDir::new(&format!(
         "ironhorse-metamorphic-file-{name}-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     let mut n = 0u32;
     let mut fresh = {
-        let dir = dir.clone();
+        let dir = dir.to_path_buf();
         move || {
             n += 1;
             FileStore::open(dir.join(format!("heap-{n}.ihstore"))).unwrap()
         }
     };
     run(&mut fresh);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -92,8 +91,72 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     }
 
     assert_eq!(
-        hex_sha256(&session.machine().write_snapshot(&sig)),
-        "d34c62fc6ac11563e01c14e0a2316a846e872f0a2368f0ec931243772dc733ea",
+        hex_sha256(&session.machine().write_snapshot(&sig).expect("quiescent machine snapshots")),
+        // Re-pinned 2026-08-26 (llm rebase): the boot heap changed on BOTH
+        // sides — the deferred pass chained native instances to
+        // %Function.prototype% (the detached-.call fix), and the llm
+        // language-completion sweep grew the boot intrinsics (Intl,
+        // Temporal, Atomics, the test262 host). Every boot's canonical
+        // bytes moved together. Format unchanged.
+        // Re-pinned 2026-08-28 for a FORMAT addition — the container's
+        // first new atom since the ledger carries: `NFLR`, the
+        // installed-names floor (wave-6 W6-7). Every linked machine's
+        // floor sits below its boot-appended name table (installs
+        // intern the Intl member and accessor keys AFTER the floor is
+        // taken), so the atom is present on every real container,
+        // this golden machine's included. The floor must travel or a
+        // resumed machine can never lazily install a name interned
+        // during its last install pass (`intl_carry.rs`).
+        // Re-pinned 2026-08-28 again at the second llm rebase: the boot
+        // heap grew on the mainline (the Date core, the Iterator global
+        // and helper surface, the Map/Set iterator prototypes, the
+        // async-generator metadata) — a CONTENT move on the base, the
+        // same class as the first llm re-pin. Format unchanged.
+        // Re-pinned 2026-08-28 once more for a FORMAT version bump
+        // (review finding 1): the write stamp moved to 2, marking the
+        // side-table atom family, so a version-1 exact-match reader
+        // refuses these containers instead of silently dropping that
+        // state. Only the `VERS` payload bytes moved.
+        // Re-pinned after rebasing onto the 2026-08-29 llm head: the
+        // mainline boot heap changed again, so this is a content move,
+        // not another format change.
+        // Re-pinned for format version 3, which marks the new `DATE`
+        // state-bearing atom. This fixture has no guest Date record,
+        // so only the VERS payload changes.
+        // Re-pinned for format version 4, marking the atomic `FUNC`
+        // callability cluster. This fixture defines no function, so
+        // again only the VERS payload changes.
+        // Re-pinned for format version 5, marking proxy state. This
+        // fixture holds no proxy, so only VERS changes.
+        // Re-pinned for format version 6, marking accessor mappings.
+        // This fixture holds no guest accessor, so only VERS changes.
+        // Re-pinned for format version 7, marking Intl bound-function
+        // links. This fixture holds none, so only VERS changes.
+        // Re-pinned for format version 8, marking private elements.
+        // This fixture holds none, so only VERS changes.
+        // Re-pinned for format version 9, marking disposable stacks.
+        // This fixture holds none, so only VERS changes.
+        // Re-pinned for format version 10, marking synchronous generator
+        // activations. This fixture holds none, so only VERS changes.
+        // Re-pinned 2026-08-31 for a boot-heap CONTENT move, the same
+        // class as the four mainline re-pins above and not a format
+        // change: three `@@iterator` natives that used to be minted
+        // during `link_intrinsics` are minted in `create_intrinsics`
+        // now, so they land below `boot_slot_count` and a fresh boot
+        // re-derives them. Above the floor they were carried by no
+        // table and resume silently lost their callability
+        // (`boot_native_identity.rs`).
+        // Re-pinned at the 2026-08-31 llm rebase, for BOTH reasons at
+        // once: the mainline grew the boot heap again (the real
+        // `.prototype` property and `%Error.prototype%`'s `stack` host
+        // accessor pair), and this branch bumped the container format
+        // to 11 for the `ESTK` atom. This fixture holds no error, so
+        // `ESTK` is absent from its bytes and only the `VERS` payload
+        // moves on that account.
+        // Re-pinned for format version 12, marking the promise cluster
+        // (`PRMS`). This fixture holds no promise, so the atom is
+        // absent and only the VERS payload changes.
+        "3ff87db04dc44e6096e3c16de42e83f8d78ec232be9f4a521cd8753265327b37",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -102,24 +165,91 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // (segmented free list: free_len in the manifest, free rows in
     // the seal), and v5 (summaries folded into the root; counts
     // header and length-prefixed edge entries in root and seal).
-    // Those container/store format changes left the blob hash
-    // unchanged — the independence this vector exists to prove. Both
-    // the blob AND the seal were re-pinned 2026-08-23 when the
-    // ironhorse-262 language-completion branch merged `llm` in: that
-    // branch grows the machine's live intrinsic/proto state, so the
-    // canonical snapshot blob legitimately differs (a MACHINE-STATE
-    // change, not a store-format one), and the seal derives from it.
-    // The seven-way metamorphic tests above still pass, so the new
-    // bytes remain deterministic and cross-host stable. Re-pinned again for
-    // the Date intrinsic's new constructor/prototype boot state, then for the
-    // collection methods' specified name/length metadata and their distinct
-    // Map/Set iterator-prototype boot state, then for the Iterator constructor
-    // and helper-method prototype surface, and then for the async-generator
-    // constructor/prototype metadata, and then for the generator-family
-    // Symbol.toStringTag properties.
+    // The blob hash above was unchanged by ALL of those format
+    // commits — the container/store independence this vector proves.
+    // Both pins moved together on 2026-08-18 for a CONTENT reason,
+    // not a format one: the boot heap deliberately changed (native
+    // function instances chain to %Function.prototype% now).
+    // Seal re-pinned again 2026-08-18 for schema v6 (class-tree
+    // root: the manifest root formula changed from the flat v5
+    // combine to per-class Merkle trees, and the seal signs the
+    // manifest). The blob hash above did NOT move — v6 changed the
+    // root formula only, never the container format.
+    // Seal re-pinned again 2026-08-24 for schema v7 (the side-table
+    // ledger: the small state grew the arrays/collections/registry
+    // sections, so every small leaf — and thus root and seal —
+    // moved). The blob hash above did NOT move: this machine carries
+    // no side-table state, and the ledger atoms are emitted only
+    // when non-empty, which is precisely the container-stability
+    // property the two-pin split exists to prove.
+    // Seal re-pinned again 2026-08-25 for schema v8 (the durable
+    // completed-crank counter): the seal signs the whole manifest, and
+    // the manifest grew a `u64` tail. The blob hash above did NOT move
+    // — the counter is store metadata and the container carries no
+    // manifest at all, which is the same two-pin split again.
+    // BOTH pins re-pinned 2026-08-26 for the llm rebase: a CONTENT
+    // move (the language-completion boot heap: Intl, Temporal, the
+    // test262 host, and the boot-link name-table appends), not a
+    // format one — the container grammar, store schema 8, and the
+    // canonical-empty SYMB/KEYS encodings are all unchanged.
+    // Seal re-pinned again 2026-08-27, three times, for the ledger
+    // carries: schema v9 (the error-data row: the ERRD section),
+    // schema v10 (the typed-array family: ABUF/TARR/DVIW), and schema
+    // v11 (the data-only language rows: WRAP/REGX/ARGB/TMPR) — each
+    // grows the small state and stamps the manifest, so every small
+    // leaf — and thus root and seal — moved. The blob hash above did
+    // NOT move any time: this machine holds none of those rows, and
+    // the ledger atoms are emitted only when non-empty — the same
+    // container-stability property the two-pin split proves.
+    // BOTH pins re-pinned 2026-08-28 for schema v12: the small state
+    // grew the intl and name-floor sections, and — the one deliberate
+    // exception to the container-stability rule — the blob gained the
+    // `NFLR` atom, because the installed-names floor is real machine
+    // state every linked machine holds (see the blob pin's comment).
+    // Seal re-pinned again 2026-08-28 for schema v13 (the iterator
+    // cursors: the ITER section) — the small state grew and stamped
+    // the manifest, so every small leaf — and thus root and seal —
+    // moved. The blob hash did NOT move: this machine holds no
+    // cursors, and the atom is emitted only when non-empty — the
+    // container-stability property the two-pin split proves, restored
+    // after v12's deliberate exception.
     assert_eq!(
         store.manifest().unwrap().seal,
-        "051dd9e307c776855e9812734a4d8f97286c96c365d28f166fdc4f80f172f34b",
+        // Both pins moved again at the second llm rebase (2026-08-28):
+        // the mainline boot-heap growth above — content, not format.
+        // And again for the format-version bump (review finding 1):
+        // the manifest embeds the `VERS` stamp, so the seal moves with
+        // the blob — the one other deliberate exception to the two-pin
+        // independence, exercised by a version field doing its job.
+        // Re-pinned with the blob after the 2026-08-29 llm rebase.
+        // Re-pinned for schema 14 and format 3: the manifest and small
+        // state gain the Date carry, while VERS marks its atom.
+        // Re-pinned for schema 15 and format 4: the small state gains
+        // the atomic function section and VERS marks `FUNC`.
+        // Re-pinned for schema 16 and format 5: the small state gains
+        // proxy records and VERS marks `PROX`.
+        // Re-pinned for schema 17 and format 6: the small state gains
+        // guest accessor mappings and VERS marks `ACCS`.
+        // Re-pinned for schema 18 and format 7: the small state gains
+        // Intl bound-function links and VERS marks `IBFN`.
+        // Re-pinned for schema 19 and format 8: the small state gains
+        // private elements and VERS marks `PRIV`.
+        // Re-pinned for schema 20 and format 9: the small state gains
+        // disposable stacks and VERS marks `DISP`.
+        // Re-pinned for schema 21 and format 10: the small state gains
+        // synchronous generator activations and VERS marks `GENR`.
+        // Re-pinned 2026-08-31 with the blob, for the same boot-heap
+        // content move: three link-time `@@iterator` mints became boot
+        // mints, so the page rows carrying the boot heap moved and the
+        // root and seal move with them. Schema and format unchanged.
+        // Re-pinned with the blob at the 2026-08-31 llm rebase: the
+        // mainline boot heap moved the page rows, and schema 22 adds
+        // the (empty here) error-frames section to the small state, so
+        // the small leaf, the root and the seal all move.
+        // Re-pinned for schema 23 and format 12: the small state gains
+        // the (empty here) promise-cluster section and VERS marks
+        // `PRMS`, so the small leaf, the root and the seal all move.
+        "e44eed990c5fab722d0504341e37213df0d51a4262d56cbfc8180e3b58ab0310",
         "epoch-3 seal chain"
     );
 }

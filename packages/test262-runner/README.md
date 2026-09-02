@@ -28,9 +28,15 @@ The `test262` directory contains
 * a copy of the `tests` and `harness` directories from https://github.com/tc39/test262.
 * additional tests from https://github.com/Moddable-OpenSource/moddable
 * additional Hardened JavaScript tests
+* Ironhorse bring-up and regression cases under `test/ironhorse/`
 
 We currently only run tests expressly marked with the `ses-xs-parity` feature
-in their front-matter.
+in their front-matter. The XS and Node suites also exclude the
+`ironhorse-dual-run`, `ironhorse-meter-exact`, and
+`ironhorse-meter-determinism` classifiers. Those annotations keep the cases in
+one corpus while preventing hosts without Ironhorse's differential and
+metering checks from attempting them. Ironhorse's Rust suites select those
+same cases by their classifiers and apply the supported checks.
 
 ## Justification
 

@@ -67,6 +67,29 @@ const SMALL_NAME: &str = "small";
 #[derive(Debug)]
 pub struct SqliteHeapStore {
     conn: Connection,
+    /// The backend's live [`RootLedger`] (V6-c): seeded by each
+    /// commit's slow path and advanced by each fast one, so a
+    /// steady-state commit neither re-SELECTs every leaf row nor
+    /// re-hashes untouched leaves — O(dirty · log n) root
+    /// maintenance. `None` after open and after any failed commit
+    /// (drop-on-failure; the next commit's slow path re-reads the
+    /// rows, re-verifies the recombination, and rebuilds it). The
+    /// fast path stops re-hashing untouched stored leaves each
+    /// commit; on this backend that trades away nothing — while the
+    /// store is warm, `locking_mode=EXCLUSIVE` shuts the file to any
+    /// other SQLite-mediated writer, so the at-rest-edit window the
+    /// scan patrolled cannot open, and an edit landing between opens
+    /// dies at the open-time validator (both directions locked in
+    /// `tests/root_cache.rs`).
+    ///
+    /// Precisely: EXCLUSIVE excludes SQLite writers, not a raw-file
+    /// writer that ignores the locking protocol (review wave 4, P3a).
+    /// Such an edit is not laundered — it is detected at the next open
+    /// or fault rather than at the next commit — so this is a change in
+    /// WHEN tamper is evident, not whether. Tamper-EVIDENCE at row
+    /// scale is the stated integrity scope; authentication is not (see
+    /// the design's threat model).
+    root_cache: Option<ironhorse_snapshot::store::RootLedger>,
 }
 
 impl SqliteHeapStore {
@@ -240,8 +263,33 @@ impl SqliteHeapStore {
                ON edge_pairs (page);",
         )
         .map_err(sql_err)?;
+        // Fail closed on an unsupported schema BEFORE the derived-table
+        // rebuild below writes anything: a store this build cannot use —
+        // too new to decode, or too old to migrate — must be refused
+        // with its bytes untouched, not clobbered by `rebuild_edge_pairs`
+        // (a committed DELETE+INSERT) and only THEN refused (review wave
+        // 4, F1). A supported-old store (migratable) and the current
+        // schema both pass; the DDL above is content-neutral
+        // (CREATE ... IF NOT EXISTS never drops a row) so it may precede
+        // this read, but the rebuild may not. A fresh (unstamped) store
+        // has no manifest and reads as `None`.
+        //
+        // The DECODE is the gate: `StoreManifest::decode` already refuses
+        // any schema outside [MIN_SUPPORTED, VERSION]. What this call
+        // site contributes is its POSITION, so the explicit range check
+        // that used to stand here was unreachable and is gone (review
+        // wave 5).
+        let _ = Self::stored_manifest(&conn)?;
         Self::rebuild_edge_pairs(&conn)?;
-        Ok(SqliteHeapStore { conn })
+        // Open does NOT migrate. A supported-old store opens as-is and
+        // the caller upgrades it with `migrate_store`, which gates the
+        // restamp on the callback-table signature this connection has no
+        // way to know (review wave 4, F2). The EXCLUSIVE locking taken
+        // above still makes that later in-place restamp safe.
+        Ok(SqliteHeapStore {
+            conn,
+            root_cache: None,
+        })
     }
 
     /// Rebuild `edge_pairs` from the sealed `page_edges` rows,
@@ -404,6 +452,49 @@ impl HeapStore for SqliteHeapStore {
         Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)
     }
 
+    fn replace_manifest_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+    ) -> Result<(), StoreError> {
+        // Migration runs at init, before any commit could have built
+        // the ledger cache — but a restamped manifest invalidates one
+        // by definition, so drop it rather than depend on ordering.
+        self.root_cache = None;
+        self.conn
+            .execute(
+                "INSERT INTO meta (key, value) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![META_MANIFEST, manifest.encode()],
+            )
+            .map_err(sql_err)?;
+        Ok(())
+    }
+
+    fn replace_manifest_and_small_for_migration(
+        &mut self,
+        manifest: &StoreManifest,
+        small: &[u8],
+    ) -> Result<(), StoreError> {
+        // The small-rewriting ladder step (6→7). One transaction: a
+        // v7-stamped manifest must never be observable beside a v6
+        // small — the pair recombines to the new root only together.
+        self.root_cache = None;
+        let tx = self.conn.transaction().map_err(sql_err)?;
+        tx.execute(
+            "INSERT INTO small_state (name, bytes) VALUES (?1, ?2)
+             ON CONFLICT(name) DO UPDATE SET bytes = excluded.bytes",
+            params![SMALL_NAME, small],
+        )
+        .map_err(sql_err)?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![META_MANIFEST, manifest.encode()],
+        )
+        .map_err(sql_err)?;
+        tx.commit().map_err(sql_err)
+    }
+
     // Trait-level query overrides (store seam phase 10): the partial
     // collector's decision queries run indexed on this backend — the
     // summary-count gate as a COUNT(*), reachability as the recursive
@@ -445,6 +536,118 @@ impl HeapStore for SqliteHeapStore {
             return Err(StoreError::Empty);
         }
         self.reachable_pages_sql(roots)
+    }
+
+    /// Generational seed query, answered from the reverse index:
+    /// candidates with an inbound edge from a page OUTSIDE the
+    /// candidate set — transfer proportional to the ANSWER, like the
+    /// CTE (the dense default reads the whole edge table).
+    fn externally_referenced(&self, targets: &[u32]) -> Result<Vec<u32>, StoreError> {
+        // Empty-store parity with the dense default, which fails with
+        // `Empty` through `page_edges` while this override would answer
+        // `[]` off an empty `edge_pairs` (review wave 4, GC-P3b). Not
+        // reachable through `generational_collect` — it reads the
+        // manifest first — but the backends must be interchangeable at
+        // the trait surface, not merely along the one path that happens
+        // to check first.
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        self.conn
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS gen_targets (p INTEGER PRIMARY KEY);
+                 DELETE FROM gen_targets;",
+            )
+            .map_err(sql_err)?;
+        {
+            let mut ins = self
+                .conn
+                .prepare("INSERT OR IGNORE INTO gen_targets (p) VALUES (?1)")
+                .map_err(sql_err)?;
+            for &t in targets {
+                ins.execute(params![t as i64]).map_err(sql_err)?;
+            }
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT DISTINCT e.target FROM edge_pairs e
+                 WHERE e.target IN (SELECT p FROM gen_targets)
+                   AND e.page NOT IN (SELECT p FROM gen_targets)",
+            )
+            .map_err(sql_err)?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(sql_err)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(page_col(r.map_err(sql_err)?)?);
+        }
+        self.conn
+            .execute("DELETE FROM gen_targets", [])
+            .map_err(sql_err)?;
+        out.sort_unstable();
+        Ok(out)
+    }
+
+    /// Region-bounded reachability for the generational pass: the
+    /// recursive walk never leaves the candidate set, so its transfer
+    /// is bounded by the mutated region, not the heap.
+    fn reachable_within(
+        &self,
+        roots: &[u32],
+        within: &[u32],
+    ) -> Result<std::collections::BTreeSet<u32>, StoreError> {
+        // Empty-store parity with the dense default (review wave 4,
+        // GC-P3b) — see `externally_referenced` above.
+        if Self::stored_manifest(&self.conn)?.is_none() {
+            return Err(StoreError::Empty);
+        }
+        self.conn
+            .execute_batch(
+                "CREATE TEMP TABLE IF NOT EXISTS gen_within (p INTEGER PRIMARY KEY);
+                 CREATE TEMP TABLE IF NOT EXISTS gen_roots (p INTEGER PRIMARY KEY);
+                 DELETE FROM gen_within; DELETE FROM gen_roots;",
+            )
+            .map_err(sql_err)?;
+        {
+            let mut ins = self
+                .conn
+                .prepare("INSERT OR IGNORE INTO gen_within (p) VALUES (?1)")
+                .map_err(sql_err)?;
+            for &w in within {
+                ins.execute(params![w as i64]).map_err(sql_err)?;
+            }
+            let mut ins = self
+                .conn
+                .prepare(
+                    "INSERT OR IGNORE INTO gen_roots (p)
+                     SELECT ?1 WHERE ?1 IN (SELECT p FROM gen_within)",
+                )
+                .map_err(sql_err)?;
+            for &r in roots {
+                ins.execute(params![r as i64]).map_err(sql_err)?;
+            }
+        }
+        let mut stmt = self
+            .conn
+            .prepare(
+                "WITH RECURSIVE reach(p) AS (
+                   SELECT p FROM gen_roots
+                   UNION
+                   SELECT e.target FROM edge_pairs e JOIN reach ON e.page = reach.p
+                   WHERE e.target IN (SELECT p FROM gen_within)
+                 )
+                 SELECT p FROM reach",
+            )
+            .map_err(sql_err)?;
+        let rows = stmt.query_map([], |r| r.get::<_, i64>(0)).map_err(sql_err)?;
+        let mut out = std::collections::BTreeSet::new();
+        for r in rows {
+            out.insert(page_col(r.map_err(sql_err)?)?);
+        }
+        self.conn
+            .execute_batch("DELETE FROM gen_within; DELETE FROM gen_roots;")
+            .map_err(sql_err)?;
+        Ok(out)
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
@@ -652,6 +855,12 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+        // Take the ledger cache up front: every early return below
+        // drops it (the [`RootLedger`] drop-on-failure discipline —
+        // rusqlite rolls the transaction back on drop, and a rolled-
+        // back commit must not leave an advanced ledger standing).
+        // Only a committed transaction stores the advanced one back.
+        let cache = self.root_cache.take();
         // IMMEDIATE: take the writer lock up front so a concurrent
         // commit serializes under busy_timeout instead of surfacing
         // SQLITE_BUSY_SNAPSHOT on the mid-transaction read-to-write
@@ -660,29 +869,54 @@ impl HeapStore for SqliteHeapStore {
             .conn
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(sql_err)?;
+        let new_cache: ironhorse_snapshot::store::RootLedger;
         {
             let stored = Self::stored_manifest(&tx)?;
             check_succession(stored.as_ref(), batch)?;
             let pages = slot_page_count(batch.manifest.slot_count);
             let exts = chunk_extent_count(batch.manifest.chunk_len);
 
-            // The shared per-commit verification (grown-region
-            // presence for all three row dimensions, boundary rows
-            // against the prior manifest, row lengths, summary
-            // coupling, root recombination) against the prior leaves
-            // and summaries — all read inside this transaction, the
-            // same snapshot the succession check read, and all BEFORE
-            // any table mutation (wave-3 reorder: a refused batch now
-            // leaves the tables untouched by construction, so the
-            // transaction rollback is the backstop for I/O failures
-            // in the mutation stage below, not the mechanism a
-            // refusal depends on). The prior leaves are read PER KIND
-            // with contiguity enforced, like the trait readers: the
-            // review found an unfiltered `ORDER BY kind, idx` here
-            // silently folding kind-2 free leaves into the extent
-            // vector (masked only by resize bounds), and no gap
-            // detection.
-            {
+            // The shared per-commit verification — all of it inside
+            // this transaction, the same snapshot the succession
+            // check read, and all BEFORE any table mutation (wave-3
+            // reorder: a refused batch leaves the tables untouched by
+            // construction, so the transaction rollback is the
+            // backstop for I/O failures in the mutation stage below,
+            // not the mechanism a refusal depends on). Two paths
+            // (V6-c): FAST — a live ledger from the previous commit
+            // runs the identical [`check_batch`] admission gauntlet
+            // against its cached widths, then advances the class
+            // trees O(dirty · log n) and refuses a batch whose root
+            // disagrees, with no per-leaf SELECT at all; SLOW (first
+            // commit after open or after any failure) — read every
+            // prior leaf and summary and run [`apply_batch`]'s full
+            // recombination, then seed the ledger from the applied
+            // vectors. The prior leaves are read PER KIND with
+            // contiguity enforced, like the trait readers: the review
+            // found an unfiltered `ORDER BY kind, idx` here silently
+            // folding kind-2 free leaves into the extent vector
+            // (masked only by resize bounds), and no gap detection.
+            new_cache = if let Some(mut ledger) = cache {
+                ironhorse_snapshot::store::check_batch(
+                    stored.as_ref().map(|m| (m, ledger.widths())),
+                    batch,
+                )?;
+                let root = ledger.apply(
+                    &batch.manifest,
+                    &batch.small,
+                    &batch.slot_pages,
+                    &batch.chunk_extents,
+                    &batch.free_segs,
+                    &batch.page_edges,
+                )?;
+                if root != batch.manifest.root {
+                    return Err(StoreError::BaselineMismatch {
+                        expected: root,
+                        found: batch.manifest.root.clone(),
+                    });
+                }
+                ledger
+            } else {
                 let read_kind = |kind: i64, what: &'static str| -> Result<Vec<[u8; 32]>, StoreError> {
                     let mut stmt = tx
                         .prepare("SELECT idx, hash FROM leaf_hashes WHERE kind = ?1 ORDER BY idx")
@@ -744,7 +978,14 @@ impl HeapStore for SqliteHeapStore {
                     stored.as_ref(),
                     batch,
                 )?;
-            }
+                ironhorse_snapshot::store::RootLedger::build(
+                    &batch.small,
+                    prior_pages,
+                    prior_exts,
+                    prior_frees,
+                    &prior_edges,
+                )
+            };
 
             let mut upsert_page = tx
                 .prepare(
@@ -899,7 +1140,10 @@ impl HeapStore for SqliteHeapStore {
             )
             .map_err(sql_err)?;
         }
-        tx.commit().map_err(sql_err)
+        tx.commit().map_err(sql_err)?;
+        // Only a DURABLE commit re-arms the fast path.
+        self.root_cache = Some(new_cache);
+        Ok(())
     }
 }
 
@@ -911,9 +1155,9 @@ mod tests {
     };
     use ironhorse_snapshot::store::{
         export_to_container, image_to_batch, import_from_container, reseal_batch,
-        store_to_image, validate_store,
+        store_to_image, validate_store, STORE_SCHEMA_VERSION,
     };
-    use ironhorse_snapshot::Signature;
+    use ironhorse_snapshot::{Signature, SnapshotError};
     use ironhorse_vm::Interp;
     use std::path::PathBuf;
 
@@ -935,11 +1179,46 @@ mod tests {
         0x04, 0x28, 0xab, 0x00, 0xbb, 0xa9,
     ];
 
-    fn tmp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ironhorse-sqlite-store-{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    /// Scratch-dir guard (the tests/common twin): pre-cleans any
+    /// prior run's leftover, creates the directory, and removes it
+    /// on drop — success or panic. Declare it before any store so
+    /// the store drops first.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> TempDir {
+            // Per-PROCESS and per-CALL unique: keying on the bare name
+            // meant two concurrent `cargo test` runs of this crate
+            // resolved to the SAME directory and the `remove_dir_all`
+            // below deleted each other's fixtures mid-run (review wave 5).
+            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let unique = format!(
+                "{name}-{}-{}",
+                std::process::id(),
+                SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            );
+            let path = std::env::temp_dir().join(unique);
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).unwrap();
+            TempDir(path)
+        }
+    }
+
+    impl std::ops::Deref for TempDir {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn tmp_dir(name: &str) -> TempDir {
+        TempDir::new(&format!("ironhorse-sqlite-store-{name}"))
     }
 
     #[test]
@@ -981,6 +1260,90 @@ mod tests {
         assert_eq!(store.manifest().unwrap().epoch, 2);
     }
 
+    /// Exercise rollback after mutation has actually started. The trigger
+    /// fires on `small_state`, after pages, extents, leaf hashes, free rows,
+    /// and both edge tables have been updated inside the transaction.
+    #[test]
+    fn sql_abort_after_row_mutation_rolls_back_and_forces_a_cold_retry() {
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let image1 = m.snapshot_image(&sig());
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store.commit(&image_to_batch(&image1, 1, "")).unwrap();
+        let prior = store.manifest().unwrap();
+        let prior_image = store_to_image(&store).unwrap();
+        let prior_counts: Vec<i64> = [
+            "slot_pages",
+            "chunk_exts",
+            "free_segs",
+            "leaf_hashes",
+            "page_edges",
+            "edge_pairs",
+            "small_state",
+            "meta",
+        ]
+        .iter()
+        .map(|table| {
+            store
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap()
+        })
+        .collect();
+
+        assert!(m.run(&PROG_B).completed);
+        let image2 = m.snapshot_image(&sig());
+        let batch2 = image_to_batch(&image2, 2, &prior.seal);
+
+        store
+            .conn
+            .execute_batch(
+                "CREATE TEMP TRIGGER abort_late_commit
+                 BEFORE UPDATE ON small_state
+                 BEGIN SELECT RAISE(ABORT, 'late commit failure'); END;",
+            )
+            .unwrap();
+        match store.commit(&batch2) {
+            Err(StoreError::Io(msg)) => {
+                assert!(msg.contains("late commit failure"), "named SQL failure: {msg}")
+            }
+            other => panic!("late SQL abort must refuse the commit: {other:?}"),
+        }
+
+        assert!(store.root_cache.is_none(), "a failed mutation drops the advanced cache");
+        assert_eq!(store.manifest().unwrap(), prior, "manifest stayed at the previous epoch");
+        assert_eq!(store_to_image(&store).unwrap(), prior_image, "all sealed content rolled back");
+        for (table, count) in [
+            "slot_pages",
+            "chunk_exts",
+            "free_segs",
+            "leaf_hashes",
+            "page_edges",
+            "edge_pairs",
+            "small_state",
+            "meta",
+        ]
+        .iter()
+        .zip(prior_counts)
+        {
+            let after: i64 = store
+                .conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(after, count, "{table} row set rolled back");
+        }
+        validate_store(&store, &sig()).expect("the previous epoch still validates");
+        drop(resume_from_store(&store, &sig()).expect("the previous epoch still resumes"));
+
+        store
+            .conn
+            .execute_batch("DROP TRIGGER abort_late_commit")
+            .unwrap();
+        store.commit(&batch2).expect("the honest retry succeeds through the cold path");
+        assert_eq!(store.manifest().unwrap().epoch, 2);
+        assert!(store.root_cache.is_some(), "the durable retry re-arms the cache");
+    }
+
     #[test]
     fn empty_store_reports_empty() {
         let store = SqliteHeapStore::open_in_memory().unwrap();
@@ -997,7 +1360,7 @@ mod tests {
     fn container_import_export_is_byte_identical() {
         let mut m = Interp::new();
         assert!(m.run(&PROG_A).completed);
-        let bytes = m.write_snapshot(&sig());
+        let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
 
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         import_from_container(&bytes, &sig(), &mut store).expect("imports");
@@ -1029,7 +1392,7 @@ mod tests {
         );
         assert_eq!(
             export_to_container(&store).unwrap(),
-            session.machine().write_snapshot(&sig())
+            session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
         );
     }
 
@@ -1073,7 +1436,6 @@ mod tests {
             b2.computrons, ub.computrons,
             "meter continued through the SQLite round-trip"
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Incremental commits persist: checkpoint, close, reopen, and the
@@ -1108,7 +1470,6 @@ mod tests {
                 found: 2
             }
         );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The geometry-drop contract: a shrink deletes stale rows in the
@@ -1125,8 +1486,20 @@ mod tests {
             "fixture must carry chunk bytes for the shrink to mean anything"
         );
 
+        // A real compaction rewrites every stored chunk offset with the
+        // bytes it moves; mirror that coherence (the wave-6 W6-14 heap
+        // gate refuses an image whose slots point into chunks it lacks)
+        // by degrading chunk-bearing slots to chunk-free values in
+        // place - chain links, ids, and accounting untouched.
         let mut shrunk = image.clone();
         shrunk.chunks = Vec::new();
+        for slot in shrunk.slots.iter_mut().chain(shrunk.stack.iter_mut()) {
+            if slot.chunk_ref().is_some() {
+                slot.kind = ironhorse_vm::Kind::Integer;
+                slot.value = ironhorse_vm::Payload::Integer(0);
+            }
+        }
+        shrunk.function_state = ironhorse_vm::FunctionStateSnapshot::default();
         let prev = store.manifest().unwrap().seal;
         let mut batch = image_to_batch(&shrunk, 2, &prev);
         batch.chunk_extents.clear();
@@ -1225,7 +1598,79 @@ mod tests {
             Err(StoreError::Io(msg)) => assert!(msg.contains("sqlite"), "named failure: {msg}"),
             other => panic!("expected fail-closed open, got {other:?}"),
         }
-        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review wave 4, F1: an unsupported-schema store fails closed at
+    /// open BEFORE `rebuild_edge_pairs` (a committed DELETE+INSERT) runs,
+    /// so the store's rows are untouched by an open that refuses it. The
+    /// canary `edge_pairs` row — not derivable from any `page_edges`
+    /// summary, so a rebuild would delete it and never restore it —
+    /// survives the refused open, proving the derived-table rebuild did
+    /// not run.
+    #[test]
+    fn unsupported_schema_refused_before_rebuild_touches_rows() {
+        let dir = tmp_dir("unsupported-schema");
+        let path = dir.join("worker-heap.sqlite");
+
+        // A valid current-schema store to tamper with.
+        let mut store = SqliteHeapStore::open(&path).unwrap();
+        let mut m = Interp::new();
+        assert!(m.run(&PROG_A).completed);
+        let mut session = begin_store_session(m, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .unwrap();
+        assert!(session.machine_mut().run(&PROG_B).completed);
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+        drop(session);
+
+        // Plant the canary and restamp the manifest to an unsupported
+        // (too-new) schema, all under this store's connection.
+        const CANARY_TARGET: i64 = 7_654_321;
+        const CANARY_PAGE: i64 = 1_234_567;
+        store
+            .conn
+            .execute(
+                "INSERT INTO edge_pairs (target, page) VALUES (?1, ?2)",
+                params![CANARY_TARGET, CANARY_PAGE],
+            )
+            .unwrap();
+        let blob: Vec<u8> = store
+            .conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = ?1",
+                params![META_MANIFEST],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mut manifest = StoreManifest::decode(&blob).unwrap();
+        manifest.store_schema = STORE_SCHEMA_VERSION + 1;
+        store
+            .conn
+            .execute(
+                "UPDATE meta SET value = ?1 WHERE key = ?2",
+                params![manifest.encode(), META_MANIFEST],
+            )
+            .unwrap();
+        store.close().unwrap();
+
+        // Reopen: the schema gate refuses before the rebuild.
+        match SqliteHeapStore::open(&path) {
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(msg))) => {
+                assert!(msg.contains("schema"), "named failure: {msg}");
+            }
+            other => panic!("expected unsupported-schema refusal, got {other:?}"),
+        }
+
+        // The canary survives: `rebuild_edge_pairs` never ran.
+        let conn = Connection::open(&path).unwrap();
+        let hits: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM edge_pairs WHERE target = ?1 AND page = ?2",
+                params![CANARY_TARGET, CANARY_PAGE],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "refused open left the derived table untouched");
     }
 
     /// Cross-backend parity: the SQLite store and the in-crate memory

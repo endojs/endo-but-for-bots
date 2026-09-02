@@ -1,7 +1,7 @@
 // @ts-check
 
 import { q } from '@endo/errors';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 const TAR_BLOCK_SIZE = 512;
 
@@ -14,7 +14,7 @@ const TAR_BLOCK_SIZE = 512;
  * @param {string} text
  */
 const writeField = (bytes, start, text) => {
-  bytes.set(bytesFromText(text), start);
+  bytes.set(encodeUtf8(text), start);
 };
 
 /**
@@ -41,7 +41,7 @@ const octalField = (value, width) =>
  * @returns {Uint8Array} a single 512-byte header block
  */
 export const tarFileHeader = (path, size) => {
-  if (bytesFromText(path).byteLength > 100) {
+  if (encodeUtf8(path).byteLength > 100) {
     throw new Error(`Path is too long for a ustar tar header: ${q(path)}`);
   }
   const header = new Uint8Array(TAR_BLOCK_SIZE);

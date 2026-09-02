@@ -124,6 +124,10 @@ export type PassStyleOf = {
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
   (p: readonly any[]): 'copyArray';
+  // A `Uint8Array` is also `Iterable<number>`; place its byteArray
+  // overload before the Iterable-as-remotable fallback so the more
+  // specific shape wins TypeScript overload resolution.
+  (p: Uint8Array): 'byteArray';
   (p: Iterable<any>): 'remotable';
   (p: Iterator<any, any, undefined>): 'remotable';
   <T extends PassStyled<PassStyleMarker, any>>(p: T): ExtractStyle<T>;
@@ -194,9 +198,10 @@ export type PassableCap =
 export type CopyArray<T extends Passable = any> = readonly T[];
 
 /**
- * A hardened immutable ArrayBuffer.
+ * A hardened frozen `Uint8Array` whose backing buffer is a hardened
+ * immutable `ArrayBuffer`.
  */
-export type ByteArray = ArrayBuffer;
+export type ByteArray = Uint8Array;
 
 /**
  * A Passable dictionary in which each key is a string and each value is Passable.

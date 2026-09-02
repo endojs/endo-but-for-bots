@@ -15,10 +15,11 @@
 //!
 //! The bespoke per-stage corpus (`corpora/*.js` + the `stage*_corpus()`
 //! accessors) that drove bring-up has **retired** into a test262-shaped
-//! `cases/` tree: the `corpus-to-262` converter (bin) dual-runs each corpus
-//! line once and emits one standard test262 case, and `endot-ih` ([`xst`])
-//! runs that tree with the same differential (design § Part 1, "the corpus
-//! becomes test262 cases"). The coverage-equivalence proof lives in
+//! `packages/test262-runner/test262/test/ironhorse/` tree: the
+//! `corpus-to-262` converter (bin) dual-runs each corpus line once and emits
+//! one standard test262 case, and `endot-ih` ([`xst`]) runs that tree
+//! with the same differential (design § Part 1, "the corpus becomes test262
+//! cases"). The coverage-equivalence proof lives in
 //! `tests/corpus_conversion_equivalence.rs`. Whole-section runs draw from the
 //! monorepo's existing `packages/test262-runner` test262 subset and its
 //! `ses-xs-parity` feature markers -- the same tree that package uses to
@@ -101,6 +102,7 @@ fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
 }
 
 pub mod compile_diff;
+pub mod expectations;
 pub mod frontmatter;
 pub mod report;
 pub mod test262;
@@ -402,6 +404,90 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     };
 
     Some(build_dual_run(source, oracle, ironhorse, compile, bytecode))
+}
+
+/// MULTI-CRANK differential mode (the wave-6 pattern-2 antidote): run
+/// `sources` as SEQUENTIAL CRANKS on one machine per engine — XS keeps
+/// one live machine across every crank (`xs_oracle::run_cranks`), and
+/// ironhorse keeps one `Interp`, relinking each crank's oracle-emitted
+/// bytecode (`relink_crank`, the managed-lifecycle path) — and compare
+/// per crank. This is the harness's window onto CROSS-CRANK semantics
+/// (state created by one crank observed by a later one), which
+/// [`dual_run`] structurally cannot see: the class of divergence the
+/// wave-6 analysis showed 1093 single-crank tests missed (an error
+/// constructor's own `message` read by a LATER crank was its live
+/// specimen).
+///
+/// Retained defining-crank bytecode extends the scope to function and
+/// closure calls created by earlier cranks. Per-crank ironhorse
+/// computrons are the RAW meter delta
+/// across the crank (`meter_index`), matching the shim's per-crank
+/// `meterIndex` reset. The run stops at the first crank where either
+/// engine fails to complete (that crank's comparison is returned;
+/// later sources are not run).
+///
+/// Returns `None` only if the oracle machine fails to start.
+pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
+    let oracle_outcomes = xs_oracle::run_cranks(sources)?;
+    let mut interp: Option<ironhorse_vm::Interp> = None;
+    let mut prev_raw: u64 = 0;
+    let mut out = Vec::new();
+    for (source, oracle) in sources.iter().zip(oracle_outcomes) {
+        let bytecode = oracle.bytecode.clone();
+        let names = ironhorse_vm::parse_symbols(&oracle.symbols);
+        let mut ironhorse = if bytecode.is_empty() {
+            // The oracle did not emit this crank (a parse failure, or a
+            // prior crank aborted the run): present ironhorse's side as
+            // the same non-run.
+            RunOutcome {
+                completed: false,
+                result: String::new(),
+                computrons: 0,
+                dispatched: 0,
+                meter_raw: 0,
+                halt: ironhorse_vm::Halt::Throw("SyntaxError".to_string()),
+            }
+        } else {
+            match interp.as_mut() {
+                None => {
+                    let mut m = interp_with_source_bridge(&names);
+                    let o = m.run(&bytecode);
+                    interp = Some(m);
+                    o
+                }
+                Some(m) => match m.relink_crank(&bytecode, &names) {
+                    Ok(relinked) => m.run(&relinked),
+                    Err(e) => RunOutcome {
+                        completed: false,
+                        result: String::new(),
+                        computrons: 0,
+                        dispatched: 0,
+                        meter_raw: 0,
+                        halt: ironhorse_vm::Halt::Decode(format!("relink refused: {e:?}")),
+                    },
+                },
+            }
+        };
+        // Per-crank metering: the raw delta across this crank, shifted
+        // exactly as the shim shifts its per-crank reset index.
+        let raw_now = interp.as_ref().map(|m| m.meter_index()).unwrap_or(0);
+        let crank_raw = raw_now.saturating_sub(prev_raw);
+        prev_raw = raw_now;
+        ironhorse.computrons = crank_raw >> 16;
+        ironhorse.meter_raw = crank_raw;
+        let stop = !(oracle.completed && ironhorse.completed);
+        out.push(build_dual_run(
+            source,
+            oracle,
+            ironhorse,
+            IronhorseCompile::NotAttempted,
+            bytecode,
+        ));
+        if stop {
+            break;
+        }
+    }
+    Some(out)
 }
 
 /// Assemble a [`DualRun`] record from an oracle outcome and ironhorse's run of

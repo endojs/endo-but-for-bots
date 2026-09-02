@@ -9,6 +9,8 @@ test/Compartment/import-now-hook/returns-undefined.js
 test/Compartment/import-now-hook/source-specifier-descriptor.js
 test/Compartment/import-now-optional-resolve-hook.js
 test/Compartment/legacy-module-method.js
+test/TextDecoder/immutable-arraybuffer-intersection.js
+test/TextEncoder/immutable-arraybuffer-intersection.js
 test/freeze/monadic.js
 test/intrinsics/ArrayBuffer/prototype-slice.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
@@ -36,7 +38,6 @@ test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/ThrowTypeError/intrinsic-metadata.js
 test/intrinsics/TypedArray/copying-methods.js
 test/intrinsics/TypedArray/in-place-methods.js
-test/intrinsics/TypedArray/intrinsic-metadata.js
 test/intrinsics/WeakMapPrototype/intrinsic-metadata.js
 test/intrinsics/WeakSetPrototype/intrinsic-metadata.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js

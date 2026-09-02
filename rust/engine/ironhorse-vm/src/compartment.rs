@@ -293,7 +293,15 @@ impl Compartment {
     /// [`Compartment::evaluate_with_symbols`].
     pub fn evaluate(&self, bytecode: &[u8]) -> RunOutcome {
         let mut interp = Interp::new();
-        for (&id, &value) in &self.globals_by_id {
+        // Seed in ID ORDER (wave-6 W6-8): iterating the HashMap seeds
+        // per-process SipHash order into the global object's property
+        // CHAIN (create_global_property prepends) and into slot
+        // allocation order - for-in enumeration, Object.keys, and
+        // snapshot bytes would differ between replicas.
+        let mut seeded: Vec<(u16, Slot)> =
+            self.globals_by_id.iter().map(|(&i, &v)| (i, v)).collect();
+        seeded.sort_unstable_by_key(|(i, _)| *i);
+        for (id, value) in seeded {
             interp.define_global_id(id, value);
         }
         interp.run(bytecode)
@@ -311,7 +319,15 @@ impl Compartment {
         let names = crate::symbols::parse_symbols(symbols);
         let mut interp = Interp::new();
         interp.link_intrinsics(&names);
-        for (&id, &value) in &self.globals_by_id {
+        // Seed in ID ORDER (wave-6 W6-8): iterating the HashMap seeds
+        // per-process SipHash order into the global object's property
+        // CHAIN (create_global_property prepends) and into slot
+        // allocation order - for-in enumeration, Object.keys, and
+        // snapshot bytes would differ between replicas.
+        let mut seeded: Vec<(u16, Slot)> =
+            self.globals_by_id.iter().map(|(&i, &v)| (i, v)).collect();
+        seeded.sort_unstable_by_key(|(i, _)| *i);
+        for (id, value) in seeded {
             interp.define_global_id(id, value);
         }
         interp.run(bytecode)

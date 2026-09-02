@@ -27,6 +27,7 @@
       "types": "./types.d.ts",
       "default": "./index.js"
     },
+    "./iroh.js": "./src/networks/iroh.js",
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
@@ -91,9 +92,10 @@
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/tar": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "@endo/where": "workspace:^",
     "@endo/zip": "workspace:^",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^12.0.0",
     "ses": "workspace:^",
     "ws": "^8.21.3"
   },

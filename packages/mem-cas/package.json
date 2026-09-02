@@ -54,6 +54,7 @@
     "@endo/bytes": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",

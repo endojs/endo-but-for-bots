@@ -41,6 +41,7 @@
 //! No JIT, no code generation, no execution-count-dependent behavior
 //! (requirement 4): a straight `match` LLVM lowers to a jump table.
 
+use crate::bulk::{ArrayData, CollKind, CollectionData, SideRefCounts};
 use crate::meter::{Meter, MeterCheck};
 use crate::opcode::Opcode;
 use crate::value::{number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena};
@@ -115,6 +116,38 @@ pub trait SourceCompiler {
 /// dispatch does, so caught exceptions are bit-exact without it.
 pub const THROW_HOST_ESCAPE_METERING: u64 = 1 << 15;
 
+/// A throw unwinding to a handler that was live ACROSS a suspend (the
+/// `try` was entered before a `yield`/`await`, and the run resumed inside
+/// it) costs XS one extra bytecode dispatch beyond the ordinary caught
+/// throw — the re-establishment the resumed frame's handler needs, which
+/// a never-suspended `CATCH` already paid for in its own dispatch.
+///
+/// Traced to source (review wave 5), so the value is derived, not fitted.
+/// In `xsRun.c`, a longjmp into an IN-LOOP `CATCH` lands on
+/// `mxFirstCode(); mxBreak;` and meters ONCE (the `mxBreak`). A longjmp
+/// into a PROLOGUE-RESTORED jump instead `goto`s `XS_CODE_JUMP` and falls
+/// into the `for(;;)` dispatch loop, which meters TWICE: once at the loop
+/// top and once more in `mxSwitch`, which the computed-goto build
+/// `#define`s to `mxBreak`. The difference is exactly one
+/// `XS_CODE_METERING`, and it lands per THROW because `fxJump` always
+/// longjmps to `the->firstJump`.
+///
+/// NOTE this is a property of the COMPUTED-GOTO dispatch build (`xsRun.c`
+/// gates it on `__GNUC__ && __OPTIMIZE__`). In a plain-`switch` build both
+/// paths meter once and this surcharge would be WRONG. The oracle is
+/// built with gcc at `-O2`, mirroring xsnap, so the pin is correct — but a
+/// port to a non-computed-goto XS must revisit this constant.
+///
+/// Also measured against the oracle (review wave 4, DET-3, which is what
+/// surfaced it: the suspend-in-try arms asserted completion only, so a
+/// one-dispatch gap on exactly this path completed with the right value
+/// and passed). The attribution is per-THROW-through-a-rebased-handler,
+/// not per rebased handler nor per suspend: with two `try`s live across
+/// the suspend, one throw is one dispatch and two throws are two, while a
+/// `try` established AFTER the resume is bit-exact with no adjustment.
+/// Identical in the generator (`yield`) and async (`await`) resume paths.
+pub const RESUMED_HANDLER_THROW_METERING: u64 = crate::meter::CODE_METERING;
+
 /// XS's value stack is a fixed array of `stackCount` slots
 /// (`xs-oracle/csrc/xs_shim.c` and the endo `DEFAULT_CREATION`:
 /// **4096**), holding the value stack, every call frame's
@@ -129,6 +162,15 @@ pub const THROW_HOST_ESCAPE_METERING: u64 = 1 << 15;
 /// engines instead of ironhorse's unbounded `Vec` completing where XS
 /// overflows.
 pub const STACK_SLOT_COUNT: usize = 4096;
+
+/// Live-slot ceiling for a BOUNDED run (wave-6 CI fuzz trophy
+/// `oom-60435549…`): the unmetered decoder harness bounds dispatch
+/// COUNT but not memory, so a program minting a retained side-table
+/// entry per dispatch (a self-feeding `START_ASYNC` loop) OOMs before
+/// the step ceiling. One million live slots is far past any legitimate
+/// ≤21-byte fuzz input yet holds a bounded run well under the harness's
+/// 2 GiB cap. Never consulted in production (`step_limit == u64::MAX`).
+const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
 /// (`mxGlobal`/`mxException`/`mxProgram`/… — the `*StackIndex` slots in
 /// `xsAll.h`) plus the frame scratch `fxOverflow` guards against; the
@@ -268,6 +310,15 @@ pub const GENERATOR_RESULT_METERING: u64 = 66304;
 /// one dispatch (`1 << 16`) beyond the body opcodes both engines run.
 /// Calibrated identical for a suspended-start and a suspended-yield resume.
 pub const GENERATOR_RESUME_METERING: u64 = 65536;
+
+/// The extra dispatch XS accrues rejecting an async function whose body
+/// throws during the SYNCHRONOUS start (inside the caller's `fxRunID`),
+/// beyond what the drain-side reject costs. Measured against the oracle
+/// (three shapes: bare start-throw, start-throw under a caller `try`,
+/// drain-side throw after an await — the first two run 1<<16 raw hot,
+/// the drain shape is exact without it). Charged in `step_async`'s
+/// reject arm only when `is_start`.
+const ASYNC_START_REJECT_BOUNDARY_METERING: u64 = 1 << 16;
 
 // ---- async-function metering (design § async/await, ASYNC-AWAIT-HANDOFF.md) --
 // Like generators, the async opcodes call `mxMeter` nowhere in their bodies, so
@@ -658,11 +709,15 @@ pub const CALL_TRAMPOLINE_PER_ARG: u64 = 1 << 14;
 /// per-element cost (the `mxGetIndex(i)` read plus the forwarded-argument copy
 /// through the tail-call). Both calibrated against the pin via the raw-gap:
 /// with a fixed callee, each element grows the run by exactly `3 << 14` and
-/// the array-argument base by a constant `98040` beyond
-/// `CALL_TRAMPOLINE_METERING` (a small ≤~272-raw context residual — the same
-/// sub-computron literal/var chunk-alignment noise the array corpus carries —
-/// stays below one computron).
-pub const APPLY_ARRAY_BASE_METERING: u64 = 98040;
+/// the array-argument base by a constant `98304` beyond
+/// `CALL_TRAMPOLINE_METERING`. That base is `XS_CODE_METERING + 2 *
+/// XS_BUILTIN_METERING` — an exact XS shape, not a fitted number. It read
+/// `98040` until review wave 5 measured the residual directly: an exact
+/// slope of `-264` raw per apply-with-array, independent of element count
+/// AND of receiver kind, which localizes the error entirely to the base.
+/// The `≤~272-raw context residual` previously recorded here WAS that
+/// error, mistaken for chunk-alignment noise.
+pub const APPLY_ARRAY_BASE_METERING: u64 = 98304;
 pub const APPLY_ARRAY_PER_ELEMENT_METERING: u64 = 3 << 14;
 
 /// `Function.prototype.bind` creation (`fx_Function_prototype_bind`): the
@@ -777,6 +832,38 @@ pub const ERROR_CONSTRUCT_EXTRA: u64 = (1 << 16) + 768;
 /// pin as `new Error('x')` minus `new Error()` = 280 raw, independent of the
 /// message length (the message string's own chunk is metered at its literal).
 pub const ERROR_MESSAGE_METERING: u64 = 280;
+
+/// `new DisposableStack()` / `new AsyncDisposableStack()` beyond what the
+/// arm's own allocation models. Measured against the pinned oracle
+/// (2026-08-27, the resource-management dual-run deltas): a bare construct
+/// under-metered by exactly two dispatch units, stable across every shape
+/// probed, so the gap is charged as a whole-unit constant.
+pub const DISPOSABLE_STACK_CONSTRUCT_METERING: u64 = 2 << 16;
+
+/// One record-adding DisposableStack method (`use`/`adopt`/`defer`) or a
+/// `move`. Measured (same probe): each added two dispatch units over the
+/// modeled cost, additive across combinations (defer×2 + move measured
+/// exactly 3× this constant beyond the construct).
+pub const DISPOSABLE_STACK_ADD_METERING: u64 = 2 << 16;
+
+/// Disposing a `use` record (the @@dispose method invoked WITH the
+/// resource as `this`) costs one dispatch unit more than the modeled
+/// callback; `defer`/`adopt` records (undefined `this` / passed resource)
+/// measured no residue. Charged per record in the dispose drain.
+pub const DISPOSE_USE_RECORD_METERING: u64 = 1 << 16;
+
+/// The `using`/`await using` declaration opcode's bookkeeping beyond the
+/// modeled lookups: one dispatch unit always (the null/undefined skip path
+/// measured exactly this), plus [`USING_RESOURCE_METERING`] when the
+/// resource is real. Measured on the sync form; the async form shares the
+/// arm and the charge, pending its own oracle calibration.
+pub const USING_DECL_METERING: u64 = 1 << 16;
+
+/// The non-nullish `using` resource's disposer capture beyond the modeled
+/// @@dispose lookup — one further dispatch unit (measured: a real-resource
+/// `using` totals exactly two units over the modeled cost, the null form
+/// one).
+pub const USING_RESOURCE_METERING: u64 = 1 << 16;
 
 /// `AggregateError(errors, message)` beyond the base error
 /// ([`ERROR_CONSTRUCT_EXTRA`] + the message): the `errors` Array instance
@@ -2492,6 +2579,21 @@ pub enum NativeMethod {
     /// `/source/flags` literal string, read through the `source`/`flags`
     /// getters.
     RegExpToString,
+    /// `RegExp.prototype.compile(...)` (`fx_RegExp_prototype_compile`): XS's
+    /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
+    /// recompilation, arguments ignored — so the mirror returns `this` as-is.
+    RegExpCompile,
+    /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an
+    /// error instance, `name[: message]` plus one `\n at <fn> ()` line per
+    /// construction-time frame; `undefined` for a non-error object; a
+    /// TypeError for a non-object `this`.
+    ErrorStackGetter,
+    /// `set Error.prototype.stack` (`fx_Error_prototype_set_stack`): defines
+    /// an own `{value, writable, enumerable, configurable}` `stack` property
+    /// on `this` unconditionally (no string check — `mxDefineID`), with a
+    /// TypeError for a non-object `this`, a missing argument, or a refused
+    /// define (a frozen receiver, a rejecting proxy trap).
+    ErrorStackSetter,
     /// `String.prototype.match(regexp)` (`fx_String_prototype_match`): coerce
     /// the receiver to string, the argument to a RegExp, and dispatch to the
     /// matcher — the non-global path returns `exec`'s result; the global path
@@ -2536,18 +2638,6 @@ impl Default for FuncInfo {
     }
 }
 
-/// An exotic array's data (XS's `XS_ARRAY_KIND` internal slot). `length`
-/// is the array length (`fxArraySetLength` semantics); `items` holds the
-/// present elements sparsely by index (an absent index in `[0, length)` is
-/// a hole). A `BTreeMap` keeps the indices ordered so `for-in` enumeration
-/// and `Array.prototype` iteration visit them in ascending index order,
-/// matching XS's item-chunk order.
-#[derive(Clone, Debug, Default)]
-struct ArrayData {
-    length: u32,
-    items: std::collections::BTreeMap<u32, Slot>,
-}
-
 #[derive(Clone, Debug)]
 struct DisposalRecord {
     resource: Slot,
@@ -2560,39 +2650,6 @@ struct DisposableStackData {
     disposed: bool,
     asynchronous: bool,
     records: Vec<DisposalRecord>,
-}
-
-/// Which collection an instance is (XS's `XS_MAP_KIND`/`XS_SET_KIND`/
-/// `XS_WEAK_MAP_KIND`/`XS_WEAK_SET_KIND` internal slot).
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum CollKind {
-    Map,
-    Set,
-    WeakMap,
-    WeakSet,
-}
-
-/// A Map/Set/WeakMap/WeakSet instance's internal state (XS's exotic
-/// collection: the hash table + insertion-ordered entry list, or the
-/// weak-entry list). Kept in the [`Interp::collections`] side table like
-/// [`ArrayData`]; entry key/value slots are never swept underneath it (the
-/// stage-2 no-mid-run-GC contract). `entries` preserves insertion order
-/// (XS's `list` order, what `forEach`/iterators visit); Set/WeakSet ignore
-/// the value half.
-///
-/// Metering is purely allocation-driven — xsMapSet.c contains no `mxMeter`
-/// calls — so `table_length` tracks XS's power-of-two address-array length
-/// (`fxResizeEntries`) to charge the `fxNewChunk(length * 8)` on the exact
-/// rehash boundaries XS crosses. Weak collections have no table (their
-/// entries hang off the key object), so `table_length` is unused for them.
-#[derive(Clone, Debug)]
-struct CollectionData {
-    kind: CollKind,
-    /// Insertion-ordered entries. Deletion leaves a tombstone so live
-    /// iterators and `forEach` cursors do not skip the following entry; a
-    /// delete followed by re-add appends a new entry at the tail.
-    entries: Vec<Option<(Slot, Slot)>>,
-    table_length: u32,
 }
 
 /// An `ArrayBuffer` instance's internal state (XS's `XS_ARRAY_BUFFER_KIND`
@@ -3021,6 +3078,11 @@ struct IterState {
     kind: u8,
     result: crate::value::SlotIndex,
     done: bool,
+    /// For a collection cursor (kinds 5-7): the owning collection's
+    /// clear-generation at creation. A `clear()` bumps the collection's
+    /// counter and this cursor dead-ends — XS's purge semantics (see
+    /// `CollectionData::generation`). Zero for every other kind.
+    generation: u32,
     enum_keys: Vec<(u16, u32)>,
     /// For a string iterator (`kind == 4`): the UTF-16BE bytes being iterated,
     /// with `index` a BYTE offset into them (an array/enumerator leaves this
@@ -3034,6 +3096,32 @@ struct IterState {
 struct ErrorInfo {
     name: &'static str,
     message: Option<String>,
+    /// The call-frame names captured at construction (innermost first,
+    /// ending with the empty program frame), the way XS records the frame
+    /// chain `fx_Error_prototype_get_stack` renders as `\n at <name> ()`
+    /// lines in the oracle shim (which compiles from buffers, so frames
+    /// carry no file:line ids).
+    frames: Vec<String>,
+}
+
+/// Resolve a decoded error-constructor name to the engine's static
+/// name, or `None` for anything the engine never records — the closed
+/// name set `ErrorInfo.name` draws from ([`Interp::restore_error_data`]
+/// and the `ERRD` decoder both refuse an unknown name as corrupt: no
+/// honest snapshot can carry one).
+pub fn error_name_static(name: &str) -> Option<&'static str> {
+    const ERROR_NAMES: [&str; 9] = [
+        "Error",
+        "EvalError",
+        "RangeError",
+        "ReferenceError",
+        "SyntaxError",
+        "TypeError",
+        "URIError",
+        "AggregateError",
+        "SuppressedError",
+    ];
+    ERROR_NAMES.iter().find(|&&n| n == name).copied()
 }
 
 /// Exact, immutable Temporal records.  Keeping these independent from the
@@ -3542,6 +3630,24 @@ pub struct RunOutcome {
 /// [`Halt::Unsupported`] naming themselves, so the differential harness
 /// reports exactly what to implement next rather than diverging
 /// silently.
+/// Why [`Interp::relink_crank`] refused (side-table ledger G2). Every
+/// variant is fail-closed: nothing ran, the machine is unchanged.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RelinkError {
+    /// The crank's bytecode references an id beyond its own compiled
+    /// table, or the instruction walker could not decode it.
+    MalformedBytecode,
+    /// Extending the table would exhaust the 16-bit id space.
+    TableFull,
+}
+
+/// One serialized `arrays` row as [`Interp::arrays_snapshot`] hands it
+/// out: `(owner slot, spec length, items ascending by index)`.
+pub type ArraySnapshot = (u32, u32, Vec<(u32, Slot)>);
+/// One serialized `collections` row: `(owner slot, kind code,
+/// table_length, entries in insertion order)`.
+pub type CollectionSnapshot = (u32, u8, u32, Vec<(Slot, Slot)>);
+
 pub struct Interp {
     stack: Vec<Slot>,
     /// The program frame's scope slots. `NEW_LOCAL`/`NEW_TEMPORARY`
@@ -3626,6 +3732,10 @@ pub struct Interp {
     /// computron count, which now also folds in the program overhead and
     /// the allocation metering.
     n_dispatched: u64,
+    /// Slot count immediately after deterministic boot construction.
+    /// Runtime native functions sit above this boundary; boot functions
+    /// below it are re-derived at the same indices on restore.
+    boot_slot_count: u32,
     /// Current **native `dispatch_at` re-entry depth** (callbacks, async
     /// bodies, async-generator and generator resumes each recurse into
     /// `dispatch_at`). Bounded by [`DISPATCH_REENTRY_LIMIT`] so a degenerate
@@ -3663,11 +3773,9 @@ pub struct Interp {
     /// the cross-segment call path, which is itself gated on
     /// [`Self::func_segments`] being non-empty (an eval having run).
     top_level_code: Option<std::rc::Rc<Vec<u8>>>,
-    /// Which persisted [`Self::code_segments`] buffer a function's body lives
-    /// in, for the functions defined inside an eval/`Function` unit. Absent ⇒
-    /// the top-level program buffer (the common case; the map stays empty
-    /// until the source bridge is first used, so a program that never evals
-    /// pays nothing and dispatches exactly as before).
+    /// Which retained [`Self::code_segments`] buffer a guest function's body
+    /// lives in. Top-level crank buffers are promoted lazily at their first
+    /// function definition; eval/`Function` buffers enter directly.
     func_segments: std::collections::HashMap<crate::value::SlotIndex, usize>,
     /// Set by the `XS_CODE_EVAL` (direct-eval) dispatch site for the duration
     /// of the `eval` native call, so the bridge can tell a **direct** eval
@@ -3773,6 +3881,16 @@ pub struct Interp {
     segmenter_proto: crate::value::SlotIndex,
     segments_proto: crate::value::SlotIndex,
     segment_iterator_proto: crate::value::SlotIndex,
+    /// `%Segments.prototype%[@@iterator]` and the `%SegmentIterator%`
+    /// self-identity, minted at BOOT beside their `async_iterator_identity`
+    /// and `string_iterator_method` siblings rather than during
+    /// `link_intrinsics`. A native minted after `boot_slot_count` is
+    /// re-derived by nothing on the resume path -- restore reinstates the
+    /// heap reference but not its `FuncInfo`, so the property reads back as
+    /// a plain object and `for..of` over a resumed `Segments` dies. Boot
+    /// slots come back at identical indices with identical name chunks.
+    segments_iterator_method: crate::value::SlotIndex,
+    segment_iterator_identity: crate::value::SlotIndex,
     date_time_format_proto: crate::value::SlotIndex,
     number_format_proto: crate::value::SlotIndex,
     locales: std::collections::HashMap<crate::value::SlotIndex, LocaleData>,
@@ -3907,11 +4025,34 @@ pub struct Interp {
     /// outside this set (and not a program symbol / not previously seen) is
     /// genuinely novel and meters one `fxNewSlot`. See [`Self::intern_key`].
     default_keys: std::collections::HashSet<&'static str>,
-    /// The next id [`Self::intern_key`] hands out for a genuinely-novel
-    /// runtime property name. Seeded past the compiler's program-symbol ids
-    /// (`link_intrinsics`), so a runtime-interned key never collides with a
-    /// program symbol or a linked intrinsic property.
-    next_intern_id: u16,
+    /// The next id [`Self::intern_symbol_key`] hands out for a symbol used
+    /// as a property key, allocated DOWNWARD from `u16::MAX` so the symbol
+    /// id space can never collide with the append-only name table growing
+    /// up from 1 (string keys — program symbols and runtime-interned names
+    /// alike — live in [`Self::symbol_names`], where they persist via the
+    /// NAME row). The two spaces meeting is the id-space-exhaustion
+    /// hazard — the same failure class the old shared counter had at
+    /// `u16::MAX` — handled by the [`Self::id_space_exhausted`] poison
+    /// latch: the meet halts the machine by name instead of aliasing.
+    next_symbol_key_id: u16,
+    /// High-water mark of the name table as of the last
+    /// `install_intrinsic_bindings` pass (wave-6 W6-7). The relink/eval
+    /// keep filters admit ids ABOVE this floor: "appended since the last
+    /// install pass", not "appended by this unit" — a name interned at
+    /// RUNTIME (a computed string key) has an id no install has seen, and
+    /// filtering by the unit's own table length refused it forever.
+    installed_names_len: usize,
+    /// Poison latch: the two property-key id spaces met (the name table
+    /// growing up collided with [`Self::next_symbol_key_id`] minting
+    /// down), so any further intern would alias an existing key. Set by
+    /// the meet branches of [`Self::append_name_key`] and
+    /// [`Self::intern_symbol_key`]; the dispatch loop halts with a named
+    /// refusal (`property-key:id-space-exhausted`) before the NEXT
+    /// instruction, so no guest program observes an aliased id. The latch
+    /// is for the machine's lifetime — the id space is genuinely full —
+    /// and [`Self::is_quiescent`] reports a poisoned machine
+    /// non-quiescent so the persist gates refuse it.
+    id_space_exhausted: bool,
     /// The program's symbol names indexed by `id - 1` (the decoded symbols
     /// atom, verbatim), so a function definition can recover its own name
     /// string for `Function.prototype.toString`.
@@ -3961,6 +4102,12 @@ pub struct Interp {
     /// internal slots). Keyed by the collection instance's slot, like
     /// [`Self::arrays`]. See [`CollectionData`].
     collections: std::collections::HashMap<crate::value::SlotIndex, CollectionData>,
+    /// Per-page refcounts for the BULK side tables' references
+    /// (arrays' items, collections' entries) — the standing map the
+    /// partial collector's page projection reads instead of walking
+    /// entries. Maintained by every counted mutation in
+    /// [`crate::bulk`]; whole-row drops decrement via `drop_refs`.
+    side_refs: SideRefCounts,
     /// The realm's `%Map.prototype%`/`%Set.prototype%`/`%WeakMap.prototype%`/
     /// `%WeakSet.prototype%` (boot objects), so a `new Map()` instance chains
     /// to the right one and its methods resolve.
@@ -4067,7 +4214,7 @@ pub struct Interp {
     /// A symbol value's descriptor slot → the program-local property **id** it
     /// is interned under when used as a property key (XS's `mxID(symbol)`: a
     /// symbol IS an id there; here a symbol's descriptor-slot identity is
-    /// minted a stable key id on first key-use, from [`Self::next_intern_id`],
+    /// minted a stable key id on first key-use, from [`Self::next_symbol_key_id`],
     /// so `o[sym]` round-trips and two uses of the SAME symbol resolve the same
     /// property). Keyed by the descriptor `SlotIndex` (stable — "slots never
     /// move"), exactly like [`Self::symbol_registry_keys`]. A symbol-keyed
@@ -4147,6 +4294,9 @@ pub struct Interp {
     async_generator_proto: crate::value::SlotIndex,
     async_generator_function_proto: crate::value::SlotIndex,
     async_iterator_identity: crate::value::SlotIndex,
+    /// `%IteratorPrototype%[@@iterator]`. See `segments_iterator_method`
+    /// for why this is a boot field rather than a link-time mint.
+    iterator_identity: crate::value::SlotIndex,
     async_gen_run_stack: Vec<AsyncGenRunFrame>,
     /// The resume mode threaded into the `BRANCH_STATUS` epilogue after an
     /// `AWAIT` resume (XS's `the->status`): `NoStatus` (a fulfilled resume —
@@ -4198,6 +4348,20 @@ pub struct Interp {
     /// keeping non-`constructor` programs (and the exact-metering corpus)
     /// byte-identical.
     constructor_id: Option<u16>,
+    /// The `%Error.prototype%` `stack` accessor pair awaiting link-time
+    /// install: `(error_proto, getter, setter)`. Installed (guarded on the
+    /// program naming `Error`, for metering neutrality elsewhere) beside
+    /// the `proto_accessors` in `link_intrinsics`.
+    error_stack_accessor: Option<(
+        crate::value::SlotIndex,
+        crate::value::SlotIndex,
+        crate::value::SlotIndex,
+    )>,
+    /// The program-symbol id of `prototype`, when the program names it —
+    /// gates installing a constructor function's own `prototype` property
+    /// (unobservable otherwise), exactly like [`Self::constructor_id`] gates
+    /// the `prototype.constructor` back-reference.
+    prototype_key_id: Option<u16>,
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
@@ -4257,106 +4421,106 @@ struct StaticStrings {
 // libc, environment variables, or a dynamically-updated database.
 const INTL_DATA_VERSION: &str = "ironhorse-intl-2026a";
 
-#[derive(Clone, Debug)]
-struct LocaleData {
-    tag: String,
-    language: String,
-    script: Option<String>,
-    region: Option<String>,
-    variants: Vec<String>,
-    unicode: std::collections::BTreeMap<String, String>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocaleData {
+    pub tag: String,
+    pub language: String,
+    pub script: Option<String>,
+    pub region: Option<String>,
+    pub variants: Vec<String>,
+    pub unicode: std::collections::BTreeMap<String, String>,
 }
 
-#[derive(Clone, Debug)]
-struct CollatorData {
-    locale: String,
-    usage: String,
-    sensitivity: String,
-    collation: String,
-    numeric: bool,
-    case_first: String,
-    ignore_punctuation: bool,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollatorData {
+    pub locale: String,
+    pub usage: String,
+    pub sensitivity: String,
+    pub collation: String,
+    pub numeric: bool,
+    pub case_first: String,
+    pub ignore_punctuation: bool,
 }
 
-#[derive(Clone, Debug)]
-struct ListFormatData {
-    locale: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListFormatData {
+    pub locale: String,
     /// `conjunction` | `disjunction` | `unit`
-    kind: String,
+    pub kind: String,
     /// `long` | `short` | `narrow`
-    style: String,
+    pub style: String,
 }
 
-#[derive(Clone, Debug)]
-struct PluralRulesData {
-    locale: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PluralRulesData {
+    pub locale: String,
     /// `cardinal` | `ordinal`
-    kind: String,
+    pub kind: String,
     /// `standard` | `scientific` | `engineering` | `compact`
-    notation: String,
-    minimum_integer_digits: u32,
-    minimum_fraction_digits: u32,
-    maximum_fraction_digits: u32,
-    minimum_significant_digits: Option<u32>,
-    maximum_significant_digits: Option<u32>,
+    pub notation: String,
+    pub minimum_integer_digits: u32,
+    pub minimum_fraction_digits: u32,
+    pub maximum_fraction_digits: u32,
+    pub minimum_significant_digits: Option<u32>,
+    pub maximum_significant_digits: Option<u32>,
     /// `fractionDigits` | `significantDigits` | `morePrecision` | `lessPrecision`
-    rounding_type: String,
+    pub rounding_type: String,
     /// `auto` | `morePrecision` | `lessPrecision`
-    rounding_priority: String,
-    rounding_mode: String,
-    rounding_increment: u32,
+    pub rounding_priority: String,
+    pub rounding_mode: String,
+    pub rounding_increment: u32,
     /// `auto` | `stripIfInteger`
-    trailing_zero_display: String,
+    pub trailing_zero_display: String,
 }
 
 /// The resolved internal slots of an `Intl.NumberFormat`. The digit-option
 /// fields mirror `PluralRulesData` (both are populated by
 /// `set_number_digit_options`); the remaining fields carry the
 /// style/currency/unit/notation/sign/grouping resolution.
-#[derive(Clone, Debug)]
-struct NumberFormatData {
-    locale: String,
-    numbering_system: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NumberFormatData {
+    pub locale: String,
+    pub numbering_system: String,
     /// `decimal` | `percent` | `currency` | `unit`
-    style: String,
+    pub style: String,
     /// `standard` | `scientific` | `engineering` | `compact`
-    notation: String,
+    pub notation: String,
     /// `short` | `long`
-    compact_display: String,
+    pub compact_display: String,
     /// `auto` | `always` | `never` | `exceptZero` | `negative`
-    sign_display: String,
+    pub sign_display: String,
     /// `always` | `auto` | `min2` | `false`
-    use_grouping: String,
-    currency: Option<String>,
+    pub use_grouping: String,
+    pub currency: Option<String>,
     /// `symbol` | `narrowSymbol` | `code` | `name`
-    currency_display: String,
+    pub currency_display: String,
     /// `standard` | `accounting`
-    currency_sign: String,
-    unit: Option<String>,
+    pub currency_sign: String,
+    pub unit: Option<String>,
     /// `short` | `narrow` | `long`
-    unit_display: String,
-    minimum_integer_digits: u32,
-    minimum_fraction_digits: u32,
-    maximum_fraction_digits: u32,
-    minimum_significant_digits: Option<u32>,
-    maximum_significant_digits: Option<u32>,
-    rounding_type: String,
-    rounding_priority: String,
-    rounding_mode: String,
-    rounding_increment: u32,
-    trailing_zero_display: String,
+    pub unit_display: String,
+    pub minimum_integer_digits: u32,
+    pub minimum_fraction_digits: u32,
+    pub maximum_fraction_digits: u32,
+    pub minimum_significant_digits: Option<u32>,
+    pub maximum_significant_digits: Option<u32>,
+    pub rounding_type: String,
+    pub rounding_priority: String,
+    pub rounding_mode: String,
+    pub rounding_increment: u32,
+    pub trailing_zero_display: String,
     /// The lazily-created, cached `[[BoundFormat]]` function (the `format`
     /// getter returns the same function on every read). Reserved for the
     /// accessor-getter follow-up; the current `format` is a plain method.
     #[allow(dead_code)]
-    bound_format: Option<crate::value::SlotIndex>,
+    pub bound_format: Option<crate::value::SlotIndex>,
 }
 
-#[derive(Clone, Debug)]
-struct SegmenterData {
-    locale: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmenterData {
+    pub locale: String,
     /// `grapheme` | `word` | `sentence`
-    granularity: String,
+    pub granularity: String,
 }
 
 /// One `%Segments%` object (the result of `segmenter.segment(string)`): the
@@ -4365,42 +4529,410 @@ struct SegmenterData {
 /// pinned `icu_segmenter` Unicode data, so precomputing the whole list at
 /// `segment()` time is equivalent to the spec's lazy FindBoundary and lets both
 /// iteration and `containing` share one immutable result.
-#[derive(Clone, Debug)]
-struct SegmentsData {
-    units: Vec<u16>,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmentsData {
+    pub units: Vec<u16>,
     /// Each `(start, end, is_word_like)` in UTF-16 code-unit offsets.
-    segments: Vec<(usize, usize, bool)>,
+    pub segments: Vec<(usize, usize, bool)>,
     /// `grapheme` | `word` | `sentence` — only `word` exposes `isWordLike`.
-    granularity: String,
+    pub granularity: String,
 }
 
 /// One `%SegmentIterator%` — a cursor into a `%Segments%` object's precomputed
 /// list (the segment index to yield next).
-#[derive(Clone, Debug)]
-struct SegmentIteratorData {
-    segments_inst: crate::value::SlotIndex,
-    pos: usize,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SegmentIteratorData {
+    pub segments_inst: crate::value::SlotIndex,
+    pub pos: usize,
 }
 
 /// One `Intl.DateTimeFormat` object's resolved options. The frozen profile
 /// carries the proleptic Gregorian calendar and a fixed offset time-zone
 /// table; formatting is deterministic and host-independent.
-#[derive(Clone, Debug)]
-struct DateTimeFormatData {
-    locale: String,
-    calendar: String,
-    numbering_system: String,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DateTimeFormatData {
+    pub locale: String,
+    pub calendar: String,
+    pub numbering_system: String,
     /// The resolved IANA time-zone name (canonicalized).
-    time_zone: String,
+    pub time_zone: String,
     /// Minutes east of UTC for the resolved zone (the frozen table is
     /// fixed-offset: UTC and the `Etc/GMT±N` / numeric-offset zones).
-    offset_minutes: i32,
-    hour_cycle: Option<String>,
+    pub offset_minutes: i32,
+    pub hour_cycle: Option<String>,
     /// Each present component's resolved representation, in resolvedOptions
     /// enumeration order. `(key, value)` e.g. `("year","numeric")`.
-    components: Vec<(&'static str, String)>,
-    date_style: Option<String>,
-    time_style: Option<String>,
+    pub components: Vec<(&'static str, String)>,
+    pub date_style: Option<String>,
+    pub time_style: Option<String>,
+}
+
+/// The closed set of `Intl.DateTimeFormat` component keys
+/// ([`DateTimeFormatData::components`] holds `&'static str` keys from
+/// exactly this list). A snapshot decoder maps persisted key strings
+/// back onto these statics and refuses anything else — crafted bytes,
+/// never engine output.
+pub fn dtf_component_key_static(name: &str) -> Option<&'static str> {
+    for key in [
+        "weekday",
+        "era",
+        "year",
+        "month",
+        "day",
+        "dayPeriod",
+        "hour",
+        "minute",
+        "second",
+        "fractionalSecondDigits",
+        "timeZoneName",
+    ] {
+        if key == name {
+            return Some(key);
+        }
+    }
+    None
+}
+
+/// The nine Intl DATA record tables of one machine, each ascending by
+/// owning slot — the ledger `IntlRecords` row as
+/// [`Interp::intl_snapshot`] emits it and [`Interp::restore_intl`]
+/// reinstates it. Pure resolved-options data; the bound-function link
+/// satellites (`collator_compare_functions`,
+/// `number_format_bound_functions`) are deliberately absent — a minted
+/// bound function is a `functions` (`FuncInfo`) row, the Pending
+/// dependency — and both getters re-mint on a cache miss, so dropping
+/// the caches at the boundary is first-access behavior, not loss.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IntlTables {
+    pub locales: Vec<(u32, LocaleData)>,
+    pub collators: Vec<(u32, CollatorData)>,
+    pub list_formats: Vec<(u32, ListFormatData)>,
+    pub plural_rules: Vec<(u32, PluralRulesData)>,
+    pub number_formats: Vec<(u32, NumberFormatData)>,
+    pub segmenters: Vec<(u32, SegmenterData)>,
+    pub segments: Vec<(u32, SegmentsData)>,
+    pub segment_iterators: Vec<(u32, SegmentIteratorData)>,
+    pub date_time_formats: Vec<(u32, DateTimeFormatData)>,
+}
+
+impl IntlTables {
+    /// Whether every table is empty (the atom is emitted only when not).
+    pub fn is_empty(&self) -> bool {
+        self.locales.is_empty()
+            && self.collators.is_empty()
+            && self.list_formats.is_empty()
+            && self.plural_rules.is_empty()
+            && self.number_formats.is_empty()
+            && self.segmenters.is_empty()
+            && self.segments.is_empty()
+            && self.segment_iterators.is_empty()
+            && self.date_time_formats.is_empty()
+    }
+}
+
+/// One built-in iterator cursor as the snapshot carries it (the ledger
+/// `Iterators` row, the `ITER` atom) — [`Interp::iterators_snapshot`]'s
+/// emission and [`Interp::restore_iterators`]'s input. Kinds: 0-2 array
+/// values/keys/entries, 3 for-in enumerator, 4 string, 5-7 collection
+/// keys/values/entries. Two boundary normalizations make the row pure
+/// data: a collection cursor's `index` is the LIVE-ENTRY ORDINAL (the
+/// `COLL` row compacts tombstones, so the ordinal IS the physical index
+/// in the restored dense table), and `clear()`-staleness folds into
+/// `done` (the absolute clear-generation counter is unobservable; only
+/// "retired" is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IteratorRow {
+    pub owner: u32,
+    pub kind: u8,
+    /// The iterated slot (weak). `u32::MAX` — [`crate::value::SlotIndex::NULL`]
+    /// — for a string iterator, whose text lives in `str_bytes`.
+    pub iterable: u32,
+    pub index: u32,
+    pub done: bool,
+    /// The reused `{value, done}` result object's slot.
+    pub result: u32,
+    /// For-in keys as `(id, index)` pairs (`id == 0` ⇒ an array index).
+    pub enum_keys: Vec<(u16, u32)>,
+    /// A string iterator's UTF-16BE text; `index` is a byte offset.
+    pub str_bytes: Vec<u8>,
+}
+
+/// One guest or bound function's serializable metadata.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionRow {
+    pub owner: u32,
+    pub segment: Option<u32>,
+    pub body_start: Option<u64>,
+    pub body_len: u64,
+    pub closures: u32,
+    pub name: String,
+    pub arity: u32,
+    pub name_chunk: u32,
+    pub is_generator: bool,
+    pub home: u32,
+    pub class_derived: Option<bool>,
+}
+
+/// One `Function.prototype.bind` wrapper's internal slots.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BoundFunctionRow {
+    pub owner: u32,
+    pub target: u32,
+    pub this_arg: Slot,
+    pub args: Vec<Slot>,
+}
+
+/// Atomic snapshot unit for guest callability.
+///
+/// Segment indices in `functions` refer to the compact `segments` vector.
+/// Constructor links, bound data, and deleted metadata are bundled because
+/// carrying any one without the function rows would restore a partial exotic.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FunctionStateSnapshot {
+    pub segments: Vec<Vec<u8>>,
+    pub functions: Vec<FunctionRow>,
+    pub bound_functions: Vec<BoundFunctionRow>,
+    pub ctor_prototypes: Vec<(u32, u32)>,
+    pub deleted_meta: Vec<(u32, u16)>,
+}
+
+impl FunctionStateSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.segments.is_empty()
+            && self.functions.is_empty()
+            && self.bound_functions.is_empty()
+            && self.ctor_prototypes.is_empty()
+            && self.deleted_meta.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyRow {
+    pub owner: u32,
+    pub target: u32,
+    pub handler: u32,
+    pub revoked: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProxyRevokerRow {
+    pub owner: u32,
+    pub proxy: u32,
+    pub name_chunk: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProxyStateSnapshot {
+    pub proxies: Vec<ProxyRow>,
+    pub revokers: Vec<ProxyRevokerRow>,
+}
+
+impl ProxyStateSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.proxies.is_empty() && self.revokers.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AccessorRow {
+    pub owner: u32,
+    pub id: u16,
+    pub get: Option<Slot>,
+    pub set: Option<Slot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IntlBoundFunctionRow {
+    /// 0 = Collator compare, 1 = NumberFormat format.
+    pub kind: u8,
+    pub function: u32,
+    pub owner: u32,
+    pub name: String,
+    pub name_chunk: u32,
+    pub arity: u32,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateValueRow {
+    pub receiver: u32,
+    pub brand: u32,
+    pub value: Slot,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrivateAccessorRow {
+    pub receiver: u32,
+    pub brand: u32,
+    pub get: Option<Slot>,
+    pub set: Option<Slot>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PrivateElementSnapshot {
+    pub values: Vec<PrivateValueRow>,
+    pub accessors: Vec<PrivateAccessorRow>,
+}
+
+impl PrivateElementSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty() && self.accessors.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisposalRecordRow {
+    pub resource: Slot,
+    pub method: Slot,
+    pub pass_resource: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DisposableStackRow {
+    pub owner: u32,
+    pub disposed: bool,
+    pub asynchronous: bool,
+    pub records: Vec<DisposalRecordRow>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedJumpRow {
+    pub target_pc: u64,
+    pub stack_offset: u64,
+    pub locals_len: u64,
+    pub id_map: Vec<(u16, u64)>,
+    pub call_depth_offset: u64,
+    pub env: Slot,
+    pub flag: u8,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SavedFrameRow {
+    pub locals: Vec<Slot>,
+    pub id_map: Vec<(u16, u64)>,
+    pub args: Vec<Slot>,
+    pub this_val: Slot,
+    pub env: Slot,
+    pub cur_func: u32,
+    pub cur_target: bool,
+    pub target_func: u32,
+    pub strict: bool,
+    pub result: Slot,
+    pub stack_slice: Vec<Slot>,
+    pub jumps: Vec<SavedJumpRow>,
+    pub resume_pc: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct GeneratorRow {
+    /// 0 = SuspendedStart, 1 = SuspendedYield, 2 = Completed.
+    pub state: u8,
+    pub owner: u32,
+    pub frame: Option<SavedFrameRow>,
+}
+
+/// One registered reaction of a pending [`PromiseRow`] (the serialized
+/// [`PromiseReaction`]). The four handler/capability slots are ordinary
+/// value slots; `kind` is the reaction's drain behavior:
+///
+/// | byte | kind | `a` | `b` |
+/// |------|------|-----|-----|
+/// | 0 | `User` | — | — |
+/// | 1 | `FinallyReturn` | — | — |
+/// | 2 | `Combine` | combinator index | element index |
+/// | 3–10 | the async-flavored kinds | | |
+///
+/// Bytes 3–10 (`AsyncAwait`, the three `AsyncGenerator*`s, the four
+/// `FromAsync*`s) name suspended async machinery whose instance rows
+/// are still Pending in the snapshot ledger, so the persist gate
+/// refuses a machine holding one
+/// ([`Interp::stored_unpersistable_row`]) and the decoder refuses the
+/// byte — the encoding is total so the refusal lives at the boundary,
+/// not in a lossy encoder.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PromiseReactionRow {
+    pub on_fulfilled: Slot,
+    pub on_rejected: Slot,
+    pub resolve: Slot,
+    pub reject: Slot,
+    pub kind: u8,
+    pub a: u32,
+    pub b: u32,
+}
+
+/// One promise instance's settlement state (the serialized
+/// [`PromiseData`]): status, result, pending reactions, and the
+/// unhandled-rejection latch [`Interp::has_unhandled_rejection`] reads.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PromiseRow {
+    pub owner: u32,
+    /// 0 = Pending, 1 = Fulfilled, 2 = Rejected. A settled row carries
+    /// no reactions (settlement drains them into the job queue, and the
+    /// quiescence gate requires that queue empty).
+    pub state: u8,
+    pub result: Slot,
+    pub ever_handled: bool,
+    pub reactions: Vec<PromiseReactionRow>,
+}
+
+/// One resolve/reject function's bound data (the serialized
+/// [`PromiseFnData`] plus the `FuncInfo` fields restore rebuilds —
+/// mirroring [`IntlBoundFunctionRow`], the other runtime-minted native
+/// population that travels outside `FUNC`).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct PromiseFnRow {
+    pub function: u32,
+    pub promise: u32,
+    /// `false` = the resolve function, `true` = the reject function.
+    pub reject: bool,
+    /// Index into [`PromiseClusterSnapshot::guards`], the pair's shared
+    /// `[[AlreadyResolved]]` boolean.
+    pub guard: u32,
+    /// The interned empty-name chunk `make_resolving_functions` gave the
+    /// pair. Carried (not re-interned) so restore mutates no arena.
+    pub name_chunk: u32,
+}
+
+/// One `Promise.all`/`allSettled`/`race`/`any` shared accumulator (the
+/// serialized [`CombinatorState`]).
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct CombinatorRow {
+    /// 0 = All, 1 = AllSettled, 2 = Race, 3 = Any.
+    pub kind: u8,
+    pub derived: u32,
+    pub remaining: u32,
+    pub results: u32,
+    pub done: bool,
+}
+
+/// The atomic promise cluster: the four side tables whose rows
+/// cross-reference each other (a reaction indexes `combinators`, a
+/// resolving function indexes `guards` and names a `promises` row), so
+/// they travel — and are validated — together, exactly as `FUNC`
+/// bundles functions with their segments.
+///
+/// The two index arenas are emitted in COMPACTED form: the snapshot
+/// verb applies the same liveness rule as the collector's
+/// `compact_reaction_arenas` (a guard is live while a resolving pair
+/// names it; a combinator while a pending `Combine` reaction does) and
+/// remaps the holders onto the dense arenas. Indices never surface to
+/// the guest, so the normalization is invisible — and it makes the
+/// encoding canonical: a continued machine and its resumed twin emit
+/// byte-identical clusters even before the continued one's next sweep.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PromiseClusterSnapshot {
+    pub promises: Vec<PromiseRow>,
+    pub functions: Vec<PromiseFnRow>,
+    pub guards: Vec<bool>,
+    pub combinators: Vec<CombinatorRow>,
+}
+
+impl PromiseClusterSnapshot {
+    pub fn is_empty(&self) -> bool {
+        self.promises.is_empty()
+            && self.functions.is_empty()
+            && self.guards.is_empty()
+            && self.combinators.is_empty()
+    }
 }
 
 /// A suspended activation: the caller's scope and resume point, saved by
@@ -4448,6 +4980,12 @@ struct CatchJump {
     /// the surviving catch/finally code in the establishing frame.
     env: Slot,
     flag: u8,
+    /// This entry was RE-ESTABLISHED when a suspended run resumed (the
+    /// handler was live across a `yield`/`await`), rather than pushed by
+    /// a `CATCH` dispatch in the current run. A throw unwinding to such
+    /// an entry costs one extra dispatch in XS — see
+    /// [`RESUMED_HANDLER_THROW_METERING`].
+    rebased: bool,
 }
 
 /// The lifecycle state of a generator instance (`xsGenerator.c`'s `state`
@@ -4476,7 +5014,9 @@ enum GeneratorState {
 /// scope (`locals`/`id_map`), the call identity (`args`/`this_val`/
 /// `cur_func`/`cur_target`/`strict`/`result`), the generator's own value-stack
 /// temporaries (`stack_slice`, the slots above the frame base at the suspend
-/// point), its live exception handlers (`jumps`), and the resume cursor
+/// point), its live exception handlers (`jumps`, positions made RELATIVE to
+/// the frame base — a suspend inside a `try` snapshots its handlers here and
+/// the resume rebases them onto the live chain), and the resume cursor
 /// (`resume_pc`).
 struct SavedFrame {
     locals: Vec<Slot>,
@@ -4499,6 +5039,11 @@ struct SavedFrame {
     jumps: Vec<SavedJump>,
     resume_pc: usize,
 }
+
+/// A [`CatchJump`] as saved into a suspended frame: `stack_len` is
+/// RELATIVE to the run's frame base (the live chain records absolute
+/// positions), and `call_depth` is dropped — a run's own handlers all
+/// sit at the run's depth, which the resume re-derives.
 
 #[derive(Clone)]
 struct SavedJump {
@@ -4679,6 +5224,7 @@ impl Interp {
             chunks,
             static_str,
             n_dispatched: 0,
+            boot_slot_count: 0,
             dispatch_depth: 0,
             source_compiler: None,
             eval_direct: false,
@@ -4709,6 +5255,8 @@ impl Interp {
             segmenter_proto: crate::value::SlotIndex::NULL,
             segments_proto: crate::value::SlotIndex::NULL,
             segment_iterator_proto: crate::value::SlotIndex::NULL,
+            segments_iterator_method: crate::value::SlotIndex::NULL,
+            segment_iterator_identity: crate::value::SlotIndex::NULL,
             date_time_format_proto: crate::value::SlotIndex::NULL,
             number_format_proto: crate::value::SlotIndex::NULL,
             locales: std::collections::HashMap::new(),
@@ -4744,7 +5292,9 @@ impl Interp {
             well_known_symbols: Vec::new(),
             symbol_ids: std::collections::HashMap::new(),
             default_keys: crate::default_keys::DEFAULT_KEYS.iter().copied().collect(),
-            next_intern_id: 1,
+            next_symbol_key_id: u16::MAX,
+            installed_names_len: 0,
+            id_space_exhausted: false,
             symbol_names: Vec::new(),
             error_data: std::collections::HashMap::new(),
             wrapper_data: std::collections::HashMap::new(),
@@ -4753,6 +5303,7 @@ impl Interp {
             arguments_objects: std::collections::HashSet::new(),
             disposable_stacks: std::collections::HashMap::new(),
             collections: std::collections::HashMap::new(),
+            side_refs: SideRefCounts::new(),
             map_proto: crate::value::SlotIndex::NULL,
             set_proto: crate::value::SlotIndex::NULL,
             weakmap_proto: crate::value::SlotIndex::NULL,
@@ -4802,6 +5353,7 @@ impl Interp {
             async_generator_proto: crate::value::SlotIndex::NULL,
             async_generator_function_proto: crate::value::SlotIndex::NULL,
             async_iterator_identity: crate::value::SlotIndex::NULL,
+            iterator_identity: crate::value::SlotIndex::NULL,
             async_gen_run_stack: Vec::new(),
             resume_status: ResumeStatus::NoStatus,
             promise_functions: std::collections::HashMap::new(),
@@ -4811,6 +5363,8 @@ impl Interp {
             from_async: Vec::new(),
             then_id: None,
             constructor_id: None,
+            error_stack_accessor: None,
+            prototype_key_id: None,
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
             last_index_id: None,
@@ -4820,6 +5374,7 @@ impl Interp {
             jumps: Vec::new(),
         };
         interp.create_intrinsics();
+        interp.boot_slot_count = interp.slots.capacity();
         interp
     }
 
@@ -5434,6 +5989,11 @@ impl Interp {
             self.proto_methods.push((async_generator_proto, name, mf));
         }
         self.async_iterator_identity = self.alloc_method(NativeMethod::AsyncIteratorIdentity);
+        self.iterator_identity = self.alloc_named_method(
+            NativeMethod::AsyncIteratorIdentity,
+            "[Symbol.iterator]",
+            0,
+        );
         self.async_generator_function_proto = self.slots.alloc(Slot::instance(self.function_proto));
         // `%AsyncGenerator%` (the common prototype of async-generator
         // functions) exposes `%AsyncGeneratorPrototype%` through its own
@@ -5542,6 +6102,7 @@ impl Interp {
             ("exec", NativeMethod::RegExpExec),
             ("test", NativeMethod::RegExpTest),
             ("toString", NativeMethod::RegExpToString),
+            ("compile", NativeMethod::RegExpCompile),
         ] {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.regexp_proto, name, mf));
@@ -5695,6 +6256,12 @@ impl Interp {
             .push((error_proto, "name", "Error".to_string()));
         self.proto_data
             .push((error_proto, "message", String::new()));
+        // `%Error.prototype%`'s `stack` host accessor pair
+        // (`fxNextHostAccessorProperty` in `fxBuildError`), installed at
+        // link time beside the other native accessors.
+        let stack_getter = self.alloc_named_method(NativeMethod::ErrorStackGetter, "get stack", 0);
+        let stack_setter = self.alloc_named_method(NativeMethod::ErrorStackSetter, "set stack", 1);
+        self.error_stack_accessor = Some((error_proto, stack_getter, stack_setter));
         for (_, native) in Native::intrinsics() {
             if matches!(
                 native,
@@ -5770,6 +6337,52 @@ impl Interp {
         self.create_temporal();
         self.create_hardened_globals();
         self.create_test262_host();
+
+        // Every native function instance (constructor and
+        // alloc_method product alike) chains to %Function.prototype%
+        // the way a user function does, so a DETACHED native resolves
+        // `.call`/`.apply`/`.bind` through the same prototype walk
+        // (the deferred pass's .call-on-native fix — alloc_method
+        // used to leave the prototype NULL on the theory that native
+        // instances are "only ever dispatched, never re-inspected",
+        // which detachment falsified). alloc_method can run before
+        // %Function.prototype% exists, so the chain lands here once,
+        // at the end of the boot; only NULL prototypes are touched.
+        //
+        // BOOT ONLY, and therefore a version fork across restore: a heap
+        // checkpointed by a build that PREDATES this fixup keeps its
+        // NULL-proto natives forever, because restore replays stored
+        // records rather than re-booting and migration restamps schema
+        // and root, never content. Such a machine resumes cleanly
+        // (VERS/SIGN/cost-table all agree — none of them fingerprints
+        // intrinsic SHAPE) and then throws on `nativeF.call(...)` where
+        // a fresh boot succeeds (review wave 4, DET-6). Accepted for the
+        // same reason the whole migration item is: no pre-delta
+        // production heaps exist. If one ever must be resumed, the fix
+        // is a restore-time re-run of this fixup — the writes are
+        // idempotent by construction (only NULL prototypes are touched),
+        // so it is safe to call on any heap.
+        if let Some(fp) = self
+            .intrinsics
+            .get("Function")
+            .copied()
+            .and_then(|c| self.prototype_of(c))
+        {
+            let native_fns: Vec<crate::value::SlotIndex> = self
+                .functions
+                .iter()
+                .filter(|(f, fi)| (fi.method.is_some() || fi.native.is_some()) && **f != fp)
+                .map(|(f, _)| *f)
+                .collect();
+            for f in native_fns {
+                let s = self.slots.get_mut(f);
+                if let Payload::Reference(p) = s.value {
+                    if p.is_null() {
+                        s.value = Payload::Reference(fp);
+                    }
+                }
+            }
+        }
     }
 
     fn alloc_named_native(&mut self, native: Native) -> crate::value::SlotIndex {
@@ -5855,6 +6468,16 @@ impl Interp {
         self.segments_proto = segments_proto;
         let segment_iterator_proto = self.slots.alloc(Slot::instance(self.object_proto));
         self.segment_iterator_proto = segment_iterator_proto;
+        self.segments_iterator_method = self.alloc_named_method(
+            NativeMethod::SegmentsIterator,
+            "[Symbol.iterator]",
+            0,
+        );
+        self.segment_iterator_identity = self.alloc_named_method(
+            NativeMethod::SegmentIteratorSymbolIterator,
+            "[Symbol.iterator]",
+            0,
+        );
 
         let date_time_format = self.alloc_named_native(Native::DateTimeFormat);
         let date_time_format_proto = self.slots.alloc(Slot::instance(self.object_proto));
@@ -6569,9 +7192,25 @@ impl Interp {
         self.functions.get(&f).and_then(|fi| fi.method)
     }
 
-    /// The `.prototype` object of a constructor instance, if it is one.
+    /// The `.prototype` object of a constructor instance, if it is one. A
+    /// guest may reassign a plain constructor function's writable own
+    /// `prototype` property, so the own slot (when the program names
+    /// `prototype` — see [`Self::prototype_key_id`]) outranks the boot-time
+    /// [`Self::ctor_prototype`] record; a reassignment to a non-object means
+    /// instances chain to `%Object.prototype%` (`fxGetPrototypeFromConstructor`).
     #[inline]
     fn prototype_of(&self, ctor: crate::value::SlotIndex) -> Option<crate::value::SlotIndex> {
+        if let Some(pid) = self.prototype_key_id {
+            if let Some(p) = self.find_property(ctor, pid) {
+                let s = self.slots.get(p);
+                if s.kind == Kind::Reference {
+                    if let Payload::Reference(r) = s.value {
+                        return Some(r);
+                    }
+                }
+                return None;
+            }
+        }
         self.ctor_prototype.get(&ctor).copied()
     }
 
@@ -6609,7 +7248,7 @@ impl Interp {
     /// Derive the program-symbol tables and every name-keyed lookup-id cache
     /// from `names` (the decoded `SYMB` atom, `names[k]` = the name of id
     /// `k + 1`): the forward `symbol_names`, the inverse `symbol_ids`, the
-    /// `next_intern_id` runtime-key counter (past the program symbols so a
+    /// name-keyed lookup-id caches (string keys append to the table itself, so a
     /// novel key never collides), and the cached ids
     /// (`length_id`/`name_id`/… and the RegExp getter/result clusters).
     ///
@@ -6623,10 +7262,11 @@ impl Interp {
     /// restore" claim true, and it keeps the two callers from drifting.
     fn bind_program_symbols(&mut self, names: &[String]) {
         self.symbol_names = names.to_vec();
-        // Runtime-interned keys number past the compiler's program symbols
-        // (ids `1..=names.len()`), so a novel runtime key can never collide
-        // with a program symbol or the intrinsic properties linked under one.
-        self.next_intern_id = (names.len() as u16).saturating_add(1);
+        // String keys interned at runtime APPEND to `symbol_names` (see
+        // `intern_key`), so `names` here — a restored NAME row included —
+        // already carries every string key the heap stores, and ids are
+        // always positions. Nothing to seed: the symbol-key counter is
+        // top-down and independent.
         // Cache the program-local id of `length` (XS's `mxID(_length)`) so an
         // `arr.length` get/set routes to the array length semantics.
         self.length_id = names
@@ -6705,6 +7345,7 @@ impl Interp {
         fill!(self.byte_offset_id, "byteOffset");
         fill!(self.buffer_id, "buffer");
         fill!(self.then_id, "then");
+        fill!(self.constructor_id, "constructor");
         fill!(self.last_index_id, "lastIndex");
         fill!(self.regexp_getter_ids.source, "source");
         fill!(self.regexp_getter_ids.flags, "flags");
@@ -6737,25 +7378,58 @@ impl Interp {
         // restored `symbol_names` without re-linking intrinsics (the
         // SymbolTables ledger row's restore-time rebuild).
         self.bind_program_symbols(names);
-        self.install_intrinsic_bindings(names);
+        self.install_intrinsic_bindings(names, true, |_| true);
     }
 
-    /// Bind every intrinsic/value-global/`globalThis`/prototype-method/
-    /// prototype-data name in `names` into the realm, keyed by the symbol id
-    /// each name currently holds in [`Self::symbol_ids`]. Idempotent: a name
-    /// whose global property already exists is skipped, so it is safe to
-    /// re-run for a nested unit (the `eval`/`Function` bridge relinks the
-    /// eval program's fresh names, then calls this to bind any intrinsic the
-    /// outer program never referenced). Split from [`Self::link_intrinsics`]
-    /// so both the top-level link and the same-realm eval bridge share one
-    /// binding pass. Resolving the id through `symbol_ids` (rather than the
-    /// positional `k + 1`) is what lets it serve an eval unit whose names were
-    /// interned past the outer program's id range.
-    fn install_intrinsic_bindings(&mut self, names: &[String]) {
+    /// Install the global bindings, prototype methods/data, native
+    /// value data, and well-known symbols for the names that `keep`
+    /// admits — the reusable body of [`Self::link_intrinsics`] (called
+    /// there with `full = true, |_| true`). [`Self::relink_crank`] and
+    /// the `eval`/`Function` bridge call it with `full = false` and a
+    /// filter that admits only the APPENDED ids, so a later unit that
+    /// first references a built-in (`Math`, `arr.map`, an Intl
+    /// namespace) gets it bound (wave-4 P1) WITHOUT re-installing the
+    /// earlier link's bindings — a re-install would clobber a guest
+    /// monkeypatch or deletion of an already-linked property.
+    ///
+    /// `full` gates the branches that depend on NO program name — the
+    /// well-known-symbol installs (`@@toStringTag` tags,
+    /// `@@iterator`/`@@asyncIterator` identities, the dispose
+    /// aliases): they run unconditionally on every full link, so on a
+    /// relink they are always redundant, and the `keep` filter cannot
+    /// gate them (symbol-key ids mint top-down from `u16::MAX`, so
+    /// every one reads as "appended"). Re-running them on a relink
+    /// silently reverted a crank-1 monkeypatch or deletion — and the
+    /// Segments branch minted fresh iterator functions per relink
+    /// (locked by `relink_preserves_guest_intrinsic_edits`). The
+    /// `proto_accessors` branch is name-guarded instead: it installs
+    /// when its GUARD name's id passes `keep`, so a later unit that
+    /// first references `Intl` still gets the `format` accessor.
+    ///
+    /// Resolving ids through `symbol_ids` (rather than the positional
+    /// `k + 1`) is what lets one body serve the top-level link, the
+    /// relink filter, and an eval unit whose names were interned past
+    /// the outer program's id range. Requires `bind_program_symbols`
+    /// (or the relink) to have populated `symbol_ids` for the full
+    /// name set first. Unmetered: these bindings pre-exist any guest
+    /// run exactly as XS's realm does.
+    fn install_intrinsic_bindings(
+        &mut self,
+        names: &[String],
+        full: bool,
+        keep: impl Fn(u16) -> bool,
+    ) {
+        // Every id in `names` is CONSIDERED by this pass (admitted or
+        // deliberately skipped by `keep`), so the floor for future
+        // partial passes advances to the full table (wave-6 W6-7).
+        self.installed_names_len = names.len();
         for name in names.iter() {
             let Some(&id) = self.symbol_ids.get(name.as_str()) else {
                 continue;
             };
+            if !keep(id) {
+                continue;
+            }
             if self.global_props.contains_key(&id) {
                 continue;
             }
@@ -6896,7 +7570,12 @@ impl Interp {
             // atom for the name). It is an XS boot default key, so assigning
             // its program-local id here is unmetered.
             let mid = if mname == "prototype" {
-                Some(self.intern_key(mname))
+                let pid = self.intern_key(mname);
+                // The canonical `prototype` key id (a boot default key,
+                // present whether or not the program names it statically) —
+                // the id `install_own_function_prototype`/`prototype_of` use.
+                self.prototype_key_id = Some(pid);
+                Some(pid)
             } else if let Some(&id) = self.symbol_ids.get(mname) {
                 Some(id)
             } else if proto == self.intl_object && self.symbol_ids.contains_key("Intl") {
@@ -6915,6 +7594,16 @@ impl Interp {
                 None
             };
             if let Some(mid) = mid {
+                if !keep(mid) {
+                    continue;
+                }
+                // A property the guest (or an earlier pass) already put
+                // there wins — installs are create-only on partial passes
+                // (wave-6 W6-7: the widened keep must not clobber a
+                // monkeypatch whose name was interned at runtime).
+                if !full && self.find_property(proto, mid).is_some() {
+                    continue;
+                }
                 let flag = if mname == "prototype" {
                     XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG
                 } else {
@@ -6948,8 +7637,10 @@ impl Interp {
         let data = std::mem::take(&mut self.proto_data);
         for (proto, pname, value) in &data {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
-                let off = self.alloc_str_text(value.as_bytes());
-                self.set_own_unmetered(*proto, pid, Slot::of(Kind::String, Payload::String(off)));
+                if keep(pid) && (full || self.find_property(*proto, pid).is_none()) {
+                    let off = self.alloc_str_text(value.as_bytes());
+                    self.set_own_unmetered(*proto, pid, Slot::of(Kind::String, Payload::String(off)));
+                }
             }
         }
         self.proto_data = data;
@@ -6963,24 +7654,65 @@ impl Interp {
             // Install only when the owning constructor is referenced (so a
             // non-Intl program's metering is untouched), then force-intern the
             // property key **without** metering — the tests read it by string,
-            // so it has no atom id of its own.
-            if self.symbol_ids.contains_key(guard) {
-                let pid = self.intern_key_unmetered(pname);
-                self.set_own_accessor_unmetered(
-                    proto,
-                    pid,
-                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
-                    None,
-                );
+            // so it has no atom id of its own. The GUARD name's id carries the
+            // keep gate: a relinked crank or eval unit that first references
+            // `Intl` (an appended id) gets the accessor, while one whose
+            // earlier link already installed it does not re-install — a guest
+            // redefinition of `format` survives.
+            if let Some(&guard_id) = self.symbol_ids.get(guard) {
+                if keep(guard_id) {
+                    let pid = self.intern_key_unmetered(pname);
+                    if !full && self.find_property(proto, pid).is_some() {
+                        continue;
+                    }
+                    self.set_own_accessor_unmetered(
+                        proto,
+                        pid,
+                        Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                        None,
+                    );
+                }
             }
         }
         self.proto_accessors = accessors;
+        // `%Error.prototype%.stack` {get, set} (`XS_DONT_ENUM_FLAG` only —
+        // enumerable: false, configurable: true), installed when the program
+        // names `Error` so every other program's metering stays untouched;
+        // the `stack` key is force-interned unmetered (an XS boot default
+        // key, reachable reflectively by string).
+        if let Some((proto, getter, setter)) = self.error_stack_accessor {
+            let names_error_family = [
+                "Error",
+                "EvalError",
+                "RangeError",
+                "ReferenceError",
+                "SyntaxError",
+                "TypeError",
+                "URIError",
+                "AggregateError",
+                "SuppressedError",
+                "stack",
+            ]
+            .iter()
+            .any(|n| self.symbol_ids.contains_key(*n));
+            if names_error_family {
+                let sid = self.intern_key_unmetered("stack");
+                self.set_own_accessor_unmetered(
+                    proto,
+                    sid,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    Some(Slot::of(Kind::Reference, Payload::Reference(setter))),
+                );
+            }
+        }
         // Native numeric data properties (`Math.PI` &co.): bound as own
         // properties of their owner under the program-local id, unmetered.
         let vdata = std::mem::take(&mut self.proto_value_data);
         for (owner, pname, value) in &vdata {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
-                self.set_own_unmetered(*owner, pid, *value);
+                if keep(pid) && (full || self.find_property(*owner, pid).is_none()) {
+                    self.set_own_unmetered(*owner, pid, *value);
+                }
             }
         }
         self.proto_value_data = vdata;
@@ -6989,10 +7721,19 @@ impl Interp {
             let wks = std::mem::take(&mut self.well_known_symbols);
             for (name, value) in &wks {
                 if let Some(&wid) = self.symbol_ids.get(*name) {
-                    self.set_own_unmetered(symbol_ctor, wid, *value);
+                    if keep(wid) && (full || self.find_property(symbol_ctor, wid).is_none()) {
+                        self.set_own_unmetered(symbol_ctor, wid, *value);
+                    }
                 }
             }
             self.well_known_symbols = wks;
+        }
+        // The remaining branches depend on NO program name and run on
+        // every FULL link; on a relink or eval-bridge install they are
+        // redundant re-installs that would revert guest edits (see the
+        // fn doc).
+        if !full {
+            return;
         }
         // Each ECMA-402 formatter prototype carries a `Symbol.toStringTag`
         // string own property (writable:false, enumerable:false,
@@ -7057,15 +7798,10 @@ impl Interp {
             );
         }
         if let Some(id) = self.well_known_symbol_property_id("iterator") {
-            let identity = self.alloc_named_method(
-                NativeMethod::AsyncIteratorIdentity,
-                "[Symbol.iterator]",
-                0,
-            );
             self.set_own_unmetered_with_flag(
                 self.iterator_proto,
                 id,
-                Slot::of(Kind::Reference, Payload::Reference(identity)),
+                Slot::of(Kind::Reference, Payload::Reference(self.iterator_identity)),
                 XS_DONT_ENUM_FLAG,
             );
             self.set_own_unmetered_with_flag(
@@ -7103,22 +7839,22 @@ impl Interp {
             // the iterator itself carries the identity `[Symbol.iterator]`
             // (`%IteratorPrototype%`) so it survives spread/`Array.from`.
             if !self.segments_proto.is_null() {
-                let iter = self.alloc_named_method(NativeMethod::SegmentsIterator, "[Symbol.iterator]", 0);
                 self.set_own_unmetered_with_flag(
                     self.segments_proto,
                     id,
-                    Slot::of(Kind::Reference, Payload::Reference(iter)),
+                    Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(self.segments_iterator_method),
+                    ),
                     XS_DONT_ENUM_FLAG,
-                );
-                let identity = self.alloc_named_method(
-                    NativeMethod::SegmentIteratorSymbolIterator,
-                    "[Symbol.iterator]",
-                    0,
                 );
                 self.set_own_unmetered_with_flag(
                     self.segment_iterator_proto,
                     id,
-                    Slot::of(Kind::Reference, Payload::Reference(identity)),
+                    Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(self.segment_iterator_identity),
+                    ),
                     XS_DONT_ENUM_FLAG,
                 );
             }
@@ -7204,13 +7940,16 @@ impl Interp {
                 // Id 0 is XS's reserved `XS_NO_ID` (an anonymous function
                 // name, an absent file): it names nothing, so it is left as-is.
                 if id != 0 {
-                    if let Some(name) = eval_names.get((id - 1) as usize) {
-                        let name = name.clone();
-                        let host_id = self.intern_program_symbol(&name);
-                        let bytes = host_id.to_le_bytes();
-                        out[pc + 1] = bytes[0];
-                        out[pc + 2] = bytes[1];
-                    }
+                    // Fail CLOSED on an id beyond the unit's own symbol
+                    // atom (wave-6 W6-18): `relink_crank` refuses the
+                    // same condition as MalformedBytecode; left in
+                    // place it would denote whatever realm name holds
+                    // that position.
+                    let name = eval_names.get((id - 1) as usize)?.clone();
+                    let host_id = self.intern_program_symbol(&name);
+                    let bytes = host_id.to_le_bytes();
+                    out[pc + 1] = bytes[0];
+                    out[pc + 2] = bytes[1];
                 }
             }
             pc += ilen;
@@ -7277,7 +8016,15 @@ impl Interp {
             Some(code) => code,
             None => return Err(Halt::Unsupported("eval:relink")),
         };
-        self.install_intrinsic_bindings(&eval_names);
+        // Bind only the ids appended SINCE THE LAST INSTALL PASS (the
+        // installed-names floor, wave-6 W6-7 — a name interned at
+        // runtime has an id no install has seen, so filtering by this
+        // unit's own pre-relink length refused it forever); ids at or
+        // below the floor keep their existing binding or a guest's
+        // deliberate replacement of it, which a re-install would
+        // clobber — the same floor scoping `relink_crank` applies.
+        let floor = self.installed_names_len;
+        self.install_intrinsic_bindings(&eval_names, false, move |id| (id as usize) > floor);
         // The unit may reference a well-known property name (`length`, `name`,
         // `then`, a RegExp getter, …) the outer program never used; its id is
         // now in the realm table, so refresh the exotic-property id caches that
@@ -7536,15 +8283,25 @@ impl Interp {
         self.stack = stack;
         self.meter.restore(meter);
         // SymbolTables ledger row: only `symbol_names` is serialized; the
-        // inverse `symbol_ids`, the `next_intern_id` counter, and the
+        // inverse `symbol_ids` and the
         // name-keyed lookup-id caches are *derived* from it — `link_intrinsics`
         // computes them at boot and never persists them, so restore re-derives
         // them here by the identical pure derivation. Without this a resumed
-        // machine's `symbol_ids` stays empty and `next_intern_id` stays at the
-        // fresh-boot `1`, colliding a novel runtime-interned key with a program
-        // symbol id. (Consumes `symbol_names`, so this both sets the forward
-        // table and rebuilds the rest.)
+        // machine's `symbol_ids` stays empty and every name lookup misses.
+        // (Consumes `symbol_names`, so this both sets the forward table and
+        // rebuilds the rest.)
         self.bind_program_symbols(&symbol_names);
+        // The installed-names floor (wave-6 W6-7) DEFAULTS to the full
+        // restored table — the conservative choice when no floor
+        // traveled (a pre-schema-12 store or container): no partial
+        // install pass may then touch any restored id, which can never
+        // clobber or resurrect a guest edit. When the snapshot carries
+        // the live floor (the `NFLR` atom / small-state section), the
+        // resume path narrows this via
+        // [`Self::restore_installed_names_floor`], so names interned
+        // DURING the last install pass stay lazily installable exactly
+        // as they were live (the `ListFormat.prototype.format` case).
+        self.installed_names_len = self.symbol_names.len();
         // GlobalProps ledger row: the global object's own-property slots
         // (intrinsic bindings and runtime-materialized `var`/sloppy globals
         // alike) round-trip *inside* the restored slot arena — they are linked
@@ -7553,6 +8310,2248 @@ impl Interp {
         // state, and boot leaves it empty. Rebuild it by walking the restored
         // chain, so a global created in an earlier crank resolves after resume.
         self.rebuild_global_props();
+        // Accessors ledger row, the boot-seeded half: a `proto_accessors`
+        // install's PROPERTY slot travels in the arena but its side-table
+        // getter entry does not; re-derive it from the boot seeds (the
+        // persist gate admits no other entry at a seed key).
+        self.rebuild_boot_accessors();
+    }
+
+    /// Relink a later crank COMPILED AGAINST ITS OWN symbol table onto
+    /// this machine's persisted table (side-table ledger G2: the
+    /// per-crank relinking lift). Program-symbol ids are 1-based table
+    /// positions, so a crank whose compiled table differs from the
+    /// machine's would silently bind the wrong globals and properties;
+    /// before this, such a crank was refused outright. Relinking makes
+    /// it run correctly instead: each crank name resolves to its
+    /// existing machine id or extends the table (append-only — every
+    /// id already stored in heap slot records keeps its meaning), and
+    /// every ID operand in the bytecode is rewritten through that map
+    /// ([`crate::opcode::remap_ids`]; nested function bodies included).
+    /// On extension the derived caches re-bind exactly as boot does.
+    ///
+    /// Refused fail-closed when the crank would EXTEND the table and
+    /// the heap STORES a runtime-interned id (a novel dynamic property
+    /// key or a symbol key, minted past the program table): the
+    /// appended ids come out of the range those occupy, and re-keying
+    /// them is the heap-wide id remap XS performs at snapshot load —
+    /// the ledger's KEYS row, not this lift. A crank that only
+    /// REORDERS onto names the table already holds moves nothing in the
+    /// id space and is never refused. A crank referencing ids beyond
+    /// its own table, or bytecode the walker cannot decode, is refused
+    /// as malformed.
+    pub fn relink_crank(
+        &mut self,
+        bytecode: &[u8],
+        crank_names: &[String],
+    ) -> Result<Vec<u8>, RelinkError> {
+        if crank_names == self.symbol_names.as_slice() {
+            self.install_pending_intrinsics();
+            return Ok(bytecode.to_vec());
+        }
+        let old_len = self.symbol_names.len();
+        let mut extended = self.symbol_names.clone();
+        let mut map: Vec<u16> = Vec::with_capacity(crank_names.len());
+        for name in crank_names {
+            let id = match extended.iter().position(|n| n == name) {
+                Some(k) => (k + 1) as u16,
+                None => {
+                    if extended.len().saturating_add(1) >= self.next_symbol_key_id as usize {
+                        return Err(RelinkError::TableFull);
+                    }
+                    extended.push(name.clone());
+                    extended.len() as u16
+                }
+            };
+            map.push(id);
+        }
+        // Growing the table cannot alias any interned id: string keys
+        // live IN the table (appended at intern time, so a crank name
+        // equal to a runtime-minted name resolves to the minted id — the
+        // aliasing-free outcome), and symbol-key ids are allocated
+        // top-down from `u16::MAX`, far above any table position until
+        // the spaces meet — which the `TableFull` bound above refuses.
+        // The old shared-counter design had to refuse extension whenever
+        // a runtime-interned id was STORED; the split id space retires
+        // that refusal entirely.
+        let remapped = crate::opcode::remap_ids(bytecode, |id| {
+            if id == 0 {
+                // XS_NO_ID: the "no name" sentinel, never a table
+                // position.
+                return Some(0);
+            }
+            map.get(id as usize - 1).copied()
+        })
+        .ok_or(RelinkError::MalformedBytecode)?;
+        if extended.len() != old_len {
+            // The table grew: re-derive the inverse table, the intern
+            // counter, and every name-keyed lookup-id cache. The
+            // install pass below then covers the appended ids along
+            // with any older above-floor backlog.
+            self.bind_program_symbols(&extended);
+        }
+        self.install_pending_intrinsics();
+        Ok(remapped)
+    }
+
+    /// The create-only partial install pass over every id ABOVE the
+    /// installed-names floor — names no install pass has considered:
+    /// ids this relink appended, names interned DURING an earlier
+    /// pass (the `format` accessor key, the Intl member keys), and
+    /// names the guest interned itself (a `JSON.parse` key, a
+    /// defineProperty key). Run on EVERY relink, aligned or not: a
+    /// crank that first references such a name must get it bound
+    /// exactly as a fresh link would (wave-4 P1), and gating the pass
+    /// on table GROWTH left non-growing cranks reading `undefined`
+    /// where the next growing crank read the binding — the
+    /// deferred-install divergence the Intl carry's twins caught.
+    /// Create-only (a property or global the guest already holds
+    /// wins), and the pass advances the floor, so each id is
+    /// considered exactly once and the aligned hot path pays one
+    /// length comparison once the backlog is empty.
+    fn install_pending_intrinsics(&mut self) {
+        if self.symbol_names.len() <= self.installed_names_len {
+            return;
+        }
+        let floor = self.installed_names_len;
+        let names = self.symbol_names.clone();
+        self.install_intrinsic_bindings(&names, false, move |id| (id as usize) > floor);
+    }
+
+    /// The installed-names floor (wave-6 W6-7): ids at or below it keep
+    /// their existing binding on partial install passes; ids above it —
+    /// names interned during an install pass (the Intl member keys, the
+    /// `format` accessor key) or by the guest — are re-considered,
+    /// create-only, by the next growing relink. Real machine state: a
+    /// resumed machine must adopt the live machine's floor, not the
+    /// restored table's length, or a boot name interned during the last
+    /// install pass can never lazily install after resume (the
+    /// `ListFormat.prototype.format` divergence the Intl carry twins
+    /// caught — the continuous machine installs it at its next growing
+    /// relink; a full-table floor refuses it forever).
+    pub fn installed_names_floor(&self) -> u32 {
+        self.installed_names_len as u32
+    }
+
+    /// Adopt a persisted installed-names floor (the `NFLR` atom /
+    /// small-state section). `false` — failing the caller's decode
+    /// closed — for a floor past the restored name table, which honest
+    /// suspension cannot produce.
+    pub fn restore_installed_names_floor(&mut self, floor: u32) -> bool {
+        if floor as usize > self.symbol_names.len() {
+            return false;
+        }
+        self.installed_names_len = floor as usize;
+        true
+    }
+
+    /// The first id past this machine's name table. Since the id-space
+    /// unification a runtime-interned STRING key appends INTO the table
+    /// (`append_name_key`), so every id at or above this floor is a
+    /// SYMBOL-key id (minted top-down from `u16::MAX` by `o[sym]` /
+    /// `Object.defineProperty(o, sym, …)`).
+    pub fn first_runtime_intern_id(&self) -> u16 {
+        (self.symbol_names.len() as u16).saturating_add(1)
+    }
+
+    /// Whether this machine has ever MINTED a symbol-key property id.
+    /// `intern_symbol_key` lowers the top-down counter and nothing raises
+    /// it, so this is cheap and monotone.
+    ///
+    /// String keys do not count: a runtime-interned NAME appends to the
+    /// persisted name table (`append_name_key`), so its id→name map
+    /// round-trips every snapshot. Symbol keys travel too now — the map
+    /// plus this counter ride the SYMB atom
+    /// ([`Self::symbol_key_table`] / [`Self::restore_symbol_key_table`])
+    /// — so minting is no longer a persistence hazard either; this
+    /// remains as the cheap pre-check that lets
+    /// [`Self::stored_runtime_intern`] skip its O(heap) walk, and as a
+    /// test witness that a fixture really minted (review wave 5's
+    /// mint-counter lesson: minting happens on a LOOKUP, not a store, so
+    /// only [`Self::stored_runtime_intern`] proves an id was STORED).
+    pub fn may_hold_runtime_interns(&self) -> bool {
+        self.next_symbol_key_id != u16::MAX
+    }
+
+    /// The first SYMBOL-KEY property id this machine actually STORES —
+    /// in a live heap slot, on the value stack, or in a side table — or
+    /// `None` if it stores none. (Ids past the name table are symbol-key
+    /// ids: string keys always live IN the table since the id-space
+    /// unification, so nothing else occupies that range.)
+    ///
+    /// Historically this was the persistence gate for the id-space hazard
+    /// (wave-4 P1): the symbol-key map did not travel, so a store refused
+    /// any machine that stored such an id. The map and its counter now
+    /// ride the SYMB atom, so the gate is gone; this survives as a TEST
+    /// WITNESS (`side_table_ledger.rs` uses it to prove a fixture stored
+    /// a symbol-key id before checkpointing) and as the live-side
+    /// counterpart of the image-side audit
+    /// (`MachineImage::stored_unregistered_key_id`, which refuses a
+    /// STORED id that maps to nothing in either table — torn or crafted
+    /// bytes, not honest minting).
+    ///
+    /// A slot on the FREE LIST is skipped: its record is stale, nothing
+    /// reaches it, and its id names nothing. Counting it would refuse a
+    /// machine whose only offending key the collector has already
+    /// reclaimed.
+    ///
+    /// Cost is O(heap) when it walks, and on a lazily-attached machine
+    /// the walk faults every page in — but it walks only when this
+    /// machine has actually minted an id, so a program that never
+    /// interned (every boot machine, and every program using static keys
+    /// only) pays one comparison.
+    pub fn stored_runtime_intern(&self) -> Option<u16> {
+        if !self.may_hold_runtime_interns() {
+            return None;
+        }
+        let floor = self.first_runtime_intern_id();
+        let over = |s: &Slot| s.stored_key_id().filter(|&id| id >= floor);
+        for i in 0..self.slots.capacity() {
+            let idx = crate::value::SlotIndex(i);
+            if self.slots.is_free_index(idx) {
+                continue;
+            }
+            if let Some(id) = over(&self.slots.get(idx)) {
+                return Some(id);
+            }
+        }
+        // Deterministic witness (wave-6 W6-24): the MINIMUM offending
+        // id across the map-backed tails, not HashMap surfacing order.
+        self.stack_slots()
+            .iter()
+            .chain(self.arrays.values().flat_map(|a| a.items().values()))
+            .chain(
+                self.collections
+                    .values()
+                    .flat_map(|c| c.live_entries().flat_map(|(k, v)| [k, v])),
+            )
+            .filter_map(over)
+            .min()
+    }
+
+    /// Quiescent snapshot of the `arrays` side table (side-table
+    /// ledger, `Arrays` row), ascending by owning slot for canonical
+    /// serialization: `(owner slot, spec length, items ascending by
+    /// index)`. Item values are ordinary [`Slot`]s — their slot/chunk
+    /// references round-trip with the arenas.
+    pub fn arrays_snapshot(&self) -> Vec<ArraySnapshot> {
+        let mut out: Vec<ArraySnapshot> = self
+            .arrays
+            .iter()
+            .map(|(owner, a)| {
+                (
+                    owner.0,
+                    a.length,
+                    a.items().iter().map(|(i, s)| (*i, *s)).collect(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _)| *owner);
+        out
+    }
+
+    /// Quiescent snapshot of the `collections` side table (ledger
+    /// `Collections` row), ascending by owning slot: `(owner slot,
+    /// kind code, table_length, entries in insertion order)`.
+    /// Tombstones (deleted entries whose physical index a live
+    /// iterator cursor may still hold) are COMPACTED out: live-entry
+    /// order, `size`, and the rehash geometry (`table_length`) are the
+    /// observables, and all survive compaction unchanged. Iterator
+    /// cursors round-trip alongside (the `ITER` row, store schema 13)
+    /// as live-entry ORDINALS — [`Self::iterators_snapshot`] performs
+    /// the matching translation, so a resumed cursor addresses exactly
+    /// the entries this compaction keeps.
+    pub fn collections_snapshot(&self) -> Vec<CollectionSnapshot> {
+        let mut out: Vec<CollectionSnapshot> = self
+            .collections
+            .iter()
+            .map(|(owner, c)| {
+                (
+                    owner.0,
+                    c.kind.code(),
+                    c.table_length,
+                    c.live_entries().copied().collect(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// The first live function backed by an owned code segment.
+    ///
+    /// The legacy name predates top-level crank-code retention, when only
+    /// eval/dynamic-Function bodies entered `func_segments`. Both top-level
+    /// and dynamic segments now persist in the atomic function snapshot.
+    pub fn live_dynamic_segment_function(&self) -> Option<u32> {
+        if self.func_segments.is_empty() {
+            return None;
+        }
+        // Deterministic witness (wave-6 W6-24): the MINIMUM live slot,
+        // not whichever HashMap order surfaces first.
+        self.func_segments
+            .keys()
+            .filter(|f| !self.slots.is_free_index(**f))
+            .map(|f| f.0)
+            .min()
+    }
+
+    /// The first SILENT-WRONG Pending-row class this heap HOLDS, or
+    /// `None` (wave-6 W6-9). These two side tables do not travel, and
+    /// a resumed slot that loses its row degrades to a PLAIN OBJECT
+    /// whose reads answer wrong values (a Proxy's gets answer
+    /// `undefined`, accessor properties read as absent) — unlike the
+    /// rows whose consuming natives happen to guard `this` and fail
+    /// visibly. Both remaining rows hold FUNCTION slots (traps,
+    /// getters/setters), so their honest carry is dependency-gated on
+    /// the `functions` row (a resumed guest function is uncallable
+    /// today — carrying a proxy whose traps cannot run would trade
+    /// silent-wrong for visible-broken, not for correct). Free-listed
+    /// owners are skipped: a swept instance's stale row names nothing.
+    /// (`error_data` and the typed-array family started here and
+    /// GRADUATED: they travel in the `ERRD` and `ABUF`/`TARR`/`DVIW`
+    /// atoms now.)
+    /// One accessor class is exempt: an entry that IS a boot
+    /// [`Self::proto_accessors`] seed — same `(proto, id)` key, the
+    /// seed's own getter, no setter (today: the `Intl.NumberFormat`
+    /// `format` getter, installed on first `Intl` reference). Its
+    /// getter is a boot-minted native whose `FuncInfo` lives on every
+    /// fresh boot, so [`Self::restore_snapshot_state`] re-derives the
+    /// entry exactly ([`Self::rebuild_boot_accessors`]) — the
+    /// `RebuiltAtRestore` pattern, not a carry. A guest REDEFINITION
+    /// at the seed key stores a different getter and still refuses.
+    pub fn stored_unpersistable_row(&self) -> Option<&'static str> {
+        self.stored_unpersistable_row_inner(false)
+    }
+
+    /// The checkpoint form: identical, except the heap walk covers only
+    /// the pages this crank DIRTIED, keeping the per-crank cost O(dirty)
+    /// as the site requires.
+    ///
+    /// Sound by induction. `begin_store_session` audits the whole heap,
+    /// and a reference can only enter a page by being WRITTEN there,
+    /// which dirties the page — so every stored reference was audited by
+    /// the checkpoint that followed its write. A slot's persistability
+    /// never changes under it either: a slot is a boot native, a guest
+    /// function, or a runtime-minted native for as long as it lives, and
+    /// a freed slot reused for a fresh native has no live reference to
+    /// the old one. The side tables are walked in FULL regardless —
+    /// they are small state, re-serialized on every checkpoint anyway.
+    pub fn stored_unpersistable_row_at_checkpoint(&self) -> Option<&'static str> {
+        self.stored_unpersistable_row_inner(true)
+    }
+
+    fn stored_unpersistable_row_inner(&self, dirty_heap_only: bool) -> Option<&'static str> {
+        // A pending reaction whose KIND names suspended async machinery
+        // (an `await`'s resumption, an async generator's, an
+        // `Array.fromAsync` step) points at instance rows the image
+        // does not carry yet (`async_instances`/`async_generators`/
+        // `from_async` are still Pending in the ledger). Every
+        // RESUMABLE async suspension is anchored by exactly such a
+        // reaction on a live promise — an unanchored instance is
+        // unreachable and swept — so refusing by kind here is the whole
+        // gate for those rows, checked before the doomed-set early
+        // return below because it is independent of function slots. The
+        // side tables are walked in full in both variants, as below.
+        let async_reaction = self
+            .promises
+            .values()
+            .flat_map(|p| p.reactions.iter())
+            .any(|r| {
+                !matches!(
+                    r.kind,
+                    ReactionKind::User | ReactionKind::FinallyReturn | ReactionKind::Combine(_, _)
+                )
+            });
+        if async_reaction {
+            return Some("a promise reaction that would resume a non-persisted async frame");
+        }
+        // The still-Pending `async_generators` row, refused ON HOLD by
+        // the W6-9 rule while its atom is unbuilt. Unlike an async
+        // FUNCTION — whose every resumable suspension is anchored by a
+        // reaction the arm above refuses, and whose completed record
+        // nothing consults again — an async GENERATOR is a guest-held
+        // object whose row `.next()`/`.return()`/`.throw()` consult in
+        // EVERY state: suspended-between-yields it is resumable with no
+        // reaction anchor, and even completed it must keep answering
+        // done results. A resumed instance that lost the row degrades
+        // to a plain object — the silent-wrong class. Free-listed
+        // owners are skipped, as everywhere.
+        if self
+            .async_generators
+            .keys()
+            .any(|owner| !self.slots.is_free_index(*owner))
+        {
+            return Some("an async generator whose state does not yet persist");
+        }
+
+        // Enumerating HOLDERS cannot be complete: every carried row adds
+        // one, and the round-2 widening proved it by covering
+        // `BoundData.target` while `this_arg` and `args` — the same
+        // struct — went on reaching the store. So ask the question the
+        // other way round: which function slots does resume fail to
+        // bring back, and is ANY of them named by state we are about to
+        // persist?
+        //
+        // The doomed set is computed first because it is almost always
+        // EMPTY (a machine that minted no runtime native has nothing to
+        // lose), and an empty set skips every traversal below.
+        let doomed = self.non_persisting_functions();
+        if doomed.is_empty() {
+            return None;
+        }
+        let names = |slot: &Slot| -> bool {
+            matches!(slot.value, Payload::Reference(f) if doomed.contains(&f.0))
+        };
+        let names_index = |i: u32| doomed.contains(&i);
+
+        // The heap itself, which carries every ordinary property, every
+        // global, and every closure capture — Sol's plain-global and
+        // plain-property cases.
+        let mut page_hit = false;
+        if dirty_heap_only {
+            for page in self.slots.dirty_pages() {
+                let start = page.saturating_mul(crate::value::SLOTS_PER_PAGE);
+                let end = start
+                    .saturating_add(crate::value::SLOTS_PER_PAGE)
+                    .min(self.slots.capacity());
+                for i in start..end {
+                    let idx = crate::value::SlotIndex(i);
+                    if !self.slots.is_free_index(idx) && names(&self.slots.get(idx)) {
+                        page_hit = true;
+                        break;
+                    }
+                }
+                if page_hit {
+                    break;
+                }
+            }
+        } else {
+            for i in 0..self.slots.capacity() {
+                let idx = crate::value::SlotIndex(i);
+                if !self.slots.is_free_index(idx) && names(&self.slots.get(idx)) {
+                    page_hit = true;
+                    break;
+                }
+            }
+        }
+        if page_hit || self.stack.iter().any(names) {
+            return Some("a stored reference to a non-persisted native function");
+        }
+
+        // The side tables that carry Slots of their own, outside the
+        // heap arena. Kept in the ledger's order so a new carried row is
+        // easy to slot in beside its neighbours.
+        let side_hit = self
+            .arrays
+            .values()
+            .flat_map(|a| a.items().iter().map(|(_, v)| v))
+            .any(names)
+            || self
+                .collections
+                .values()
+                .flat_map(|c| c.entries().iter().flatten().flat_map(|e| [&e.0, &e.1]))
+                .any(names)
+            || self.accessors.values().any(|d| {
+                d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
+            })
+            || self.private_values.values().any(names)
+            || self.private_accessors.values().any(|d| {
+                d.get.as_ref().is_some_and(names) || d.set.as_ref().is_some_and(names)
+            })
+            // The raw slot-INDEX fields. Most side-table indices name
+            // objects (a brand, a home, a prototype, an iterable), which
+            // cannot be the doomed thing; these two are the ones that
+            // can name a FUNCTION, and neither is a Slot, so a walk of
+            // Slot-bearing state alone steps straight past them.
+            //
+            // `BoundData` in full: the target is an index, while
+            // `this_arg` and `args` are Slots the round-2 check missed.
+            || self.bound_functions.values().any(|d| {
+                names_index(d.target.0) || names(&d.this_arg) || d.args.iter().any(names)
+            })
+            // A Proxy over a callable: the proxy row is the only thing
+            // keeping the native reachable once the guest drops its own
+            // reference, and both slots are indices.
+            || self
+                .proxies
+                .values()
+                .any(|p| names_index(p.target.0) || names_index(p.handler.0))
+            || self
+                .disposable_stacks
+                .values()
+                .flat_map(|d| d.records.iter())
+                .any(|r| names(&r.resource) || names(&r.method))
+            || self.wrapper_data.values().any(names)
+            // The promise cluster's Slot-bearing state: a settlement
+            // result and a reaction's handler/capability slots can all
+            // hold function references. The cluster's raw INDEX fields
+            // (a resolving function's promise, a combinator's derived
+            // promise and results Array) name instances that are never
+            // function slots, so the Slot walk covers it.
+            || self.promises.values().any(|p| {
+                names(&p.result)
+                    || p.reactions.iter().any(|r| {
+                        names(&r.on_fulfilled)
+                            || names(&r.on_rejected)
+                            || names(&r.resolve)
+                            || names(&r.reject)
+                    })
+            });
+        if side_hit {
+            return Some("a stored reference to a non-persisted native function");
+        }
+
+        // Suspended generator frames: every slot of a saved activation
+        // travels, so every one of them can retain a doomed native.
+        let frame_hit = self.generators.values().any(|g| {
+            g.frame.as_ref().is_some_and(|f| {
+                f.locals.iter().any(names)
+                    || f.args.iter().any(names)
+                    || f.stack_slice.iter().any(names)
+                    || names(&f.this_val)
+                    || names(&f.env)
+                    || names(&f.result)
+                    || f.jumps.iter().any(|j| names(&j.env))
+            })
+        });
+        if frame_hit {
+            return Some("a stored reference to a non-persisted native function");
+        }
+        None
+    }
+
+    /// Whether a function SLOT survives resume: it is a boot native (a
+    /// fresh boot re-mints it at the same index), a proxy revoker, an
+    /// Intl bound native, or a promise resolving function (each rebuilt
+    /// from carried state), or a guest bytecode function (carried by
+    /// `FUNC`). Anything else is a native minted at runtime, which
+    /// travels in no table -- restore reinstates the reference without
+    /// its `FuncInfo`.
+    fn function_persists(&self, function: crate::value::SlotIndex) -> bool {
+        if function.0 < self.boot_slot_count || self.proxy_revokers.contains_key(&function) {
+            return true;
+        }
+        if self.collator_compare_functions.contains_key(&function)
+            || self.number_format_bound_functions.contains_key(&function)
+            || self.promise_functions.contains_key(&function)
+        {
+            return true;
+        }
+        self.functions
+            .get(&function)
+            .is_some_and(|info| info.native.is_none() && info.method.is_none())
+    }
+
+    /// The function slots resume cannot bring back: everything in
+    /// [`Self::functions`] that [`Self::function_persists`] rejects — a
+    /// native minted at RUNTIME, above `boot_slot_count`, carried by no
+    /// table. Usually empty.
+    fn non_persisting_functions(&self) -> std::collections::BTreeSet<u32> {
+        self.functions
+            .keys()
+            .filter(|f| !self.function_persists(**f))
+            .map(|f| f.0)
+            .collect()
+    }
+
+    /// Whether an `accessors` entry is exactly a boot
+    /// [`Self::proto_accessors`] seed: seed proto and interned seed
+    /// name as the key, the seed getter (by slot identity) as the
+    /// getter, and no setter.
+    fn is_boot_seed_accessor(
+        &self,
+        owner: crate::value::SlotIndex,
+        id: u16,
+        data: &AccessorData,
+    ) -> bool {
+        if data.set.is_some() {
+            return false;
+        }
+        let getter = match data.get {
+            Some(Slot {
+                value: Payload::Reference(g),
+                ..
+            }) => g,
+            _ => return false,
+        };
+        self.proto_accessors.iter().any(|&(proto, pname, seed, _)| {
+            proto == owner && seed == getter && self.symbol_ids.get(pname) == Some(&id)
+        })
+    }
+
+    /// Re-derive the boot-seeded prototype accessor entries after a
+    /// restore (the `RebuiltAtRestore` pattern, like
+    /// [`Self::rebuild_global_props`]): the accessor PROPERTY slot
+    /// travels in the arena, but its getter/setter pair lives in the
+    /// `accessors` side table, which does not. Every seed's getter is
+    /// a boot-minted native at a deterministic boot slot, so the entry
+    /// is a pure function of boot structure plus the restored arena —
+    /// and the persist gate refused any heap whose entry at a seed key
+    /// was NOT exactly the seed, so an accessor-flagged property at a
+    /// seed key can only mean the boot accessor. A guest deletion or
+    /// data-property redefinition leaves no accessor-flagged slot and
+    /// rebuilds nothing.
+    fn rebuild_boot_accessors(&mut self) {
+        let seeds = std::mem::take(&mut self.proto_accessors);
+        for &(proto, pname, getter, _) in &seeds {
+            let Some(&pid) = self.symbol_ids.get(pname) else {
+                continue;
+            };
+            let Some(p) = self.find_property(proto, pid) else {
+                continue;
+            };
+            if self.slots.get(p).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG)
+                != (XS_GETTER_FLAG | XS_SETTER_FLAG)
+            {
+                continue;
+            }
+            self.accessors.insert(
+                (proto, pid),
+                AccessorData {
+                    get: Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    set: None,
+                },
+            );
+        }
+        self.proto_accessors = seeds;
+    }
+
+    /// Quiescent snapshot of the `error_data` side table (ledger
+    /// `ErrorData` row, the `ERRD` atom), ascending by owning slot:
+    /// `(owner slot, error name, optional message)`. The name is the
+    /// construction-time constructor name and the message half is
+    /// `None` (bare-name render) or the recorded text — exactly what
+    /// the abort-value render consults, so a resumed `throw e`
+    /// stringifies as the uninterrupted machine's would.
+    pub fn errors_snapshot(&self) -> Vec<(u32, &'static str, Option<String>, Vec<String>)> {
+        let mut out: Vec<(u32, &'static str, Option<String>, Vec<String>)> = self
+            .error_data
+            .iter()
+            .map(|(owner, info)| {
+                (owner.0, info.name, info.message.clone(), info.frames.clone())
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Reinstate the `error_data` side table from a snapshot (the exact
+    /// inverse of [`Self::errors_snapshot`]). Runs on a freshly
+    /// restored machine whose table is empty. Each decoded name must be
+    /// one of the engine's error constructor names
+    /// ([`error_name_static`]) — the decoder already refused anything
+    /// else, so the `false` return is a belt-and-braces corrupt signal
+    /// (the caller fails its decode closed).
+    pub fn restore_error_data(
+        &mut self,
+        rows: Vec<(u32, String, Option<String>, Vec<String>)>,
+    ) -> bool {
+        for (owner, name, message, frames) in rows {
+            let Some(name) = error_name_static(&name) else {
+                return false;
+            };
+            self.error_data.insert(
+                crate::value::SlotIndex(owner),
+                ErrorInfo {
+                    name,
+                    message,
+                    frames,
+                },
+            );
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the `array_buffers` side table (ledger
+    /// `ArrayBuffers` row, the `ABUF` atom), ascending by owning slot:
+    /// `(owner slot, backing chunk offset, byte length, flags)`. The
+    /// backing BYTES travel with the chunk arena (`BLOC`); this row is
+    /// the geometry that makes them readable. Flags fold the two
+    /// satellite brand sets in: bit 0 = detached
+    /// ([`Self::detached_buffers`]), bit 1 = shared
+    /// ([`Self::shared_buffers`]).
+    pub fn array_buffers_snapshot(&self) -> Vec<(u32, u32, u32, u8)> {
+        let mut out: Vec<(u32, u32, u32, u8)> = self
+            .array_buffers
+            .iter()
+            .map(|(owner, b)| {
+                let flags = u8::from(self.detached_buffers.contains(owner))
+                    | (u8::from(self.shared_buffers.contains(owner)) << 1);
+                (owner.0, b.data.0, b.length, flags)
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Quiescent snapshot of the `typed_arrays` side table (ledger
+    /// `TypedArrays` row, the `TARR` atom), ascending by owning slot:
+    /// `(owner slot, element kind, buffer slot, byte offset, element
+    /// length)`. `kind` indexes [`TYPED_ARRAY_TYPES`].
+    pub fn typed_arrays_snapshot(&self) -> Vec<(u32, u8, u32, u32, u32)> {
+        let mut out: Vec<(u32, u8, u32, u32, u32)> = self
+            .typed_arrays
+            .iter()
+            .map(|(owner, t)| (owner.0, t.kind, t.buffer.0, t.offset, t.length))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _, _)| *owner);
+        out
+    }
+
+    /// Quiescent snapshot of the `data_views` side table (ledger
+    /// `DataViews` row, the `DVIW` atom), ascending by owning slot:
+    /// `(owner slot, buffer slot, byte offset, byte length)`.
+    pub fn data_views_snapshot(&self) -> Vec<(u32, u32, u32, u32)> {
+        let mut out: Vec<(u32, u32, u32, u32)> = self
+            .data_views
+            .iter()
+            .map(|(owner, d)| (owner.0, d.buffer.0, d.offset, d.size))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Reinstate the typed-array family from a snapshot (the exact
+    /// inverse of the three `*_snapshot` views above). Runs on a
+    /// freshly restored machine whose tables are empty, AFTER the
+    /// arenas are in place (the buffer extents are validated against
+    /// the restored chunk arena). Validates every row — an unknown
+    /// element kind, a flags byte outside the two brand bits, a NULL
+    /// or out-of-arena backing extent, a view naming a buffer with no
+    /// row, or view geometry past its buffer's length — and returns
+    /// `false` without completing on a violation (the caller fails its
+    /// decode closed); a well-formed snapshot always restores fully.
+    pub fn restore_typed_array_family(
+        &mut self,
+        buffers: Vec<(u32, u32, u32, u8)>,
+        views: Vec<(u32, u8, u32, u32, u32)>,
+        data_views: Vec<(u32, u32, u32, u32)>,
+    ) -> bool {
+        let chunk_len = self.chunks.byte_size() as u64;
+        for (owner, data, length, flags) in &buffers {
+            let data = crate::value::ChunkOffset(*data);
+            // Every honest buffer owns a real chunk allocation (a
+            // zero-length buffer still allocates its header), whose
+            // payload begins past the 4-byte header and ends inside
+            // the arena.
+            if data.is_null()
+                || (data.0 as u64) < crate::value::CHUNK_HEADER as u64
+                || data.0 as u64 + *length as u64 > chunk_len
+                || *flags > 0b11
+            {
+                return false;
+            }
+            let owner = crate::value::SlotIndex(*owner);
+            self.array_buffers.insert(
+                owner,
+                ArrayBufferData {
+                    data,
+                    length: *length,
+                },
+            );
+            if flags & 1 != 0 {
+                self.detached_buffers.insert(owner);
+            }
+            if flags & 2 != 0 {
+                self.shared_buffers.insert(owner);
+            }
+        }
+        for (owner, kind, buffer, offset, length) in views {
+            let Some(ty) = TYPED_ARRAY_TYPES.get(kind as usize) else {
+                return false;
+            };
+            let buffer = crate::value::SlotIndex(buffer);
+            let Some(buf) = self.array_buffers.get(&buffer) else {
+                return false;
+            };
+            let end = offset as u64 + ((length as u64) << ty.shift);
+            if end > buf.length as u64 {
+                return false;
+            }
+            self.typed_arrays.insert(
+                crate::value::SlotIndex(owner),
+                TypedArrayData {
+                    kind,
+                    buffer,
+                    offset,
+                    length,
+                },
+            );
+        }
+        for (owner, buffer, offset, size) in data_views {
+            let buffer = crate::value::SlotIndex(buffer);
+            let Some(buf) = self.array_buffers.get(&buffer) else {
+                return false;
+            };
+            if offset as u64 + size as u64 > buf.length as u64 {
+                return false;
+            }
+            self.data_views.insert(
+                crate::value::SlotIndex(owner),
+                DataViewData {
+                    buffer,
+                    offset,
+                    size,
+                },
+            );
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the `wrapper_data` side table (ledger
+    /// `WrapperData` row, the `WRAP` atom), ascending by owning slot:
+    /// each primitive wrapper instance's boxed value. The value is an
+    /// ordinary [`Slot`] — its chunk reference (a boxed String)
+    /// round-trips with the arenas.
+    pub fn wrappers_snapshot(&self) -> Vec<(u32, Slot)> {
+        let mut out: Vec<(u32, Slot)> = self
+            .wrapper_data
+            .iter()
+            .map(|(owner, v)| (owner.0, *v))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _)| *owner);
+        out
+    }
+
+    /// Reinstate the `wrapper_data` side table from a snapshot (the
+    /// exact inverse of [`Self::wrappers_snapshot`]); the decoded
+    /// slots were already bounds-checked with the heap.
+    pub fn restore_wrapper_data(&mut self, rows: Vec<(u32, Slot)>) {
+        for (owner, value) in rows {
+            self.wrapper_data.insert(crate::value::SlotIndex(owner), value);
+        }
+    }
+
+    /// Quiescent snapshot of the `regexps` side table (ledger `RegExps`
+    /// row, the `REGX` atom), ascending by owning slot: `(owner,
+    /// source, flags, lastIndex bits)`. The COMPILED program does not
+    /// travel — it is a pure function of `(source, flags)` and the
+    /// restore recompiles it, exactly as construction did.
+    pub fn regexps_snapshot(&self) -> Vec<(u32, String, String, u64)> {
+        let mut out: Vec<(u32, String, String, u64)> = self
+            .regexps
+            .iter()
+            .map(|(owner, r)| {
+                (
+                    owner.0,
+                    r.source.clone(),
+                    r.flags.clone(),
+                    r.last_index.to_bits(),
+                )
+            })
+            .collect();
+        out.sort_unstable_by_key(|(owner, _, _, _)| *owner);
+        out
+    }
+
+    /// Reinstate the `regexps` side table from a snapshot, recompiling
+    /// each program from its persisted `(source, flags)`. A source
+    /// that fails to recompile cannot come from an honest snapshot
+    /// (construction compiled the same pair), so the `false` return
+    /// fails the caller's decode closed.
+    pub fn restore_regexps(&mut self, rows: Vec<(u32, String, String, u64)>) -> bool {
+        for (owner, source, flags, last_index_bits) in rows {
+            let Ok(program) = ironhorse_regexp::compile(&source, &flags) else {
+                return false;
+            };
+            self.regexps.insert(
+                crate::value::SlotIndex(owner),
+                RegExpData {
+                    program,
+                    source,
+                    flags,
+                    last_index: f64::from_bits(last_index_bits),
+                },
+            );
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the `arguments_objects` brand set (the
+    /// `ARGB` atom — the satellite the `Arrays` row's coverage note
+    /// called out as NOT traveling), ascending owners.
+    pub fn arguments_brands_snapshot(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = self.arguments_objects.iter().map(|o| o.0).collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Reinstate the arguments-exotic brand set.
+    pub fn restore_arguments_brands(&mut self, owners: Vec<u32>) {
+        for owner in owners {
+            self.arguments_objects.insert(crate::value::SlotIndex(owner));
+        }
+    }
+
+    /// Quiescent snapshot of Date `[[DateValue]]` records, ascending by
+    /// owning slot and carrying each IEEE-754 value as raw bits.
+    ///
+    /// The untouched `%Date.prototype%` seed is re-derived by boot and is
+    /// omitted. A guest-mutated prototype is emitted like any other Date.
+    pub fn dates_snapshot(&self) -> Vec<(u32, u64)> {
+        let boot_bits = f64::NAN.to_bits();
+        let mut out: Vec<(u32, u64)> = self
+            .dates
+            .iter()
+            .filter(|(owner, value)| **owner != self.date_proto || value.to_bits() != boot_bits)
+            .map(|(owner, value)| (owner.0, value.to_bits()))
+            .collect();
+        out.sort_unstable_by_key(|(owner, _)| *owner);
+        out
+    }
+
+    /// Reinstate validated Date `[[DateValue]]` records.
+    pub fn restore_dates(&mut self, rows: Vec<(u32, u64)>) {
+        for (owner, value_bits) in rows {
+            self.dates
+                .insert(crate::value::SlotIndex(owner), f64::from_bits(value_bits));
+        }
+    }
+
+    /// Snapshot the atomic guest-callability cluster.
+    pub fn function_state_snapshot(&self) -> FunctionStateSnapshot {
+        let mut owners = std::collections::BTreeSet::new();
+        for (owner, info) in &self.functions {
+            if info.native.is_none() && info.method.is_none() {
+                owners.insert(owner.0);
+            }
+        }
+
+        let referenced_segments: std::collections::BTreeSet<usize> = owners
+            .iter()
+            .filter_map(|owner| {
+                let owner = crate::value::SlotIndex(*owner);
+                self.functions
+                    .get(&owner)
+                    .and_then(|info| info.body_start)
+                    .map(|_| {
+                        *self
+                            .func_segments
+                            .get(&owner)
+                            .expect("every guest bytecode function owns a code segment")
+                    })
+            })
+            .collect();
+        let segment_remap: std::collections::BTreeMap<usize, u32> = referenced_segments
+            .iter()
+            .enumerate()
+            .map(|(new, old)| (*old, new as u32))
+            .collect();
+        let segments = referenced_segments
+            .iter()
+            .map(|old| self.code_segments[*old].as_ref().clone())
+            .collect();
+
+        let mut functions: Vec<FunctionRow> = owners
+            .iter()
+            .map(|owner| {
+                let owner = crate::value::SlotIndex(*owner);
+                let info = &self.functions[&owner];
+                let segment = info
+                    .body_start
+                    .map(|_| segment_remap[&self.func_segments[&owner]]);
+                FunctionRow {
+                    owner: owner.0,
+                    segment,
+                    body_start: info.body_start.map(|v| v as u64),
+                    body_len: info.body_len as u64,
+                    closures: info.closures.0,
+                    name: info.name.clone(),
+                    arity: info.arity,
+                    name_chunk: info.name_chunk.0,
+                    is_generator: info.is_generator,
+                    home: info.home.0,
+                    class_derived: info.class_derived,
+                }
+            })
+            .collect();
+        functions.sort_unstable_by_key(|row| row.owner);
+
+        let mut bound_functions: Vec<BoundFunctionRow> = self
+            .bound_functions
+            .iter()
+            .filter(|(owner, _)| owners.contains(&owner.0))
+            .map(|(owner, data)| BoundFunctionRow {
+                owner: owner.0,
+                target: data.target.0,
+                this_arg: data.this_arg,
+                args: data.args.clone(),
+            })
+            .collect();
+        bound_functions.sort_unstable_by_key(|row| row.owner);
+
+        let mut ctor_prototypes: Vec<(u32, u32)> = self
+            .ctor_prototype
+            .iter()
+            .filter(|(owner, _)| owners.contains(&owner.0))
+            .map(|(owner, prototype)| (owner.0, prototype.0))
+            .collect();
+        ctor_prototypes.sort_unstable();
+
+        let mut deleted_meta: Vec<(u32, u16)> = self
+            .deleted_fn_meta
+            .iter()
+            .map(|(owner, id)| (owner.0, *id))
+            .collect();
+        deleted_meta.sort_unstable();
+
+        FunctionStateSnapshot {
+            segments,
+            functions,
+            bound_functions,
+            ctor_prototypes,
+            deleted_meta,
+        }
+    }
+
+    /// Restore a validated atomic guest-callability cluster.
+    pub fn restore_function_state(&mut self, state: FunctionStateSnapshot) -> bool {
+        let function_owners: std::collections::BTreeSet<u32> =
+            state.functions.iter().map(|row| row.owner).collect();
+        let bound_owners: std::collections::BTreeSet<u32> =
+            state.bound_functions.iter().map(|row| row.owner).collect();
+
+        for row in &state.functions {
+            let owner = crate::value::SlotIndex(row.owner);
+            if self.functions.contains_key(&owner) {
+                return false;
+            }
+            match (row.segment, row.body_start) {
+                (Some(segment), Some(start)) => {
+                    let Some(code) = state.segments.get(segment as usize) else {
+                        return false;
+                    };
+                    let Some(end) = start.checked_add(row.body_len) else {
+                        return false;
+                    };
+                    if end > code.len() as u64 {
+                        return false;
+                    }
+                }
+                (None, None) if bound_owners.contains(&row.owner) => {}
+                _ => return false,
+            }
+        }
+        for row in &state.bound_functions {
+            if !function_owners.contains(&row.owner)
+                || (!function_owners.contains(&row.target)
+                    && !self
+                        .functions
+                        .contains_key(&crate::value::SlotIndex(row.target)))
+            {
+                return false;
+            }
+        }
+        if state
+            .ctor_prototypes
+            .iter()
+            .any(|(owner, _)| !function_owners.contains(owner))
+        {
+            return false;
+        }
+
+        self.code_segments = state
+            .segments
+            .into_iter()
+            .map(std::rc::Rc::new)
+            .collect();
+        self.func_segments.clear();
+        for row in state.functions {
+            let owner = crate::value::SlotIndex(row.owner);
+            if let Some(segment) = row.segment {
+                self.func_segments.insert(owner, segment as usize);
+            }
+            self.functions.insert(
+                owner,
+                FuncInfo {
+                    body_start: row.body_start.map(|v| v as usize),
+                    body_len: row.body_len as usize,
+                    closures: crate::value::SlotIndex(row.closures),
+                    native: None,
+                    method: None,
+                    name: row.name,
+                    arity: row.arity,
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    is_generator: row.is_generator,
+                    home: crate::value::SlotIndex(row.home),
+                    class_derived: row.class_derived,
+                },
+            );
+        }
+        for row in state.bound_functions {
+            self.bound_functions.insert(
+                crate::value::SlotIndex(row.owner),
+                BoundData {
+                    target: crate::value::SlotIndex(row.target),
+                    this_arg: row.this_arg,
+                    args: row.args,
+                },
+            );
+        }
+        for (owner, prototype) in state.ctor_prototypes {
+            self.ctor_prototype.insert(
+                crate::value::SlotIndex(owner),
+                crate::value::SlotIndex(prototype),
+            );
+        }
+        for (owner, id) in state.deleted_meta {
+            self.deleted_fn_meta
+                .insert((crate::value::SlotIndex(owner), id));
+        }
+        true
+    }
+
+    pub fn proxy_state_snapshot(&self) -> ProxyStateSnapshot {
+        let mut proxies: Vec<ProxyRow> = self
+            .proxies
+            .iter()
+            .map(|(owner, data)| ProxyRow {
+                owner: owner.0,
+                target: data.target.0,
+                handler: data.handler.0,
+                revoked: data.revoked,
+            })
+            .collect();
+        proxies.sort_unstable_by_key(|row| row.owner);
+
+        let mut revokers: Vec<ProxyRevokerRow> = self
+            .proxy_revokers
+            .iter()
+            .map(|(owner, proxy)| {
+                let info = &self.functions[owner];
+                ProxyRevokerRow {
+                    owner: owner.0,
+                    proxy: proxy.0,
+                    name_chunk: info.name_chunk.0,
+                }
+            })
+            .collect();
+        revokers.sort_unstable_by_key(|row| row.owner);
+        ProxyStateSnapshot { proxies, revokers }
+    }
+
+    pub fn restore_proxy_state(&mut self, state: ProxyStateSnapshot) -> bool {
+        let proxy_owners: std::collections::BTreeSet<u32> =
+            state.proxies.iter().map(|row| row.owner).collect();
+        if state
+            .revokers
+            .iter()
+            .any(|row| !proxy_owners.contains(&row.proxy))
+        {
+            return false;
+        }
+        for row in state.proxies {
+            self.proxies.insert(
+                crate::value::SlotIndex(row.owner),
+                ProxyData {
+                    target: crate::value::SlotIndex(row.target),
+                    handler: crate::value::SlotIndex(row.handler),
+                    revoked: row.revoked,
+                },
+            );
+        }
+        for row in state.revokers {
+            let owner = crate::value::SlotIndex(row.owner);
+            if self.functions.contains_key(&owner) {
+                return false;
+            }
+            self.functions.insert(
+                owner,
+                FuncInfo {
+                    method: Some(NativeMethod::ProxyRevoke),
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    ..FuncInfo::default()
+                },
+            );
+            self.proxy_revokers
+                .insert(owner, crate::value::SlotIndex(row.proxy));
+        }
+        true
+    }
+
+    fn accessor_function_persists(&self, value: Option<Slot>) -> bool {
+        let Some(Slot {
+            value: Payload::Reference(function),
+            ..
+        }) = value
+        else {
+            return value.is_none();
+        };
+        self.function_persists(function)
+    }
+
+    /// Snapshot guest accessor getter/setter mappings. Exact boot seeds are
+    /// re-derived and omitted.
+    pub fn accessors_snapshot(&self) -> Vec<AccessorRow> {
+        let mut rows: Vec<AccessorRow> = self
+            .accessors
+            .iter()
+            .filter(|((owner, id), data)| !self.is_boot_seed_accessor(*owner, *id, data))
+            .map(|((owner, id), data)| AccessorRow {
+                owner: owner.0,
+                id: *id,
+                get: data.get,
+                set: data.set,
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| (row.owner, row.id));
+        rows
+    }
+
+    pub fn restore_accessors(&mut self, rows: Vec<AccessorRow>) -> bool {
+        for row in rows {
+            for value in [row.get, row.set].into_iter().flatten() {
+                let Payload::Reference(function) = value.value else {
+                    return false;
+                };
+                if !self.functions.contains_key(&function) {
+                    return false;
+                }
+            }
+            self.accessors.insert(
+                (crate::value::SlotIndex(row.owner), row.id),
+                AccessorData {
+                    get: row.get,
+                    set: row.set,
+                },
+            );
+        }
+        true
+    }
+
+    pub fn intl_bound_functions_snapshot(&self) -> Vec<IntlBoundFunctionRow> {
+        let mut rows = Vec::new();
+        for (function, owner) in &self.collator_compare_functions {
+            let info = &self.functions[function];
+            rows.push(IntlBoundFunctionRow {
+                kind: 0,
+                function: function.0,
+                owner: owner.0,
+                name: info.name.clone(),
+                name_chunk: info.name_chunk.0,
+                arity: info.arity,
+            });
+        }
+        for (function, owner) in &self.number_format_bound_functions {
+            let info = &self.functions[function];
+            rows.push(IntlBoundFunctionRow {
+                kind: 1,
+                function: function.0,
+                owner: owner.0,
+                name: info.name.clone(),
+                name_chunk: info.name_chunk.0,
+                arity: info.arity,
+            });
+        }
+        rows.sort_unstable_by_key(|row| row.function);
+        rows
+    }
+
+    pub fn restore_intl_bound_functions(&mut self, rows: Vec<IntlBoundFunctionRow>) -> bool {
+        for row in rows {
+            let function = crate::value::SlotIndex(row.function);
+            let owner = crate::value::SlotIndex(row.owner);
+            if self.functions.contains_key(&function) {
+                return false;
+            }
+            let method = match row.kind {
+                0 if self.collators.contains_key(&owner) => NativeMethod::CollatorCompare,
+                1 if self.number_formats.contains_key(&owner) => {
+                    NativeMethod::NumberFormatBoundFormat
+                }
+                _ => return false,
+            };
+            self.functions.insert(
+                function,
+                FuncInfo {
+                    method: Some(method),
+                    name: row.name,
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    arity: row.arity,
+                    ..FuncInfo::default()
+                },
+            );
+            if row.kind == 0 {
+                self.collator_compare_functions.insert(function, owner);
+            } else {
+                self.number_format_bound_functions.insert(function, owner);
+                self.number_formats.get_mut(&owner).unwrap().bound_format = Some(function);
+            }
+        }
+        true
+    }
+
+    pub fn private_elements_snapshot(&self) -> PrivateElementSnapshot {
+        let mut values: Vec<PrivateValueRow> = self
+            .private_values
+            .iter()
+            .map(|((receiver, brand), value)| PrivateValueRow {
+                receiver: receiver.0,
+                brand: brand.0,
+                value: *value,
+            })
+            .collect();
+        values.sort_unstable_by_key(|row| (row.receiver, row.brand));
+        let mut accessors: Vec<PrivateAccessorRow> = self
+            .private_accessors
+            .iter()
+            .map(|((receiver, brand), data)| PrivateAccessorRow {
+                receiver: receiver.0,
+                brand: brand.0,
+                get: data.get,
+                set: data.set,
+            })
+            .collect();
+        accessors.sort_unstable_by_key(|row| (row.receiver, row.brand));
+        PrivateElementSnapshot { values, accessors }
+    }
+
+    pub fn restore_private_elements(&mut self, state: PrivateElementSnapshot) -> bool {
+        for row in state.values {
+            self.private_values.insert(
+                (
+                    crate::value::SlotIndex(row.receiver),
+                    crate::value::SlotIndex(row.brand),
+                ),
+                row.value,
+            );
+        }
+        for row in state.accessors {
+            for value in [row.get, row.set].into_iter().flatten() {
+                let Payload::Reference(function) = value.value else {
+                    return false;
+                };
+                if !self.functions.contains_key(&function) {
+                    return false;
+                }
+            }
+            self.private_accessors.insert(
+                (
+                    crate::value::SlotIndex(row.receiver),
+                    crate::value::SlotIndex(row.brand),
+                ),
+                AccessorData {
+                    get: row.get,
+                    set: row.set,
+                },
+            );
+        }
+        true
+    }
+
+    pub fn disposable_stacks_snapshot(&self) -> Vec<DisposableStackRow> {
+        let mut rows: Vec<DisposableStackRow> = self
+            .disposable_stacks
+            .iter()
+            .map(|(owner, data)| DisposableStackRow {
+                owner: owner.0,
+                disposed: data.disposed,
+                asynchronous: data.asynchronous,
+                records: data
+                    .records
+                    .iter()
+                    .map(|record| DisposalRecordRow {
+                        resource: record.resource,
+                        method: record.method,
+                        pass_resource: record.pass_resource,
+                    })
+                    .collect(),
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    pub fn restore_disposable_stacks(&mut self, rows: Vec<DisposableStackRow>) {
+        for row in rows {
+            self.disposable_stacks.insert(
+                crate::value::SlotIndex(row.owner),
+                DisposableStackData {
+                    disposed: row.disposed,
+                    asynchronous: row.asynchronous,
+                    records: row
+                        .records
+                        .into_iter()
+                        .map(|record| DisposalRecord {
+                            resource: record.resource,
+                            method: record.method,
+                            pass_resource: record.pass_resource,
+                        })
+                        .collect(),
+                },
+            );
+        }
+    }
+
+    fn saved_frame_snapshot(frame: &SavedFrame) -> SavedFrameRow {
+        let sorted_map = |map: &std::collections::HashMap<u16, usize>| {
+            let mut rows: Vec<(u16, u64)> =
+                map.iter().map(|(id, index)| (*id, *index as u64)).collect();
+            rows.sort_unstable();
+            rows
+        };
+        SavedFrameRow {
+            locals: frame.locals.clone(),
+            id_map: sorted_map(&frame.id_map),
+            args: frame.args.clone(),
+            this_val: frame.this_val,
+            env: frame.env,
+            cur_func: frame.cur_func.0,
+            cur_target: frame.cur_target,
+            target_func: frame.target_func.0,
+            strict: frame.strict,
+            result: frame.result,
+            stack_slice: frame.stack_slice.clone(),
+            jumps: frame
+                .jumps
+                .iter()
+                .map(|jump| SavedJumpRow {
+                    target_pc: jump.target_pc as u64,
+                    stack_offset: jump.stack_offset as u64,
+                    locals_len: jump.locals_len as u64,
+                    id_map: sorted_map(&jump.id_map),
+                    call_depth_offset: jump.call_depth_offset as u64,
+                    env: jump.env,
+                    flag: jump.flag,
+                })
+                .collect(),
+            resume_pc: frame.resume_pc as u64,
+        }
+    }
+
+    fn restore_saved_frame(row: SavedFrameRow) -> Option<SavedFrame> {
+        let map = |rows: Vec<(u16, u64)>| -> Option<std::collections::HashMap<u16, usize>> {
+            rows.into_iter()
+                .map(|(id, index)| Some((id, usize::try_from(index).ok()?)))
+                .collect()
+        };
+        Some(SavedFrame {
+            locals: row.locals,
+            id_map: map(row.id_map)?,
+            args: row.args,
+            this_val: row.this_val,
+            env: row.env,
+            cur_func: crate::value::SlotIndex(row.cur_func),
+            cur_target: row.cur_target,
+            target_func: crate::value::SlotIndex(row.target_func),
+            strict: row.strict,
+            result: row.result,
+            stack_slice: row.stack_slice,
+            jumps: row
+                .jumps
+                .into_iter()
+                .map(|jump| {
+                    Some(SavedJump {
+                        target_pc: usize::try_from(jump.target_pc).ok()?,
+                        stack_offset: usize::try_from(jump.stack_offset).ok()?,
+                        locals_len: usize::try_from(jump.locals_len).ok()?,
+                        id_map: map(jump.id_map)?,
+                        call_depth_offset: usize::try_from(jump.call_depth_offset).ok()?,
+                        env: jump.env,
+                        flag: jump.flag,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?,
+            resume_pc: usize::try_from(row.resume_pc).ok()?,
+        })
+    }
+
+    pub fn generators_snapshot(&self) -> Vec<GeneratorRow> {
+        let mut rows: Vec<GeneratorRow> = self
+            .generators
+            .iter()
+            .map(|(owner, data)| GeneratorRow {
+                owner: owner.0,
+                state: match data.state {
+                    GeneratorState::SuspendedStart => 0,
+                    GeneratorState::SuspendedYield => 1,
+                    GeneratorState::Completed => 2,
+                    GeneratorState::Executing => 3,
+                },
+                frame: data.frame.as_ref().map(Self::saved_frame_snapshot),
+            })
+            .collect();
+        rows.sort_unstable_by_key(|row| row.owner);
+        rows
+    }
+
+    pub fn restore_generators(&mut self, rows: Vec<GeneratorRow>) -> bool {
+        for row in rows {
+            let state = match row.state {
+                0 => GeneratorState::SuspendedStart,
+                1 => GeneratorState::SuspendedYield,
+                2 => GeneratorState::Completed,
+                _ => return false,
+            };
+            let frame = match row.frame {
+                Some(frame) => match Self::restore_saved_frame(frame) {
+                    Some(frame) => Some(frame),
+                    None => return false,
+                },
+                None => None,
+            };
+            if (state == GeneratorState::Completed) != frame.is_none() {
+                return false;
+            }
+            self.generators
+                .insert(crate::value::SlotIndex(row.owner), GeneratorData { state, frame });
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the promise cluster (ledger rows
+    /// `Promises`/`PromiseFunctions`/`PromiseGuards`/`Combinators`, the
+    /// `PRMS` atom). Promise and resolving-function rows ascend by
+    /// owner slot; the two index arenas are emitted COMPACTED (see
+    /// [`PromiseClusterSnapshot`]) so the encoding is canonical and
+    /// every emitted entry is provably live. Free-listed owners are
+    /// skipped, as everywhere: a swept instance's stale row names
+    /// nothing.
+    ///
+    /// Async-flavored reactions serialize by kind byte like everything
+    /// else — the persist gate refuses the machine before an honest
+    /// writer can reach this verb with one, and the decoder refuses the
+    /// byte from a dishonest one.
+    pub fn promise_cluster_snapshot(&self) -> PromiseClusterSnapshot {
+        let mut promises: Vec<(crate::value::SlotIndex, &PromiseData)> = self
+            .promises
+            .iter()
+            .filter(|(owner, _)| !self.slots.is_free_index(**owner))
+            .map(|(owner, data)| (*owner, data))
+            .collect();
+        promises.sort_unstable_by_key(|(owner, _)| owner.0);
+        let mut functions: Vec<(crate::value::SlotIndex, &PromiseFnData)> = self
+            .promise_functions
+            .iter()
+            .filter(|(owner, _)| !self.slots.is_free_index(**owner))
+            .map(|(owner, data)| (*owner, data))
+            .collect();
+        functions.sort_unstable_by_key(|(owner, _)| owner.0);
+
+        // The live-index sets, exactly `compact_reaction_arenas`' rule
+        // over the rows being emitted (the job queue, its other holder,
+        // is empty at every persistable boundary).
+        let live_guards: std::collections::BTreeSet<usize> =
+            functions.iter().map(|(_, d)| d.guard).collect();
+        let live_comb: std::collections::BTreeSet<u32> = promises
+            .iter()
+            .flat_map(|(_, p)| p.reactions.iter())
+            .filter_map(|r| match r.kind {
+                ReactionKind::Combine(ci, _) => Some(ci),
+                _ => None,
+            })
+            .collect();
+        let guard_map: std::collections::HashMap<usize, u32> = live_guards
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let comb_map: std::collections::HashMap<u32, u32> = live_comb
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+
+        PromiseClusterSnapshot {
+            promises: promises
+                .into_iter()
+                .map(|(owner, data)| PromiseRow {
+                    owner: owner.0,
+                    state: match data.state {
+                        PromiseState::Pending => 0,
+                        PromiseState::Fulfilled => 1,
+                        PromiseState::Rejected => 2,
+                    },
+                    result: data.result,
+                    ever_handled: data.ever_handled,
+                    reactions: data
+                        .reactions
+                        .iter()
+                        .map(|r| {
+                            let (kind, a, b) = match r.kind {
+                                ReactionKind::User => (0, 0, 0),
+                                ReactionKind::FinallyReturn => (1, 0, 0),
+                                ReactionKind::Combine(ci, elem) => (2, comb_map[&ci], elem),
+                                ReactionKind::AsyncAwait(i) => (3, i.0, 0),
+                                ReactionKind::AsyncGeneratorAwait(i) => (4, i.0, 0),
+                                ReactionKind::AsyncGeneratorYield(i) => (5, i.0, 0),
+                                ReactionKind::AsyncGeneratorReturn(i) => (6, i.0, 0),
+                                ReactionKind::FromAsyncNext(fa) => (7, fa, 0),
+                                ReactionKind::FromAsyncElem(fa) => (8, fa, 0),
+                                ReactionKind::FromAsyncMap(fa) => (9, fa, 0),
+                                ReactionKind::FromAsyncClose(fa) => (10, fa, 0),
+                            };
+                            PromiseReactionRow {
+                                on_fulfilled: r.on_fulfilled,
+                                on_rejected: r.on_rejected,
+                                resolve: r.resolve,
+                                reject: r.reject,
+                                kind,
+                                a,
+                                b,
+                            }
+                        })
+                        .collect(),
+                })
+                .collect(),
+            functions: functions
+                .into_iter()
+                .map(|(owner, data)| PromiseFnRow {
+                    function: owner.0,
+                    promise: data.promise.0,
+                    reject: data.reject,
+                    guard: guard_map[&data.guard],
+                    name_chunk: self.functions[&owner].name_chunk.0,
+                })
+                .collect(),
+            guards: live_guards
+                .iter()
+                .map(|&old| self.promise_guards[old])
+                .collect(),
+            combinators: live_comb
+                .iter()
+                .map(|&old| {
+                    let c = &self.combinators[old as usize];
+                    CombinatorRow {
+                        kind: match c.kind {
+                            CombinatorKind::All => 0,
+                            CombinatorKind::AllSettled => 1,
+                            CombinatorKind::Race => 2,
+                            CombinatorKind::Any => 3,
+                        },
+                        derived: c.derived.0,
+                        remaining: c.remaining,
+                        results: c.results.0,
+                        done: c.done,
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    /// Restore a validated promise cluster onto a fresh boot machine.
+    /// Rebuilds each resolving function's `FuncInfo` exactly as
+    /// [`Self::make_resolving_functions`] minted it — the same
+    /// resurrect-the-native pattern as
+    /// [`Self::restore_intl_bound_functions`] — and refuses a function
+    /// slot boot already owns (the reverse collision, a cluster row at
+    /// a guest function's slot, is refused by `restore_function_state`
+    /// running after this verb). The cross-checks the decoder already
+    /// proved are re-validated belt-and-braces, as everywhere.
+    pub fn restore_promise_cluster(&mut self, snap: PromiseClusterSnapshot) -> bool {
+        let owners: std::collections::BTreeSet<u32> =
+            snap.promises.iter().map(|row| row.owner).collect();
+        let state_of = |owner: u32| -> Option<u8> {
+            snap.promises
+                .binary_search_by_key(&owner, |row| row.owner)
+                .ok()
+                .map(|i| snap.promises[i].state)
+        };
+        // Per-combinator results-Array length, for the element-index
+        // bound below (the bulk side tables restore before this verb,
+        // so the rows are in hand). An undone combinator's derived must
+        // still be PENDING — `done` latches exactly its settlement, and
+        // the drain's `settle_promise` overwrites unconditionally.
+        let mut results_lengths = Vec::with_capacity(snap.combinators.len());
+        for c in &snap.combinators {
+            if c.kind > 3
+                || !owners.contains(&c.derived)
+                || (!c.done && state_of(c.derived) != Some(0))
+            {
+                return false;
+            }
+            match self.arrays.get(&crate::value::SlotIndex(c.results)) {
+                // `remaining` starts at the element count (the results
+                // Array's preset length) and only decrements — and a
+                // race never decrements it at all.
+                Some(data)
+                    if c.remaining <= data.length
+                        && (c.kind != 2 || c.remaining == data.length) =>
+                {
+                    results_lengths.push(data.length)
+                }
+                _ => return false,
+            }
+        }
+        let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
+        // A `User`/`FinallyReturn` reaction's capability must be one
+        // resolving pair (the decoder's rule, re-proved here): both
+        // slots reference cluster rows naming one promise and one
+        // guard with opposite polarity.
+        let fn_pair_ok = |resolve: &Slot, reject: &Slot| -> bool {
+            let row_of = |slot: &Slot| -> Option<&PromiseFnRow> {
+                if slot.kind != Kind::Reference {
+                    return None;
+                }
+                match slot.value {
+                    Payload::Reference(r) => snap
+                        .functions
+                        .binary_search_by_key(&r.0, |row| row.function)
+                        .ok()
+                        .map(|i| &snap.functions[i]),
+                    _ => None,
+                }
+            };
+            matches!(
+                (row_of(resolve), row_of(reject)),
+                (Some(res), Some(rej))
+                    if !res.reject
+                        && rej.reject
+                        && res.promise == rej.promise
+                        && res.guard == rej.guard
+            )
+        };
+        for row in &snap.promises {
+            let state = match row.state {
+                0 => PromiseState::Pending,
+                1 => PromiseState::Fulfilled,
+                2 => PromiseState::Rejected,
+                _ => return false,
+            };
+            // Settlement drains reactions into the job queue, and the
+            // quiescence gate requires that queue empty — a settled row
+            // that still holds reactions cannot be honest.
+            if state != PromiseState::Pending && !row.reactions.is_empty() {
+                return false;
+            }
+            let reactions: Option<Vec<PromiseReaction>> = row
+                .reactions
+                .iter()
+                .map(|r| {
+                    let kind = match r.kind {
+                        0 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
+                            ReactionKind::User
+                        }
+                        1 if fn_pair_ok(&r.resolve, &r.reject) && r.a == 0 && r.b == 0 => {
+                            ReactionKind::FinallyReturn
+                        }
+                        // The element index must sit inside the results
+                        // Array's carried length (the creation preset —
+                        // `array_set_dense` would grow past it and the
+                        // `any` aggregate walk iterates `0..length`),
+                        // each `(combinator, element)` pair appears at
+                        // most once (a duplicate would count one
+                        // element twice at the drain), and a native
+                        // element reaction carries NO capability slots.
+                        2 if (r.a as usize) < snap.combinators.len()
+                            && r.b < results_lengths[r.a as usize]
+                            && [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                                .iter()
+                                .all(|slot| slot.kind == Kind::Undefined)
+                            && elem_seen.insert((r.a, r.b)) =>
+                        {
+                            ReactionKind::Combine(r.a, r.b)
+                        }
+                        // The async-flavored kinds name machinery no
+                        // atom carries yet; the decoder refuses them
+                        // and so does this verb — as it does the
+                        // crafted shapes above.
+                        _ => return None,
+                    };
+                    Some(PromiseReaction {
+                        on_fulfilled: r.on_fulfilled,
+                        on_rejected: r.on_rejected,
+                        resolve: r.resolve,
+                        reject: r.reject,
+                        kind,
+                    })
+                })
+                .collect();
+            let Some(reactions) = reactions else {
+                return false;
+            };
+            self.promises.insert(
+                crate::value::SlotIndex(row.owner),
+                PromiseData {
+                    state,
+                    result: row.result,
+                    reactions,
+                    ever_handled: row.ever_handled,
+                },
+            );
+        }
+        // Guard coherence, the decoder's rule re-proved: one resolving
+        // pair (or its surviving half) per guard, one promise per pair.
+        let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; snap.guards.len()];
+        for row in &snap.functions {
+            let function = crate::value::SlotIndex(row.function);
+            if self.functions.contains_key(&function) || !owners.contains(&row.promise) {
+                return false;
+            }
+            let Some(entry) = guard_rows.get_mut(row.guard as usize) else {
+                return false;
+            };
+            let polarity = 1u8 << (row.reject as u8);
+            match entry {
+                None => *entry = Some((row.promise, polarity)),
+                Some((promise, mask)) => {
+                    if *promise != row.promise || *mask & polarity != 0 {
+                        return false;
+                    }
+                    *mask |= polarity;
+                }
+            }
+            self.functions.insert(
+                function,
+                FuncInfo {
+                    method: Some(if row.reject {
+                        NativeMethod::PromiseRejectFunction
+                    } else {
+                        NativeMethod::PromiseResolveFunction
+                    }),
+                    name_chunk: crate::value::ChunkOffset(row.name_chunk),
+                    arity: 1,
+                    ..FuncInfo::default()
+                },
+            );
+            self.promise_functions.insert(
+                function,
+                PromiseFnData {
+                    promise: crate::value::SlotIndex(row.promise),
+                    reject: row.reject,
+                    guard: row.guard as usize,
+                },
+            );
+        }
+        self.promise_guards = snap.guards;
+        self.combinators = snap
+            .combinators
+            .iter()
+            .map(|c| CombinatorState {
+                kind: match c.kind {
+                    0 => CombinatorKind::All,
+                    1 => CombinatorKind::AllSettled,
+                    2 => CombinatorKind::Race,
+                    _ => CombinatorKind::Any,
+                },
+                derived: crate::value::SlotIndex(c.derived),
+                remaining: c.remaining,
+                results: crate::value::SlotIndex(c.results),
+                done: c.done,
+            })
+            .collect();
+        true
+    }
+
+    /// Quiescent snapshot of the four Temporal record tables (ledger
+    /// `TemporalRecords` row, the `TMPR` atom), each ascending by
+    /// owner: instants `(owner, epochNanoseconds)`, durations
+    /// `(owner, the ten field values)`, plains `(owner, kind,
+    /// year, [month, day, hour, minute, second, ms, µs, ns])`, zoneds
+    /// `(owner, epochNanoseconds, timeZone, offsetNs)`.
+    #[allow(clippy::type_complexity)]
+    pub fn temporal_snapshot(
+        &self,
+    ) -> (
+        Vec<(u32, i128)>,
+        Vec<(u32, [i64; 10])>,
+        Vec<(u32, u8, i64, [u32; 8])>,
+        Vec<(u32, i128, String, i64)>,
+    ) {
+        let mut instants: Vec<(u32, i128)> = self
+            .temporal_instants
+            .iter()
+            .map(|(o, r)| (o.0, r.epoch_nanoseconds))
+            .collect();
+        instants.sort_unstable_by_key(|(o, _)| *o);
+        let mut durations: Vec<(u32, [i64; 10])> = self
+            .temporal_durations
+            .iter()
+            .map(|(o, r)| (o.0, r.fields()))
+            .collect();
+        durations.sort_unstable_by_key(|(o, _)| *o);
+        let mut plains: Vec<(u32, u8, i64, [u32; 8])> = self
+            .temporal_plains
+            .iter()
+            .map(|(o, r)| {
+                (
+                    o.0,
+                    r.kind,
+                    r.year,
+                    [
+                        r.month,
+                        r.day,
+                        r.hour,
+                        r.minute,
+                        r.second,
+                        r.millisecond,
+                        r.microsecond,
+                        r.nanosecond,
+                    ],
+                )
+            })
+            .collect();
+        plains.sort_unstable_by_key(|(o, _, _, _)| *o);
+        let mut zoneds: Vec<(u32, i128, String, i64)> = self
+            .temporal_zoneds
+            .iter()
+            .map(|(o, r)| (o.0, r.epoch_nanoseconds, r.time_zone.clone(), r.offset_ns))
+            .collect();
+        zoneds.sort_unstable_by_key(|(o, _, _, _)| *o);
+        (instants, durations, plains, zoneds)
+    }
+
+    /// Reinstate the four Temporal record tables. A plain record's
+    /// `kind` outside the engine's discriminants (0..=4) can only be
+    /// crafted bytes — the consuming natives match on it — so the
+    /// `false` return fails the caller's decode closed.
+    #[allow(clippy::type_complexity)]
+    pub fn restore_temporal_records(
+        &mut self,
+        instants: Vec<(u32, i128)>,
+        durations: Vec<(u32, [i64; 10])>,
+        plains: Vec<(u32, u8, i64, [u32; 8])>,
+        zoneds: Vec<(u32, i128, String, i64)>,
+    ) -> bool {
+        for (owner, epoch_nanoseconds) in instants {
+            self.temporal_instants.insert(
+                crate::value::SlotIndex(owner),
+                TemporalInstantRecord { epoch_nanoseconds },
+            );
+        }
+        for (owner, f) in durations {
+            self.temporal_durations.insert(
+                crate::value::SlotIndex(owner),
+                TemporalDurationRecord {
+                    years: f[0],
+                    months: f[1],
+                    weeks: f[2],
+                    days: f[3],
+                    hours: f[4],
+                    minutes: f[5],
+                    seconds: f[6],
+                    milliseconds: f[7],
+                    microseconds: f[8],
+                    nanoseconds: f[9],
+                },
+            );
+        }
+        for (owner, kind, year, f) in plains {
+            if kind > 4 {
+                return false;
+            }
+            self.temporal_plains.insert(
+                crate::value::SlotIndex(owner),
+                TemporalPlainRecord {
+                    kind,
+                    year,
+                    month: f[0],
+                    day: f[1],
+                    hour: f[2],
+                    minute: f[3],
+                    second: f[4],
+                    millisecond: f[5],
+                    microsecond: f[6],
+                    nanosecond: f[7],
+                },
+            );
+        }
+        for (owner, epoch_nanoseconds, time_zone, offset_ns) in zoneds {
+            self.temporal_zoneds.insert(
+                crate::value::SlotIndex(owner),
+                TemporalZonedRecord {
+                    epoch_nanoseconds,
+                    time_zone,
+                    offset_ns,
+                },
+            );
+        }
+        true
+    }
+
+    /// Quiescent snapshot of the nine Intl DATA record tables (ledger
+    /// `IntlRecords` row, the `INTL` atom), each ascending by owning
+    /// slot. The `NumberFormatData::bound_format` cache is STRIPPED to
+    /// `None` on the way out: the minted bound function is a
+    /// `functions` (`FuncInfo`) row that does not travel, and the
+    /// `format` getter re-mints on a cache miss, so a first
+    /// post-resume read behaves exactly like a first access. The
+    /// bound-function LINK tables ride the same reasoning and are not
+    /// emitted at all (see [`IntlTables`]).
+    pub fn intl_snapshot(&self) -> IntlTables {
+        fn sorted<T: Clone>(
+            m: &std::collections::HashMap<crate::value::SlotIndex, T>,
+        ) -> Vec<(u32, T)> {
+            let mut v: Vec<(u32, T)> = m.iter().map(|(o, r)| (o.0, r.clone())).collect();
+            v.sort_unstable_by_key(|(o, _)| *o);
+            v
+        }
+        let mut number_formats = sorted(&self.number_formats);
+        for (_, r) in &mut number_formats {
+            r.bound_format = None;
+        }
+        IntlTables {
+            locales: sorted(&self.locales),
+            collators: sorted(&self.collators),
+            list_formats: sorted(&self.list_formats),
+            plural_rules: sorted(&self.plural_rules),
+            number_formats,
+            segmenters: sorted(&self.segmenters),
+            segments: sorted(&self.segments),
+            segment_iterators: sorted(&self.segment_iterators),
+            date_time_formats: sorted(&self.date_time_formats),
+        }
+    }
+
+    /// Reinstate the nine Intl record tables. Returns `false` —
+    /// failing the caller's decode closed — for structure only crafted
+    /// bytes can hold: a segments record whose boundaries lie outside
+    /// its input (or out of order), or a segment iterator naming an
+    /// instance with no segments record or a cursor past its list.
+    /// Unrecognized option STRINGS are not refused: every consuming
+    /// match has a fallback arm, so the worst a forged string yields
+    /// is a wrong rendering, never unsafety (`forbid(unsafe_code)`).
+    pub fn restore_intl(&mut self, t: IntlTables) -> bool {
+        for (_, r) in &t.segments {
+            let mut prev = 0usize;
+            for &(start, end, _) in &r.segments {
+                if start < prev || end < start || end > r.units.len() {
+                    return false;
+                }
+                prev = start;
+            }
+        }
+        for (_, r) in &t.segment_iterators {
+            match t.segments.binary_search_by_key(&r.segments_inst.0, |(o, _)| *o) {
+                Ok(k) => {
+                    if r.pos > t.segments[k].1.segments.len() {
+                        return false;
+                    }
+                }
+                Err(_) => return false,
+            }
+        }
+        fn install<T>(
+            m: &mut std::collections::HashMap<crate::value::SlotIndex, T>,
+            rows: Vec<(u32, T)>,
+        ) {
+            for (owner, r) in rows {
+                m.insert(crate::value::SlotIndex(owner), r);
+            }
+        }
+        install(&mut self.locales, t.locales);
+        install(&mut self.collators, t.collators);
+        install(&mut self.list_formats, t.list_formats);
+        install(&mut self.plural_rules, t.plural_rules);
+        install(&mut self.number_formats, t.number_formats);
+        install(&mut self.segmenters, t.segmenters);
+        install(&mut self.segments, t.segments);
+        install(&mut self.segment_iterators, t.segment_iterators);
+        install(&mut self.date_time_formats, t.date_time_formats);
+        true
+    }
+
+    /// Quiescent snapshot of the built-in iterator cursors (ledger
+    /// `Iterators` row, the `ITER` atom), ascending by owning slot.
+    /// Free-listed owners are skipped (a swept cursor's row names
+    /// nothing, and its collection may be gone). Two normalizations
+    /// at the boundary (see [`IteratorRow`]): a collection cursor's
+    /// physical entry index becomes the live-entry ORDINAL — matching
+    /// the `COLL` row's tombstone compaction — and a stale cursor
+    /// (its collection's clear-generation moved) emits `done: true`,
+    /// exactly the latch its next `next()` would have set.
+    pub fn iterators_snapshot(&self) -> Vec<IteratorRow> {
+        let mut out: Vec<IteratorRow> = Vec::new();
+        for (owner, st) in &self.iterators {
+            if self.slots.is_free_index(*owner) {
+                continue;
+            }
+            let (index, done) = if (5..=7).contains(&st.kind) {
+                let Some(c) = self.collections.get(&st.iterable) else {
+                    continue;
+                };
+                let stale = c.generation() != st.generation;
+                let ordinal = c.entries()[..(st.index as usize).min(c.entries().len())]
+                    .iter()
+                    .filter(|e| e.is_some())
+                    .count() as u32;
+                (ordinal, st.done || stale)
+            } else {
+                (st.index, st.done)
+            };
+            out.push(IteratorRow {
+                owner: owner.0,
+                kind: st.kind,
+                iterable: st.iterable.0,
+                index,
+                done,
+                result: st.result.0,
+                enum_keys: st.enum_keys.clone(),
+                str_bytes: st.str_bytes.clone(),
+            });
+        }
+        out.sort_unstable_by_key(|r| r.owner);
+        out
+    }
+
+    /// Reinstate the built-in iterator cursors. Returns `false` —
+    /// failing the caller's decode closed — for structure only crafted
+    /// bytes can hold: an unknown kind, a collection cursor naming an
+    /// instance with no restored collection (its `next()` indexes the
+    /// table unconditionally) or a cursor past the live-entry list, a
+    /// string cursor past its text or splitting a UTF-16 unit, or a
+    /// for-in cursor past its key list or holding a key id outside the
+    /// restored name table.
+    pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
+        for r in &rows {
+            if r.kind > 7 {
+                return false;
+            }
+            match r.kind {
+                5..=7 => {
+                    let Some(c) = self.collections.get(&crate::value::SlotIndex(r.iterable))
+                    else {
+                        return false;
+                    };
+                    if r.index as usize > c.entries().len() {
+                        return false;
+                    }
+                }
+                4 => {
+                    if r.index as usize > r.str_bytes.len() || r.index % 2 != 0 {
+                        return false;
+                    }
+                }
+                3 => {
+                    if r.index as usize > r.enum_keys.len() {
+                        return false;
+                    }
+                    if r.enum_keys.iter().any(|&(id, _)| {
+                        id != crate::value::XS_NO_ID
+                            && id as usize > self.symbol_names.len()
+                    }) {
+                        return false;
+                    }
+                }
+                _ => {}
+            }
+        }
+        for r in rows {
+            // Restored collections rebuild at clear-generation ZERO, so
+            // a live carried cursor adopts zero and a retired one rides
+            // its folded `done` — the equality the stale check consults
+            // holds exactly as it did live.
+            self.iterators.insert(
+                crate::value::SlotIndex(r.owner),
+                IterState {
+                    iterable: crate::value::SlotIndex(r.iterable),
+                    index: r.index,
+                    kind: r.kind,
+                    generation: 0,
+                    result: crate::value::SlotIndex(r.result),
+                    done: r.done,
+                    enum_keys: r.enum_keys,
+                    str_bytes: r.str_bytes,
+                },
+            );
+        }
+        true
+    }
+
+    /// The symbol-key property-id table (ledger `SYMB` row): the
+    /// top-down mint counter and every `(id, descriptor slot)` pair,
+    /// ascending by id. [`Self::restore_symbol_key_table`] is the exact
+    /// inverse; persisting the pair of them is what lets a heap holding
+    /// symbol-KEYED properties round-trip a snapshot (the stored ids
+    /// re-bind to the same descriptor slots instead of aliasing).
+    pub fn symbol_key_table(&self) -> (u16, Vec<(u16, u32)>) {
+        let mut pairs: Vec<(u16, u32)> = self
+            .symbol_key_ids
+            .iter()
+            .map(|(desc, &id)| (id, desc.0))
+            .collect();
+        pairs.sort_unstable_by_key(|&(id, _)| id);
+        (self.next_symbol_key_id, pairs)
+    }
+
+    /// Reinstate the symbol-key id table from a snapshot (the ledger's
+    /// SYMB row; the exact inverse of [`Self::symbol_key_table`]). Runs
+    /// on a freshly restored machine whose map is empty. Validates the
+    /// decoded shape — ids strictly ascending and above the counter,
+    /// descriptors pairwise distinct — and returns `false` without
+    /// mutating anything on a violation (the caller fails its decode
+    /// closed); a well-formed table always restores fully.
+    pub fn restore_symbol_key_table(&mut self, next: u16, pairs: &[(u16, u32)]) -> bool {
+        // The counter (and so every pair id above it) must clear the
+        // name table: a symbol id equal to a table position would make
+        // one id simultaneously a string key and a symbol key, and
+        // `o[sym]` would read the string-keyed slot while `Object.keys`
+        // dropped it — silent aliasing from crafted or torn bytes, the
+        // class every sibling decoder refuses (review of the llm
+        // rebase). Runs after `bind_program_symbols`, so the table is
+        // the persisted one.
+        if (next as usize) <= self.symbol_names.len() {
+            return false;
+        }
+        let mut prev: Option<u16> = None;
+        let mut descs = std::collections::HashSet::new();
+        for &(id, desc) in pairs {
+            if id <= next || prev.is_some_and(|prev_id| id <= prev_id) || !descs.insert(desc) {
+                return false;
+            }
+            prev = Some(id);
+        }
+        for &(id, desc) in pairs {
+            self.symbol_key_ids.insert(crate::value::SlotIndex(desc), id);
+        }
+        self.next_symbol_key_id = next;
+        true
+    }
+
+    /// Quiescent snapshot of the `Symbol.for` registry (ledger
+    /// `SymbolRegistry` row), ascending by key bytes: `(key bytes,
+    /// descriptor slot)`.
+    pub fn symbol_registry_snapshot(&self) -> Vec<(Vec<u8>, u32)> {
+        let mut out: Vec<(Vec<u8>, u32)> = self
+            .symbol_registry
+            .iter()
+            .map(|(k, v)| (k.clone(), v.0))
+            .collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// Reinstate the bulk side tables and the symbol registry from a
+    /// snapshot (the ledger's restore half; the exact inverse of the
+    /// three `*_snapshot` views). Runs on a freshly restored machine
+    /// whose tables are empty; every insert routes through the counted
+    /// accessors so the side-ref page counts the partial collector
+    /// reads are rebuilt in lockstep, and the registry's forward and
+    /// reverse maps are repopulated pairwise. An unknown collection
+    /// kind code is a corrupt image and returns `false` (the caller
+    /// fails its decode closed); a well-formed snapshot always
+    /// restores fully.
+    pub fn restore_bulk_side_tables(
+        &mut self,
+        arrays: Vec<ArraySnapshot>,
+        collections: Vec<CollectionSnapshot>,
+        registry: Vec<(Vec<u8>, u32)>,
+    ) -> bool {
+        for (owner, length, items) in arrays {
+            let mut a = crate::bulk::ArrayData::default();
+            a.length = length;
+            for (index, value) in items {
+                a.insert_item(index, value, &mut self.side_refs);
+            }
+            self.arrays.insert(crate::value::SlotIndex(owner), a);
+        }
+        for (owner, kind_code, table_length, entries) in collections {
+            let Some(kind) = crate::bulk::CollKind::from_code(kind_code) else {
+                return false;
+            };
+            let mut c = crate::bulk::CollectionData::new(kind, table_length);
+            for (key, value) in entries {
+                c.push_entry(key, value, &mut self.side_refs);
+            }
+            self.collections.insert(crate::value::SlotIndex(owner), c);
+        }
+        for (key, descriptor) in registry {
+            let desc = crate::value::SlotIndex(descriptor);
+            self.symbol_registry.insert(key.clone(), desc);
+            self.symbol_registry_keys.insert(desc, key);
+        }
+        true
     }
 
     /// Rebuild the [`Self::global_props`] id→slot fast index by walking the
@@ -7621,15 +10620,37 @@ impl Interp {
     /// slots) — 536 raw total against the pin. Initialized undefined; a
     /// following `SET_VARIABLE` assigns and meters its own built-in step.
     fn materialize_global_property(&mut self, id: u16) -> crate::value::SlotIndex {
-        self.tick_property_create();
+        self.tick_property_create(id);
         self.create_global_property(id, (Kind::Undefined, Payload::None))
     }
 
     /// Meter one new own-property allocation: the property `fxNewSlot`
     /// ([`crate::meter::SLOT_ALLOCATION_METERING`]) plus the measured
     /// [`PROPERTY_CREATE_REMAINDER`], 536 raw total against the pin.
+    ///
+    /// The remainder is dominated by the interned-key `fxFindKey` →
+    /// `fxNewSlot`/`fxNewChunk` allocation, which XS pays only for an atom
+    /// **missing** its boot name table. A key that is one of XS's boot
+    /// default keys (`gxIDStrings` — `toString`, `valueOf`, …) is
+    /// pre-interned at machine creation, so creating a property under it
+    /// costs only the property slot — measured against the pin as exactly
+    /// 256 (the `Test262Error.prototype.toString = …` harness store).
     #[inline]
-    fn tick_property_create(&mut self) {
+    fn tick_property_create(&mut self, id: u16) {
+        self.meter.tick_slot_alloc();
+        let name = self.id_name(id);
+        if !self.default_keys.contains(name.as_str()) {
+            self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
+        }
+    }
+
+    /// The pre-discount flat form of [`Self::tick_property_create`], for the
+    /// internal materializations (the legacy `caller`/`arguments` own
+    /// properties a function define installs through `instance_put`) whose
+    /// costs are folded into calibrated cluster constants measured with this
+    /// flat charge — discounting them would unbalance those clusters.
+    #[inline]
+    fn tick_property_create_flat(&mut self) {
         self.meter.tick_slot_alloc();
         self.meter.tick_raw(PROPERTY_CREATE_REMAINDER);
     }
@@ -7646,6 +10667,79 @@ impl Interp {
     pub fn arm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.begin(interval);
         self.meter_host = Some(host);
+    }
+
+    /// Re-arm a RESUMED machine's meter without destroying the restored
+    /// computron count (wave-6 W6-13): the meter's `index` survives; a
+    /// fresh check window opens from it. This is the deliberate
+    /// interval-CHANGE form — the host chose a new window, so the next
+    /// check threshold restarts from the preserved index. A resume that
+    /// wants the meter to continue **exactly** as suspended must use
+    /// [`Self::reattach_meter_host`] instead: repeated sub-interval
+    /// suspend/resume cycles through `rearm_meter` would move the check
+    /// deadline forward each time (review finding 7). The host callback
+    /// cannot travel in a snapshot, so every resume that wants metering
+    /// MUST call one of the three arm forms — a restored machine that
+    /// skips them reports armed state but never consults a host.
+    pub fn rearm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
+        self.meter.rearm(interval);
+        self.meter_host = Some(host);
+    }
+
+    /// Reattach ONLY the host callback on a resumed machine, leaving
+    /// every restored meter counter — `index`, `interval`, and the
+    /// next-check threshold `count` — exactly as the snapshot carried
+    /// them (review finding 7). This is the pure resume form: a machine
+    /// suspended mid-window resumes as if never interrupted, so the
+    /// host sees its callback at the original deadline rather than a
+    /// freshly opened window. Meaningless on a snapshot whose meter was
+    /// never armed (`interval == 0` never checks), exactly as suspended.
+    pub fn reattach_meter_host(&mut self, host: Box<dyn FnMut(u64) -> bool>) {
+        self.meter_host = Some(host);
+    }
+
+    /// The accumulated raw meter index (diagnostic; the same value the
+    /// meter state serializes).
+    pub fn meter_index(&self) -> u64 {
+        self.meter.state().index
+    }
+
+    /// The three reaction-arena lengths `(combinators, from_async,
+    /// promise_guards)` — diagnostic for the arena-growth lock
+    /// (wave-6 W6-19): settled entries must be RECLAIMED by a
+    /// collection, not accumulate for the machine's lifetime.
+    pub fn reaction_arena_lens(&self) -> (usize, usize, usize) {
+        (
+            self.combinators.len(),
+            self.from_async.len(),
+            self.promise_guards.len(),
+        )
+    }
+
+    /// Number of retained defining-code segments, for the GC compaction lock.
+    pub fn retained_code_segment_count(&self) -> usize {
+        self.code_segments.len()
+    }
+
+    /// Whether the machine stands at a QUIESCENT crank boundary — the
+    /// precondition every persist verb requires (wave-6 W6-10). A crank
+    /// that HALTED (uncaught throw, meter abort, unsupported opcode)
+    /// returns with pending microtasks, a populated call stack, live
+    /// handlers, a set exception, and a mid-frame value stack; a
+    /// checkpoint there would serialize the mid-frame stack while
+    /// silently dropping the rest — a resumed chimera. The managed
+    /// lifecycle rewinds halted cranks; this is the seam-level gate for
+    /// every other caller.
+    pub fn is_quiescent(&self) -> bool {
+        self.call_stack.is_empty()
+            && self.stack.is_empty()
+            && self.jumps.is_empty()
+            && self.promise_jobs.is_empty()
+            && self.gen_run_stack.is_empty()
+            && self.async_run_stack.is_empty()
+            && self.async_gen_run_stack.is_empty()
+            && self.exception.kind == Kind::Undefined
+            && !self.id_space_exhausted
     }
 
     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
@@ -7846,7 +10940,7 @@ impl Interp {
                         if i > 0 {
                             out.push(',');
                         }
-                        if let Some(item) = a.items.get(&i) {
+                        if let Some(item) = a.items().get(&i) {
                             if item.kind != Kind::Undefined && item.kind != Kind::Null {
                                 out.push_str(&self.render(item));
                             }
@@ -7968,6 +11062,31 @@ impl Interp {
         }
     }
 
+    /// Render an uncaught thrown value the way XS's host boundary does
+    /// (`fxToString` on the exception): a thrown user object runs its guest
+    /// `toString` (sta.js's `Test262Error` carries one), so the abort value
+    /// matches the oracle's rendering of the same failure. Engine-built
+    /// native errors (in `error_data`) keep the static render — their
+    /// `Error.prototype.toString` shape is already mirrored — and any
+    /// failure inside the guest coercion falls back to the static render.
+    fn render_uncaught(&mut self, code: &[u8], v: Slot) -> String {
+        if let Payload::Reference(r) = v.value {
+            if v.kind == Kind::Reference && !self.error_data.contains_key(&r) {
+                if let Ok(prim) = self.to_primitive(code, v, true) {
+                    if prim.kind == Kind::String {
+                        if let Payload::String(off) = prim.value {
+                            return self.str_text(off);
+                        }
+                    }
+                    if prim.kind != Kind::Reference {
+                        return self.render(&prim);
+                    }
+                }
+            }
+        }
+        self.render(&v)
+    }
+
     /// The string value of an instance's `Symbol.toStringTag` (own or
     /// inherited), for the completion-render boundary — a read-only (`&self`)
     /// analogue of [`Self::string_to_string_tag`] that never interns. Returns
@@ -8026,8 +11145,13 @@ impl Interp {
     /// harness) that must stay total on arbitrary/malformed bytecode without
     /// wedging on a non-terminating dispatch cycle.
     pub fn run_bounded(&mut self, code: &[u8], step_limit: u64) -> RunOutcome {
+        // Scoped, not latched (wave-6 W6-16): the ceiling applies to
+        // THIS run; a later plain `run` is unbounded again.
+        let prev = self.step_limit;
         self.step_limit = step_limit;
-        self.run(code)
+        let out = self.run(code);
+        self.step_limit = prev;
+        out
     }
 
     pub fn run(&mut self, code: &[u8]) -> RunOutcome {
@@ -8036,6 +11160,19 @@ impl Interp {
         // buffer from a nested segment. Only the cross-segment call path reads
         // it, and that path is gated on an eval having defined a function.
         self.top_level_code = Some(std::rc::Rc::new(code.to_vec()));
+        // Top-level functions defined by this crank lazily promote the
+        // current buffer into `code_segments` at their first CODE opcode.
+        // No-function cranks retain no segment and keep the common path
+        // allocation-free beyond the existing top-level copy.
+        self.active_segment = None;
+        // A crank's top level starts sloppy until its own `BEGIN_STRICT`
+        // says otherwise (wave-6 W6-6: nothing reset this register at
+        // crank entry, so one strict crank latched strict semantics onto
+        // every later crank's top level — and, unserialized, diverged
+        // from a resumed twin's fresh-boot `false`). Function frames are
+        // unaffected: `enter_call` sets it per callee and unwind/resume
+        // restore it.
+        self.strict = false;
         let mut halt = self.dispatch(code);
         // Pump-loop latch: after the script settles, drain the promise job
         // queue with metering still accumulating — the host-driven microtask
@@ -8084,6 +11221,25 @@ impl Interp {
         } else {
             String::new()
         };
+        // Boundary-register hygiene (wave-6 W6-11): on a COMPLETED
+        // crank, the host has its rendered completion above and the
+        // next crank's prologue rebuilds locals — but between here and
+        // there these registers were live GC ROOTS the restore path
+        // never reinstates, so an uninterrupted machine's boundary
+        // collection retained pages its resumed twin freed (free-list
+        // divergence, which feeds replica-visible allocation order).
+        // Clear them at the boundary so both twins root the same set.
+        // A HALTED crank keeps everything: the quiescence gate refuses
+        // it and the managed lifecycle rewinds it whole.
+        if completed {
+            self.result = Slot::undefined();
+            self.locals.clear();
+            self.id_map.clear();
+        }
+        // `active_segment` identifies only the buffer of the dispatch in
+        // progress. Every surviving function has its own `func_segments`
+        // entry, so no segment cursor crosses a crank boundary.
+        self.active_segment = None;
         RunOutcome {
             completed,
             result,
@@ -8168,6 +11324,32 @@ impl Interp {
             // jobs) shares the one cumulative ceiling.
             if self.n_dispatched >= self.step_limit {
                 return Halt::StepLimit(self.n_dispatched);
+            }
+            // Memory wedge guard, bounded mode ONLY (`step_limit` is
+            // `u64::MAX` in production, which relies on the computron
+            // meter to bound allocation). A hostile program can mint a
+            // retained side-table entry per dispatch — e.g. a
+            // self-feeding `START_ASYNC` loop allocates an async
+            // instance (and its saved-frame Vecs) each step — so the
+            // dispatch ceiling alone lets an unmetered bounded run
+            // (the decoder fuzz harness) reach it 2M times and OOM
+            // before it halts. Bound live slots too: a bounded wedge is
+            // memory as much as time, and no real ≤21-byte fuzz input
+            // legitimately reaches a million live slots.
+            if self.step_limit != u64::MAX
+                && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING
+            {
+                return Halt::StepLimit(self.n_dispatched);
+            }
+            // Property-key id-space poison latch (wave-6 Remaining item):
+            // an intern that would alias sets the flag instead of handing
+            // out a duplicate id; the halt here fires before the next
+            // instruction so no aliased read or write is guest-observable.
+            // The latch holds for the machine's lifetime — every later
+            // crank halts identically — and `is_quiescent` keeps the
+            // poisoned machine out of the persist gates.
+            if self.id_space_exhausted {
+                return Halt::Unsupported("property-key:id-space-exhausted");
             }
             if pc >= len {
                 return Halt::Decode(format!("pc {} past end {}", pc, len));
@@ -8313,7 +11495,7 @@ impl Interp {
                     if let Some(data) = self.arrays.get_mut(&array) {
                         data.length = values.len() as u32;
                         for (index, value) in values.into_iter().enumerate() {
-                            data.items.insert(index as u32, value);
+                            data.insert_item(index as u32, value, &mut self.side_refs);
                         }
                     }
                     // The `_SLOPPY`/`_STRICT` forms build the user-visible
@@ -9013,7 +12195,24 @@ impl Interp {
                         let iterator = match self.call_primitive_method(code, method, iterable, &[])
                         {
                             Ok(iterator) if iterator.kind == Kind::Reference => iterator,
-                            Ok(_) => return self.catchable_type_error(),
+                            Ok(_) => {
+                                // GetIterator step 3 (`fxGetIterator`'s
+                                // "iterator: not an object"), raised in-frame
+                                // so a `try` in the SAME activation — a
+                                // generator body around `yield*` — observes it
+                                // (a returned halt would skip that handler).
+                                let error = self.internal_error(
+                                    "TypeError",
+                                    "iterator: not an object".into(),
+                                );
+                                pc = dispatch_result!(
+                                    self.raise_js(error),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
+                                continue;
+                            }
                             Err(halt) => return halt,
                         };
                         self.push(iterator);
@@ -9074,7 +12273,19 @@ impl Interp {
                             self.meter.tick_raw(FOR_OF_GET_ITERATOR_METERING);
                             self.push(iterable);
                         }
-                        _ => return self.catchable_type_error(),
+                        _ => {
+                            // No iterator protocol at all: XS reaches the
+                            // call of the absent `Symbol.iterator` method
+                            // (`fxCallInstance`'s "call: not a function"),
+                            // raised in-frame so an enclosing `try` in the
+                            // same activation observes it.
+                            let error = self.internal_error(
+                                "TypeError",
+                                "call: not a function".into(),
+                            );
+                            pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                            continue;
+                        }
                     }
                     pc += size as usize;
                 }
@@ -9581,13 +12792,7 @@ impl Interp {
                             // accessor getter (`fx_Map_prototype_size`), reading
                             // the size slot. WeakMap/WeakSet have no `size`.
                             self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
-                            Slot::integer(
-                                self.collections[&inst]
-                                    .entries
-                                    .iter()
-                                    .filter(|entry| entry.is_some())
-                                    .count() as i32,
-                            )
+                            Slot::integer(self.collections[&inst].live_len() as i32)
                         }
                         Payload::Reference(inst)
                             if Some(id) == self.byte_length_id
@@ -9683,8 +12888,17 @@ impl Interp {
                                 }
                             } else if Some(id) == g.source {
                                 self.meter.tick_raw(REGEXP_GETTER_METERING);
-                                let (bytes, _alloc) = self.regexp_source_bytes(inst);
-                                self.new_string_metered(&bytes)
+                                let (bytes, allocated) = self.regexp_source_bytes(inst);
+                                if allocated {
+                                    self.new_string_metered(&bytes)
+                                } else {
+                                    // XS returns the constructor's existing
+                                    // source key when no escaping is needed;
+                                    // materialize the equivalent primitive in
+                                    // our arena without charging a new chunk.
+                                    let offset = self.alloc_str_text(&bytes);
+                                    Slot::of(Kind::String, Payload::String(offset))
+                                }
                             } else if Some(id) == g.flags {
                                 self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
                                 let flags = self.regexps[&inst].flags.clone();
@@ -9940,7 +13154,7 @@ impl Interp {
                             } else if let Some(index) =
                                 numeric_index.filter(|_| self.arrays.contains_key(&inst))
                             {
-                                self.arrays.get_mut(&inst).unwrap().items.remove(&index);
+                                self.arrays.get_mut(&inst).unwrap().remove_item(&index, &mut self.side_refs);
                                 true
                             } else if self.arrays.contains_key(&inst) && Some(id) == self.length_id
                             {
@@ -10000,6 +13214,12 @@ impl Interp {
                 XS_CODE_CONSTRUCTOR_FUNCTION | XS_CODE_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_function(name);
+                    // Only `constructor_function` carries XS's
+                    // `fxDefaultFunctionPrototype` own `prototype` property;
+                    // plain `function` (a method shape) has none.
+                    if op == XS_CODE_CONSTRUCTOR_FUNCTION {
+                        self.install_own_function_prototype(f);
+                    }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10014,6 +13234,10 @@ impl Interp {
                 XS_CODE_GENERATOR_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_generator_function(name);
+                    // A generator function carries the same own `prototype`
+                    // slot (`fxDefaultFunctionPrototype` over the generator
+                    // prototype object it re-chained).
+                    self.install_own_function_prototype(f);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10033,6 +13257,7 @@ impl Interp {
                 XS_CODE_ASYNC_GENERATOR_FUNCTION => {
                     let name = id!(1);
                     let f = self.new_async_generator_function(name);
+                    self.install_own_function_prototype(f);
                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
                     pc += ilen;
                 }
@@ -10078,15 +13303,14 @@ impl Interp {
                         info.body_start = Some(body_start);
                         info.body_len = n;
                         info.arity = arity;
-                        // Record which run-time-compiled segment this body
-                        // lives in, so a call reaching it from a different
-                        // buffer dispatches over the right bytes even after the
-                        // eval returns. Top-level functions (`active_segment ==
-                        // None`) never enter the map — the common no-eval path
-                        // stays untouched.
-                        if let Some(seg) = self.active_segment {
-                            self.func_segments.insert(f, seg);
-                        }
+                        // Every guest function names an owned segment,
+                        // including a top-level crank function. Dynamic/eval
+                        // dispatch already has an active segment; the first
+                        // top-level definition lazily promotes this crank's
+                        // retained buffer and makes it active for the rest of
+                        // the dispatch.
+                        let seg = self.ensure_active_code_segment(code);
+                        self.func_segments.insert(f, seg);
                     }
                     pc = body_start + n;
                 }
@@ -10648,11 +13872,30 @@ impl Interp {
                             continue;
                         }
                         match self.enter_call_bound(bf, base, argc, ret_pc) {
-                            Ok(body_start) => {
+                            Ok((body_start, target)) => {
                                 if self.check_meter() == MeterCheck::Abort {
                                     return Halt::MeterAbort;
                                 }
-                                pc = body_start;
+                                let segment = self.callee_segment(target);
+                                if segment == self.active_segment {
+                                    pc = body_start;
+                                    continue;
+                                }
+                                match self.dispatch_entered_cross_segment(body_start, segment) {
+                                    Ok(result) => {
+                                        self.push(result);
+                                        pc = ret_pc;
+                                    }
+                                    Err(Halt::Resume(target))
+                                        if self.call_stack.len() < return_depth =>
+                                    {
+                                        return Halt::Resume(target);
+                                    }
+                                    Err(Halt::Resume(target)) => {
+                                        pc = target;
+                                    }
+                                    Err(halt) => return halt,
+                                }
                             }
                             Err(h) => return h,
                         }
@@ -11284,6 +14527,14 @@ impl Interp {
                         return Halt::Unsupported("get_super:no-home");
                     }
                     let base = self.instance_prototype(home);
+                    // GetValue on a super reference performs ToObject on the
+                    // home prototype; a null [[Prototype]] is a TypeError
+                    // (ECMA-262 6.2.5.5), raised at use, after key evaluation.
+                    if base.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let value = dispatch_result!(
                         self.ordinary_get(code, base, id, receiver),
                         pc,
@@ -11310,6 +14561,13 @@ impl Interp {
                         _ => return Halt::Unsupported("get_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    // A computed super reference defers the null-base
+                    // TypeError to GetValue (ECMA-262 6.2.5.5 via ToObject).
+                    if super_ref.next.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let value = dispatch_result!(
                         self.ordinary_get(code, super_ref.next, id, receiver),
                         pc,
@@ -11332,6 +14590,14 @@ impl Interp {
                         return Halt::Unsupported("set_super:no-home");
                     }
                     let base = self.instance_prototype(home);
+                    // PutValue on a super reference performs ToObject on the
+                    // home prototype; a null [[Prototype]] is a TypeError
+                    // (ECMA-262 6.2.5.6), raised after the RHS has evaluated.
+                    if base.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, base, id, value, receiver),
                         pc,
@@ -11364,6 +14630,14 @@ impl Interp {
                         _ => return Halt::Unsupported("set_super_at:key"),
                     };
                     let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
+                    // A computed super reference defers the null-base
+                    // TypeError to PutValue (ECMA-262 6.2.5.6 via ToObject),
+                    // after both the key and the RHS have evaluated.
+                    if super_ref.next.is_null() {
+                        let error = self.build_error("TypeError", 0, 0);
+                        pc = dispatch_result!(self.raise_js(error), pc, self, return_depth);
+                        continue;
+                    }
                     let accepted = dispatch_result!(
                         self.ordinary_set(code, super_ref.next, id, value, receiver),
                         pc,
@@ -11773,7 +15047,8 @@ impl Interp {
                                 }
                                 None => {
                                     self.meter_host_escape();
-                                    return Halt::Throw(self.render(&v));
+                                    let text = self.render_uncaught(code, v);
+                                    return Halt::Throw(text);
                                 }
                             }
                         }
@@ -12059,6 +15334,12 @@ impl Interp {
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
                         let yielded = self.pop();
+                        // Same hostile-bytecode refusal as the sync path
+                        // below: splitting past the stack end is a panic,
+                        // not a frame snapshot.
+                        if stack_base > self.stack.len() {
+                            return Halt::Unsupported("yield:stack-underflow");
+                        }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
                             .jumps
@@ -12244,15 +15525,36 @@ impl Interp {
                 // driver via [`Halt::Await`], carrying the awaited value (popped
                 // to the frame result). The per-suspend metering is the identical
                 // C code as `YIELD`, so it reuses [`GENERATOR_YIELD_METERING`].
-                // `await` inside a live `try` needs the jump-chain snapshot/rebase
-                // (the same increment generators defer for `yield-in-try`) — an
-                // honest named skip for now.
+                // `await` inside a live `try` travels like `yield`'s: the run's
+                // handlers ride the saved frame and the resume rebases them.
                 XS_CODE_AWAIT => {
-                    if let Some(a) = self.async_gen_run_stack.last() {
+                    // A plain async function can run inside an async
+                    // generator's step (the generator body synchronously
+                    // calls it and its body awaits) — suspend the INNERMOST
+                    // driver, exactly as the YIELD arm selects between the
+                    // sync- and async-generator stacks. Preferring the
+                    // async-generator stack unconditionally snapshotted the
+                    // helper's activation into the GENERATOR's side-table
+                    // entry: the helper's own resume then found no frame
+                    // (`async:no-frame`) and the generator's saved frame was
+                    // transiently clobbered (review of the llm rebase; XS
+                    // completes the composition).
+                    let async_gen_is_innermost = self.async_gen_run_stack.last().is_some_and(|a| {
+                        self.async_run_stack
+                            .last()
+                            .is_none_or(|p| a.call_depth_base > p.call_depth_base)
+                    });
+                    if async_gen_is_innermost {
+                        let a = self.async_gen_run_stack.last().unwrap();
                         let (gen, stack_base, jumps_base, call_depth_base) =
                             (a.gen, a.stack_base, a.jumps_base, a.call_depth_base);
                         let resume_pc = pc + size as usize;
                         let awaited = self.pop();
+                        // Same hostile-bytecode refusal as the plain-async
+                        // path below.
+                        if stack_base > self.stack.len() {
+                            return Halt::Unsupported("await:stack-underflow");
+                        }
                         let stack_slice = self.stack.split_off(stack_base);
                         let jumps = self
                             .jumps
@@ -12370,6 +15672,9 @@ impl Interp {
                         call_depth: self.call_stack.len(),
                         env: self.env,
                         flag: 1,
+                        // Pushed by this dispatch, not re-established on a
+                        // resume — no rebase surcharge.
+                        rebased: false,
                     });
                     pc += size as usize;
                 }
@@ -12408,7 +15713,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            return Halt::Throw(self.render(&v));
+                            let text = self.render_uncaught(code, v);
+                            return Halt::Throw(text);
                         }
                     }
                 }
@@ -12430,7 +15736,8 @@ impl Interp {
                         }
                         None => {
                             self.meter_host_escape();
-                            return Halt::Throw(self.render(&v));
+                            let text = self.render_uncaught(code, v);
+                            return Halt::Throw(text);
                         }
                     }
                 }
@@ -12450,10 +15757,14 @@ impl Interp {
                 // adjacent synthetic disposal slot while preserving the
                 // resource as the binding value.
                 XS_CODE_USING | XS_CODE_USING_ASYNC => {
+                    // Measured declaration residue (see the constants):
+                    // one unit always, one more for a real resource.
+                    self.meter.tick_raw(USING_DECL_METERING);
                     let resource = *self.stack.last().unwrap_or(&Slot::undefined());
                     let disposer = if matches!(resource.kind, Kind::Null | Kind::Undefined) {
                         Slot::null()
                     } else {
+                        self.meter.tick_raw(USING_RESOURCE_METERING);
                         let inst = match resource.value {
                             Payload::Reference(inst) if resource.kind == Kind::Reference => inst,
                             _ => {
@@ -12473,16 +15784,19 @@ impl Interp {
                                 );
                             }
                         }
+                        // The @@dispose lookup serves BOTH forms: it is the
+                        // sync `using`'s primary protocol and the async
+                        // form's fallback (wave-6 W6-5 — gating it behind
+                        // the async opcode made every sync `using` with a
+                        // disposer throw TypeError at the declaration).
                         if !self.is_callable_value(value) {
-                            if op == XS_CODE_USING_ASYNC {
-                                if let Some(id) = self.well_known_symbol_property_id("dispose") {
-                                    value = dispatch_result!(
-                                        self.mop_get(code, inst, id, resource),
-                                        pc,
-                                        self,
-                                        return_depth
-                                    );
-                                }
+                            if let Some(id) = self.well_known_symbol_property_id("dispose") {
+                                value = dispatch_result!(
+                                    self.mop_get(code, inst, id, resource),
+                                    pc,
+                                    self,
+                                    return_depth
+                                );
                             }
                         }
                         if !self.is_callable_value(value) {
@@ -12505,7 +15819,7 @@ impl Interp {
                     let has_prior = matches!(selector.value, Payload::Integer(0));
                     if has_prior {
                         let prior = self.get_local(exception_index).unwrap_or_else(Slot::undefined);
-                        let suppressed = self.build_suppressed_error(current, prior);
+                        let suppressed = self.build_suppressed_error(current, prior, None);
                         self.set_local(exception_index, suppressed);
                     } else {
                         self.set_local(exception_index, current);
@@ -12606,6 +15920,25 @@ impl Interp {
         }
         self.ctor_prototype.insert(f, proto);
         f
+    }
+
+    /// Install a constructor function's own `prototype` data property
+    /// (`fxDefaultFunctionPrototype`'s `{writable, enumerable: false,
+    /// configurable: false}` slot) pointing at its [`Self::ctor_prototype`]
+    /// object, so `T.prototype` reads, `T.prototype.m = …` augmentation, and
+    /// `T.prototype = …` reassignment all resolve the SAME object `new T()`
+    /// chains instances to. Gated on the program naming `prototype` (like the
+    /// `prototype.constructor` back-reference), unmetered on both sides.
+    fn install_own_function_prototype(&mut self, f: crate::value::SlotIndex) {
+
+        if let (Some(pid), Some(&proto)) = (self.prototype_key_id, self.ctor_prototype.get(&f)) {
+            self.set_own_unmetered_with_flag(
+                f,
+                pid,
+                Slot::of(Kind::Reference, Payload::Reference(proto)),
+                XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+            );
+        }
     }
 
     /// Define a generator function (`XS_CODE_GENERATOR_FUNCTION` →
@@ -13122,8 +16455,7 @@ impl Interp {
     /// buffer handle when a cross-segment switch is needed; a `None` buffer
     /// keeps the caller's `code`. Mirrors the callback cross-segment routing in
     /// [`Self::run_callback`]; for a top-level body (`func` not in
-    /// [`Self::func_segments`]) it is a no-op, so a program that never evals is
-    /// unaffected.
+    /// [`Self::func_segments`]) it is a no-op.
     fn resume_segment_buffer(
         &self,
         func: crate::value::SlotIndex,
@@ -13146,6 +16478,26 @@ impl Interp {
         }
     }
 
+    /// Ensure the currently executing buffer has an owned segment.
+    ///
+    /// Eval/dynamic-Function dispatch installs its segment before entering.
+    /// A top-level crank stays segment-free until its first function body is
+    /// defined, then promotes the `top_level_code` copy already owned by the
+    /// machine. This is the crank-code retention half of cross-crank calls.
+    fn ensure_active_code_segment(&mut self, code: &[u8]) -> usize {
+        if let Some(segment) = self.active_segment {
+            return segment;
+        }
+        let segment = self.code_segments.len();
+        let buffer = self
+            .top_level_code
+            .clone()
+            .unwrap_or_else(|| std::rc::Rc::new(code.to_vec()));
+        self.code_segments.push(buffer);
+        self.active_segment = Some(segment);
+        segment
+    }
+
     /// The code segment a callee function's body lives in, and whether it
     /// differs from the segment the current dispatch loop runs over — i.e.
     /// whether entering it needs a cross-segment nested dispatch rather than
@@ -13161,11 +16513,10 @@ impl Interp {
     /// on the value stack and, if its body lives in a different segment than
     /// this loop's buffer, return `Some(callee_segment)` to route it through a
     /// cross-segment dispatch. Returns `None` (stay in-loop) in the common
-    /// same-segment case, and — the zero-overhead fast path — immediately when
-    /// no eval has ever defined a function ([`Self::func_segments`] empty), so
-    /// a program that never evals dispatches exactly as before.
+    /// same-segment case, and immediately when no retained function exists.
     ///
-    /// The fast-path guard is `code_segments` empty (no eval has ever run):
+    /// The fast-path guard is `code_segments` empty (no function has retained
+    /// a defining buffer):
     /// only then is every callee guaranteed same-segment. Once an eval has
     /// run, the check is needed both ways — the top-level program calling an
     /// eval-defined function, and (while dispatching an eval segment) that
@@ -13199,11 +16550,21 @@ impl Interp {
         has_target: bool,
         callee_segment: Option<usize>,
     ) -> Result<Slot, Halt> {
+        let body_start = self.enter_call(argc, 0, has_target)?;
+        self.dispatch_entered_cross_segment(body_start, callee_segment)
+    }
+
+    /// Dispatch a frame that has already been entered over its retained
+    /// segment. Shared by ordinary and bound cross-crank calls.
+    fn dispatch_entered_cross_segment(
+        &mut self,
+        body_start: usize,
+        callee_segment: Option<usize>,
+    ) -> Result<Slot, Halt> {
         let buf = match self.segment_buffer(callee_segment) {
             Some(buf) => buf,
-            None => return Err(Halt::Unsupported("eval:missing-segment")),
+            None => return Err(Halt::Unsupported("function:missing-segment")),
         };
-        let body_start = self.enter_call(argc, 0, has_target)?;
         let return_depth = self.call_stack.len();
         let saved_segment = self.active_segment;
         self.active_segment = callee_segment;
@@ -13390,6 +16751,12 @@ impl Interp {
             g.state = GeneratorState::Executing;
         }
         let return_depth = self.call_stack.len();
+        // Rebase the suspended run's jump handlers onto the live
+        // chain: relative stack positions anchor at the fresh frame
+        // base, and depths at the fresh run depth (the suspend-in-try
+        // fix — these entries sit above `jumps_base`, so run
+        // completion or a throw truncates them exactly as if the run
+        // had never suspended).
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
@@ -13399,6 +16766,9 @@ impl Interp {
                 call_depth: return_depth + jump.call_depth_offset,
                 env: jump.env,
                 flag: jump.flag,
+                // Re-established on this resume: a throw reaching it pays
+                // [`RESUMED_HANDLER_THROW_METERING`].
+                rebased: true,
             }));
         self.gen_run_stack.push(GenRunFrame {
             gen,
@@ -13632,6 +17002,19 @@ impl Interp {
             target_func: self.target_func,
             ret_pc: 0,
         });
+        // FENCE the caller's live handlers for the nested body run.
+        // XS's fxStepAsync / fxAsyncGeneratorStep run the body under
+        // their own native mxTry: an uncaught body throw REJECTS the
+        // promise (the Halt::Throw arm below), it never lands in a
+        // `try` live around the synchronous start — where, unfenced,
+        // the mainline's cross-frame unwind consumed the caller's
+        // handler (a caught `1` where XS answers `after`, or a leaked
+        // Halt::Resume — review of the llm rebase, locked by the
+        // await_in_try boundary cases). Sync generators stay UNfenced:
+        // there the cross-frame catch is XS's own behavior. The body's
+        // rebased handlers live above the (now empty) chain and are
+        // consumed or truncated before the unfence.
+        let fenced_jumps = std::mem::take(&mut self.jumps);
         let stack_base = self.stack.len();
         let jumps_base = self.jumps.len();
         self.locals = saved.locals;
@@ -13655,6 +17038,12 @@ impl Interp {
         };
         self.async_generators.get_mut(&gen).unwrap().state = AsyncGeneratorState::Executing;
         let return_depth = self.call_stack.len();
+        // Rebase the suspended run's jump handlers onto the live
+        // chain: relative stack positions anchor at the fresh frame
+        // base, and depths at the fresh run depth (the suspend-in-try
+        // fix — these entries sit above `jumps_base`, so run
+        // completion or a throw truncates them exactly as if the run
+        // had never suspended).
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
@@ -13664,6 +17053,9 @@ impl Interp {
                 call_depth: return_depth + jump.call_depth_offset,
                 env: jump.env,
                 flag: jump.flag,
+                // Re-established on this resume: a throw reaching it pays
+                // [`RESUMED_HANDLER_THROW_METERING`].
+                rebased: true,
             }));
         self.async_gen_run_stack.push(AsyncGenRunFrame {
             gen,
@@ -13687,7 +17079,7 @@ impl Interp {
         self.active_segment = saved_segment;
         self.async_gen_run_stack.pop();
         self.resume_status = ResumeStatus::NoStatus;
-        match outcome {
+        let step_result = match outcome {
             Halt::AsyncYield(value) => {
                 let _ = self.leave_call();
                 self.stack.truncate(stack_base);
@@ -13746,9 +17138,23 @@ impl Interp {
                 }
                 self.stack.truncate(stack_base);
                 self.jumps.truncate(jumps_base);
+                // A halt (meter abort, unsupported opcode) abandons the
+                // step: complete the instance like the sibling arms do
+                // (wave-6 W6-20 — leaving it `Executing` with no frame
+                // was a lifecycle state the machine cannot otherwise
+                // produce, and a raw caller's later `next()` met it).
+                let data = self.async_generators.get_mut(&gen).unwrap();
+                data.state = AsyncGeneratorState::Completed;
+                data.frame = None;
                 Err(other)
             }
-        }
+        };
+        // Unfence: the caller's chain returns exactly as it was; the
+        // body's own handlers were consumed above (every arm truncates
+        // to the fenced-empty base).
+        debug_assert!(self.jumps.is_empty(), "async body left handlers behind");
+        self.jumps = fenced_jumps;
+        step_result
     }
 
     /// Run one step of an async-function instance (XS's `fxStepAsync`): install
@@ -13817,6 +17223,19 @@ impl Interp {
             target_func: self.target_func,
             ret_pc: 0,
         });
+        // FENCE the caller's live handlers for the nested body run.
+        // XS's fxStepAsync / fxAsyncGeneratorStep run the body under
+        // their own native mxTry: an uncaught body throw REJECTS the
+        // promise (the Halt::Throw arm below), it never lands in a
+        // `try` live around the synchronous start — where, unfenced,
+        // the mainline's cross-frame unwind consumed the caller's
+        // handler (a caught `1` where XS answers `after`, or a leaked
+        // Halt::Resume — review of the llm rebase, locked by the
+        // await_in_try boundary cases). Sync generators stay UNfenced:
+        // there the cross-frame catch is XS's own behavior. The body's
+        // rebased handlers live above the (now empty) chain and are
+        // consumed or truncated before the unfence.
+        let fenced_jumps = std::mem::take(&mut self.jumps);
         let stack_base = self.stack.len();
         let jumps_base = self.jumps.len();
         self.locals = saved.locals;
@@ -13842,6 +17261,12 @@ impl Interp {
             status
         };
         let return_depth = self.call_stack.len();
+        // Rebase the suspended run's jump handlers onto the live
+        // chain: relative stack positions anchor at the fresh frame
+        // base, and depths at the fresh run depth (the suspend-in-try
+        // fix — these entries sit above `jumps_base`, so run
+        // completion or a throw truncates them exactly as if the run
+        // had never suspended).
         self.jumps
             .extend(saved.jumps.into_iter().map(|jump| CatchJump {
                 target_pc: jump.target_pc,
@@ -13851,6 +17276,9 @@ impl Interp {
                 call_depth: return_depth + jump.call_depth_offset,
                 env: jump.env,
                 flag: jump.flag,
+                // Re-established on this resume: a throw reaching it pays
+                // [`RESUMED_HANDLER_THROW_METERING`].
+                rebased: true,
             }));
         self.async_run_stack.push(AsyncRunFrame {
             inst,
@@ -13875,7 +17303,7 @@ impl Interp {
         self.async_run_stack.pop();
         // Any `BRANCH_STATUS` will have consumed the status; reset defensively.
         self.resume_status = ResumeStatus::NoStatus;
-        match outcome {
+        let step_result = match outcome {
             Halt::Await(v) => {
                 // The `AWAIT` arm snapshotted the instance and truncated the
                 // stack to `stack_base`; the ambient frame is still suspended —
@@ -13948,6 +17376,12 @@ impl Interp {
                     a.frame = None;
                 }
                 self.meter.tick_raw(ASYNC_STEP_SETTLE_METERING);
+                if is_start {
+                    // See the constant's doc: the sync-start reject
+                    // crosses one more dispatch in XS than the
+                    // drain-side reject.
+                    self.meter.tick_raw(ASYNC_START_REJECT_BOUNDARY_METERING);
+                }
                 let reject_fn = self.async_instances[&inst].reject_fn;
                 self.settle_via_function(reject_fn, reason)
             }
@@ -13971,7 +17405,13 @@ impl Interp {
                 }
                 Err(other)
             }
-        }
+        };
+        // Unfence: the caller's chain returns exactly as it was; the
+        // body's own handlers were consumed above (every arm truncates
+        // to the fenced-empty base).
+        debug_assert!(self.jumps.is_empty(), "async body left handlers behind");
+        self.jumps = fenced_jumps;
+        step_result
     }
 
     /// Schedule an `await` (XS's `fxStepAsync` await-branch): register the
@@ -14557,11 +17997,16 @@ impl Interp {
             // Array errors argument is modeled; any other iterable drives the
             // general `fxGetIterator` protocol and self-names an honest skip.
             Native::AggregateError => self.build_aggregate_error(base, argc)?,
-            Native::SuppressedError => self.build_suppressed_error(arg(0), arg(1)),
+            Native::SuppressedError => {
+                let message = (argc >= 3).then(|| arg(2));
+                self.build_suppressed_error(arg(0), arg(1), message)
+            }
             Native::DisposableStack | Native::AsyncDisposableStack => {
                 if !has_target {
                     return Err(self.catchable_type_error());
                 }
+                // Measured constructor residue (see the constant).
+                self.meter.tick_raw(DISPOSABLE_STACK_CONSTRUCT_METERING);
                 let proto = self
                     .intrinsics
                     .get(native.display_name())
@@ -14620,7 +18065,7 @@ impl Interp {
                             let mut v = a;
                             v.id = 0;
                             v.next = crate::value::SlotIndex::NULL;
-                            data.items.insert(0, v);
+                            data.insert_item(0, v, &mut self.side_refs);
                             data.length = 1;
                         }
                     }
@@ -14631,7 +18076,7 @@ impl Interp {
                         let mut v = arg(i);
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        data.items.insert(i as u32, v);
+                        data.insert_item(i as u32, v, &mut self.side_refs);
                     }
                     data.length = argc as u32;
                 }
@@ -14662,11 +18107,7 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections.insert(
                     inst,
-                    CollectionData {
-                        kind,
-                        entries: Vec::new(),
-                        table_length: MAP_MIN_TABLE_LENGTH,
-                    },
+                    CollectionData::new(kind, MAP_MIN_TABLE_LENGTH),
                 );
                 if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
                     self.populate_collection_from_dense_array(code, inst, a)?;
@@ -14703,11 +18144,7 @@ impl Interp {
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.collections.insert(
                     inst,
-                    CollectionData {
-                        kind,
-                        entries: Vec::new(),
-                        table_length: 0,
-                    },
+                    CollectionData::new(kind, 0),
                 );
                 if argc >= 1 && a.kind != Kind::Undefined && a.kind != Kind::Null {
                     self.populate_collection_from_dense_array(code, inst, a)?;
@@ -14905,25 +18342,36 @@ impl Interp {
                     Payload::Reference(r)
                         if self.arrays.contains_key(&r) || self.typed_arrays.contains_key(&r) =>
                     {
-                        // The source element sequence, read directly (a dense
-                        // array's items / a source TypedArray's decoded
-                        // elements); a hole reads `undefined` (→ NaN → 0 for an
-                        // integer view), matching the default-iterator result.
-                        let elements: Vec<Slot> = if let Some(src) = self.arrays.get(&r) {
-                            let len = src.length;
-                            (0..len)
-                                .map(|i| src.items.get(&i).copied().unwrap_or_else(Slot::undefined))
-                                .collect()
+                        // The source LENGTH decides the allocation, so read it,
+                        // bound it, and charge for it BEFORE materializing
+                        // anything. This used to collect `0..len` into a
+                        // `Vec<Slot>` and sanity-check afterwards, which made
+                        // the source length an *unmetered allocation
+                        // instruction*: a sparse `a.length = 200_000_000` —
+                        // ordinary JS state, and ordinary snapshot bytes no
+                        // decoder can refuse, since a sparse array is legitimate
+                        // — reserved 32 bytes per declared element before any
+                        // bound and before any charge. What that costs depends
+                        // on the host and both outcomes are bad: where the
+                        // reservation fails, `handle_alloc_error` ABORTS THE
+                        // PROCESS, which no `catch_unwind` can contain; where
+                        // overcommit lets it succeed, the worker stalls filling
+                        // slots the meter never sees (measured: 132 seconds and
+                        // 8.6 GB for a two-call program — review wave 5).
+                        //
+                        // Ordered this way the from-source path is exposed
+                        // exactly as much as the length form `new TA(n)` it is
+                        // equivalent to, and no more: the bound rejects first,
+                        // and `alloc_array_buffer` charges
+                        // `tick_chunk_new(byte_length)` before it allocates.
+                        // `tests/typed_array_source_length.rs` holds the
+                        // deadline that keeps the order this way round.
+                        let (length, source_ta) = if let Some(src) = self.arrays.get(&r) {
+                            (src.length, None)
                         } else {
                             let src = self.typed_arrays[&r];
-                            (0..src.length)
-                                .map(|i| {
-                                    self.typed_array_element_get(src, i)
-                                        .unwrap_or_else(Slot::undefined)
-                                })
-                                .collect()
+                            (src.length, Some(src))
                         };
-                        let length = elements.len() as u32;
                         if length > (0x7FFF_FFFFu32 >> shift) {
                             return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
                         }
@@ -14938,8 +18386,26 @@ impl Interp {
                             length,
                         };
                         self.typed_arrays.insert(inst, ta);
-                        for (i, v) in elements.into_iter().enumerate() {
-                            self.typed_array_element_set(code, ta, i as u32, v)?;
+                        // Copy element by element rather than through an
+                        // intermediate vector, so the only length-proportional
+                        // allocation is the metered backing store itself. Source
+                        // and destination are distinct buffers, so interleaving
+                        // the reads with the writes is not aliasing. A hole (a
+                        // dense array's missing item / an unreadable source
+                        // element) reads `undefined` (→ NaN → 0 for an integer
+                        // view), matching the default-iterator result.
+                        for i in 0..length {
+                            let v = match source_ta {
+                                None => self
+                                    .arrays
+                                    .get(&r)
+                                    .and_then(|src| src.items().get(&i).copied())
+                                    .unwrap_or_else(Slot::undefined),
+                                Some(src) => self
+                                    .typed_array_element_get(src, i)
+                                    .unwrap_or_else(Slot::undefined),
+                            };
+                            self.typed_array_element_set(code, ta, i, v)?;
                             self.meter
                                 .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
                         }
@@ -15198,7 +18664,7 @@ impl Interp {
                 return Ok(Some(locale.tag.clone()));
             }
             if let Some(array) = self.arrays.get(&r) {
-                let first = array.items.get(&0).copied();
+                let first = array.items().get(&0).copied();
                 return first
                     .map(|slot| self.intl_locale_argument(code, slot).map(Some))
                     .unwrap_or(Ok(None));
@@ -15214,7 +18680,7 @@ impl Interp {
         let values = if let Payload::Reference(r) = value.value {
             if let Some(array) = self.arrays.get(&r) {
                 (0..array.length)
-                    .filter_map(|i| array.items.get(&i).copied())
+                    .filter_map(|i| array.items().get(&i).copied())
                     .collect::<Vec<_>>()
             } else {
                 vec![value]
@@ -15825,7 +19291,7 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -15844,7 +19310,7 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -15903,7 +19369,7 @@ impl Interp {
                     let item = self
                         .arrays
                         .get(&obj)
-                        .and_then(|a| a.items.get(&i))
+                        .and_then(|a| a.items().get(&i))
                         .copied()
                         .unwrap_or_else(Slot::undefined);
                     let s = self.list_element_string(item)?;
@@ -15926,7 +19392,7 @@ impl Interp {
                         let item = self
                             .arrays
                             .get(&source)
-                            .and_then(|a| a.items.get(&i))
+                            .and_then(|a| a.items().get(&i))
                             .copied()
                             .unwrap_or_else(Slot::undefined);
                         let s = self.list_element_string(item)?;
@@ -16451,7 +19917,7 @@ impl Interp {
             let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
             item.id = 0;
             item.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+            self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
         }
         self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
         Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -16745,6 +20211,61 @@ impl Interp {
         Ok(self.regexp_exec_inner(inst, arg0)?.0)
     }
 
+    /// Spell the subject for the matcher's NUL-terminated walk the way an XS
+    /// string is stored: an embedded U+0000 becomes the overlong pair `C0 80`
+    /// (modified UTF-8), so the walk never sees a bare NUL byte and treats it
+    /// as end-of-subject. Well-formed UTF-8 never contains `C0`, so every
+    /// `C0 80` pair in the result is one this spelling introduced.
+    fn regexp_subject_bytes(text: &str) -> Vec<u8> {
+        let bytes = text.as_bytes();
+        if !bytes.contains(&0) {
+            return bytes.to_vec();
+        }
+        let mut out = Vec::with_capacity(bytes.len() + 8);
+        for &b in bytes {
+            if b == 0 {
+                out.extend_from_slice(&[0xC0, 0x80]);
+            } else {
+                out.push(b);
+            }
+        }
+        out
+    }
+
+    /// Invert [`Self::regexp_subject_bytes`] on a matched slice before the
+    /// standard UTF-8 decode (a bare `C0 80` would otherwise decode lossily).
+    fn regexp_piece_bytes(piece: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(piece.len());
+        let mut i = 0;
+        while i < piece.len() {
+            if piece[i] == 0xC0 && piece.get(i + 1) == Some(&0x80) {
+                out.push(0);
+                i += 2;
+            } else {
+                out.push(piece[i]);
+                i += 1;
+            }
+        }
+        out
+    }
+
+    /// Count the `C0 80` pairs introduced by [`Self::regexp_subject_bytes`]
+    /// strictly before byte offset `end`, the correction from a byte offset in
+    /// the spelled subject back to the code-unit offset XS reports.
+    fn regexp_nul_pairs_before(subject: &[u8], end: usize) -> i32 {
+        let mut pairs = 0;
+        let mut i = 0;
+        while i + 1 < end.min(subject.len()) {
+            if subject[i] == 0xC0 && subject[i + 1] == 0x80 {
+                pairs += 1;
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        pairs
+    }
+
     /// The `exec` body, returning `(result, Some(match_start))` on a match so
     /// the String-side `search`/`match` methods (which drive the full `exec`,
     /// as XS's `fxExecuteRegExp` does) can read the match position without
@@ -16758,8 +20279,9 @@ impl Interp {
         self.meter.tick_raw(REGEXP_EXEC_FRAME_METERING);
         let subject_slot = self.to_string_slot_metered(arg0);
         let subject = match subject_slot.value {
-            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space.
-            Payload::String(off) => self.str_text(off).into_bytes(),
+            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space,
+            // with U+0000 spelled `C0 80` the way an XS string stores it.
+            Payload::String(off) => Self::regexp_subject_bytes(&self.str_text(off)),
             _ => Vec::new(),
         };
         // The declared named groups, one entry per UNIQUE name in name-slot
@@ -16784,7 +20306,10 @@ impl Interp {
         self.meter.tick_raw(
             REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
         );
-        let match_start = captures[0].0;
+        // Correct the reported match position for any `C0 80` NUL pairs the
+        // subject spelling introduced before it (one code unit each to XS).
+        let match_start =
+            captures[0].0 - Self::regexp_nul_pairs_before(&subject, captures[0].0.max(0) as usize);
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
         let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
@@ -16795,8 +20320,9 @@ impl Interp {
             // `resultItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
             let slot = if from >= 0 {
-                let piece = &subject[from as usize..to as usize];
-                self.new_string_metered(piece)
+                let piece =
+                    Self::regexp_piece_bytes(&subject[from as usize..to as usize]);
+                self.new_string_metered(&piece)
             } else {
                 Slot::undefined()
             };
@@ -16806,7 +20332,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&result).unwrap();
             for (i, s) in items {
-                a.items.insert(i, s);
+                a.insert_item(i, s, &mut self.side_refs);
             }
             a.length = captures.len() as u32;
         }
@@ -16908,8 +20434,8 @@ impl Interp {
                 self.meter.tick_slot_alloc();
                 {
                     let a = self.arrays.get_mut(&pair).unwrap();
-                    a.items.insert(0, Slot::integer(from));
-                    a.items.insert(1, Slot::integer(to));
+                    a.insert_item(0, Slot::integer(from), &mut self.side_refs);
+                    a.insert_item(1, Slot::integer(to), &mut self.side_refs);
                     a.length = 2;
                 }
                 let s = Slot::of(Kind::Reference, Payload::Reference(pair));
@@ -16924,7 +20450,7 @@ impl Interp {
         {
             let a = self.arrays.get_mut(&arr).unwrap();
             for (i, s) in items {
-                a.items.insert(i, s);
+                a.insert_item(i, s, &mut self.side_refs);
             }
             a.length = captures.len() as u32;
         }
@@ -17132,7 +20658,7 @@ impl Interp {
             Payload::Reference(r) => r,
             _ => return None,
         };
-        let item = self.arrays.get(&r)?.items.get(&(idx as u32)).copied()?;
+        let item = self.arrays.get(&r)?.items().get(&(idx as u32)).copied()?;
         match item.value {
             Payload::String(off) if item.kind == Kind::String => {
                 Some(self.str_text(off).into_bytes())
@@ -17418,7 +20944,7 @@ impl Interp {
     fn array_index_slot(&self, arr: Slot, i: u32) -> Slot {
         if let Payload::Reference(r) = arr.value {
             if let Some(a) = self.arrays.get(&r) {
-                if let Some(s) = a.items.get(&i) {
+                if let Some(s) = a.items().get(&i) {
                     return *s;
                 }
             }
@@ -17432,7 +20958,7 @@ impl Interp {
         let n = segments.len() as u32;
         let a = self.arrays.get_mut(&array).unwrap();
         for (i, s) in segments.into_iter().enumerate() {
-            a.items.insert(i as u32, s);
+            a.insert_item(i as u32, s, &mut self.side_refs);
         }
         a.length = n;
         Slot::of(Kind::Reference, Payload::Reference(array))
@@ -17443,7 +20969,7 @@ impl Interp {
     fn regexp_whole_match_len(&self, result: Slot) -> usize {
         if let Payload::Reference(r) = result.value {
             if let Some(a) = self.arrays.get(&r) {
-                if let Some(s) = a.items.get(&0) {
+                if let Some(s) = a.items().get(&0) {
                     if let Payload::String(off) = s.value {
                         return self.str_len(off);
                     }
@@ -19204,7 +22730,7 @@ impl Interp {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 (0..len)
-                    .map(|i| data.items.get(&i).copied().unwrap_or_else(Slot::undefined))
+                    .map(|i| data.items().get(&i).copied().unwrap_or_else(Slot::undefined))
                     .collect()
             }
             Payload::String(off) if iterable.kind == Kind::String => {
@@ -19402,9 +22928,7 @@ impl Interp {
                         let errs: Vec<Slot> = {
                             let data = &self.arrays[&results];
                             (0..data.length)
-                                .map(|i| {
-                                    data.items.get(&i).copied().unwrap_or_else(Slot::undefined)
-                                })
+                                .map(|i| data.items().get(&i).copied().unwrap_or_else(Slot::undefined))
                                 .collect()
                         };
                         let agg = self.new_aggregate_error(errs);
@@ -19427,7 +22951,7 @@ impl Interp {
         v.id = 0;
         v.next = crate::value::SlotIndex::NULL;
         let data = self.arrays.get_mut(&inst).unwrap();
-        data.items.insert(i, v);
+        data.insert_item(i, v, &mut self.side_refs);
         if i + 1 > data.length {
             data.length = i + 1;
         }
@@ -19471,6 +22995,7 @@ impl Interp {
             ErrorInfo {
                 name: "AggregateError",
                 message: None,
+                frames: self.capture_error_frames(),
             },
         );
         let n = errors.len() as u64;
@@ -19481,17 +23006,16 @@ impl Interp {
         for (i, mut v) in errors.into_iter().enumerate() {
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            arr_data.items.insert(i as u32, v);
+            arr_data.insert_item(i as u32, v, &mut self.side_refs);
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
-        if let Some(&eid) = self.symbol_ids.get("errors") {
-            self.set_own_unmetered(
-                inst,
-                eid,
-                Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
-            );
-        }
+        let eid = self.intern_key_unmetered("errors");
+        self.set_own_unmetered(
+            inst,
+            eid,
+            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
+        );
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
@@ -19505,6 +23029,25 @@ impl Interp {
     /// (under the program's relinked ids) so guest reads resolve — both
     /// unmetered, mirroring XS where `name` is the inherited prototype value
     /// and the property slot cost is folded into the measured constants.
+    /// The frame-name chain an error captures at construction (XS's
+    /// `fxCaptureErrorStack` recording): the current activation's function
+    /// name, each suspended caller's, then the empty program frame. A
+    /// non-function level (the program scope) contributes nothing beyond
+    /// the final empty frame.
+    fn capture_error_frames(&self) -> Vec<String> {
+        let mut frames = Vec::new();
+        if let Some(fi) = self.functions.get(&self.cur_func) {
+            frames.push(fi.name.clone());
+        }
+        for state in self.call_stack.iter().rev() {
+            if let Some(fi) = self.functions.get(&state.cur_func) {
+                frames.push(fi.name.clone());
+            }
+        }
+        frames.push(String::new());
+        frames
+    }
+
     fn build_error(&mut self, name: &'static str, base: usize, argc: usize) -> Slot {
         // Base object cost, exactly as the native `Object` constructor
         // (`tick_builtin` + `fxNewObject`), plus the error-instance extra.
@@ -19544,6 +23087,7 @@ impl Interp {
             ErrorInfo {
                 name,
                 message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
         // An own `message` property only when a message argument was given
@@ -19551,17 +23095,20 @@ impl Interp {
         // prototype. `name` is always inherited from the prototype, never own
         // — so `err.hasOwnProperty('name')` is `false`, matching XS. Both are
         // set unmetered (the own message slot cost is folded into the
-        // measured construct constants).
+        // measured construct constants). The key is INTERNED, not looked up:
+        // XS's key table is machine-global ("message" is a boot key), so the
+        // own property exists whether or not the constructing crank ever
+        // compiled the name — a later crank's `e.message` must resolve
+        // (locked by `error_own_properties.rs`).
         if let Some(text) = message {
-            if let Some(&mid) = self.symbol_ids.get("message") {
-                let off = self.alloc_str_text(text.as_bytes());
-                self.set_own_unmetered_with_flag(
-                    inst,
-                    mid,
-                    Slot::of(Kind::String, Payload::String(off)),
-                    XS_DONT_ENUM_FLAG,
-                );
-            }
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(text.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         // `InstallErrorCause`: when the options object has a `cause`
         // property, copy its value to a writable, non-enumerable,
@@ -19602,15 +23149,14 @@ impl Interp {
             if let Some(info) = self.error_data.get_mut(&inst) {
                 info.message = Some(message.clone());
             }
-            if let Some(&mid) = self.symbol_ids.get("message") {
-                let off = self.alloc_str_text(message.as_bytes());
-                self.set_own_unmetered_with_flag(
-                    inst,
-                    mid,
-                    Slot::of(Kind::String, Payload::String(off)),
-                    XS_DONT_ENUM_FLAG,
-                );
-            }
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(message.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         err
     }
@@ -19626,9 +23172,20 @@ impl Interp {
     }
 
     /// Construct `SuppressedError(error, suppressed, message)`. Disposal
-    /// chaining uses the first two fields directly; ordinary constructor
-    /// calls share the same realm prototype and non-enumerable own fields.
-    fn build_suppressed_error(&mut self, error: Slot, suppressed: Slot) -> Slot {
+    /// chaining uses the first two fields directly (and passes no
+    /// message); ordinary constructor calls share the same realm
+    /// prototype and non-enumerable own fields, and ToString a present,
+    /// non-undefined message argument exactly as `build_error` does
+    /// (metered — XS's `fx_Error_aux` message path). The field keys are
+    /// INTERNED, not looked up: XS's key table is machine-global, so
+    /// the own properties exist whether or not the constructing crank
+    /// compiled the names (locked by `error_own_properties.rs`).
+    fn build_suppressed_error(
+        &mut self,
+        error: Slot,
+        suppressed: Slot,
+        message_arg: Option<Slot>,
+    ) -> Slot {
         let inst = self.new_object();
         if let Some(proto) = self
             .intrinsics
@@ -19637,17 +23194,38 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
+        let message: Option<String> = match message_arg {
+            Some(a) if a.kind != Kind::Undefined => {
+                let bytes = self.to_string_bytes_metered(a);
+                self.meter.tick_raw(ERROR_MESSAGE_METERING);
+                Some(String::from_utf8_lossy(&bytes).into_owned())
+            }
+            _ => None,
+        };
         self.error_data.insert(
             inst,
             ErrorInfo {
                 name: "SuppressedError",
-                message: None,
+                // This branch's fix (the SuppressedError message was
+                // dropped) composes with the base's new stack frames:
+                // both fields are wanted.
+                message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
+        if let Some(text) = message {
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(text.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
         for (name, value) in [("error", error), ("suppressed", suppressed)] {
-            if let Some(&id) = self.symbol_ids.get(name) {
-                self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG);
-            }
+            let id = self.intern_key_unmetered(name);
+            self.set_own_unmetered_with_flag(inst, id, value, XS_DONT_ENUM_FLAG);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
@@ -19672,12 +23250,10 @@ impl Interp {
             Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
-                    return Err(Halt::Unsupported(
-                        "native-call:AggregateError:sparse-errors",
-                    ));
+                if (0..len).any(|i| !data.items().contains_key(&i)) {
+                    return Err(Halt::Unsupported("native-call:AggregateError:sparse-errors"));
                 }
-                (0..len).map(|i| data.items[&i]).collect()
+                (0..len).map(|i| data.items()[&i]).collect()
             }
             _ => {
                 return Err(Halt::Unsupported(
@@ -19718,18 +23294,20 @@ impl Interp {
             ErrorInfo {
                 name: "AggregateError",
                 message: message.clone(),
+                frames: self.capture_error_frames(),
             },
         );
         if let Some(text) = message {
-            if let Some(&mid) = self.symbol_ids.get("message") {
-                let off = self.alloc_str_text(text.as_bytes());
-                self.set_own_unmetered_with_flag(
-                    inst,
-                    mid,
-                    Slot::of(Kind::String, Payload::String(off)),
-                    XS_DONT_ENUM_FLAG,
-                );
-            }
+            // Interned, not looked up — the machine-global key rule
+            // `build_error` documents.
+            let mid = self.intern_key_unmetered("message");
+            let off = self.alloc_str_text(text.as_bytes());
+            self.set_own_unmetered_with_flag(
+                inst,
+                mid,
+                Slot::of(Kind::String, Payload::String(off)),
+                XS_DONT_ENUM_FLAG,
+            );
         }
         if argc >= 3 {
             let options = self
@@ -19756,18 +23334,17 @@ impl Interp {
         for (i, mut v) in err_elems.into_iter().enumerate() {
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            arr_data.items.insert(i as u32, v);
+            arr_data.insert_item(i as u32, v, &mut self.side_refs);
         }
         arr_data.length = n as u32;
         self.arrays.insert(arr_inst, arr_data);
-        if let Some(&eid) = self.symbol_ids.get("errors") {
-            self.set_own_unmetered_with_flag(
-                inst,
-                eid,
-                Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
-                XS_DONT_ENUM_FLAG,
-            );
-        }
+        let eid = self.intern_key_unmetered("errors");
+        self.set_own_unmetered_with_flag(
+            inst,
+            eid,
+            Slot::of(Kind::Reference, Payload::Reference(arr_inst)),
+            XS_DONT_ENUM_FLAG,
+        );
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
@@ -20106,10 +23683,12 @@ impl Interp {
             Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
                 let data = &self.arrays[&arr];
                 let len = data.length;
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
+                // Reads route through the counted-accessor view (the
+                // seam's bulk-table discipline); no counts move.
+                if (0..len).any(|i| !data.items().contains_key(&i)) {
                     return Ok(false);
                 }
-                let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
+                let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                 let meter =
                     APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
                 (args, meter)
@@ -20211,6 +23790,8 @@ impl Interp {
         self.enter_call(n, ret_pc, false)
     }
 
+
+
     /// `Function.prototype.apply` (no-array subset): invoke the receiver with
     /// the rebound `this` and **no** arguments — the case where the arguments
     /// array is absent, `undefined`, or `null`. An actual arguments array (a
@@ -20219,6 +23800,8 @@ impl Interp {
     fn enter_call_dot_apply(
         &mut self,
         base: usize,
+        // Kept for signature symmetry with `enter_call`: `.apply`'s
+        // own arity is immaterial — thisArg/argArray read positionally.
         _argc: usize,
         ret_pc: usize,
         code: &[u8],
@@ -20270,10 +23853,10 @@ impl Interp {
                 let len = data.length;
                 // Dense only: every index in `[0, length)` must be a present
                 // element (no holes), else the read walks the prototype.
-                if (0..len).any(|i| !data.items.contains_key(&i)) {
+                if (0..len).any(|i| !data.items().contains_key(&i)) {
                     return Err(Halt::Unsupported("apply:sparse-arguments-array"));
                 }
-                let args: Vec<Slot> = (0..len).map(|i| data.items[&i]).collect();
+                let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                 // The array path's fixed setup plus the per-element read +
                 // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
                 let meter =
@@ -20326,7 +23909,7 @@ impl Interp {
         base: usize,
         argc: usize,
         ret_pc: usize,
-    ) -> Result<usize, Halt> {
+    ) -> Result<(usize, crate::value::SlotIndex), Halt> {
         let data = self.bound_functions[&bf].clone();
         // A bound function whose target is itself bound needs the trampoline to
         // re-dispatch through the target's own bound handler (XS's `mxRunCount`
@@ -20361,6 +23944,7 @@ impl Interp {
         self.meter
             .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
         self.enter_call(total, ret_pc, false)
+            .map(|body_start| (body_start, data.target))
     }
 
     /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
@@ -20548,6 +24132,9 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            // Measured add-record residue (see the constant).
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.records.push(DisposalRecord {
                 resource,
                 method: disposer,
@@ -20568,6 +24155,8 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.records.push(DisposalRecord {
                 resource,
                 method: disposer,
@@ -20587,6 +24176,8 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.records.push(DisposalRecord {
                 resource: Slot::undefined(),
                 method: disposer,
@@ -20602,6 +24193,8 @@ impl Interp {
             if data.disposed {
                 return Err(self.catchable_type_error());
             }
+            self.meter.tick_raw(DISPOSABLE_STACK_ADD_METERING);
+            let data = self.disposable_stacks.get_mut(&inst).expect("brand checked");
             data.disposed = true;
             let records = std::mem::take(&mut data.records);
             let proto = match self.slots.get(inst).value {
@@ -20643,6 +24236,12 @@ impl Interp {
             } else {
                 record.resource
             };
+            // A `use` record (this-bound @@dispose; `defer` records
+            // carry an undefined resource, `adopt` passes it as the
+            // argument) meters one extra dispatch unit at disposal.
+            if !record.pass_resource && record.resource.kind != Kind::Undefined {
+                self.meter.tick_raw(DISPOSE_USE_RECORD_METERING);
+            }
             if let Err(error) = self.run_callback_catching_throw(
                 code,
                 record.method,
@@ -20650,7 +24249,7 @@ impl Interp {
                 &args,
             )? {
                 pending_error = Some(match pending_error {
-                    Some(suppressed) => self.build_suppressed_error(error, suppressed),
+                    Some(suppressed) => self.build_suppressed_error(error, suppressed, None),
                     None => error,
                 });
             }
@@ -21798,7 +25397,7 @@ impl Interp {
                         let mut item = Slot::of(Kind::Reference, Payload::Reference(obj));
                         item.id = 0;
                         item.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+                        self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
                     }
                     self.arrays.get_mut(&arr).unwrap().length = parts.len() as u32;
                     Slot::of(Kind::Reference, Payload::Reference(arr))
@@ -21910,7 +25509,7 @@ impl Interp {
                     let mut item = self.intl_string(cat);
                     item.id = 0;
                     item.next = crate::value::SlotIndex::NULL;
-                    self.arrays.get_mut(&arr).unwrap().items.insert(i as u32, item);
+                    self.arrays.get_mut(&arr).unwrap().insert_item(i as u32, item, &mut self.side_refs);
                 }
                 self.arrays.get_mut(&arr).unwrap().length = categories.len() as u32;
                 self.define_descriptor_field(
@@ -22588,8 +26187,7 @@ impl Interp {
                         .string_key_name(id)
                         .ok_or(Halt::Unsupported("Object.keys:unknown-key"))?;
                     let off = self.alloc_str_text(name.as_bytes());
-                    data.items
-                        .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
+                    data.insert_item(i as u32, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
                 }
                 self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
@@ -22734,8 +26332,7 @@ impl Interp {
                         })
                         .ok_or(Halt::Unsupported("getOwnPropertyNames:unknown-key"))?;
                     let off = self.alloc_str_text(name.as_bytes());
-                    data.items
-                        .insert(i as u32, Slot::of(Kind::String, Payload::String(off)));
+                    data.insert_item(i as u32, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
                 }
                 self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
@@ -22807,12 +26404,13 @@ impl Interp {
                     .filter(|id| self.is_symbol_key_id(*id))
                     .collect();
                 let result = self.new_array_unmetered();
-                let mut items = std::collections::BTreeMap::new();
+                let mut data = ArrayData::default();
                 for (index, id) in ids.into_iter().enumerate() {
-                    items.insert(index as u32, self.property_key_slot(id)?);
+                    let key_slot = self.property_key_slot(id)?;
+                    data.insert_item(index as u32, key_slot, &mut self.side_refs);
                 }
-                let length = items.len() as u32;
-                self.arrays.insert(result, ArrayData { length, items });
+                data.length = data.items().len() as u32;
+                self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
             // `Object.defineProperty(o, k, descriptor)`: define a **new** own
@@ -23196,18 +26794,14 @@ impl Interp {
                         let pair = self.slots.alloc(Slot::instance(self.array_proto));
                         let mut pd = ArrayData::default();
                         pd.length = 2;
-                        pd.items
-                            .insert(0, Slot::of(Kind::String, Payload::String(off)));
-                        pd.items.insert(1, *val);
+                        pd.insert_item(0, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
+                        pd.insert_item(1, *val, &mut self.side_refs);
                         self.arrays.insert(pair, pd);
-                        data.items.insert(
-                            i as u32,
-                            Slot::of(Kind::Reference, Payload::Reference(pair)),
-                        );
+                        data.insert_item(i as u32, Slot::of(Kind::Reference, Payload::Reference(pair)), &mut self.side_refs);
                     } else {
                         self.meter.tick_raw(OBJECT_VALUES_PER_KEY_METERING);
                         self.meter.tick_slot_alloc();
-                        data.items.insert(i as u32, *val);
+                        data.insert_item(i as u32, *val, &mut self.side_refs);
                     }
                 }
                 self.arrays.insert(result, data);
@@ -23405,7 +26999,7 @@ impl Interp {
                     let mut v = a;
                     v.id = 0;
                     v.next = crate::value::SlotIndex::NULL;
-                    self.arrays.get_mut(&inst).unwrap().items.insert(idx, v);
+                    self.arrays.get_mut(&inst).unwrap().insert_item(idx, v, &mut self.side_refs);
                     self.meter.tick_builtin_some(5);
                 }
                 let a = self.arrays.get_mut(&inst).unwrap();
@@ -23428,8 +27022,7 @@ impl Interp {
                         .arrays
                         .get_mut(&inst)
                         .unwrap()
-                        .items
-                        .remove(&new_len)
+                        .remove_item(&new_len, &mut self.side_refs)
                         .unwrap_or_else(Slot::undefined);
                     // `fxSetIndexSize(length-1, XS_CHUNK)` reallocs the item
                     // chunk down; `mxMeterSome(8)`.
@@ -23461,7 +27054,7 @@ impl Interp {
                     let mut steps: u64 = 0;
                     for i in 0..a.length {
                         steps += 1;
-                        if let Some(item) = a.items.get(&i) {
+                        if let Some(item) = a.items().get(&i) {
                             if self.strict_equal(item, &target) {
                                 found = i as i32;
                                 break;
@@ -23497,7 +27090,7 @@ impl Interp {
                     let mut steps: u64 = 0;
                     for i in from..a.length {
                         steps += 1;
-                        let item = a.items.get(&i).copied().unwrap_or_else(Slot::undefined);
+                        let item = a.items().get(&i).copied().unwrap_or_else(Slot::undefined);
                         if self.same_value_zero(&item, &target) {
                             found = true;
                             break;
@@ -23532,7 +27125,7 @@ impl Interp {
                     while i > 0 {
                         i -= 1;
                         steps += 1;
-                        if let Some(item) = a.items.get(&i) {
+                        if let Some(item) = a.items().get(&i) {
                             if self.strict_equal(item, &target) {
                                 found = i as i32;
                                 break;
@@ -23567,7 +27160,7 @@ impl Interp {
                 v.id = 0;
                 v.next = crate::value::SlotIndex::NULL;
                 for i in start..end {
-                    self.arrays.get_mut(&inst).unwrap().items.insert(i, v);
+                    self.arrays.get_mut(&inst).unwrap().insert_item(i, v, &mut self.side_refs);
                     self.meter.tick_builtin_some(5);
                 }
                 this
@@ -23589,13 +27182,13 @@ impl Interp {
                 let mut lo = 0u32;
                 let mut hi = length.saturating_sub(1);
                 while lo < hi {
-                    let l = a.items.remove(&lo);
-                    let h = a.items.remove(&hi);
+                    let l = a.remove_item(&lo, &mut self.side_refs);
+                    let h = a.remove_item(&hi, &mut self.side_refs);
                     if let Some(h) = h {
-                        a.items.insert(lo, h);
+                        a.insert_item(lo, h, &mut self.side_refs);
                     }
                     if let Some(l) = l {
-                        a.items.insert(hi, l);
+                        a.insert_item(hi, l, &mut self.side_refs);
                     }
                     lo += 1;
                     hi -= 1;
@@ -23623,12 +27216,12 @@ impl Interp {
                     let items: Vec<(u32, Slot)> = {
                         let a = &self.arrays[&inst];
                         (0..count)
-                            .filter_map(|i| a.items.get(&(start + i)).map(|s| (i, *s)))
+                            .filter_map(|i| a.items().get(&(start + i)).map(|s| (i, *s)))
                             .collect()
                     };
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items {
-                        a.items.insert(i, Slot::of(s.kind, s.value));
+                        a.insert_item(i, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = count;
                 }
@@ -23681,17 +27274,13 @@ impl Interp {
                         // path).
                         let (len, dense) = {
                             let a = &self.arrays[&r];
-                            (a.length, a.items.len() as u32 == a.length)
+                            (a.length, a.items().len() as u32 == a.length)
                         };
                         if !dense {
                             return Err(Halt::Unsupported("concat:sparse-arg"));
                         }
                         for i in 0..len {
-                            let s = self.arrays[&r]
-                                .items
-                                .get(&i)
-                                .copied()
-                                .unwrap_or_else(Slot::undefined);
+                            let s = self.arrays[&r].items().get(&i).copied().unwrap_or_else(Slot::undefined);
                             self.meter.tick_slot_alloc();
                             self.meter.tick_builtin_some(2);
                             self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
@@ -23712,7 +27301,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.items.insert(i as u32, s);
+                        a.insert_item(i as u32, s, &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -23745,7 +27334,7 @@ impl Interp {
                     self.meter.tick_raw(ARRAY_AT_READ_METERING);
                     self.arrays
                         .get(&inst)
-                        .and_then(|a| a.items.get(&(idx as u32)).copied())
+                        .and_then(|a| a.items().get(&(idx as u32)).copied())
                         .map(|s| Slot::of(s.kind, s.value))
                         .unwrap_or_else(Slot::undefined)
                 } else {
@@ -23769,12 +27358,12 @@ impl Interp {
                     let new_len = length - 1;
                     let removed = {
                         let a = self.arrays.get_mut(&inst).unwrap();
-                        let first = a.items.remove(&0).unwrap_or_else(Slot::undefined);
+                        let first = a.remove_item(&0, &mut self.side_refs).unwrap_or_else(Slot::undefined);
                         let mut shifted = std::collections::BTreeMap::new();
-                        for (&k, &v) in a.items.iter() {
+                        for (&k, &v) in a.items().iter() {
                             shifted.insert(k - 1, v);
                         }
-                        a.items = shifted;
+                        a.replace_items(shifted, &mut self.side_refs);
                         a.length = new_len;
                         first
                     };
@@ -23814,7 +27403,7 @@ impl Interp {
                     self.meter.tick_builtin_some((length as u64) * 10);
                     let a = self.arrays.get_mut(&inst).unwrap();
                     let mut shifted = std::collections::BTreeMap::new();
-                    for (&k, &v) in a.items.iter() {
+                    for (&k, &v) in a.items().iter() {
                         shifted.insert(k + c, v);
                     }
                     for (i, mut v) in args.into_iter().enumerate() {
@@ -23823,7 +27412,7 @@ impl Interp {
                         shifted.insert(i as u32, v);
                         self.meter.tick_builtin_some(4);
                     }
-                    a.items = shifted;
+                    a.replace_items(shifted, &mut self.side_refs);
                     a.length = length + c;
                 }
                 self.meter.tick_builtin_some(2);
@@ -23852,17 +27441,17 @@ impl Interp {
                     // (memmove semantics — overlapping ranges are handled by the
                     // snapshot).
                     let src: Vec<Option<Slot>> = (0..count)
-                        .map(|i| self.arrays[&inst].items.get(&(from + i)).copied())
+                        .map(|i| self.arrays[&inst].items().get(&(from + i)).copied())
                         .collect();
                     let a = self.arrays.get_mut(&inst).unwrap();
                     for (i, s) in src.into_iter().enumerate() {
                         let dst = to + i as u32;
                         match s {
                             Some(v) => {
-                                a.items.insert(dst, v);
+                                a.insert_item(dst, v, &mut self.side_refs);
                             }
                             None => {
-                                a.items.remove(&dst);
+                                a.remove_item(&dst, &mut self.side_refs);
                             }
                         }
                     }
@@ -23906,7 +27495,7 @@ impl Interp {
                                 value
                             } else {
                                 self.arrays[&inst]
-                                    .items
+                                    .items()
                                     .get(&i)
                                     .copied()
                                     .unwrap_or_else(Slot::undefined)
@@ -23915,7 +27504,7 @@ impl Interp {
                         .collect();
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in items.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = length;
                 }
@@ -23946,7 +27535,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 self.meter.tick_raw(ARRAY_FOREACH_FRAME_METERING);
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -23976,7 +27565,7 @@ impl Interp {
                     self.meter.tick_raw(self.array_chunk_size_metering(length));
                 }
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -23985,7 +27574,7 @@ impl Interp {
                         let mut v = r;
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        self.arrays.get_mut(&result).unwrap().items.insert(i, v);
+                        self.arrays.get_mut(&result).unwrap().insert_item(i, v, &mut self.side_refs);
                     }
                 }
                 self.arrays.get_mut(&result).unwrap().length = length;
@@ -24015,7 +27604,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_SOMEEVERY_FRAME_METERING);
                 let mut answer = is_every;
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24065,8 +27654,9 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in 0..length {
-                    let item = self.arrays[&inst]
-                        .items
+                    let item = self
+                        .arrays[&inst]
+                        .items()
                         .get(&i)
                         .copied()
                         .unwrap_or_else(Slot::undefined);
@@ -24115,7 +27705,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_FILTER_FRAME_METERING);
                 let mut kept: Vec<Slot> = Vec::new();
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24137,7 +27727,7 @@ impl Interp {
                     for (i, mut v) in kept.into_iter().enumerate() {
                         v.id = 0;
                         v.next = crate::value::SlotIndex::NULL;
-                        a.items.insert(i as u32, v);
+                        a.insert_item(i as u32, v, &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24165,14 +27755,9 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
                 // The present indices in fold order.
                 let order: Vec<u32> = if right {
-                    (0..length)
-                        .rev()
-                        .filter(|i| self.arrays[&inst].items.contains_key(i))
-                        .collect()
+                    (0..length).rev().filter(|i| self.arrays[&inst].items().contains_key(i)).collect()
                 } else {
-                    (0..length)
-                        .filter(|i| self.arrays[&inst].items.contains_key(i))
-                        .collect()
+                    (0..length).filter(|i| self.arrays[&inst].items().contains_key(i)).collect()
                 };
                 let mut it = order.into_iter();
                 let mut acc = if argc >= 2 {
@@ -24186,7 +27771,7 @@ impl Interp {
                             // The seed-finding scan (one iteration for a dense
                             // array — the first/last present element).
                             self.meter.tick_raw(ARRAY_REDUCE_INIT_SCAN_METERING);
-                            match self.arrays[&inst].items.get(&i) {
+                            match self.arrays[&inst].items().get(&i) {
                                 Some(s) => *s,
                                 None => {
                                     return Err(Halt::Unsupported("reduce:concurrent-mutation"))
@@ -24200,7 +27785,7 @@ impl Interp {
                     // A prior callback may have mutated the receiver (e.g. the
                     // test262 `delete arr[i]` pattern); a vanished snapshotted
                     // index self-names rather than panicking on a missing key.
-                    let item = match self.arrays[&inst].items.get(&i) {
+                    let item = match self.arrays[&inst].items().get(&i) {
                         Some(s) => *s,
                         None => return Err(Halt::Unsupported("reduce:concurrent-mutation")),
                     };
@@ -24240,8 +27825,9 @@ impl Interp {
                 }
                 let mut found: Option<(u32, Slot)> = None;
                 for i in (0..length).rev() {
-                    let item = self.arrays[&inst]
-                        .items
+                    let item = self
+                        .arrays[&inst]
+                        .items()
                         .get(&i)
                         .copied()
                         .unwrap_or_else(Slot::undefined);
@@ -24291,7 +27877,7 @@ impl Interp {
                         .map(|to| {
                             let from = length - 1 - to;
                             self.arrays[&inst]
-                                .items
+                                .items()
                                 .get(&from)
                                 .copied()
                                 .unwrap_or_else(Slot::undefined)
@@ -24299,7 +27885,7 @@ impl Interp {
                         .collect();
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (to, s) in items.into_iter().enumerate() {
-                        a.items.insert(to as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(to as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = length;
                 }
@@ -24368,13 +27954,7 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Perform the splice on a dense element vector.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| {
-                        self.arrays[&inst]
-                            .items
-                            .get(&i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    })
+                    .map(|i| self.arrays[&inst].items().get(&i).copied().unwrap_or_else(Slot::undefined))
                     .collect();
                 let removed: Vec<Slot> = cur[start as usize..(start + deletions) as usize].to_vec();
                 let inserted: Vec<Slot> = (0..insertions)
@@ -24391,16 +27971,16 @@ impl Interp {
                 rebuilt.extend_from_slice(&cur[(start + deletions) as usize..]);
                 {
                     let a = self.arrays.get_mut(&inst).unwrap();
-                    a.items.clear();
+                    a.clear_items(&mut self.side_refs);
                     for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = length - deletions + insertions;
                 }
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in removed.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = deletions;
                 }
@@ -24453,13 +28033,7 @@ impl Interp {
                 self.meter.tick_builtin_some(4);
                 // Build the result densely; the receiver stays untouched.
                 let cur: Vec<Slot> = (0..length)
-                    .map(|i| {
-                        self.arrays[&inst]
-                            .items
-                            .get(&i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    })
+                    .map(|i| self.arrays[&inst].items().get(&i).copied().unwrap_or_else(Slot::undefined))
                     .collect();
                 let inserted: Vec<Slot> = (0..insertions)
                     .map(|k| {
@@ -24477,7 +28051,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = result_len;
                 }
@@ -24513,7 +28087,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24539,7 +28113,7 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
                 let mut out: Vec<Slot> = Vec::new();
                 for i in 0..length {
-                    let item = self.arrays[&inst].items.get(&i).copied();
+                    let item = self.arrays[&inst].items().get(&i).copied();
                     if let Some(item) = item {
                         self.meter.tick_raw(ARRAY_FLATMAP_CALLBACK_METERING);
                         let cb_args = [item, Slot::integer(i as i32), this];
@@ -24554,7 +28128,7 @@ impl Interp {
                             self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
                             let sub_len = self.arrays[&sub].length;
                             for k in 0..sub_len {
-                                if let Some(e) = self.arrays[&sub].items.get(&k).copied() {
+                                if let Some(e) = self.arrays[&sub].items().get(&k).copied() {
                                     self.meter.tick_raw(ARRAY_FLAT_PER_LEAF_METERING);
                                     self.meter
                                         .tick_raw(self.array_item_grow_metering(out.len() as u64));
@@ -24574,7 +28148,7 @@ impl Interp {
                 {
                     let a = self.arrays.get_mut(&result).unwrap();
                     for (i, s) in out.into_iter().enumerate() {
-                        a.items.insert(i as u32, Slot::of(s.kind, s.value));
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
                     }
                     a.length = total;
                 }
@@ -24604,7 +28178,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 let items: Vec<Option<Slot>> = {
                     let a = &self.arrays[&inst];
-                    (0..length).map(|i| a.items.get(&i).copied()).collect()
+                    (0..length).map(|i| a.items().get(&i).copied()).collect()
                 };
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
@@ -24646,7 +28220,7 @@ impl Interp {
                 let length = self.arrays[&inst].length;
                 let items: Vec<Option<Slot>> = {
                     let a = &self.arrays[&inst];
-                    (0..length).map(|i| a.items.get(&i).copied()).collect()
+                    (0..length).map(|i| a.items().get(&i).copied()).collect()
                 };
                 self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
                 self.meter.tick_slot_alloc();
@@ -24896,7 +28470,7 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("collection-clear:weak")),
                 }
                 self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
-                self.collections.get_mut(&inst).unwrap().entries.clear();
+                self.collections.get_mut(&inst).unwrap().clear_entries(&mut self.side_refs);
                 // `fxResizeEntries` with size 0 shrinks the address chunk back
                 // toward `mxTableMinLength`, charging the rehash chunk if the
                 // length changes (modeled by [`Self::collection_table_resize`]).
@@ -25174,6 +28748,71 @@ impl Interp {
                 };
                 self.regexp_test(inst, arg0)?
             }
+            NativeMethod::RegExpCompile => this,
+            NativeMethod::ErrorStackGetter => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                match self.error_data.get(&inst).cloned() {
+                    None => Slot::undefined(),
+                    Some(info) => {
+                        // `name`/`message` are read live off the instance
+                        // (`mxGetID`), so a post-construction rename shows.
+                        let mut text = match self.name_id.map(|id| self.instance_get(inst, id)) {
+                            Some(v) if v.kind != Kind::Undefined => self.render(&v),
+                            _ => info.name.to_string(),
+                        };
+                        let message = match self.symbol_ids.get("message").copied() {
+                            Some(id) => {
+                                let v = self.instance_get(inst, id);
+                                if v.kind == Kind::Undefined {
+                                    None
+                                } else {
+                                    Some(self.render(&v))
+                                }
+                            }
+                            None => info.message.clone(),
+                        };
+                        if let Some(m) = message {
+                            if !m.is_empty() {
+                                text.push_str(": ");
+                                text.push_str(&m);
+                            }
+                        }
+                        for frame in &info.frames {
+                            text.push_str("\n at");
+                            if !frame.is_empty() {
+                                text.push(' ');
+                                text.push_str(frame);
+                            }
+                            text.push_str(" ()");
+                        }
+                        self.new_string_metered(text.as_bytes())
+                    }
+                }
+            }
+            NativeMethod::ErrorStackSetter => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                if argc < 1 {
+                    return Err(self.catchable_type_error());
+                }
+                let id = self.intern_key("stack");
+                let desc = OrdinaryDescriptor {
+                    value: Some(arg0),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                };
+                if !self.mop_define_own_property(code, inst, id, desc)? {
+                    return Err(self.catchable_type_error());
+                }
+                Slot::undefined()
+            }
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => r,
@@ -25342,6 +28981,9 @@ impl Interp {
                     return Ok(Slot::boolean(true));
                 }
                 if !self.instance_extensible(inst) {
+                    return Ok(Slot::boolean(false));
+                }
+                if self.prototype_chain_would_cycle(inst, new_proto) {
                     return Ok(Slot::boolean(false));
                 }
                 // Store the new prototype in the instance slot's payload
@@ -25623,7 +29265,7 @@ impl Interp {
                     let mut data = ArrayData::default();
                     data.length = n;
                     for (i, slot) in items.into_iter().enumerate() {
-                        data.items.insert(i as u32, slot);
+                        data.insert_item(i as u32, slot, &mut self.side_refs);
                     }
                     self.arrays.insert(result, data);
                     return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
@@ -25656,7 +29298,8 @@ impl Interp {
                 let mut data = ArrayData::default();
                 data.length = n;
                 for (i, &id) in ids.iter().enumerate() {
-                    data.items.insert(i as u32, self.property_key_slot(id)?);
+                    let key_slot = self.property_key_slot(id)?;
+                    data.insert_item(i as u32, key_slot, &mut self.side_refs);
                 }
                 self.arrays.insert(result, data);
                 Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
@@ -25976,21 +29619,14 @@ impl Interp {
                 }
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p]
-                            .as_mut()
-                            .unwrap()
-                            .1 = val;
+                        self.collections.get_mut(&inst).unwrap().set_entry_value(p, val, &mut self.side_refs);
                     }
                     None => {
                         // `fxSetEntry`/`fxSetWeakEntry` new key: three slots
                         // (Map: key + value + entry; WeakMap: keyEntry +
                         // listEntry + closure).
                         self.charge_new_entry_slots(3);
-                        self.collections
-                            .get_mut(&inst)
-                            .unwrap()
-                            .entries
-                            .push(Some((key, val)));
+                        self.collections.get_mut(&inst).unwrap().push_entry(key, val, &mut self.side_refs);
                         self.collection_table_resize(inst);
                     }
                 }
@@ -26006,11 +29642,7 @@ impl Interp {
                     // `fxSetWeakEntry` → three (keyEntry + listEntry + closure).
                     let n = if weak { 3 } else { 2 };
                     self.charge_new_entry_slots(n);
-                    self.collections
-                        .get_mut(&inst)
-                        .unwrap()
-                        .entries
-                        .push(Some((key, Slot::undefined())));
+                    self.collections.get_mut(&inst).unwrap().push_entry(key, Slot::undefined(), &mut self.side_refs);
                     self.collection_table_resize(inst);
                 }
                 Ok(this)
@@ -26019,7 +29651,7 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 let v = self
                     .collection_find(inst, &key)
-                    .map(|p| self.collections[&inst].entries[p].unwrap().1)
+                    .map(|p| self.collections[&inst].entries()[p].unwrap().1)
                     .unwrap_or_else(Slot::undefined);
                 Ok(v)
             }
@@ -26038,7 +29670,7 @@ impl Interp {
                 let key = self.normalize_coll_key(arg0);
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p] = None;
+                        self.collections.get_mut(&inst).unwrap().remove_entry(p, &mut self.side_refs);
                         // `fxDeleteEntry` calls `fxResizeEntries` (a Map/Set may
                         // shrink its address chunk; a weak unlink is
                         // allocation-free).
@@ -26075,10 +29707,10 @@ impl Interp {
             }
         }
         let data = &self.arrays[&array];
-        if (0..data.length).any(|index| !data.items.contains_key(&index)) {
+        if (0..data.length).any(|index| !data.items().contains_key(&index)) {
             return Err(Halt::Unsupported("collection-constructor:sparse-array"));
         }
-        let elements: Vec<Slot> = (0..data.length).map(|index| data.items[&index]).collect();
+        let elements: Vec<Slot> = (0..data.length).map(|index| data.items()[&index]).collect();
         let kind = self.collections[&inst].kind;
         let method_name = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
             "set"
@@ -26140,12 +29772,12 @@ impl Interp {
                 };
                 let entry_data = &self.arrays[&entry];
                 if entry_data.length < 2
-                    || !entry_data.items.contains_key(&0)
-                    || !entry_data.items.contains_key(&1)
+                    || !entry_data.items().contains_key(&0)
+                    || !entry_data.items().contains_key(&1)
                 {
                     return Err(Halt::Unsupported("collection-constructor:sparse-map-entry"));
                 }
-                (entry_data.items[&0], entry_data.items[&1])
+                (entry_data.items()[&0], entry_data.items()[&1])
             } else {
                 (element, Slot::undefined())
             };
@@ -26170,10 +29802,7 @@ impl Interp {
             }
             if let Some(position) = self.collection_find(inst, &key) {
                 if matches!(kind, CollKind::Map | CollKind::WeakMap) {
-                    self.collections.get_mut(&inst).unwrap().entries[position]
-                        .as_mut()
-                        .unwrap()
-                        .1 = value;
+                    self.collections.get_mut(&inst).unwrap().set_entry_value(position, value, &mut self.side_refs);
                 }
             } else {
                 let slots = match kind {
@@ -26181,11 +29810,7 @@ impl Interp {
                     CollKind::Set => 2,
                 };
                 self.charge_new_entry_slots(slots);
-                self.collections
-                    .get_mut(&inst)
-                    .unwrap()
-                    .entries
-                    .push(Some((key, value)));
+                self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
                 self.collection_table_resize(inst);
             }
         }
@@ -26200,6 +29825,22 @@ impl Interp {
     /// meters the single native host frame ([`MATH_FRAME_METERING`]). No
     /// `mxMeterSome` and no chunk — the pin's bodies carry neither. A NaN
     /// result is the canonical `f64::NAN`.
+    ///
+    /// LIBM DECISION-OF-RECORD (wave-6 W6-23): the transcendental bodies
+    /// call the platform libm (via `f64::sin`/`powf`/…), the engine's one
+    /// genuine host-environment dependence — and the pinned XS oracle
+    /// links the SAME platform libm, which is what the differential
+    /// suite's bit-exactness rests on. The recorded stance: determinism
+    /// is scoped PER RELEASE BINARY PER PLATFORM (one pinned toolchain
+    /// and libm per release; twins on one host are always exact).
+    /// Heterogeneous-fleet consensus needs a vendored deterministic libm
+    /// (the pure-Rust `libm` crate is the named candidate), which must
+    /// land TOGETHER with an oracle built against the same library — a
+    /// unilateral swap here would break the differential pin wherever
+    /// glibc and MUSL disagree in the last ulp, and a last-ulp divergence
+    /// is a full determinism break (results feed guest branches, so
+    /// computrons diverge transitively). See the design's Remaining
+    /// ledger for the decision record.
     fn call_math(&mut self, id: MathId, base: usize, argc: usize) -> Result<Slot, Halt> {
         let arg = |i: usize| -> Option<Slot> {
             if i < argc {
@@ -26766,22 +30407,25 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 visited.push(inst);
-                let out = if let Some(a) = self.arrays.get(&inst).cloned() {
+                let out = if let Some((a_length, a_items)) = self
+                    .arrays
+                    .get(&inst)
+                    .map(|a| (a.length, a.items().clone()))
+                {
                     // `fxIsArray` branch: enter cost, then one iteration body per
                     // index (paid for holes too — they serialize as `null`), plus
                     // the recursive child cost each element adds through `cost`.
                     *cost += JSON_STRINGIFY_ARRAY_ENTER_METERING;
-                    if a.length > 0 {
+                    if a_length > 0 {
                         *cost += JSON_STRINGIFY_ARRAY_NONEMPTY_METERING;
                     }
                     let mut buf = vec![b'['];
-                    for i in 0..a.length {
+                    for i in 0..a_length {
                         if i > 0 {
                             buf.push(b',');
                         }
                         *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
-                        let elem = a
-                            .items
+                        let elem = a_items
                             .get(&i)
                             .map(|s| Slot::of(s.kind, s.value))
                             .unwrap_or_else(Slot::undefined);
@@ -27134,7 +30778,7 @@ impl Interp {
             self.json_parse_whitespace(input, pos);
             *cost += JSON_PARSE_ARRAY_ELEMENT_METERING;
             let v = self.json_parse_value(input, pos, cost)?;
-            self.arrays.get_mut(&inst).unwrap().items.insert(length, v);
+            self.arrays.get_mut(&inst).unwrap().insert_item(length, v, &mut self.side_refs);
             length += 1;
             self.json_parse_whitespace(input, pos);
             match input.get(*pos) {
@@ -27798,6 +31442,7 @@ impl Interp {
                 iterable: arr,
                 index: 0,
                 kind,
+                generation: 0,
                 result,
                 done: false,
                 enum_keys: Vec::new(),
@@ -27830,6 +31475,7 @@ impl Interp {
                 iterable: crate::value::SlotIndex::NULL,
                 index: 0,
                 kind: 4,
+                generation: 0,
                 result,
                 done: false,
                 enum_keys: Vec::new(),
@@ -27851,6 +31497,7 @@ impl Interp {
     /// ([`COLLECTION_ITERATOR_CREATE_METERING`]).
     fn make_collection_iterator(&mut self, inst: crate::value::SlotIndex, kind: u8) -> Slot {
         self.meter.tick_raw(COLLECTION_ITERATOR_CREATE_METERING);
+        let coll_generation = self.collections.get(&inst).map_or(0, |c| c.generation());
         let result = self.slots.alloc(Slot::instance(self.object_proto));
         if let Some(vid) = self.value_id {
             self.set_own_unmetered(result, vid, Slot::undefined());
@@ -27870,6 +31517,7 @@ impl Interp {
                 iterable: inst,
                 index: 0,
                 kind,
+                generation: coll_generation,
                 result,
                 done: false,
                 enum_keys: Vec::new(),
@@ -27907,7 +31555,13 @@ impl Interp {
                 .value_id
                 .map(|id| self.instance_get(result_obj, id))
                 .unwrap_or_else(Slot::undefined);
-            self.arrays.get_mut(&array).unwrap().items.insert(length, value);
+            // The write routes through the counted accessor so the
+            // side-ref page counts move with it (the seam's bulk-table
+            // discipline; a raw map insert desyncs the parity net).
+            self.arrays
+                .get_mut(&array)
+                .unwrap()
+                .insert_item(length, value, &mut self.side_refs);
             length += 1;
         }
         self.arrays.get_mut(&array).unwrap().length = length;
@@ -27930,14 +31584,27 @@ impl Interp {
     fn collection_iterator_next(&mut self, iter: crate::value::SlotIndex) -> Slot {
         let st = self.iterators[&iter].clone();
         let result = st.result;
+        // A `clear()` since this cursor was created retires it for good
+        // (XS's purge frees the node chain the cursor walked; it never
+        // reaches entries added after a clear). Latch done.
+        let stale = self
+            .collections
+            .get(&st.iterable)
+            .is_some_and(|c| c.generation() != st.generation);
+        if stale {
+            if let Some(s) = self.iterators.get_mut(&iter) {
+                s.done = true;
+            }
+        }
+        let st = self.iterators[&iter].clone();
         let len = self
             .collections
             .get(&st.iterable)
-            .map(|c| c.entries.len() as u32)
+            .map(|c| c.entries().len() as u32)
             .unwrap_or(0);
         let mut live_index = st.index;
         while live_index < len
-            && self.collections[&st.iterable].entries[live_index as usize].is_none()
+            && self.collections[&st.iterable].entries()[live_index as usize].is_none()
         {
             live_index += 1;
         }
@@ -27950,7 +31617,7 @@ impl Interp {
             if st.kind == 7 {
                 self.meter.tick_raw(COLLECTION_ITERATOR_ENTRY_METERING);
             }
-            let (k, v) = self.collections[&st.iterable].entries[live_index as usize].unwrap();
+            let (k, v) = self.collections[&st.iterable].entries()[live_index as usize].unwrap();
             let is_set = matches!(self.collections[&st.iterable].kind, CollKind::Set);
             let value = match st.kind {
                 5 => k, // keys
@@ -27964,8 +31631,8 @@ impl Interp {
                     let pair = self.new_array();
                     let arr = self.arrays.get_mut(&pair).unwrap();
                     arr.length = 2;
-                    arr.items.insert(0, Slot::of(a.kind, a.value));
-                    arr.items.insert(1, Slot::of(b.kind, b.value));
+                    arr.insert_item(0, Slot::of(a.kind, a.value), &mut self.side_refs);
+                    arr.insert_item(1, Slot::of(b.kind, b.value), &mut self.side_refs);
                     self.meter.tick_raw(self.array_chunk_size_metering(2));
                     Slot::of(Kind::Reference, Payload::Reference(pair))
                 }
@@ -28025,10 +31692,21 @@ impl Interp {
             MAP_FOREACH_FRAME_METERING
         });
         // Index into the insertion list. Deletions leave tombstones and
-        // additions append, matching XS's live linked-list walk.
+        // additions append, matching XS's live linked-list walk. A
+        // `clear()` from inside the callback bumps the collection's
+        // generation and ends the walk (XS's purge — the cursor never
+        // reaches post-clear appends).
+        let start_generation = self.collections.get(&inst).map_or(0, |c| c.generation());
         let mut i = 0u32;
         loop {
-            let entry = self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+            if self
+                .collections
+                .get(&inst)
+                .is_none_or(|c| c.generation() != start_generation)
+            {
+                break;
+            }
+            let entry = self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
             let (k, v) = match entry {
                 Some(Some(kv)) => *kv,
                 Some(None) => {
@@ -28074,7 +31752,7 @@ impl Interp {
     fn collection_live_len(&self, inst: crate::value::SlotIndex) -> usize {
         self.collections
             .get(&inst)
-            .map(|c| c.entries.iter().filter(|e| e.is_some()).count())
+            .map(|c| c.entries().iter().filter(|e| e.is_some()).count())
             .unwrap_or(0)
     }
 
@@ -28083,7 +31761,7 @@ impl Interp {
     fn collection_live_keys(&self, inst: crate::value::SlotIndex) -> Vec<Slot> {
         self.collections
             .get(&inst)
-            .map(|c| c.entries.iter().filter_map(|e| e.map(|(k, _)| k)).collect())
+            .map(|c| c.entries().iter().filter_map(|e| e.map(|(k, _)| k)).collect())
             .unwrap_or_default()
     }
 
@@ -28249,19 +31927,11 @@ impl Interp {
         let inst = self.slots.alloc(Slot::instance(self.set_proto));
         self.collections.insert(
             inst,
-            CollectionData {
-                kind: CollKind::Set,
-                entries: Vec::new(),
-                table_length: MAP_MIN_TABLE_LENGTH,
-            },
+            CollectionData::new(CollKind::Set, MAP_MIN_TABLE_LENGTH),
         );
         for key in keys {
             self.charge_new_entry_slots(2);
-            self.collections
-                .get_mut(&inst)
-                .unwrap()
-                .entries
-                .push(Some((key, Slot::undefined())));
+            self.collections.get_mut(&inst).unwrap().push_entry(key, Slot::undefined(), &mut self.side_refs);
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -28302,7 +31972,7 @@ impl Interp {
                     let mut i = 0u32;
                     loop {
                         let entry =
-                            self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                            self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
                         let k = match entry {
                             Some(Some((k, _))) => *k,
                             Some(None) => {
@@ -28383,7 +32053,7 @@ impl Interp {
                 let mut i = 0u32;
                 loop {
                     let entry =
-                        self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                        self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
                     let k = match entry {
                         Some(Some((k, _))) => *k,
                         Some(None) => {
@@ -28423,7 +32093,7 @@ impl Interp {
                     let mut i = 0u32;
                     loop {
                         let entry =
-                            self.collections.get(&inst).and_then(|c| c.entries.get(i as usize));
+                            self.collections.get(&inst).and_then(|c| c.entries().get(i as usize));
                         let k = match entry {
                             Some(Some((k, _))) => *k,
                             Some(None) => {
@@ -28506,14 +32176,10 @@ impl Interp {
                     .copied()
                     .unwrap_or_else(Slot::undefined);
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries[p].unwrap().1);
+                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
                 }
                 self.charge_new_entry_slots(3);
-                self.collections
-                    .get_mut(&inst)
-                    .unwrap()
-                    .entries
-                    .push(Some((key, value)));
+                self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
                 self.collection_table_resize(inst);
                 Ok(value)
             }
@@ -28528,7 +32194,7 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 if let Some(p) = self.collection_find(inst, &key) {
-                    return Ok(self.collections[&inst].entries[p].unwrap().1);
+                    return Ok(self.collections[&inst].entries()[p].unwrap().1);
                 }
                 // `Call(callbackfn, undefined, « key »)`. The callback may mutate
                 // the map (including inserting `key` itself); the computed value
@@ -28536,18 +32202,11 @@ impl Interp {
                 let value = self.run_callback(code, callbackfn, Slot::undefined(), &[key])?;
                 match self.collection_find(inst, &key) {
                     Some(p) => {
-                        self.collections.get_mut(&inst).unwrap().entries[p]
-                            .as_mut()
-                            .unwrap()
-                            .1 = value;
+                        self.collections.get_mut(&inst).unwrap().set_entry_value(p, value, &mut self.side_refs);
                     }
                     None => {
                         self.charge_new_entry_slots(3);
-                        self.collections
-                            .get_mut(&inst)
-                            .unwrap()
-                            .entries
-                            .push(Some((key, value)));
+                        self.collections.get_mut(&inst).unwrap().push_entry(key, value, &mut self.side_refs);
                         self.collection_table_resize(inst);
                     }
                 }
@@ -28663,7 +32322,7 @@ impl Interp {
                     let value = self
                         .arrays
                         .get(&i)
-                        .and_then(|a| a.items.get(&k))
+                        .and_then(|a| a.items().get(&k))
                         .copied()
                         .unwrap_or_else(Slot::undefined);
                     record!(value);
@@ -28774,20 +32433,12 @@ impl Interp {
         let inst = self.slots.alloc(Slot::instance(self.map_proto));
         self.collections.insert(
             inst,
-            CollectionData {
-                kind: CollKind::Map,
-                entries: Vec::new(),
-                table_length: MAP_MIN_TABLE_LENGTH,
-            },
+            CollectionData::new(CollKind::Map, MAP_MIN_TABLE_LENGTH),
         );
         for (key, values) in buckets {
             let array = self.group_array_from_values(values);
             self.charge_new_entry_slots(3);
-            self.collections
-                .get_mut(&inst)
-                .unwrap()
-                .entries
-                .push(Some((key, array)));
+            self.collections.get_mut(&inst).unwrap().push_entry(key, array, &mut self.side_refs);
             self.collection_table_resize(inst);
         }
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -28846,7 +32497,7 @@ impl Interp {
             let mut v = v;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            self.arrays.get_mut(&inst).unwrap().items.insert(i as u32, v);
+            self.arrays.get_mut(&inst).unwrap().insert_item(i as u32, v, &mut self.side_refs);
         }
         self.arrays.get_mut(&inst).unwrap().length = n;
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -28935,6 +32586,7 @@ impl Interp {
                 iterable: obj,
                 index: 0,
                 kind: 3,
+                generation: 0,
                 result,
                 done: false,
                 enum_keys: keys,
@@ -28958,7 +32610,7 @@ impl Interp {
         while !cur.is_null() {
             // Array index keys first (ascending), then string keys.
             if let Some(a) = self.arrays.get(&cur) {
-                let mut idxs: Vec<u32> = a.items.keys().copied().collect();
+                let mut idxs: Vec<u32> = a.items().keys().copied().collect();
                 idxs.sort_unstable();
                 for i in idxs {
                     let k = (crate::value::XS_NO_ID, i);
@@ -28973,7 +32625,14 @@ impl Interp {
             let mut p = self.slots.get(cur).next;
             while !p.is_null() {
                 let s = self.slots.get(p);
-                if s.id != crate::value::XS_NO_ID && s.flag & XS_DONT_ENUM_FLAG == 0 {
+                // Symbol-keyed properties are excluded from for-in per
+                // EnumerateObjectProperties (and XS agrees); before this
+                // filter a symbol-keyed enumerable own property yielded a
+                // phantom "" key (the unmapped id rendered empty).
+                if s.id != crate::value::XS_NO_ID
+                    && s.flag & XS_DONT_ENUM_FLAG == 0
+                    && !self.is_symbol_key_id(s.id)
+                {
                     names.push((s.id, 0));
                 }
                 p = s.next;
@@ -29023,7 +32682,7 @@ impl Interp {
                     0 => self
                         .arrays
                         .get(&st.iterable)
-                        .and_then(|a| a.items.get(&st.index).copied())
+                        .and_then(|a| a.items().get(&st.index).copied())
                         .map(|s| Slot::of(s.kind, s.value))
                         .unwrap_or_else(Slot::undefined),
                     1 => Slot::integer(st.index as i32),
@@ -29032,14 +32691,14 @@ impl Interp {
                         let elem = self
                             .arrays
                             .get(&st.iterable)
-                            .and_then(|a| a.items.get(&st.index).copied())
+                            .and_then(|a| a.items().get(&st.index).copied())
                             .map(|s| Slot::of(s.kind, s.value))
                             .unwrap_or_else(Slot::undefined);
                         let pair = self.new_array();
                         let a = self.arrays.get_mut(&pair).unwrap();
                         a.length = 2;
-                        a.items.insert(0, Slot::integer(st.index as i32));
-                        a.items.insert(1, elem);
+                        a.insert_item(0, Slot::integer(st.index as i32), &mut self.side_refs);
+                        a.insert_item(1, elem, &mut self.side_refs);
                         self.meter.tick_raw(self.array_chunk_size_metering(2));
                         Slot::of(Kind::Reference, Payload::Reference(pair))
                     }
@@ -29123,7 +32782,7 @@ impl Interp {
             _ => return None,
         };
         let a = self.arrays.get(&inst)?;
-        if a.items.len() as u32 == a.length {
+        if a.items().len() as u32 == a.length {
             Some(inst)
         } else {
             None
@@ -30775,7 +34434,7 @@ impl Interp {
     /// The index of `key` among `inst`'s entries by SameValueZero, or `None`.
     fn collection_find(&self, inst: crate::value::SlotIndex, key: &Slot) -> Option<usize> {
         let data = self.collections.get(&inst)?;
-        data.entries
+        data.entries()
             .iter()
             .position(|entry| entry.is_some_and(|(k, _)| self.same_value_zero(&k, key)))
     }
@@ -30802,10 +34461,7 @@ impl Interp {
             if data.kind == CollKind::WeakMap || data.kind == CollKind::WeakSet {
                 return;
             }
-            (
-                data.table_length,
-                data.entries.iter().filter(|entry| entry.is_some()).count() as u32,
-            )
+            (data.table_length, data.live_len() as u32)
         };
         // mxTableThreshold(L) = (L>>1) + (L>>2); high = threshold, low = high>>1.
         let high = (former >> 1) + (former >> 2);
@@ -30936,7 +34592,23 @@ impl Interp {
     /// throw escapes every JS handler and reaches the host boundary), so
     /// the caller yields `Halt::Throw`.
     fn unwind_to_jump(&mut self) -> Option<usize> {
+        // A throw between `XS_CODE_SUPER` (which arms the pending
+        // new-target for the construct about to happen) and the
+        // construct frame that consumes it abandons that construct
+        // (wave-6 W6-15: left armed, the machine's NEXT `new F()` took
+        // the stale target as its `new.target`). Disarm BEFORE the
+        // empty-chain return below, so the uncaught direct
+        // `THROW`/`RETHROW` (and rejected-await) host escapes are
+        // covered exactly like the caught path and `raise_js`.
+        self.pending_new_target = None;
         let jump = self.jumps.pop()?;
+        // A handler live across a suspend costs XS one extra dispatch to
+        // land in (see [`RESUMED_HANDLER_THROW_METERING`]); a handler
+        // pushed by a `CATCH` in this run costs nothing beyond the
+        // ordinary caught-throw modeling.
+        if jump.rebased {
+            self.meter.tick_raw(RESUMED_HANDLER_THROW_METERING);
+        }
         // Pop any callee activations opened since the catch was
         // established (a throw crossing called functions), restoring the
         // establishing frame's saved activation each time (XS restores
@@ -30967,6 +34639,9 @@ impl Interp {
         match self.unwind_to_jump() {
             Some(target) => Ok(target),
             None => {
+                // Uncaught: the host-escape leaves the machine
+                // post-throw ([`Self::unwind_to_jump`] disarmed the
+                // pending new-target for every escape path, W6-15).
                 self.meter_host_escape();
                 Err(Halt::Throw(self.render(&value)))
             }
@@ -31257,11 +34932,7 @@ impl Interp {
         out: &mut Vec<Slot>,
     ) {
         for index in 0..len {
-            let item = match self
-                .arrays
-                .get(&src)
-                .and_then(|a| a.items.get(&index).copied())
-            {
+            let item = match self.arrays.get(&src).and_then(|a| a.items().get(&index).copied()) {
                 Some(it) => it,
                 None => continue, // a hole is skipped (fxHasIndex false)
             };
@@ -31316,14 +34987,49 @@ impl Interp {
         if let Some(&id) = self.symbol_ids.get(name) {
             return id;
         }
-        let id = self.next_intern_id;
-        self.next_intern_id = self.next_intern_id.saturating_add(1);
-        self.symbol_ids.insert(name.to_string(), id);
+        let id = self.append_name_key(name);
         if !self.default_keys.contains(name) {
             // A name absent from XS's boot key table misses `nameTable`, so
             // `fxNewNameX` calls `fxFindKey` → `fxNewSlot`: one metered slot.
             self.meter.tick_slot_alloc();
         }
+        id
+    }
+
+    /// Append a novel string key to the name table and hand out its id (the
+    /// new table position). The table IS the persisted id→name map (the NAME
+    /// row), so a key interned here round-trips a snapshot with its id — the
+    /// unification that retired the string-key half of the old runtime-intern
+    /// persistence refusal. Saturates at the symbol-key floor when the two id
+    /// spaces meet (the exhaustion hazard documented on
+    /// [`Self::next_symbol_key_id`]).
+    fn append_name_key(&mut self, name: &str) -> u16 {
+        let next = self.symbol_names.len().saturating_add(1);
+        if next >= self.next_symbol_key_id as usize {
+            // The id spaces met: poison the machine and hand the CURRENT
+            // operation a saturated placeholder. The placeholder aliases,
+            // but the dispatch loop halts on the latch before the next
+            // instruction and the managed lifecycle rewinds the crank, so
+            // the alias is never guest-observable or persisted.
+            self.id_space_exhausted = true;
+            let id = self.next_symbol_key_id;
+            self.symbol_ids.insert(name.to_string(), id);
+            return id;
+        }
+        let id = next as u16;
+        self.symbol_names.push(name.to_string());
+        self.symbol_ids.insert(name.to_string(), id);
+        // Keep the name-keyed special-id caches in lockstep with the
+        // table: a restore re-derives them from the FULL persisted
+        // table (`bind_program_symbols`), so a live machine that
+        // interned a cached name ("length", "value", …) without
+        // seeding its cache would gate the exotic fast paths
+        // differently from its own resumed twin — a result AND
+        // computron divergence (review of the llm rebase, locked by
+        // `runtime_interned_special_name_gates_like_resumed`). The
+        // refresh is additive (fills only `None` caches) and O(a few
+        // map lookups) on the rare novel-intern path.
+        self.refresh_special_ids_from_symbols();
         id
     }
 
@@ -31335,10 +35041,7 @@ impl Interp {
         if let Some(&id) = self.symbol_ids.get(name) {
             return id;
         }
-        let id = self.next_intern_id;
-        self.next_intern_id = self.next_intern_id.saturating_add(1);
-        self.symbol_ids.insert(name.to_string(), id);
-        id
+        self.append_name_key(name)
     }
 
     /// The program-local property **id** a symbol value is keyed under (XS's
@@ -31348,14 +35051,23 @@ impl Interp {
     /// `o[sym]` round-trips and `sym1 === sym2` implies same key. No metering:
     /// the symbol was already allocated (its descriptor slot); using it as a
     /// key allocates no new name slot in XS (`mxID` is a field read). The id is
-    /// drawn from the shared [`Self::next_intern_id`] counter, so it never
+    /// drawn from the top-down [`Self::next_symbol_key_id`] counter, so it never
     /// collides with a string key or a program symbol.
     fn intern_symbol_key(&mut self, desc: crate::value::SlotIndex) -> u16 {
         if let Some(&id) = self.symbol_key_ids.get(&desc) {
             return id;
         }
-        let id = self.next_intern_id;
-        self.next_intern_id = self.next_intern_id.saturating_add(1);
+        if (self.next_symbol_key_id as usize) <= self.symbol_names.len().saturating_add(1) {
+            // Same poison latch as `append_name_key`: the placeholder id
+            // aliases, but the loop-top halt fires before the next
+            // instruction, so it never leaks to a completed crank.
+            self.id_space_exhausted = true;
+            let id = self.next_symbol_key_id;
+            self.symbol_key_ids.insert(desc, id);
+            return id;
+        }
+        let id = self.next_symbol_key_id;
+        self.next_symbol_key_id -= 1;
         self.symbol_key_ids.insert(desc, id);
         id
     }
@@ -31578,7 +35290,7 @@ impl Interp {
                 Ok(self
                     .arrays
                     .get(&inst)
-                    .and_then(|a| a.items.get(&index).copied())
+                    .and_then(|a| a.items().get(&index).copied())
                     .map(|s| Slot::of(s.kind, s.value))
                     .unwrap_or_else(Slot::undefined))
             } else {
@@ -31728,10 +35440,10 @@ impl Interp {
         let is_new = !self
             .arrays
             .get(&inst)
-            .map(|a| a.items.contains_key(&index))
+            .map(|a| a.items().contains_key(&index))
             .unwrap_or(false);
         if is_new {
-            let present = self.arrays[&inst].items.len() as u64;
+            let present = self.arrays[&inst].items().len() as u64;
             self.meter.tick_raw(self.array_item_grow_metering(present));
         }
         if define {
@@ -31741,7 +35453,7 @@ impl Interp {
             let mut v = value;
             v.id = 0;
             v.next = crate::value::SlotIndex::NULL;
-            a.items.insert(index, v);
+            a.insert_item(index, v, &mut self.side_refs);
             if index + 1 > a.length {
                 a.length = index + 1;
             }
@@ -31781,9 +35493,13 @@ impl Interp {
         let new_len = self.to_length_u32(value);
         if let Some(a) = self.arrays.get_mut(&inst) {
             if new_len < a.length {
-                let drop: Vec<u32> = a.items.range(new_len..).map(|(&k, _)| k).collect();
+                let drop: Vec<u32> = a
+                    .items()
+                    .range(new_len..)
+                    .map(|(&k, _)| k)
+                    .collect();
                 for k in drop {
-                    a.items.remove(&k);
+                    a.remove_item(&k, &mut self.side_refs);
                 }
             }
             a.length = new_len;
@@ -32316,7 +36032,7 @@ impl Interp {
                 // `globalThis.x = value` or its computed equivalent.
                 self.global_props.insert(id, index);
             }
-            self.tick_property_create();
+            self.tick_property_create(id);
             return true;
         }
 
@@ -32861,7 +36577,7 @@ impl Interp {
             return Ok(self
                 .arrays
                 .get(&inst)
-                .and_then(|a| a.items.get(&(i as u32)).copied())
+                .and_then(|a| a.items().get(&(i as u32)).copied())
                 .map(|s| Slot::of(s.kind, s.value))
                 .unwrap_or_else(Slot::undefined));
         }
@@ -32889,6 +36605,29 @@ impl Interp {
     }
 
     /// `O.[[SetPrototypeOf]](V)` — `proto` is `Reference`/`Null`.
+    /// OrdinarySetPrototypeOf's cycle refusal (ECMA-262 10.1.2 step 8):
+    /// walk the ordinary prototype chain from the proposed prototype;
+    /// reaching `inst` would close a cycle. A proxy in the chain ends the
+    /// walk without failure — its `[[GetPrototypeOf]]` is not the ordinary
+    /// one, so the spec's loop stops there.
+    fn prototype_chain_would_cycle(
+        &self,
+        inst: crate::value::SlotIndex,
+        new_proto: crate::value::SlotIndex,
+    ) -> bool {
+        let mut p = new_proto;
+        while !p.is_null() {
+            if p == inst {
+                return true;
+            }
+            if self.proxies.contains_key(&p) {
+                return false;
+            }
+            p = self.instance_prototype(p);
+        }
+        false
+    }
+
     fn mop_set_prototype(
         &mut self,
         code: &[u8],
@@ -32911,6 +36650,9 @@ impl Interp {
             return Ok(true);
         }
         if !self.instance_extensible(inst) {
+            return Ok(false);
+        }
+        if self.prototype_chain_would_cycle(inst, new_proto) {
             return Ok(false);
         }
         let slot = self.slots.get_mut(inst);
@@ -33062,7 +36804,7 @@ impl Interp {
                 return Ok(true);
             }
             if let Some(idx) = index {
-                if a.items.contains_key(&idx) {
+                if a.items().contains_key(&idx) {
                     return Ok(true);
                 }
             }
@@ -33230,7 +36972,7 @@ impl Interp {
             });
         }
         let idx = self.string_key_name(id).and_then(|n| string_to_index(&n))?;
-        let s = a.items.get(&idx).copied()?;
+        let s = a.items().get(&idx).copied()?;
         Some(OrdinaryDescriptor {
             value: Some(Slot::of(s.kind, s.value)),
             writable: Some(true),
@@ -33282,7 +37024,7 @@ impl Interp {
         // then the ordinary string keys, then symbol keys.
         if self.arrays.contains_key(&inst) {
             let mut out = Vec::new();
-            let mut idxs: Vec<u32> = self.arrays[&inst].items.keys().copied().collect();
+            let mut idxs: Vec<u32> = self.arrays[&inst].items().keys().copied().collect();
             idxs.sort_unstable();
             for i in idxs {
                 let id = self.intern_key(&i.to_string());
@@ -34025,7 +37767,7 @@ impl Interp {
         let mut data = ArrayData::default();
         data.length = items.len() as u32;
         for (i, s) in items.iter().enumerate() {
-            data.items.insert(i as u32, *s);
+            data.insert_item(i as u32, *s, &mut self.side_refs);
         }
         self.arrays.insert(inst, data);
         Slot::of(Kind::Reference, Payload::Reference(inst))
@@ -34267,7 +38009,7 @@ impl Interp {
             s.value = value.value;
             false
         } else {
-            self.tick_property_create(); // fxNewSlot + property-table growth (536)
+            self.tick_property_create_flat(); // fxNewSlot + property-table growth (536)
             if inst == self.global_obj {
                 // A new own property of the global object — a `globalThis.x = 1`
                 // (or computed `globalThis["x"] = 1`) creating a binding — is a
@@ -37600,8 +41342,12 @@ fn count_new_locals(code: &[u8], start: usize, len: usize) -> usize {
             }
             // The 2-byte inline flag operand `new_property`/`new_property_at`
             // carry past their id (the dispatch loop advances 5, not the
-            // `instruction_len` id-opcode 3).
-            Opcode::XS_CODE_NEW_PROPERTY | Opcode::XS_CODE_NEW_PROPERTY_AT => 5,
+            // `instruction_len` id-opcode 3). The AT form has NO id
+            // operand: a 1-byte opcode whose 2-byte INTEGER_1 flag is a
+            // separate instruction the loop below sizes itself (wave-6
+            // W6-17 - bundling it as 5 desynchronized the scan).
+            Opcode::XS_CODE_NEW_PROPERTY => 5,
+            Opcode::XS_CODE_NEW_PROPERTY_AT => 1,
             Opcode::XS_CODE_NEW_PRIVATE_1 => 4,
             Opcode::XS_CODE_NEW_PRIVATE_2 => 5,
             _ => crate::opcode::instruction_len(code, pc).unwrap_or(1),
@@ -38232,8 +41978,50 @@ mod tests {
         op as u8
     }
 
+    /// Wave-6 W6-17: `NEW_PROPERTY_AT` is a 1-byte opcode followed by a
+    /// SEPARATE 2-byte `INTEGER_1` flag instruction (the coder emits
+    /// them as two instructions; dispatch advances 3). The local-count
+    /// walker hard-coded 5 — `NEW_PROPERTY`'s footprint (3-byte id op +
+    /// 2-byte flag) — stepping 2 bytes past every computed-key member
+    /// and desynchronizing the scan, so a following `NEW_LOCAL` was
+    /// missed and `FUNCTION_LOCAL_METERING` under-charged.
     #[test]
-    fn leave_call_underflow_fails_closed_on_main_thread_stack() {
+    fn local_count_walker_sizes_new_property_at_exactly() {
+        let code = [
+            b(Opcode::XS_CODE_NEW_PROPERTY_AT),
+            b(Opcode::XS_CODE_INTEGER_1),
+            0,
+            b(Opcode::XS_CODE_NEW_LOCAL),
+            5,
+            0,
+        ];
+        assert_eq!(
+            count_new_locals(&code, 0, code.len()),
+            1,
+            "the walker mis-stepped NEW_PROPERTY_AT and skipped the NEW_LOCAL"
+        );
+    }
+
+    /// Wave-6 W6-18: the eval-bridge relinker must FAIL CLOSED on an id
+    /// beyond the unit's own symbol atom, exactly as `relink_crank`
+    /// refuses `MalformedBytecode` — not silently leave the id denoting
+    /// whatever realm name holds that position.
+    #[test]
+    fn eval_relink_refuses_an_id_beyond_the_unit_table() {
+        let mut interp = Interp::new();
+        interp.link_intrinsics(&["Object".to_string()]);
+        // GET_VARIABLE with id 200 in a unit whose table has one name.
+        let code = [b(Opcode::XS_CODE_GET_VARIABLE), 200, 0];
+        assert!(
+            interp
+                .relink_program_symbols(&code, &["only".to_string()])
+                .is_none(),
+            "an out-of-table id must refuse, not fail open"
+        );
+    }
+
+    #[test]
+    fn former_leave_call_underflow_trophy_completes_without_panicking() {
         // The `fuzz-ironhorse` bytecode_decoder trophy (CI run
         // 33123238794, 2026-08-27): this 20-byte crafted program drove
         // nested async re-entry until a `start_async` return-family
@@ -38242,13 +42030,12 @@ mod tests {
         // cascaded to an empty stack, and hit the explicit
         // `panic!("leave_call with empty call stack")` — a host process
         // abort where a named refusal is owed (endojs/endo-but-for-bots#1046).
-        // The frame-underflow guards on the four return-family boundaries
-        // (`end:`/`start_generator:`/`start_async_generator:`/`start_async:`)
-        // now degrade it to a host-facing `Halt::Unsupported`, exactly as
-        // the sibling `*:stack-underflow` refusals do. Run on a
-        // main-thread-sized (8 MiB, libFuzzer's default) stack via a
-        // spawned thread so the assertion faithfully mirrors the fuzz
-        // harness rather than the test runner's smaller worker stack.
+        // The current mainline's bounded native re-entry changes this
+        // trophy's terminal outcome to a safe `Return` before the old
+        // underflow site. Keep the exact bytes as the process-crash lock:
+        // run on a main-thread-sized (8 MiB, libFuzzer's default) stack
+        // so the assertion faithfully mirrors the fuzz harness rather
+        // than the test runner's smaller worker stack.
         let bytes: &[u8] = &[
             41, 12, 193, 193, 193, 193, 12, 12, 56, 102, 102, 102, 102, 102, 102, 102, 6, 66,
             193, 82,
@@ -38258,8 +42045,8 @@ mod tests {
             .spawn(|| crate::run_program_bounded(bytes, 500_000).halt)
             .expect("spawn fuzz-repro thread")
             .join()
-            .expect("run must not panic — a frame underflow is a named refusal, not an abort");
-        assert_eq!(halt, Halt::Unsupported("start_async:frame-underflow"));
+            .expect("run must not panic on the former frame-underflow trophy");
+        assert_eq!(halt, Halt::Return);
     }
 
     #[test]
@@ -39734,6 +43521,11 @@ impl Interp {
         // host reads it at the boundary where collections run), so it
         // is a root exactly like `this_val`/`exception`.
         slot_roots(&self.result, &mut roots);
+        // The active `with`/eval environment head (wave-6 W6-1): the
+        // compiled `POP` after `XS_CODE_WITH` discards the only stack
+        // reference, so this register is an environment instance's
+        // SOLE holder while a `with` body executes.
+        slot_roots(&self.env, &mut roots);
         for f in &self.call_stack {
             for s in &f.locals {
                 slot_roots(s, &mut roots);
@@ -39743,25 +43535,28 @@ impl Interp {
             }
             slot_roots(&f.this_val, &mut roots);
             slot_roots(&f.result, &mut roots);
+            slot_roots(&f.env, &mut roots);
             roots.push(f.cur_func);
+            roots.push(f.target_func);
+        }
+        // Live exception handlers hold the environment head to restore
+        // on a throw (`CatchJump::env`) — a reference like any frame's.
+        for j in &self.jumps {
+            slot_roots(&j.env, &mut roots);
         }
         for (_, s) in &self.well_known_symbols {
             slot_roots(s, &mut roots);
         }
-        // Symbol identity tables. A symbol used as a property key is
-        // held BY ID in property records — no arena reference points
-        // back at its descriptor slot, and `symbol_key_ids` is the
-        // only descriptor→id link — so sweeping the descriptor while
-        // its id still lives in a chain makes `is_symbol_key_id`
-        // misclassify that property (the PR review's finding). And a
-        // `Symbol.for` registry entry must live as long as the
-        // registry itself (the spec's registry never drops entries).
-        // Both tables key by descriptor slot; their keys are roots.
-        // For `symbol_key_ids` this is deliberately conservative — a
-        // key whose last property died is retained until a precise
-        // trace-the-property-chains refinement — which is retention
-        // only, never misclassification.
-        roots.extend(self.symbol_key_ids.keys().copied());
+        // Symbol identity tables. A `Symbol.for` registry entry must
+        // live as long as the registry itself (the spec's registry
+        // never drops entries), so registry descriptors stay roots.
+        // Plain symbol-KEY descriptors (`symbol_key_ids`) are NOT
+        // roots any more: the full collector retains one precisely —
+        // via the ephemeron pass — exactly while its interned id sits
+        // on a marked property record or the descriptor is otherwise
+        // reachable, and prunes the intern when both die (the
+        // deferred-pass precision refinement; the partial collector
+        // stays page-conservative through the side-table visitor).
         roots.extend(self.symbol_registry_keys.keys().copied());
         for (idx, _, s) in &self.proto_value_data {
             roots.push(*idx);
@@ -39782,6 +43577,7 @@ impl Interp {
             self.arraybuffer_proto,
             self.dataview_proto,
             self.array_iterator_proto,
+            self.date_proto,
             self.iterator_proto,
             self.map_iterator_proto,
             self.set_iterator_proto,
@@ -39801,6 +43597,14 @@ impl Interp {
         for (holder, _, _) in &self.proto_data {
             roots.push(*holder);
         }
+        // The lazy-install accessor list (wave-6 W6-4): until the first
+        // crank that names its guard installs it, the pending getter
+        // function (and its owning prototype) is reachable ONLY here —
+        // exactly like its rooted `proto_methods`/`proto_data` siblings.
+        for (holder, _, getter, _) in &self.proto_accessors {
+            roots.push(*holder);
+            roots.push(*getter);
+        }
         // Symbol.for registry entries are strong per spec.
         roots.extend(self.symbol_registry.values().copied());
         for f in &self.gen_run_stack {
@@ -39808,6 +43612,9 @@ impl Interp {
         }
         for f in &self.async_run_stack {
             roots.push(f.inst);
+        }
+        for f in &self.async_gen_run_stack {
+            roots.push(f.gen);
         }
         // The pending microtask queue: a crank that halts on a throw,
         // meter exhaustion, or an unsupported opcode leaves jobs
@@ -39842,10 +43649,11 @@ impl Interp {
                             }
                         }
                         // A `fromAsync` reaction indexes the [`FromAsyncData`]
-                        // side table (append-only, its slots live for the
-                        // machine's lifetime); the queued reaction is the only
-                        // edge to that record at the drain, so root its
-                        // reference-bearing slots here (mirrors `Combine`).
+                        // side table (compacted at sweep to the entries such
+                        // reactions still name — W6-19); the queued reaction
+                        // is the only edge to that record at the drain, so
+                        // root its reference-bearing slots here (mirrors
+                        // `Combine`).
                         ReactionKind::FromAsyncNext(fa)
                         | ReactionKind::FromAsyncElem(fa)
                         | ReactionKind::FromAsyncMap(fa)
@@ -39925,8 +43733,23 @@ impl Interp {
             well_known_symbols: &'a mut Vec<(&'static str, Slot)>,
             proto_value_data: &'a mut Vec<(SlotIndex, &'static str, Slot)>,
             promise_jobs: &'a mut std::collections::VecDeque<PromiseJob>,
+            side_refs: &'a mut SideRefCounts,
+            symbol_key_ids: &'a mut std::collections::HashMap<SlotIndex, u16>,
+            proxies: &'a mut std::collections::HashMap<SlotIndex, ProxyData>,
+            proxy_revokers: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
+            accessors: &'a mut std::collections::HashMap<(SlotIndex, u16), AccessorData>,
+            private_values: &'a mut std::collections::HashMap<(SlotIndex, SlotIndex), Slot>,
+            private_accessors:
+                &'a mut std::collections::HashMap<(SlotIndex, SlotIndex), AccessorData>,
+            disposable_stacks: &'a mut std::collections::HashMap<SlotIndex, DisposableStackData>,
+            async_generators: &'a mut std::collections::HashMap<SlotIndex, AsyncGeneratorData>,
+            segment_iterators: &'a mut std::collections::HashMap<SlotIndex, SegmentIteratorData>,
+            collator_compare_functions: &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
+            number_format_bound_functions:
+                &'a mut std::collections::HashMap<SlotIndex, SlotIndex>,
+            number_formats: &'a mut std::collections::HashMap<SlotIndex, NumberFormatData>,
             combinators: &'a [CombinatorState],
-            from_async: &'a [FromAsyncData],
+            from_async: &'a mut Vec<FromAsyncData>,
             static_str: &'a mut StaticStrings,
             swept: Vec<SlotIndex>,
         }
@@ -39943,7 +43766,15 @@ impl Interp {
             }
             f.this_val.each_ref_slot(&mut *visit);
             f.result.each_ref_slot(&mut *visit);
+            // The suspended `with`/eval environment head and the saved
+            // handlers' restore environments (wave-6 W6-1): the frame is
+            // an environment instance's SOLE holder across a suspension.
+            f.env.each_ref_slot(&mut *visit);
+            for j in &f.jumps {
+                j.env.each_ref_slot(&mut *visit);
+            }
             visit(f.cur_func);
+            visit(f.target_func);
         }
 
         // Rewrite a chunk offset carried INSIDE a stored Slot.
@@ -39975,6 +43806,10 @@ impl Interp {
             fn extra_edges(&self, idx: SlotIndex, visit: &mut dyn FnMut(SlotIndex)) {
                 if let Some(f) = self.functions.get(&idx) {
                     visit(f.closures);
+                    // The `super` home object (wave-6 W6-2): for a method
+                    // detached from a dead class, this is the prototype's
+                    // only remaining edge.
+                    visit(f.home);
                 }
                 if let Some(b) = self.bound_functions.get(&idx) {
                     visit(b.target);
@@ -39989,25 +43824,105 @@ impl Interp {
                 if let Some(s) = self.wrapper_data.get(&idx) {
                     s.each_ref_slot(&mut *visit);
                 }
+                // The language-completion sweep's side tables (llm
+                // rebase): each holds arena edges the keyed instance
+                // reaches through internal slots. A table missing here
+                // let the collector sweep a live proxy target or
+                // accessor closure and hand its slot to the next
+                // allocation — a proven silent wrong read (review of
+                // the llm rebase, locked by gc_side_tables.rs).
+                if let Some(p) = self.proxies.get(&idx) {
+                    visit(p.target);
+                    visit(p.handler);
+                }
+                if let Some(px) = self.proxy_revokers.get(&idx) {
+                    visit(*px);
+                }
+                if let Some(d) = self.disposable_stacks.get(&idx) {
+                    for r in &d.records {
+                        r.resource.each_ref_slot(&mut *visit);
+                        r.method.each_ref_slot(&mut *visit);
+                    }
+                }
+                if let Some(g) = self.async_generators.get(&idx) {
+                    if let Some(f) = &g.frame {
+                        saved_frame_slots(f, visit);
+                    }
+                    for rq in g.requests.iter().chain(g.active.as_ref()) {
+                        rq.value.each_ref_slot(&mut *visit);
+                        rq.resolve.each_ref_slot(&mut *visit);
+                        rq.reject.each_ref_slot(&mut *visit);
+                    }
+                }
+                if let Some(si) = self.segment_iterators.get(&idx) {
+                    visit(si.segments_inst);
+                }
+                if let Some(owner) = self.collator_compare_functions.get(&idx) {
+                    visit(*owner);
+                }
+                if let Some(owner) = self.number_format_bound_functions.get(&idx) {
+                    visit(*owner);
+                }
+                if let Some(nf) = self.number_formats.get(&idx) {
+                    if let Some(bf) = nf.bound_format {
+                        visit(bf);
+                    }
+                }
+                // Tuple-keyed tables (owner, id/cell): a per-owner index
+                // does not exist, so these are filtered scans — O(table)
+                // per marked owner. Accessor/private tables are small in
+                // practice; a counted per-owner index is the named
+                // upgrade if that stops holding.
+                for ((owner, _id), a) in self.accessors.iter() {
+                    if *owner == idx {
+                        if let Some(g) = &a.get {
+                            g.each_ref_slot(&mut *visit);
+                        }
+                        if let Some(s) = &a.set {
+                            s.each_ref_slot(&mut *visit);
+                        }
+                    }
+                }
+                for ((recv, cell), v) in self.private_values.iter() {
+                    if *recv == idx {
+                        visit(*cell);
+                        v.each_ref_slot(&mut *visit);
+                    }
+                }
+                for ((recv, cell), a) in self.private_accessors.iter() {
+                    if *recv == idx {
+                        visit(*cell);
+                        if let Some(g) = &a.get {
+                            g.each_ref_slot(&mut *visit);
+                        }
+                        if let Some(s) = &a.set {
+                            s.each_ref_slot(&mut *visit);
+                        }
+                    }
+                }
                 if let Some(a) = self.arrays.get(&idx) {
-                    for s in a.items.values() {
+                    for s in a.items().values() {
                         s.each_ref_slot(&mut *visit);
                     }
                 }
                 if let Some(c) = self.collections.get(&idx) {
-                    // Weak collections are DELIBERATELY marked strong
-                    // for now: ephemeron semantics (mark a WeakMap
-                    // value only while its key is live; drop
-                    // dead-keyed entries before compaction) need a
-                    // fixpoint pass this mark loop does not have.
-                    // Conservative direction only — weakly-held
-                    // objects are retained, never freed while live —
-                    // pinned by the gc_machine test
-                    // `weak_collection_entries_are_retained_conservatively`,
-                    // which flips when ephemerons land.
-                    for (k, v) in c.entries.iter().flatten() {
-                        k.each_ref_slot(&mut *visit);
-                        v.each_ref_slot(&mut *visit);
+                    match c.kind {
+                        CollKind::Map | CollKind::Set => {
+                            for (k, v) in c.live_entries() {
+                                k.each_ref_slot(&mut *visit);
+                                v.each_ref_slot(&mut *visit);
+                            }
+                        }
+                        // WEAK collections hold nothing strongly: a
+                        // key lives only through outside references,
+                        // and a WeakMap value only through the
+                        // ephemeron pass (marked while its key is
+                        // marked, `GcHooks::ephemeron_edges`);
+                        // dead-keyed entries are pruned before the
+                        // sweep. Locked by the gc_machine ephemeron
+                        // tests (the old conservative-retention pin
+                        // flipped when this landed).
+                        CollKind::WeakMap | CollKind::WeakSet => {}
                     }
                 }
                 if let Some(t) = self.typed_arrays.get(&idx) {
@@ -40095,8 +44010,13 @@ impl Interp {
                 self.bound_functions.remove(&idx);
                 self.ctor_prototype.remove(&idx);
                 self.wrapper_data.remove(&idx);
-                self.arrays.remove(&idx);
-                self.collections.remove(&idx);
+                if let Some(a) = self.arrays.remove(&idx) {
+                    a.drop_refs(&mut self.side_refs);
+                }
+                if let Some(c) = self.collections.remove(&idx) {
+                    c.drop_refs(&mut self.side_refs);
+                }
+                self.symbol_key_ids.remove(&idx);
                 self.array_buffers.remove(&idx);
                 self.typed_arrays.remove(&idx);
                 self.data_views.remove(&idx);
@@ -40105,11 +44025,113 @@ impl Interp {
                 self.generators.remove(&idx);
                 self.async_instances.remove(&idx);
                 self.promise_functions.remove(&idx);
+                // Chunk-bearing llm-sweep tables prune IN-HOOK like the
+                // frames above (compaction must not remap dead entries'
+                // chunk offsets); the tuple-keyed tables retain-scan per
+                // swept owner — O(swept · table), small tables in
+                // practice.
+                self.async_generators.remove(&idx);
+                self.disposable_stacks.remove(&idx);
+                self.accessors.retain(|(owner, _), _| *owner != idx);
+                self.private_values.retain(|(recv, cell), _| *recv != idx && *cell != idx);
+                self.private_accessors.retain(|(recv, cell), _| *recv != idx && *cell != idx);
                 // The tables holding no slots or chunks (error data,
                 // regexps, symbol id maps) are pruned after the
                 // collection from this list — late pruning cannot
                 // leak chunk liveness there.
                 self.swept.push(idx);
+            }
+
+            fn ephemeron_edges(&self, slots: &SlotArena, visit: &mut dyn FnMut(SlotIndex)) {
+                // WeakMap values: an entry's value is reachable
+                // exactly while its MAP and its KEY both are. WeakSet
+                // entries add no edges (membership keeps nothing
+                // alive).
+                for (inst, c) in self.collections.iter() {
+                    if !slots.is_marked(*inst) || c.kind != CollKind::WeakMap {
+                        continue;
+                    }
+                    for (k, v) in c.live_entries() {
+                        let mut key_live = false;
+                        k.each_ref_slot(|r| {
+                            if slots.is_marked(r) {
+                                key_live = true;
+                            }
+                        });
+                        if key_live {
+                            v.each_ref_slot(&mut *visit);
+                        }
+                    }
+                }
+                // Symbol-key descriptors: a marked property record
+                // whose id is an interned symbol key keeps the
+                // descriptor (and its description chunk) alive — the
+                // precise replacement for rooting every intern.
+                //
+                // Deliberately CONSERVATIVE on two axes (review wave 4,
+                // GC-P3a), both retention-only — this pass can only keep
+                // a descriptor alive, never free one, so neither can
+                // cause a use-after-free or a wrong answer:
+                //
+                //  - it walks the whole arena per fixpoint round rather
+                //    than an index of property records, so the cost is
+                //    O(capacity) × rounds even when `wanted` is tiny;
+                //  - it compares `slot.id` on every marked slot without
+                //    filtering by kind, and `id` doubles as the argument
+                //    count on frame slots, so a frame with N arguments
+                //    where N equals a wanted key's id retains that
+                //    descriptor spuriously.
+                //
+                // Both want the same thing to fix properly: a reverse
+                // index from key id to the property records using it,
+                // maintained where properties are written. Until the
+                // ledger's KEYS row makes that index durable anyway,
+                // over-retaining a handful of descriptors is the cheaper
+                // trade.
+                let wanted: std::collections::HashMap<u16, SlotIndex> = self
+                    .symbol_key_ids
+                    .iter()
+                    .filter(|(d, _)| !slots.is_marked(**d))
+                    .map(|(d, id)| (*id, *d))
+                    .collect();
+                if !wanted.is_empty() {
+                    for i in 0..slots.capacity() {
+                        let idx = SlotIndex(i);
+                        if slots.is_marked(idx) {
+                            if let Some(&d) = wanted.get(&slots.get(idx).id) {
+                                visit(d);
+                            }
+                        }
+                    }
+                }
+            }
+
+            fn prune_dead_keyed(&mut self, slots: &SlotArena) {
+                // Dead-keyed weak entries leave their collections
+                // (counted decrements) before the sweep reclaims the
+                // targets.
+                let side_refs = &mut *self.side_refs;
+                for (inst, c) in self.collections.iter_mut() {
+                    if !slots.is_marked(*inst)
+                        || !matches!(c.kind, CollKind::WeakMap | CollKind::WeakSet)
+                    {
+                        continue;
+                    }
+                    c.prune_entries(side_refs, |k, _v| {
+                        let mut key_live = false;
+                        k.each_ref_slot(|r| {
+                            if slots.is_marked(r) {
+                                key_live = true;
+                            }
+                        });
+                        key_live
+                    });
+                }
+                // An intern whose descriptor stayed unmarked through
+                // the fixpoint has no live property using its id and
+                // no other reference: drop the mapping (the sweep
+                // reclaims the descriptor slot itself).
+                self.symbol_key_ids.retain(|d, _| slots.is_marked(*d));
             }
 
             fn external_chunk_refs(&mut self, visit: &mut dyn FnMut(&mut ChunkOffset)) {
@@ -40129,15 +44151,10 @@ impl Interp {
                     slot_chunk(s, visit);
                 }
                 for a in self.arrays.values_mut() {
-                    for s in a.items.values_mut() {
-                        slot_chunk(s, visit);
-                    }
+                    a.for_each_value_mut_chunk_remap(|s| slot_chunk(s, visit));
                 }
                 for c in self.collections.values_mut() {
-                    for (k, v) in c.entries.iter_mut().flatten() {
-                        slot_chunk(k, visit);
-                        slot_chunk(v, visit);
-                    }
+                    c.for_each_entry_mut_chunk_remap(|s| slot_chunk(s, visit));
                 }
                 for p in self.promises.values_mut() {
                     slot_chunk(&mut p.result, visit);
@@ -40147,6 +44164,20 @@ impl Interp {
                         slot_chunk(&mut r.resolve, visit);
                         slot_chunk(&mut r.reject, visit);
                     }
+                }
+                // Wave-6 W6-3: in-flight `Array.fromAsync` state stores raw
+                // Slot COPIES (a string thisArg, a captured close error);
+                // their chunk offsets relocate with compaction like any
+                // other external holder's.
+                for d in self.from_async.iter_mut() {
+                    slot_chunk(&mut d.resolve, visit);
+                    slot_chunk(&mut d.reject, visit);
+                    slot_chunk(&mut d.mapfn, visit);
+                    slot_chunk(&mut d.this_arg, visit);
+                    slot_chunk(&mut d.iterator, visit);
+                    slot_chunk(&mut d.next_method, visit);
+                    slot_chunk(&mut d.array_like, visit);
+                    slot_chunk(&mut d.close_error, visit);
                 }
                 for g in self.generators.values_mut() {
                     if let Some(f) = &mut g.frame {
@@ -40159,6 +44190,27 @@ impl Interp {
                     if let Some(f) = &mut a.frame {
                         saved_frame_chunks(f, visit);
                     }
+                }
+                for g in self.async_generators.values_mut() {
+                    if let Some(f) = &mut g.frame {
+                        saved_frame_chunks(f, visit);
+                    }
+                    for rq in g.requests.iter_mut().chain(g.active.as_mut()) {
+                        slot_chunk(&mut rq.value, visit);
+                        slot_chunk(&mut rq.resolve, visit);
+                        slot_chunk(&mut rq.reject, visit);
+                    }
+                }
+                for d in self.disposable_stacks.values_mut() {
+                    for r in &mut d.records {
+                        slot_chunk(&mut r.resource, visit);
+                        slot_chunk(&mut r.method, visit);
+                    }
+                }
+                // Private VALUES can be strings (chunk-backed); the
+                // accessor tables hold callables only (no chunk refs).
+                for v in self.private_values.values_mut() {
+                    slot_chunk(v, visit);
                 }
                 for s in self.stack.iter_mut() {
                     slot_chunk(s, visit);
@@ -40262,8 +44314,21 @@ impl Interp {
             well_known_symbols: &mut self.well_known_symbols,
             proto_value_data: &mut self.proto_value_data,
             promise_jobs: &mut self.promise_jobs,
+            side_refs: &mut self.side_refs,
+            symbol_key_ids: &mut self.symbol_key_ids,
+            proxies: &mut self.proxies,
+            proxy_revokers: &mut self.proxy_revokers,
+            accessors: &mut self.accessors,
+            private_values: &mut self.private_values,
+            private_accessors: &mut self.private_accessors,
+            disposable_stacks: &mut self.disposable_stacks,
+            async_generators: &mut self.async_generators,
+            segment_iterators: &mut self.segment_iterators,
+            collator_compare_functions: &mut self.collator_compare_functions,
+            number_format_bound_functions: &mut self.number_format_bound_functions,
+            number_formats: &mut self.number_formats,
             combinators: &self.combinators,
-            from_async: &self.from_async,
+            from_async: &mut self.from_async,
             static_str: &mut self.static_str,
             swept: Vec::new(),
         };
@@ -40279,9 +44344,197 @@ impl Interp {
         self.error_data.retain(|k, _| !dead.contains(k));
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
+        // `func_segments` holds no slots or chunks (function slot →
+        // retained-segment index), so it prunes late like the rest of
+        // this list and cannot survive a reused owner slot.
+        self.func_segments.retain(|k, _| !dead.contains(k));
+        // The llm sweep's slot-and-chunk-free tables — edge maps keyed
+        // by an instance or function slot, and pure brand/scalar
+        // records. A stale entry surviving a slot-index reuse
+        // re-branded the NEXT object minted at that index (a reused
+        // slot answered Temporal's brand check, a fresh ArrayBuffer
+        // read as detached — review of the llm rebase).
+        self.proxies.retain(|k, _| !dead.contains(k));
+        self.proxy_revokers.retain(|k, _| !dead.contains(k));
+        self.segment_iterators.retain(|k, _| !dead.contains(k));
+        self.collator_compare_functions.retain(|k, _| !dead.contains(k));
+        self.number_format_bound_functions.retain(|k, _| !dead.contains(k));
+        self.temporal_instants.retain(|k, _| !dead.contains(k));
+        self.temporal_durations.retain(|k, _| !dead.contains(k));
+        self.temporal_plains.retain(|k, _| !dead.contains(k));
+        self.temporal_zoneds.retain(|k, _| !dead.contains(k));
+        // The mainline's Date table (2026-08-28 rebase): weak-keyed
+        // epoch-ms records — a swept instance's row must go with it,
+        // or a recycled slot inherits the brand and `new Date(value)`
+        // answers the dead Date's time (locked in gc_side_tables.rs).
+        self.dates.retain(|k, _| !dead.contains(k));
+        self.detached_buffers.retain(|k| !dead.contains(k));
+        self.shared_buffers.retain(|k| !dead.contains(k));
+        self.arguments_objects.retain(|k| !dead.contains(k));
+        self.deleted_fn_meta.retain(|(k, _)| !dead.contains(k));
+        self.locales.retain(|k, _| !dead.contains(k));
+        self.collators.retain(|k, _| !dead.contains(k));
+        self.list_formats.retain(|k, _| !dead.contains(k));
+        self.plural_rules.retain(|k, _| !dead.contains(k));
+        self.number_formats.retain(|k, _| !dead.contains(k));
+        self.segmenters.retain(|k, _| !dead.contains(k));
+        self.segments.retain(|k, _| !dead.contains(k));
+        self.date_time_formats.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
+        // The FORWARD map (`symbol_registry`: string → descriptor) is
+        // deliberately not pruned here. It is a GC ROOT — every
+        // registered descriptor is reachable from it — so no descriptor
+        // it names can ever be in `dead`, and a retain would be a no-op
+        // scan of the whole registry every sweep (review wave 4,
+        // GC-P3d). If the registry is ever made weak, this becomes a
+        // real omission and the reverse map's `retain` above shows the
+        // shape the fix takes.
+
+        self.compact_code_segments();
+        self.compact_reaction_arenas();
 
         stats
+    }
+
+    /// Compact the append-only reaction arenas (wave-6 W6-19):
+    /// `combinators`, `from_async`, and `promise_guards` were
+    /// append-only for the machine's lifetime — settled entries were
+    /// unreachable but never reclaimed, unbounded growth on a
+    /// long-lived machine doing combinator/`fromAsync`/resolving work
+    /// every crank. An arena index is LIVE while some surviving
+    /// holder still names it: a `ReactionKind::Combine`/`FromAsync*`
+    /// on a live promise's pending reactions or a queued job
+    /// (combinators, fromAsync), or a live resolving-function pair's
+    /// `guard` (promise_guards). The compaction keeps live entries in
+    /// index order, re-points every holder onto the dense arena, and
+    /// drops the rest. Runs at the end of both collectors' sweeps —
+    /// deterministic (holder contents only, stable order) and
+    /// guest-invisible (indices never surface; nothing is metered).
+    fn compact_reaction_arenas(&mut self) {
+        use std::collections::BTreeSet;
+        let mut live_comb: BTreeSet<u32> = BTreeSet::new();
+        let mut live_fa: BTreeSet<u32> = BTreeSet::new();
+        {
+            let mut note = |kind: &ReactionKind| match *kind {
+                ReactionKind::Combine(ci, _) => {
+                    live_comb.insert(ci);
+                }
+                ReactionKind::FromAsyncNext(fa)
+                | ReactionKind::FromAsyncElem(fa)
+                | ReactionKind::FromAsyncMap(fa)
+                | ReactionKind::FromAsyncClose(fa) => {
+                    live_fa.insert(fa);
+                }
+                _ => {}
+            };
+            for p in self.promises.values() {
+                for r in &p.reactions {
+                    note(&r.kind);
+                }
+            }
+            for j in &self.promise_jobs {
+                if let PromiseJob::Reaction { reaction, .. } = j {
+                    note(&reaction.kind);
+                }
+            }
+        }
+        let live_guards: BTreeSet<usize> =
+            self.promise_functions.values().map(|d| d.guard).collect();
+
+        // Fully-live arenas need no rewrite (every index below the
+        // length is referenced, so every remap would be the identity).
+        if live_comb.len() == self.combinators.len()
+            && live_fa.len() == self.from_async.len()
+            && live_guards.len() == self.promise_guards.len()
+        {
+            return;
+        }
+
+        let comb_map: std::collections::HashMap<u32, u32> = live_comb
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let fa_map: std::collections::HashMap<u32, u32> = live_fa
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new as u32))
+            .collect();
+        let guard_map: std::collections::HashMap<usize, usize> = live_guards
+            .iter()
+            .enumerate()
+            .map(|(new, &old)| (old, new))
+            .collect();
+
+        let repoint = |kind: &mut ReactionKind| match kind {
+            ReactionKind::Combine(ci, _) => *ci = comb_map[ci],
+            ReactionKind::FromAsyncNext(fa)
+            | ReactionKind::FromAsyncElem(fa)
+            | ReactionKind::FromAsyncMap(fa)
+            | ReactionKind::FromAsyncClose(fa) => *fa = fa_map[fa],
+            _ => {}
+        };
+        for p in self.promises.values_mut() {
+            for r in &mut p.reactions {
+                repoint(&mut r.kind);
+            }
+        }
+        for j in &mut self.promise_jobs {
+            if let PromiseJob::Reaction { reaction, .. } = j {
+                repoint(&mut reaction.kind);
+            }
+        }
+        for d in self.promise_functions.values_mut() {
+            d.guard = guard_map[&d.guard];
+        }
+
+        let old = std::mem::take(&mut self.combinators);
+        self.combinators = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_comb.contains(&(*i as u32)))
+            .map(|(_, e)| e)
+            .collect();
+        let old = std::mem::take(&mut self.from_async);
+        self.from_async = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_fa.contains(&(*i as u32)))
+            .map(|(_, e)| e)
+            .collect();
+        let old = std::mem::take(&mut self.promise_guards);
+        self.promise_guards = old
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| live_guards.contains(i))
+            .map(|(_, e)| e)
+            .collect();
+    }
+
+    /// Drop code buffers no live guest function references and remap the
+    /// surviving function→segment indices densely.
+    fn compact_code_segments(&mut self) {
+        let live: std::collections::BTreeSet<usize> =
+            self.func_segments.values().copied().collect();
+        if live.len() == self.code_segments.len()
+            && live.iter().copied().eq(0..self.code_segments.len())
+        {
+            return;
+        }
+        let remap: std::collections::BTreeMap<usize, usize> = live
+            .iter()
+            .enumerate()
+            .map(|(new, old)| (*old, new))
+            .collect();
+        let old = std::mem::take(&mut self.code_segments);
+        self.code_segments = old
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, segment)| live.contains(&index).then_some(segment))
+            .collect();
+        for segment in self.func_segments.values_mut() {
+            *segment = remap[segment];
+        }
     }
 }
 
@@ -40323,11 +44576,25 @@ impl Interp {
         let dead: std::collections::HashSet<SlotIndex> = freed.iter().copied().collect();
         self.functions.retain(|k, _| !dead.contains(k));
         self.bound_functions.retain(|k, _| !dead.contains(k));
+        self.func_segments.retain(|k, _| !dead.contains(k));
         self.ctor_prototype.retain(|k, _| !dead.contains(k));
         self.wrapper_data.retain(|k, _| !dead.contains(k));
         self.error_data.retain(|k, _| !dead.contains(k));
-        self.arrays.retain(|k, _| !dead.contains(k));
-        self.collections.retain(|k, _| !dead.contains(k));
+        let refs = &mut self.side_refs;
+        self.arrays.retain(|k, a| {
+            let keep = !dead.contains(k);
+            if !keep {
+                a.drop_refs(refs);
+            }
+            keep
+        });
+        self.collections.retain(|k, c| {
+            let keep = !dead.contains(k);
+            if !keep {
+                c.drop_refs(refs);
+            }
+            keep
+        });
         self.array_buffers.retain(|k, _| !dead.contains(k));
         self.typed_arrays.retain(|k, _| !dead.contains(k));
         self.data_views.retain(|k, _| !dead.contains(k));
@@ -40335,10 +44602,56 @@ impl Interp {
         self.promises.retain(|k, _| !dead.contains(k));
         self.generators.retain(|k, _| !dead.contains(k));
         self.async_instances.retain(|k, _| !dead.contains(k));
+        // The llm sweep's tables — same coverage as the full sweep's
+        // in-hook and late prunes (a page-freed instance must not
+        // leave a stale edge or brand behind).
+        self.proxies.retain(|k, _| !dead.contains(k));
+        self.proxy_revokers.retain(|k, _| !dead.contains(k));
+        self.accessors.retain(|(owner, _), _| !dead.contains(owner));
+        self.private_values
+            .retain(|(recv, cell), _| !dead.contains(recv) && !dead.contains(cell));
+        self.private_accessors
+            .retain(|(recv, cell), _| !dead.contains(recv) && !dead.contains(cell));
+        self.disposable_stacks.retain(|k, _| !dead.contains(k));
+        self.async_generators.retain(|k, _| !dead.contains(k));
+        self.segment_iterators.retain(|k, _| !dead.contains(k));
+        self.collator_compare_functions.retain(|k, _| !dead.contains(k));
+        self.number_format_bound_functions.retain(|k, _| !dead.contains(k));
+        self.temporal_instants.retain(|k, _| !dead.contains(k));
+        self.temporal_durations.retain(|k, _| !dead.contains(k));
+        self.temporal_plains.retain(|k, _| !dead.contains(k));
+        self.temporal_zoneds.retain(|k, _| !dead.contains(k));
+        // The mainline's Date table (2026-08-28 rebase): weak-keyed
+        // epoch-ms records — a swept instance's row must go with it,
+        // or a recycled slot inherits the brand and `new Date(value)`
+        // answers the dead Date's time (locked in gc_side_tables.rs).
+        self.dates.retain(|k, _| !dead.contains(k));
+        self.detached_buffers.retain(|k| !dead.contains(k));
+        self.shared_buffers.retain(|k| !dead.contains(k));
+        self.arguments_objects.retain(|k| !dead.contains(k));
+        self.deleted_fn_meta.retain(|(k, _)| !dead.contains(k));
+        self.locales.retain(|k, _| !dead.contains(k));
+        self.collators.retain(|k, _| !dead.contains(k));
+        self.list_formats.retain(|k, _| !dead.contains(k));
+        self.plural_rules.retain(|k, _| !dead.contains(k));
+        self.number_formats.retain(|k, _| !dead.contains(k));
+        self.segmenters.retain(|k, _| !dead.contains(k));
+        self.segments.retain(|k, _| !dead.contains(k));
+        self.date_time_formats.retain(|k, _| !dead.contains(k));
         self.promise_functions.retain(|k, _| !dead.contains(k));
         self.regexps.retain(|k, _| !dead.contains(k));
         self.symbol_key_ids.retain(|k, _| !dead.contains(k));
         self.symbol_registry_keys.retain(|k, _| !dead.contains(k));
+        // The FORWARD map (`symbol_registry`: string → descriptor) is
+        // deliberately not pruned here. It is a GC ROOT — every
+        // registered descriptor is reachable from it — so no descriptor
+        // it names can ever be in `dead`, and a retain would be a no-op
+        // scan of the whole registry every sweep (review wave 4,
+        // GC-P3d). If the registry is ever made weak, this becomes a
+        // real omission and the reverse map's `retain` above shows the
+        // shape the fix takes.
+        self.compact_code_segments();
+        self.compact_reaction_arenas();
         freed.len() as u32
     }
 
@@ -40382,22 +44695,70 @@ impl Interp {
             .capacity()
             .div_ceil(crate::value::SLOTS_PER_PAGE) as usize;
         let mut bits = vec![false; pages];
-        self.each_side_table_ref(&mut |r| {
+        // The TAIL tables (functions, promises, iterators, …) stay an
+        // O(small) walk; the BULK tables (arrays' items, collections'
+        // entries) are read from the standing per-page refcounts the
+        // counted accessors maintain (design § Plan: counted
+        // side-table ref-page accessors) — O(pages-with-refs) instead
+        // of O(live entries).
+        self.each_side_table_ref_tail(&mut |r| {
             if !r.is_null() {
                 if let Some(b) = bits.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize) {
                     *b = true;
                 }
             }
         });
+        self.side_refs.or_into_bits(&mut bits);
+        // Parity net (debug builds): the standing counts must agree
+        // with a fresh enumeration of every side table — a missed
+        // counted mutation shows up HERE, before the collector can
+        // free a live page or pin a dead one.
+        #[cfg(debug_assertions)]
+        {
+            let mut walked = vec![false; pages];
+            self.each_side_table_ref(&mut |r| {
+                if !r.is_null() {
+                    if let Some(b) = walked.get_mut((r.0 / crate::value::SLOTS_PER_PAGE) as usize)
+                    {
+                        *b = true;
+                    }
+                }
+            });
+            debug_assert_eq!(
+                bits, walked,
+                "counted bulk pages diverge from the side-table enumeration"
+            );
+        }
         bits
     }
 
-    /// Visit every slot index held in a side-table VALUE — the single
-    /// enumeration body behind [`Self::side_table_ref_slots`] and
-    /// [`Self::side_table_ref_page_bits`]. Keeping one body is the
-    /// no-drift discipline: a new side table gets added here once and
-    /// every projection sees it.
+    /// Visit every slot index held in a side-table VALUE — the full
+    /// enumeration behind [`Self::side_table_ref_slots`] and the
+    /// debug parity net. Composes the tail walk with a walk of the
+    /// two BULK tables, so the tail body is shared with the counted
+    /// page projection and cannot drift from it.
     fn each_side_table_ref(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {
+        self.each_side_table_ref_tail(visit);
+        for a in self.arrays.values() {
+            for s in a.items().values() {
+                s.each_ref_slot(&mut *visit);
+            }
+        }
+        for c in self.collections.values() {
+            for (k, v) in c.live_entries() {
+                k.each_ref_slot(&mut *visit);
+                v.each_ref_slot(&mut *visit);
+            }
+        }
+    }
+
+    /// The TAIL of the enumeration: every side table EXCEPT the two
+    /// bulk ones (arrays' items, collections' entries), whose pages
+    /// the standing [`crate::bulk::SideRefCounts`] map serves. The
+    /// page projection composes tail + counts; a new side table gets
+    /// added here once (or, if bulk-sized, behind counted accessors
+    /// in [`crate::bulk`]) and every projection sees it.
+    fn each_side_table_ref_tail(&self, visit: &mut dyn FnMut(crate::value::SlotIndex)) {
         use crate::value::SlotIndex;
         fn slot_refs(s: &Slot, visit: &mut dyn FnMut(SlotIndex)) {
             s.each_ref_slot(|e| visit(e));
@@ -40414,10 +44775,21 @@ impl Interp {
             }
             slot_refs(&f.this_val, visit);
             slot_refs(&f.result, visit);
+            // Wave-6 W6-1: the suspended environment head and the saved
+            // handlers' restore environments, mirrored from the full
+            // collector's saved_frame_slots.
+            slot_refs(&f.env, visit);
+            for j in &f.jumps {
+                slot_refs(&j.env, visit);
+            }
             visit(f.cur_func);
+            visit(f.target_func);
         }
         for f in self.functions.values() {
             visit(f.closures);
+            // Wave-6 W6-2: the super home object, mirrored from the full
+            // collector's functions arm.
+            visit(f.home);
         }
         for b in self.bound_functions.values() {
             visit(b.target);
@@ -40432,15 +44804,64 @@ impl Interp {
         for s in self.wrapper_data.values() {
             slot_refs(s, visit);
         }
-        for a in self.arrays.values() {
-            for s in a.items.values() {
+        // The llm sweep's side tables (see the extra_edges twin — the
+        // parity net keeps these two walks honest together).
+        for p in self.proxies.values() {
+            visit(p.target);
+            visit(p.handler);
+        }
+        for px in self.proxy_revokers.values() {
+            visit(*px);
+        }
+        for a in self.accessors.values() {
+            if let Some(g) = &a.get {
+                slot_refs(g, visit);
+            }
+            if let Some(s) = &a.set {
                 slot_refs(s, visit);
             }
         }
-        for c in self.collections.values() {
-            for (k, v) in c.entries.iter().flatten() {
-                slot_refs(k, visit);
-                slot_refs(v, visit);
+        for ((_recv, cell), v) in self.private_values.iter() {
+            visit(*cell);
+            slot_refs(v, visit);
+        }
+        for ((_recv, cell), a) in self.private_accessors.iter() {
+            visit(*cell);
+            if let Some(g) = &a.get {
+                slot_refs(g, visit);
+            }
+            if let Some(s) = &a.set {
+                slot_refs(s, visit);
+            }
+        }
+        for d in self.disposable_stacks.values() {
+            for r in &d.records {
+                slot_refs(&r.resource, visit);
+                slot_refs(&r.method, visit);
+            }
+        }
+        for g in self.async_generators.values() {
+            if let Some(f) = &g.frame {
+                frame_refs(f, visit);
+            }
+            for rq in g.requests.iter().chain(g.active.as_ref()) {
+                slot_refs(&rq.value, visit);
+                slot_refs(&rq.resolve, visit);
+                slot_refs(&rq.reject, visit);
+            }
+        }
+        for si in self.segment_iterators.values() {
+            visit(si.segments_inst);
+        }
+        for owner in self.collator_compare_functions.values() {
+            visit(*owner);
+        }
+        for owner in self.number_format_bound_functions.values() {
+            visit(*owner);
+        }
+        for nf in self.number_formats.values() {
+            if let Some(bf) = nf.bound_format {
+                visit(bf);
             }
         }
         for t in self.typed_arrays.values() {

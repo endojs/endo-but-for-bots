@@ -70,6 +70,7 @@
     "@endo/space-inventory-graph": "workspace:^",
     "@endo/space-peers": "workspace:^",
     "@endo/space-whylip": "workspace:^",
+    "@endo/space-workflow": "workspace:^",
     "@endo/spaces-util": "workspace:^",
     "@endo/where": "workspace:^",
     "marked": "^17.0.5",
@@ -88,7 +89,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "happy-dom": "^20.11.2",
+    "happy-dom": "^20.11.6",
     "typescript": "catalog:dev",
     "vite": "^6.0.0"
   },

@@ -13,6 +13,8 @@ use ironhorse_snapshot::store_suite::{
 };
 use ironhorse_store_sqlite::SqliteHeapStore;
 
+mod common;
+
 fn in_memory() -> SqliteHeapStore {
     SqliteHeapStore::open_in_memory().expect("in-memory store opens")
 }
@@ -43,22 +45,19 @@ fn sqlite_in_memory_resume_equals_uninterrupted() {
 /// end. WAL and the full connection discipline engage on this path,
 /// unlike `:memory:`.
 fn with_disk_stores(name: &str, run: impl FnOnce(&mut dyn FnMut() -> SqliteHeapStore)) {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = common::TempDir::new(&format!(
         "ironhorse-sqlite-suite-{name}-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     let mut n = 0u32;
     let mut fresh = {
-        let dir = dir.clone();
+        let dir = dir.to_path_buf();
         move || {
             n += 1;
             SqliteHeapStore::open(dir.join(format!("heap-{n}.sqlite"))).expect("disk store opens")
         }
     };
     run(&mut fresh);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

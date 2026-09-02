@@ -1311,7 +1311,7 @@ const makePatternKit = () => {
       // prettier-ignore
       return (
         confirmKind(specimen, 'byteArray', reject) &&
-        (/** @type {ArrayBuffer} */ (specimen).byteLength <= byteLengthLimit ||
+        (/** @type {Uint8Array} */ (specimen).byteLength <= byteLengthLimit ||
           reject && reject`byteArray ${specimen} must not be bigger than ${byteLengthLimit}`)
       );
     },

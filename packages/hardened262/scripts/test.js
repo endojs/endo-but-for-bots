@@ -136,6 +136,9 @@ export async function* generateScenariosForTests(tests, agents, extraFlags) {
                 compartment,
                 lockdown,
                 lockdownCompartment: lockdown && compartment,
+                // A raw scenario is a direct execution on the bare engine:
+                // no SES shim, lockdown, or wrapping compartment.
+                raw: agent === 'xs' && !lockdown && !compartment,
               },
               temporaryPath: [
                 agent,
@@ -300,6 +303,9 @@ const compactEnd = test => {
 // SES-shim deliveries exercise sloppy/strict, with and without lockdown. The
 // whole compartment axis remains generated. Ironhorse records every scenario
 // it does not yet run as a failure so its baseline has no skips.
+// When the compartment scenarios are wired, their compartments must receive
+// TextEncoder and TextDecoder as explicit endowments. Whether URL and similar
+// platform globals belong among SES's implicit globals is a separate decision.
 export const agentRunsScenario = (agent, scenario) => {
   if (agent === 'ironhorse' || agent === 'sesIronhorse') {
     return (

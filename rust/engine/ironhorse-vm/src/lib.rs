@@ -20,6 +20,7 @@
 //! `gxCodeSizes`) at the `c/moddable` pin, so opcode byte values,
 //! instruction sizes, and mnemonics match the oracle exactly.
 
+mod bulk;
 pub mod compartment;
 pub mod cost;
 pub mod default_keys;
@@ -37,8 +38,16 @@ pub use compartment::{
 };
 pub use gc::{GcStats, Heap};
 pub use interp::{
-    CompiledSource, Halt, Interp, Native, RunOutcome, SourceCompileError, SourceCompiler,
-    PROGRAM_INVOCATION_COMPUTRONS,
+    dtf_component_key_static, error_name_static, AccessorRow, ArraySnapshot, BoundFunctionRow,
+    CollatorData, CollectionSnapshot, CompiledSource, DateTimeFormatData, DisposableStackRow,
+    DisposalRecordRow, FunctionRow, FunctionStateSnapshot, GeneratorRow, Halt, Interp,
+    IntlBoundFunctionRow, IntlTables, IteratorRow, ListFormatData, LocaleData, Native,
+    CombinatorRow, NumberFormatData, PluralRulesData, PrivateAccessorRow, PrivateElementSnapshot,
+    PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseReactionRow, PromiseRow,
+    ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError, RunOutcome,
+    SavedFrameRow, SavedJumpRow,
+    SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
+    PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
 };
 pub use meter::{Meter, MeterCheck, MeterState, COST_TABLE_VERSION};
 pub use module::{
@@ -82,6 +91,15 @@ pub fn run_program_with_symbols(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
     let mut interp = Interp::new();
     interp.link_intrinsics(&names);
     interp.run(bytecode)
+}
+
+/// Whether a persisted RegExp `(source, flags)` pair recompiles under this
+/// engine build.
+///
+/// Snapshot validation calls this before admitting an image, so restoration
+/// never discovers malformed RegExp state after the trust boundary.
+pub fn regexp_source_compiles(source: &str, flags: &str) -> bool {
+    ironhorse_regexp::compile(source, flags).is_ok()
 }
 
 /// Disassemble a bytecode buffer to `(offset, mnemonic)` pairs, walking

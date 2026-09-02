@@ -74,6 +74,15 @@ test('native-available: dispatched functions match polyfill on clean inputs', t 
   }
 });
 
+// The encoders no longer accept a bare `ArrayBuffer`: now that the byteArray
+// passable form is narrowed to a whole-buffer-spanning `Uint8Array`, every
+// value they receive is a `Uint8Array` (plain, genuine immutable view, or
+// emulated frozen wrapper), so there is no buffer-vs-view type disjunction to
+// normalize. The single remaining runtime distinction —
+// a genuine `Uint8Array` view versus an emulated `@endo/immutable-arraybuffer`
+// wrapper that reports `ArrayBuffer.isView(wrapper) === false` — is exercised
+// by `@endo/bytes/indexed.js`.
+
 test('jsDecodeBase64 rejects malformed inputs with polyfill-specific messages', t => {
   t.throws(() => jsDecodeBase64('%'), {
     message: /Invalid base64 character %/,

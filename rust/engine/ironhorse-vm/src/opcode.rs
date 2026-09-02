@@ -493,7 +493,21 @@ pub static CODE_SIZES: [i8; XS_CODE_COUNT] = [
     1, // XS_CODE_WITH
     1, // XS_CODE_WITHOUT
     1, // XS_CODE_YIELD
-    5, // XS_CODE_PROFILE
+    // XS_CODE_PROFILE is ID-SHAPED but deliberately NOT id-mapped, so it
+    // keeps a POSITIVE size rather than the `0` sentinel. XS writes the
+    // entry longhand under `#ifdef mx32bitID` (`5` with 4-byte IDs, `3`
+    // without) — `xsCommon.c` — and this is a 2-byte-ID build, so `3` is
+    // the right value; the `5` that stood here was the 32-bit branch
+    // transcribed into a 16-bit build (review wave 4, G2-d).
+    //
+    // The `0` sentinel would be equally wrong, in the other direction:
+    // `fxMapperMapIDs` (`xsAPI.c`) keys the symbol remap on `0 == offset`
+    // and handles PROFILE inside the `0 < offset` branch, where it mints
+    // a FRESH profile id via `fxGenerateProfileID` instead of mapping the
+    // operand. PROFILE's operand is a profiling counter, not a
+    // symbol-table position, so it must stay out of `remap_ids` (review
+    // wave 5). Inert today either way — the coder never emits PROFILE.
+    3, // XS_CODE_PROFILE
     1, // XS_CODE_YIELD_STAR
     2, // XS_CODE_USED_1
     3, // XS_CODE_USED_2
@@ -1039,37 +1053,195 @@ pub const ID_SIZE: usize = 2;
 /// - `size == -2`: `1 + 2 + u16` (u16 LE length prefix, then bytes).
 /// - `size == -4`: `1 + 4 + u32` (u32 LE length prefix, then bytes).
 ///
-/// Returns `None` on an unknown opcode byte or a truncated length
-/// prefix (a corrupt or truncated stream), never panicking — the
-/// bytecode-decoder fuzz target (design § Fuzzability, target 2) relies
-/// on this.
+/// Returns `None` on an unknown opcode byte, a truncated length
+/// prefix, or a TRUNCATED INSTRUCTION — one whose operands or declared
+/// payload run past the end of the stream (wave-6 W6-22: the sentinel
+/// arms used to size a truncated trailing payload "successfully", so
+/// the relink walk accepted bytes the dispatch loop refuses; bounding
+/// the whole instruction here makes every walker agree). Never
+/// panicking — the bytecode-decoder fuzz target (design § Fuzzability,
+/// target 2) relies on this.
 pub fn instruction_len(code: &[u8], pc: usize) -> Option<usize> {
     let byte = *code.get(pc)?;
     let op = Opcode::from_u8(byte)?;
     let size = op.size();
-    if size > 0 {
-        return Some(size as usize);
+    let len = if size > 0 {
+        size as usize
+    } else {
+        match size {
+            0 => 1 + ID_SIZE,
+            -1 => {
+                let n = *code.get(pc + 1)? as usize;
+                2 + n
+            }
+            -2 => {
+                let lo = *code.get(pc + 1)? as usize;
+                let hi = *code.get(pc + 2)? as usize;
+                3 + (lo | (hi << 8))
+            }
+            -4 => {
+                let b0 = *code.get(pc + 1)? as usize;
+                let b1 = *code.get(pc + 2)? as usize;
+                let b2 = *code.get(pc + 3)? as usize;
+                let b3 = *code.get(pc + 4)? as usize;
+                5 + (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+            }
+            // Every negative sentinel XS emits is -1/-2/-4; anything
+            // else is an impossible table entry.
+            _ => return None,
+        }
+    };
+    // The whole instruction — operands and payload included — must lie
+    // inside the stream; an instruction ending exactly at the end is
+    // complete, one running past it is truncation.
+    (pc.checked_add(len)? <= code.len()).then_some(len)
+}
+
+/// Rewrite every 2-byte little-endian ID operand through `map`,
+/// walking the stream with [`instruction_len`] exactly as the
+/// disassembler does (side-table ledger G2: the bytecode half of
+/// per-crank relinking). `gxCodeSizes == 0` marks ID-bearing opcodes
+/// — XS's own snapshot remap keys off the same table entry — so the
+/// coverage cannot drift from the length walk. Nested function bodies
+/// are covered: a `CODE_X` operand carries only the body LENGTH and
+/// the body's instructions follow inline, so the walk enters them;
+/// length-prefixed data payloads (strings, bigints, host names) are
+/// skipped whole by their `-1/-2/-4` sentinels. Returns `None` on an
+/// unknown opcode, a truncated instruction, or a `map` refusal — the
+/// caller treats all three as "this bytecode cannot be relinked".
+pub fn remap_ids(bytecode: &[u8], mut map: impl FnMut(u16) -> Option<u16>) -> Option<Vec<u8>> {
+    let mut out = bytecode.to_vec();
+    let mut pc = 0usize;
+    while pc < out.len() {
+        let op = Opcode::from_u8(out[pc])?;
+        let len = instruction_len(&out, pc)?;
+        if op.size() == 0 {
+            if pc + 1 + ID_SIZE > out.len() {
+                return None;
+            }
+            let id = u16::from_le_bytes([out[pc + 1], out[pc + 2]]);
+            let new = map(id)?;
+            out[pc + 1..pc + 1 + ID_SIZE].copy_from_slice(&new.to_le_bytes());
+        }
+        pc = pc.checked_add(len)?;
     }
-    match size {
-        0 => Some(1 + ID_SIZE),
-        -1 => {
-            let n = *code.get(pc + 1)? as usize;
-            Some(2 + n)
+    Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every SYMBOL-operand opcode must carry the `0` sentinel, because
+    /// that is what [`remap_ids`] keys on and what [`instruction_len`]
+    /// resolves to `1 + ID_SIZE`. A concrete size on one of these is
+    /// doubly wrong: the relink skips its operand AND mis-advances the
+    /// scan, desynchronizing every instruction after it.
+    ///
+    /// The list is exactly XS's own `gxCodeSizes` ZERO entries, read off
+    /// `xsCommon.c`. `XS_CODE_PROFILE` is deliberately NOT among them:
+    /// it is ID-shaped but XS gives it a positive size (`3` in a
+    /// 2-byte-ID build) precisely so the symbol remap skips it —
+    /// `fxMapperMapIDs` handles it in the `0 < offset` branch and mints a
+    /// fresh profile id rather than mapping the operand. Both directions
+    /// are asserted below, so neither "PROFILE joins the sentinel set"
+    /// nor "a real symbol op leaves it" can land silently (review waves
+    /// 4 and 5).
+    #[test]
+    fn every_id_bearing_opcode_uses_the_computed_size_sentinel() {
+        let id_bearing = [
+            Opcode::XS_CODE_ASYNC_FUNCTION,
+            Opcode::XS_CODE_ASYNC_GENERATOR_FUNCTION,
+            Opcode::XS_CODE_CONSTRUCTOR_FUNCTION,
+            Opcode::XS_CODE_DELETE_PROPERTY,
+            Opcode::XS_CODE_DELETE_SUPER,
+            Opcode::XS_CODE_FILE,
+            Opcode::XS_CODE_FUNCTION,
+            Opcode::XS_CODE_GENERATOR_FUNCTION,
+            Opcode::XS_CODE_GET_PROPERTY,
+            Opcode::XS_CODE_GET_SUPER,
+            Opcode::XS_CODE_GET_THIS_VARIABLE,
+            Opcode::XS_CODE_GET_VARIABLE,
+            Opcode::XS_CODE_EVAL_PRIVATE,
+            Opcode::XS_CODE_EVAL_REFERENCE,
+            Opcode::XS_CODE_NAME,
+            Opcode::XS_CODE_NEW_CLOSURE,
+            Opcode::XS_CODE_NEW_LOCAL,
+            Opcode::XS_CODE_NEW_PROPERTY,
+            Opcode::XS_CODE_PROGRAM_REFERENCE,
+            Opcode::XS_CODE_SET_PROPERTY,
+            Opcode::XS_CODE_SET_SUPER,
+            Opcode::XS_CODE_SET_VARIABLE,
+            Opcode::XS_CODE_SYMBOL,
+        ];
+        for op in id_bearing {
+            assert_eq!(
+                op.size(),
+                0,
+                "{} carries an ID operand and must use the computed-size sentinel",
+                op.name(),
+            );
         }
-        -2 => {
-            let lo = *code.get(pc + 1)? as usize;
-            let hi = *code.get(pc + 2)? as usize;
-            Some(3 + (lo | (hi << 8)))
+        // And the converse: nothing else claims the sentinel, so
+        // `remap_ids` never rewrites two bytes of a non-ID operand.
+        for byte in 0..XS_CODE_COUNT {
+            let Some(op) = Opcode::from_u8(byte as u8) else {
+                continue;
+            };
+            if op.size() == 0 {
+                assert!(
+                    id_bearing.contains(&op),
+                    "{} claims the computed-size sentinel but is not ID-bearing",
+                    op.name(),
+                );
+            }
         }
-        -4 => {
-            let b0 = *code.get(pc + 1)? as usize;
-            let b1 = *code.get(pc + 2)? as usize;
-            let b2 = *code.get(pc + 3)? as usize;
-            let b3 = *code.get(pc + 4)? as usize;
-            Some(5 + (b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)))
-        }
-        // Every negative sentinel XS emits is -1/-2/-4; anything else is
-        // an impossible table entry.
-        _ => None,
+        // PROFILE specifically: ID-shaped, positive size, out of the
+        // remap set. `3` is `1 + ID_SIZE` — XS's own non-`mx32bitID`
+        // value — so the instruction WALK agrees with the sentinel form
+        // while the symbol REMAP correctly skips it.
+        assert_eq!(
+            Opcode::XS_CODE_PROFILE.size(),
+            (1 + ID_SIZE) as i8,
+            "PROFILE must keep XS's positive 2-byte-ID size, not the remap sentinel",
+        );
+        assert!(
+            !id_bearing.contains(&Opcode::XS_CODE_PROFILE),
+            "PROFILE's operand is a profile counter, not a symbol id",
+        );
+    }
+
+    /// Wave-6 W6-22: a TRUNCATED TRAILING payload must refuse to walk.
+    /// A length-prefixed instruction declaring more payload bytes than
+    /// the stream holds used to size "successfully" (the sentinel arms
+    /// computed the length without checking the payload exists), so
+    /// `remap_ids` walked off the end and reported the truncated
+    /// bytecode relinkable — while the dispatch loop fails closed on
+    /// the same bytes. The two walkers must agree: truncation is a
+    /// refusal in both.
+    #[test]
+    fn a_truncated_trailing_payload_refuses_to_walk() {
+        // STRING_1 (`-1` sentinel: u8 length prefix, then bytes)
+        // declaring 8 payload bytes with only 2 present.
+        let truncated = [Opcode::XS_CODE_STRING_1 as u8, 8, b'a', b'b'];
+        assert_eq!(
+            instruction_len(&truncated, 0),
+            None,
+            "a truncated payload must not size"
+        );
+        assert!(
+            remap_ids(&truncated, Some).is_none(),
+            "a truncated payload must not relink"
+        );
+        // A truncated FIXED-size operand at the tail refuses the same
+        // way (INTEGER_2 is 3 bytes; only the opcode byte is present).
+        let short_fixed = [Opcode::XS_CODE_INTEGER_2 as u8];
+        assert_eq!(instruction_len(&short_fixed, 0), None);
+        assert!(remap_ids(&short_fixed, Some).is_none());
+        // The well-formed forms still walk: a payload ending EXACTLY at
+        // the end of the stream is complete, not truncated.
+        let exact = [Opcode::XS_CODE_STRING_1 as u8, 2, b'a', b'b'];
+        assert_eq!(instruction_len(&exact, 0), Some(4));
+        assert!(remap_ids(&exact, Some).is_some());
     }
 }

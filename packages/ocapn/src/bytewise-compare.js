@@ -1,6 +1,6 @@
 // @ts-check
 
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 
 /**
  * @param {Uint8Array} left
@@ -87,13 +87,10 @@ export function compareUint8Arrays(
 
 /**
  * Compare two immutable ArrayBuffers
- * @param {ArrayBufferLike} left
- * @param {ArrayBufferLike} right
+ * @param {Uint8Array} left
+ * @param {Uint8Array} right
  * @returns {number}
  */
 export const compareImmutableArrayBuffers = (left, right) => {
-  return compareUint8Arrays(
-    bytesFromImmutable(left),
-    bytesFromImmutable(right),
-  );
+  return compareUint8Arrays(thawedBytes(left), thawedBytes(right));
 };

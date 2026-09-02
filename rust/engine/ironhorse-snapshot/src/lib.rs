@@ -25,9 +25,10 @@
 //!   and the host callback-table [`format::Signature`] scheme.
 //! - [`slot_codec`] — [`ironhorse_vm::Slot`] ↔ fixed-width record.
 //! - [`image`] — [`image::MachineImage`] plus [`image::write_machine`] /
-//!   [`image::read_machine`], the narrow API the `Machine`-level surface
-//!   calls, now including the [`image::MeterImage`] `METR` atom (meter
-//!   state across suspend, design row 6).
+//!   [`image::read_machine`] for low-level tooling, and the
+//!   proof-carrying [`image::ValidatedSnapshot`] the `Machine`-level
+//!   adoption surface consumes. Includes the [`image::MeterImage`] `METR`
+//!   atom (meter state across suspend, design row 6).
 //! - [`machine`] — the xsnap-shaped `Machine` surface (stage-6 child 3):
 //!   the [`machine::MachineSnapshot`] extension trait on `ironhorse_vm::Interp`
 //!   (`write_snapshot_to_file`/`suspend_to_cas`) plus
@@ -63,13 +64,21 @@ pub mod store_file;
 // support only, hence feature-gated.
 #[cfg(feature = "store-suite")]
 pub mod store_suite;
+// Scratch-dir guard for the src test modules only (integration
+// binaries carry their own copy in tests/common/).
+#[cfg(test)]
+pub(crate) mod test_dir;
 
 pub use atom::{Atom, AtomError, AtomReader, AtomWriter};
 pub use format::{
-    FourCc, Signature, SignatureError, SnapshotError, Version, VersionError, BLOC, CREA, HEAP,
-    KEYS, METR, NAME, SIGN, STAC, SYMB, VERS, XS_M,
+    FourCc, Signature, SignatureError, SnapshotError, Version, VersionError, ACCS, ARRY, BLOC,
+    COLL, CREA, DATE, DISP, FUNC, GENR, HEAP, IBFN, KEYS, METR, NAME, PRIV, PROX, REGY, SIGN,
+    STAC, SYMB, VERS, XS_M,
 };
-pub use image::{read_machine, write_machine, CreationParams, MachineImage, MeterImage};
+pub use image::{
+    read_machine, read_validated_machine, write_machine, ArrayImage, CollectionImage,
+    CreationParams, DateImage, MachineImage, MeterImage, RegistryImage, ValidatedSnapshot,
+};
 pub use machine::{
     from_snapshot_bytes, from_snapshot_file, image_to_interp, resume_from_cas, MachineSnapshot,
     MachineSnapshotError,
@@ -80,6 +89,6 @@ pub use store::{
     check_epoch, chunk_extent_count, chunk_extent_len, export_to_container, image_to_batch,
     import_from_container, slot_page_count, slot_page_len, store_to_image, validate_store,
     CheckpointBatch, CommitStats, HeapStore, MemoryStore, SmallState, StoreError, StoreManifest,
-    CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE, STORE_SCHEMA_VERSION,
+    ValidatedStoreState, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE, STORE_SCHEMA_VERSION,
 };
 pub use store_file::{FileStore, FILE_MAGIC};

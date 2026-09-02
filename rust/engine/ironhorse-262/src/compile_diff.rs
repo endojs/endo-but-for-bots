@@ -135,7 +135,9 @@ fn oracle_compile_module(source: &str) -> Option<(bool, Vec<u8>)> {
 /// ironhorse's **Module** compile verdict for `source`, total over panics —
 /// the module counterpart of [`ironhorse_compile`].
 fn ironhorse_compile_module(source: &str) -> Result<Result<Vec<u8>, String>, String> {
-    let caught = panic::catch_unwind(AssertUnwindSafe(|| ironhorse_compile::compile_module(source)));
+    let caught = panic::catch_unwind(AssertUnwindSafe(|| {
+        ironhorse_compile::compile_module(source)
+    }));
     match caught {
         Ok(Ok(bytes)) => Ok(Ok(bytes)),
         Ok(Err(e)) => Ok(Err(format!("{:?}", e))),
@@ -410,12 +412,13 @@ pub fn compile_diff_files(files: &[PathBuf]) -> CompileReport {
 /// The curated conformance-case programs as `(id, source)` pairs — the
 /// bounded, known-covered byte-identity slice the in-crate `cargo test` gate
 /// drives. The `corpora/*.js` line files these once came from retired into
-/// the `cases/` tree (design § Part 1); every converted case preserves its
+/// the shared test262 tree under `test/ironhorse/` (design § Part 1); every converted case preserves its
 /// original one-line program verbatim in an `info: Source: <program>`
 /// frontmatter line, so the byte-identity gate reads the *same* programs from
 /// the surviving cases with no change to what it covers.
 pub fn corpora_programs() -> Vec<(String, String)> {
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("cases");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../packages/test262-runner/test262/test/ironhorse");
     let mut files = crate::test262::collect_js(&dir);
     files.sort();
     let mut out = Vec::new();
@@ -506,7 +509,9 @@ pub fn symbols_diff_programs(programs: &[(String, String)]) -> SymbolsReport {
                 continue;
             }
         };
-        let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| ironhorse_compile::compile_atoms(source)));
+        let ironhorse = panic::catch_unwind(AssertUnwindSafe(|| {
+            ironhorse_compile::compile_atoms(source)
+        }));
         let ironhorse_syms = match ironhorse {
             Ok(Ok((_, syms))) => syms,
             // ironhorse folded or rejected: the bytecode gate covers accept/reject
@@ -736,7 +741,10 @@ mod tests {
         // mean the flipped default links intrinsics against a different
         // id→name table than the oracle, so it fails the build.
         let programs = corpora_programs();
-        assert!(!programs.is_empty(), "curated corpora must contain programs");
+        assert!(
+            !programs.is_empty(),
+            "curated corpora must contain programs"
+        );
         let report = symbols_diff_programs(&programs);
         let mut buf = Vec::new();
         print_symbols_report(&mut buf, &report, "corpora").unwrap();

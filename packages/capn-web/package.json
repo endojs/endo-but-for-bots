@@ -56,12 +56,13 @@
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
-    "capnweb": "^0.11.1",
+    "capnweb": "^0.12.0",
     "eslint": "catalog:dev",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
   "dependencies": {
+    "@endo/base64": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",

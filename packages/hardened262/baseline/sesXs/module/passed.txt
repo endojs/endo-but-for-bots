@@ -4,6 +4,8 @@ test/Compartment/evaluate-transforms.js
 test/Compartment/import-now-hook/module-source-descriptor-sees-globals.js
 test/Compartment/import-now-hook/namespace-descriptor.js
 test/Compartment/import-now-hook/returns-undefined.js
+test/TextDecoder/immutable-arraybuffer-intersection.js
+test/TextEncoder/immutable-arraybuffer-intersection.js
 test/intrinsics/ArrayBuffer/prototype-slice.js
 test/intrinsics/ArrayIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/AsyncFunction/intrinsic-metadata.js

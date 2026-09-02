@@ -83,6 +83,9 @@ Methods: `has`, `list`, `lookup`, `entry`, `stat`, `readText`,
 `makeFile`, `readOnly`, `snapshot`, `help`.
 Path arguments accept `string | string[]` (a single name or
 an array of path segments).
+A slash inside a string is not a separator —
+`readText('src/foo.js')` is rejected; pass `['src', 'foo.js']`, or mint a
+token with `entry('src/foo.js')`, the one mount method that splits on `/`.
 
 ### ScratchMount
 

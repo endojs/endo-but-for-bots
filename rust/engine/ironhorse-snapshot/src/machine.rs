@@ -60,10 +60,12 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use crate::format::{Signature, SnapshotError};
-use crate::image::{read_machine, write_machine, MachineImage, MeterImage};
+use crate::image::{
+    read_validated_machine, write_machine, MachineImage, MeterImage, ValidatedSnapshot,
+};
 use crate::sha256::{hex, Sha256};
 use crate::store::{
-    chunk_extent_count, combine_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
+    chunk_extent_count, compute_root, derive_page_edges, image_to_batch, leaf_hash, seal_commit,
     slot_page_count, store_to_image, validate_store, CheckpointBatch, HeapStore, SmallState,
     StoreError, StoreLeaves, StoreManifest, LEAF_EXT, LEAF_PAGE, LEAF_SMALL,
     STORE_SCHEMA_VERSION,
@@ -78,6 +80,16 @@ use ironhorse_vm::Interp;
 pub enum MachineSnapshotError {
     Io(io::Error),
     Snapshot(SnapshotError),
+    /// The machine is not at a quiescent crank boundary (wave-6 W6-10):
+    /// its last crank halted, leaving pending microtasks / frames / an
+    /// exception that no snapshot carries. Rewind or complete a crank
+    /// before persisting.
+    NotQuiescent,
+    /// The heap holds live state in a SILENT-WRONG Pending side table
+    /// (wave-6 W6-9: proxies, accessors, typed arrays) - a resumed
+    /// machine would answer wrong values, so persist refuses by name
+    /// until the row's atom lands (error data graduated to `ERRD`).
+    PendingStateUnsupported { row: &'static str },
 }
 
 impl std::fmt::Display for MachineSnapshotError {
@@ -85,6 +97,12 @@ impl std::fmt::Display for MachineSnapshotError {
         match self {
             MachineSnapshotError::Io(e) => write!(f, "snapshot io error: {e}"),
             MachineSnapshotError::Snapshot(e) => write!(f, "snapshot decode error: {e:?}"),
+            MachineSnapshotError::NotQuiescent => {
+                write!(f, "machine is not at a quiescent crank boundary")
+            }
+            MachineSnapshotError::PendingStateUnsupported { row } => {
+                write!(f, "heap holds live {row}: that side table does not travel yet")
+            }
         }
     }
 }
@@ -114,9 +132,20 @@ pub trait MachineSnapshot {
     /// value stack, the program symbol names, and the metering state.
     fn snapshot_image(&self, signature: &Signature) -> MachineImage;
 
+    /// The persist preconditions for the blob verbs (wave-6 W6-10/12):
+    /// the same gates the store verbs enforce - a quiescent crank
+    /// boundary and no live dynamic-segment function. The default is
+    /// permissive for image-only implementors; [`Interp`] overrides it.
+    fn persist_gate(&self) -> Result<(), MachineSnapshotError> {
+        Ok(())
+    }
+
     /// Serialize this machine to the in-memory `XS_M` container bytes.
-    fn write_snapshot(&self, signature: &Signature) -> Vec<u8> {
-        write_machine(&self.snapshot_image(signature))
+    /// Refuses a machine that fails [`Self::persist_gate`] - the blob
+    /// verbs carry the same preconditions as the store verbs.
+    fn write_snapshot(&self, signature: &Signature) -> Result<Vec<u8>, MachineSnapshotError> {
+        self.persist_gate()?;
+        Ok(write_machine(&self.snapshot_image(signature)))
     }
 
     /// Write this machine's heap snapshot to `file`, computing SHA-256 on
@@ -129,7 +158,7 @@ pub trait MachineSnapshot {
         signature: &Signature,
         file: File,
     ) -> Result<String, MachineSnapshotError> {
-        let bytes = self.write_snapshot(signature);
+        let bytes = self.write_snapshot(signature)?;
         let mut hasher = Sha256::new();
         let mut file = file;
         // Stream the serialized image to disk in chunks, hashing on the
@@ -167,11 +196,26 @@ pub trait MachineSnapshot {
 }
 
 impl MachineSnapshot for Interp {
+    fn persist_gate(&self) -> Result<(), MachineSnapshotError> {
+        if !self.is_quiescent() {
+            return Err(MachineSnapshotError::NotQuiescent);
+        }
+        if let Some(row) = self.stored_unpersistable_row() {
+            return Err(MachineSnapshotError::PendingStateUnsupported { row });
+        }
+        Ok(())
+    }
+
     fn snapshot_image(&self, signature: &Signature) -> MachineImage {
         // The carried atoms (see the suspend-point contract): arenas +
-        // stack + program symbol names + meter. Runtime-interned keys
-        // (KEYS) and well-known symbol identities (SYMB) are among the
-        // enumerated `Pending` remainder for now, so they travel empty.
+        // stack + the name table + meter, plus the side-table ledger's
+        // serialized rows (arrays, collections, `Symbol.for` registry)
+        // and the symbol-key id table (SYMB). String keys — program
+        // symbols and runtime-interned names alike — travel inside the
+        // NAME table since the id-space unification, so the KEYS atom
+        // is retired and travels empty.
+        let tables = side_tables_of(self);
+        let (next_id, pairs) = self.symbol_key_table();
         MachineImage::from_arenas(
             signature.clone(),
             &self.slots,
@@ -179,24 +223,466 @@ impl MachineSnapshot for Interp {
             self.stack_slots(),
             self.program_symbol_names().to_vec(),
             Vec::new(),
-            Vec::new(),
+            crate::image::SymbolKeyImage { next_id, pairs },
         )
         .with_meter(self.meter_state())
+        .with_side_tables(
+            tables.arrays,
+            tables.collections,
+            tables.registry,
+            tables.errors,
+            tables.buffers,
+            tables.typed_arrays,
+            tables.data_views,
+        )
+        .with_language_rows(
+            tables.wrappers,
+            tables.regexps,
+            tables.arguments_brands,
+            tables.temporal,
+            tables.intl,
+        )
+        .with_iterators(tables.iterators)
+        .with_dates(tables.dates)
+        .with_function_state(tables.function_state)
+        .with_proxy_state(tables.proxy_state)
+        .with_accessors(tables.accessors)
+        .with_intl_bound_functions(tables.intl_bound_functions)
+        .with_private_elements(tables.private_elements)
+        .with_disposable_stacks(tables.disposable_stacks)
+        .with_generators(tables.generators)
+        .with_promise_cluster(tables.promise_cluster)
+        .with_name_floor(self.installed_names_floor())
     }
 }
 
-/// Rebuild a live [`Interp`] from a decoded [`MachineImage`]: a fresh
+/// The machine's serialized side-table views (ledger rows `Arrays`/
+/// `Collections`/`SymbolRegistry`/`ErrorData`/`ArrayBuffers`/
+/// `TypedArrays`/`DataViews`/`Dates`), converted from the vm's tuple
+/// snapshots into the image structs, in the vm's canonical
+/// (ascending) order.
+struct SideTableImages {
+    arrays: Vec<crate::image::ArrayImage>,
+    collections: Vec<crate::image::CollectionImage>,
+    registry: Vec<crate::image::RegistryImage>,
+    errors: Vec<crate::image::ErrorImage>,
+    buffers: Vec<crate::image::BufferImage>,
+    typed_arrays: Vec<crate::image::TypedArrayImage>,
+    data_views: Vec<crate::image::DataViewImage>,
+    wrappers: Vec<crate::image::WrapperImage>,
+    regexps: Vec<crate::image::RegExpImage>,
+    dates: Vec<crate::image::DateImage>,
+    function_state: ironhorse_vm::FunctionStateSnapshot,
+    proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    accessors: Vec<ironhorse_vm::AccessorRow>,
+    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+    private_elements: ironhorse_vm::PrivateElementSnapshot,
+    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    generators: Vec<ironhorse_vm::GeneratorRow>,
+    promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+    arguments_brands: Vec<u32>,
+    temporal: crate::image::TemporalImage,
+    intl: ironhorse_vm::IntlTables,
+    iterators: Vec<ironhorse_vm::IteratorRow>,
+}
+
+fn side_tables_of(interp: &Interp) -> SideTableImages {
+    let arrays = interp
+        .arrays_snapshot()
+        .into_iter()
+        .map(|(owner, length, items)| crate::image::ArrayImage {
+            owner,
+            length,
+            items,
+        })
+        .collect();
+    let collections = interp
+        .collections_snapshot()
+        .into_iter()
+        .map(
+            |(owner, kind, table_length, entries)| crate::image::CollectionImage {
+                owner,
+                kind,
+                table_length,
+                entries,
+            },
+        )
+        .collect();
+    let registry = interp
+        .symbol_registry_snapshot()
+        .into_iter()
+        .map(|(key, descriptor)| crate::image::RegistryImage { key, descriptor })
+        .collect();
+    let errors = interp
+        .errors_snapshot()
+        .into_iter()
+        .map(|(owner, name, message, frames)| crate::image::ErrorImage {
+            owner,
+            name: name.to_string(),
+            message,
+            frames,
+        })
+        .collect();
+    let buffers = interp
+        .array_buffers_snapshot()
+        .into_iter()
+
+        .map(|(owner, data, length, flags)| crate::image::BufferImage {
+            owner,
+            data,
+            length,
+            flags,
+        })
+        .collect();
+    let typed_arrays = interp
+        .typed_arrays_snapshot()
+        .into_iter()
+        .map(|(owner, kind, buffer, offset, length)| crate::image::TypedArrayImage {
+            owner,
+            kind,
+            buffer,
+            offset,
+            length,
+        })
+        .collect();
+    let data_views = interp
+        .data_views_snapshot()
+        .into_iter()
+        .map(|(owner, buffer, offset, size)| crate::image::DataViewImage {
+            owner,
+            buffer,
+            offset,
+            size,
+        })
+        .collect();
+    let wrappers = interp
+        .wrappers_snapshot()
+        .into_iter()
+        .map(|(owner, value)| crate::image::WrapperImage { owner, value })
+        .collect();
+    let regexps = interp
+        .regexps_snapshot()
+        .into_iter()
+        .map(|(owner, source, flags, last_index_bits)| crate::image::RegExpImage {
+            owner,
+            source,
+            flags,
+            last_index_bits,
+        })
+        .collect();
+    let arguments_brands = interp.arguments_brands_snapshot();
+    let (instants, durations, plains, zoneds) = interp.temporal_snapshot();
+    let temporal = crate::image::TemporalImage {
+        instants,
+        durations,
+        plains,
+        zoneds,
+    };
+    let intl = interp.intl_snapshot();
+    let iterators = interp.iterators_snapshot();
+    let dates = interp
+        .dates_snapshot()
+        .into_iter()
+        .map(|(owner, value_bits)| crate::image::DateImage { owner, value_bits })
+        .collect();
+    let function_state = interp.function_state_snapshot();
+    let proxy_state = interp.proxy_state_snapshot();
+    let accessors = interp.accessors_snapshot();
+    let intl_bound_functions = interp.intl_bound_functions_snapshot();
+    let private_elements = interp.private_elements_snapshot();
+    let disposable_stacks = interp.disposable_stacks_snapshot();
+    let generators = interp.generators_snapshot();
+    let promise_cluster = interp.promise_cluster_snapshot();
+    SideTableImages {
+        arrays,
+        collections,
+        registry,
+        errors,
+        buffers,
+        typed_arrays,
+        data_views,
+        wrappers,
+        regexps,
+        arguments_brands,
+        temporal,
+        intl,
+        iterators,
+        dates,
+        function_state,
+        proxy_state,
+        accessors,
+        intl_bound_functions,
+        private_elements,
+        disposable_stacks,
+        generators,
+        promise_cluster,
+    }
+}
+
+/// Reinstate the ledger side tables on a restored machine from their
+/// image rows — [`Interp::restore_bulk_side_tables`]'s image-typed
+/// front door, shared by every resume path (container, eager store,
+/// lazy store). A malformed kind code was already refused at decode,
+/// so the restore cannot fail on validated input — but "cannot" is a
+/// claim about the decoders, not a proof, so a `false` return is a
+/// STRUCTURED refusal, never a debug-only assert: a release build must
+/// refuse the row set, not continue with silently missing exotic state
+/// (review finding 4).
+#[allow(clippy::too_many_arguments)]
+fn restore_side_tables(
+    interp: &mut Interp,
+    arrays: Vec<crate::image::ArrayImage>,
+    collections: Vec<crate::image::CollectionImage>,
+    registry: Vec<crate::image::RegistryImage>,
+    errors: Vec<crate::image::ErrorImage>,
+    buffers: Vec<crate::image::BufferImage>,
+    typed_arrays: Vec<crate::image::TypedArrayImage>,
+    data_views: Vec<crate::image::DataViewImage>,
+    wrappers: Vec<crate::image::WrapperImage>,
+    regexps: Vec<crate::image::RegExpImage>,
+    dates: Vec<crate::image::DateImage>,
+    function_state: ironhorse_vm::FunctionStateSnapshot,
+    proxy_state: ironhorse_vm::ProxyStateSnapshot,
+    accessors: Vec<ironhorse_vm::AccessorRow>,
+    intl_bound_functions: Vec<ironhorse_vm::IntlBoundFunctionRow>,
+    private_elements: ironhorse_vm::PrivateElementSnapshot,
+    disposable_stacks: Vec<ironhorse_vm::DisposableStackRow>,
+    generators: Vec<ironhorse_vm::GeneratorRow>,
+    promise_cluster: ironhorse_vm::PromiseClusterSnapshot,
+    arguments_brands: Vec<u32>,
+    temporal: crate::image::TemporalImage,
+    intl: ironhorse_vm::IntlTables,
+    iterators: Vec<ironhorse_vm::IteratorRow>,
+) -> Result<(), crate::format::SnapshotError> {
+    use crate::format::SnapshotError;
+    let ok = interp.restore_bulk_side_tables(
+        arrays
+            .into_iter()
+            .map(|a| (a.owner, a.length, a.items))
+            .collect(),
+        collections
+            .into_iter()
+            .map(|c| (c.owner, c.kind, c.table_length, c.entries))
+            .collect(),
+        registry.into_iter().map(|r| (r.key, r.descriptor)).collect(),
+    );
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: unknown kind code"));
+    }
+    // The error-data rows (name validated at decode against the
+    // engine's closed error-name set, so this cannot fail on a
+    // validated image either).
+    let ok = interp.restore_error_data(
+        errors
+            .into_iter()
+            .map(|e| (e.owner, e.name, e.message, e.frames))
+            .collect(),
+    );
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: unknown error name"));
+    }
+    // The typed-array family (kinds, flags, extents and view geometry
+    // all validated at decode/bounds; the vm re-validates against its
+    // restored arenas, so `false` is a belt-and-braces corrupt signal).
+    let ok = interp.restore_typed_array_family(
+        buffers
+            .into_iter()
+            .map(|b| (b.owner, b.data, b.length, b.flags))
+            .collect(),
+        typed_arrays
+            .into_iter()
+            .map(|t| (t.owner, t.kind, t.buffer, t.offset, t.length))
+            .collect(),
+        data_views
+            .into_iter()
+            .map(|d| (d.owner, d.buffer, d.offset, d.size))
+            .collect(),
+    );
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed typed-array family",
+        ));
+    }
+    // The data-only language rows (schema 11). Wrapper values were
+    // bounds-walked with the heap; a regexp that fails to RECOMPILE
+    // from its persisted (source, flags) cannot come from an honest
+    // snapshot (construction compiled the same pair), and a plain
+    // record's kind was validated at decode.
+    interp.restore_wrapper_data(
+        wrappers.into_iter().map(|w| (w.owner, w.value)).collect(),
+    );
+    let ok = interp.restore_regexps(
+        regexps
+            .into_iter()
+            .map(|r| (r.owner, r.source, r.flags, r.last_index_bits))
+            .collect(),
+    );
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: persisted regexp does not recompile",
+        ));
+    }
+    interp.restore_dates(
+        dates
+            .into_iter()
+            .map(|d| (d.owner, d.value_bits))
+            .collect(),
+    );
+    if !interp.restore_proxy_state(proxy_state) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed proxy state",
+        ));
+    }
+    // The Intl record rows (schema 12): pure resolved-options data;
+    // segment geometry and the iterator cross-reference were validated
+    // at decode/bounds, and the vm re-validates them on the way in.
+    let ok = interp.restore_intl(intl);
+    if !ok {
+        return Err(SnapshotError::Corrupt("side-table restore: malformed intl record"));
+    }
+    // The Intl bound natives (schema 18) install BEFORE the retained
+    // function state, not after: they are the one function-shaped
+    // population that `FUNC` does not own, and a guest `.bind()` over
+    // one (`nf.format.bind(null)`) emits a `FUNC` bound row whose
+    // target is an `IBFN` slot. Adjudicating retained function state
+    // first sees that target in neither `state.functions` nor the boot
+    // machine and refuses an HONEST snapshot — permanently, on every
+    // resume. `restore_intl_bound_functions` depends only on the Intl
+    // data rows above, so the earlier position is otherwise inert, and
+    // the two collision checks stay mutually exclusive: `IBFN` still
+    // refuses a slot boot already minted, and `FUNC` still refuses one
+    // an earlier verb installed.
+    if !interp.restore_intl_bound_functions(intl_bound_functions) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed Intl bound-function state",
+        ));
+    }
+    // The promise cluster (schema 23) installs its resolving-function
+    // natives BEFORE the retained function state for the same reason
+    // `IBFN` does: a guest `.bind()` over a resolving function emits a
+    // `FUNC` bound row whose target is a `PRMS` slot, which the
+    // retained-state adjudication must find already installed. The
+    // collision checks stay two-sided: this verb refuses a slot boot
+    // already minted, and `FUNC` refuses one an earlier verb installed.
+    if !interp.restore_promise_cluster(promise_cluster) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed promise cluster",
+        ));
+    }
+    if !interp.restore_function_state(function_state) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed retained function state",
+        ));
+    }
+    if !interp.restore_generators(generators) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed generator state",
+        ));
+    }
+    interp.restore_arguments_brands(arguments_brands);
+    let ok = interp.restore_temporal_records(
+        temporal.instants,
+        temporal.durations,
+        temporal.plains,
+        temporal.zoneds,
+    );
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed temporal record",
+        ));
+    }
+    if !interp.restore_accessors(accessors) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed accessor state",
+        ));
+    }
+    if !interp.restore_private_elements(private_elements) {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed private elements",
+        ));
+    }
+    interp.restore_disposable_stacks(disposable_stacks);
+    // The iterator cursors (schema 13): validated at decode/bounds
+    // (kinds, cursor ranges, the covering-collection cross-check);
+    // restored AFTER the collections so the covering rows are in hand
+    // for the vm's own re-validation.
+    let ok = interp.restore_iterators(iterators);
+    if !ok {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed iterator cursor",
+        ));
+    }
+    Ok(())
+}
+
+/// Rebuild a live [`Interp`] from a [`ValidatedSnapshot`]: a fresh
 /// boot machine with the image's serializable state reinstated (the
 /// arenas, stack, program symbol names, and metering state). The
 /// boot-derived intrinsics/prototypes come from the fresh boot at their
 /// deterministic slot indices, matching the image's boot region. See
 /// [`Interp::restore_snapshot_state`].
-pub fn image_to_interp(image: MachineImage) -> Interp {
+///
+/// The proof wrapper prevents mutation between validation and restore.
+/// Restoration remains fallible while the VM keeps belt-and-braces
+/// revalidation for derived state; every such refusal is structured on all
+/// build profiles.
+pub fn image_to_interp(
+    snapshot: ValidatedSnapshot,
+) -> Result<Interp, crate::format::SnapshotError> {
+    let image = snapshot.into_image();
     let meter = image.meter.to_state();
     let (slots, chunks) = image.to_arenas();
     let mut interp = Interp::new();
     interp.restore_snapshot_state(slots, chunks, image.stack, image.names, meter);
-    interp
+    // The installed-names floor (wave-6 W6-7): adopt the live floor
+    // when it traveled, so names interned during the last install pass
+    // stay lazily installable exactly as they were live. Bounds were
+    // validated at decode.
+    if let Some(floor) = image.name_floor {
+        if !interp.restore_installed_names_floor(floor) {
+            return Err(crate::format::SnapshotError::Corrupt(
+                "installed-names floor does not restore",
+            ));
+        }
+    }
+    // The symbol-key id table (SYMB): re-bind each stored id to its
+    // descriptor slot and reinstate the top-down mint counter, so a
+    // symbol-keyed property reads back under the same id and a later
+    // mint cannot reuse a stored number.
+    if !interp.restore_symbol_key_table(image.symbols.next_id, &image.symbols.pairs) {
+        return Err(crate::format::SnapshotError::Corrupt(
+            "symbol-key table does not restore",
+        ));
+    }
+    // The side-table ledger rows (arrays, collections, registry):
+    // restored through the counted accessors so the side-ref page
+    // counts rebuild in lockstep.
+    restore_side_tables(
+        &mut interp,
+        image.arrays,
+        image.collections,
+        image.registry,
+        image.errors,
+        image.buffers,
+        image.typed_arrays,
+        image.data_views,
+        image.wrappers,
+        image.regexps,
+        image.dates,
+        image.function_state,
+        image.proxy_state,
+        image.accessors,
+        image.intl_bound_functions,
+        image.private_elements,
+        image.disposable_stacks,
+        image.generators,
+        image.promise_cluster,
+        image.arguments_brands,
+        image.temporal,
+        image.intl,
+        image.iterators,
+    )?;
+    Ok(interp)
 }
 
 /// Rebuild a machine from `XS_M` container bytes, enforcing the ironhorse
@@ -204,8 +690,8 @@ pub fn image_to_interp(image: MachineImage) -> Interp {
 /// cost-table version (all fail closed). The metering analogue of
 /// `fxReadSnapshot`'s signature gate is the `METR` cost-table check.
 pub fn from_snapshot_bytes(buf: &[u8], expected_sig: &Signature) -> Result<Interp, SnapshotError> {
-    let image = read_machine(buf, expected_sig)?;
-    Ok(image_to_interp(image))
+    let snapshot = read_validated_machine(buf, expected_sig)?;
+    image_to_interp(snapshot)
 }
 
 /// Rebuild a machine from a snapshot file. Streams the file into memory,
@@ -304,6 +790,32 @@ pub struct StoreSession {
     /// is what lets the machine keep faulting after its own commits
     /// (its non-dirty rows are unchanged by its own checkpoint).
     pin: Option<std::rc::Rc<LazyPin>>,
+    /// Slot pages dirtied (or grown) since the last collection this
+    /// session ran — the generational collector's candidate set,
+    /// accumulated from each checkpoint's traveling page rows and
+    /// cleared when a collection consumes it. A fresh RESUME starts
+    /// empty (a generational pass right after resume frees nothing —
+    /// retention-only, sound).
+    gen_dirty: std::collections::BTreeSet<u32>,
+    /// The session's live copy of the store's root metadata (V6-c):
+    /// seeded from verified state at begin/resume and advanced by
+    /// each successful checkpoint, so the steady-state commit reads
+    /// NO stored metadata and re-hashes only the dirty leaves' root
+    /// paths. `None` after a failed commit (the owner-drops-on-failure
+    /// discipline [`RootLedger`] documents); the next checkpoint takes
+    /// the slow path — stored-metadata read, laundering pre-verify,
+    /// full recombination — and rebuilds it.
+    root_ledger: Option<crate::store::RootLedger>,
+    /// Total COMPLETED cranks the STORE has absorbed — the durable
+    /// counter the cadence schedule is derived from (store schema 8).
+    /// Seeded from the manifest at begin/resume and written back by
+    /// every checkpoint, so it survives a suspend and the schedule
+    /// cannot fork across one (review wave 5).
+    ///
+    /// The session does not advance this itself: it has no notion of a
+    /// crank. The caller that does — `PersistentMachine` — sets it with
+    /// [`StoreSession::set_cranks`] before checkpointing.
+    cranks: u64,
 }
 
 impl std::fmt::Debug for StoreSession {
@@ -319,6 +831,20 @@ impl StoreSession {
     /// The store epoch this session last committed or adopted.
     pub fn epoch(&self) -> u64 {
         self.epoch
+    }
+
+    /// Total COMPLETED cranks this store has absorbed — the durable
+    /// counter a cadence schedule must key off if it is to survive a
+    /// suspend (see [`StoreManifest::cranks`]).
+    pub fn cranks(&self) -> u64 {
+        self.cranks
+    }
+
+    /// Record the store's completed-crank total, to be written by the
+    /// next checkpoint. The session cannot derive this — it has no
+    /// notion of a crank — so the caller that does owns it.
+    pub fn set_cranks(&mut self, cranks: u64) {
+        self.cranks = cranks;
     }
 
     /// The bound machine.
@@ -342,7 +868,12 @@ impl StoreSession {
 /// formulas are exactly [`MachineImage::from_arenas`]'s, so a store
 /// checkpointed incrementally exports byte-identically to a blob
 /// written by [`MachineSnapshot::write_snapshot`].
-fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManifest {
+fn manifest_of(
+    interp: &Interp,
+    signature: &Signature,
+    epoch: u64,
+    cranks: u64,
+) -> StoreManifest {
     StoreManifest {
         version: crate::format::Version::current(),
         store_schema: STORE_SCHEMA_VERSION,
@@ -356,22 +887,56 @@ fn manifest_of(interp: &Interp, signature: &Signature, epoch: u64) -> StoreManif
         chunk_len: interp.chunks.byte_size() as u64,
         free_len: interp.slots.free_list().len() as u32,
         epoch,
+        cranks,
         root: String::new(),
         seal: String::new(),
     }
 }
 
 /// The machine's small state, mirroring [`MachineSnapshot::snapshot_image`]
-/// exactly (keys and well-known-symbol identities travel empty per the
-/// current side-table coverage).
+/// exactly (the KEYS section is retired — string keys travel inside the
+/// NAME table since the id-space unification; the ledger rows — arrays,
+/// collections, registry since schema 7 and errors since schema 9 —
+/// travel alongside, and the symbol-key table travels in the symbols
+/// section).
 fn small_state_of(interp: &Interp) -> SmallState {
+    let tables = side_tables_of(interp);
+    let (next_id, pairs) = interp.symbol_key_table();
     SmallState {
         stack: interp.stack_slots().to_vec(),
         slot_free: interp.slots.free_list().to_vec(),
         keys: Vec::new(),
         names: interp.program_symbol_names().to_vec(),
-        symbols: Vec::new(),
+        symbols: crate::image::SymbolKeyImage { next_id, pairs },
         meter: MeterImage::of(interp.meter_state()),
+        arrays: tables.arrays,
+        collections: tables.collections,
+        registry: tables.registry,
+        errors: tables.errors,
+        buffers: tables.buffers,
+        typed_arrays: tables.typed_arrays,
+        data_views: tables.data_views,
+        wrappers: tables.wrappers,
+        regexps: tables.regexps,
+        dates: tables.dates,
+        function_state: tables.function_state,
+        proxy_state: tables.proxy_state,
+        accessors: tables.accessors,
+        intl_bound_functions: tables.intl_bound_functions,
+        private_elements: tables.private_elements,
+        disposable_stacks: tables.disposable_stacks,
+        generators: tables.generators,
+        promise_cluster: tables.promise_cluster,
+        arguments_brands: tables.arguments_brands,
+        temporal: tables.temporal,
+        intl: tables.intl,
+        iterators: tables.iterators,
+        // Canonicalized like `with_name_floor`: a floor at the table
+        // length is the restore default and travels as `None`.
+        name_floor: {
+            let floor = interp.installed_names_floor();
+            (floor as usize != interp.program_symbol_names().len()).then_some(floor)
+        },
     }
 }
 
@@ -389,7 +954,38 @@ pub fn begin_store_session(
         Ok(m) => return Err((interp, StoreError::NotEmpty { epoch: m.epoch })),
         Err(e) => return Err((interp, e)),
     }
-    let batch = image_to_batch(&interp.snapshot_image(signature), 1, "");
+    // A persist verb requires a QUIESCENT crank boundary (wave-6
+    // W6-10): a halted crank leaves pending microtasks, a populated
+    // call stack, live handlers, a set exception, and a mid-frame value
+    // stack — a checkpoint there serializes the mid-frame stack while
+    // silently dropping the rest. The managed lifecycle rewinds halted
+    // cranks; this gate covers every other caller.
+    if !interp.is_quiescent() {
+        return Err((interp, StoreError::MachineNotQuiescent));
+    }
+    // The four SILENT-WRONG Pending rows (wave-6 W6-9): a resumed heap
+    // holding one answers wrong values, not visible failures. Refuse by
+    // name until their atoms land (the recorded G3 lift).
+    if let Some(row) = interp.stored_unpersistable_row() {
+        return Err((interp, StoreError::PendingStateUnsupported { row }));
+    }
+    // The id-space audit (what remains of the wave-4 P1 gate): with
+    // string keys living in the NAME table and symbol keys traveling in
+    // the SYMB table, a LIVE machine cannot store an id outside both —
+    // ids only ever come from minting. Finding one here would mean this
+    // process corrupted its own tables; refuse rather than persist the
+    // contradiction. Asked of the IMAGE, which this path builds in full
+    // anyway, so the witness is what the store would actually hold.
+    let image = interp.snapshot_image(signature);
+    if image.stored_unregistered_key_id().is_some() {
+        return Err((
+            interp,
+            StoreError::Snapshot(SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            )),
+        ));
+    }
+    let batch = image_to_batch(&image, 1, "");
     if let Err(e) = store.commit(&batch) {
         // A failed commit hands the machine back with its dirt intact.
         return Err((interp, e));
@@ -398,12 +994,42 @@ pub fn begin_store_session(
     // forgets nothing and the next attempt re-offers the same dirt.
     interp.slots.clear_dirty();
     interp.chunks.clear_dirty();
+    // Seed the session's root ledger from the epoch-1 batch — it
+    // carries EVERY row, so an empty ledger advanced by it is the
+    // store's exact state (`root_ledger_tracks_real_batches`).
+    let root_ledger = {
+        let mut ledger =
+            crate::store::RootLedger::build(&batch.small, Vec::new(), Vec::new(), Vec::new(), &[]);
+        ledger
+            .apply(
+                &batch.manifest,
+                &batch.small,
+                &batch.slot_pages,
+                &batch.chunk_extents,
+                &batch.free_segs,
+                &batch.page_edges,
+            )
+            .ok()
+            .filter(|root| *root == batch.manifest.root)
+            .map(|_| ledger)
+    };
+    debug_assert!(root_ledger.is_some(), "epoch-1 ledger seed cannot diverge");
     let seal = batch.manifest.seal;
+    // The full write dirtied EVERY page: the first generational pass
+    // after a begin degenerates to a full partial collect, which is
+    // exactly right for a fresh store.
+    let gen_dirty: std::collections::BTreeSet<u32> =
+        (0..crate::store::slot_page_count(batch.manifest.slot_count)).collect();
     Ok(StoreSession {
+        gen_dirty,
         interp,
         epoch: 1,
         seal,
         pin: None,
+        root_ledger,
+        // A fresh store has absorbed no cranks; the first checkpoint
+        // records however many the caller reports.
+        cranks: 0,
     })
 }
 
@@ -421,6 +1047,23 @@ pub fn checkpoint_to_store(
     signature: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
+    // The wave-4 P1 intern gate stood here — an O(dirty) refusal of any
+    // stored runtime-interned property id, because the id→name map did
+    // not travel. The id-space unification retired it: string keys live
+    // in the NAME table (persisted every checkpoint via the small
+    // state) and symbol keys travel in the SYMB table, so a live
+    // machine's stored ids are always resumable by construction, and
+    // `begin_store_session` / `resume_from_store` keep the full-image
+    // audit for adopted bytes.
+    //
+    if let Some(row) = session.interp.stored_unpersistable_row_at_checkpoint() {
+        return Err(StoreError::PendingStateUnsupported { row });
+    }
+    // And the quiescence gate (wave-6 W6-10): a halted crank must be
+    // rewound, never checkpointed - see begin_store_session.
+    if !session.interp.is_quiescent() {
+        return Err(StoreError::MachineNotQuiescent);
+    }
     let stored = store.manifest()?;
     if stored.epoch != session.epoch {
         return Err(StoreError::EpochMismatch {
@@ -439,35 +1082,74 @@ pub fn checkpoint_to_store(
     let epoch = session.epoch.checked_add(1).ok_or(StoreError::Snapshot(
         crate::format::SnapshotError::Corrupt("store epoch exhausted"),
     ))?;
-    // The stored metadata this commit builds on must itself cohere:
-    // leaves + summaries + small state recombine to the stored root
-    // (metadata-scale). A leaf edited at rest leaves the manifest
-    // untouched — so the pairing guard above still passes — and
-    // without this check the edit would be laundered into THIS
-    // commit's validly sealed root, surfacing only as a fault panic
-    // at the corrupted row's first read (the review's laundering
-    // finding).
-    let (mut leaf_pages, mut leaf_exts) = store.leaf_hashes()?;
-    let prior_frees = store.free_leaf_hashes()?;
-    let mut edges_all = store.page_edges()?;
-    {
-        let stored_small = store.read_small_state()?;
-        let recombined = combine_root(
-            &leaf_hash(LEAF_SMALL, 0, &stored_small),
-            &leaf_pages,
-            &leaf_exts,
-            &prior_frees,
-            &edges_all,
-        );
-        if recombined != stored.root {
-            return Err(StoreError::BaselineMismatch {
-                expected: recombined,
-                found: stored.root.clone(),
-            });
-        }
+    // Root maintenance takes one of two paths (V6-c). FAST: the
+    // session holds a live [`RootLedger`] — verified at seed time and
+    // advanced in lockstep with this session's own commits, which the
+    // pairing guard above proves are the only ones — so this commit
+    // reads NO stored metadata and re-hashes only the dirty leaves'
+    // root paths, O(dirty · log n). The ledger is TAKEN here: any
+    // error path FROM THIS POINT ON drops it and the next checkpoint
+    // rebuilds via the slow path (the drop-on-failure discipline).
+    //
+    // The guards ABOVE — runtime-interns, epoch, seal, epoch overflow,
+    // and a failed manifest read — return before the take, so a refusal
+    // there leaves the ledger in place (review wave 4, P3b: the prose
+    // said "any failed or refused commit drops it", which overstated
+    // it). That is correct rather than an oversight: those guards
+    // refuse before anything is written, so the ledger still describes
+    // exactly the store state it was advanced against and stays
+    // coherent. What must drop the ledger is a failure that could have
+    // left the store somewhere else, and every one of those is below.
+    // SLOW (no
+    // ledger: first checkpoint after a failure): read the stored
+    // metadata and verify it recombines to the stored root before
+    // building on it — a leaf edited at rest leaves the manifest
+    // untouched, so the pairing guard above still passes, and without
+    // this check the edit would be laundered into THIS commit's
+    // validly sealed root (the review's laundering finding). The fast
+    // path is immune to that laundering by construction — it never
+    // reads the edited bytes — and the edit stays detected by the
+    // backend's own recombination, every fault's row/leaf check, and
+    // the next open.
+    enum RootPath {
+        Fast(crate::store::RootLedger),
+        Slow {
+            leaf_pages: Vec<[u8; 32]>,
+            leaf_exts: Vec<[u8; 32]>,
+            prior_frees: Vec<[u8; 32]>,
+            edges_all: Vec<Vec<u32>>,
+        },
     }
+    let mut path = match session.root_ledger.take() {
+        Some(ledger) => RootPath::Fast(ledger),
+        None => {
+            let (leaf_pages, leaf_exts) = store.leaf_hashes()?;
+            let prior_frees = store.free_leaf_hashes()?;
+            let edges_all = store.page_edges()?;
+            let stored_small = store.read_small_state()?;
+            let recombined = compute_root(
+                &leaf_hash(LEAF_SMALL, 0, &stored_small),
+                &leaf_pages,
+                &leaf_exts,
+                &prior_frees,
+                &edges_all,
+            );
+            if recombined != stored.root {
+                return Err(StoreError::BaselineMismatch {
+                    expected: recombined,
+                    found: stored.root.clone(),
+                });
+            }
+            RootPath::Slow {
+                leaf_pages,
+                leaf_exts,
+                prior_frees,
+                edges_all,
+            }
+        }
+    };
     let interp = &mut session.interp;
-    let mut manifest = manifest_of(interp, signature, epoch);
+    let mut manifest = manifest_of(interp, signature, epoch, session.cranks);
 
     // Dirty rows only — never the whole heap. `page_records`/
     // `extent_bytes` copy one page/extent out of the arena (dirty rows
@@ -509,9 +1191,15 @@ pub fn checkpoint_to_store(
         .collect();
 
     let small = small_state_of(interp).encode();
-    // Free-list segments (phase 9): diff against the stored segment
+    // Free-list segments (phase 9): diff against the prior segment
     // leaves so only CHANGED segments travel — LIFO churn touches the
     // tail segment, making per-commit free bytes O(1) in heap size.
+    // Both paths hold the prior free leaves: the ledger carries them
+    // live; the slow path just read them.
+    let prior_frees: &[[u8; 32]] = match &path {
+        RootPath::Fast(ledger) => ledger.free_leaves(),
+        RootPath::Slow { prior_frees, .. } => prior_frees,
+    };
     let free_all = crate::store::encode_all_free_segs(interp.slots.free_list());
     let free_segs: Vec<(u32, Vec<u8>)> = free_all
         .into_iter()
@@ -519,37 +1207,55 @@ pub fn checkpoint_to_store(
             prior_frees.get(*i as usize).copied() != Some(leaf_hash(crate::store::LEAF_FREE, *i, bytes))
         })
         .collect();
-    // Row-hash tree + summary maintenance (phases 5-6, v5): prior
-    // state + this commit's dirty leaves/summaries → the new sealed
-    // root. Metadata-scale (32 bytes per row) and O(dirty) hashing of
-    // content.
-    let mut leaf_frees = prior_frees;
-    leaf_pages.resize(page_count as usize, [0u8; 32]);
-    leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
-    leaf_frees.resize(
-        crate::store::free_seg_count(manifest.free_len) as usize,
-        [0u8; 32],
-    );
-    for (i, bytes) in &slot_pages {
-        leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
-    }
-    for (i, bytes) in &chunk_extents {
-        leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
-    }
-    for (i, bytes) in &free_segs {
-        leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
-    }
-    edges_all.resize(page_count as usize, Vec::new());
-    for (i, targets) in &page_edges {
-        edges_all[*i as usize] = targets.clone();
-    }
-    manifest.root = combine_root(
-        &leaf_hash(LEAF_SMALL, 0, &small),
-        &leaf_pages,
-        &leaf_exts,
-        &leaf_frees,
-        &edges_all,
-    );
+    // Root maintenance: prior state + this commit's dirty
+    // leaves/summaries → the new sealed root. Fast path: the ledger
+    // patches the traveling rows and recomputes only their tree
+    // paths. Slow path: patch the full vectors read above and
+    // recombine from scratch (also the ledger's rebuild material).
+    manifest.root = match &mut path {
+        RootPath::Fast(ledger) => ledger.apply(
+            &manifest,
+            &small,
+            &slot_pages,
+            &chunk_extents,
+            &free_segs,
+            &page_edges,
+        )?,
+        RootPath::Slow {
+            leaf_pages,
+            leaf_exts,
+            prior_frees,
+            edges_all,
+        } => {
+            let leaf_frees = prior_frees;
+            leaf_pages.resize(page_count as usize, [0u8; 32]);
+            leaf_exts.resize(chunk_extent_count(manifest.chunk_len) as usize, [0u8; 32]);
+            leaf_frees.resize(
+                crate::store::free_seg_count(manifest.free_len) as usize,
+                [0u8; 32],
+            );
+            for (i, bytes) in &slot_pages {
+                leaf_pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
+            }
+            for (i, bytes) in &chunk_extents {
+                leaf_exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
+            }
+            for (i, bytes) in &free_segs {
+                leaf_frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
+            }
+            edges_all.resize(page_count as usize, Vec::new());
+            for (i, targets) in &page_edges {
+                edges_all[*i as usize] = targets.clone();
+            }
+            compute_root(
+                &leaf_hash(LEAF_SMALL, 0, &small),
+                leaf_pages,
+                leaf_exts,
+                leaf_frees,
+                edges_all,
+            )
+        }
+    };
     manifest.seal = seal_commit(
         &session.seal,
         &manifest,
@@ -570,35 +1276,92 @@ pub fn checkpoint_to_store(
         page_edges,
     };
     store.commit(&batch)?;
-    session.interp.slots.clear_dirty();
-    session.interp.chunks.clear_dirty();
+    // The commit landed: hand the advanced ledger back to the session
+    // (fast path), or rebuild one from the slow path's freshly
+    // verified-and-patched vectors — either way the NEXT checkpoint
+    // is O(dirty · log n).
+    session.root_ledger = Some(match path {
+        RootPath::Fast(ledger) => ledger,
+        RootPath::Slow {
+            leaf_pages,
+            leaf_exts,
+            prior_frees,
+            edges_all,
+        } => crate::store::RootLedger::build(
+            &batch.small,
+            leaf_pages,
+            leaf_exts,
+            prior_frees,
+            &edges_all,
+        ),
+    });
+    // Accumulate the traveled slot pages into the generational
+    // candidate set (dirtied ∪ grown — exactly what this commit
+    // shipped); a collection consumes and clears it.
+    session
+        .gen_dirty
+        .extend(batch.slot_pages.iter().map(|(p, _)| *p));
+    // Did this commit land in the PINNED store — the one the machine's
+    // faults read from — decided by address identity (borrow-free, see
+    // [`LazyPin`])? A commit into an identical TWIN leaves the pin, and
+    // the pinned store's content, exactly where the faults need them.
+    //
+    // Taken BEFORE the dirty bits are cleared, because the arenas need
+    // the answer to decide which pages are still safe to evict: clean is
+    // not the same as backed, and a twin commit makes them differ
+    // (review wave 5).
+    let landed_in_backing = {
+        let committed: *const dyn HeapStore = &*store;
+        session
+            .pin
+            .as_ref()
+            .is_some_and(|pin| committed.cast::<()>() == pin.store_addr)
+    };
+    session
+        .interp
+        .slots
+        .clear_dirty_after_commit(landed_in_backing);
+    session
+        .interp
+        .chunks
+        .clear_dirty_after_commit(landed_in_backing);
     session.epoch = epoch;
     session.seal = seal.clone();
     if let Some(pin) = &session.pin {
-        // Advance only if this commit landed in the PINNED store,
-        // decided by address identity (borrow-free — see [`LazyPin`]);
-        // a commit into an identical twin leaves the pin — and the
-        // pinned store's content — exactly where the machine's faults
-        // need them.
-        let committed: *const dyn HeapStore = &*store;
-        if committed.cast::<()>() == pin.store_addr {
+        if landed_in_backing {
             pin.epoch.set(epoch);
             *pin.seal.borrow_mut() = seal;
             // The pinned store's rows just changed; the leaves every
             // future fault verifies against must follow (phase 8: a
             // committed-then-clean row is evictable, so it CAN fault
             // again — and must verify against the bytes this commit
-            // wrote, not the attach-time ones).
-            *pin.leaves.borrow_mut() = StoreLeaves {
-                pages: leaf_pages,
-                exts: leaf_exts,
-                frees: leaf_frees,
-            };
+            // wrote, not the attach-time ones). Patched in place from
+            // the batch's own rows — O(dirty), like the root ledger.
+            {
+                let mut leaves = pin.leaves.borrow_mut();
+                leaves.pages.resize(page_count as usize, [0u8; 32]);
+                leaves
+                    .exts
+                    .resize(chunk_extent_count(batch.manifest.chunk_len) as usize, [0u8; 32]);
+                leaves.frees.resize(
+                    crate::store::free_seg_count(batch.manifest.free_len) as usize,
+                    [0u8; 32],
+                );
+                for (i, bytes) in &batch.slot_pages {
+                    leaves.pages[*i as usize] = leaf_hash(LEAF_PAGE, *i, bytes);
+                }
+                for (i, bytes) in &batch.chunk_extents {
+                    leaves.exts[*i as usize] = leaf_hash(LEAF_EXT, *i, bytes);
+                }
+                for (i, bytes) in &batch.free_segs {
+                    leaves.frees[*i as usize] = leaf_hash(crate::store::LEAF_FREE, *i, bytes);
+                }
+            }
             // And the arenas' lazy backing advances to the committed
             // geometry: rows appended past the attach-time range are
             // now store-backed (evictable, re-faultable), and the
             // tail row's expected fault length is the committed one.
-            session.interp.slots.advance_backing();
+            session.interp.slots.advance_backing(batch.manifest.chunk_len);
             session.interp.chunks.advance_backing();
         }
     }
@@ -615,8 +1378,32 @@ pub fn resume_from_store(
     store: &dyn HeapStore,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, _small, _leaves) = validate_store(store, expected_sig)?;
+    let (manifest, _small, leaves) = validate_store(store, expected_sig)?.into_parts();
+    // Ledger seed material (V6-c): validation just proved these
+    // leaves recombine to the stored root; the raw summaries and
+    // small bytes complete the picture. Read before the torn-read
+    // re-check below so the guard covers them too.
+    let edges = store.page_edges()?;
+    let small_bytes = store.read_small_state()?;
     let image = store_to_image(store)?;
+    // The eager resume reads every row, so it can afford the FULL
+    // id-space audit and is the one resume path that does. It closes
+    // the adoption hole: a store whose bytes carry a property id
+    // outside both key tables (crafted, torn, or written by a
+    // pre-unification build that let one through) is refused here
+    // rather than laundered into this session's checkpoints (review
+    // wave 5). `resume_from_store_lazy` deliberately reads no heap rows
+    // at open — that is the whole point of lazy resume — so it cannot
+    // ask this question, and does not pretend to; what protects it is
+    // that every WRITE path audits, so no store this code produces can
+    // hold one.
+    if image.stored_unregistered_key_id().is_some() {
+        return Err(StoreError::Snapshot(
+            crate::format::SnapshotError::Corrupt(
+                "stored property id outside the name and symbol-key tables",
+            ),
+        ));
+    }
     // Re-check the manifest after the row reads: the reads above are
     // not one atomic snapshot on every backend, so a concurrent commit
     // could otherwise hand us a chimera of two epochs (the SQLite
@@ -629,11 +1416,23 @@ pub fn resume_from_store(
             found: after.seal,
         });
     }
+    let root_ledger = crate::store::RootLedger::build(
+        &small_bytes,
+        leaves.pages,
+        leaves.exts,
+        leaves.frees,
+        &edges,
+    );
+    debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
     Ok(StoreSession {
-        interp: image_to_interp(image),
+        gen_dirty: std::collections::BTreeSet::new(),
+        interp: image_to_interp(ValidatedSnapshot::from_validated_image(image))
+            .map_err(StoreError::Snapshot)?,
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: None,
+        root_ledger: Some(root_ledger),
+        cranks: manifest.cranks,
     })
 }
 
@@ -737,7 +1536,12 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
 ) -> Result<StoreSession, StoreError> {
-    let (manifest, small, leaves) = validate_store(&*store.borrow(), expected_sig)?;
+    let (manifest, small, leaves) =
+        validate_store(&*store.borrow(), expected_sig)?.into_parts();
+    // Ledger seed material (V6-c), read before the torn-read re-check
+    // below so the guard covers it too.
+    let edges = store.borrow().page_edges()?;
+    let small_bytes = store.borrow().read_small_state()?;
     // Re-check the manifest after validation's separate reads, exactly
     // as eager resume does after its row reads: the manifest / small /
     // inventory reads are not one atomic snapshot on every backend, so
@@ -754,6 +1558,14 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
             });
         }
     }
+    let root_ledger = crate::store::RootLedger::build(
+        &small_bytes,
+        leaves.pages.clone(),
+        leaves.exts.clone(),
+        leaves.frees.clone(),
+        &edges,
+    );
+    debug_assert_eq!(root_ledger.root(), manifest.root, "seed from validated state");
     let pin = std::rc::Rc::new(LazyPin {
         epoch: std::cell::Cell::new(manifest.epoch),
         seal: std::cell::RefCell::new(manifest.seal.clone()),
@@ -772,6 +1584,7 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.slot_free.clone(),
         manifest.slot_live,
         source.clone(),
+        manifest.chunk_len,
     );
     let chunks = ironhorse_vm::ChunkArena::lazy_from_parts(manifest.chunk_len as usize, source);
     let mut interp = Interp::new();
@@ -782,11 +1595,59 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         small.names.clone(),
         small.meter.to_state(),
     );
+    // The installed-names floor (wave-6 W6-7), exactly as the container
+    // path adopts it; bounds were validated by `SmallState::decode`.
+    if let Some(floor) = small.name_floor {
+        if !interp.restore_installed_names_floor(floor) {
+            return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+                "installed-names floor does not restore",
+            )));
+        }
+    }
+    // The symbol-key id table rides the small state too, restored
+    // before anything can mint.
+    if !interp.restore_symbol_key_table(small.symbols.next_id, &small.symbols.pairs) {
+        return Err(StoreError::Snapshot(crate::format::SnapshotError::Corrupt(
+            "symbol-key table does not restore",
+        )));
+    }
+    // The ledger side tables ride the small state, so a LAZY resume
+    // restores them eagerly like everything else small — only arena
+    // rows fault on demand.
+    restore_side_tables(
+        &mut interp,
+        small.arrays,
+        small.collections,
+        small.registry,
+        small.errors,
+        small.buffers,
+        small.typed_arrays,
+        small.data_views,
+        small.wrappers,
+        small.regexps,
+        small.dates,
+        small.function_state,
+        small.proxy_state,
+        small.accessors,
+        small.intl_bound_functions,
+        small.private_elements,
+        small.disposable_stacks,
+        small.generators,
+        small.promise_cluster,
+        small.arguments_brands,
+        small.temporal,
+        small.intl,
+        small.iterators,
+    )
+    .map_err(StoreError::Snapshot)?;
     Ok(StoreSession {
+        gen_dirty: std::collections::BTreeSet::new(),
         interp,
         epoch: manifest.epoch,
         seal: manifest.seal,
         pin: Some(pin),
+        root_ledger: Some(root_ledger),
+        cranks: manifest.cranks,
     })
 }
 
@@ -797,6 +1658,105 @@ mod tests {
 
     fn sig() -> Signature {
         Signature::new("ironhorse-worker-v1")
+    }
+
+    /// Wave-6 W6-14: a store whose hashes are CONSISTENT over hostile
+    /// content (the tampered-at-rest / crafted-store class) must be
+    /// refused at resume exactly as the container path refuses the same
+    /// bytes - leaf hashes prove authentic-to-commit, not in-arena.
+    #[test]
+    fn a_consistently_sealed_store_with_out_of_arena_refs_refuses_eager_resume() {
+        use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".to_string()]);
+        let mut image = m.snapshot_image(&sig());
+        let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
+        let k = (0..image.slots.len())
+            .find(|i| !free.contains(&(*i as u32)))
+            .expect("a live slot");
+        let poison = image.slots.len() as u32 + 100;
+        image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
+        // Sanity: the CONTAINER path refuses this exact content.
+        assert!(
+            crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err(),
+            "the container gate refuses the poisoned image"
+        );
+        // Forge the store: image_to_batch computes CONSISTENT leaf
+        // hashes / root / seal over the poisoned rows - the honest
+        // sealing machinery run over hostile content.
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, "");
+        crate::store::HeapStore::commit(&mut store, &batch)
+            .expect("the forged batch seals consistently");
+        assert!(
+            resume_from_store(&store, &sig()).is_err(),
+            "the store path must refuse what the container path refuses"
+        );
+    }
+
+    /// The lazy twin: the poisoned page dies AT THE FAULT with a named
+    /// corrupt-store refusal (the path's established channel), not
+    /// later inside the collector as an anonymous index panic.
+    #[test]
+    #[should_panic(expected = "out-of-arena")]
+    fn a_lazily_resumed_poisoned_store_dies_named_at_the_fault() {
+        use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".to_string()]);
+        let mut image = m.snapshot_image(&sig());
+        let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
+        let k = (0..image.slots.len())
+            .find(|i| !free.contains(&(*i as u32)))
+            .expect("a live slot");
+        let poison = image.slots.len() as u32 + 100;
+        image.slots[k] = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(poison)));
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, "");
+        crate::store::HeapStore::commit(&mut store, &batch)
+            .expect("the forged batch seals consistently");
+        let mut resumed = resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig(),
+        )
+        .expect("lazy attach");
+        // Force every page resident - the poisoned one faults.
+        resumed.machine_mut().collect_garbage();
+    }
+
+    /// The chunk-offset half of the same class (the recorded lazy
+    /// remainder, now closed): a faulted slot whose String payload
+    /// names an offset outside the chunk arena must die AT THE FAULT
+    /// with the named corrupt-store refusal — not later, anonymously,
+    /// inside a chunk read or the compactor's asserts.
+    #[test]
+    #[should_panic(expected = "out-of-arena chunk offset")]
+    fn a_lazily_resumed_store_with_a_poisoned_chunk_offset_dies_named_at_the_fault() {
+        use ironhorse_vm::{ChunkOffset, Kind, Payload, Slot};
+        let mut m = Interp::new();
+        m.link_intrinsics(&["x".to_string()]);
+        let mut image = m.snapshot_image(&sig());
+        let free: std::collections::HashSet<u32> = image.slot_free.iter().copied().collect();
+        let k = (0..image.slots.len())
+            .find(|i| !free.contains(&(*i as u32)))
+            .expect("a live slot");
+        let poison = image.chunks.len() as u32 + 100;
+        image.slots[k] = Slot::of(Kind::String, Payload::String(ChunkOffset(poison)));
+        // Sanity: the CONTAINER path refuses this exact content.
+        assert!(
+            crate::image::read_machine(&crate::image::write_machine(&image), &sig()).is_err(),
+            "the container gate refuses the poisoned chunk offset"
+        );
+        let mut store = crate::store::MemoryStore::new();
+        let batch = image_to_batch(&image, 1, "");
+        crate::store::HeapStore::commit(&mut store, &batch)
+            .expect("the forged batch seals consistently");
+        let mut resumed = resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig(),
+        )
+        .expect("lazy attach");
+        // Force every page resident - the poisoned one faults.
+        resumed.machine_mut().collect_garbage();
     }
 
     // The exact XS bytecode for `(function(x){return x+1})(5)` (captured
@@ -824,12 +1784,18 @@ mod tests {
         let a = m.run(&PROG_A);
         assert!(a.completed);
 
-        let bytes = m.write_snapshot(&sig());
-        let m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
+        let bytes = m.write_snapshot(&sig()).expect("quiescent machine snapshots");
+        let snapshot = read_validated_machine(&bytes, &sig()).expect("validates");
+        assert_eq!(
+            snapshot.image().meter.to_state(),
+            m.meter_state(),
+            "the proof wrapper exposes only an immutable validated image",
+        );
+        let m2 = image_to_interp(snapshot).expect("restores validated state");
         // The restored machine carries the same metering state.
         assert_eq!(m2.meter_state(), m.meter_state());
         // Re-serializing the restored machine is byte-identical.
-        assert_eq!(m2.write_snapshot(&sig()), bytes);
+        assert_eq!(m2.write_snapshot(&sig()).expect("quiescent machine snapshots"), bytes);
     }
 
     /// The row-6 bar: run-to-a-crank, suspend, resume, run-to-end equals
@@ -847,7 +1813,7 @@ mod tests {
         let mut m1 = Interp::new();
         let a1 = m1.run(&PROG_A);
         assert!(a1.completed);
-        let bytes = m1.write_snapshot(&sig());
+        let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
         let mut m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         let b2 = m2.run(&PROG_B);
 
@@ -874,7 +1840,7 @@ mod tests {
         let armed_state = m1.meter_state();
         assert!(armed_state.interval > 0, "meter is armed");
 
-        let bytes = m1.write_snapshot(&sig());
+        let bytes = m1.write_snapshot(&sig()).expect("quiescent machine snapshots");
         let m2 = from_snapshot_bytes(&bytes, &sig()).expect("restores");
         // The armed interval and the accumulated index both survive.
         assert_eq!(m2.meter_state(), armed_state);
@@ -907,6 +1873,7 @@ mod tests {
         let mut m = Interp::new();
         m.run(&PROG_A);
         let bytes = m.write_snapshot(&Signature::new("host-v1"));
+        let bytes = bytes.expect("quiescent machine snapshots");
         match from_snapshot_bytes(&bytes, &Signature::new("host-v2")) {
             Err(SnapshotError::SignatureMismatch { .. }) => {}
             Err(e) => panic!("expected signature mismatch, got {e:?}"),
@@ -925,15 +1892,10 @@ mod tests {
         uninterrupted.run(&PROG_A);
         let ub = uninterrupted.run(&PROG_B);
 
-        let dir = std::env::temp_dir().join(format!(
-            "ironhorse-cas-test-{}",
-            // A per-run-unique subdir without Math.random/Date: the
-            // content hash of PROG_A's snapshot is itself unique enough,
-            // computed below; use a fixed name scoped by process temp dir.
-            "suspend-resume"
-        ));
-        // Clean any prior run's directory.
-        let _ = std::fs::remove_dir_all(&dir);
+        // A fixed name scoped by the process temp dir; the guard
+        // pre-cleans any prior run's leftover and removes the
+        // directory on drop, success or panic.
+        let dir = crate::test_dir::TempDir::new("ironhorse-cas-test-suspend-resume");
 
         let mut m1 = Interp::new();
         m1.run(&PROG_A);
@@ -950,7 +1912,6 @@ mod tests {
         assert_eq!(b2.result, ub.result);
         assert_eq!(b2.computrons, ub.computrons, "meter continued through the CAS round-trip");
 
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1038,5 +1999,110 @@ pub fn partial_collect(
     let roots: Vec<u32> = root_pages.into_iter().collect();
     let reached = store.reachable_page_set(&roots)?;
     let dead: Vec<u32> = (0..total).filter(|p| !reached.contains(p)).collect();
-    Ok(session.machine_mut().free_pages(&dead))
+    let freed = session.machine_mut().free_pages(&dead);
+    // A full partial collect re-examines everything, so the
+    // generational candidate set restarts empty.
+    session.gen_dirty.clear();
+    Ok(freed)
+}
+
+/// **Summary-generational collection** (store seam phase 11): the
+/// steady-state variant of [`partial_collect`] whose work is bounded
+/// by the MUTATED region, not the live heap. Candidates are only the
+/// pages dirtied (or grown) since the last collection this session
+/// ran; a candidate survives when it is
+///
+/// 1. a current ROOT page (arena roots or side-table refs),
+/// 2. referenced from an UN-dirtied old page (whose stored edges are
+///    its current edges — the reverse-index seed), or
+/// 3. reachable from either seed class through summary edges WITHIN
+///    the dirty region (edges leaving the region land on old pages,
+///    which this pass never frees).
+///
+/// Old-generation garbage is deliberately retained — the periodic
+/// [`partial_collect`] (or the full in-memory collector) reclaims it;
+/// every page this pass frees, a full partial pass would also free
+/// (retention-only divergence, locked by test). Timing stays a pure
+/// function of store content and the session's own checkpoint
+/// history. Returns the number of slots freed.
+///
+/// # Not resume-invariant — do NOT wire this to `collect_every`
+///
+/// The candidate set is `gen_dirty`, which a resume seeds EMPTY while a
+/// continuous session keeps accumulating. Two replicas running the same
+/// program under the same `CadencePolicy` therefore free DIFFERENT pages
+/// if one suspends and resumes mid-window, and the free list is
+/// container-visible — so the replicas' bytes diverge (review wave 4,
+/// DET-5).
+///
+/// This is latent today and must stay that way: `PersistentMachine`'s
+/// scheduled collection calls [`partial_collect`], whose candidate set is
+/// the whole store and which is therefore resume-invariant, and this
+/// collector is reached only from tests. The `CadencePolicy` replica
+/// claim ("same policy ⟹ same bytes") assumes a resume-invariant
+/// collector. Anyone flipping `collect_every` to this one must first make
+/// the candidate set depend on durable state rather than session
+/// lifetime.
+pub fn generational_collect(
+    session: &mut StoreSession,
+    store: &dyn HeapStore,
+) -> Result<u32, StoreError> {
+    let interp = session.machine();
+    assert!(
+        interp.slots.dirty_pages().is_empty() && interp.chunks.dirty_extents().is_empty(),
+        "generational collect requires a clean checkpoint boundary (dirty rows present)"
+    );
+    let manifest = store.manifest()?;
+    if manifest.epoch != session.epoch || manifest.seal != session.seal {
+        return Err(StoreError::BaselineMismatch {
+            expected: session.seal.clone(),
+            found: manifest.seal,
+        });
+    }
+    let total = slot_page_count(manifest.slot_count);
+    let found = store.summary_page_count()?;
+    if found != total {
+        return Err(StoreError::SummaryCount {
+            expected: total,
+            found,
+        });
+    }
+    let dirty: Vec<u32> = session
+        .gen_dirty
+        .iter()
+        .copied()
+        .filter(|p| *p < total)
+        .collect();
+    if dirty.is_empty() {
+        return Ok(0);
+    }
+    let dirty_set: std::collections::BTreeSet<u32> = dirty.iter().copied().collect();
+
+    // Seed class 1: candidate pages that are current roots.
+    let mut seeds: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let interp = session.machine();
+    for r in interp.gc_roots() {
+        if !r.is_null() {
+            let p = r.0 / crate::store::SLOTS_PER_PAGE;
+            if dirty_set.contains(&p) {
+                seeds.insert(p);
+            }
+        }
+    }
+    for (p, hit) in interp.side_table_ref_page_bits().into_iter().enumerate() {
+        if hit && dirty_set.contains(&(p as u32)) {
+            seeds.insert(p as u32);
+        }
+    }
+    // Seed class 2: candidates referenced from outside the region.
+    for t in store.externally_referenced(&dirty)? {
+        seeds.insert(t);
+    }
+    // Expansion within the region only.
+    let seed_vec: Vec<u32> = seeds.into_iter().collect();
+    let kept = store.reachable_within(&seed_vec, &dirty)?;
+    let dead: Vec<u32> = dirty.into_iter().filter(|p| !kept.contains(p)).collect();
+    let freed = session.machine_mut().free_pages(&dead);
+    session.gen_dirty.clear();
+    Ok(freed)
 }

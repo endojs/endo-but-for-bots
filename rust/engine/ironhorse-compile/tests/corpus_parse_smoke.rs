@@ -1,7 +1,7 @@
 //! Whole-corpus parse smoke (stage-5 child 3 local bar).
 //!
 //! Every conformance-corpus program — the curated corpus lines, now carried
-//! verbatim in the `info: Source:` frontmatter of the `ironhorse-262/cases/`
+//! verbatim in the `info: Source:` frontmatter of the shared `test/ironhorse/`
 //! tree (the `corpora/*.js` line files retired in PR #600 convergence 2/5) —
 //! is parsed by the `ironhorse-compile` parser **as a Script** and its
 //! accept/reject verdict compared against the XS oracle
@@ -50,7 +50,7 @@ fn corpus_parse_smoke() {
     assert_eq!(
         programs.len(),
         CORPUS_PROGRAM_COUNT,
-        "expected {CORPUS_PROGRAM_COUNT} corpus programs in ironhorse-262/cases, found {}",
+        "expected {CORPUS_PROGRAM_COUNT} corpus programs in test/ironhorse, found {}",
         programs.len()
     );
 
@@ -77,17 +77,30 @@ fn corpus_parse_smoke() {
         match (mine, oracle) {
             (true, true) => agree_accept += 1,
             (false, false) => agree_reject += 1,
-            (false, true) => ironhorse_rejected_oracle_accepted.push((id.clone(), line.to_string())),
-            (true, false) => ironhorse_accepted_oracle_rejected.push((id.clone(), line.to_string())),
+            (false, true) => {
+                ironhorse_rejected_oracle_accepted.push((id.clone(), line.to_string()))
+            }
+            (true, false) => {
+                ironhorse_accepted_oracle_rejected.push((id.clone(), line.to_string()))
+            }
         }
     }
 
     // The named tally.
-    eprintln!("corpus parse smoke: {} programs, {total} oracle-compared", programs.len());
+    eprintln!(
+        "corpus parse smoke: {} programs, {total} oracle-compared",
+        programs.len()
+    );
     eprintln!("  agree/accept : {agree_accept}");
     eprintln!("  agree/reject : {agree_reject}");
-    eprintln!("  ironhorse-rejected / oracle-accepted : {}", ironhorse_rejected_oracle_accepted.len());
-    eprintln!("  ironhorse-accepted / oracle-rejected : {}", ironhorse_accepted_oracle_rejected.len());
+    eprintln!(
+        "  ironhorse-rejected / oracle-accepted : {}",
+        ironhorse_rejected_oracle_accepted.len()
+    );
+    eprintln!(
+        "  ironhorse-accepted / oracle-rejected : {}",
+        ironhorse_accepted_oracle_rejected.len()
+    );
     if oracle_unavailable > 0 {
         eprintln!("  (oracle unavailable on {oracle_unavailable} programs, skipped)");
     }
@@ -103,5 +116,8 @@ fn corpus_parse_smoke() {
         "{} corpus program(s) the oracle parses were rejected by the ironhorse parser (see above)",
         ironhorse_rejected_oracle_accepted.len()
     );
-    assert!(agree_accept > 0, "expected the corpus to contain accepted programs");
+    assert!(
+        agree_accept > 0,
+        "expected the corpus to contain accepted programs"
+    );
 }

@@ -6,9 +6,8 @@
  */
 
 import harden from '@endo/harden';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 
@@ -19,11 +18,11 @@ import { ocapnPassStyleOf } from '../codecs/ocapn-pass-style.js';
 const labelTextDecoder = new TextDecoder('utf-8', { fatal: true });
 
 /**
- * @param {ArrayBufferLike} buffer
+ * @param {Uint8Array} bytes
  * @returns {string}
  */
-const decodeBytestringLabel = buffer =>
-  labelTextDecoder.decode(bytesFromImmutable(buffer));
+const decodeBytestringLabel = bytes =>
+  labelTextDecoder.decode(thawedBytes(bytes));
 /**
  * A codec that can read and write values using any OCapN reader/writer.
  * Works with both Syrup and CBOR codecs.
@@ -182,8 +181,8 @@ export const makeExpectedLengthBytestringCodec = (codecName, length) => {
       return bytestring;
     },
     write: (value, syrupWriter) => {
-      if (!(value instanceof ArrayBuffer)) {
-        throw Error(`Expected ArrayBuffer, got ${typeof value}`);
+      if (!(value instanceof Uint8Array)) {
+        throw Error(`Expected Uint8Array, got ${typeof value}`);
       }
       if (value.byteLength !== length) {
         throw Error(`Expected length ${length}, got ${value.byteLength}`);
@@ -212,7 +211,7 @@ export const NumberPrefixCodec = makeCodec('NumberPrefix', {
   write: (value, syrupWriter) => {
     if (typeof value === 'string') {
       syrupWriter.writeString(value);
-    } else if (value instanceof ArrayBuffer) {
+    } else if (value instanceof Uint8Array) {
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);
@@ -435,7 +434,7 @@ export const makeRecordCodec = (
     } else if (effectiveLabelType === 'string') {
       syrupWriter.writeString(label);
     } else if (effectiveLabelType === 'bytestring') {
-      syrupWriter.writeBytestring(bytesToImmutable(bytesFromText(label)));
+      syrupWriter.writeBytestring(frozenBytes(encodeUtf8(label)));
     }
     writeBody(value, syrupWriter);
     syrupWriter.exitRecord();

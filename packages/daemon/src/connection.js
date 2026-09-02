@@ -6,8 +6,8 @@ import { isPassable, passableAsJustin } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader } from '@endo/stream';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 /** @import { Stream, Reader, Writer } from '@endo/stream' */
 /** @import { CapTpConnectionRegistrar } from './types.js' */
@@ -258,13 +258,13 @@ export const messageToBytes = message => {
     };
   }
   const text = JSON.stringify(outgoing);
-  const bytes = bytesFromText(text);
+  const bytes = encodeUtf8(text);
   return bytes;
 };
 
 /** @param {Uint8Array} bytes */
 export const bytesToMessage = bytes => {
-  const text = bytesToText(bytes);
+  const text = decodeUtf8(bytes);
   // console.log('<-', text);
   const message = JSON.parse(text);
   return message;

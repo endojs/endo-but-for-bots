@@ -9,7 +9,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makePipe } from '@endo/stream';
 import { makePromiseKit } from '@endo/promise-kit';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { makeNetstringCapTP } from '../connection.js';
 import { fromHex, toHex } from '../hex.js';
 // eslint-disable-next-line import/order
@@ -365,7 +365,7 @@ export const make = async (
       switch (type) {
         case MSG_CHALLENGE: {
           const { nonce } = decodeChallenge(payload);
-          const domainBytes = bytesFromText(relayDomain);
+          const domainBytes = encodeUtf8(relayDomain);
           const challengeData = new Uint8Array(
             domainBytes.length + nonce.length,
           );

@@ -16,6 +16,8 @@ use ironhorse_snapshot::{FileStore, Signature};
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp};
 
+mod common;
+
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
@@ -98,15 +100,15 @@ fn assert_parity(store: &SqliteHeapStore) {
 
 #[test]
 fn edge_pairs_agree_with_dense_reachability() {
-    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-parity-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = common::TempDir::new(&format!(
+        "ironhorse-query-gc-parity-{}",
+        std::process::id()
+    ));
     let store = Rc::new(RefCell::new(
         SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap(),
     ));
     build_store(store.clone());
     assert_parity(&store.borrow());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -141,14 +143,11 @@ fn partial_collect_equivalent_across_backends() {
     let mut mem = MemoryStore::new();
     let (freed_mem, free_len_mem) = run(&mut mem);
 
-    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-eq-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = common::TempDir::new(&format!("ironhorse-query-gc-eq-{}", std::process::id()));
     let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
     let (freed_file, free_len_file) = run(&mut file);
     let mut sq = SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap();
     let (freed_sq, free_len_sq) = run(&mut sq);
-    let _ = std::fs::remove_dir_all(&dir);
 
     assert!(freed_mem > 1500, "reclaims the dropped chain: {freed_mem}");
     assert_eq!(freed_mem, freed_file, "freed count: memory vs file");
@@ -166,9 +165,7 @@ fn edge_pairs_rebuilt_after_count_preserving_desync() {
     // rebuilds the derived index unconditionally, so parity must
     // hold again after reopen; this arm bites if anyone reintroduces
     // a "skip rebuild when counts agree" fast path.
-    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-move-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = common::TempDir::new(&format!("ironhorse-query-gc-move-{}", std::process::id()));
     let path = dir.join("heap.sqlite");
     let store = Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap()));
     build_store(store.clone());
@@ -202,7 +199,6 @@ fn edge_pairs_rebuilt_after_count_preserving_desync() {
     let store = SqliteHeapStore::open(&path).unwrap();
     assert_parity(&store);
     store.close().unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -212,9 +208,7 @@ fn summary_page_count_refuses_gapped_page_edges() {
     // beyond-geometry row has the right COUNT(*) while an interior
     // page is missing — the dense default fails closed on that shape
     // (MissingRow), so the COUNT override must refuse it too.
-    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-gap-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = common::TempDir::new(&format!("ironhorse-query-gc-gap-{}", std::process::id()));
     let path = dir.join("heap.sqlite");
     let store = Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap()));
     build_store(store.clone());
@@ -254,14 +248,11 @@ fn summary_page_count_refuses_gapped_page_edges() {
         "gap + phantom row fails closed, got {err:?}"
     );
     store.close().unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
 fn edge_pairs_backfill_after_external_wipe() {
-    let dir = std::env::temp_dir().join(format!("ironhorse-query-gc-wipe-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+    let dir = common::TempDir::new(&format!("ironhorse-query-gc-wipe-{}", std::process::id()));
     let path = dir.join("heap.sqlite");
     let store = Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap()));
     build_store(store.clone());
@@ -286,5 +277,54 @@ fn edge_pairs_backfill_after_external_wipe() {
     let store = SqliteHeapStore::open(&path).unwrap();
     assert_parity(&store);
     store.close().unwrap();
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn generational_collect_equivalent_across_backends() {
+    use ironhorse_snapshot::machine::{checkpoint_to_store, generational_collect, partial_collect};
+    // Phase 11's backend-equivalence lock: the generational pass's
+    // seed and expansion queries run through the trait — the dense
+    // defaults on Memory/File, the reverse-index and region-bounded
+    // CTE overrides here — and the outcome must be a pure function of
+    // store content, not of which backend answered.
+    let cranks = [
+        "var keep = 0; var g = 0; var i = 0; var t = 0; \
+         keep = { v: 0, w: 0 }; \
+         for (i = 0; i < 900; i = i + 1) { keep = { v: i, w: i }; } \
+         t = 1; t",
+        "var keep; var g; var i; var t; \
+         for (i = 0; i < 1200; i = i + 1) { g = { v: i, w: i }; } \
+         g = 0; keep = { v: -1, w: -1 }; t = 2; t",
+    ];
+    let compiled: Vec<(Vec<u8>, Vec<String>)> = cranks.iter().map(|s| compile(s)).collect();
+
+    let run = |store: &mut dyn HeapStore| -> (u32, usize) {
+        let mut m = Interp::new();
+        m.link_intrinsics(&compiled[0].1);
+        assert!(m.run(&compiled[0].0).completed);
+        let mut session = begin_store_session(m, &sig(), store)
+            .map_err(|(_, e)| e)
+            .expect("begin");
+        let _ = partial_collect(&mut session, store).expect("boundary collect");
+        checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
+        let o = session.machine_mut().run(&compiled[1].0);
+        assert!(o.completed, "halt: {:?}", o.halt);
+        checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
+        let freed = generational_collect(&mut session, store).expect("generational");
+        (freed, session.machine().slots.free_list().len())
+    };
+
+    let dir = common::TempDir::new(&format!("ironhorse-query-gc-gen-{}", std::process::id()));
+    let mut mem = MemoryStore::new();
+    let (freed_mem, fl_mem) = run(&mut mem);
+    let mut file = FileStore::open(dir.join("heap.ihstore")).unwrap();
+    let (freed_file, fl_file) = run(&mut file);
+    let mut sq = SqliteHeapStore::open(dir.join("heap.sqlite")).unwrap();
+    let (freed_sq, fl_sq) = run(&mut sq);
+
+    assert!(freed_mem > 800, "the new dropped chain reclaims: {freed_mem}");
+    assert_eq!(freed_mem, freed_file, "freed count: memory vs file");
+    assert_eq!(freed_mem, freed_sq, "freed count: memory vs sqlite");
+    assert_eq!(fl_mem, fl_file, "free list: memory vs file");
+    assert_eq!(fl_mem, fl_sq, "free list: memory vs sqlite");
 }

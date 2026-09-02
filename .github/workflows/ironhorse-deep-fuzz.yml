@@ -1,0 +1,140 @@
+# The DEEP fuzz lane for the ironhorse engine (store-seam design
+# § Fuzzability; the deferred-work checklist's scheduled-deep-fuzz
+# item). ci.yml's fuzz-ironhorse job is a 30-second-per-target
+# regression tripwire on every relevant PR; this workflow is the
+# search — minutes per target on a schedule, plus on demand from the
+# Actions tab. It shares the smoke lane's corpus cache family, so the
+# two lanes accrete ONE corpus: whatever the nightly search discovers
+# seeds the next PR's tripwire.
+
+name: Ironhorse deep fuzz
+
+on:
+  schedule:
+    # Daily, off the peak hours. A scheduled run fuzzes the default
+    # branch; findings land as uploaded artifacts and a red run.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      seconds_per_target:
+        description: 'libFuzzer -max_total_time per target'
+        required: false
+        default: '900'
+        type: string
+
+# Minimal permissions: read the checkout; artifacts ride the built-in
+# token scope.
+permissions:
+  contents: read
+
+# Repo convention (designs/ci-no-npm-lifecycle.md): no yarn here, but
+# the posture is kept uniform across workflows.
+env:
+  YARN_ENABLE_SCRIPTS: 'false'
+  npm_config_ignore_scripts: 'true'
+  # The toolchain the fuzz targets build with — the SAME pin as
+  # ci.yml's fuzz-ironhorse (bump both deliberately, together).
+  FUZZ_TOOLCHAIN: nightly-2026-08-15
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  deep-fuzz:
+    name: deep-fuzz
+
+    runs-on: ubuntu-latest
+    # Four targets at up to 15 minutes each, plus the cold build.
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Fetch XS oracle submodule
+        # The ironhorse-fuzz lib links the XS oracle for its
+        # differential targets. Anonymous shallow fetch can hit
+        # transient throttling on shared runner egress; retry before
+        # failing, and fail LOUD if all attempts leave the sources
+        # absent.
+        run: |
+          for i in 1 2 3; do
+            git submodule update --init --depth 1 c/moddable && break
+            sleep $((10 * i))
+          done
+          test -f c/moddable/xs/sources/xsAll.h
+
+      - name: Cache Cargo + fuzz build
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            rust/engine/ironhorse-fuzz/fuzz/target
+          key: ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-${{ hashFiles('rust/engine/ironhorse-fuzz/fuzz/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-build-${{ env.FUZZ_TOOLCHAIN }}-
+
+      - name: Cache fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: rust/engine/ironhorse-fuzz/fuzz/corpus
+          # The SAME key family as ci.yml's smoke lane: run-unique
+          # primary key (never an exact hit, so every run SAVES its
+          # grown corpus), prefix restore pulling the newest corpus
+          # in scope — smoke and deep accrete one corpus between
+          # them. Crashing inputs land in artifacts/, never corpus/.
+          key: ${{ runner.os }}-ironhorse-fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-ironhorse-fuzz-corpus-
+
+      - name: Install pinned nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install "$FUZZ_TOOLCHAIN" --profile minimal
+          command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked
+
+      - name: Check fuzz lockfile freshness
+        working-directory: rust/engine/ironhorse-fuzz
+        # `cargo fuzz run` itself does not take --locked, so a stale
+        # committed fuzz/Cargo.lock would silently float new registry
+        # deps at build time. Fail loudly with the fix in the error.
+        run: |
+          cargo +"$FUZZ_TOOLCHAIN" fetch --locked --manifest-path fuzz/Cargo.toml || {
+            echo "::error::fuzz/Cargo.lock is stale — run 'cargo update --workspace' in rust/engine/ironhorse-fuzz/fuzz and commit the lock"
+            exit 1
+          }
+
+      - name: Deep fuzz (minutes per target)
+        working-directory: rust/engine/ironhorse-fuzz
+        # Accumulate failures instead of stopping at the first
+        # crashing target, so one red run surfaces every crashing
+        # target's artifact at once. A scheduled run uses the default
+        # budget; a dispatch can widen or narrow it. The dispatch
+        # input reaches the script through env, never template
+        # expansion inside `run` (zizmor: template-injection), and is
+        # digit-checked before use.
+        env:
+          FUZZ_BUDGET: ${{ github.event.inputs.seconds_per_target || '900' }}
+        run: |
+          case "$FUZZ_BUDGET" in
+            *[!0-9]*|'') echo "::error::seconds_per_target must be a positive integer"; exit 1 ;;
+            *[1-9]*) ;;
+            *) echo "::error::seconds_per_target must be greater than zero"; exit 1 ;;
+          esac
+          rc=0
+          for t in snapshot_decoder snapshot_roundtrip bytecode_decoder parser; do
+            cargo +"$FUZZ_TOOLCHAIN" fuzz run "$t" -- -max_total_time="$FUZZ_BUDGET" -print_final_stats=1 || rc=1
+          done
+          exit "$rc"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-deep-fuzz-artifacts
+          path: rust/engine/ironhorse-fuzz/fuzz/artifacts/
+          if-no-files-found: ignore

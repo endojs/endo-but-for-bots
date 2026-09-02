@@ -1,3 +1,4 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 /**
@@ -12,13 +13,17 @@
  */
 
 /**
+ * The byteArray pass style is a frozen `Uint8Array` backed by an
+ * immutable `ArrayBuffer`. The branded byteArray-shaped types below
+ * are `Uint8Array` at runtime (the current byteArray shape).
+ *
  * @typedef {string & { _brand: 'LocationId' }} LocationId
  * A string used for referencing, such as keys in Maps. Not part of OCapN spec.
- * @typedef {ArrayBufferLike & { _brand: 'SessionId' }} SessionId
+ * @typedef {Uint8Array & { _brand: 'SessionId' }} SessionId
  * From OCapN spec. Id for a session between two peers.
- * @typedef {ArrayBufferLike & { _brand: 'SwissNum' }} SwissNum
+ * @typedef {Uint8Array & { _brand: 'SwissNum' }} SwissNum
  * From OCapN spec. Used for resolving SturdyRefs.
- * @typedef {ArrayBufferLike & { _brand: 'PublicKeyId' }} PublicKeyId
+ * @typedef {Uint8Array & { _brand: 'PublicKeyId' }} PublicKeyId
  * From OCapN spec. Identifier for a public key (double SHA-256 hash of key descriptor).
  */
 
@@ -147,7 +152,7 @@
  * @property {SelfIdentity} selfIdentity - Our identity for this session,
  *   supplied by the network (which authenticated to the peer using this
  *   keypair during handshake).
- * @property {ArrayBufferLike} remotePublicKeyBytes - Peer's raw public
+ * @property {Uint8Array} remotePublicKeyBytes - Peer's raw public
  *   key bytes (needed to construct OcapnPublicKey for session).
  * @property {OcapnLocation} remoteLocation - Peer's location.
  * @property {import('../codecs/components.js').OcapnSignature} remoteLocationSignature -
@@ -303,10 +308,10 @@
  * `NetlayerHandlers.resumeSession`.
  *
  * @typedef {object} SessionResumption
- * @property {ArrayBufferLike} sessionId
+ * @property {SessionId} sessionId
  * @property {OcapnLocation} peerLocation
  * @property {OcapnSignature} peerLocationSignature
- * @property {ArrayBufferLike} peerPublicKeyBytes
+ * @property {Uint8Array} peerPublicKeyBytes
  * @property {Uint8Array} [selfPrivateKeyBytes] resume with the same
  *   session keys the previous process used, so cross-restart handoff
  *   signatures keep verifying; omitted, fresh keys are minted

@@ -39,7 +39,8 @@ use ironhorse_snapshot::store::{export_to_container, store_to_image, StoreError}
 use ironhorse_snapshot::Signature;
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp, CHUNK_EXTENT_BYTES, SLOTS_PER_PAGE};
-use std::path::PathBuf;
+
+mod common;
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -50,11 +51,8 @@ fn compile(source: &str) -> (Vec<u8>, Vec<String>) {
     (bytecode, parse_symbols(&symbols))
 }
 
-fn tmp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("ironhorse-sqlite-engine-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
+fn tmp_dir(name: &str) -> common::TempDir {
+    common::TempDir::new(&format!("ironhorse-sqlite-engine-{name}"))
 }
 
 /// Run `cranks` uninterrupted on one machine, then again with a full
@@ -68,11 +66,12 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     let mut baseline = Interp::new();
     baseline.link_intrinsics(&compiled[0].1);
     let mut baseline_outcomes = Vec::new();
-    for (bytecode, _) in &compiled {
+    for (i, (bytecode, _)) in compiled.iter().enumerate() {
         let outcome = baseline.run(bytecode);
         assert!(
             outcome.completed,
-            "[{name}] baseline crank completes (halt: {:?})",
+            "[{name}] baseline crank {} completes (halt: {:?})",
+            i + 1,
             outcome.halt
         );
         baseline_outcomes.push(outcome);
@@ -136,11 +135,10 @@ fn run_scenario(name: &str, cranks: &[&str]) -> String {
     // the blob the baseline machine itself writes.
     assert_eq!(
         export_to_container(&store).unwrap(),
-        baseline.write_snapshot(&sig()),
+        baseline.write_snapshot(&sig()).expect("quiescent machine snapshots"),
         "[{name}] final store export byte-equals the never-suspended machine's blob"
     );
 
-    let _ = std::fs::remove_dir_all(&dir);
     baseline_outcomes.last().unwrap().result.clone()
 }
 
@@ -327,7 +325,6 @@ fn truncated_database_fails_closed_not_wrong() {
         Err(other) => panic!("unexpected error shape: {other:?}"),
         Ok(()) => panic!("a truncated database must not resume"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The single-writer-per-path model is enforced, not assumed
@@ -338,12 +335,10 @@ fn truncated_database_fails_closed_not_wrong() {
 /// racing the writer. ~5s: the second opener waits out busy_timeout.
 #[test]
 fn second_opener_fails_closed_under_exclusive_locking() {
-    let dir = std::env::temp_dir().join(format!(
+    let dir = common::TempDir::new(&format!(
         "ironhorse-sqlite-exclusive-{}",
         std::process::id()
     ));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("heap.sqlite");
 
     let first = ironhorse_store_sqlite::SqliteHeapStore::open(&path).expect("first opener");
@@ -352,5 +347,184 @@ fn second_opener_fails_closed_under_exclusive_locking() {
         Ok(_) => panic!("second opener must fail closed while the first holds the file"),
     }
     drop(first);
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Side-table ledger (G1) through SQLite: an array, a Map, and a
+/// `Symbol.for` registration built before the FIRST sleep keep
+/// answering — and keep MUTATING — across two more sleep cycles,
+/// tracking the uninterrupted baseline. Every crank opens with the
+/// same var/anchor prelude so all three compile to the identical
+/// symbol table (the bucket-ordered contract).
+#[test]
+fn side_tables_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "side-tables",
+        &[
+            "var arr = []; var m = new Map(); var sym = 0; var a = 0; var i = 0; var t = 0; var v = 0; \
+             m.set; m.get; arr.length; Symbol.for; \
+             a = { v: 1 }; sym = Symbol.for('led'); \
+             for (i = 0; i < 8; i = i + 1) { arr[i] = i + 1; } \
+             m.set(a, 50); m.set(sym, 500); t = 7;",
+            "var arr; var m; Map; var sym; var a; var i; var t; var v; \
+             m.set; m.get; arr.length; Symbol.for; \
+             arr[8] = 9; m.set(a, m.get(a) + 1); t = 7;",
+            "var arr; var m; Map; var sym; var a; var i; var t; var v; \
+             m.set; m.get; arr.length; Symbol.for; \
+             t = arr.length + arr[8] + m.get(a) + m.get(Symbol.for('led')); t",
+        ],
+    );
+    // 9 + 9 + 51 + 500
+    assert_eq!(last, "569");
+}
+
+/// The GRADUATED carry matrix, through the full close/reopen lifecycle.
+///
+/// This file's header used to say a live closure or generator held
+/// ACROSS a suspend was deliberately absent, because those rows were
+/// the ledger's `Pending` remainder. That is no longer true: the
+/// callability cluster, generators, Intl bound functions, private
+/// elements and disposable stacks all graduated. Until now they were
+/// exercised only against the reference backends and the shared
+/// metamorphic suite, which holds ONE connection open for a whole
+/// scenario — so nothing ran a carried row through a
+/// last-connection close, WAL folding, `SqliteHeapStore::init`, a lost
+/// and reconstructed `root_cache`, a rebuilt `edge_pairs`, and a lazy
+/// read after reopen.
+///
+/// `run_scenario` is that lifecycle, and its locks are the strong ones:
+/// every crank's value against an uninterrupted baseline, the final
+/// computron count, `store_to_image == snapshot_image` after every
+/// checkpoint, and a final container export byte-identical to the
+/// baseline's blob.
+fn carry_scenario(name: &str, mentions: &str, bodies: &[&str]) -> String {
+    // Bare re-declarations do not clobber, so one preamble opens every
+    // crank; the dead block anchors the member and parameter names that
+    // otherwise appear in only one of them. Program-symbol ids are
+    // POSITIONAL, so an unanchored name shifts every id after it.
+    let decls = "var a; var b; var C; var f; var g; var inst; var it; var k; var nf; \
+                 var o; var q; var s; var sg; var seg; var t; var v; var x; ";
+    let cranks: Vec<String> = bodies
+        .iter()
+        .map(|body| {
+            format!(
+                "{decls} if (0) {{ (function (x, k, v) {{ return x + k + v; }}); {mentions} }} {body}"
+            )
+        })
+        .collect();
+    let refs: Vec<&str> = cranks.iter().map(String::as_str).collect();
+    // Enforce the discipline this file documents instead of trusting
+    // it: ids are positional, so one name interned by only some cranks
+    // shifts every id after it and the unrelinked baseline silently
+    // resolves the wrong property (an `undefined` read, not an error).
+    let anchor = compile(refs[0]).1;
+    for (i, crank) in refs.iter().enumerate().skip(1) {
+        assert_eq!(
+            compile(crank).1,
+            anchor,
+            "[{name}] crank {} must intern exactly crank 1's symbols, in order",
+            i + 1
+        );
+    }
+    run_scenario(name, &refs)
+}
+
+#[test]
+fn the_callability_cluster_survives_sqlite_sleep_cycles() {
+    let last = carry_scenario(
+        "carry-functions",
+        "f.bind(o, 0); o.k;",
+        &[
+            "f = function (x) { return x + this.k; }; o = { k: 10 }; b = f.bind(o, 5); t = 7;",
+            "t = b(); o.k = 20; t",
+            "t = b(); t",
+        ],
+    );
+    assert_eq!(last, "25");
+}
+
+#[test]
+fn a_suspended_generator_survives_sqlite_sleep_cycles() {
+    let last = carry_scenario(
+        "carry-generators",
+        "it.next().value; it.next().done;",
+        &[
+            "g = function* () { var x = 1; yield x; yield x + 1; yield x + 2; }; \
+             it = g(); t = it.next().value; t",
+            "t = it.next().value; t",
+            "t = it.next().value + (it.next().done ? 100 : 0); t",
+        ],
+    );
+    assert_eq!(last, "103");
+}
+
+#[test]
+fn intl_bound_functions_survive_sqlite_sleep_cycles() {
+    // Also the SQLite arm of the rebound-Intl ordering fix: `b` is a
+    // guest bind whose TARGET travels in `IBFN`, the shape that used to
+    // checkpoint and then never resume.
+    let last = carry_scenario(
+        "carry-intl-bound",
+        "new Intl.NumberFormat('en'); nf.format(0); f.bind(null);",
+        &[
+            "nf = new Intl.NumberFormat('en'); f = nf.format; b = f.bind(null); t = 7;",
+            "t = f(0.5); t",
+            "t = b(0.25) + ':' + (nf.format === f); t",
+        ],
+    );
+    assert_eq!(last, "0.25:true");
+}
+
+#[test]
+fn private_elements_and_disposal_survive_sqlite_sleep_cycles() {
+    let last = carry_scenario(
+        "carry-private-disposal",
+        "(class { #n = 0; get n() { return this.#n; } set n(v) { this.#n = v; } }); \
+         new C(); inst.n; new DisposableStack(); s.defer(null); s.dispose();",
+        &[
+            "C = class { #n = 3; get n() { return this.#n; } set n(v) { this.#n = v; } }; \
+             inst = new C(); s = new DisposableStack(); \
+             s.defer(function () { v = 9; }); v = 0; t = 7;",
+            "t = inst.n; inst.n = inst.n + 4; t",
+            "s.dispose(); t = inst.n + v; t",
+        ],
+    );
+    assert_eq!(last, "16");
+}
+
+#[test]
+fn boot_minted_iterator_natives_survive_sqlite_sleep_cycles() {
+    // The SQLite arm of the boot-mint fix: these three `@@iterator`
+    // natives are re-derived by a fresh boot rather than carried, so
+    // they are exactly the state a close/reopen could get wrong.
+    let last = carry_scenario(
+        "carry-boot-natives",
+        "new Intl.Segmenter('en'); sg.segment('ab'); seg[Symbol.iterator]; \
+         for (var q of seg) { k = q; }",
+        &[
+            "sg = new Intl.Segmenter('en'); seg = sg.segment('ab'); t = 7;",
+            "t = typeof seg[Symbol.iterator]; t",
+            "k = 0; for (var q of seg) { k = k + 1; } t = k; t",
+        ],
+    );
+    assert_eq!(last, "2");
+}
+
+#[test]
+fn the_promise_cluster_survives_sqlite_sleep_cycles() {
+    // The SQLite arm of the schema-23 promise-cluster carry: a pending
+    // promise with a stored resolver and a user reaction crosses two
+    // close/reopen cycles, settles in the middle crank through the
+    // restored resolver, and the late observation reads the value the
+    // pre-sleep reaction computed.
+    let last = carry_scenario(
+        "carry-promises",
+        "new Promise(function (a, b) { a(b); }); Promise.resolve(0); q.then(null);",
+        &[
+            "q = new Promise(function (a, b) { f = a; }); \
+             q.then(function (v) { g = v + 1; }); g = 0; t = 7;",
+            "f(41); t = typeof f; t",
+            "t = g; t",
+        ],
+    );
+    assert_eq!(last, "42");
 }

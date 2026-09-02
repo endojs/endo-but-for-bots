@@ -30,7 +30,7 @@
     "test": "ava"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.117.1",
+    "@anthropic-ai/sdk": "^0.120.0",
     "@endo/conversation-tree": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
@@ -44,6 +44,7 @@
   "devDependencies": {
     "@endo/cli": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/workflow": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev"

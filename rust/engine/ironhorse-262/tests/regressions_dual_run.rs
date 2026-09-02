@@ -2,7 +2,7 @@
 //! [`designs/ironhorse-test262-convergence.md`] § Part 1, "The fuzz-grammar
 //! arms").
 //!
-//! `cases/regressions/` is the durable, portable home for differential-fuzz
+//! `test/ironhorse/regressions/` is the durable, portable home for differential-fuzz
 //! trophies: each minimized, fixed source divergence is checked in as a
 //! test262-style case (features `ironhorse-dual-run`, the fuzz arm named in
 //! `info:`), so a finding becomes a regression test rather than a line in a
@@ -10,12 +10,12 @@
 //! machinery a nightly run uses and holds it to the one bar a regression case
 //! must always meet: **zero divergence**. A case may still be a *named* skip
 //! (a parse-phase negative waits on the `ironhorse-compile` default flip, exactly
-//! as the converted corpus does — see `cases/regressions/README.md`), but it
+//! as the converted corpus does — see `test/ironhorse/regressions/README.md`), but it
 //! must never fail the runner's verdict/observable agreement. The moment a
 //! future fix regresses, its checked-in trophy fails here.
 //!
 //! This is intentionally separate from `corpus_conversion_equivalence`: that
-//! test proves the corpus → `cases/` conversion preserved coverage (and so
+//! test proves the corpus -> shared-test-tree conversion preserved coverage (and so
 //! asserts every corpus case is *covered* end-to-end); regressions are not
 //! corpus and legitimately carry parse-negative named skips, so they are held
 //! only to the no-divergence bar here and are excluded there.
@@ -27,7 +27,7 @@ use std::path::PathBuf;
 /// The checked-in fuzz-trophies regression tree.
 fn regressions_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("cases")
+        .join("../../../packages/test262-runner/test262/test/ironhorse")
         .join("regressions")
 }
 

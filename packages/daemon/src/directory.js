@@ -1,7 +1,7 @@
 // @ts-check
 
 import harden from '@endo/harden';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
@@ -543,7 +543,7 @@ export const makeDirectoryMaker = ({
       // directory's own storeIdentifier, which enforces a pet-name leaf.
       const namePath = namePathFrom(petNameOrPath);
       if (namePath.length < 2) {
-        const bytes = bytesFromText(content);
+        const bytes = encodeUtf8(content);
         const readerRef = bytesReaderFromIterator([bytes]);
         /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
         const tasks = makeDeferredTasks();

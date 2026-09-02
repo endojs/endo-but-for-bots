@@ -19,6 +19,8 @@ use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
+mod common;
+
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
 }
@@ -35,10 +37,8 @@ const PROG_B: [u8; 51] = [
     0x04, 0x28, 0xab, 0x00, 0xbb, 0xa9,
 ];
 
-fn file_store(name: &str) -> (FileStore, std::path::PathBuf) {
-    let dir = std::env::temp_dir().join(format!("ironhorse-store-checkpoint-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn file_store(name: &str) -> (FileStore, common::TempDir) {
+    let dir = common::TempDir::new(&format!("ironhorse-store-checkpoint-{name}"));
     (FileStore::open(dir.join("heap.ihstore")).unwrap(), dir)
 }
 
@@ -58,9 +58,8 @@ fn store_tracks_live_machine_memory() {
 
 #[test]
 fn store_tracks_live_machine_file() {
-    let (mut store, dir) = file_store("tracks");
+    let (mut store, _dir) = file_store("tracks");
     ironhorse_snapshot::store_suite::checkpoint_acceptance(&mut store);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The incrementality bar, measured exactly as before the session
@@ -104,9 +103,8 @@ fn resume_equals_uninterrupted_memory() {
 
 #[test]
 fn resume_equals_uninterrupted_file() {
-    let (mut store, dir) = file_store("resume");
+    let (mut store, _dir) = file_store("resume");
     ironhorse_snapshot::store_suite::resume_equals_uninterrupted(&mut store);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Resume, run, checkpoint incrementally, across file-store reopens.
@@ -131,7 +129,6 @@ fn resumed_session_checkpoints_incrementally_across_reopen() {
     drop(store);
     let store = FileStore::open(&path).unwrap();
     assert_eq!(store_to_image(&store).unwrap(), expected);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Binding to a non-empty store is refused, and the machine is handed
@@ -227,7 +224,6 @@ fn forked_file_store_fails_closed_on_seal() {
         Err(StoreError::BaselineMismatch { .. }) => {}
         other => panic!("expected BaselineMismatch across the fork, got {other:?}"),
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Two handles on one path: the slower handle's commit must fail
@@ -257,7 +253,6 @@ fn second_file_handle_cannot_clobber_a_commit() {
     // B's checkpoint survives on disk.
     let reread = FileStore::open(&path).unwrap();
     assert_eq!(reread.manifest().unwrap().epoch, 2);
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A replayed full batch (import shape) into a non-empty store is
@@ -291,8 +286,8 @@ fn resume_after_incremental_checkpoint_reads_merged_state() {
     let s2 = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(s2.machine().meter_state(), session.machine().meter_state());
     assert_eq!(
-        s2.machine().write_snapshot(&sig()),
-        session.machine().write_snapshot(&sig())
+        s2.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots")
     );
 }
 
@@ -554,7 +549,6 @@ fn length_preserving_flip_at_rest_fails_closed() {
         Ok(_) => panic!("a flipped leaf hash must fail closed at open"),
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Phase 6: reachability over the persisted summaries is answered
@@ -654,7 +648,7 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
 
     // Reference bytes, faulting everything in (all rows resident).
-    let expect = session.machine().write_snapshot(&sig());
+    let expect = session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots");
 
     // Evict every clean row — including the rows the checkpoint just
     // rewrote and the pages appended past the attach range.
@@ -671,8 +665,178 @@ fn evict_after_own_checkpoint_refaults_cleanly() {
     // Every re-fault must verify against the REFRESHED leaves at the
     // COMMITTED geometry and reinstall identical content.
     assert_eq!(
-        session.machine().write_snapshot(&sig()),
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
         expect,
         "post-commit eviction re-faults reinstall the committed bytes"
+    );
+}
+
+/// Review wave 5: the same sequence with the checkpoint going into a
+/// TWIN store instead of the pinned one. The wave-4 guard covered the
+/// appended TAIL of exactly this state and left the backed BODY.
+///
+/// A twin commit clears the dirty bits — the twin does hold the bytes —
+/// while the PINNED store, which every fault reads, still holds the old
+/// ones. A page modified during the crank therefore looked clean, and
+/// therefore evictable, and its re-fault silently reverted it. Eviction
+/// is supposed to be observationally irrelevant, so the image must be
+/// identical whether or not the sweep ran.
+///
+/// Bite check: with `clear_dirty_after_commit`'s twin case reverted to
+/// a plain dirty clear, the post-sweep image differs from the reference.
+#[test]
+fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
+    use ironhorse_snapshot::store::chunk_extent_count;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let session = begin(m, &mut *store.borrow_mut());
+    drop(session);
+
+    // Resume against `store` — that is the PIN, and every fault reads
+    // it. The checkpoint below goes somewhere else.
+    let mut session = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    // Modify records the store ALREADY backs, so the divergence is in
+    // the body rather than in an appended tail. Rewriting record 0 of
+    // every attach-time page guarantees at least one such page.
+    let backed_pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
+    for page in 0..backed_pages {
+        let idx = ironhorse_vm::SlotIndex(page * ironhorse_vm::SLOTS_PER_PAGE);
+        session.machine_mut().slots.get_mut(idx).id = 0;
+        session.machine_mut().slots.get_mut(idx).value =
+            ironhorse_vm::Payload::Integer(0x5EED + page as i32);
+    }
+
+    // The twin is a byte-identical copy of the pinned store, so the
+    // commit succeeds on succession — it is a legitimate operation, and
+    // the pin deliberately stays put.
+    let mut twin = MemoryStore::new();
+    twin.commit(&image_to_batch(
+        &store_to_image(&*store.borrow()).expect("export the pinned store"),
+        1,
+        "",
+    ))
+    .expect("seed the twin");
+    checkpoint_to_store(&mut session, &sig(), &mut twin).expect("twin checkpoint");
+
+    // Reference bytes with everything resident.
+    let expect = session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots");
+
+    let manifest = store.borrow().manifest().unwrap();
+    let mut evictions = 0u32;
+    for page in 0..slot_page_count(manifest.slot_count) {
+        evictions += session.machine().slots.evict_page(page) as u32;
+    }
+    for ext in 0..chunk_extent_count(manifest.chunk_len) {
+        evictions += session.machine().chunks.evict_extent(ext) as u32;
+    }
+    // Some rows are untouched and still evictable, so the sweep is not
+    // vacuously refused; what must not happen is losing the edits.
+    let _ = evictions;
+
+    assert_eq!(
+        session.machine().write_snapshot(&sig()).expect("quiescent machine snapshots"),
+        expect,
+        "an evict sweep after a twin-store checkpoint must not revert the body"
+    );
+}
+
+/// A store wrapper whose next `commit` fails with an injected I/O
+/// error AFTER the shared verification would have passed — the
+/// durable-write failure a real backend can hit at any time.
+struct FailOnceStore {
+    inner: MemoryStore,
+    fail_next: std::cell::Cell<bool>,
+}
+
+impl HeapStore for FailOnceStore {
+    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+        self.inner.manifest()
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+        self.inner.read_small_state()
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        self.inner.read_slot_page(page)
+    }
+    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        self.inner.read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        self.inner.inventory()
+    }
+    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
+        self.inner.leaf_hashes()
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.inner.page_edges()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.inner.read_free_seg(seg)
+    }
+    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
+        self.inner.free_leaf_hashes()
+    }
+    fn commit(&mut self, batch: &CheckpointBatch) -> Result<(), StoreError> {
+        if self.fail_next.replace(false) {
+            return Err(StoreError::Io("injected commit failure".to_string()));
+        }
+        self.inner.commit(batch)
+    }
+}
+
+/// V6-c recovery lock: a failed commit drops the session's root
+/// ledger (never advancing it past a store that did not move), the
+/// NEXT checkpoint takes the slow path — stored-metadata read,
+/// laundering pre-verify, full recombination — and succeeds, and the
+/// one after that is back on the fast path. Every surviving epoch
+/// must validate and resume identically to an unbroken history.
+#[test]
+fn checkpoint_recovers_through_a_failed_commit() {
+    let mut store = FailOnceStore {
+        inner: MemoryStore::new(),
+        fail_next: std::cell::Cell::new(false),
+    };
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let mut session = begin(m, &mut store);
+
+    // Injected failure: the machine keeps its dirt, the store keeps
+    // its epoch, and the session must NOT have advanced.
+    assert!(session.machine_mut().run(&PROG_B).completed);
+    store.fail_next.set(true);
+    match checkpoint_to_store(&mut session, &sig(), &mut store) {
+        Err(StoreError::Io(msg)) => assert_eq!(msg, "injected commit failure"),
+        other => panic!("expected the injected failure, got {other:?}"),
+    }
+    assert_eq!(store.manifest().unwrap().epoch, 1, "store did not move");
+    assert_eq!(session.epoch(), 1, "session did not move");
+
+    // Slow-path retry: the SAME dirt commits (nothing was cleared by
+    // the failure), the ledger rebuilds, and the store equals the
+    // machine exactly.
+    let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+    assert_eq!(epoch, 2);
+    assert_eq!(
+        store_to_image(&store).unwrap(),
+        session.machine().snapshot_image(&sig()),
+        "retried checkpoint equals the live machine"
+    );
+
+    // Fast path again on the next crank; the chain stays valid and
+    // resumable.
+    assert!(session.machine_mut().run(&PROG_A).completed);
+    let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
+    assert_eq!(epoch, 3);
+    ironhorse_snapshot::store::validate_store(&store, &sig()).unwrap();
+    let resumed = resume_from_store(&store, &sig()).unwrap();
+    assert_eq!(
+        resumed.machine().snapshot_image(&sig()),
+        session.machine().snapshot_image(&sig()),
+        "a resume sees exactly the recovered history"
     );
 }

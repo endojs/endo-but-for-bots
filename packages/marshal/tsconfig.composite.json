@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../bytes/tsconfig.composite.json"
+    },
+    {
       "path": "../common/tsconfig.composite.json"
     },
     {
@@ -19,6 +22,12 @@
     },
     {
       "path": "../harden/tsconfig.composite.json"
+    },
+    {
+      "path": "../hex/tsconfig.composite.json"
+    },
+    {
+      "path": "../immutable-arraybuffer/tsconfig.composite.json"
     },
     {
       "path": "../nat/tsconfig.composite.json"

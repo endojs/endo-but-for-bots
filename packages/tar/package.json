@@ -39,7 +39,8 @@
   },
   "dependencies": {
     "@endo/bytes": "workspace:^",
-    "@endo/errors": "workspace:^"
+    "@endo/errors": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",

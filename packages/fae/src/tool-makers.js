@@ -1,5 +1,6 @@
 // @ts-check
 // spell-out-exempt: preserve existing public dirPath and makeListDirTool names.
+/* global setTimeout */
 
 import fs from 'fs';
 import path from 'path';
@@ -56,6 +57,22 @@ const resolveSafe = (relativePath, cwd) => {
 };
 
 /**
+ * BigInt has no JSON representation, so a result that merely *contains* one
+ * throws inside `JSON.stringify` and the whole result is lost — even though
+ * the capabilities most worth calling return them (`stat()` sizes and times, a
+ * workflow's `status()` and `journal()`). Callers worked around that by
+ * hand-rolling this replacer at every call site, which buries the real result
+ * in a re-parsed blob. Decimal strings rather than a marshalling sentinel: a
+ * tool result is text a model reads, and `"1786825186213908033"` is the
+ * readable answer.
+ *
+ * @param {string} _key
+ * @param {unknown} value
+ */
+const bigintsAsDecimalStrings = (_key, value) =>
+  typeof value === 'bigint' ? value.toString() : value;
+
+/**
  * Render a tool result value as text for the model. Plain JSON-serializable
  * values stringify directly. A CapTP presence (a remote capability) has no
  * enumerable own properties, so `JSON.stringify` collapses it to `"{}"` — the
@@ -70,7 +87,7 @@ const resolveSafe = (relativePath, cwd) => {
 const renderToolResult = async result => {
   let json;
   try {
-    json = JSON.stringify(result, null, 2);
+    json = JSON.stringify(result, bigintsAsDecimalStrings, 2);
   } catch {
     json = undefined;
   }
@@ -1421,6 +1438,24 @@ harden(makeAdoptTool);
  * @param {import('@endo/eventual-send').ERef<object>} powers
  * @returns {FaeTool}
  */
+/**
+ * Strip a wrapping markdown code fence from a code string. Models frequently
+ * echo the fenced style used in tool descriptions and hand back
+ * ```` ```js\n…\n``` ```` as the `code` argument; the backticks are then a
+ * SyntaxError inside the Compartment, so a perfectly good multiline snippet
+ * "fails to run". Only strips when the ENTIRE trimmed string is one fenced
+ * block (optionally tagged with a language), leaving inline backticks in real
+ * code untouched.
+ *
+ * @param {string} code
+ * @returns {string}
+ */
+const stripCodeFence = code => {
+  const trimmed = code.trim();
+  const fenced = /^```[^\n`]*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return fenced ? fenced[1] : code;
+};
+
 export const makeExecTool = powers => {
   /** @type {ToolSchema} */
   const toolSchema = harden({
@@ -1435,7 +1470,17 @@ export const makeExecTool = powers => {
         '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
         '- E: eventual send — use E(ref).method() for all remote calls\n' +
         '- harden: freeze objects for safe passing\n' +
-        '- console: for logging\n\n' +
+        '- console: for logging\n' +
+        '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
+        'The code runs under SES lockdown, which surprises callers who expect a ' +
+        'normal environment:\n' +
+        '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
+        'let a capability supply one.\n' +
+        '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
+        'between polls within one call.\n' +
+        '- The result is JSON-serialized for the model. BigInts render as ' +
+        'decimal strings, so a stat() or workflow status can be returned as ' +
+        'it came. A remote capability is described by its method names.\n\n' +
         'Example — adopt a channel, join it, and post a reply:\n' +
         '```\n' +
         'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
@@ -1468,14 +1513,38 @@ export const makeExecTool = powers => {
       if (!code) {
         throw new Error('code is required');
       }
+      // Tolerate a markdown-fenced snippet (a common model output) so multiline
+      // code isn't rejected for its wrapping backticks.
+      const source = stripCodeFence(code);
       // Wrap in an async IIFE so top-level await works
-      const wrappedSource = `(async (powers, E, harden, console) => {\n${code}\n})`;
+      const wrappedSource = `(async (powers, E, harden, console, sleep) => {\n${source}\n})`;
       const c = new Compartment({
         __options__: true,
         globals: { BigInt },
       });
-      const fn = c.evaluate(wrappedSource);
-      const result = await fn(powers, E, harden, console);
+      let fn;
+      try {
+        fn = c.evaluate(wrappedSource);
+      } catch (err) {
+        // A parse failure here is almost always malformed code from the model.
+        // Return the error as the tool result (rather than throwing) with a
+        // nudge to resend clean source, so the model can self-correct on the
+        // next round instead of the turn aborting.
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not parse the code (${message}). Send raw JavaScript in the "code" argument — no markdown fences — and check for syntax errors.`,
+        );
+      }
+      // The compartment has no timers, so an agent watching something change
+      // (a workflow reaching await-approval, a build finishing) could not wait
+      // inside a single call and had to spin or burn a turn per poll. `sleep`
+      // is the host's timer, handed in deliberately: it grants delay, nothing
+      // else, to code that already holds this guest's full authority.
+      const sleep = ms =>
+        new Promise(resolve => {
+          setTimeout(resolve, Math.max(0, Number(ms) || 0));
+        });
+      const result = await fn(powers, E, harden, console, sleep);
       if (result === undefined) {
         return 'done (no return value)';
       }

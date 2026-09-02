@@ -4,7 +4,7 @@
 import harden from '@endo/harden';
 import { q } from '@endo/errors';
 import { readTarEntries, tarPathSegments } from '@endo/tar/reader.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
 /**
@@ -128,7 +128,7 @@ export const checkinTarTree = async (readerRef, contentStore) => {
       // Symlink: the target is the header linkname and the content size
       // is zero, but drain any content/padding to stay block-aligned.
       await drain(entry.content);
-      attachBlob(segments, await storeBytes(bytesFromText(entry.linkname)));
+      attachBlob(segments, await storeBytes(encodeUtf8(entry.linkname)));
     }
   }
 
@@ -147,7 +147,7 @@ export const checkinTarTree = async (readerRef, contentStore) => {
       }
     }
     entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return storeBytes(bytesFromText(JSON.stringify(entries)));
+    return storeBytes(encodeUtf8(JSON.stringify(entries)));
   };
 
   return storeTree(root);

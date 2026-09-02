@@ -10,6 +10,8 @@ test/Compartment/import-now-hook/returns-undefined.js
 test/Compartment/import-now-hook/source-specifier-descriptor.js
 test/Compartment/import-now-optional-resolve-hook.js
 test/Compartment/prototype/Symbol.toStringTag.js
+test/TextDecoder/immutable-arraybuffer-intersection.js
+test/TextEncoder/immutable-arraybuffer-intersection.js
 test/freeze/monadic.js
 test/harden/cycle.js
 test/harden/exists.js

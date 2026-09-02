@@ -27,11 +27,12 @@
 
 #include "xsAll.h"
 #include "xsScript.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 
-#define ENDOR_RESULT_MAX 1024
+#define ENDOR_RESULT_MAX 16384
 #define ENDOR_ERROR_MAX 256
 
 typedef struct {
@@ -44,9 +45,31 @@ typedef struct {
 	txU4 ok;         /* 1 = completed normally, 0 = threw / parse error */
 	char result[ENDOR_RESULT_MAX]; /* completion value coerced to String() */
 	char error[ENDOR_ERROR_MAX];   /* message when ok == 0 */
+	/* True byte length of the coerced completion value BEFORE the copy
+	 * into the fixed `result` buffer. When this exceeds ENDOR_RESULT_MAX-1
+	 * the stored `result` is a truncated prefix, so a caller comparing it
+	 * against the port must not read a divergence from the truncation — the
+	 * differential check skips such a case honestly (finding 493390fc0397). */
+	txU4 result_len;
 } EndorOracleResult;
 
 static int gEndorClusterReady = 0;
+
+/*
+ * Machine create/delete must be serialized process-wide.  XS machines
+ * are thread-confined while RUNNING (the differential harness runs
+ * cases in parallel across test threads on purpose), but
+ * fxCreateMachine / fxDeleteMachine each adjust the process-global
+ * shared-cluster usage count (gxSharedCluster->usage in xsAtomics.c)
+ * with plain unsynchronized int arithmetic.  Racing creates/deletes
+ * lose updates; when the count drifts to zero, fxTerminateSharedCluster
+ * frees the live cluster and every later machine create/delete is a
+ * use-after-free — observed as intermittent glibc aborts ("double free
+ * or corruption", "corrupted double-linked list") in the parallel
+ * oracle-differential suites.  The mutex covers the latch and the
+ * create/delete calls only; machine execution stays parallel.
+ */
+static pthread_mutex_t gEndorMachineLifecycleMutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void fx_endor_detachArrayBuffer(txMachine *the)
 {
@@ -69,6 +92,35 @@ static void fx_endor_detachArrayBuffer(txMachine *the)
 		}
 	}
 	mxTypeError("this is no ArrayBuffer instance");
+}
+
+/*
+ * Best-effort stringification of the caught mxException into `buf`.
+ * Every mxCatch in this shim wants the thrown value as text, but
+ * fxToString can itself throw (an Error whose toString/name/message
+ * reads throw again, a Symbol exception), and a throw inside mxCatch
+ * re-enters fxJump with an EMPTY jump chain — fxAbort, bypassing the
+ * caller's fxEndHost and machine teardown (review finding). So the
+ * conversion runs under its own nested mxTry and falls back to a
+ * fixed tag; the jump restore rebalances the->stack either way.
+ */
+static void endor_error_from_exception(txMachine *the, char *buf, size_t max)
+{
+	if (mxException.kind == XS_UNDEFINED_KIND)
+		return;
+	mxTry(the) {
+		mxPush(mxException);
+		fxToString(the, the->stack);
+		if (the->stack->value.string) {
+			strncpy(buf, the->stack->value.string, max - 1);
+			buf[max - 1] = 0;
+		}
+		mxPop();
+	}
+	mxCatch(the) {
+		strncpy(buf, "(exception stringification threw)", max - 1);
+		buf[max - 1] = 0;
+	}
 }
 
 /*
@@ -187,13 +239,21 @@ void fxLoadModule(txMachine *the, txSlot *module, txID moduleID)
 	}
 }
 
-/* Mirrors DEFAULT_CREATION in rust/endo/xsnap/src/lib.rs. */
+/* Mirrors DEFAULT_CREATION in rust/endo/xsnap/src/lib.rs, EXCEPT
+ * stackCount: the tc39 generated corpora (RegExp/property-escapes,
+ * CharacterClassEscapes, identifier start/part sweeps) drive the harness
+ * idiom `String.fromCodePoint.apply(null, <10000 code points>)`, which
+ * needs one value-stack slot per argument. Production xsnap's 4096 slots
+ * abort those cases (`oracle-host-stack-limit` non-results, ~470 in the
+ * full sweep); 64Ki slots (1 MiB) lets the oracle host them and certify
+ * real verdicts. Stack capacity is host geometry, not language semantics
+ * or metering: computron counts do not depend on it. */
 static txCreation gEndorCreation = {
 	128 * 1024, /* initialChunkSize */
 	64 * 1024,  /* incrementalChunkSize */
 	8192,       /* initialHeapCount */
 	4096,       /* incrementalHeapCount */
-	4096,       /* stackCount */
+	64 * 1024,  /* stackCount */
 	2048,       /* initialKeyCount */
 	512,        /* incrementalKeyCount */
 	127,        /* nameModulo */
@@ -203,6 +263,28 @@ static txCreation gEndorCreation = {
 	0,          /* staticSize */
 	0,          /* nativeStackSize */
 };
+
+/* See gEndorMachineLifecycleMutex: the latch and the cluster-usage
+ * mutations inside fxCreateMachine run under the lock. */
+static txMachine *xs_oracle_create_machine(const char *name)
+{
+	txMachine *the;
+	pthread_mutex_lock(&gEndorMachineLifecycleMutex);
+	if (!gEndorClusterReady) {
+		fxInitializeSharedCluster(C_NULL);
+		gEndorClusterReady = 1;
+	}
+	the = fxCreateMachine(&gEndorCreation, (txString)name, C_NULL, 0);
+	pthread_mutex_unlock(&gEndorMachineLifecycleMutex);
+	return the;
+}
+
+static void xs_oracle_delete_machine(txMachine *the)
+{
+	pthread_mutex_lock(&gEndorMachineLifecycleMutex);
+	fxDeleteMachine(the);
+	pthread_mutex_unlock(&gEndorMachineLifecycleMutex);
+}
 
 /*
  * Run `source` as a program eval on a fresh machine.
@@ -215,12 +297,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle");
 	if (!the)
 		return -1;
 
@@ -347,6 +424,7 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			{
 				txString s = result->value.string;
 				if (s) {
+					out->result_len = (txU4)c_strlen(s);
 					strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
 					out->result[ENDOR_RESULT_MAX - 1] = 0;
 				}
@@ -370,19 +448,11 @@ int xs_oracle_run(const char *source, txU4 sourceLen, EndorOracleResult *out)
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
 			/* mxException holds the thrown value; stringify best-effort. */
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string, ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
 
@@ -396,6 +466,152 @@ void xs_oracle_free(EndorOracleResult *out)
 		free(out->symbols);
 		out->symbols = C_NULL;
 	}
+}
+
+/*
+ * MULTI-CRANK oracle mode (the wave-6 pattern-2 antidote): run
+ * `crankCount` script sources SEQUENTIALLY on ONE machine, capturing a
+ * full EndorOracleResult per crank — bytecode/symbols (each crank's
+ * own compile), run-only computrons (meterIndex reset per crank,
+ * exactly as xs_oracle_run measures a single crank), the microtask
+ * drain included (the pump-loop latch), and the completion value.
+ *
+ * This is what lets the differential harness compare CROSS-CRANK
+ * semantics — state created by crank 1 observed by crank 2 — where the
+ * single-crank entry structurally cannot (a class of divergence the
+ * wave-6 analysis showed 1093 single-crank tests missed). Retained
+ * defining-crank bytecode lets the ironhorse side include calls of
+ * functions and closures created by earlier cranks too.
+ *
+ * An uncaught throw in crank i captures into outs[i] exactly as the
+ * single-crank entry's catch does and STOPS the run; later cranks are
+ * left ok == 0 with no code (the harness compares up to and including
+ * the aborting crank). Every out slot must be released with
+ * xs_oracle_free regardless.
+ */
+int xs_oracle_run_cranks(const char **sources, const txU4 *sourceLens,
+	txU4 crankCount, EndorOracleResult *outs)
+{
+	txMachine *the;
+	/* Survives the mxCatch longjmp, so the catch attributes the throw
+	 * to the crank that raised it. */
+	volatile txU4 crank_i = 0;
+	txU4 j;
+
+	for (j = 0; j < crankCount; j++)
+		memset(&outs[j], 0, sizeof(outs[j]));
+
+	the = xs_oracle_create_machine("xs-oracle-cranks");
+	if (!the)
+		return -1;
+
+	the = fxBeginHost(the);
+	{
+		mxTry(the) {
+			/* The Hardened-JavaScript globals + test262 host hook, exactly
+			 * as xs_oracle_run installs them (see its comment for why the
+			 * global must be the stack top during the installs). */
+			{
+				txSlot *slot;
+				mxPush(mxGlobal);
+				slot = fxLastProperty(the, fxToInstance(the, the->stack));
+				slot = fxNextHostFunctionProperty(the, slot, fx_harden, 1,
+					fxID(the, "harden"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_lockdown, 0,
+					fxID(the, "lockdown"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_petrify, 1,
+					fxID(the, "petrify"), XS_DONT_ENUM_FLAG);
+				slot = fxNextHostFunctionProperty(the, slot, fx_mutabilities, 1,
+					fxID(the, "mutabilities"), XS_DONT_ENUM_FLAG);
+				mxPop();
+			}
+			{
+				txSlot *slot;
+				txSlot *global;
+				txSlot *host;
+				mxPush(mxGlobal);
+				global = the->stack;
+				mxPush(mxObjectPrototype);
+				slot = fxLastProperty(the, fxNewObjectInstance(the));
+				slot = fxNextHostFunctionProperty(the, slot,
+					fx_endor_detachArrayBuffer, 1,
+					fxID(the, "detachArrayBuffer"), XS_DONT_ENUM_FLAG);
+				host = the->stack;
+				slot = fxLastProperty(the, fxToInstance(the, global));
+				(void)fxNextSlotProperty(the, slot, host,
+					fxID(the, "$262"), XS_DONT_ENUM_FLAG);
+				mxPop();
+				mxPop();
+			}
+
+			for (crank_i = 0; crank_i < crankCount; crank_i++) {
+				EndorOracleResult *out = &outs[crank_i];
+				txStringCStream stream;
+				txScript *script;
+				txSlot *module;
+				txSlot *realm;
+				txSlot *result;
+
+				stream.buffer = (txString)sources[crank_i];
+				stream.offset = 0;
+				stream.size = (txSize)sourceLens[crank_i];
+
+				/* Compile this crank (parse metering discarded below). */
+				script = fxParseScript(the, &stream, fxStringCGetter,
+					mxProgramFlag | mxEvalFlag);
+
+				out->code_size = (txU4)script->codeSize;
+				if (script->codeSize > 0) {
+					out->code = (txS1 *)malloc(script->codeSize);
+					if (out->code)
+						memcpy(out->code, script->codeBuffer, script->codeSize);
+				}
+				if (script->symbolsBuffer && script->symbolsSize > 0) {
+					out->symbols_size = (txU4)script->symbolsSize;
+					out->symbols = (txS1 *)malloc(script->symbolsSize);
+					if (out->symbols)
+						memcpy(out->symbols, script->symbolsBuffer, script->symbolsSize);
+				}
+
+				module = mxProgram.value.reference;
+				realm = mxModuleInstanceInternal(module)->value.module.realm;
+
+				/* Measure THIS crank's run only. */
+				the->meterIndex = 0;
+				fxRunScript(the, script, mxRealmGlobal(realm), C_NULL,
+					mxRealmClosures(realm)->value.reference, C_NULL, module);
+				/* Per-crank microtask drain (the pump-loop latch). */
+				while (the->promiseJobs) {
+					the->promiseJobs = 0;
+					fxRunPromiseJobs(the);
+				}
+				out->computrons = the->meterIndex >> 16;
+				out->meter_raw = (txU4)the->meterIndex;
+
+				result = the->stack;
+				fxToString(the, result);
+				{
+					txString s = result->value.string;
+					if (s) {
+						strncpy(out->result, s, ENDOR_RESULT_MAX - 1);
+						out->result[ENDOR_RESULT_MAX - 1] = 0;
+					}
+				}
+				mxPop();
+				out->ok = 1;
+			}
+		}
+		mxCatch(the) {
+			EndorOracleResult *out = &outs[crank_i];
+			out->ok = 0;
+			out->computrons = the->meterIndex >> 16;
+			out->meter_raw = (txU4)the->meterIndex;
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
+		}
+	}
+	fxEndHost(the);
+	xs_oracle_delete_machine(the);
+	return 0;
 }
 
 /*
@@ -429,12 +645,7 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle-module", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle-module");
 	if (!the)
 		return -1;
 
@@ -479,20 +690,11 @@ int xs_oracle_compile_module(const char *source, txU4 sourceLen, EndorOracleResu
 		}
 		mxCatch(the) {
 			out->ok = 0;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string,
-						ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
 
@@ -574,12 +776,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle-run-module", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle-run-module");
 	if (!the)
 		return -1;
 
@@ -692,6 +889,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 				fxGetID(the, fxID(the, "result"));
 				fxToString(the, the->stack);
 				if (the->stack->value.string) {
+					out->result_len = (txU4)c_strlen(the->stack->value.string);
 					strncpy(out->result, the->stack->value.string,
 						ENDOR_RESULT_MAX - 1);
 					out->result[ENDOR_RESULT_MAX - 1] = 0;
@@ -705,21 +903,12 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 			out->computrons = the->meterIndex >> 16;
 			out->meter_raw = (txU4)the->meterIndex;
 			out->ok = 0;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string,
-						ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	gEndorModuleLatch = C_NULL;
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }
 
@@ -758,10 +947,17 @@ typedef struct {
 	txU4 capture_count; /* code[1]: total captures incl. whole match (index 0) */
 	txU4 name_count;    /* code[2] */
 	txS4 captures[2 * ENDOR_MAX_CAPTURES]; /* from,to pairs, byte offsets, -1 unset */
-	txU4 compile_computrons; /* compile meter >> 16 */
-	txU4 compile_meter_raw;
-	txU4 match_computrons;   /* match meter >> 16 */
-	txU4 match_meter_raw;
+	/* The meter is XS's own `meterIndex`, a txU8 (xsAll.h). A match over a
+	 * pathological empty-matchable pattern can dispatch well over 65536
+	 * steps, so the raw 16.16 meter exceeds 2^32; these fields therefore
+	 * carry the full 64-bit value. A narrower field silently wrapped it
+	 * (finding 5d122a6fc10babd9: a false differential_regexp divergence
+	 * where the port's un-truncated u64 meter disagreed only with the
+	 * shim's wrapped 32-bit copy). */
+	txU8 compile_computrons; /* compile meter >> 16 */
+	txU8 compile_meter_raw;
+	txU8 match_computrons;   /* match meter >> 16 */
+	txU8 match_meter_raw;
 	char error[ENDOR_ERROR_MAX]; /* compile error message when ok == 0 */
 } EndorRegExpResult;
 
@@ -771,12 +967,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 	txMachine *the;
 	memset(out, 0, sizeof(*out));
 
-	if (!gEndorClusterReady) {
-		fxInitializeSharedCluster(C_NULL);
-		gEndorClusterReady = 1;
-	}
-
-	the = fxCreateMachine(&gEndorCreation, "xs-oracle-regexp", C_NULL, 0);
+	the = xs_oracle_create_machine("xs-oracle-regexp");
 	if (!the)
 		return -1;
 
@@ -799,7 +990,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 			}
 			else {
 				out->ok = 1;
-				out->compile_meter_raw = (txU4)the->meterIndex;
+				out->compile_meter_raw = (txU8)the->meterIndex;
 				out->compile_computrons = the->meterIndex >> 16;
 
 				captureCount = code[1];
@@ -815,7 +1006,7 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 				the->meterIndex = 0;
 				out->matched = fxMatchRegExp(the, code, data,
 					(txString)subject, start) ? 1 : 0;
-				out->match_meter_raw = (txU4)the->meterIndex;
+				out->match_meter_raw = (txU8)the->meterIndex;
 				out->match_computrons = the->meterIndex >> 16;
 
 				before = captureCount;
@@ -832,18 +1023,10 @@ int xs_oracle_regexp(const char *pattern, const char *modifier,
 			 * overflow on a pathological pattern). Report as a compile
 			 * failure with a best-effort message. */
 			out->ok = 0;
-			if (mxException.kind != XS_UNDEFINED_KIND) {
-				mxPush(mxException);
-				fxToString(the, the->stack);
-				if (the->stack->value.string) {
-					strncpy(out->error, the->stack->value.string, ENDOR_ERROR_MAX - 1);
-					out->error[ENDOR_ERROR_MAX - 1] = 0;
-				}
-				mxPop();
-			}
+			endor_error_from_exception(the, out->error, ENDOR_ERROR_MAX);
 		}
 	}
 	fxEndHost(the);
-	fxDeleteMachine(the);
+	xs_oracle_delete_machine(the);
 	return 0;
 }

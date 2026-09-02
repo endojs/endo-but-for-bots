@@ -176,7 +176,7 @@ export const makePassableCodecs = descCodecs => {
           syrupWriter.writeString(value);
         } else if (typeof value === 'bigint') {
           syrupWriter.writeInteger(value);
-        } else if (value instanceof ArrayBuffer) {
+        } else if (value instanceof Uint8Array) {
           syrupWriter.writeBytestring(value);
         } else {
           throw new Error(

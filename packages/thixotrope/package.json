@@ -41,11 +41,11 @@
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
-    "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/ocapn": "workspace:^",
     "@endo/stream": "workspace:^",
     "@noble/hashes": "^2.3.0"

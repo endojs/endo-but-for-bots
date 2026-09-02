@@ -16,6 +16,10 @@ use std::os::raw::{c_char, c_int};
 
 // NOT #![forbid(unsafe_code)] — this crate is the audited FFI seam.
 
+/// Must stay byte-identical to `ENDOR_RESULT_MAX` in `csrc/xs_shim.c` — the
+/// fixed capacity of the completion-value buffer shared across the FFI.
+const RESULT_BUF_CAP: usize = 16384;
+
 #[repr(C)]
 struct XsOracleResultRaw {
     code: *mut i8,
@@ -25,8 +29,12 @@ struct XsOracleResultRaw {
     computrons: u32,
     meter_raw: u32,
     ok: u32,
-    result: [u8; 1024],
+    result: [u8; RESULT_BUF_CAP],
     error: [u8; 256],
+    /// True byte length of the completion value before it was copied into the
+    /// fixed `result` buffer. Greater than `RESULT_BUF_CAP - 1` means `result`
+    /// holds a truncated prefix.
+    result_len: u32,
 }
 
 impl Default for XsOracleResultRaw {
@@ -39,8 +47,9 @@ impl Default for XsOracleResultRaw {
             computrons: 0,
             meter_raw: 0,
             ok: 0,
-            result: [0u8; 1024],
+            result: [0u8; RESULT_BUF_CAP],
             error: [0u8; 256],
+            result_len: 0,
         }
     }
 }
@@ -62,6 +71,12 @@ extern "C" {
         out: *mut XsOracleResultRaw,
     ) -> c_int;
     fn xs_oracle_free(out: *mut XsOracleResultRaw);
+    fn xs_oracle_run_cranks(
+        sources: *const *const c_char,
+        source_lens: *const u32,
+        crank_count: u32,
+        outs: *mut XsOracleResultRaw,
+    ) -> c_int;
     fn xs_oracle_regexp(
         pattern: *const c_char,
         modifier: *const c_char,
@@ -81,10 +96,13 @@ struct XsRegExpResultRaw {
     capture_count: u32,
     name_count: u32,
     captures: [i32; 2 * ENDOR_MAX_CAPTURES],
-    compile_computrons: u32,
-    compile_meter_raw: u32,
-    match_computrons: u32,
-    match_meter_raw: u32,
+    // 64-bit: XS's `meterIndex` is a txU8, and a match over a pathological
+    // empty-matchable pattern can exceed 2^32 raw (finding
+    // 5d122a6fc10babd9). Must mirror `EndorRegExpResult` in xs_shim.c.
+    compile_computrons: u64,
+    compile_meter_raw: u64,
+    match_computrons: u64,
+    match_meter_raw: u64,
     error: [u8; 256],
 }
 
@@ -130,11 +148,15 @@ pub struct RegExpOutcome {
     /// Compile meter: `XS_PARSE_REGEXP_METERING * pattern size >> 16`.
     pub compile_computrons: u64,
     /// Raw compile meter (16.16 fixed point).
-    pub compile_meter_raw: u32,
+    pub compile_meter_raw: u64,
     /// Match meter: `XS_REGEXP_METERING` per step dispatched, `>> 16`.
     pub match_computrons: u64,
-    /// Raw match meter (16.16 fixed point).
-    pub match_meter_raw: u32,
+    /// Raw match meter (16.16 fixed point). 64-bit: a match over a
+    /// pathological empty-matchable pattern can dispatch far more than
+    /// 65536 steps, so the raw meter exceeds `u32::MAX` (the pin's
+    /// `meterIndex` is a txU8). Truncating it here manufactured a false
+    /// `differential_regexp` divergence (finding 5d122a6fc10babd9).
+    pub match_meter_raw: u64,
     /// Compile error message (valid when `!compiled`).
     pub error: String,
 }
@@ -180,9 +202,9 @@ pub fn regexp(pattern: &str, flags: &str, subject: &str, start: i32) -> Option<R
         capture_count: raw.capture_count,
         name_count: raw.name_count,
         captures,
-        compile_computrons: raw.compile_computrons as u64,
+        compile_computrons: raw.compile_computrons,
         compile_meter_raw: raw.compile_meter_raw,
-        match_computrons: raw.match_computrons as u64,
+        match_computrons: raw.match_computrons,
         match_meter_raw: raw.match_meter_raw,
         error: cstr_field(&raw.error),
     })
@@ -202,6 +224,12 @@ pub struct OracleOutcome {
     /// Completion value coerced with JS `String()` (valid when
     /// `completed`), else empty.
     pub result: String,
+    /// `true` when the completion value was longer than the oracle's fixed
+    /// capture buffer, so [`result`](Self::result) holds only a truncated
+    /// prefix. A differential caller must treat this as "the oracle cannot
+    /// faithfully represent this result" and skip the comparison rather than
+    /// reading a divergence from the truncation (finding `493390fc0397`).
+    pub result_truncated: bool,
     /// The thrown value stringified (valid when `!completed`).
     pub error: String,
     /// Run-only computrons: `meterIndex >> 16` measured over execution,
@@ -255,6 +283,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         symbols,
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
+        result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -265,6 +294,81 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
     unsafe { xs_oracle_free(&mut raw as *mut _) };
 
     Some(outcome)
+}
+
+/// Convert (and free) one shim result slot into an owned outcome —
+/// the same copy-out [`run`] performs inline.
+fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
+    let bytecode = if raw.code.is_null() || raw.code_size == 0 {
+        Vec::new()
+    } else {
+        // Safety: the shim malloc'd `code_size` bytes at `code`.
+        unsafe {
+            std::slice::from_raw_parts(raw.code as *const u8, raw.code_size as usize).to_vec()
+        }
+    };
+    let symbols = if raw.symbols.is_null() || raw.symbols_size == 0 {
+        Vec::new()
+    } else {
+        unsafe {
+            std::slice::from_raw_parts(raw.symbols as *const u8, raw.symbols_size as usize)
+                .to_vec()
+        }
+    };
+    let outcome = OracleOutcome {
+        bytecode,
+        symbols,
+        completed: raw.ok != 0,
+        result: cstr_field(&raw.result),
+        // Same derivation as `run`'s inline copy-out: a completion value
+        // longer than the shim's fixed capture buffer arrives truncated,
+        // and a differential caller must skip the comparison rather than
+        // read the truncation as a divergence.
+        result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
+        error: cstr_field(&raw.error),
+        computrons: raw.computrons as u64,
+        meter_raw: raw.meter_raw,
+    };
+    // Safety: frees the shim's heap buffers; copied out above.
+    unsafe { xs_oracle_free(raw as *mut _) };
+    outcome
+}
+
+/// MULTI-CRANK oracle mode: run `sources` sequentially on ONE XS
+/// machine and return a per-crank outcome — each crank's own compiled
+/// bytecode/symbols, its run-only computrons (meterIndex reset per
+/// crank, microtask drain included), and its completion value. This is
+/// the differential harness's window onto CROSS-CRANK semantics (state
+/// created by crank 1 observed by crank 2), which the single-crank
+/// [`run`] entry structurally cannot compare. An uncaught throw stops
+/// the run at that crank: its outcome carries the error, and later
+/// sources are returned as not-completed placeholders with empty
+/// bytecode.
+///
+/// Returns `None` only on a machine-level failure.
+pub fn run_cranks(sources: &[&str]) -> Option<Vec<OracleOutcome>> {
+    let ptrs: Vec<*const c_char> = sources
+        .iter()
+        .map(|s| s.as_bytes().as_ptr() as *const c_char)
+        .collect();
+    let lens: Vec<u32> = sources.iter().map(|s| s.as_bytes().len() as u32).collect();
+    let mut raws: Vec<XsOracleResultRaw> =
+        (0..sources.len()).map(|_| XsOracleResultRaw::default()).collect();
+    // Safety: `ptrs`/`lens`/`raws` are valid for `sources.len()` slots;
+    // the C side reads the sources by (pointer, length) and writes only
+    // within each out slot and heap buffers we copy out and free.
+    let rc = unsafe {
+        xs_oracle_run_cranks(
+            ptrs.as_ptr(),
+            lens.as_ptr(),
+            sources.len() as u32,
+            raws.as_mut_ptr(),
+        )
+    };
+    if rc != 0 {
+        return None;
+    }
+    Some(raws.iter_mut().map(outcome_from_raw).collect())
 }
 
 /// The outcome of compiling one **Module** on XS (parse + code, no run).
@@ -425,6 +529,24 @@ fn cstr_field(buf: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
+    /// value longer than the old 1024-byte capture buffer used to be silently
+    /// truncated to 1023 bytes, so the oracle reported a shorter string than
+    /// the (correct) port and the differential harness read a spurious
+    /// divergence. The capture buffer now holds well over 1 KiB, and any
+    /// result that still overflows it is flagged `result_truncated` so callers
+    /// skip rather than compare a truncated prefix.
+    #[test]
+    fn long_completion_value_is_captured_untruncated() {
+        // A 2000-char completion value — comfortably past the old 1023-byte
+        // usable buffer, comfortably inside the current one.
+        let out = run("'x'.repeat(2000)").expect("oracle machine must start");
+        assert!(out.completed, "program completes: {}", out.error);
+        assert_eq!(out.result.len(), 2000, "the full string is captured, not a 1023-byte prefix");
+        assert!(out.result.bytes().all(|b| b == b'x'));
+        assert!(!out.result_truncated, "a result within the buffer is not flagged truncated");
+    }
+
     /// Materialize `files` into a unique temp dir, run `main` as a module
     /// graph, and return the outcome (dir removed afterward). Unit tests do
     /// not get CARGO_TARGET_TMPDIR, so key the dir on the case name.
@@ -557,6 +679,31 @@ mod tests {
         let o = regexp("a", "", "aba", 1).expect("machine");
         assert!(o.matched);
         assert_eq!(o.captures[0], (2, 3));
+    }
+
+    #[test]
+    fn regexp_match_meter_is_not_truncated_to_32_bits() {
+        // Regression for ironhorse fuzz finding 5d122a6fc10babd9
+        // (differential_regexp): the pin's `meterIndex` is a txU8, and a
+        // match over this deeply nested empty-matchable pattern dispatches
+        // 243671 steps, so the raw 16.16 match meter is
+        // 243671 * 65536 = 15_969_222_656 — past u32::MAX. The shim
+        // originally copied it into a txU4 field, wrapping it to
+        // 3_084_320_768 and manufacturing a false "match meter" divergence
+        // against the port's un-truncated u64 meter. The oracle must now
+        // report the full 64-bit value.
+        let pattern = "(?:(?:(?:b*b*b*)(?:b*b*b*)(?:b*b*b*)|b*b*b*)(?:(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})|0{1,3}0{1,3}0{1,3})(?:(?:0*0*0*)?(?:0*0*0*)?(?:0*0*0*)?|0*0*0*)?|(?:b*b*b*)(?:b*b*b*)(?:b*b*b*)|b*b*b*)(?:(?:(?:0*0*0*)?(?:0*0*0*)?(?:0*0*0*)?|0*0*0*)?(?:(?:b*b*b*)(?:b*b*b*)(?:b*b*b*)|b*b*b*)(?:(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})|0{1,3}0{1,3}0{1,3})|(?:0*0*0*)?(?:0*0*0*)?(?:0*0*0*)?|0*0*0*)?(?:(?:(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})|0{1,3}0{1,3}0{1,3})(?:(?:0*0*0*)?(?:0*0*0*)?(?:0*0*0*)?|0*0*0*)?(?:(?:b*b*b*)(?:b*b*b*)(?:b*b*b*)|b*b*b*)|(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})|0{1,3}0{1,3}0{1,3})|(?:(?:b*b*b*)(?:b*b*b*)(?:b*b*b*)|b*b*b*)(?:(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})(?:0{1,3}0{1,3}0{1,3})|0{1,3}0{1,3}0{1,3})(?:(?:0*0*0*)?(?:0*0*0*)?(?:0*0*0*)?|0*0*0*)?|(?:b*b*b*)(?:b*b*b*)(?:b*b*b*)|b*b*b*";
+        let o = regexp(pattern, "", "00b00", 2).expect("machine");
+        assert!(o.compiled, "should compile: {}", o.error);
+        assert!(o.matched);
+        assert_eq!(
+            o.match_meter_raw, 15_969_222_656,
+            "match meter must be the full 64-bit value, not a 32-bit wrap"
+        );
+        assert!(
+            o.match_meter_raw > u64::from(u32::MAX),
+            "the reproducing meter is past the 32-bit boundary"
+        );
     }
 
     // ---------------------------------------------------------------------
