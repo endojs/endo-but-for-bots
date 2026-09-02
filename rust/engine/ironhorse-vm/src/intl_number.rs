@@ -1125,23 +1125,70 @@ fn apply_style_pattern(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
     }
 }
 
-/// Whether the rendered standard-notation value is exactly the integer one.
-/// Currency-name and long-unit plural selection follows the rounded display
-/// value and its visible fraction count: `1.2` rounded to `1` is singular, but
-/// an explicitly rendered `1.00` is plural in the frozen English profile.
+/// Whether the rendered value is exactly the integer one. Currency-name and
+/// long-unit plural selection follows the rounded display value and its
+/// visible fraction count: `1.2` rounded to `1` is singular, an explicitly
+/// rendered `1.00` is plural, and `1E0` remains singular.
 fn rendered_value_is_one(opts: &NfResolved, parts: &[Part]) -> bool {
-    if opts.notation != Notation::Standard {
+    if opts.notation == Notation::Compact
+        || parts.iter().any(|part| part.kind == PartType::Fraction)
+    {
         return false;
     }
-    let integer = parts
+    let mapped_integer = parts
         .iter()
         .filter(|part| part.kind == PartType::Integer)
         .map(|part| part.value.as_str())
         .collect::<String>();
-    if integer != map_digits("1", &opts.numbering_system) {
+    let Some(integer) = unmap_digits(&mapped_integer, &opts.numbering_system) else {
+        return false;
+    };
+    let integer = integer.trim_start_matches('0');
+    if integer.is_empty()
+        || !integer.starts_with('1')
+        || !integer[1..].bytes().all(|digit| digit == b'0')
+    {
         return false;
     }
-    !parts.iter().any(|part| part.kind == PartType::Fraction)
+
+    let mapped_exponent = parts
+        .iter()
+        .filter(|part| part.kind == PartType::ExponentInteger)
+        .map(|part| part.value.as_str())
+        .collect::<String>();
+    let exponent = if mapped_exponent.is_empty() {
+        0
+    } else {
+        let Some(ascii) = unmap_digits(&mapped_exponent, &opts.numbering_system) else {
+            return false;
+        };
+        let Ok(mut exponent) = ascii.parse::<i32>() else {
+            return false;
+        };
+        if parts
+            .iter()
+            .any(|part| part.kind == PartType::ExponentMinusSign)
+        {
+            exponent = -exponent;
+        }
+        exponent
+    };
+    exponent == -(integer.len() as i32 - 1)
+}
+
+/// Convert digits from a supported numbering system back to ASCII for the
+/// small amount of exact-value reasoning required by plural selection.
+fn unmap_digits(value: &str, nu: &str) -> Option<String> {
+    let map = numbering_digits(nu)
+        .unwrap_or(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    let mut ascii = String::with_capacity(value.len());
+    for ch in value.chars() {
+        let digit = map
+            .iter()
+            .position(|mapped| mapped.chars().eq(std::iter::once(ch)))?;
+        ascii.push(char::from(b'0' + digit as u8));
+    }
+    Some(ascii)
 }
 
 fn currency_label(opts: &NfResolved, code: &str, singular: bool) -> String {
@@ -1493,6 +1540,11 @@ mod tests {
         unit.unit_display = UnitDisplay::Long;
         assert_eq!(format_to_string(&unit, 1.0), "1 meter");
         assert_eq!(format_to_string(&unit, 2.0), "2 meters");
+        unit.notation = Notation::Scientific;
+        assert_eq!(format_to_string(&unit, 1.0), "1E0 meter");
+        unit.notation = Notation::Engineering;
+        assert_eq!(format_to_string(&unit, 1.0), "1E0 meter");
+        unit.notation = Notation::Standard;
         unit.min_fraction_digits = 2;
         assert_eq!(format_to_string(&unit, 1.0), "1.00 meters");
         unit.min_fraction_digits = 0;

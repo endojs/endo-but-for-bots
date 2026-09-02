@@ -38203,12 +38203,9 @@ impl Interp {
     /// distinct `receiver` (ECMA-262 10.1.9.2 steps 3.a–3.e): the integer-
     /// indexed `[[Set]]`'s valid-index-but-receiver-differs continuation. The
     /// value is stored on the receiver (never on the source view, never
-    /// coerced through the source's element type) — creating an own data
-    /// property, or updating an existing writable data property, and failing
-    /// (`false`) for a non-object receiver, an accessor / non-writable existing
-    /// property, or a non-extensible receiver. A canonical numeric index on a
-    /// typed-array receiver routes to that receiver's own
-    /// `[[DefineOwnProperty]]` (coercing through its element type).
+    /// coerced through the source's element type). Both the existing-property
+    /// probe and the final definition use the receiver's full internal-method
+    /// dispatch, preserving Array, String, TypedArray, and Proxy exotics.
     fn set_data_on_receiver(
         &mut self,
         code: &[u8],
@@ -38220,32 +38217,8 @@ impl Interp {
             Payload::Reference(r) if receiver.kind == Kind::Reference => r,
             _ => return Ok(false),
         };
-        if let Some(&rta) = self.typed_arrays.get(&robj) {
-            if let Some(rn) = self.ta_numeric_index(key) {
-                let desc = OrdinaryDescriptor {
-                    value: Some(value),
-                    ..OrdinaryDescriptor::default()
-                };
-                return self.ta_index_define(code, rta, rn, desc);
-            }
-            let id = self.to_property_id(code, key)?;
-            return self.set_ordinary_data_on(robj, id, value);
-        }
         let id = self.to_property_id(code, key)?;
-        self.set_ordinary_data_on(robj, id, value)
-    }
-
-    /// The ordinary-object half of [`Self::set_data_on_receiver`]: update an
-    /// existing writable data property (rejecting an accessor / non-writable
-    /// one) or `CreateDataProperty` a fresh own property (rejecting a
-    /// non-extensible receiver).
-    fn set_ordinary_data_on(
-        &mut self,
-        obj: crate::value::SlotIndex,
-        id: u16,
-        value: Slot,
-    ) -> Result<bool, Halt> {
-        match self.ordinary_get_own_descriptor(obj, id) {
+        match self.mop_get_own_property(code, robj, id)? {
             Some(existing) => {
                 if existing.is_accessor() || existing.writable == Some(false) {
                     return Ok(false);
@@ -38254,7 +38227,7 @@ impl Interp {
                     value: Some(value),
                     ..OrdinaryDescriptor::default()
                 };
-                Ok(self.ordinary_define_own_property(obj, id, desc))
+                self.mop_define_own_property(code, robj, id, desc)
             }
             None => {
                 let desc = OrdinaryDescriptor {
@@ -38264,7 +38237,7 @@ impl Interp {
                     configurable: Some(true),
                     ..OrdinaryDescriptor::default()
                 };
-                Ok(self.ordinary_define_own_property(obj, id, desc))
+                self.mop_define_own_property(code, robj, id, desc)
             }
         }
     }
@@ -41697,6 +41670,11 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get_own_property(code, inst, id);
         }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                return Ok(self.ta_index_own_descriptor(ta, index));
+            }
+        }
         if self.find_property(inst, id).is_none() {
             if let Some(d) = self.exotic_own_descriptor(inst, id) {
                 return Ok(Some(d));
@@ -41864,6 +41842,11 @@ impl Interp {
     ) -> Result<bool, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_define_own_property(code, inst, id, desc);
+        }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                return self.ta_index_define(code, ta, index, desc);
+            }
         }
         if self.arrays.contains_key(&inst) {
             return self.array_define_own_property(code, inst, id, desc);

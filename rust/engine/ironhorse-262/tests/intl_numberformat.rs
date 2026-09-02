@@ -111,6 +111,18 @@ fn currency_and_unit_patterns_are_exact() {
             "1.00 meters",
         ),
         (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',notation:'scientific'}).format(1)",
+            "1E0 meter",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',notation:'engineering'}).format(1)",
+            "1E0 meter",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',notation:'scientific',minimumFractionDigits:1}).format(1)",
+            "1.0E0 meters",
+        ),
+        (
             "new Intl.NumberFormat('en-US',{style:'unit',unit:'percent',unitDisplay:'long'}).format(12)",
             "12 percent",
         ),
