@@ -2904,12 +2904,11 @@ struct RegExpData {
     program: ironhorse_regexp::Program,
     source: String,
     flags: String,
-    /// The `lastIndex` internal store (XS's own writable `lastIndex` data
-    /// property). Backed here in the side table rather than as a heap
-    /// property so `exec`/`test` can advance it internally even when the
-    /// program never names `lastIndex`; a `re.lastIndex` get/set is
-    /// special-cased in `GET_PROPERTY`/`SET_PROPERTY` to read/write this
-    /// field (with `ToLength` clamping on set, as `exec` applies).
+    /// The legacy schema-11 `REGX` value used only when restoring a snapshot
+    /// written before `lastIndex` became a real heap property. New machines
+    /// carry the complete value and descriptor flags in the instance's
+    /// ordinary property slot; this numeric fallback remains on the wire so
+    /// existing stores stay readable without a schema migration.
     last_index: f64,
 }
 
@@ -4488,8 +4487,8 @@ pub struct Interp {
     /// Per-instance RegExp state (XS's `XS_REGEXP_KIND` internal slot): the
     /// compiled program plus the source/flags strings. Keyed by the RegExp
     /// instance's slot, like [`Self::promises`]. `lastIndex` is an ordinary
-    /// own integer property of the instance, not stored here. See
-    /// [`RegExpData`].
+    /// own data property of the instance; [`RegExpData::last_index`] exists
+    /// only as the legacy schema-11 snapshot fallback.
     regexps: std::collections::HashMap<crate::value::SlotIndex, RegExpData>,
     /// The realm's `%RegExp.prototype%` (a boot object), so a `new RegExp`
     /// instance (and a `/.../` literal) chains to it and `exec`/`test`/the
@@ -9905,20 +9904,26 @@ impl Interp {
     }
 
     /// Quiescent snapshot of the `regexps` side table (ledger `RegExps`
-    /// row, the `REGX` atom), ascending by owning slot: `(owner,
-    /// source, flags, lastIndex bits)`. The COMPILED program does not
-    /// travel — it is a pure function of `(source, flags)` and the
-    /// restore recompiles it, exactly as construction did.
+    /// row, the `REGX` atom), ascending by owning slot. The compiled program
+    /// does not travel — it is a pure function of `(source, flags)` and the
+    /// restore recompiles it. The final numeric field preserves the schema-11
+    /// wire shape for old readers; the authoritative `lastIndex` value and
+    /// attributes now ride the ordinary heap property.
     pub fn regexps_snapshot(&self) -> Vec<(u32, String, String, u64)> {
         let mut out: Vec<(u32, String, String, u64)> = self
             .regexps
             .iter()
             .map(|(owner, r)| {
+                let last_index = self
+                    .last_index_id
+                    .and_then(|id| self.find_property(*owner, id))
+                    .and_then(|property| numeric_of(&self.slots.get(property)))
+                    .unwrap_or(r.last_index);
                 (
                     owner.0,
                     r.source.clone(),
                     r.flags.clone(),
-                    r.last_index.to_bits(),
+                    last_index.to_bits(),
                 )
             })
             .collect();
@@ -9926,18 +9931,36 @@ impl Interp {
         out
     }
 
-    /// Reinstate the `regexps` side table from a snapshot, recompiling
-    /// each program from its persisted `(source, flags)`. A source
-    /// that fails to recompile cannot come from an honest snapshot
-    /// (construction compiled the same pair), so the `false` return
-    /// fails the caller's decode closed.
+    /// Reinstate the `regexps` side table from a snapshot, recompiling each
+    /// program from its persisted `(source, flags)`. A schema-11 snapshot has
+    /// no heap `lastIndex` property, so materialize it from the legacy numeric
+    /// field. A newer snapshot must carry the standard non-enumerable,
+    /// non-configurable data descriptor; reject any other shape.
     pub fn restore_regexps(&mut self, rows: Vec<(u32, String, String, u64)>) -> bool {
         for (owner, source, flags, last_index_bits) in rows {
             let Ok(program) = ironhorse_regexp::compile(&source, &flags) else {
                 return false;
             };
+            let owner = crate::value::SlotIndex(owner);
+            let id = self.regexp_last_index_id();
+            match self.ordinary_get_own_descriptor(owner, id) {
+                Some(descriptor)
+                    if descriptor.is_data()
+                        && descriptor.enumerable == Some(false)
+                        && descriptor.configurable == Some(false) => {}
+                Some(_) => return false,
+                None => {
+                    let value = Self::slot_from_number(f64::from_bits(last_index_bits));
+                    self.set_own_unmetered_with_flag(
+                        owner,
+                        id,
+                        value,
+                        XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+                    );
+                }
+            }
             self.regexps.insert(
-                crate::value::SlotIndex(owner),
+                owner,
                 RegExpData {
                     program,
                     source,
@@ -13929,19 +13952,6 @@ impl Interp {
                                     Err(halt) => return halt,
                                 }
                             }
-                        } else if self.regexps.contains_key(&inst) && Some(id) == self.last_index_id
-                        {
-                            // `re.lastIndex = N`: the `lastIndex` own data
-                            // property, backed by the side table. Coerced with
-                            // `ToLength`-ish integer semantics (the covered
-                            // grammar assigns a non-negative integer).
-                            let n = to_number(&value);
-                            let clamped = if n.is_nan() || n < 0.0 {
-                                0.0
-                            } else {
-                                n.floor()
-                            };
-                            self.regexps.get_mut(&inst).unwrap().last_index = clamped;
                         } else if !match self.ordinary_set(code, inst, id, value, obj) {
                             Ok(accepted) => accepted,
                             Err(halt) => return halt,
@@ -14173,21 +14183,14 @@ impl Interp {
                         }
                         Payload::Reference(inst) if self.regexps.contains_key(&inst) => {
                             // The RegExp accessor getters (`fx_RegExp_prototype_
-                            // get_*`) and the `lastIndex` own data property.
-                            // `source`/`flags` return strings (a fresh chunk);
-                            // the per-flag getters read `code[0]` and return a
-                            // boolean; `lastIndex` reads the side-table store.
+                            // get_*`). `source`/`flags` return strings (a fresh
+                            // chunk); the per-flag getters read `code[0]` and
+                            // return a boolean. The ordinary `lastIndex` data
+                            // property falls through to `instance_get` below.
                             // Any other name (`exec`/`test`/`toString`/
                             // `constructor`) resolves up the prototype chain.
                             let g = self.regexp_getter_ids;
-                            if Some(id) == self.last_index_id {
-                                let li = self.regexps[&inst].last_index;
-                                if li == (li as i32) as f64 {
-                                    Slot::integer(li as i32)
-                                } else {
-                                    Slot::number(li)
-                                }
-                            } else if Some(id) == g.source {
+                            if Some(id) == g.source {
                                 self.meter.tick_raw(REGEXP_GETTER_METERING);
                                 let (bytes, allocated) = self.regexp_source_bytes(inst);
                                 if allocated {
@@ -21973,6 +21976,85 @@ impl Interp {
         s
     }
 
+    /// The canonical `lastIndex` key. It is an XS boot-default key, so making
+    /// it visible for an instance constructed by code that never spelled the
+    /// name is unmetered, just like the pre-existing intrinsic property.
+    fn regexp_last_index_id(&mut self) -> u16 {
+        if let Some(id) = self.last_index_id {
+            return id;
+        }
+        let id = self.intern_key_unmetered("lastIndex");
+        self.last_index_id = Some(id);
+        id
+    }
+
+    /// Preserve the integer fast representation without losing negative zero
+    /// or a non-integral/non-finite Number.
+    fn slot_from_number(value: f64) -> Slot {
+        if value == (value as i32) as f64 && !(value == 0.0 && value.is_sign_negative()) {
+            Slot::integer(value as i32)
+        } else {
+            Slot::number(value)
+        }
+    }
+
+    /// Install the mandatory RegExp-instance `lastIndex` data property:
+    /// writable, non-enumerable, and non-configurable.
+    fn install_regexp_last_index(&mut self, inst: crate::value::SlotIndex, value: Slot) {
+        let id = self.regexp_last_index_id();
+        self.set_own_unmetered_with_flag(
+            inst,
+            id,
+            value,
+            XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+        );
+    }
+
+    fn regexp_get_last_index(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<Slot, Halt> {
+        let id = self.regexp_last_index_id();
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
+        self.mop_get(code, inst, id, receiver)
+    }
+
+    /// `Set(R, "lastIndex", value, true)`: every RegExp algorithm uses the
+    /// throwing form, so a frozen instance reports a catchable TypeError.
+    fn regexp_set_last_index(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        let id = self.regexp_last_index_id();
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
+        if self.mop_set(code, inst, id, value, receiver)? {
+            Ok(())
+        } else {
+            Err(self.catchable_type_error())
+        }
+    }
+
+    fn regexp_last_index_length(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<u64, Halt> {
+        let value = self.regexp_get_last_index(code, inst)?;
+        self.to_length_value(code, value)
+    }
+
+    fn regexp_advance_last_index(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+    ) -> Result<(), Halt> {
+        let next = self.regexp_last_index_length(code, inst)?.saturating_add(1);
+        self.regexp_set_last_index(code, inst, Slot::number(next as f64))
+    }
+
     /// Build a RegExp instance from a coerced pattern + flags string
     /// (`fx_RegExp` → `fxNewRegExpInstance` + `fxInitializeRegExp`): compile
     /// the pattern with child 8's matcher, chain the instance to
@@ -22033,6 +22115,7 @@ impl Interp {
                 last_index: 0.0,
             },
         );
+        self.install_regexp_last_index(inst, Slot::integer(0));
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
     }
 
@@ -22044,21 +22127,25 @@ impl Interp {
     /// code-unit↔byte `lastIndex` remap matters) self-names an honest skip.
     fn regexp_match_drive(
         &mut self,
+        code: &[u8],
         inst: crate::value::SlotIndex,
         subject: &[u8],
     ) -> Result<(bool, Vec<(i32, i32)>, Vec<i32>), Halt> {
-        let (flags_word, global, sticky, last_index) = {
+        let (flags_word, global, sticky) = {
             let d = &self.regexps[&inst];
             let f = d.program.flags();
             (
                 f,
                 f & ironhorse_regexp::XS_REGEXP_G != 0,
                 f & ironhorse_regexp::XS_REGEXP_Y != 0,
-                d.last_index,
             )
         };
         let _ = flags_word;
         let advance = global || sticky;
+        // RegExpBuiltinExec applies `ToLength(Get(R, "lastIndex"))` before
+        // selecting the zero start used by non-global/non-sticky expressions.
+        // The property may hold any JS value; assignment itself never coerces.
+        let last_index = self.regexp_last_index_length(code, inst)? as f64;
         // The code-unit↔byte `lastIndex` remap (`fxCacheUnicodeToUTF8Offset`)
         // is identity only for an ASCII subject; a multi-byte subject under a
         // stateful flag self-names.
@@ -22069,7 +22156,7 @@ impl Interp {
         let stop = subject.len() as f64;
         if advance && start > stop {
             // `lastIndex` past the end: no match, reset to 0.
-            self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
+            self.regexp_set_last_index(code, inst, Slot::integer(0))?;
             let captures = vec![(-1, -1); self.regexps[&inst].program.capture_count];
             let names = vec![-1; self.regexps[&inst].program.name_count];
             return Ok((false, captures, names));
@@ -22087,15 +22174,15 @@ impl Interp {
         self.meter.tick_raw(outcome.match_meter_raw);
         if !outcome.matched {
             if advance {
-                self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
+                self.regexp_set_last_index(code, inst, Slot::integer(0))?;
             }
             return Ok((false, outcome.captures, outcome.names));
         }
         if advance {
             // Advance `lastIndex` to the whole-match end (code units == bytes
             // for ASCII).
-            let end = outcome.captures[0].1 as f64;
-            self.regexps.get_mut(&inst).unwrap().last_index = end;
+            let end = outcome.captures[0].1;
+            self.regexp_set_last_index(code, inst, Slot::integer(end))?;
         }
         Ok((true, outcome.captures, outcome.names))
     }
@@ -22103,8 +22190,13 @@ impl Interp {
     /// `RegExp.prototype.exec(string)` (`fx_RegExp_prototype_exec`): the match
     /// drive plus the result-array construction (`[whole, ...captures]` with
     /// the `index`/`input`/`groups` own properties), or `null` on no match.
-    fn regexp_exec(&mut self, inst: crate::value::SlotIndex, arg0: Slot) -> Result<Slot, Halt> {
-        Ok(self.regexp_exec_inner(inst, arg0)?.0)
+    fn regexp_exec(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        arg0: Slot,
+    ) -> Result<Slot, Halt> {
+        Ok(self.regexp_exec_inner(code, inst, arg0)?.0)
     }
 
     /// Spell the subject for the matcher's NUL-terminated walk the way an XS
@@ -22169,6 +22261,7 @@ impl Interp {
     /// present only when the program references `index`).
     fn regexp_exec_inner(
         &mut self,
+        code: &[u8],
         inst: crate::value::SlotIndex,
         arg0: Slot,
     ) -> Result<(Slot, Option<i32>), Halt> {
@@ -22188,7 +22281,7 @@ impl Interp {
             self.regexps[&inst].program.capture_group_names.clone();
         let has_indices =
             self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_D != 0;
-        let (matched, captures, names) = self.regexp_match_drive(inst, &subject)?;
+        let (matched, captures, names) = self.regexp_match_drive(code, inst, &subject)?;
         if !matched {
             self.regexp_last_names.clear();
             return Ok((Slot::null(), None));
@@ -22388,9 +22481,14 @@ impl Interp {
     /// `mxGetID(_exec)` + `mxRunCount(1)` re-entrant call framing. ironhorse
     /// mirrors that: run the exec machinery, discard the array, return the
     /// boolean.
-    fn regexp_test(&mut self, inst: crate::value::SlotIndex, arg0: Slot) -> Result<Slot, Halt> {
+    fn regexp_test(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        arg0: Slot,
+    ) -> Result<Slot, Halt> {
         self.meter.tick_raw(REGEXP_TEST_FRAME_METERING);
-        let result = self.regexp_exec(inst, arg0)?;
+        let result = self.regexp_exec(code, inst, arg0)?;
         Ok(Slot::boolean(result.kind != Kind::Null))
     }
 
@@ -22402,15 +22500,23 @@ impl Interp {
     /// `withoutRegexp` coerce-to-RegExp path) self-names.
     fn string_search(
         &mut self,
+        code: &[u8],
         inst: crate::value::SlotIndex,
         subject: Slot,
     ) -> Result<Slot, Halt> {
         self.meter.tick_raw(STRING_SEARCH_FRAME_METERING);
-        let saved = self.regexps[&inst].last_index;
-        // `search` runs `exec` with `lastIndex` forced to 0, then restores it.
-        self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
-        let (_res, start) = self.regexp_exec_inner(inst, subject)?;
-        self.regexps.get_mut(&inst).unwrap().last_index = saved;
+        let saved = self.regexp_get_last_index(code, inst)?;
+        let zero = Slot::integer(0);
+        // @@search sets/restores only when the observed value differs, which
+        // permits a frozen non-global RegExp whose lastIndex is already zero.
+        if !self.same_value(saved, zero) {
+            self.regexp_set_last_index(code, inst, zero)?;
+        }
+        let (_res, start) = self.regexp_exec_inner(code, inst, subject)?;
+        let current = self.regexp_get_last_index(code, inst)?;
+        if !self.same_value(current, saved) {
+            self.regexp_set_last_index(code, inst, saved)?;
+        }
         match start {
             Some(s) => {
                 // The `mxGetID(_index)` read of the result's `index`.
@@ -22427,17 +22533,22 @@ impl Interp {
     /// directly; `inst` is the RegExp argument, `subject` the receiver string.
     /// The global path resets `lastIndex`, collects each whole match, and
     /// advances past an empty match so the loop always makes progress.
-    fn string_match(&mut self, inst: crate::value::SlotIndex, subject: Slot) -> Result<Slot, Halt> {
+    fn string_match(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        subject: Slot,
+    ) -> Result<Slot, Halt> {
         let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
         self.meter.tick_raw(STRING_MATCH_FRAME_METERING);
         if !global {
-            return Ok(self.regexp_exec_inner(inst, subject)?.0);
+            return Ok(self.regexp_exec_inner(code, inst, subject)?.0);
         }
 
-        self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
+        self.regexp_set_last_index(code, inst, Slot::integer(0))?;
         let mut matches = Vec::new();
         loop {
-            let (result, _) = self.regexp_exec_inner(inst, subject)?;
+            let (result, _) = self.regexp_exec_inner(code, inst, subject)?;
             if result.kind == Kind::Null {
                 break;
             }
@@ -22446,7 +22557,7 @@ impl Interp {
             self.meter.tick_slot_alloc();
             matches.push(whole);
             if empty {
-                self.regexps.get_mut(&inst).unwrap().last_index += 1.0;
+                self.regexp_advance_last_index(code, inst)?;
             }
         }
         if matches.is_empty() {
@@ -22598,11 +22709,11 @@ impl Interp {
         // `fxNewInstance` for the segment list.
         self.meter.tick_slot_alloc();
         if global {
-            self.regexps.get_mut(&inst).unwrap().last_index = 0.0;
+            self.regexp_set_last_index(code, inst, Slot::integer(0))?;
         }
         let mut results = Vec::new();
         loop {
-            let (result, start) = self.regexp_exec_inner(inst, subject)?;
+            let (result, start) = self.regexp_exec_inner(code, inst, subject)?;
             let Some(pos) = start else {
                 break;
             };
@@ -22612,7 +22723,7 @@ impl Interp {
                 break;
             }
             if match_len == 0 {
-                self.regexps.get_mut(&inst).unwrap().last_index += 1.0;
+                self.regexp_advance_last_index(code, inst)?;
             }
         }
         if results.is_empty() {
@@ -22875,6 +22986,7 @@ impl Interp {
                 last_index: 0.0,
             },
         );
+        self.install_regexp_last_index(sp, Slot::integer(0));
         Ok(sp)
     }
 
@@ -23051,8 +23163,8 @@ impl Interp {
         if size == 0 {
             // Empty subject: one exec; a match yields `[]`, a miss `[""]`.
             self.meter.tick_raw(STRING_SPLIT_EMPTY_METERING);
-            self.regexps.get_mut(&splitter).unwrap().last_index = 0.0;
-            let (res, _start) = self.regexp_exec_inner(splitter, subject)?;
+            self.regexp_set_last_index(code, splitter, Slot::integer(0))?;
+            let (res, _start) = self.regexp_exec_inner(code, splitter, subject)?;
             if res.kind == Kind::Null {
                 push_segment(self, 0, 0, &mut segments);
             }
@@ -23062,15 +23174,15 @@ impl Interp {
         let mut q = 0usize;
         while q < size {
             self.meter.tick_raw(STRING_SPLIT_PER_STEP_METERING);
-            self.regexps.get_mut(&splitter).unwrap().last_index = q as f64;
-            let (res, start) = self.regexp_exec_inner(splitter, subject)?;
+            self.regexp_set_last_index(code, splitter, Slot::number(q as f64))?;
+            let (res, start) = self.regexp_exec_inner(code, splitter, subject)?;
             if start.is_none() {
                 q += 1; // fxAdvanceStringIndex (ASCII → +1)
             } else {
                 // A matched step: `mxGetID(_lastIndex)` (read `e`) + the
                 // `fxIsSameValue(e, p)` check.
                 self.meter.tick_raw(STRING_SPLIT_MATCH_STEP_METERING);
-                let e = self.regexps[&splitter].last_index as usize;
+                let e = self.regexp_last_index_length(code, splitter)? as usize;
                 if e == p {
                     self.meter
                         .untick_raw(STRING_SPLIT_EMPTY_ADVANCE_DISCOUNT);
@@ -29302,14 +29414,10 @@ impl Interp {
                 self.arrays.insert(result, data);
                 Slot::of(Kind::Reference, Payload::Reference(result))
             }
-            // `Object.defineProperty(o, k, descriptor)`: define a **new** own
-            // data property on an ordinary object from a full four-field data
-            // descriptor. Covers the verifyProperty shape — `{value, writable,
-            // enumerable, configurable}` all present, no `get`/`set` — storing
-            // the booleans as the property's XS flag byte so the attributes
-            // ripple through `keys`/`getOwnPropertyDescriptor`. A redefine of an
-            // existing key, a partial or accessor descriptor, an index/exotic
-            // key, or an exotic receiver self-names.
+            // `Object.defineProperty(o, k, descriptor)`: route ordinary and
+            // modeled exotic receivers through ToPropertyDescriptor and their
+            // complete `[[DefineOwnProperty]]` seam. The fallback below is only
+            // for shapes that still lack that complete descriptor model.
             NativeMethod::ObjectDefineProperty => {
                 let target = match arg0.value {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
@@ -29328,6 +29436,7 @@ impl Interp {
                     || self.array_buffers.contains_key(&target)
                     || self.data_views.contains_key(&target)
                     || self.wrapper_data.contains_key(&target)
+                    || self.regexps.contains_key(&target)
                 {
                     let key = self
                         .stack
@@ -31764,14 +31873,14 @@ impl Interp {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => r,
                     _ => return Err(Halt::Unsupported("RegExp.exec:non-regexp-this")),
                 };
-                self.regexp_exec(inst, arg0)?
+                self.regexp_exec(code, inst, arg0)?
             }
             NativeMethod::RegExpTest => {
                 let inst = match this.value {
                     Payload::Reference(r) if self.regexps.contains_key(&r) => r,
                     _ => return Err(Halt::Unsupported("RegExp.test:non-regexp-this")),
                 };
-                self.regexp_test(inst, arg0)?
+                self.regexp_test(code, inst, arg0)?
             }
             NativeMethod::RegExpCompile => this,
             NativeMethod::ErrorStackGetter => {
@@ -31865,7 +31974,7 @@ impl Interp {
                     };
                     match arg0.value {
                         Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                            self.string_search(r, subject)?
+                            self.string_search(code, r, subject)?
                         }
                         _ => {
                             let pattern = if arg0.kind == Kind::Undefined {
@@ -31878,7 +31987,7 @@ impl Interp {
                             let Payload::Reference(inst) = regexp.value else {
                                 unreachable!()
                             };
-                            self.string_search(inst, subject)?
+                            self.string_search(code, inst, subject)?
                         }
                     }
                 }
@@ -31903,7 +32012,7 @@ impl Interp {
                     };
                     match arg0.value {
                         Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                            self.string_match(r, subject)?
+                            self.string_match(code, r, subject)?
                         }
                         _ => {
                             let pattern = if arg0.kind == Kind::Undefined {
@@ -31916,7 +32025,7 @@ impl Interp {
                             let Payload::Reference(inst) = regexp.value else {
                                 unreachable!()
                             };
-                            self.string_match(inst, subject)?
+                            self.string_match(code, inst, subject)?
                         }
                     }
                 }
@@ -42016,13 +42125,6 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(arg0),
         };
-        // RegExp's synthetic `lastIndex` is still side-table backed rather
-        // than exposed through the complete MOP. Freezing it as if it had no
-        // own property would be observably wrong; keep this precise boundary
-        // until that descriptor is unified.
-        if self.regexps.contains_key(&inst) {
-            return Err(Halt::Unsupported("harden:regexp-lastIndex"));
-        }
         // Already hardened: XS short-circuits (`slot->flag & flag`).
         if self.slots.get(inst).flag & XS_DONT_MARSHALL_FLAG != 0 {
             return Ok(arg0);
@@ -42080,9 +42182,6 @@ impl Interp {
         inst: crate::value::SlotIndex,
         list: &mut Vec<crate::value::SlotIndex>,
     ) -> Result<(), Halt> {
-        if self.regexps.contains_key(&inst) {
-            return Err(Halt::Unsupported("harden:regexp-lastIndex"));
-        }
         self.meter.tick_raw(HARDEN_OBJECT_BASE_METERING);
         if !self.mop_prevent_extensions(code, inst)? {
             return Err(self.catchable_type_error());
@@ -42159,9 +42258,6 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(arg0),
         };
-        if self.regexps.contains_key(&inst) {
-            return Err(Halt::Unsupported("petrify:regexp-lastIndex"));
-        }
         self.meter.tick_raw(PETRIFY_OBJECT_BASE_METERING);
         if !self.mop_prevent_extensions(code, inst)? {
             return Err(self.catchable_type_error());

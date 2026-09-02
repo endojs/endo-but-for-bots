@@ -248,10 +248,11 @@ pub struct WrapperImage {
 }
 
 /// One RegExp instance's serialized side-table row (the `REGX` atom /
-/// small-state regexps section): the owning slot, the pattern source,
-/// the flags, and the `lastIndex` internal store as raw f64 bits. The
-/// COMPILED program does not travel — it is a pure function of
-/// `(source, flags)` and the restore recompiles it. Ascending by owner.
+/// small-state regexps section): the owning slot, pattern source, flags, and
+/// the legacy schema-11 numeric `lastIndex` fallback. Current snapshots carry
+/// the authoritative arbitrary-valued property and its attributes in HEAP;
+/// the fallback keeps older stores readable. The compiled program does not
+/// travel — restore recompiles it from `(source, flags)`. Ascending by owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegExpImage {
     pub owner: u32,
@@ -1525,7 +1526,7 @@ pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotErr
 
 /// Encode the regexp side table (the `REGX` payload / small-state
 /// regexps section). Wire form per row: `u32 owner`, `u32 source_len` +
-/// bytes, `u32 flags_len` + bytes, `u64 lastIndex bits`.
+/// bytes, `u32 flags_len` + bytes, `u64 legacy lastIndex bits`.
 pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(regexps.len() as u32).to_be_bytes());

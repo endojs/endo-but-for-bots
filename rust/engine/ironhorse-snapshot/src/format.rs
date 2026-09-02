@@ -85,10 +85,11 @@ pub const DVIW: FourCc = FourCc(*b"DVIW");
 /// row): per wrapper instance, its boxed value slot. Ironhorse-specific;
 /// emitted only when non-empty (see [`ARRY`]).
 pub const WRAP: FourCc = FourCc(*b"WRAP");
-/// `REGX` — the regular-expression side table (ledger `RegExps` row):
-/// per instance, `(source, flags, lastIndex)`; the compiled program
-/// recompiles from the pair at restore. Ironhorse-specific; emitted
-/// only when non-empty (see [`ARRY`]).
+/// `REGX` — the regular-expression side table (ledger `RegExps` row): per
+/// instance, `(source, flags, legacyLastIndex)`; current lastIndex state rides
+/// its ordinary `HEAP` property, while the compiled program recompiles from
+/// the pair at restore. Ironhorse-specific; emitted only when non-empty (see
+/// [`ARRY`]).
 pub const REGX: FourCc = FourCc(*b"REGX");
 /// `ARGB` — the arguments-exotic brand set (the `Arrays` row's
 /// satellite): the branded owners, ascending. Ironhorse-specific;
