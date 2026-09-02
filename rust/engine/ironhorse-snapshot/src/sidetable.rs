@@ -561,9 +561,10 @@ impl SideTable {
             SideTable::TemporalRecords => {
                 ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Serialized)
             }
-            // Date `[[DateValue]]` records travel as raw IEEE-754 bits
-            // in `DATE` (schema 14). The untouched Date.prototype seed
-            // is re-derived by boot; a guest-mutated seed is emitted.
+            // Date-instance `[[DateValue]]` records travel as raw IEEE-754
+            // bits in `DATE` (schema 14). `%Date.prototype%` has no Date
+            // brand; restore drops its row when migrating a snapshot written
+            // by the former seeded-prototype representation.
             SideTable::Dates => ("dates", Serialized),
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
             SideTable::PrivateElements => ("private_values/private_accessors", Serialized),
