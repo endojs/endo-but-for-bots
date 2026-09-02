@@ -41,8 +41,7 @@
 //! word applies to the enclosed disjunction and is restored at the sequel step
 //! (the matcher's `cxModifiersStep`). Every remaining deferred surface is a
 //! **named** [`compile::CompileError::Unsupported`], never a wrong meter or a
-//! wrong value: outside `u`/`v`/a group name, an astral code point in the
-//! pattern (which XS splits into surrogates, a path this stage does not emit).
+//! wrong value.
 
 mod charcase;
 mod encoding;
@@ -268,6 +267,26 @@ mod tests {
         let (dm, dc) = caps(".", "u", "\u{1F600}");
         assert!(dm);
         assert_eq!(dc[0], (0, 4));
+    }
+
+    #[test]
+    fn cesu8_subject_distinguishes_code_units_by_unicode_mode() {
+        let subject = [0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80];
+
+        let plain = compile(".", "").expect("plain dot compiles");
+        let plain_match = match_regexp(&plain, &subject, 0);
+        assert!(plain_match.matched);
+        assert_eq!(plain_match.captures[0], (0, 3));
+
+        let unicode = compile(".", "u").expect("unicode dot compiles");
+        let unicode_match = match_regexp(&unicode, &subject, 0);
+        assert!(unicode_match.matched);
+        assert_eq!(unicode_match.captures[0], (0, 6));
+
+        let literal = compile("😀", "").expect("astral literal compiles as surrogates");
+        let literal_match = match_regexp(&literal, &subject, 0);
+        assert!(literal_match.matched);
+        assert_eq!(literal_match.captures[0], (0, 6));
     }
 
     #[test]

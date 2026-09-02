@@ -1189,14 +1189,13 @@ to the union of its folded singletons (`fxCharSetRange`), `\w` drops
 `a`..`z` (the folded subject reaches its `A`..`Z` form), and the match loop
 folds every decoded character (`fxGetCharacter`) — all pinned bit-exact.
 
-**Honest, named skips (the stage bar).** This increment ports the core
-grammar over the non-`u`/`v` subset (the `i` flag included). Every deferred
-surface compiles to a **named** `CompileError::Unsupported`, never a wrong
-meter or a wrong value: the `u`/`v` flags (CESU-8 surrogate walk, unicode
-property escapes, V-mode string sets, and their `u`/`v` fold tables),
-`\p{}`/`\P{}`, named captures (`(?<name>)` / `\k<name>`), inline modifiers
-(`(?flags:)`), and astral (`> 0xFFFF`) code points. The crate is
-`#![forbid(unsafe_code)]` and Miri-clean
+**Unicode execution.** The matcher accepts the same CESU-8 spelling XS uses
+for JavaScript strings. Outside `u`/`v`, it advances one UTF-16 code unit at a
+time; under `u`/`v`, `fxCESU8Decode` and `fxFindCharacter` combine and traverse
+valid surrogate pairs as one code point. Astral pattern literals are likewise
+split into surrogates only outside Unicode mode. Unicode properties, V-mode
+string sets, named captures, and inline modifiers are all part of the executed
+surface. The crate is `#![forbid(unsafe_code)]` and Miri-clean
 (`cargo +nightly miri test -p ironhorse-regexp --lib`).
 
 ### The JavaScript RegExp surface (stage-3b, child 9)
@@ -1215,17 +1214,22 @@ whole-program run, not just the matcher:
   across every pattern shape.
 - **`exec`/`test`**: the match drive from `lastIndex` (g/y), the `[whole,
   ...captures]` result array with `index`/`input`/`groups`, `lastIndex`
-  advance; `test` drives the full `exec` as XS's `fxExecuteRegExp` does.
+  advance, and `d`-flag `.indices`/`.indices.groups`; `test` drives the full
+  `exec` as XS's `fxExecuteRegExp` does. Stateful indices are translated
+  between matcher CESU-8 byte offsets and ECMAScript UTF-16 code-unit offsets,
+  including embedded NULs, BMP non-ASCII text, astral pairs, and lone
+  surrogates.
 - **Accessors**: `source` (escape-on-read), the composite `flags` (the
   eight per-flag cascade), the per-flag getters, `lastIndex` get/set, and
   `toString` (the three growing `fxConcatString` chunks) — special-cased by id
   in `GET`/`SET_PROPERTY` over the side table.
 - **`String.prototype.{search,match,replace,split}`** via the
   `Symbol.{search,match,replace,split}` protocol to the RegExp workers:
-  `search` (index or −1), non-global `match` (the exec array), non-global
-  literal-replacement `replace` (the segment-list assembly), and `split` (the
-  sticky-splitter walk). Each carries its calibrated protocol-dispatch +
-  worker residual, raw-exact.
+  `search` (index or −1), global and non-global `match`, string/function
+  `replace` with the `$`-substitution grammar, and `split` (the sticky-splitter
+  walk). Empty-match advancement and slicing operate on UTF-16 indices and
+  honor the `u`/`v` code-point mode. Each carries its calibrated
+  protocol-dispatch + worker residual.
 
 **Corpus + fuzz.** `ironhorse-262/corpora/stage3b-regexp.js` (a curated corpus,
 `stage3b_regexp_corpus_is_bit_exact_against_oracle`) and a whole-program
@@ -1239,13 +1243,10 @@ already earned its keep, driving out a sub-computron construction-metering gap
 `built-ins/String/prototype/{search,match,replace,split}` sections
 **divergent=0** with growth.
 
-**Honest, named skips** (each a named `Halt::Unsupported`, never a wrong value
-or a fitted meter): named-group result shaping, a RegExp-valued pattern arg,
-a syntax-error / unsupported-feature throw, a non-ASCII stateful (g/y) subject;
-global `match`/`replace` collection, the `$`-substitution grammar and function
-replacement in `replace`; a limit that truncates, an empty-matching separator,
-and a non-ASCII subject in `split`; and a string (non-RegExp) argument to the
-String methods (the `withoutRegexp` coerce path).
+**Remaining named skips** are narrow: a RegExp-valued `RegExp` constructor
+argument, generic non-RegExp receivers for `exec`/`test`/`toString`, and the
+named-capture callback-state branch of `replace`. The ordinary String-method
+coercion and `Symbol.{search,match,replace,split}` dispatch paths execute.
 
 ## Decoder-hang trophy: a malformed backward branch that never terminated (stage-4b)
 

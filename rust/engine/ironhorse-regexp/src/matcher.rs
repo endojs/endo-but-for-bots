@@ -11,9 +11,9 @@
 //! `truncate`. This is behaviorally identical and needs no `unsafe`.
 
 use crate::compile::Program;
+use crate::encoding::{find_character, get_character};
 use crate::flags::*;
 use crate::opcode::*;
-use crate::encoding::{find_character, get_character};
 
 /// `gxLineCharacters` (xsre.c): the line terminators, as charset ranges.
 const LINE_CHARACTERS: [i32; 7] = [6, 0x000A, 0x000A + 1, 0x000D, 0x000D + 1, 0x2028, 0x2029 + 1];
@@ -88,8 +88,9 @@ fn match_character(chars: &[i32], base_at: usize, count: i32, character: i64) ->
     false
 }
 
-/// Match a compiled `program` against `subject` (raw UTF-8 bytes, no
-/// trailing NUL needed) starting at byte offset `start`.
+/// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
+/// CESU-8 byte spelling, no trailing NUL needed) starting at byte offset
+/// `start`.
 pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutcome {
     let code = &program.code;
     let stop = subject.len() as i32;
@@ -227,8 +228,9 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                         ok = false;
                                         break;
                                     }
-                                    g = find_character(subject, g as usize, 1) as i32;
-                                    from = find_character(subject, from as usize, 1) as i32;
+                                    g = find_character(subject, g as usize, 1, flags as u32) as i32;
+                                    from = find_character(subject, from as usize, 1, flags as u32)
+                                        as i32;
                                 }
                                 if ok {
                                     offset = target;
@@ -263,8 +265,9 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                         ok = false;
                                         break;
                                     }
-                                    g = find_character(subject, g as usize, 1) as i32;
-                                    from = find_character(subject, from as usize, 1) as i32;
+                                    g = find_character(subject, g as usize, 1, flags as u32) as i32;
+                                    from = find_character(subject, from as usize, 1, flags as u32)
+                                        as i32;
                                 }
                                 if ok {
                                     offset = target;
@@ -280,7 +283,8 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         if offset == 0 {
                             pop = true;
                         } else {
-                            let e = find_character(subject, offset as usize, -1) as i32;
+                            let e = find_character(subject, offset as usize, -1, flags as u32)
+                                as i32;
                             let count = code[p];
                             if !match_character(code, p + 1, count, get_character(subject, e as usize, flags as u32)) {
                                 pop = true;
@@ -299,7 +303,8 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                             if !match_character(code, p + 1, count, get_character(subject, offset as usize, flags as u32)) {
                                 pop = true;
                             } else {
-                                offset = find_character(subject, offset as usize, 1) as i32;
+                                offset = find_character(subject, offset as usize, 1, flags as u32)
+                                    as i32;
                             }
                         }
                     }
@@ -321,7 +326,11 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                 &LINE_CHARACTERS,
                                 1,
                                 LINE_CHARACTERS[0],
-                                get_character(subject, find_character(subject, offset as usize, -1), flags as u32),
+                                get_character(
+                                    subject,
+                                    find_character(subject, offset as usize, -1, flags as u32),
+                                    flags as u32,
+                                ),
                             )
                         {
                             // ok
@@ -484,7 +493,7 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
             if start == stop {
                 break 'scan;
             }
-            start = find_character(subject, start as usize, 1) as i32;
+            start = find_character(subject, start as usize, 1, base_flags as u32) as i32;
         }
     }
 
@@ -500,7 +509,7 @@ fn word_at(subject: &[u8], offset: i32, boundary: i32, flags: i32) -> bool {
         return false;
     }
     let at = if boundary == 0 {
-        find_character(subject, offset as usize, -1)
+        find_character(subject, offset as usize, -1, flags as u32)
     } else {
         offset as usize
     };

@@ -22050,9 +22050,31 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
+        subject: &[u16],
     ) -> Result<(), Halt> {
-        let next = self.regexp_last_index_length(code, inst)?.saturating_add(1);
+        let index = self.regexp_last_index_length(code, inst)?;
+        let unicode = self.regexps[&inst].program.flags()
+            & (ironhorse_regexp::XS_REGEXP_U | ironhorse_regexp::XS_REGEXP_V)
+            != 0;
+        let next = Self::advance_string_index(subject, index, unicode);
         self.regexp_set_last_index(code, inst, Slot::number(next as f64))
+    }
+
+    /// `AdvanceStringIndex(S, index, unicode)`: advance by one UTF-16 code
+    /// unit, except that `u`/`v` mode consumes a valid surrogate pair as one
+    /// code point. An index at/past the end still advances by one.
+    fn advance_string_index(subject: &[u16], index: u64, unicode: bool) -> u64 {
+        if unicode {
+            if let Ok(i) = usize::try_from(index) {
+                if i + 1 < subject.len()
+                    && (0xD800..=0xDBFF).contains(&subject[i])
+                    && (0xDC00..=0xDFFF).contains(&subject[i + 1])
+                {
+                    return index.saturating_add(2);
+                }
+            }
+        }
+        index.saturating_add(1)
     }
 
     /// Build a RegExp instance from a coerced pattern + flags string
@@ -22120,41 +22142,34 @@ impl Interp {
     }
 
     /// Drive the matcher for `exec`/`test` (`fxMatchRegExp` from the resolved
-    /// `lastIndex`): returns `(matched, captures, match_start, match_end)` in
-    /// **code-unit** offsets (== byte offsets for the covered non-`u`,
-    /// ASCII-subject subset), charging the match meter and updating
-    /// `lastIndex`. A non-ASCII subject under a `g`/`y` flag (where the
-    /// code-unit↔byte `lastIndex` remap matters) self-names an honest skip.
+    /// `lastIndex`): returns `(matched, captures, names)`, with captures in
+    /// **code-unit** offsets, charging the match meter and updating
+    /// `lastIndex`. The matcher itself uses XS CESU-8 byte offsets; `offsets`
+    /// is the exact code-unit-boundary map for the encoded subject.
     fn regexp_match_drive(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
         subject: &[u8],
+        subject_units: &[u16],
+        offsets: &[usize],
     ) -> Result<(bool, Vec<(i32, i32)>, Vec<i32>), Halt> {
-        let (flags_word, global, sticky) = {
+        let (unicode, global, sticky) = {
             let d = &self.regexps[&inst];
             let f = d.program.flags();
             (
-                f,
+                f & (ironhorse_regexp::XS_REGEXP_U | ironhorse_regexp::XS_REGEXP_V) != 0,
                 f & ironhorse_regexp::XS_REGEXP_G != 0,
                 f & ironhorse_regexp::XS_REGEXP_Y != 0,
             )
         };
-        let _ = flags_word;
         let advance = global || sticky;
         // RegExpBuiltinExec applies `ToLength(Get(R, "lastIndex"))` before
         // selecting the zero start used by non-global/non-sticky expressions.
         // The property may hold any JS value; assignment itself never coerces.
-        let last_index = self.regexp_last_index_length(code, inst)? as f64;
-        // The code-unit↔byte `lastIndex` remap (`fxCacheUnicodeToUTF8Offset`)
-        // is identity only for an ASCII subject; a multi-byte subject under a
-        // stateful flag self-names.
-        if advance && !subject.is_ascii() {
-            return Err(Halt::Unsupported("RegExp:non-ascii-stateful-lastIndex"));
-        }
-        let start = if advance { last_index } else { 0.0 };
-        let stop = subject.len() as f64;
-        if advance && start > stop {
+        let last_index = self.regexp_last_index_length(code, inst)?;
+        let subject_len = offsets.len().saturating_sub(1) as u64;
+        if advance && last_index > subject_len {
             // `lastIndex` past the end: no match, reset to 0.
             self.regexp_set_last_index(code, inst, Slot::integer(0))?;
             let captures = vec![(-1, -1); self.regexps[&inst].program.capture_count];
@@ -22166,7 +22181,25 @@ impl Interp {
             // `fxCacheUTF8ToUnicodeOffset` (write the match end back) framing.
             self.meter.tick_raw(REGEXP_STATEFUL_METERING);
         }
-        let start_i = start as i32;
+        let start_i = if advance {
+            let mut start_index = last_index as usize;
+            // CompileToCharSet under `u`/`v` treats a valid surrogate pair as
+            // one input character. A UTF-16 `lastIndex` on its trailing code
+            // unit therefore maps to the character's leading boundary. This
+            // is GetStringIndex's round-down behavior; pinned XS 8.3.1 omits
+            // it and incorrectly exposes the low surrogate as a character.
+            if unicode
+                && start_index > 0
+                && start_index < subject_len as usize
+                && (0xDC00..=0xDFFF).contains(&subject_units[start_index])
+                && (0xD800..=0xDBFF).contains(&subject_units[start_index - 1])
+            {
+                start_index -= 1;
+            }
+            offsets[start_index] as i32
+        } else {
+            0
+        };
         let outcome = {
             let program = &self.regexps[&inst].program;
             ironhorse_regexp::match_regexp(program, subject, start_i)
@@ -22178,13 +22211,28 @@ impl Interp {
             }
             return Ok((false, outcome.captures, outcome.names));
         }
+        let captures: Vec<(i32, i32)> = outcome
+            .captures
+            .iter()
+            .map(|&(from, to)| {
+                if from < 0 {
+                    return (-1, -1);
+                }
+                let from = offsets
+                    .binary_search(&(from as usize))
+                    .expect("matcher capture starts at a CESU-8 code-unit boundary");
+                let to = offsets
+                    .binary_search(&(to as usize))
+                    .expect("matcher capture ends at a CESU-8 code-unit boundary");
+                (from as i32, to as i32)
+            })
+            .collect();
         if advance {
-            // Advance `lastIndex` to the whole-match end (code units == bytes
-            // for ASCII).
-            let end = outcome.captures[0].1;
+            // Advance `lastIndex` to the whole-match end in UTF-16 code units.
+            let end = captures[0].1;
             self.regexp_set_last_index(code, inst, Slot::integer(end))?;
         }
-        Ok((true, outcome.captures, outcome.names))
+        Ok((true, captures, outcome.names))
     }
 
     /// `RegExp.prototype.exec(string)` (`fx_RegExp_prototype_exec`): the match
@@ -22199,59 +22247,31 @@ impl Interp {
         Ok(self.regexp_exec_inner(code, inst, arg0)?.0)
     }
 
-    /// Spell the subject for the matcher's NUL-terminated walk the way an XS
-    /// string is stored: an embedded U+0000 becomes the overlong pair `C0 80`
-    /// (modified UTF-8), so the walk never sees a bare NUL byte and treats it
-    /// as end-of-subject. Well-formed UTF-8 never contains `C0`, so every
-    /// `C0 80` pair in the result is one this spelling introduced.
-    fn regexp_subject_bytes(text: &str) -> Vec<u8> {
-        let bytes = text.as_bytes();
-        if !bytes.contains(&0) {
-            return bytes.to_vec();
-        }
-        let mut out = Vec::with_capacity(bytes.len() + 8);
-        for &b in bytes {
-            if b == 0 {
-                out.extend_from_slice(&[0xC0, 0x80]);
-            } else {
-                out.push(b);
+    /// Encode UTF-16 code units in XS's modified CESU-8 spelling and return
+    /// the byte offset of every code-unit boundary. U+0000 is `C0 80`, and
+    /// each surrogate is its own three-byte sequence; the matcher combines a
+    /// valid pair only when `u`/`v` is active.
+    fn regexp_subject_bytes(units: &[u16]) -> (Vec<u8>, Vec<usize>) {
+        let mut bytes = Vec::with_capacity(units.len() * 3);
+        let mut offsets = Vec::with_capacity(units.len() + 1);
+        for &unit in units {
+            offsets.push(bytes.len());
+            match unit {
+                0 => bytes.extend_from_slice(&[0xC0, 0x80]),
+                1..=0x7F => bytes.push(unit as u8),
+                0x80..=0x7FF => {
+                    bytes.push(0xC0 | (unit >> 6) as u8);
+                    bytes.push(0x80 | (unit & 0x3F) as u8);
+                }
+                _ => {
+                    bytes.push(0xE0 | (unit >> 12) as u8);
+                    bytes.push(0x80 | ((unit >> 6) & 0x3F) as u8);
+                    bytes.push(0x80 | (unit & 0x3F) as u8);
+                }
             }
         }
-        out
-    }
-
-    /// Invert [`Self::regexp_subject_bytes`] on a matched slice before the
-    /// standard UTF-8 decode (a bare `C0 80` would otherwise decode lossily).
-    fn regexp_piece_bytes(piece: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(piece.len());
-        let mut i = 0;
-        while i < piece.len() {
-            if piece[i] == 0xC0 && piece.get(i + 1) == Some(&0x80) {
-                out.push(0);
-                i += 2;
-            } else {
-                out.push(piece[i]);
-                i += 1;
-            }
-        }
-        out
-    }
-
-    /// Count the `C0 80` pairs introduced by [`Self::regexp_subject_bytes`]
-    /// strictly before byte offset `end`, the correction from a byte offset in
-    /// the spelled subject back to the code-unit offset XS reports.
-    fn regexp_nul_pairs_before(subject: &[u8], end: usize) -> i32 {
-        let mut pairs = 0;
-        let mut i = 0;
-        while i + 1 < end.min(subject.len()) {
-            if subject[i] == 0xC0 && subject[i + 1] == 0x80 {
-                pairs += 1;
-                i += 2;
-            } else {
-                i += 1;
-            }
-        }
-        pairs
+        offsets.push(bytes.len());
+        (bytes, offsets)
     }
 
     /// The `exec` body, returning `(result, Some(match_start))` on a match so
@@ -22267,12 +22287,11 @@ impl Interp {
     ) -> Result<(Slot, Option<i32>), Halt> {
         self.meter.tick_raw(REGEXP_EXEC_FRAME_METERING);
         let subject_slot = self.to_string_slot_metered(arg0);
-        let subject = match subject_slot.value {
-            // Transcode UTF-16 → UTF-8 for the matcher's byte-offset space,
-            // with U+0000 spelled `C0 80` the way an XS string stores it.
-            Payload::String(off) => Self::regexp_subject_bytes(&self.str_text(off)),
+        let subject_units = match subject_slot.value {
+            Payload::String(off) => self.str_units(off),
             _ => Vec::new(),
         };
+        let (subject, offsets) = Self::regexp_subject_bytes(&subject_units);
         // The declared named groups, one entry per UNIQUE name in name-slot
         // order — the `groups` object's own-key order. Duplicate names share a
         // slot, so a name appears once; its live capture is resolved through
@@ -22281,7 +22300,8 @@ impl Interp {
             self.regexps[&inst].program.capture_group_names.clone();
         let has_indices =
             self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_D != 0;
-        let (matched, captures, names) = self.regexp_match_drive(code, inst, &subject)?;
+        let (matched, captures, names) =
+            self.regexp_match_drive(code, inst, &subject, &subject_units, &offsets)?;
         if !matched {
             self.regexp_last_names.clear();
             return Ok((Slot::null(), None));
@@ -22295,10 +22315,7 @@ impl Interp {
         self.meter.tick_raw(
             REGEXP_EXEC_MATCH_METERING + REGEXP_EXEC_PER_CAPTURE * capture_count.saturating_sub(1),
         );
-        // Correct the reported match position for any `C0 80` NUL pairs the
-        // subject spelling introduced before it (one code unit each to XS).
-        let match_start =
-            captures[0].0 - Self::regexp_nul_pairs_before(&subject, captures[0].0.max(0) as usize);
+        let match_start = captures[0].0;
         // The result array: one element per capture (whole match at 0).
         let result = self.new_array_unmetered();
         let mut items: Vec<(u32, Slot)> = Vec::with_capacity(captures.len());
@@ -22309,9 +22326,7 @@ impl Interp {
             // `resultItem = fxNewSlot` per capture.
             self.meter.tick_slot_alloc();
             let slot = if from >= 0 {
-                let piece =
-                    Self::regexp_piece_bytes(&subject[from as usize..to as usize]);
-                self.new_string_metered(&piece)
+                self.new_string_units(&subject_units[from as usize..to as usize])
             } else {
                 Slot::undefined()
             };
@@ -22545,6 +22560,9 @@ impl Interp {
             return Ok(self.regexp_exec_inner(code, inst, subject)?.0);
         }
 
+        let subject_units = self
+            .string_receiver_units(subject)
+            .expect("match subject was already converted to a string");
         self.regexp_set_last_index(code, inst, Slot::integer(0))?;
         let mut matches = Vec::new();
         loop {
@@ -22557,7 +22575,7 @@ impl Interp {
             self.meter.tick_slot_alloc();
             matches.push(whole);
             if empty {
-                self.regexp_advance_last_index(code, inst)?;
+                self.regexp_advance_last_index(code, inst, &subject_units)?;
             }
         }
         if matches.is_empty() {
@@ -22677,17 +22695,16 @@ impl Interp {
     ) -> Result<Slot, Halt> {
         let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
         let functional = self.is_callable_value(replacement);
-        let subject_bytes = match self.string_receiver_text(subject) {
+        let subject_units = match self.string_receiver_units(subject) {
             Some(c) => c,
             None => return Err(Halt::Unsupported("String.replace:non-string-receiver")),
         };
         // A non-callable replacement is converted once before any match is
         // attempted. Callable replacements are converted only after each call.
-        let repl_bytes = if functional {
+        let repl_units = if functional {
             None
         } else {
-            let units = self.to_string_units(code, replacement)?;
-            Some(String::from_utf16_lossy(&units).into_bytes())
+            Some(self.to_string_units(code, replacement)?)
         };
         let has_named_captures = !self.regexps[&inst]
             .program
@@ -22696,9 +22713,13 @@ impl Interp {
         if has_named_captures
             && (functional
                 || (global
-                    && repl_bytes
+                    && repl_units
                         .as_deref()
-                        .is_some_and(|bytes| bytes.windows(2).any(|w| w == b"$<"))))
+                        .is_some_and(|units| {
+                            units
+                                .windows(2)
+                                .any(|w| w == [b'$' as u16, b'<' as u16])
+                        })))
         {
             return Err(Halt::Unsupported("String.replace:named-callback-state"));
         }
@@ -22723,16 +22744,13 @@ impl Interp {
                 break;
             }
             if match_len == 0 {
-                self.regexp_advance_last_index(code, inst)?;
+                self.regexp_advance_last_index(code, inst, &subject_units)?;
             }
         }
         if results.is_empty() {
             return Ok(subject);
         }
         if functional {
-            let subject_units = self
-                .string_receiver_units(subject)
-                .expect("replace subject was already validated as a string");
             let mut assembled = Vec::new();
             let mut next_source_position = 0;
             for (result, pos, match_len) in results {
@@ -22741,26 +22759,21 @@ impl Interp {
                 self.meter.tick_raw(
                     STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
                 );
-                // The matcher reports offsets in its UTF-8 subject, while the
-                // replacer callback and string assembly use UTF-16 code-unit
-                // indices. A valid match boundary is always a UTF-8 boundary.
-                let prefix = &subject_bytes[..pos.min(subject_bytes.len())];
-                let code_unit_pos = String::from_utf8_lossy(prefix).encode_utf16().count();
                 assembled.extend_from_slice(
-                    &subject_units[next_source_position..code_unit_pos.min(subject_units.len())],
+                    &subject_units[next_source_position..pos.min(subject_units.len())],
                 );
                 let mut args = Vec::with_capacity(capture_count + 2);
                 for i in 0..capture_count {
                     args.push(self.array_index_slot(result, i as u32));
                 }
-                args.push(Slot::number(code_unit_pos as f64));
+                args.push(Slot::number(pos as f64));
                 args.push(subject);
                 let value = self.invoke_value(code, replacement, Slot::undefined(), &args)?;
                 let units = self.to_string_units(code, value)?;
                 self.meter.tick_slot_alloc();
                 self.meter.tick_chunk_new((units.len() + 1) as u64);
                 assembled.extend_from_slice(&units);
-                next_source_position = code_unit_pos.saturating_add(match_len);
+                next_source_position = pos.saturating_add(match_len);
             }
             assembled.extend_from_slice(&subject_units[next_source_position..]);
             self.meter.tick_chunk_new((assembled.len() + 1) as u64);
@@ -22775,13 +22788,13 @@ impl Interp {
             self.meter.tick_raw(
                 STRING_REPLACE_PER_CAPTURE * capture_count.saturating_sub(1) as u64,
             );
-            assembled.extend_from_slice(&subject_bytes[next_source_position..pos]);
-            let repl = repl_bytes.as_deref().unwrap();
-            let subst_bytes = if repl.contains(&b'$') {
+            assembled.extend_from_slice(&subject_units[next_source_position..pos]);
+            let repl = repl_units.as_deref().unwrap();
+            let subst_units = if repl.contains(&(b'$' as u16)) {
                 self.regexp_get_substitution(
                     inst,
                     result,
-                    &subject_bytes,
+                    &subject_units,
                     pos,
                     match_len,
                     repl,
@@ -22790,14 +22803,14 @@ impl Interp {
                 repl.to_vec()
             };
             self.meter.tick_slot_alloc();
-            self.meter.tick_chunk_new((subst_bytes.len() + 1) as u64);
-            assembled.extend_from_slice(&subst_bytes);
+            self.meter.tick_chunk_new((subst_units.len() + 1) as u64);
+            assembled.extend_from_slice(&subst_units);
             next_source_position = pos + match_len;
         }
-        assembled.extend_from_slice(&subject_bytes[next_source_position..]);
+        assembled.extend_from_slice(&subject_units[next_source_position..]);
         // The final assembly `fxNewChunk(total + 1)`.
         self.meter.tick_chunk_new((assembled.len() + 1) as u64);
-        let off = self.alloc_str_text(&assembled);
+        let off = self.chunks.alloc(&units_to_be16(&assembled));
         Ok(Slot::of(Kind::String, Payload::String(off)))
     }
 
@@ -22812,19 +22825,17 @@ impl Interp {
         0
     }
 
-    /// The byte text of capture group `idx` from an `exec` result array, or
-    /// `None` when the group did not participate (its result element is
-    /// `undefined`).
-    fn regexp_capture_bytes(&self, result: Slot, idx: usize) -> Option<Vec<u8>> {
+    /// The UTF-16 code units of capture group `idx` from an `exec` result
+    /// array, or `None` when the group did not participate (its result element
+    /// is `undefined`).
+    fn regexp_capture_units(&self, result: Slot, idx: usize) -> Option<Vec<u16>> {
         let r = match result.value {
             Payload::Reference(r) => r,
             _ => return None,
         };
         let item = self.arrays.get(&r)?.items().get(&(idx as u32)).copied()?;
         match item.value {
-            Payload::String(off) if item.kind == Kind::String => {
-                Some(self.str_text(off).into_bytes())
-            }
+            Payload::String(off) if item.kind == Kind::String => Some(self.str_units(off)),
             _ => None,
         }
     }
@@ -22840,11 +22851,11 @@ impl Interp {
         &self,
         inst: crate::value::SlotIndex,
         result: Slot,
-        subject: &[u8],
+        subject: &[u16],
         pos: usize,
         match_len: usize,
-        repl: &[u8],
-    ) -> Vec<u8> {
+        repl: &[u16],
+    ) -> Vec<u16> {
         let count = self.regexp_capture_count(result); // includes whole match at 0
         let names: Vec<(String, i32)> =
             self.regexps[&inst].program.capture_group_names.clone();
@@ -22852,36 +22863,38 @@ impl Interp {
         let mut out = Vec::with_capacity(repl.len());
         let mut i = 0;
         while i < repl.len() {
-            if repl[i] != b'$' || i + 1 >= repl.len() {
+            if repl[i] != b'$' as u16 || i + 1 >= repl.len() {
                 out.push(repl[i]);
                 i += 1;
                 continue;
             }
             match repl[i + 1] {
-                b'$' => {
-                    out.push(b'$');
+                c if c == b'$' as u16 => {
+                    out.push(b'$' as u16);
                     i += 2;
                 }
-                b'&' => {
+                c if c == b'&' as u16 => {
                     out.extend_from_slice(matched);
                     i += 2;
                 }
-                b'`' => {
+                c if c == b'`' as u16 => {
                     out.extend_from_slice(&subject[..pos]);
                     i += 2;
                 }
-                b'\'' => {
+                c if c == b'\'' as u16 => {
                     out.extend_from_slice(&subject[(pos + match_len).min(subject.len())..]);
                     i += 2;
                 }
-                b'0'..=b'9' => {
-                    let d1 = (repl[i + 1] - b'0') as usize;
+                c if (b'0' as u16..=b'9' as u16).contains(&c) => {
+                    let d1 = (repl[i + 1] - b'0' as u16) as usize;
                     // Prefer a two-digit reference when the second digit forms
                     // an in-range group number, else fall back to one digit.
                     let mut group = 0usize;
                     let mut consumed = 0usize;
-                    if i + 2 < repl.len() && repl[i + 2].is_ascii_digit() {
-                        let two = d1 * 10 + (repl[i + 2] - b'0') as usize;
+                    if i + 2 < repl.len()
+                        && (b'0' as u16..=b'9' as u16).contains(&repl[i + 2])
+                    {
+                        let two = d1 * 10 + (repl[i + 2] - b'0' as u16) as usize;
                         if two >= 1 && two < count {
                             group = two;
                             consumed = 3;
@@ -22893,43 +22906,50 @@ impl Interp {
                     }
                     if consumed == 0 {
                         // Out of range: `$` and the digits stay literal.
-                        out.push(b'$');
+                        out.push(b'$' as u16);
                         i += 1;
                     } else {
-                        if let Some(bytes) = self.regexp_capture_bytes(result, group) {
-                            out.extend_from_slice(&bytes);
+                        if let Some(units) = self.regexp_capture_units(result, group) {
+                            out.extend_from_slice(&units);
                         }
                         i += consumed;
                     }
                 }
-                b'<' if !names.is_empty() => {
+                c if c == b'<' as u16 && !names.is_empty() => {
                     // `$<name>`: scan to the next `>`; a missing `>` leaves the
                     // `$<` literal (matching the `$<snd` → `$<snd` case). The
                     // name's live capture is resolved through the matcher's
                     // runtime `names[]` (slot = the name's position in the
                     // slot-ordered `capture_group_names`), so a duplicate name
                     // expands to whichever alternative matched.
-                    if let Some(rel) = repl[i + 2..].iter().position(|&c| c == b'>') {
+                    if let Some(rel) = repl[i + 2..]
+                        .iter()
+                        .position(|&c| c == b'>' as u16)
+                    {
                         let name = &repl[i + 2..i + 2 + rel];
-                        if let Some(slot) = names.iter().position(|(nm, _)| nm.as_bytes() == name) {
+                        if let Some(slot) = names
+                            .iter()
+                            .position(|(nm, _)| nm.encode_utf16().eq(name.iter().copied()))
+                        {
                             let cidx = self.regexp_last_names.get(slot).copied().unwrap_or(-1);
                             if cidx >= 0 {
-                                if let Some(bytes) = self.regexp_capture_bytes(result, cidx as usize)
+                                if let Some(units) =
+                                    self.regexp_capture_units(result, cidx as usize)
                                 {
-                                    out.extend_from_slice(&bytes);
+                                    out.extend_from_slice(&units);
                                 }
                             }
                             // An unset or absent name expands to the empty string.
                         }
                         i += 2 + rel + 1;
                     } else {
-                        out.extend_from_slice(b"$<");
+                        out.extend_from_slice(&[b'$' as u16, b'<' as u16]);
                         i += 2;
                     }
                 }
                 _ => {
                     // `$` followed by any other code unit is a literal `$`.
-                    out.push(b'$');
+                    out.push(b'$' as u16);
                     i += 1;
                 }
             }
@@ -23128,18 +23148,12 @@ impl Interp {
         limit_slot: Slot,
     ) -> Result<Slot, Halt> {
         let subject_units = self.to_string_units(code, subject)?;
-        let subject_bytes = String::from_utf16_lossy(&subject_units).into_bytes();
         let subject = if subject.kind == Kind::String {
             subject
         } else {
             let off = self.chunks.alloc(&units_to_be16(&subject_units));
             Slot::of(Kind::String, Payload::String(off))
         };
-        // Non-ASCII would need the code-unit↔byte remap the sticky walk assumes
-        // away.
-        if !subject_bytes.is_ascii() {
-            return Err(Halt::Unsupported("String.split:non-ascii-subject"));
-        }
         let limit = self.string_split_limit(code, limit_slot)? as u64;
         self.meter.tick_raw(STRING_SPLIT_FRAME_METERING);
         // `mxGetID(_flags)` in the worker (the eight-property cascade) + the
@@ -23147,15 +23161,17 @@ impl Interp {
         self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
         self.meter.tick_raw(STRING_SPLIT_SPECIES_METERING);
         let splitter = self.build_split_splitter(inst)?;
+        let unicode = self.regexps[&splitter].program.flags()
+            & (ironhorse_regexp::XS_REGEXP_U | ironhorse_regexp::XS_REGEXP_V)
+            != 0;
         // The result array + its `fxNewInstance`.
         let array = self.new_array_unmetered();
         let mut segments: Vec<Slot> = Vec::new();
-        let size = subject_bytes.len();
+        let size = subject_units.len();
         let push_segment = |this: &mut Self, from: usize, to: usize, segs: &mut Vec<Slot>| {
             // `split_aux`: a `fxNewSlot` + the substring `fxNewChunk`.
             this.meter.tick_slot_alloc();
-            let piece = &subject_bytes[from..to];
-            segs.push(this.new_string_metered(piece));
+            segs.push(this.new_string_units(&subject_units[from..to]));
         };
         if limit == 0 {
             return Ok(self.finish_split_array(array, segments));
@@ -23177,7 +23193,7 @@ impl Interp {
             self.regexp_set_last_index(code, splitter, Slot::number(q as f64))?;
             let (res, start) = self.regexp_exec_inner(code, splitter, subject)?;
             if start.is_none() {
-                q += 1; // fxAdvanceStringIndex (ASCII → +1)
+                q = Self::advance_string_index(&subject_units, q as u64, unicode) as usize;
             } else {
                 // A matched step: `mxGetID(_lastIndex)` (read `e`) + the
                 // `fxIsSameValue(e, p)` check.
@@ -23186,7 +23202,7 @@ impl Interp {
                 if e == p {
                     self.meter
                         .untick_raw(STRING_SPLIT_EMPTY_ADVANCE_DISCOUNT);
-                    q += 1;
+                    q = Self::advance_string_index(&subject_units, q as u64, unicode) as usize;
                 } else {
                     push_segment(self, p, q, &mut segments);
                     if segments.len() as u64 == limit {
@@ -33674,17 +33690,6 @@ impl Interp {
             },
             _ => None,
         }
-    }
-
-    /// The **UTF-8 text** bytes of a string receiver (lossy over lone
-    /// surrogates), for the regexp/matcher boundary — the `ironhorse-regexp`
-    /// matcher works over UTF-8 bytes with byte offsets, so the subject is
-    /// transcoded UTF-16 → UTF-8 here (identity byte-for-byte on the ASCII
-    /// subject the covered regexp grammar reaches). `None` for a non-string
-    /// receiver.
-    fn string_receiver_text(&self, this: Slot) -> Option<Vec<u8>> {
-        self.string_receiver_units(this)
-            .map(|u| String::from_utf16_lossy(&u).into_bytes())
     }
 
     /// Allocate a fresh String slot from **UTF-8 text** `bytes`, decoding them
