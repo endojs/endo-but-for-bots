@@ -2,11 +2,12 @@
   "name": "@endo/space-nixos-admin",
   "version": "0.1.0",
   "private": true,
-  "description": "NixOS machine-admin caplet for hosted Endo — edit and apply the host's NixOS configuration through a privilege-separated spool",
+  "description": "Capability for inspecting and managing a local NixOS host through a privilege-separated rebuild service",
   "keywords": [
     "endo",
     "nixos",
     "admin",
+    "monitoring",
     "self-hosted"
   ],
   "author": "Endo contributors",
@@ -22,6 +23,7 @@
   "type": "module",
   "exports": {
     "./setup.js": "./setup.js",
+    "./setup-forgejo-credential.js": "./setup-forgejo-credential.js",
     "./caplet.js": "./caplet.js",
     "./package.json": "./package.json"
   },

@@ -16,9 +16,18 @@ const makeAdmin = async t => {
   t.teardown(() => rm(dir, { recursive: true, force: true }));
   const configDir = join(dir, 'config');
   const nixosDir = join(dir, 'spool');
-  await mkdir(configDir);
+  const lockDir = join(dir, 'locks');
+  await Promise.all([mkdir(configDir), mkdir(lockDir)]);
   const admin = await make(undefined, undefined, {
-    env: { ENDO_NIXOS_CONFIG_DIR: configDir, ENDO_NIXOS_DIR: nixosDir },
+    env: {
+      ENDO_NIXOS_CONFIG_DIR: configDir,
+      ENDO_NIXOS_DIR: nixosDir,
+      ENDO_NIXOS_LOCK_DIR: lockDir,
+    },
+    systemPaths:
+      process.platform === 'linux'
+        ? { flock: '/usr/bin/flock', shell: '/bin/sh' }
+        : {},
   });
   return { admin, configDir };
 };

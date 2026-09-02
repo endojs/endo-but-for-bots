@@ -5,7 +5,7 @@
 // Mints the Git credential the machine-admin agent pushes to the local Forgejo
 // with, and files it in the host's inventory as `forgejo-credential`. Intended
 // to be listed in the daemon's ENDO_EXTRA so it re-provisions on every start
-// (see the endo-host repo).
+// for installations that use Forgejo as their local configuration forge.
 //
 // This is what closes the self-update loop: a revision the agent authors exists
 // only on the forge, and `services.endo.mirrorUrl` fetches it from there, so the
@@ -38,6 +38,7 @@ const CREDENTIAL_NAME = 'forgejo-credential';
  * @param {string} audience
  */
 const existingCredentialController = async (agent, audience) => {
+  await null;
   let controller;
   try {
     const credential = await E(agent).lookup(CREDENTIAL_NAME);
@@ -67,7 +68,23 @@ export const main = async agent => {
   // The loopback origin rather than the public hostname: the daemon reaches
   // Forgejo directly, and `services.endo.mirrorUrl` fetches the pinned revision
   // over the same origin, so both halves of the loop agree on the audience.
-  const audience = env.ENDO_FORGEJO_URL || 'http://127.0.0.1:3000';
+  const configuredUrl = env.ENDO_FORGEJO_URL || 'http://127.0.0.1:3000';
+  let forgejoUrl;
+  try {
+    forgejoUrl = new URL(configuredUrl);
+  } catch {
+    throw new Error(
+      'Invalid ENDO_FORGEJO_URL; expected an absolute HTTP(S) URL.',
+    );
+  }
+  if (forgejoUrl.protocol !== 'http:' && forgejoUrl.protocol !== 'https:') {
+    throw new Error(
+      'Invalid ENDO_FORGEJO_URL; expected an absolute HTTP(S) URL.',
+    );
+  }
+  // An origin deliberately excludes paths, queries, fragments, and userinfo,
+  // matching the Git remote audience comparison without logging credentials.
+  const { origin: audience } = forgejoUrl;
   const username = env.ENDO_FORGEJO_USER || 'floot';
 
   const controller = await existingCredentialController(agent, audience);

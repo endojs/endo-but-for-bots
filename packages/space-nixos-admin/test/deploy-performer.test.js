@@ -1,13 +1,43 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { once } from 'node:events';
+import {
+  mkdir,
+  mkdtemp,
+  chmod,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { make, sanitizeId } from '../caplet.js';
 
 const REV = 'f83f0430cfeb5968563f60f171d58f88d087c1b4';
+
+const fingerprintFor = (
+  action,
+  message,
+  configFingerprint,
+  protocolFingerprint,
+) =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        action,
+        message,
+        configFingerprint,
+        protocolFingerprint,
+      }),
+      'utf8',
+    )
+    .digest('hex');
 
 /** @param {number} ms */
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -18,10 +48,45 @@ const makeHarness = async t => {
   t.teardown(() => rm(dir, { recursive: true, force: true }));
   const configDir = join(dir, 'config');
   const spoolDir = join(dir, 'spool');
-  await mkdir(configDir);
+  const currentSystem = join(dir, 'current-system');
+  const lockDir = join(dir, 'locks');
+  const systemStorePath = '/nix/store/aaaaaaaa-test-system';
+  await Promise.all([
+    mkdir(configDir),
+    mkdir(spoolDir),
+    mkdir(lockDir),
+    symlink(systemStorePath, currentSystem),
+  ]);
+  const canonicalConfigDir = await realpath(configDir);
+  const canonicalLockDir = await realpath(lockDir);
+  const protocolPath = join(spoolDir, 'protocol.json');
+  const protocol = {
+    version: 2,
+    idEcho: true,
+    outcomes: true,
+    system: systemStorePath,
+    host: hostname(),
+    configDir: canonicalConfigDir,
+    lockDir: canonicalLockDir,
+  };
+  const protocolFingerprint = createHash('sha256')
+    .update(
+      JSON.stringify({
+        version: protocol.version,
+        idEcho: protocol.idEcho,
+        outcomes: protocol.outcomes,
+        host: protocol.host,
+        configDir: protocol.configDir,
+        lockDir: protocol.lockDir,
+      }),
+      'utf8',
+    )
+    .digest('hex');
+  await writeFile(protocolPath, JSON.stringify(protocol));
   const env = {
     ENDO_NIXOS_CONFIG_DIR: configDir,
     ENDO_NIXOS_DIR: spoolDir,
+    ENDO_NIXOS_LOCK_DIR: lockDir,
     ENDO_NIXOS_POLL_MS: '10',
     // Bound abandoned watchers so a failing test cannot hold the worker
     // open for the production 24h cap.
@@ -29,7 +94,16 @@ const makeHarness = async t => {
   };
   // A second `make` over the same directories stands in for the caplet's
   // next incarnation after a daemon restart.
-  const reincarnate = () => make(undefined, undefined, { env });
+  const reincarnate = () =>
+    make(undefined, undefined, {
+      env,
+      systemPaths: {
+        currentSystem,
+        ...(process.platform === 'linux'
+          ? { flock: '/usr/bin/flock', shell: '/bin/sh' }
+          : {}),
+      },
+    });
   const admin = await reincarnate();
 
   const requestPath = join(spoolDir, 'apply-request.json');
@@ -76,8 +150,11 @@ const makeHarness = async t => {
     const record = {
       id: request.id,
       action: request.action,
-      message: request.message,
+      fingerprint: request.fingerprint,
+      configFingerprint: request.configFingerprint,
+      protocolFingerprint: request.protocolFingerprint,
       phase,
+      message: phase === 'ok' ? 'completed' : 'simulated failure',
     };
     await writeFile(statusPath, JSON.stringify(record), 'utf8');
     await mkdir(outcomesDir, { recursive: true });
@@ -100,7 +177,14 @@ const makeHarness = async t => {
     await rm(join(spoolDir, 'apply-request.json'), { force: true });
     await writeFile(
       statusPath,
-      JSON.stringify({ id: request.id, phase: 'switching' }),
+      JSON.stringify({
+        id: request.id,
+        action: request.action,
+        fingerprint: request.fingerprint,
+        configFingerprint: request.configFingerprint,
+        protocolFingerprint: request.protocolFingerprint,
+        phase: 'switching',
+      }),
       'utf8',
     );
     return request;
@@ -118,6 +202,10 @@ const makeHarness = async t => {
     spoolDir,
     statusPath,
     outcomesDir,
+    protocolPath,
+    protocolFingerprint,
+    protocol,
+    currentSystem,
   };
 };
 
@@ -159,6 +247,49 @@ test('re-invoking a settled key returns the record without re-submitting', async
   t.is(await requestBytes(), bytesBefore, 'no second spool submission');
 });
 
+test('a settled switch survives its NixOS system transition', async t => {
+  const {
+    admin,
+    reincarnate,
+    processNext,
+    requestBytes,
+    protocolPath,
+    protocol,
+    currentSystem,
+  } = await makeHarness(t);
+  const settled = admin.apply('activate new system', 'r-9:5-1');
+  await processNext();
+  t.true((await settled).ok);
+  const requestBefore = await requestBytes();
+
+  const nextSystem = '/nix/store/bbbbbbbb-next-test-system';
+  await rm(currentSystem);
+  await symlink(nextSystem, currentSystem);
+  await writeFile(
+    protocolPath,
+    JSON.stringify({ ...protocol, system: nextSystem }),
+  );
+
+  const revived = await reincarnate();
+  t.true((await revived.apply('activate new system', 'r-9:5-1')).ok);
+  t.is(await requestBytes(), requestBefore, 'recovery did not resubmit');
+});
+
+test('a settled key cannot be reused for different arguments', async t => {
+  const { admin, reincarnate, processNext, requestBytes } =
+    await makeHarness(t);
+  const settled = admin.build('validate', 'r-9:6-0');
+  await processNext();
+  t.true((await settled).ok);
+  const bytesBefore = await requestBytes();
+
+  const revived = await reincarnate();
+  await t.throwsAsync(() => revived.apply('deploy', 'r-9:6-0'), {
+    message: /already bound/,
+  });
+  t.is(await requestBytes(), bytesBefore, 'no new operation was submitted');
+});
+
 test('a duplicate in-flight dispatch attaches to the pending request', async t => {
   const { admin, reincarnate, processNext, requestBytes } =
     await makeHarness(t);
@@ -186,15 +317,8 @@ test('a stale id-less status does not wedge an applier that does echo ids', asyn
   // The regression this guards: one hand-written apply leaves an id-less
   // status behind, and every settlement verb on the host then refuses
   // forever, blaming an applier that is in fact fine.
-  const { admin, statusPath, spoolDir, outcomesDir, processNext } =
-    await makeHarness(t);
+  const { admin, statusPath, spoolDir, processNext } = await makeHarness(t);
   await mkdir(spoolDir, { recursive: true });
-  await mkdir(outcomesDir, { recursive: true });
-  await writeFile(
-    join(outcomesDir, 'r-old_1-0.json'),
-    JSON.stringify({ id: 'r-old:1-0', phase: 'ok' }),
-    'utf8',
-  );
   await writeFile(statusPath, JSON.stringify({ phase: 'ok' }), 'utf8');
 
   const settled = admin.build('note', 'r-9:0-0');
@@ -202,14 +326,79 @@ test('a stale id-less status does not wedge an applier that does echo ids', asyn
   t.true((await settled).ok);
 });
 
-test('an id-less status refuses submission instead of guessing', async t => {
-  const { admin, statusPath, requestBytes, spoolDir } = await makeHarness(t);
+test('a missing current protocol marker refuses submission', async t => {
+  const { admin, statusPath, requestBytes, spoolDir, protocolPath } =
+    await makeHarness(t);
   await mkdir(spoolDir, { recursive: true });
+  await rm(protocolPath);
   await writeFile(statusPath, JSON.stringify({ phase: 'ok' }), 'utf8');
   await t.throwsAsync(() => admin.build('note', 'r-3:0-0'), {
-    message: /does not echo request ids/,
+    message: /does not advertise protocol/,
   });
   t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('historical outcomes do not prove the current applier protocol', async t => {
+  const { admin, statusPath, requestBytes, outcomesDir, protocolPath } =
+    await makeHarness(t);
+  await rm(protocolPath);
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, 'historical.json'),
+    JSON.stringify({ id: 'historical', phase: 'ok' }),
+  );
+  await writeFile(statusPath, JSON.stringify({ phase: 'ok' }), 'utf8');
+
+  await t.throwsAsync(() => admin.apply('must not escape', 'r-3:1-0'), {
+    message: /does not advertise protocol/,
+  });
+  t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('protocol marker must bind the configured host and checkout', async t => {
+  const { admin, requestBytes, protocolPath } = await makeHarness(t);
+  await writeFile(
+    protocolPath,
+    JSON.stringify({
+      version: 2,
+      idEcho: true,
+      outcomes: true,
+      system: '/nix/store/aaaaaaaa-test-system',
+      host: 'another-host',
+      configDir: '/another/checkout',
+      lockDir: '/another/lock-directory',
+    }),
+  );
+
+  await t.throwsAsync(() => admin.build('must not escape', 'r-3:2-0'), {
+    message: /host.*checkout/,
+  });
+  t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('protocol marker must bind the shared lock directory', async t => {
+  const { admin, requestBytes, protocolPath } = await makeHarness(t);
+  const protocol = JSON.parse(await readFile(protocolPath, 'utf8'));
+  await writeFile(
+    protocolPath,
+    JSON.stringify({ ...protocol, lockDir: '/another/lock-directory' }),
+  );
+
+  await t.throwsAsync(() => admin.build('must not escape', 'r-3:3-0'), {
+    message: /lock directory/,
+  });
+  t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('a malformed request occupies the slot and is never overwritten', async t => {
+  const { admin, requestBytes, spoolDir } = await makeHarness(t);
+  await writeFile(join(spoolDir, 'apply-request.json'), '{}');
+  const before = await requestBytes();
+
+  await t.throwsAsync(() => admin.build('must not escape', 'r-3:4-0'), {
+    message: /Malformed or foreign apply request/,
+  });
+  t.is(await requestBytes(), before);
 });
 
 test('a request superseded without an outcome fails loud, never retries', async t => {
@@ -251,6 +440,172 @@ test('operations serialize: one spool submission at a time, in order', async t =
   t.is((await readRequest()).id, 'r-5:1-0');
 });
 
+test('separate caplet instances cannot race the shared request slot', async t => {
+  const { admin, reincarnate, processNext } = await makeHarness(t);
+  const other = await reincarnate();
+  const first = admin.build('first instance', 'r-5:2-0');
+  const second = other.build('second instance', 'r-5:3-0');
+
+  const a = await processNext();
+  const b = await processNext();
+  t.deepEqual([a.id, b.id].sort(), ['r-5:2-0', 'r-5:3-0']);
+  t.true((await first).ok);
+  t.true((await second).ok);
+});
+
+test.serial(
+  'a stopped lock owner is never evicted; a crash releases it',
+  async t => {
+    if (process.platform !== 'linux') {
+      t.pass();
+      return;
+    }
+    const { admin, processNext, requestBytes, spoolDir } = await makeHarness(t);
+    const child = spawn(
+      '/usr/bin/flock',
+      [
+        '--exclusive',
+        '--no-fork',
+        join(spoolDir, 'submit.lock'),
+        '/bin/sh',
+        '-c',
+        'printf "ready\\n"; IFS= read -r _',
+      ],
+      { stdio: ['pipe', 'pipe', 'pipe'] },
+    );
+    t.teardown(() => {
+      if (child.exitCode === null) {
+        child.kill('SIGKILL');
+      }
+    });
+    await Promise.race([
+      once(child.stdout, 'data'),
+      once(child, 'exit').then(([code]) => {
+        throw new Error(`lock fixture exited before ready (${code})`);
+      }),
+    ]);
+    child.kill('SIGSTOP');
+
+    const settled = admin.build('wait for lock', 'r-5:4-0');
+    await delay(100);
+    t.is(await requestBytes(), undefined, 'a stopped live owner kept the lock');
+
+    const exited = once(child, 'exit');
+    child.kill('SIGKILL');
+    await exited;
+    await processNext();
+    t.true((await settled).ok);
+  },
+);
+
+test('config fingerprint matches the published known-answer vector', async t => {
+  const { admin, configDir, readRequest, processNext } = await makeHarness(t);
+  await writeFile(join(configDir, 'a.nix'), 'abc\n');
+  await mkdir(join(configDir, 'empty'));
+  await chmod(join(configDir, 'a.nix'), 0o644);
+  await chmod(join(configDir, 'empty'), 0o755);
+
+  const settled = admin.build('known-answer', 'r-5:5-0');
+  let request;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      request = await readRequest();
+      break;
+    } catch {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(5);
+    }
+  }
+  t.is(
+    request.configFingerprint,
+    'fcedad18db84adbaf8935ae34ce543e024d36160a79125aaac195e25c5336dd2',
+  );
+  await processNext();
+  t.true((await settled).ok);
+});
+
+test('an outcome from another protocol binding cannot settle a key', async t => {
+  const { admin, readRequest, outcomesDir } = await makeHarness(t);
+  const settled = admin.build('bound outcome', 'r-5:6-0');
+  let request;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      request = await readRequest();
+      break;
+    } catch {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(5);
+    }
+  }
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId(request.id)}.json`),
+    JSON.stringify({
+      ...request,
+      protocolFingerprint: '0'.repeat(64),
+      phase: 'ok',
+    }),
+  );
+  await t.throwsAsync(() => settled, { message: /another host configuration/ });
+});
+
+test('an outcome must carry the action configuration fingerprint', async t => {
+  const { admin, readRequest, outcomesDir } = await makeHarness(t);
+  const settled = admin.build('complete schema', 'r-5:7-0');
+  let request;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      request = await readRequest();
+      break;
+    } catch {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(5);
+    }
+  }
+  const incomplete = {
+    id: request.id,
+    action: request.action,
+    fingerprint: request.fingerprint,
+    protocolFingerprint: request.protocolFingerprint,
+    nonce: request.nonce,
+  };
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId(request.id)}.json`),
+    JSON.stringify({ ...incomplete, phase: 'ok' }),
+  );
+  await t.throwsAsync(() => settled, { message: /configFingerprint/ });
+});
+
+test('an outcome must echo the submitted configuration fingerprint', async t => {
+  const { admin, readRequest, outcomesDir } = await makeHarness(t);
+  const settled = admin.build('exact config', 'r-5:8-0');
+  let request;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      request = await readRequest();
+      break;
+    } catch {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(5);
+    }
+  }
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId(request.id)}.json`),
+    JSON.stringify({
+      ...request,
+      configFingerprint: '0'.repeat(64),
+      phase: 'ok',
+    }),
+  );
+  await t.throwsAsync(() => settled, { message: /already bound/ });
+});
+
 test('stageFiles captures previous contents and revertFiles restores them', async t => {
   const { admin, configDir } = await makeHarness(t);
   await writeFile(join(configDir, 'existing.nix'), 'before\n', 'utf8');
@@ -264,8 +619,12 @@ test('stageFiles captures previous contents and revertFiles restores them', asyn
   );
   t.deepEqual(staged.paths, ['existing.nix', 'modules/new.nix']);
   t.deepEqual(staged.previous, [
-    { path: 'existing.nix', text: 'before\n' },
-    { path: 'modules/new.nix', text: null },
+    { path: 'existing.nix', text: 'before\n', createdDirectories: [] },
+    {
+      path: 'modules/new.nix',
+      text: null,
+      createdDirectories: ['modules'],
+    },
   ]);
   t.is(await readFile(join(configDir, 'existing.nix'), 'utf8'), 'after\n');
   t.is(await readFile(join(configDir, 'modules/new.nix'), 'utf8'), 'created\n');
@@ -273,6 +632,40 @@ test('stageFiles captures previous contents and revertFiles restores them', asyn
   await admin.revertFiles(staged.previous, 'r-6:1-0');
   t.is(await readFile(join(configDir, 'existing.nix'), 'utf8'), 'before\n');
   await t.throwsAsync(() => readFile(join(configDir, 'modules/new.nix')), {
+    code: 'ENOENT',
+  });
+  await t.throwsAsync(() => readFile(join(configDir, 'modules')), {
+    code: 'ENOENT',
+  });
+});
+
+test('writeFile reports UTF-8 bytes rather than UTF-16 code units', async t => {
+  const { admin } = await makeHarness(t);
+  t.deepEqual(await admin.writeFile('unicode.nix', 'é'), {
+    path: 'unicode.nix',
+    bytes: 2,
+  });
+});
+
+test('listFiles propagates a missing requested subtree', async t => {
+  const { admin } = await makeHarness(t);
+  await t.throwsAsync(() => admin.listFiles('missing'), { code: 'ENOENT' });
+});
+
+test('a failed stage restores files and newly created directories', async t => {
+  const { admin, configDir } = await makeHarness(t);
+  await t.throwsAsync(
+    () =>
+      admin.stageFiles(
+        harden([
+          { path: 'new/child.nix', text: 'created before failure\n' },
+          { path: 'new', text: 'cannot replace a directory\n' },
+        ]),
+        'r-6:2-0',
+      ),
+    { message: /written prefix was restored/ },
+  );
+  await t.throwsAsync(() => readFile(join(configDir, 'new')), {
     code: 'ENOENT',
   });
 });
@@ -320,14 +713,25 @@ test('a foreign pending request is slot-busy, not clobbered', async t => {
   // its outcome instead of overwriting the slot — the overwrite would
   // destroy a possibly-approved apply and later misreport it as
   // superseded.
-  const { admin, processNext, readRequest, spoolDir } = await makeHarness(t);
+  const { admin, processNext, readRequest, spoolDir, protocolFingerprint } =
+    await makeHarness(t);
+  const configFingerprint = '0'.repeat(64);
+  const message = 'earlier';
   await mkdir(spoolDir, { recursive: true });
   await writeFile(
     join(spoolDir, 'apply-request.json'),
     JSON.stringify({
       action: 'switch',
-      message: 'earlier',
+      message,
       id: 'earlier-op',
+      fingerprint: fingerprintFor(
+        'switch',
+        message,
+        configFingerprint,
+        protocolFingerprint,
+      ),
+      configFingerprint,
+      protocolFingerprint,
       nonce: 'x1',
     }),
     'utf8',
@@ -374,6 +778,62 @@ test('an outcome record for a colliding sanitized name fails loud', async t => {
   t.is(await requestBytes(), undefined, 'nothing was submitted');
 });
 
+test('a colliding foreign outcome never frees its pending slot', async t => {
+  const { admin, requestBytes, spoolDir, outcomesDir, protocolFingerprint } =
+    await makeHarness(t);
+  const configFingerprint = '0'.repeat(64);
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(spoolDir, 'apply-request.json'),
+    JSON.stringify({
+      action: 'build',
+      message: '',
+      id: 'a:b',
+      fingerprint: fingerprintFor(
+        'build',
+        '',
+        configFingerprint,
+        protocolFingerprint,
+      ),
+      configFingerprint,
+      protocolFingerprint,
+      nonce: 'old',
+    }),
+  );
+  await writeFile(
+    join(outcomesDir, `${sanitizeId('a:b')}.json`),
+    JSON.stringify({ id: 'a_b', phase: 'ok' }),
+  );
+  const bytesBefore = await requestBytes();
+
+  await t.throwsAsync(() => admin.build('mine', 'r-10:1-0'), {
+    message: /collision/,
+  });
+  t.is(await requestBytes(), bytesBefore, 'the foreign request remains');
+});
+
+test('config symlinks cannot escape the checkout', async t => {
+  const { admin, configDir } = await makeHarness(t);
+  const outsideDir = join(configDir, '..', 'outside');
+  await mkdir(outsideDir);
+  await symlink(outsideDir, join(configDir, 'escape'));
+
+  await t.throwsAsync(() => admin.writeFile('escape/pwned', 'bad'), {
+    message: /Refusing to follow config symlink/,
+  });
+  await t.throwsAsync(() => readFile(join(outsideDir, 'pwned')), {
+    code: 'ENOENT',
+  });
+
+  const outsideRev = join(outsideDir, 'endo.rev');
+  await writeFile(outsideRev, `${REV}\n`);
+  await symlink(outsideRev, join(configDir, 'endo.rev'));
+  await t.throwsAsync(() => admin.stageRev(REV.replace(/^f/, '0')), {
+    message: /Refusing to follow config symlink/,
+  });
+  t.is(await readFile(outsideRev, 'utf8'), `${REV}\n`);
+});
+
 test('an id-less status appearing mid-watch errs after the grace, without rewriting', async t => {
   const { admin, requestBytes, statusPath, spoolDir } = await makeHarness(t);
   const settled = admin.apply('deploy', 'r-11:0-0');
@@ -390,6 +850,49 @@ test('an id-less status appearing mid-watch errs after the grace, without rewrit
     message: /does not echo request ids/,
   });
   t.is(await requestBytes(), bytesBefore, 'the request was never rewritten');
+});
+
+test('malformed status during a watch fails decisively without rewriting', async t => {
+  const { admin, requestBytes, statusPath } = await makeHarness(t);
+  const settled = admin.build('diagnose malformed status', 'r-11:1-0');
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await requestBytes()) !== undefined) break;
+    // eslint-disable-next-line no-await-in-loop
+    await delay(5);
+  }
+  const bytesBefore = await requestBytes();
+  await writeFile(statusPath, '{not json', 'utf8');
+  await t.throwsAsync(() => settled, { message: /Refusing to decide/ });
+  t.is(await requestBytes(), bytesBefore, 'the request was never rewritten');
+});
+
+test('a nonterminal outcome is rejected as malformed', async t => {
+  const { admin, readRequest, outcomesDir } = await makeHarness(t);
+  const settled = admin.build('validate phase', 'r-11:2-0');
+  let request;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      request = await readRequest();
+      break;
+    } catch {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(5);
+    }
+  }
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId(request.id)}.json`),
+    JSON.stringify({
+      id: request.id,
+      action: request.action,
+      fingerprint: request.fingerprint,
+      protocolFingerprint: request.protocolFingerprint,
+      phase: 'switching',
+    }),
+  );
+  await t.throwsAsync(() => settled, { message: /Malformed outcome/ });
 });
 
 test('stageFiles refuses when a previous capture is unreadable', async t => {

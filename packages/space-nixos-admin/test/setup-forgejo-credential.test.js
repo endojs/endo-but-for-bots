@@ -13,6 +13,7 @@ const AUDIENCE = 'https://git.example';
  * @param {{ audience: string, kind: string }} [options.credential]
  */
 const makeAgent = ({ credential } = {}) => {
+  /** @type {{ provided: any[], rotated: any[] }} */
   const calls = { provided: [], rotated: [] };
   const cap = {};
   const controller = {
@@ -44,7 +45,12 @@ const makeAgent = ({ credential } = {}) => {
   return { agent, calls };
 };
 
-/** Set env vars for one test and restore them afterwards. */
+/**
+ * Set env vars for one test and restore them afterwards.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {Record<string, string>} env
+ */
 const withEnv = (t, env) => {
   const previous = { ...process.env };
   Object.assign(process.env, env);
@@ -67,7 +73,11 @@ test('a host with no forge password provisions nothing', async t => {
 });
 
 test('an unbound name is minted', async t => {
-  withEnv(t, { ENDO_FORGEJO_FLOOT_PW: 'hunter2', ENDO_FORGEJO_URL: AUDIENCE });
+  withEnv(t, {
+    ENDO_FORGEJO_FLOOT_PW: 'hunter2',
+    ENDO_FORGEJO_URL:
+      'https://embedded:must-not-leak@git.example/org/repo.git?token=nope',
+  });
   const { agent, calls } = makeAgent();
 
   await main(agent);
@@ -80,6 +90,20 @@ test('an unbound name is minted', async t => {
       password: 'hunter2',
     },
   ]);
+  t.deepEqual(calls.rotated, []);
+});
+
+test('an invalid forge URL is rejected without provisioning', async t => {
+  withEnv(t, {
+    ENDO_FORGEJO_FLOOT_PW: 'hunter2',
+    ENDO_FORGEJO_URL: 'ssh://git.example/org/repo.git',
+  });
+  const { agent, calls } = makeAgent();
+
+  await t.throwsAsync(() => main(agent), {
+    message: /absolute HTTP\(S\) URL/,
+  });
+  t.deepEqual(calls.provided, []);
   t.deepEqual(calls.rotated, []);
 });
 
