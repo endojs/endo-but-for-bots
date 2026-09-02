@@ -20483,24 +20483,23 @@ impl Interp {
                     if !has_target && flags_arg.kind == Kind::Undefined {
                         // `RegExp(pattern)` returns `pattern` only when its
                         // observable `constructor` is the active intrinsic.
-                        // When the program never names `constructor`, the lazy
-                        // boot model guarantees the untouched default link.
-                        if let (Some(id), Payload::Reference(r)) =
-                            (self.constructor_id, pattern_arg.value)
-                        {
-                            let constructor = self.mop_get(code, r, id, pattern_arg)?;
+                        if let Payload::Reference(r) = pattern_arg.value {
+                            let id = self.intern_key("constructor");
                             let active = self
                                 .stack
                                 .get(base + 1)
                                 .copied()
                                 .unwrap_or_else(Slot::undefined);
+                            let constructor = if pattern_regexp.is_some()
+                                && self.regexp_getter_uses_default(r, id)
+                            {
+                                active
+                            } else {
+                                self.mop_get(code, r, id, pattern_arg)?
+                            };
                             self.same_value(constructor, active)
                         } else {
-                            // With no observable constructor key, only an
-                            // internally branded RegExp can have the untouched
-                            // `%RegExp%` default. A generic `@@match` object
-                            // inherits `%Object%`'s constructor instead.
-                            pattern_regexp.is_some()
+                            false
                         }
                     } else {
                         false
@@ -20512,19 +20511,12 @@ impl Interp {
                     pattern_arg
                 } else {
                     let pattern = if pattern_is_regexp {
-                        let source_id = self
-                            .regexp_getter_ids
-                            .source
-                            .or_else(|| self.symbol_ids.get("source").copied());
+                        let source_id = self.intern_key("source");
                         if let Some(r) = pattern_regexp {
                             // The ordinary Get is observable through own and
-                            // inherited overrides. When the program never
-                            // names `source`, lazy boot leaves no property id
-                            // that guest code could have observed.
-                            if let Some(id) = source_id
-                                .filter(|&id| !self.regexp_getter_uses_default(r, id))
-                            {
-                                let source = self.mop_get(code, r, id, pattern_arg)?;
+                            // inherited overrides, including Proxy prototypes.
+                            if !self.regexp_getter_uses_default(r, source_id) {
+                                let source = self.mop_get(code, r, source_id, pattern_arg)?;
                                 if source.kind == Kind::Undefined {
                                     String::new()
                                 } else {
@@ -20539,10 +20531,7 @@ impl Interp {
                             let Payload::Reference(r) = pattern_arg.value else {
                                 unreachable!("IsRegExp is false for primitives")
                             };
-                            let source = match source_id {
-                                Some(id) => self.mop_get(code, r, id, pattern_arg)?,
-                                None => Slot::undefined(),
-                            };
+                            let source = self.mop_get(code, r, source_id, pattern_arg)?;
                             if source.kind == Kind::Undefined {
                                 String::new()
                             } else {
@@ -20556,15 +20545,10 @@ impl Interp {
                     };
                     let flags = if flags_arg.kind == Kind::Undefined {
                         if pattern_is_regexp {
-                            let flags_id = self
-                                .regexp_getter_ids
-                                .flags
-                                .or_else(|| self.symbol_ids.get("flags").copied());
+                            let flags_id = self.intern_key("flags");
                             if let Some(r) = pattern_regexp {
-                                if let Some(id) = flags_id
-                                    .filter(|&id| !self.regexp_getter_uses_default(r, id))
-                                {
-                                    let value = self.mop_get(code, r, id, pattern_arg)?;
+                                if !self.regexp_getter_uses_default(r, flags_id) {
+                                    let value = self.mop_get(code, r, flags_id, pattern_arg)?;
                                     if value.kind == Kind::Undefined {
                                         String::new()
                                     } else {
@@ -20579,10 +20563,7 @@ impl Interp {
                                 let Payload::Reference(r) = pattern_arg.value else {
                                     unreachable!("IsRegExp is false for primitives")
                                 };
-                                let value = match flags_id {
-                                    Some(id) => self.mop_get(code, r, id, pattern_arg)?,
-                                    None => Slot::undefined(),
-                                };
+                                let value = self.mop_get(code, r, flags_id, pattern_arg)?;
                                 if value.kind == Kind::Undefined {
                                     String::new()
                                 } else {
@@ -22349,6 +22330,32 @@ impl Interp {
         Ok(self.regexp_exec_inner(code, inst, arg0)?.0)
     }
 
+    /// `RegExpExec(R, S)`: call an observable `R.exec` when it is callable,
+    /// otherwise fall back to the builtin matcher for a branded RegExp. The
+    /// callable result must be an object or `null`.
+    fn regexp_exec_abstract(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+        subject: Slot,
+    ) -> Result<Slot, Halt> {
+        let exec_id = self.intern_key("exec");
+        let exec = self.mop_get(code, inst, exec_id, receiver)?;
+        if self.is_callable_value(exec) {
+            let result = self.invoke_value(code, exec, receiver, &[subject])?;
+            return match result.kind {
+                Kind::Null | Kind::Reference => Ok(result),
+                _ => Err(self.catchable_type_error()),
+            };
+        }
+        if self.regexps.contains_key(&inst) {
+            self.regexp_exec(code, inst, subject)
+        } else {
+            Err(self.catchable_type_error())
+        }
+    }
+
     /// Encode UTF-16 code units in XS's modified CESU-8 spelling and return
     /// the byte offset of every code-unit boundary. U+0000 is `C0 80`, and
     /// each surrogate is its own three-byte sequence; the matcher combines a
@@ -22388,7 +22395,7 @@ impl Interp {
         arg0: Slot,
     ) -> Result<(Slot, Option<i32>), Halt> {
         self.meter.tick_raw(REGEXP_EXEC_FRAME_METERING);
-        let subject_slot = self.to_string_slot_metered(arg0);
+        let subject_slot = self.to_string_slot(code, arg0)?;
         let subject_units = match subject_slot.value {
             Payload::String(off) => self.str_units(off),
             _ => Vec::new(),
@@ -22602,10 +22609,12 @@ impl Interp {
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
+        receiver: Slot,
         arg0: Slot,
     ) -> Result<Slot, Halt> {
         self.meter.tick_raw(REGEXP_TEST_FRAME_METERING);
-        let result = self.regexp_exec(code, inst, arg0)?;
+        let subject = self.to_string_slot(code, arg0)?;
+        let result = self.regexp_exec_abstract(code, inst, receiver, subject)?;
         Ok(Slot::boolean(result.kind != Kind::Null))
     }
 
@@ -23404,6 +23413,61 @@ impl Interp {
         // The final chunk is the third concat, already metered; allocate it
         // without re-charging.
         let off = self.alloc_str_text(&out);
+        Ok(Slot::of(Kind::String, Payload::String(off)))
+    }
+
+    /// Generic `RegExp.prototype.toString`: observe `source` and `flags` in
+    /// specification order, including user accessors and their ToString
+    /// conversions. A branded RegExp whose implicit intrinsic getter is still
+    /// reached obtains that value from the RegExp side table.
+    fn regexp_to_string_generic(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        self.meter.tick_raw(REGEXP_TOSTRING_METERING);
+        let source_id = self.intern_key("source");
+        let source = if self.regexps.contains_key(&inst)
+            && self.regexp_getter_uses_default(inst, source_id)
+        {
+            self.meter.tick_raw(REGEXP_GETTER_METERING);
+            let (bytes, allocated) = self.regexp_source_bytes(inst);
+            if allocated {
+                self.new_string_metered(&bytes)
+            } else {
+                let offset = self.alloc_str_text(&bytes);
+                Slot::of(Kind::String, Payload::String(offset))
+            }
+        } else {
+            self.mop_get(code, inst, source_id, receiver)?
+        };
+        let source = self.to_string_units(code, source)?;
+
+        let flags_id = self.intern_key("flags");
+        let flags = if self.regexps.contains_key(&inst)
+            && self.regexp_getter_uses_default(inst, flags_id)
+        {
+            self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
+            let flags = self.regexps[&inst].flags.clone();
+            self.new_string_metered(flags.as_bytes())
+        } else {
+            self.mop_get(code, inst, flags_id, receiver)?
+        };
+        let flags = self.to_string_units(code, flags)?;
+
+        // XS builds the result as three growing concatenations: `"/" +
+        // source`, then `+ "/"`, then `+ flags`.
+        self.meter.tick_chunk_new((source.len() + 2) as u64);
+        self.meter.tick_chunk_new((source.len() + 3) as u64);
+        self.meter
+            .tick_chunk_new((source.len() + flags.len() + 3) as u64);
+        let mut out = Vec::with_capacity(source.len() + flags.len() + 2);
+        out.push(b'/' as u16);
+        out.extend_from_slice(&source);
+        out.push(b'/' as u16);
+        out.extend_from_slice(&flags);
+        let off = self.chunks.alloc(&units_to_be16(&out));
         Ok(Slot::of(Kind::String, Payload::String(off)))
     }
 
@@ -31988,17 +32052,23 @@ impl Interp {
             // surface over child 8's matcher.
             NativeMethod::RegExpExec => {
                 let inst = match this.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("RegExp.exec:non-regexp-this")),
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
                 };
-                self.regexp_exec(code, inst, arg0)?
+                if self.regexps.contains_key(&inst) {
+                    self.regexp_exec(code, inst, arg0)?
+                } else {
+                    // The builtin rejects a receiver without
+                    // [[RegExpMatcher]] before coercing its argument.
+                    return Err(self.catchable_type_error());
+                }
             }
             NativeMethod::RegExpTest => {
                 let inst = match this.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("RegExp.test:non-regexp-this")),
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
                 };
-                self.regexp_test(code, inst, arg0)?
+                self.regexp_test(code, inst, this, arg0)?
             }
             NativeMethod::RegExpCompile => this,
             NativeMethod::ErrorStackGetter => {
@@ -32067,10 +32137,20 @@ impl Interp {
             }
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
-                    Payload::Reference(r) if self.regexps.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("RegExp.toString:non-regexp-this")),
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => return Err(self.catchable_type_error()),
                 };
-                self.regexp_to_string(inst)?
+                let source_id = self.intern_key("source");
+                let flags_id = self.intern_key("flags");
+                let default_source = self.regexps.contains_key(&inst)
+                    && self.regexp_getter_uses_default(inst, source_id);
+                let default_flags = self.regexps.contains_key(&inst)
+                    && self.regexp_getter_uses_default(inst, flags_id);
+                if default_source && default_flags {
+                    self.regexp_to_string(inst)?
+                } else {
+                    self.regexp_to_string_generic(code, inst, this)?
+                }
             }
             // `String.prototype.search`: a custom `regexp[Symbol.search]` is
             // called with the original receiver before string coercion. The
@@ -33840,6 +33920,20 @@ impl Interp {
         }
         let bytes = self.to_string_bytes_metered(primitive);
         Ok(String::from_utf8_lossy(&bytes).encode_utf16().collect())
+    }
+
+    /// ECMAScript `ToString`, retaining the resulting primitive as a String
+    /// slot so callers can pass it to user code without a lossy text roundtrip.
+    fn to_string_slot(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+        let primitive = if value.kind == Kind::Reference {
+            self.to_primitive(code, value, true)?
+        } else {
+            value
+        };
+        if primitive.kind == Kind::Symbol {
+            return Err(self.catchable_type_error());
+        }
+        Ok(self.to_string_slot_metered(primitive))
     }
 
     /// `RequireObjectCoercible(this)` followed by `ToString(this)` for the

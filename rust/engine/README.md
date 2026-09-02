@@ -1243,11 +1243,12 @@ already earned its keep, driving out a sub-computron construction-metering gap
 `built-ins/String/prototype/{search,match,replace,split}` sections
 **divergent=0** with growth.
 
-**Remaining named skips** are narrow: generic non-RegExp receivers for
-`exec`/`test`/`toString` and the named-capture callback-state branch of
-`replace`. A RegExp-valued `RegExp` constructor argument supports the ordinary
-call-identity, copy, and flags-override paths. The ordinary String-method
-coercion and `Symbol.{search,match,replace,split}` dispatch paths execute.
+**Remaining named skips** are narrow: the named-capture callback-state branch
+of `replace`. A RegExp-valued `RegExp` constructor argument supports the
+ordinary call-identity, copy, and flags-override paths. The prototype
+`exec`/`test`/`toString` methods implement their generic receiver and observable
+coercion paths, and the ordinary String-method coercion plus
+`Symbol.{search,match,replace,split}` dispatch paths execute.
 
 ## Decoder-hang trophy: a malformed backward branch that never terminated (stage-4b)
 
