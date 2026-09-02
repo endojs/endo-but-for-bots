@@ -1,49 +1,71 @@
-# Merge blockers and follow-up dependencies
+# Merge blockers and external dependencies
 
-This branch deliberately extracts the protocol core without cherry-picking the
-large hosted-management stack from exploratory PR #994. The following work must
-land, receive its own review, and be rebased under any hosted deployment:
+This branch does not cherry-pick the exploratory PR #994 hosted-management
+stack.
+Its shared writable Codex home, one-process-per-turn client, ambient thread
+files, MCP bearer socket, token-in-environment flow, mutable images, and
+cancellation replay conflict with this design.
 
-1. **Session provisioning and teardown.** Create one slice, workspace mount,
-   disposable Codex home, process, and revocation context per Floot session.
-   Failure at every intermediate step must unwind already-created resources.
-2. **Credential broker.** Keep reusable credentials outside the slice and mint
-   revocable, least-lived authority through a broker or API proxy in a separate
-   protection boundary. A file mount is insufficient because Codex-launched
-   commands share the app-server UID and can read `CODEX_HOME` by absolute path.
-   Do not put tokens in the shared filesystem, environment, or process domain,
-   and do not copy or bind a machine-wide `CODEX_HOME`.
-3. **Sandbox guarantees.** Verify and test private-network policy (including
-   loopback, link-local, RFC1918, IPv6, and DNS rebinding), cgroup/resource
-   limits, process containment, and kill/reap behavior for the selected backend.
-   Give tool subprocesses an egress policy distinct from Codex's brokered API
-   channel, with negative tests proving tools cannot read credentials or reach
-   disallowed Internet destinations.
-   Define and test background-terminal cleanup between turns. App-server's
-   `turn/interrupt` explicitly leaves background terminals running; the current
-   client does not enable the experimental cleanup endpoint.
-4. **Durable audit journal.** Record tool intent, approval decisions, results,
-   cancellation, and failure append-only outside the editable conversation
-   tree. Failed turns may have side effects and must remain observable.
-5. **Explicit approval capabilities.** The core currently rejects every
-   app-server request. Any UI or policy reviewer must be separately endowed and
-   must not turn approval into a model-callable tool.
-6. **Runtime mounts and MCP.** Projecting Endo capabilities or an MCP bridge into
-   Codex expands authority and depends on the runtime-mount/MCP work from the
-   exploratory branch. Review and land those independently before integration.
-7. **Factory lifecycle and dynamic model UI.** Floot has a generic hosted-turn
-   seam, but the factory must not advertise Codex until it can own teardown and
-   obtain concrete model/reasoning choices from `CodexClient.models()` instead
-   of static catalog entries.
-8. **Failed-turn history reconciliation.** Codex keeps failed and cancelled
-   turns in its stateful thread even when Floot does not commit them to its
-   user-visible conversation tree. A hosted integration must either checkpoint
-   and roll back the backend, or persist an explicit failed-turn record and
-   reconcile both histories before the next prompt. Until then the generic seam
-   is injection-only and the factory must not expose it.
-9. **Reproducible image.** Codex CLI is version-pinned, but the base image must
-   be digest-pinned and the resulting image identified by digest in deployment.
+Session staging, reverse-order rollback, retryable teardown, run/admin facet
+attenuation, dynamic model discovery, direct Endo dynamic tools, checkpointed
+failed-history reconciliation, durable audit primitives, and the reproducible
+image recipe are implemented here.
+The following foundations remain external blockers before a production hosted
+deployment can satisfy the asserted contract.
 
-Relevant functionality already on `llm` and therefore not duplicated here:
-FAE exec robustness, FAE compartment rules and sleep, reviewed-change
-workflows, and mount-path documentation.
+## Attestable sandbox enforcement
+
+`@endo/sandbox` must enforce and report `HostedAgentPolicyV1` from effective
+rootless Podman/container state.
+Today its Podman `network: "private"` is NAT rather than filtered isolation, and
+its `limits` record is not translated into cgroup/resource flags.
+The required changes and negative production tests belong in an independently
+reviewed sandbox PR.
+Until it lands, `makeCodexBackendFactory` rejects the policy and app-server does
+not start.
+
+This dependency includes a broker-only network namespace and concrete
+credential-free sidecar transport with process-scoped routing that excludes
+model-launched descendants, cgroup and storage enforcement, private
+namespaces, read-only root, the exact workspace/state/tmpfs mount table, and
+the pinned Codex `workspaceWrite` child policy that makes control state
+read-only to model-launched commands, plus descendant reap/orphan reconciliation
+exactly as specified in
+[SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md).
+
+## Provider credential broker
+
+A separate unconfined broker must own the selected vendor-supported upstream
+credential: individual ChatGPT or Claude.ai OAuth refresh state, or supported
+enterprise access-token/workload-identity material.
+It issues revocable, quota-bound, provider-only session endpoints.
+This branch defines and validates the exact `BrokerLeaseV1` attestation at the
+provisioning seam; the broker and sidecar implementation remain external.
+The stock pinned CLIs must be verified against vendor-supported proxy or gateway
+configuration without putting a real bearer in the slice.
+If that is impossible for a provider, its subscription mode remains disabled.
+
+The complete Codex and Claude Code requirements are in
+[SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md).
+The old `codex-auth-seeder`, shared `CODEX_HOME`,
+`CLAUDE_CODE_OAUTH_TOKEN` environment injection, and credential materialization
+from PR #994 must not land underneath this feature.
+
+## Runtime mount replacement
+
+Endo APIs are exposed to Codex now as app-server dynamic tools through a pinned
+`EndoToolSet`; this does not depend on MCP or `/mnt`.
+Arbitrary live filesystem-capability attachment is a separate authority and
+lifecycle feature.
+If it is later required, it must semantically include the complete race-fix
+chain from PR #994: serialized replacement, exact path/mode validation,
+possession checks, stale-bridge cleanup, full slice recreation, and no prompt
+replay.
+
+## History reconciliation
+
+Codex CLI 0.152.0 provides stable `thread/turns/list` and
+`thread/revert({ threadId, beforeTurnId })` methods.
+This branch pins and tests the write-ahead, commit-acknowledged reconciliation
+protocol against those checkpoint-addressed methods; there is no deprecated
+history API merge blocker.

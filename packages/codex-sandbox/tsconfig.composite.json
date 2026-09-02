@@ -18,6 +18,12 @@
       "path": "../exo-stream/tsconfig.composite.json"
     },
     {
+      "path": "../hosted-agent/tsconfig.composite.json"
+    },
+    {
+      "path": "../pass-style/tsconfig.composite.json"
+    },
+    {
       "path": "../patterns/tsconfig.composite.json"
     },
     {

@@ -21,6 +21,7 @@
     "./src/fae-tool-interface.js": "./src/fae-tool-interface.js",
     "./src/tool-makers.js": "./src/tool-makers.js",
     "./src/tools.js": "./src/tools.js",
+    "./src/turn-engine.js": "./src/turn-engine.js",
     "./src/extract-tool-calls.js": "./src/extract-tool-calls.js",
     "./package.json": "./package.json"
   },

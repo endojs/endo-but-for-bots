@@ -3,11 +3,12 @@ import '@endo/init';
 
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { Far } from '@endo/far';
 
 import { makeCodexClient } from '../src/codex-client.js';
 
 const INITIALIZE_RESULT = harden({
-  codexHome: '/private/codex',
+  codexHome: '/codex-home',
   platformFamily: 'unix',
   platformOs: 'linux',
   userAgent: 'codex-test',
@@ -51,6 +52,7 @@ const makeQueue = () => {
  *   turnIdValue?: any,
  *   turnStatus?: any,
  *   modelListResult?: any,
+ *   existingTurnIds?: string[],
  * }} [options]
  */
 const makeFixture = ({
@@ -63,34 +65,66 @@ const makeFixture = ({
   turnIdValue,
   turnStatus = 'inProgress',
   modelListResult,
+  existingTurnIds = [],
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
   let transportClosed = false;
-  let turnNumber = 0;
+  let turnNumber = existingTurnIds.length;
+  const turnIds = [...existingTurnIds];
+  const push = message => {
+    if (message?.method === 'turn/completed') {
+      const completedId = message.params?.turn?.id;
+      if (typeof completedId === 'string' && !turnIds.includes(completedId)) {
+        turnIds.push(completedId);
+      }
+    }
+    queue.push(message);
+  };
   const send = async message => {
     sent.push(message);
     if (!('id' in message) || !('method' in message)) return;
     switch (message.method) {
       case 'initialize':
-        queue.push({ id: message.id, result: INITIALIZE_RESULT });
+        push({ id: message.id, result: INITIALIZE_RESULT });
         break;
       case 'thread/start':
-        queue.push({
+        push({
           id: message.id,
           result: { thread: { id: 'thread-new' } },
         });
         break;
       case 'thread/resume':
-        queue.push({
+        push({
           id: message.id,
           result: { thread: { id: message.params.threadId } },
         });
         break;
+      case 'thread/revert': {
+        const index = turnIds.indexOf(message.params.beforeTurnId);
+        if (index >= 0) turnIds.splice(index);
+        push({
+          id: message.id,
+          result: { thread: { id: message.params.threadId, turns: [] } },
+        });
+        break;
+      }
+      case 'thread/turns/list': {
+        const latest = turnIds.at(-1);
+        push({
+          id: message.id,
+          result: {
+            data: latest ? [{ id: latest }] : [],
+            nextCursor: null,
+            backwardsCursor: null,
+          },
+        });
+        break;
+      }
       case 'turn/start':
         turnNumber += 1;
-        for (const event of beforeTurnResponse) queue.push(event);
-        queue.push({
+        for (const event of beforeTurnResponse) push(event);
+        push({
           id: message.id,
           result: {
             turn: {
@@ -102,13 +136,13 @@ const makeFixture = ({
         });
         break;
       case 'turn/interrupt':
-        queue.push(
+        push(
           interruptError
             ? { id: message.id, error: { message: interruptError } }
             : { id: message.id, result: {} },
         );
         if (!interruptError && interruptTerminal) {
-          queue.push({
+          push({
             method: 'turn/completed',
             params: {
               threadId: message.params.threadId,
@@ -118,7 +152,7 @@ const makeFixture = ({
         }
         break;
       case 'model/list':
-        queue.push({
+        push({
           id: message.id,
           result:
             modelListResult === undefined
@@ -127,6 +161,9 @@ const makeFixture = ({
                     {
                       id: 'gpt-test',
                       displayName: 'GPT Test',
+                      description: 'Test model',
+                      isDefault: true,
+                      defaultReasoningEffort: 'high',
                       supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
                     },
                   ],
@@ -156,7 +193,7 @@ const makeFixture = ({
   });
   return {
     client,
-    push: queue.push,
+    push,
     sent,
     isClosed: () => transportClosed,
   };
@@ -246,10 +283,17 @@ test('initializes, persists a new thread, and streams normalized events', async 
   );
   t.is(turnStart.params.model, 'gpt-test');
   t.is(turnStart.params.effort, 'high');
+  t.deepEqual(turnStart.params.sandboxPolicy, {
+    type: 'workspaceWrite',
+    writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
+    networkAccess: false,
+    excludeSlashTmp: true,
+    excludeTmpdirEnvVar: true,
+  });
   t.true(events.some(event => event.type === 'tool-call'));
   t.true(events.some(event => event.type === 'tool-result'));
   t.true(events.some(event => event.type === 'text-delta'));
-  t.deepEqual(events.at(-1), { type: 'end' });
+  t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
 });
 
 test('notifications arriving before turn/start response are replayed', async t => {
@@ -277,7 +321,7 @@ test('notifications arriving before turn/start response are replayed', async t =
   const reader = await fixture.client.send('go');
   const events = await drain(reader);
   t.true(events.some(event => event.text === 'response last'));
-  t.deepEqual(events.at(-1), { type: 'end' });
+  t.is(events.at(-1).type, 'end');
 });
 
 test('commentary is distinct from the final answer stream', async t => {
@@ -375,7 +419,7 @@ test('unconsumed thread-scoped notifications do not poison an active turn', asyn
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
-  t.deepEqual((await drain(reader)).at(-1), { type: 'end' });
+  t.is((await drain(reader)).at(-1).type, 'end');
 });
 
 test('resumes a persisted thread and lists server-provided models', async t => {
@@ -500,6 +544,11 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
   t.deepEqual(events.at(-1), { type: 'abort', reason: 'quota exhausted' });
 
   const second = await fixture.client.send('second');
+  const methods = fixture.sent.map(message => message.method);
+  t.true(methods.lastIndexOf('thread/revert') > 0);
+  t.true(
+    methods.lastIndexOf('thread/revert') < methods.lastIndexOf('turn/start'),
+  );
   fixture.push({
     method: 'turn/completed',
     params: {
@@ -507,7 +556,180 @@ test('a failed turn reaches terminal abort without poisoning its thread', async 
       turn: { id: 'turn-2', status: 'completed' },
     },
   });
-  t.deepEqual((await drain(second)).at(-1), { type: 'end' });
+  t.is((await drain(second)).at(-1).type, 'end');
+});
+
+test('a persisted Floot checkpoint acknowledges a completed backend turn', async t => {
+  let state;
+  const first = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  const firstReader = await first.client.send('first');
+  first.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const terminal = (await drain(firstReader)).at(-1);
+  t.is(terminal.checkpoint, 'turn-1');
+  await first.client.terminate();
+
+  const second = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: ['turn-1'],
+    clientOptions: {
+      savedRecovery: /** @type {any} */ (state).recovery,
+      saveThreadState: async next => {
+        state = next;
+      },
+    },
+  });
+  const secondReader = await second.client.send('second', {
+    acknowledgedCheckpoint: terminal.checkpoint,
+  });
+  t.falsy(second.sent.find(message => message.method === 'thread/revert'));
+  second.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(secondReader);
+  await second.client.terminate();
+});
+
+test('replaying an already durable checkpoint is idempotent', async t => {
+  const fixture = makeFixture({ threadId: 'thread-saved' });
+  const first = await fixture.client.send('first');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const checkpoint = (await drain(first)).at(-1).checkpoint;
+  await fixture.client.acknowledge(checkpoint);
+
+  const second = await fixture.client.send('second', {
+    acknowledgedCheckpoint: checkpoint,
+  });
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  t.is((await drain(second)).at(-1).checkpoint, 'turn-2');
+  await fixture.client.acknowledge('turn-2');
+  await fixture.client.terminate();
+});
+
+test('a failed thread-binding audit is retried before dispatch', async t => {
+  let bindingAttempts = 0;
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      auditEvent: async kind => {
+        if (kind === 'thread-bound') {
+          bindingAttempts += 1;
+          if (bindingAttempts === 1) throw Error('audit unavailable');
+        }
+      },
+    },
+  });
+  await t.throwsAsync(() => fixture.client.send('first'), {
+    message: /audit unavailable/,
+  });
+  const reader = await fixture.client.send('retry');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  t.is(bindingAttempts, 2);
+  await fixture.client.acknowledge('turn-1');
+  await fixture.client.terminate();
+});
+
+test('reconciliation is idempotent after revert wins a crash', async t => {
+  const state = {
+    threadId: 'thread-saved',
+    recovery: { baseTurnId: null, turnId: 'lost-turn', status: 'failed' },
+  };
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: [],
+    clientOptions: {
+      savedRecovery: state.recovery,
+      saveThreadState: async () => undefined,
+    },
+  });
+  const reader = await fixture.client.send('after crash');
+  t.falsy(fixture.sent.find(message => message.method === 'thread/revert'));
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  await fixture.client.terminate();
+});
+
+test('reconciliation marker survives a failed completion audit', async t => {
+  let reconciliationAudits = 0;
+  const persisted = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    existingTurnIds: [],
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: null,
+        turnId: 'lost-turn',
+        status: 'failed',
+      },
+      auditEvent: async kind => {
+        if (kind === 'history-reconciled') {
+          reconciliationAudits += 1;
+          if (reconciliationAudits === 1) throw Error('audit unavailable');
+        }
+      },
+      saveThreadState: async state => {
+        persisted.push(state);
+      },
+    },
+  });
+  await t.throwsAsync(() => fixture.client.send('first'), {
+    message: /audit unavailable/,
+  });
+  t.deepEqual(persisted, []);
+
+  const reader = await fixture.client.send('retry');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  await drain(reader);
+  t.is(reconciliationAudits, 2);
+  t.true(persisted.some(state => state.recovery === undefined));
+  await fixture.client.terminate();
 });
 
 test('a failed turn without terminal confirmation poisons the session', async t => {
@@ -597,7 +819,7 @@ test('late completion from an interrupted turn cannot end its successor', async 
   });
   const events = await drain(second);
   t.true(events.some(event => event.text === 'new turn'));
-  t.deepEqual(events.at(-1), { type: 'end' });
+  t.is(events.at(-1).type, 'end');
 });
 
 test('server requests fail closed', async t => {
@@ -605,8 +827,8 @@ test('server requests fail closed', async t => {
   const reader = await fixture.client.send('first');
   fixture.push({
     id: 91,
-    method: 'item/commandExecution/requestApproval',
-    params: { command: 'curl example.com' },
+    method: 'account/chatgptAuthTokens/refresh',
+    params: { reason: 'expired' },
   });
   for (let tries = 0; tries < 20; tries += 1) {
     if (fixture.sent.some(message => message.id === 91)) break;
@@ -617,6 +839,517 @@ test('server requests fail closed', async t => {
   t.is(response.error.code, -32_601);
   await fixture.client.interrupt();
   await drain(reader);
+});
+
+test('operation approvals are automatically accepted inside the Endo sandbox', async t => {
+  const audit = [];
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('first');
+  fixture.push({
+    id: 92,
+    method: 'item/commandExecution/requestApproval',
+    params: {
+      threadId: 'thread-saved',
+      turnId: 'turn-1',
+      itemId: 'command-1',
+      command: 'touch output.txt',
+    },
+  });
+  for (let tries = 0; tries < 20; tries += 1) {
+    if (fixture.sent.some(message => message.id === 92)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.deepEqual(fixture.sent.find(message => message.id === 92)?.result, {
+    decision: 'accept',
+  });
+  t.true(audit.some(entry => entry.kind === 'approval-auto-granted'));
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('permission-profile expansion is not an exposed approval capability', async t => {
+  const fixture = makeFixture({ threadId: 'thread-saved' });
+  const reader = await fixture.client.send('first');
+  fixture.push({
+    id: 921,
+    method: 'item/permissions/requestApproval',
+    params: {
+      threadId: 'thread-saved',
+      turnId: 'turn-1',
+      itemId: 'permission-1',
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: ['/'], write: ['/'] },
+      },
+    },
+  });
+  for (let tries = 0; tries < 20; tries += 1) {
+    if (fixture.sent.some(message => message.id === 921)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.is(fixture.sent.find(message => message.id === 921)?.error.code, -32_601);
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('only endowed dynamic Endo tools are callable and durably audited', async t => {
+  const calls = [];
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolSetId: 'tools-v1',
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'Look up an endowed capability.',
+          inputSchema: {
+            type: 'object',
+            properties: { name: { type: 'string' } },
+            required: ['name'],
+          },
+        },
+      ],
+      callTool: async (name, args) => {
+        calls.push({ name, args });
+        return `found ${args.name}`;
+      },
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('find it');
+  fixture.push({
+    id: 93,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'call-1',
+      namespace: null,
+      tool: 'lookup',
+      arguments: { name: 'workspace' },
+    },
+  });
+  for (let tries = 0; tries < 20; tries += 1) {
+    if (fixture.sent.some(message => message.id === 93)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.deepEqual(calls, [{ name: 'lookup', args: { name: 'workspace' } }]);
+  t.deepEqual(fixture.sent.find(message => message.id === 93)?.result, {
+    success: true,
+    contentItems: [{ type: 'inputText', text: 'found workspace' }],
+  });
+  t.deepEqual(
+    audit
+      .filter(entry => entry.kind.startsWith('tool-'))
+      .map(entry => entry.kind),
+    ['tool-intent', 'tool-result'],
+  );
+  await fixture.client.interrupt();
+  await drain(reader);
+});
+
+test('a server request cannot bind a turn id before turn/start returns', async t => {
+  const calls = [];
+  const fixture = makeFixture({
+    beforeTurnResponse: [
+      {
+        id: 931,
+        method: 'item/tool/call',
+        params: {
+          threadId: 'thread-new',
+          turnId: 'forged-turn',
+          callId: 'forged-call',
+          namespace: null,
+          tool: 'lookup',
+          arguments: {},
+        },
+      },
+    ],
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'lookup',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: async () => {
+        calls.push('called');
+      },
+    },
+  });
+  const events = await drain(await fixture.client.send('first'));
+  t.deepEqual(calls, []);
+  t.is(events.at(-1).type, 'abort');
+  t.true(fixture.isClosed());
+});
+
+test('a dynamic tool call id cannot be replayed', async t => {
+  const calls = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'lookup',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: async () => {
+        calls.push('called');
+        return 'ok';
+      },
+    },
+  });
+  const reader = await fixture.client.send('first');
+  const params = {
+    threadId: 'thread-new',
+    turnId: 'turn-1',
+    callId: 'same-call',
+    namespace: null,
+    tool: 'lookup',
+    arguments: {},
+  };
+  fixture.push({ id: 941, method: 'item/tool/call', params });
+  for (let tries = 0; tries < 20; tries += 1) {
+    if (fixture.sent.some(message => message.id === 941)) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  fixture.push({ id: 942, method: 'item/tool/call', params });
+  const events = await drain(reader);
+  t.deepEqual(calls, ['called']);
+  t.is(events.at(-1).type, 'abort');
+  t.true(fixture.isClosed());
+});
+
+test('teardown reserves admission before awaiting its close audit', async t => {
+  let calls = 0;
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'late',
+          description: 'Must not start during teardown.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: async () => {
+        calls += 1;
+        return 'bad';
+      },
+      auditEvent: async kind => {
+        if (kind === 'session-close-requested') {
+          /** @type {ReturnType<typeof makeFixture>} */ (fixture).push({
+            id: 950,
+            method: 'item/tool/call',
+            params: {
+              threadId: 'thread-new',
+              turnId: 'turn-1',
+              callId: 'late-1',
+              namespace: null,
+              tool: 'late',
+              arguments: {},
+            },
+          });
+          await null;
+        }
+      },
+    },
+  });
+  const reader = await fixture.client.send('first');
+  await fixture.client.terminate();
+  t.is(calls, 0);
+  t.is((await drain(reader)).at(-1).type, 'abort');
+});
+
+test('teardown synchronously rejects a new turn before its close audit', async t => {
+  /** @type {(value?: any) => void} */
+  let auditStarted = () => {};
+  /** @type {(value?: any) => void} */
+  let releaseAudit = () => {};
+  const started = new Promise(resolve => {
+    auditStarted = resolve;
+  });
+  const gate = new Promise(resolve => {
+    releaseAudit = resolve;
+  });
+  const fixture = makeFixture({
+    clientOptions: {
+      auditEvent: async kind => {
+        if (kind === 'session-close-requested') {
+          auditStarted();
+          await gate;
+        }
+      },
+    },
+  });
+  const closing = fixture.client.terminate();
+  await started;
+  await t.throwsAsync(() => fixture.client.send('too late'), {
+    message: /session closing/,
+  });
+  releaseAudit();
+  await closing;
+});
+
+test('a timed-out Endo tool poisons the session until late settlement', async t => {
+  /** @type {(value?: any) => void} */
+  let settle = () => {};
+  const audit = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 10,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'wait',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: async () =>
+        new Promise(resolve => {
+          settle = resolve;
+        }),
+      auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+    },
+  });
+  const reader = await fixture.client.send('first');
+  fixture.push({
+    id: 951,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'wait-1',
+      namespace: null,
+      tool: 'wait',
+      arguments: {},
+    },
+  });
+  t.is((await drain(reader)).at(-1).type, 'abort');
+  t.true(fixture.isClosed());
+  await t.throwsAsync(() => fixture.client.terminate(), {
+    message: /unsettled Endo tool call/,
+  });
+  settle('late result');
+  for (let tries = 0; tries < 20; tries += 1) {
+    if (audit.some(entry => entry.kind === 'tool-late-settled')) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  t.true(audit.some(entry => entry.kind === 'tool-outcome-unknown'));
+  t.true(audit.some(entry => entry.kind === 'tool-late-settled'));
+  await fixture.client.terminate();
+});
+
+test('late non-JSON tool fulfillments remain call-correlated unknowns', async t => {
+  const cases = [
+    ['bigint', 1n],
+    ['remotable', Far('LateSuccessfulToolAuthority', {})],
+  ];
+  for (const [label, lateResult] of cases) {
+    /** @type {(value?: any) => void} */
+    let settle = () => {};
+    const audit = [];
+    const fixture = makeFixture({
+      clientOptions: {
+        toolCallTimeoutMs: 10,
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'wait',
+            description: 'wait',
+            inputSchema: { type: 'object' },
+          },
+        ],
+        callTool: async () =>
+          new Promise(resolve => {
+            settle = resolve;
+          }),
+        auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const reader = await fixture.client.send(`wait for ${label}`);
+    fixture.push({
+      id: label === 'bigint' ? 956 : 957,
+      method: 'item/tool/call',
+      params: {
+        threadId: 'thread-new',
+        turnId: 'turn-1',
+        callId: `late-${label}`,
+        namespace: null,
+        tool: 'wait',
+        arguments: {},
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await drain(reader);
+    settle(lateResult);
+    for (let tries = 0; tries < 20; tries += 1) {
+      if (audit.some(entry => entry.kind === 'tool-late-outcome-unknown'))
+        break;
+      // eslint-disable-next-line no-await-in-loop
+      await Promise.resolve();
+    }
+    const late = audit.find(
+      entry => entry.kind === 'tool-late-outcome-unknown',
+    );
+    t.is(late?.payload.callId, `late-${label}`);
+    t.false(
+      audit.some(
+        entry => entry.kind === 'tool-late-settled' && entry.payload.success,
+      ),
+    );
+    // eslint-disable-next-line no-await-in-loop
+    await fixture.client.terminate();
+  }
+});
+
+test('an unauditable successful Endo result quarantines instead of inviting replay', async t => {
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'mutate',
+          description: 'Perform one endowed mutation.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: async () => 'x'.repeat(4 * 1024 * 1024 + 1),
+    },
+  });
+  const reader = await fixture.client.send('mutate once');
+  fixture.push({
+    id: 952,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'mutate-1',
+      namespace: null,
+      tool: 'mutate',
+      arguments: {},
+    },
+  });
+  const events = await drain(reader);
+  t.is(events.at(-1).type, 'abort');
+  t.regex(events.at(-1).reason, /Audit payload exceeded/);
+  t.falsy(fixture.sent.find(message => message.id === 952));
+  t.true(fixture.isClosed());
+});
+
+test('non-JSON successful Endo results are unknown and never retryable', async t => {
+  const cases = [
+    ['bigint', 1n],
+    ['remotable', Far('SuccessfulToolAuthority', {})],
+  ];
+  for (const [label, result] of cases) {
+    const audit = [];
+    const fixture = makeFixture({
+      clientOptions: {
+        dynamicTools: [
+          {
+            type: 'function',
+            name: 'mutate',
+            description: 'Perform one endowed mutation.',
+            inputSchema: { type: 'object' },
+          },
+        ],
+        callTool: async () => result,
+        auditEvent: async (kind, payload) => audit.push({ kind, payload }),
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const reader = await fixture.client.send(`mutate with ${label}`);
+    fixture.push({
+      id: label === 'bigint' ? 954 : 955,
+      method: 'item/tool/call',
+      params: {
+        threadId: 'thread-new',
+        turnId: 'turn-1',
+        callId: `mutate-${label}`,
+        namespace: null,
+        tool: 'mutate',
+        arguments: {},
+      },
+    });
+    // eslint-disable-next-line no-await-in-loop
+    const events = await drain(reader);
+    t.is(events.at(-1).type, 'abort');
+    t.true(fixture.isClosed());
+    t.falsy(
+      fixture.sent.find(
+        message => message.id === (label === 'bigint' ? 954 : 955),
+      ),
+    );
+    t.deepEqual(
+      audit
+        .filter(entry => entry.kind.startsWith('tool-'))
+        .map(entry => [entry.kind, entry.payload.success]),
+      [
+        ['tool-intent', undefined],
+        ['tool-outcome-unknown', undefined],
+      ],
+    );
+  }
+});
+
+test('a rejected post-success audit quarantines a side-effectful Endo tool', async t => {
+  let mutations = 0;
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'mutate',
+          description: 'Perform one endowed mutation.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: async () => {
+        mutations += 1;
+        return 'committed';
+      },
+      auditEvent: async kind => {
+        if (kind === 'tool-result') throw Error('audit store unavailable');
+      },
+    },
+  });
+  const reader = await fixture.client.send('mutate once');
+  fixture.push({
+    id: 953,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'mutate-2',
+      namespace: null,
+      tool: 'mutate',
+      arguments: {},
+    },
+  });
+  const events = await drain(reader);
+  t.is(mutations, 1);
+  t.is(events.at(-1).type, 'abort');
+  t.is(events.at(-1).reason, 'audit store unavailable');
+  t.falsy(fixture.sent.find(message => message.id === 953));
+  t.true(fixture.isClosed());
 });
 
 test('turn output bounds interrupt an excessive stream', async t => {
@@ -659,6 +1392,8 @@ test('terminate closes the transport', async t => {
     threadId: null,
     ready: false,
     active: false,
+    pendingToolCalls: 0,
+    closing: false,
     terminated: false,
     cleanupFailures: [],
   });
@@ -671,6 +1406,8 @@ test('terminate closes the transport', async t => {
     threadId: null,
     ready: false,
     active: false,
+    pendingToolCalls: 0,
+    closing: true,
     terminated: true,
     cleanupFailures: [],
   });
@@ -819,7 +1556,10 @@ test('malformed initialize results poison the pinned protocol session', async t 
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
         if (message.method === 'initialize') {
-          queue.push({ id: message.id, result: {} });
+          queue.push({
+            id: message.id,
+            result: { ...INITIALIZE_RESULT, codexHome: '/workspace' },
+          });
         }
       },
       close: async () => queue.close(),
@@ -848,6 +1588,11 @@ test('ambiguous turn-start write failure poisons the session', async t => {
           queue.push({
             id: message.id,
             result: { thread: { id: 'thread-saved' } },
+          });
+        } else if (message.method === 'thread/turns/list') {
+          queue.push({
+            id: message.id,
+            result: { data: [], nextCursor: null, backwardsCursor: null },
           });
         } else if (message.method === 'turn/start') {
           throw Error('stdin failed after write');
@@ -887,6 +1632,11 @@ test('interrupt during deferred turn start closes the ambiguous session', async 
             id: message.id,
             result: { thread: { id: 'thread-saved' } },
           });
+        } else if (message.method === 'thread/turns/list') {
+          queue.push({
+            id: message.id,
+            result: { data: [], nextCursor: null, backwardsCursor: null },
+          });
         }
       },
       close: async () => {
@@ -896,12 +1646,14 @@ test('interrupt during deferred turn start closes the ambiguous session', async 
     }),
   });
   const readerP = client.send('first');
+  readerP.catch(() => undefined);
   await null;
-  for (let tries = 0; tries < 50; tries += 1) {
+  for (let tries = 0; tries < 200; tries += 1) {
     if (sent.some(message => message.method === 'turn/start')) break;
     // eslint-disable-next-line no-await-in-loop
     await null;
   }
+  t.true(sent.some(message => message.method === 'turn/start'));
   await t.throwsAsync(() => client.interrupt(), {
     message: /id was confirmed/,
   });
@@ -938,7 +1690,9 @@ test('interrupt during thread startup is a terminating barrier', async t => {
     // eslint-disable-next-line no-await-in-loop
     await null;
   }
-  await client.interrupt();
+  await t.throwsAsync(() => client.interrupt(), {
+    message: /interrupted during startup/,
+  });
   t.true(closed);
   await t.throwsAsync(sendP, { message: /interrupted during startup/ });
   await t.throwsAsync(() => client.send('second'), {
@@ -959,7 +1713,7 @@ test('an idle interrupt cannot terminate a turn that starts afterward', async t 
       turn: { id: 'turn-1', status: 'completed' },
     },
   });
-  t.deepEqual((await drain(reader)).at(-1), { type: 'end' });
+  t.is((await drain(reader)).at(-1).type, 'end');
   t.false((await fixture.client.status()).terminated);
 });
 

@@ -12,7 +12,7 @@ const textChunks = parts =>
   bytesReaderFromIterator(parts.map(part => new TextEncoder().encode(part)));
 
 /**
- * @param {{ stdout?: string[], stderr?: string[], closeStdinEarly?: boolean, stdinError?: string, stdoutError?: string, killError?: string, waitBarrier?: Promise<void>, waitError?: string }} [options]
+ * @param {{ stdout?: string[], stderr?: string[], closeStdinEarly?: boolean, stdinError?: string, stdoutError?: string, stdinBarrier?: Promise<void>, stdoutBarrier?: Promise<void>, killError?: string, waitBarrier?: Promise<void>, waitError?: string }} [options]
  */
 const makeFixture = ({
   stdout = ['{"id":1,"result":{}}\n'],
@@ -20,6 +20,8 @@ const makeFixture = ({
   closeStdinEarly = false,
   stdinError,
   stdoutError,
+  stdinBarrier,
+  stdoutBarrier,
   killError,
   waitBarrier,
   waitError,
@@ -48,6 +50,7 @@ const makeFixture = ({
 
   const proc = {
     async stdin() {
+      if (stdinBarrier) await stdinBarrier;
       if (stdinError) throw Error(stdinError);
       if (closeStdinEarly) {
         return harden({
@@ -62,6 +65,7 @@ const makeFixture = ({
       return bytesWriterFromIterator(sink);
     },
     async stdout() {
+      if (stdoutBarrier) await stdoutBarrier;
       if (stdoutError) throw Error(stdoutError);
       return textChunks(stdout);
     },
@@ -104,7 +108,6 @@ test('transport binds app-server stdio and owns process cleanup', async t => {
   const transport = await startAppServerTransport({
     slice: /** @type {any} */ (fixture.slice),
     cwd: '/work',
-    env: { CODEX_HOME: '/private/codex' },
     executable: '/bin/codex',
     stdoutByteLimit: 123n,
     stderrByteLimit: 45n,
@@ -114,7 +117,16 @@ test('transport binds app-server stdio and owns process cleanup', async t => {
     argv: ['/bin/codex', 'app-server', '--listen', 'stdio://'],
     options: {
       cwd: '/work',
-      env: { CODEX_HOME: '/private/codex' },
+      env: {
+        CODEX_HOME: '/codex-home',
+        HOME: '/home/node',
+        LANG: 'C.UTF-8',
+        LC_ALL: 'C.UTF-8',
+        TEMP: '/tmp',
+        TMP: '/tmp',
+        TMPDIR: '/tmp',
+        TZ: 'UTC',
+      },
       captureStdout: true,
       captureStderr: true,
       stdoutByteLimit: 123n,
@@ -137,6 +149,50 @@ test('transport binds app-server stdio and owns process cleanup', async t => {
   t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
   t.regex(transport.diagnostics(), /first\nsecond/);
   await t.throwsAsync(transport.send({ id: 8 }), { message: /closed/ });
+});
+
+test('transport denies all caller-supplied environment entries', async t => {
+  for (const env of /** @type {Array<Record<string, string>>} */ ([
+    { OPENAI_API_KEY: 'secret' },
+    { GITHUB_TOKEN: 'secret' },
+    { HTTPS_PROXY: 'http://credential-proxy.invalid' },
+    { SAFE_VALUE: 'even seemingly safe values expand the contract' },
+  ])) {
+    const fixture = makeFixture({});
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        startAppServerTransport({
+          slice: /** @type {any} */ (fixture.slice),
+          env,
+        }),
+      { message: /Custom app-server environment denied/ },
+    );
+    t.is(fixture.getSpawnCall(), undefined);
+  }
+});
+
+test('transport bounds stdio acquisition and reaps partial setup', async t => {
+  for (const barrierName of ['stdinBarrier', 'stdoutBarrier']) {
+    const fixture = makeFixture({
+      [barrierName]: new Promise(() => {}),
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        startAppServerTransport({
+          slice: /** @type {any} */ (fixture.slice),
+          setupTimeoutMs: 5,
+          teardownTimeoutMs: 50,
+        }),
+      { message: /acquisition timed out/ },
+    );
+    t.deepEqual(fixture.counts(), {
+      stdinReturns: 0,
+      kills: 1,
+      waits: 1,
+    });
+  }
 });
 
 test('transport rejects when app-server closes stdin before a write', async t => {
@@ -181,6 +237,18 @@ test('close attempts all teardown steps and preserves failure', async t => {
   });
   await t.throwsAsync(transport.close(), { message: /teardown failed/ });
   await t.throwsAsync(transport.close(), { message: /teardown failed/ });
+  t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
+});
+
+test('close bounds a supervisor that never reports process reap', async t => {
+  const fixture = makeFixture({ waitBarrier: new Promise(() => {}) });
+  const transport = await startAppServerTransport({
+    slice: /** @type {any} */ (fixture.slice),
+    teardownTimeoutMs: 5,
+  });
+  await t.throwsAsync(transport.close(), {
+    message: /teardown failed/,
+  });
   t.deepEqual(fixture.counts(), { stdinReturns: 1, kills: 1, waits: 1 });
 });
 

@@ -4,6 +4,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { makeError, X } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 
 import { toolFromItem } from './codex-protocol.js';
@@ -14,6 +15,7 @@ const CodexClientInterface = M.interface('CodexClient', {
     .returns(M.promise()),
   models: M.call().returns(M.promise()),
   interrupt: M.call().returns(M.promise()),
+  acknowledge: M.call(M.string()).returns(M.promise()),
   terminate: M.call().returns(M.promise()),
   status: M.call().returns(M.promise()),
   help: M.call().optional(M.string()).returns(M.string()),
@@ -45,6 +47,64 @@ const brief = (value, limit) => {
   return `${text.slice(0, limit)}… [truncated ${text.length - limit} chars]`;
 };
 
+const auditProjection = (value, limit = 4 * 1024 * 1024) => {
+  const text =
+    typeof value === 'string'
+      ? value
+      : (JSON.stringify(value) ?? String(value));
+  const size = new TextEncoder().encode(text).byteLength;
+  if (size > limit) throw Error(`Audit payload exceeded ${limit} bytes`);
+  return text;
+};
+
+/**
+ * Project a successful tool fulfillment to JSON without silently collapsing
+ * an Endo capability to `{}` or coercing another non-JSON passable.
+ *
+ * @param {unknown} root
+ */
+const projectToolResult = root => {
+  const visit = value => {
+    if (
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'boolean'
+    ) {
+      return value;
+    }
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) {
+        throw Error('Successful Endo tool result contains a non-finite number');
+      }
+      return value;
+    }
+    let style;
+    try {
+      style = passStyleOf(value);
+    } catch {
+      throw Error('Successful Endo tool result is not passable JSON data');
+    }
+    if (style === 'copyArray') {
+      return harden(value.map(visit));
+    }
+    if (style === 'copyRecord') {
+      const keys = Reflect.ownKeys(value);
+      if (!keys.every(key => typeof key === 'string')) {
+        throw Error(
+          'Successful Endo tool result contains a symbol-keyed field',
+        );
+      }
+      return harden(
+        Object.fromEntries(keys.map(key => [key, visit(value[key])])),
+      );
+    }
+    throw Error(`Successful Endo tool result has non-JSON pass style ${style}`);
+  };
+  return visit(root);
+};
+
+const CODEX_SANDBOX_MODE = 'workspace-write';
+
 /**
  * @typedef {object} AppServerTransport
  * @property {AsyncIterable<any>} messages
@@ -63,8 +123,12 @@ const brief = (value, limit) => {
  * @property {Promise<void>} terminal
  * @property {() => void} resolveTerminal
  * @property {ReturnType<typeof setTimeout>} [terminalTimer]
+ * @property {ReturnType<typeof setTimeout>} [wallTimer]
  * @property {number} events
  * @property {number} bytes
+ * @property {number} toolCalls
+ * @property {Set<string>} serverRequestIds
+ * @property {Set<string>} toolCallIds
  * @property {Set<string>} textItems
  * @property {Map<string, string | null>} messagePhases
  * @property {Map<string, any[]>} earlyByTurn
@@ -81,6 +145,7 @@ const brief = (value, limit) => {
  * @param {() => Promise<AppServerTransport>} options.start
  * @param {string} options.sessionId
  * @param {(error: Error) => void | Promise<void>} [options.reportCleanupFailure]
+ * @param {(kind: string, payload: Record<string, unknown>) => void | Promise<void>} [options.auditEvent]
  * @param {string} [options.threadId]
  * @param {(threadId: string) => Promise<void>} [options.saveThreadId]
  * @param {string} [options.cwd]
@@ -88,32 +153,49 @@ const brief = (value, limit) => {
  * @param {string} [options.reasoningEffort]
  * @param {string} [options.developerInstructions]
  * @param {string} [options.approvalPolicy]
- * @param {string} [options.sandbox]
+ * @param {Array<{ type: 'function', name: string, description: string, inputSchema: unknown }>} [options.dynamicTools]
+ * @param {(name: string, args: Record<string, unknown>) => Promise<unknown>} [options.callTool]
+ * @param {string} [options.toolSetId]
+ * @param {string} [options.savedToolSetId]
+ * @param {{ baseTurnId: string | null, turnId?: string, status?: string }} [options.savedRecovery]
+ * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string } }) => Promise<void>} [options.saveThreadState]
  * @param {number} [options.requestTimeoutMs]
  * @param {number} [options.maxTurnEvents]
  * @param {number} [options.maxTurnBytes]
  * @param {number} [options.maxToolResultChars]
  * @param {number} [options.maxPromptBytes]
  * @param {number} [options.maxRequestBytes]
+ * @param {number} [options.maxToolCalls]
+ * @param {number} [options.toolCallTimeoutMs]
+ * @param {number} [options.turnWallTimeoutMs]
  */
 export const makeCodexClient = ({
   start,
   sessionId,
   reportCleanupFailure = () => undefined,
+  auditEvent = () => undefined,
   threadId: savedThreadId,
   saveThreadId = async () => undefined,
+  saveThreadState,
   cwd = '/workspace',
   model,
   reasoningEffort,
   developerInstructions,
   approvalPolicy = 'never',
-  sandbox = 'workspace-write',
+  dynamicTools = [],
+  callTool,
+  toolSetId,
+  savedToolSetId,
+  savedRecovery,
   requestTimeoutMs = 30_000,
   maxTurnEvents = 10_000,
   maxTurnBytes = 16 * 1024 * 1024,
   maxToolResultChars = 64 * 1024,
   maxPromptBytes = 1024 * 1024,
   maxRequestBytes = 2 * 1024 * 1024,
+  maxToolCalls = 128,
+  toolCallTimeoutMs = 120_000,
+  turnWallTimeoutMs = 30 * 60_000,
 }) => {
   /** @type {AppServerTransport | undefined} */
   let transport;
@@ -121,10 +203,20 @@ export const makeCodexClient = ({
   let ready;
   /** @type {Promise<void> | undefined} */
   let shutdown;
+  /** @type {Promise<void> | undefined} */
+  let sessionFailureAudit;
   let terminated = false;
+  let closing = false;
+  let closeDeferredAudited = false;
+  let closeRequestedAudited = false;
   let initialized = false;
   /** @type {string[]} */
   const cleanupFailures = [];
+  /** @type {Set<Promise<unknown>>} */
+  const pendingToolOperations = new Set();
+  const audit = async (kind, payload = {}) => {
+    await auditEvent(kind, harden({ sessionId, ...payload }));
+  };
   const recordCleanupFailure = error => {
     const failure = error instanceof Error ? error : Error(`${error}`);
     cleanupFailures.push(brief(failure.message, 4096));
@@ -153,6 +245,9 @@ export const makeCodexClient = ({
       );
       if (cleanupFailures.length > 16) cleanupFailures.shift();
     }
+    Promise.resolve(
+      audit('cleanup-failed', { reason: brief(failure.message, 4096) }),
+    ).catch(() => undefined);
   };
   /** @type {(failure: Error) => void} */
   let signalTermination = () => {};
@@ -164,6 +259,8 @@ export const makeCodexClient = ({
   let nextRequestId = 1;
   let threadId = savedThreadId;
   let threadReady = false;
+  let recovery = savedRecovery;
+  let needsRollback = Boolean(recovery);
   /** @type {Map<number, { resolve: (value: any) => void, reject: (error: Error) => void }>} */
   const pending = new Map();
   /** @type {ActiveTurn | undefined} */
@@ -181,29 +278,66 @@ export const makeCodexClient = ({
     if (!active) return;
     const turn = active;
     if (turn.terminalTimer !== undefined) clearTimeout(turn.terminalTimer);
+    if (turn.wallTimer !== undefined) clearTimeout(turn.wallTimer);
     turn.push(event);
     active = undefined;
     turnReserved = false;
     turn.resolveTerminal();
   };
 
-  const failSession = error => {
+  const failSession = (error, recordFailure = true) => {
     const failure = error instanceof Error ? error : Error(`${error}`);
+    if (recordFailure && !sessionFailureAudit) {
+      sessionFailureAudit = audit('session-failed', {
+        reason: brief(failure.message, 4096),
+      });
+      // A caller may not await an automatic protocol failure; keep the
+      // rejection observed while shutdown retains it for lifecycle reporting.
+      sessionFailureAudit.catch(() => undefined);
+    }
     terminated = true;
     signalTermination(failure);
     turnReserved = false;
     rejectPending(failure);
-    if (active) endActive(harden({ type: 'abort', reason: failure.message }));
+    if (active) {
+      const failedTurn = active;
+      const finish = () => {
+        if (active === failedTurn) {
+          endActive(harden({ type: 'abort', reason: failure.message }));
+        }
+      };
+      if (sessionFailureAudit) {
+        sessionFailureAudit.then(finish, finish);
+      } else {
+        finish();
+      }
+    }
     if (!shutdown) {
       shutdown = (async () => {
         await null;
+        const failures = [];
         if (transport) {
-          await transport.close();
+          try {
+            await transport.close();
+          } catch (closeError) {
+            failures.push(closeError);
+          }
         } else if (ready) {
           // Do not let an unbounded transport factory delay terminate(). The
           // startup continuation observes `terminated` and closes any process
           // that arrives late; keep its rejection observed here.
           void ready.catch(() => undefined);
+        }
+        if (sessionFailureAudit) {
+          try {
+            await sessionFailureAudit;
+          } catch (auditError) {
+            failures.push(auditError);
+          }
+        }
+        if (failures.length > 0) {
+          if (failures.length === 1) throw failures[0];
+          throw new AggregateError(failures, 'Codex session shutdown failed');
         }
       })();
       // Automatic protocol-failure paths have no caller awaiting shutdown.
@@ -288,7 +422,9 @@ export const makeCodexClient = ({
     await null;
     if (!turn) {
       if (reserved) {
-        await failSession(Error(`${reason} during startup`));
+        const failure = Error(`${reason} during startup`);
+        await failSession(failure);
+        return failure;
       }
       return undefined;
     }
@@ -306,6 +442,11 @@ export const makeCodexClient = ({
       return failure;
     }
     try {
+      await audit('turn-interrupt-requested', {
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        reason,
+      });
       await request('turn/interrupt', {
         threadId: turn.threadId,
         turnId: turn.turnId,
@@ -364,7 +505,269 @@ export const makeCodexClient = ({
     );
   };
 
-  const onNotification = message => {
+  const correlateServerRequest = params => {
+    if (
+      !active ||
+      params?.threadId !== active.threadId ||
+      typeof params?.turnId !== 'string' ||
+      params.turnId === '' ||
+      !active.turnId
+    ) {
+      return false;
+    }
+    return params.turnId === active.turnId;
+  };
+
+  const runDynamicTool = async params => {
+    if (closing || terminated) {
+      throw Error(
+        'Codex session is closing; no new Endo tool calls are admitted',
+      );
+    }
+    if (!correlateServerRequest(params)) {
+      throw Error('Dynamic tool call was not correlated to the active turn');
+    }
+    if (params.namespace !== null && params.namespace !== undefined) {
+      throw Error('Namespaced dynamic tools are not exposed by Endo');
+    }
+    if (typeof callTool !== 'function') {
+      throw Error('No Endo dynamic-tool executor is installed');
+    }
+    const descriptor = dynamicTools.find(tool => tool.name === params.tool);
+    if (!descriptor) {
+      throw Error(`Dynamic tool is not endowed: ${params.tool}`);
+    }
+    if (!params.arguments || typeof params.arguments !== 'object') {
+      throw Error('Dynamic tool arguments must be a record');
+    }
+    if (typeof params.callId !== 'string' || params.callId === '') {
+      throw Error('Dynamic tool call omitted its stable call id');
+    }
+    if (!active || active.toolCalls >= maxToolCalls) {
+      throw Error(`Dynamic tool call limit exceeded (${maxToolCalls})`);
+    }
+    if (active.toolCallIds.has(params.callId)) {
+      throw Error(`Dynamic tool call id was replayed: ${params.callId}`);
+    }
+    active.toolCallIds.add(params.callId);
+    active.toolCalls += 1;
+    await audit('tool-intent', {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      callId: params.callId,
+      tool: params.tool,
+      arguments: auditProjection(params.arguments),
+    });
+    const timeoutFailure = Error(
+      `Dynamic tool timed out after ${toolCallTimeoutMs} ms`,
+    );
+    /** @type {ReturnType<typeof setTimeout> | undefined} */
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
+    });
+    const operation = Promise.resolve().then(() =>
+      callTool(params.tool, params.arguments),
+    );
+    pendingToolOperations.add(operation);
+    operation.then(
+      () => pendingToolOperations.delete(operation),
+      () => pendingToolOperations.delete(operation),
+    );
+    let result;
+    try {
+      result = await Promise.race([operation, deadline]);
+    } catch (error) {
+      if (timer !== undefined) clearTimeout(timer);
+      if (terminated) throw error;
+      if (error === timeoutFailure) {
+        await audit('tool-outcome-unknown', {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          callId: params.callId,
+          tool: params.tool,
+          reason: timeoutFailure.message,
+        });
+        // The Endo call cannot be assumed cancelled. Poison the session so no
+        // successor can overlap it, and keep observing the late settlement for
+        // the operator journal instead of reporting a false tool failure.
+        operation
+          .then(
+            async lateResult => {
+              try {
+                const lateProjected = projectToolResult(lateResult);
+                await audit('tool-late-settled', {
+                  threadId: params.threadId,
+                  turnId: params.turnId,
+                  callId: params.callId,
+                  tool: params.tool,
+                  success: true,
+                  result: auditProjection(lateProjected),
+                });
+              } catch (lateProjectionError) {
+                await audit('tool-late-outcome-unknown', {
+                  threadId: params.threadId,
+                  turnId: params.turnId,
+                  callId: params.callId,
+                  tool: params.tool,
+                  reason: brief(
+                    lateProjectionError instanceof Error
+                      ? lateProjectionError.message
+                      : `${lateProjectionError}`,
+                    maxToolResultChars,
+                  ),
+                });
+              }
+            },
+            lateError =>
+              audit('tool-late-settled', {
+                threadId: params.threadId,
+                turnId: params.turnId,
+                callId: params.callId,
+                tool: params.tool,
+                success: false,
+                reason: brief(
+                  lateError instanceof Error ? lateError.message : lateError,
+                  maxToolResultChars,
+                ),
+              }),
+          )
+          .catch(recordCleanupFailure);
+        failSession(timeoutFailure);
+        throw timeoutFailure;
+      }
+      const reason = brief(
+        error instanceof Error ? error.message : `${error}`,
+        maxToolResultChars,
+      );
+      await audit('tool-result', {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        callId: params.callId,
+        tool: params.tool,
+        success: false,
+        reason,
+      });
+      return harden({
+        success: false,
+        contentItems: harden([{ type: 'inputText', text: `Error: ${reason}` }]),
+      });
+    }
+    if (timer !== undefined) clearTimeout(timer);
+
+    let projected;
+    let text;
+    try {
+      projected = projectToolResult(result);
+      text = brief(projected, maxToolResultChars);
+    } catch (renderError) {
+      const reason = brief(
+        renderError instanceof Error
+          ? renderError.message
+          : 'Successful Endo tool result could not be represented',
+        maxToolResultChars,
+      );
+      let failure =
+        renderError instanceof Error ? renderError : Error(`${renderError}`);
+      try {
+        await audit('tool-outcome-unknown', {
+          threadId: params.threadId,
+          turnId: params.turnId,
+          callId: params.callId,
+          tool: params.tool,
+          reason,
+        });
+      } catch (auditError) {
+        failure = new AggregateError(
+          [failure, auditError],
+          'Successful Endo tool result could not be durably represented',
+          { cause: auditError },
+        );
+      }
+      failSession(failure);
+      throw failure;
+    }
+    try {
+      await audit('tool-result', {
+        threadId: params.threadId,
+        turnId: params.turnId,
+        callId: params.callId,
+        tool: params.tool,
+        success: true,
+        result: auditProjection(projected),
+      });
+    } catch (error) {
+      // The Endo operation has already succeeded. Without its complete durable
+      // result record, returning an ordinary tool error could invite the model
+      // to repeat a side effect. Quarantine the session instead.
+      failSession(error);
+      throw error;
+    }
+    return harden({
+      success: true,
+      contentItems: harden([{ type: 'inputText', text }]),
+    });
+  };
+
+  const handleServerRequest = async message => {
+    await null;
+    const { id, method, params = {} } = message;
+    const validId =
+      (typeof id === 'string' && id !== '') ||
+      (typeof id === 'number' && Number.isFinite(id));
+    if (!validId || !active) {
+      throw Error('Codex server request omitted a valid active request id');
+    }
+    const requestKey = `${typeof id}:${id}`;
+    if (active.serverRequestIds.has(requestKey)) {
+      throw Error(`Codex server request id was replayed: ${id}`);
+    }
+    active.serverRequestIds.add(requestKey);
+    if (method === 'item/tool/call') {
+      const result = await runDynamicTool(params);
+      await sendMessage({ id, result });
+      return;
+    }
+    const approvalMethods = new Set([
+      'item/commandExecution/requestApproval',
+      'item/fileChange/requestApproval',
+    ]);
+    if (approvalMethods.has(method)) {
+      if (!correlateServerRequest(params)) {
+        throw Error(`${method} was not correlated to the active turn`);
+      }
+      const result = harden({ decision: 'accept' });
+      await audit('approval-auto-granted', {
+        method,
+        threadId: params.threadId,
+        turnId: params.turnId,
+        itemId: `${params.itemId || ''}`,
+        // Record the requested envelope, including commands and paths. The
+        // journal is operator-sensitive storage, not a redacted UI log.
+        request: auditProjection(params),
+        response: result,
+      });
+      await sendMessage({ id, result });
+      return;
+    }
+    await audit('server-request-denied', {
+      method: `${method}`,
+      ...(typeof params.threadId === 'string'
+        ? { threadId: params.threadId }
+        : {}),
+      ...(typeof params.turnId === 'string' ? { turnId: params.turnId } : {}),
+    });
+    await sendMessage({
+      id,
+      error: {
+        code: -32_601,
+        message: `Unsupported server request: ${method}`,
+      },
+    });
+  };
+
+  const onNotification = async message => {
+    await null;
     const { method, params = {} } = message;
     if (!active || params?.threadId !== active.threadId) return;
     const eventTurnId = params?.turnId || params?.turn?.id;
@@ -419,6 +822,13 @@ export const makeCodexClient = ({
         }
         const tool = toolFromItem(params.item);
         if (tool) {
+          await audit('backend-tool-intent-observed', {
+            threadId: params.threadId,
+            turnId: eventTurnId,
+            itemId: tool.id,
+            tool: tool.name,
+            arguments: auditProjection(tool.args),
+          });
           pushTurn({
             type: 'tool-call',
             id: tool.id,
@@ -440,6 +850,13 @@ export const makeCodexClient = ({
         }
         const tool = toolFromItem(item);
         if (tool) {
+          await audit('backend-tool-result-observed', {
+            threadId: params.threadId,
+            turnId: eventTurnId,
+            itemId: tool.id,
+            tool: tool.name,
+            result: auditProjection(tool.result),
+          });
           pushTurn({
             type: 'tool-result',
             id: tool.id,
@@ -498,9 +915,27 @@ export const makeCodexClient = ({
         break;
       case 'turn/completed': {
         const status = params.turn?.status;
+        await audit('turn-terminal', {
+          threadId: params.threadId,
+          turnId: eventTurnId,
+          status: `${status || 'missing'}`,
+          ...((active?.errorReason || params.turn?.error?.message) && {
+            reason: active?.errorReason || params.turn?.error?.message,
+          }),
+        });
         if (status === 'completed') {
-          endActive({ type: 'end' });
+          recovery = harden({
+            baseTurnId: /** @type {any} */ (recovery).baseTurnId,
+            turnId: eventTurnId,
+            status: 'completed',
+          });
+          await persistThreadState(recovery);
+          // Floot persists this checkpoint with its conversation node, then
+          // acknowledges it. Until then the next send conservatively rolls the
+          // backend turn out.
+          endActive({ type: 'end', checkpoint: eventTurnId });
         } else if (status === 'interrupted' || status === 'failed') {
+          needsRollback = true;
           endActive({
             type: 'abort',
             reason: `${
@@ -557,23 +992,14 @@ export const makeCodexClient = ({
             pending.delete(responseId);
           }
         } else if ('id' in message && 'method' in message) {
-          // No model-callable bridge is installed in this core. Reject every
-          // server request so a newly introduced request cannot silently grant
-          // authority.
-          await sendMessage({
-            id: message.id,
-            error: {
-              code: -32_601,
-              message: `Unsupported server request: ${message.method}`,
-            },
-          });
+          await handleServerRequest(message);
         } else if ('method' in message) {
-          onNotification(message);
+          await onNotification(message);
         }
       }
-      failSession(Error('Codex app-server stdout closed'));
+      if (!terminated) failSession(Error('Codex app-server stdout closed'));
     } catch (error) {
-      failSession(error);
+      if (!terminated) failSession(error);
     }
   };
 
@@ -650,14 +1076,14 @@ export const makeCodexClient = ({
               version: '0.1.0',
             },
             capabilities: {
-              experimentalApi: false,
+              experimentalApi: dynamicTools.length > 0,
               requestAttestation: false,
             },
           });
           if (
-            typeof initializeResult?.codexHome !== 'string' ||
-            typeof initializeResult?.platformFamily !== 'string' ||
-            typeof initializeResult?.platformOs !== 'string' ||
+            initializeResult?.codexHome !== '/codex-home' ||
+            initializeResult?.platformFamily !== 'unix' ||
+            initializeResult?.platformOs !== 'linux' ||
             typeof initializeResult?.userAgent !== 'string'
           ) {
             const failure = Error(
@@ -668,6 +1094,12 @@ export const makeCodexClient = ({
           }
           await sendMessage({ method: 'initialized' });
           initialized = true;
+          await audit('session-open', {
+            approvalPolicy,
+            sandbox: CODEX_SANDBOX_MODE,
+            toolNetworkAccess: false,
+            toolSetId: toolSetId || '',
+          });
         } catch (error) {
           failSession(error);
           throw error;
@@ -683,7 +1115,7 @@ export const makeCodexClient = ({
     const common = {
       cwd,
       approvalPolicy,
-      sandbox,
+      sandbox: CODEX_SANDBOX_MODE,
       ...(opts.model || model ? { model: opts.model || model } : {}),
       ...(opts.systemPrompt ||
       opts.developerInstructions ||
@@ -696,6 +1128,21 @@ export const makeCodexClient = ({
           }
         : {}),
     };
+    let rotatedFrom;
+    if (threadId && dynamicTools.length > 0 && savedToolSetId !== toolSetId) {
+      // A schema/capability change gets a fresh conversation rather than
+      // silently rebinding old model context to new authority. The old thread
+      // remains intact for audit/recovery.
+      rotatedFrom = threadId;
+      threadId = undefined;
+      recovery = undefined;
+      needsRollback = false;
+      await audit('thread-rotation-required', {
+        oldThreadId: rotatedFrom,
+        oldToolSetId: savedToolSetId || '',
+        newToolSetId: toolSetId || '',
+      });
+    }
     if (threadId) {
       const response = await request('thread/resume', {
         threadId,
@@ -710,7 +1157,10 @@ export const makeCodexClient = ({
         throw failure;
       }
     } else {
-      const response = await request('thread/start', common);
+      const response = await request('thread/start', {
+        ...common,
+        ...(dynamicTools.length > 0 ? { dynamicTools } : {}),
+      });
       const created = response?.thread?.id;
       if (typeof created !== 'string' || created === '') {
         const failure = Error('Codex app-server did not return a thread id');
@@ -720,19 +1170,148 @@ export const makeCodexClient = ({
       // Persistence is part of thread creation: never execute a turn whose
       // continuation identity was not durably accepted by the caller.
       try {
-        await saveThreadId(created);
+        if (saveThreadState) {
+          await saveThreadState(
+            harden({
+              threadId: created,
+              ...(toolSetId ? { toolSetId } : {}),
+            }),
+          );
+        } else {
+          await saveThreadId(created);
+        }
       } catch (error) {
         failSession(error);
         throw error;
       }
       threadId = created;
     }
+    await audit('thread-bound', {
+      threadId: /** @type {string} */ (threadId),
+      resumed: Boolean(savedThreadId && !rotatedFrom),
+      ...(rotatedFrom ? { rotatedFrom } : {}),
+      toolSetId: toolSetId || '',
+    });
     threadReady = true;
     return /** @type {string} */ (threadId);
   };
 
+  const persistThreadState = async nextRecovery => {
+    if (!threadId || !saveThreadState) return;
+    await saveThreadState(
+      harden({
+        threadId,
+        ...(toolSetId ? { toolSetId } : {}),
+        ...(nextRecovery ? { recovery: nextRecovery } : {}),
+      }),
+    );
+  };
+
+  const readLatestTurnId = async () => {
+    const currentThreadId = await ensureThread();
+    const response = await request('thread/turns/list', {
+      threadId: currentThreadId,
+      cursor: null,
+      limit: 1,
+      sortDirection: 'desc',
+      itemsView: 'notLoaded',
+    });
+    if (
+      !Array.isArray(response?.data) ||
+      /** @type {any[]} */ (response.data).length > 1
+    ) {
+      throw Error('Codex returned a malformed latest-turn checkpoint');
+    }
+    const latest = response.data[0]?.id;
+    if (latest !== undefined && (typeof latest !== 'string' || latest === '')) {
+      throw Error('Codex returned an invalid latest turn id');
+    }
+    return latest || null;
+  };
+
+  const reconcileThread = async () => {
+    if (!needsRollback || !recovery) return;
+    const currentThreadId = await ensureThread();
+    const latestBefore = await readLatestTurnId();
+    await audit('history-reconciliation-started', {
+      threadId: currentThreadId,
+      strategy: 'checkpointed-thread-revert',
+      baseTurnId: recovery.baseTurnId || '',
+      latestTurnId: latestBefore || '',
+    });
+    if (latestBefore === recovery.baseTurnId) {
+      await audit('history-reconciled', {
+        threadId: currentThreadId,
+        strategy: 'checkpoint-already-restored',
+      });
+      await persistThreadState(undefined);
+      recovery = undefined;
+      needsRollback = false;
+      return;
+    }
+    if (recovery.turnId && latestBefore !== recovery.turnId) {
+      throw Error(
+        'Codex history advanced beyond the unacknowledged turn; session quarantined',
+      );
+    }
+    if (latestBefore === null) {
+      throw Error(
+        'Codex history lost the unacknowledged turn; session quarantined',
+      );
+    }
+    const response = await request('thread/revert', {
+      threadId: currentThreadId,
+      beforeTurnId: latestBefore,
+    });
+    if (response?.thread?.id !== currentThreadId) {
+      const failure = Error(
+        'Codex history reconciliation returned the wrong thread',
+      );
+      failSession(failure);
+      throw failure;
+    }
+    const latestAfter = await readLatestTurnId();
+    if (latestAfter !== recovery.baseTurnId) {
+      throw Error('Codex rollback did not restore the durable turn checkpoint');
+    }
+    // This comparison makes recovery idempotent if a crash occurs after the
+    // rollback response but before the marker is cleared.
+    await audit('history-reconciled', {
+      threadId: currentThreadId,
+      strategy: 'checkpointed-thread-revert',
+    });
+    await persistThreadState(undefined);
+    recovery = undefined;
+    needsRollback = false;
+  };
+
+  const acknowledgeCheckpoint = async checkpoint => {
+    await null;
+    if (!recovery) {
+      await audit('turn-commit-already-acknowledged', {
+        threadId: threadId || '',
+        turnId: checkpoint,
+      });
+      return;
+    }
+    if (recovery.status !== 'completed' || recovery.turnId !== checkpoint) {
+      throw Error(
+        `Codex checkpoint is not awaiting acknowledgement: ${checkpoint}`,
+      );
+    }
+    await persistThreadState(undefined);
+    recovery = undefined;
+    needsRollback = false;
+    await audit('turn-committed', {
+      threadId: /** @type {string} */ (threadId),
+      turnId: checkpoint,
+    });
+  };
+
   return makeExo('CodexClient', CodexClientInterface, {
     async send(prompt, opts = {}) {
+      if (terminated) throw Error('Codex session terminated');
+      if (closing) throw Error('Codex session closing');
       if (new TextEncoder().encode(prompt).byteLength > maxPromptBytes) {
         throw makeError(X`Codex prompt exceeded ${maxPromptBytes} bytes`);
       }
@@ -744,6 +1323,10 @@ export const makeCodexClient = ({
       await null;
       try {
         currentThreadId = await ensureThread(opts);
+        if (opts.acknowledgedCheckpoint) {
+          await acknowledgeCheckpoint(String(opts.acknowledgedCheckpoint));
+        }
+        await reconcileThread();
       } catch (error) {
         turnReserved = false;
         throw error;
@@ -767,6 +1350,9 @@ export const makeCodexClient = ({
         resolveTerminal,
         events: 0,
         bytes: 0,
+        toolCalls: 0,
+        serverRequestIds: new Set(),
+        toolCallIds: new Set(),
         textItems: new Set(),
         messagePhases: new Map(),
         earlyByTurn: new Map(),
@@ -774,13 +1360,41 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
+      turn.wallTimer = setTimeout(() => {
+        if (active === turn) {
+          void interruptActive(
+            `Codex turn exceeded ${turnWallTimeoutMs} ms wall time`,
+          );
+        }
+      }, turnWallTimeoutMs);
       channel.setOnClose(() => {
         if (active === turn) void interruptActive('Codex turn interrupted');
       });
       try {
+        await audit('turn-requested', {
+          threadId: currentThreadId,
+          promptBytes: new TextEncoder().encode(prompt).byteLength,
+          model: String(opts.model || model || ''),
+          reasoningEffort: String(
+            opts.reasoningEffort || reasoningEffort || '',
+          ),
+        });
+        // Floot commits only after a successful terminal event. Persist the
+        // previous backend turn as a write-ahead checkpoint before dispatch.
+        recovery = harden({ baseTurnId: await readLatestTurnId() });
+        await persistThreadState(recovery);
+        needsRollback = true;
         const response = await request('turn/start', {
           threadId: currentThreadId,
           input: [{ type: 'text', text: prompt, text_elements: [] }],
+          approvalPolicy,
+          sandboxPolicy: {
+            type: 'workspaceWrite',
+            writableRoots: ['/workspace', '/tmp', '/run', '/scratch'],
+            networkAccess: false,
+            excludeSlashTmp: true,
+            excludeTmpdirEnvVar: true,
+          },
           ...(opts.model || model ? { model: opts.model || model } : {}),
           ...(opts.reasoningEffort || reasoningEffort
             ? { effort: opts.reasoningEffort || reasoningEffort }
@@ -799,11 +1413,19 @@ export const makeCodexClient = ({
         }
         if (active === turn) {
           turn.turnId = `${response.turn.id}`;
+          recovery = harden({
+            baseTurnId: /** @type {any} */ (recovery).baseTurnId,
+            turnId: turn.turnId,
+          });
+          await persistThreadState(recovery);
           const early = turn.earlyByTurn.get(turn.turnId) || [];
           turn.earlyByTurn.clear();
           for (const message of early) {
             if (active !== turn) break;
-            onNotification(message);
+            // Preserve the app-server event order, including durable audit
+            // appends, before returning control to the stream consumer.
+            // eslint-disable-next-line no-await-in-loop
+            await onNotification(message);
           }
         }
       } catch (error) {
@@ -815,6 +1437,10 @@ export const makeCodexClient = ({
         }
       }
       return channel.reader;
+    },
+    async acknowledge(checkpoint) {
+      await ensureThread();
+      await acknowledgeCheckpoint(checkpoint);
     },
     async models() {
       await ensureReady();
@@ -855,7 +1481,29 @@ export const makeCodexClient = ({
       if (failure) throw failure;
     },
     async terminate() {
-      const done = failSession(Error('Codex session terminated'));
+      // Reserve shutdown synchronously before the first await. The message pump
+      // and any concurrent terminate caller observe this admission barrier.
+      closing = true;
+      await null;
+      if (pendingToolOperations.size > 0) {
+        if (!closeDeferredAudited) {
+          await audit('session-close-deferred', {
+            pendingToolCalls: pendingToolOperations.size,
+          });
+          closeDeferredAudited = true;
+        }
+        throw Error(
+          `Codex session has ${pendingToolOperations.size} unsettled Endo tool call(s)`,
+        );
+      }
+      if (!terminated && !closeRequestedAudited) {
+        await audit('session-close-requested', {
+          threadId: threadId || '',
+          needsRollback,
+        });
+        closeRequestedAudited = true;
+      }
+      const done = failSession(Error('Codex session terminated'), false);
       await done;
     },
     async status() {
@@ -864,6 +1512,10 @@ export const makeCodexClient = ({
         threadId: threadId || null,
         ready: initialized && !terminated,
         active: Boolean(active),
+        ...(needsRollback ? { needsReconciliation: true } : {}),
+        pendingToolCalls: pendingToolOperations.size,
+        ...(toolSetId ? { toolSetId } : {}),
+        closing,
         terminated,
         cleanupFailures: harden([...cleanupFailures]),
       });
@@ -873,6 +1525,8 @@ export const makeCodexClient = ({
         send: 'send(prompt, options?) -> streamed provider-neutral events',
         models: 'models() -> app-server model catalog',
         interrupt: 'interrupt() -> interrupt the active turn',
+        acknowledge:
+          'acknowledge(checkpoint) -> confirm the durable Floot commit',
         terminate: 'terminate() -> stop the app-server process',
         status: 'status() -> session lifecycle state',
       });

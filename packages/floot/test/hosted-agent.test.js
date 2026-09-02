@@ -178,3 +178,161 @@ test('failed hosted turns do not revive as history after restart', async t => {
     ],
   );
 });
+
+test('agent shutdown interrupts and awaits an active hosted turn', async t => {
+  const powers = makeFakePowers();
+  let interrupted = 0;
+  let terminalDelivered = false;
+  const turns = [];
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      turns.push(channel);
+      return channel.reader;
+    },
+    async interrupt() {
+      interrupted += 1;
+      terminalDelivered = true;
+      turns.at(-1).push({ type: 'abort', reason: 'interrupted' });
+    },
+  });
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient },
+    'test prompt',
+  );
+  const reply = makeReplyChannel();
+  const turn = agent.converse('keep working', reply.writer);
+  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  turns[0].push({ type: 'phase', phase: 'thinking' });
+  await null;
+  await null;
+  await agent.shutdown();
+  await turn;
+  t.true(terminalDelivered);
+  t.is(interrupted, 1);
+  t.deepEqual(await agent.getHistory(), []);
+  await t.throwsAsync(
+    () => agent.converse('too late', makeReplyChannel().writer),
+    { message: /shutting down/ },
+  );
+});
+
+test('a rejected hosted interrupt quarantines the streaming agent', async t => {
+  const powers = makeFakePowers();
+  const turns = [];
+  const hostedClient = harden({
+    async send() {
+      const channel = makeBufferedReader();
+      turns.push(channel);
+      return channel.reader;
+    },
+    async interrupt() {
+      throw Error('terminal barrier failed');
+    },
+  });
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { hostedClient },
+    'test prompt',
+  );
+  const active = agent.converse('mutate', makeReplyChannel().writer);
+  for (let tries = 0; turns.length === 0 && tries < 50; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  turns[0].push({ type: 'phase', phase: 'thinking' });
+  const activeFailure = t.throwsAsync(active, {
+    message: /terminal barrier failed/,
+  });
+  await t.throwsAsync(() => agent.shutdown(), {
+    message: /terminal barrier failed/,
+  });
+  // Factory teardown may proceed to the separately held backend admin facet,
+  // whose termination is the authoritative slice-reap barrier.
+  await agent.shutdown(true);
+  await activeFailure;
+  await t.throwsAsync(
+    () => agent.converse('retry', makeReplyChannel().writer),
+    { message: /terminal barrier failed/ },
+  );
+});
+
+test('shutdown cancels inbox startup delayed before iterator creation', async t => {
+  const base = makeFakePowers();
+  let releaseLocate = () => {};
+  const locateReady = new Promise(resolve => {
+    releaseLocate = () => resolve('self-locator');
+  });
+  const inbox = makeBufferedReader();
+  const powers = harden({
+    ...base,
+    locate: async () => locateReady,
+    followMessages: async () => inbox.reader,
+  });
+  const provider = harden({
+    async chatStream() {
+      throw Error('must not run');
+    },
+  });
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    { provider },
+    'test prompt',
+  );
+  agent.startInbox();
+  const shutdown = agent.shutdown();
+  releaseLocate();
+  await shutdown;
+  t.true(inbox.isClosed());
+});
+
+test('failed provider tool loops do not revive partial history', async t => {
+  const powers = makeFakePowers();
+  let round = 0;
+  const provider = harden({
+    async chatStream() {
+      round += 1;
+      if (round === 1) {
+        return harden({
+          message: harden({
+            role: 'assistant',
+            content: '',
+            tool_calls: harden([
+              harden({
+                id: 'list-1',
+                type: 'function',
+                function: harden({ name: 'list', arguments: '{}' }),
+              }),
+            ]),
+          }),
+        });
+      }
+      throw Error('provider failed after tool execution');
+    },
+  });
+  const first = await makeStreamingAgent(
+    powers,
+    undefined,
+    { provider },
+    'test prompt',
+  );
+  const reply = makeReplyChannel();
+  await t.throwsAsync(() => first.converse('partial', reply.writer), {
+    message: /provider failed after tool execution/,
+  });
+
+  const revived = await makeStreamingAgent(
+    powers,
+    undefined,
+    { provider },
+    'test prompt',
+  );
+  t.deepEqual(await revived.getHistory(), []);
+});

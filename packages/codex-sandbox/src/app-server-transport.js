@@ -1,5 +1,7 @@
 // @ts-check
 
+import { clearTimeout, setTimeout } from 'node:timers';
+
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
@@ -11,6 +13,21 @@ import { encodeJsonLine, parseJsonLines } from './codex-protocol.js';
 const DEFAULT_STDOUT_LIMIT = 64n * 1024n * 1024n;
 const DEFAULT_STDERR_LIMIT = 1024n * 1024n;
 
+const withDeadline = async (operation, label, timeoutMs) => {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(Error(`Codex app-server ${label} timed out`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([operation, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+};
+
 /**
  * Start one long-lived `codex app-server` process inside an already-confined
  * sandbox slice. This adapter owns only stdio and process lifetime; credentials,
@@ -19,12 +36,14 @@ const DEFAULT_STDERR_LIMIT = 1024n * 1024n;
  * @param {object} options
  * @param {SandboxHandle} options.slice
  * @param {string} [options.cwd]
- * @param {Record<string, string>} [options.env]
+ * @param {Record<string, string>} [options.env] reserved; custom entries denied
  * @param {string} [options.executable]
  * @param {number} [options.maxLineBytes]
  * @param {bigint} [options.stdoutByteLimit]
  * @param {bigint} [options.stderrByteLimit]
  * @param {number} [options.maxRequestBytes]
+ * @param {number} [options.setupTimeoutMs]
+ * @param {number} [options.teardownTimeoutMs]
  */
 export const startAppServerTransport = async ({
   slice,
@@ -35,13 +54,31 @@ export const startAppServerTransport = async ({
   stdoutByteLimit = DEFAULT_STDOUT_LIMIT,
   stderrByteLimit = DEFAULT_STDERR_LIMIT,
   maxRequestBytes = 2 * 1024 * 1024,
+  setupTimeoutMs = 30_000,
+  teardownTimeoutMs = 30_000,
 }) => {
+  const customNames = Object.keys(env);
+  if (customNames.length > 0) {
+    throw Error(
+      `Custom app-server environment denied: ${customNames.sort().join(', ')}`,
+    );
+  }
+  const effectiveEnv = harden({
+    CODEX_HOME: '/codex-home',
+    HOME: '/home/node',
+    LANG: 'C.UTF-8',
+    LC_ALL: 'C.UTF-8',
+    TEMP: '/tmp',
+    TMP: '/tmp',
+    TMPDIR: '/tmp',
+    TZ: 'UTC',
+  });
   const proc = /** @type {ProcessHandle} */ (
     await E(slice).spawn(
       harden([executable, 'app-server', '--listen', 'stdio://']),
       harden({
         cwd,
-        env: harden({ ...env }),
+        env: effectiveEnv,
         captureStdout: true,
         captureStderr: true,
         stdoutByteLimit,
@@ -54,7 +91,9 @@ export const startAppServerTransport = async ({
   let stderrDone = Promise.resolve();
   try {
     const input = iterateBytesWriter(
-      /** @type {any} */ (await E(proc).stdin()),
+      /** @type {any} */ (
+        await withDeadline(E(proc).stdin(), 'stdin acquisition', setupTimeoutMs)
+      ),
       { buffer: 0 },
     );
     let writeChain = Promise.resolve();
@@ -80,7 +119,11 @@ export const startAppServerTransport = async ({
       }
     })();
 
-    const stdout = await E(proc).stdout();
+    const stdout = await withDeadline(
+      E(proc).stdout(),
+      'stdout acquisition',
+      setupTimeoutMs,
+    );
     const messages = parseJsonLines(
       iterateBytesReader(stdout, { buffer: 16 }),
       maxLineBytes === undefined ? {} : { maxLineBytes },
@@ -107,20 +150,24 @@ export const startAppServerTransport = async ({
           await null;
           const failures = [];
           const [inputResult, killResult] = await Promise.allSettled([
-            input.return(),
-            E(proc).kill(),
+            withDeadline(input.return(), 'stdin close', teardownTimeoutMs),
+            withDeadline(E(proc).kill(), 'kill', teardownTimeoutMs),
           ]);
           if (inputResult.status === 'rejected')
             failures.push(inputResult.reason);
           if (killResult.status === 'rejected')
             failures.push(killResult.reason);
           try {
-            await E(proc).wait();
+            await withDeadline(
+              E(proc).wait(),
+              'process reap',
+              teardownTimeoutMs,
+            );
           } catch (error) {
             failures.push(error);
           }
           try {
-            await stderrDone;
+            await withDeadline(stderrDone, 'stderr drain', teardownTimeoutMs);
           } catch (error) {
             failures.push(error);
           }
@@ -146,9 +193,9 @@ export const startAppServerTransport = async ({
   } catch (error) {
     const failures = [error];
     const cleanup = await Promise.allSettled([
-      E(proc).kill(),
-      E(proc).wait(),
-      stderrDone,
+      withDeadline(E(proc).kill(), 'kill', teardownTimeoutMs),
+      withDeadline(E(proc).wait(), 'process reap', teardownTimeoutMs),
+      withDeadline(stderrDone, 'stderr drain', teardownTimeoutMs),
     ]);
     for (const result of cleanup) {
       if (result.status === 'rejected') failures.push(result.reason);
