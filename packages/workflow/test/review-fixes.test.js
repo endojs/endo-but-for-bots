@@ -146,7 +146,13 @@ test('engineEventTypes collects internal, settlement, timer, and emit types', t 
           answered: [
             {
               target: 'b',
-              effects: [{ kind: 'emit', event: { type: 'hop' } }],
+              effects: [
+                { kind: 'emit', event: { type: 'hop' } },
+                {
+                  kind: 'emit',
+                  event: { type: 'dynamic-{$params.kind}' },
+                },
+              ],
             },
           ],
           refused: [{ target: 'b' }],
@@ -166,6 +172,10 @@ test('engineEventTypes collects internal, settlement, timer, and emit types', t 
     'regions-settled',
     'state-done',
   ]);
+  t.false(
+    engineEventTypes(chart).some(type => type.startsWith('dynamic-')),
+    'templated types are intentionally not reserved',
+  );
 });
 
 test('control cannot forge settlements or region joins', async t => {

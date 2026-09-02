@@ -157,10 +157,12 @@ by the starter) injects signals, pauses/resumes/cancels, mints
 pattern-checked participant `port`s, and is the only holder that can
 `resolveRef` a redacted capability out of the run's refs store — an
 access that is itself journaled as an `admin` entry.
-Control signals are external events: `signal` rejects every event type the
-chart can synthesize as an effect settlement, timer, emit, or region join, and
-strips engine-owned routing and settlement metadata (`path`, `effectId`,
-`compensation`, and `delivers`).
+Control signals are external events: `signal` rejects statically named effect
+settlement, timer, emit, and region-join event types, and strips engine-owned
+routing and settlement metadata (`path`, `effectId`, `compensation`, and
+`delivers`).
+Types containing interpolation syntax cannot be enumerated by this protection;
+security-sensitive charts must use literal engine event types.
 
 Asks land in the recipients' ordinary inboxes.
 `endo resolve` / `endo reject` answer unstructured requests.

@@ -11,8 +11,8 @@
 
 Phases 1–4 are implemented as `packages/workflow` (`@endo/workflow`),
 with Phase 5's status feeds, the `@endo/space-workflow` Chat space, and
-a fake-daemon realization of Phase 6's acceptance flow; 92 tests pass
-and package lint is clean.
+a fake-daemon realization of Phase 6's acceptance flow; the package test suite
+and lint pass.
 A cross-review against the parallel implementation on
 `claude/endo-workflow-system-5u7764` folded that branch's best ideas
 into this one (hardening round below).
@@ -154,9 +154,11 @@ findings were all fixed and regression-tested (81 tests):
    terminal outcome (a completed run can no longer flip to failed).
 3. **Ocap tightening.** Charts asserted capability-free (an embedded
    remotable would have leaked through the shareable run facet's
-   `chart()`); ports and control signals refuse engine-producible event types
-   (no forged `state-done` / quorum joins / other participants' settlements)
-   and strip engine-owned routing and settlement metadata;
+   `chart()`); ports and control signals refuse statically named
+   engine-producible event types (no forged `state-done` / quorum joins / other
+   participants' settlements) and strip engine-owned routing and settlement
+   metadata; templated event types are not enumerable and security-sensitive
+   charts use literal types;
    factory start/revoke and derive/revoke races closed by durable
    re-checks; depth caps on redaction/encoding with unencodable
    settlement values converted to loud effect failures.
@@ -887,7 +889,7 @@ WorkflowRun: {
 
 // Control — held by whoever started the run (and the service holder).
 WorkflowControl: {
-  signal(event)                      → seq                // external type only; strips engine routing marks
+  signal(event)                      → seq                // no static engine types; strips routing marks
   pause() / resume()                 → void
   cancel(reason?)                    → void               // compensations, then terminal
   help()

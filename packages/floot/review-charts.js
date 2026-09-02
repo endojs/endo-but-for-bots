@@ -441,6 +441,15 @@ export const makeReviewedChangeChart = ({
             { when: budgetExhausted, target: 'exhausted' },
             { target: 'implement' },
           ],
+          // Re-enter so an already-materialized budget emit is pruned and a
+          // fresh one is generated from the adjusted context.
+          'set-remaining': [
+            {
+              when: SetRemainingShape,
+              target: 'gate',
+              assign: { remaining: { $event: 'value.remaining' } },
+            },
+          ],
         },
       },
 
@@ -536,6 +545,15 @@ export const makeReviewedChangeChart = ({
             { when: previewEnabled, target: 'preview' },
             { target: passedTarget },
           ],
+          // Re-enter to prune and regenerate the pending policy emit rather
+          // than allowing a stale envelope to win the queue race.
+          'set-remaining': [
+            {
+              when: SetRemainingShape,
+              target: 'ready',
+              assign: { remaining: { $event: 'value.remaining' } },
+            },
+          ],
         },
       },
 
@@ -581,6 +599,12 @@ export const makeReviewedChangeChart = ({
                 remaining: { $inc: -1n },
                 feedback: 'preview CI did not report before its deadline',
               },
+            },
+          ],
+          'set-remaining': [
+            {
+              when: SetRemainingShape,
+              assign: { remaining: { $event: 'value.remaining' } },
             },
           ],
         },
