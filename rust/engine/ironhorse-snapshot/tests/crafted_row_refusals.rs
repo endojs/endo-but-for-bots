@@ -436,6 +436,15 @@ fn finally_await_fixture() -> Interp {
     )
 }
 
+/// A `FinallyReturn` reaction still waiting on its source promise, with an
+/// unrelated Array for corrupting the carried species constructor.
+fn pending_finally_fixture() -> Interp {
+    quiescent_machine(
+        "var p=0;var resolve=0;var spare=[];var t=0; \
+         p=new Promise(function(r){resolve=r});p.finally(function(){});t=7;t",
+    )
+}
+
 /// A custom `NewPromiseCapability` constructor that retains its executor,
 /// plus an unrelated Array whose owner provides an honest in-bounds object
 /// for the missing-home-fields corruption arm below.
@@ -495,6 +504,29 @@ fn a_finally_await_reaction_requires_a_boolean_payload() {
         .expect("the fixture holds a pending FinallyAwait reaction");
     reaction.a = 2;
     expect_container_refusal(&image, "promise cluster: unused reaction payload not zero");
+}
+
+#[test]
+fn a_finally_reaction_requires_a_constructor_after_restore() {
+    let m = pending_finally_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let array = image.arrays[0].owner;
+    image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 1)
+        .expect("the fixture holds a pending FinallyReturn reaction")
+        .on_rejected = ironhorse_vm::Slot::of(
+            ironhorse_vm::Kind::Reference,
+            ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(array)),
+        );
+    expect_container_refusal(
+        &image,
+        "side-table restore: malformed promise capability",
+    );
 }
 
 #[test]
@@ -757,12 +789,10 @@ fn a_combinator_done_state_that_disagrees_with_its_derived_promise_is_refused() 
     );
 }
 
-/// The capability-graph review round: a `User`/`FinallyReturn`/`FinallyAwait`
-/// reaction's capability must be ONE resolving pair (the drain
-/// recovers the derived promise through `resolve` alone, so a
-/// cross-wired capability silently settles whatever the crafted slot
-/// binds); a `Combine` reaction carries no capability at all; and a
-/// guard belongs to exactly one pair.
+/// The capability-graph review round: a reaction's arbitrary custom
+/// resolve/reject callbacks must remain callable after every function table is
+/// restored; a `Combine` reaction carries no capability at all; and a native
+/// resolving guard belongs to exactly one pair.
 #[test]
 fn a_crafted_reaction_capability_is_refused() {
     use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
@@ -788,15 +818,29 @@ fn a_crafted_reaction_capability_is_refused() {
         "promise cluster: reaction capability names no resolving function",
     );
 
-    // (b) Two references that are not one pair (here: the resolve half
-    // twice, a polarity clash; a mixed-pair splice fails the same way
-    // on promise or guard).
-    let mut mismatched = image.clone();
-    let r = reaction_of(&mut mismatched);
-    r.reject = r.resolve;
+    // (b) Custom species callbacks are ordinary persisted functions, so their
+    // callability can only be checked after `FUNC` restore. Replacing one with
+    // an in-bounds Array must still fail closed at that second-phase gate.
+    let custom = quiescent_machine(
+        "var p=0;var res=0;var spare=[];var result={};var t=0; \
+         function C(executor){executor(function(){},function(){});return result} \
+         p=new Promise(function(resolve){res=resolve});p.constructor={}; \
+         p.constructor[Symbol.species]=C;p.then(function(v){return v});t=7;t",
+    );
+    let bytes = custom.write_snapshot(&sig()).expect("writes");
+    let mut non_callable = read_machine(&bytes, &sig()).expect("reads");
+    let array = non_callable.arrays[0].owner;
+    non_callable
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 0)
+        .expect("the fixture holds a custom user reaction")
+        .resolve = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(array)));
     expect_container_refusal(
-        &mismatched,
-        "promise cluster: reaction capability is not one resolving pair",
+        &non_callable,
+        "side-table restore: malformed promise capability",
     );
 
     // (c) A guard spliced across two pairs: the fixture mints one pair

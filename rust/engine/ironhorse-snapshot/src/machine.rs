@@ -574,6 +574,11 @@ fn restore_side_tables(
             "side-table restore: malformed retained function state",
         ));
     }
+    if !interp.restored_promise_capabilities_are_valid() {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed promise capability",
+        ));
+    }
     if !interp.restore_generators(generators) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed generator state",

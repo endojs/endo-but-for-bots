@@ -155,6 +155,46 @@ fn a_custom_capability_executor_survives_resume() {
     );
 }
 
+/// A pending `.then` reaction can carry resolve/reject callbacks supplied by a
+/// custom species constructor. The callbacks and the arbitrary result object
+/// must retain identity and behavior across both snapshot backends.
+#[test]
+fn a_custom_species_reaction_survives_resume() {
+    assert_twin(
+        "ih-prms-custom-species-reaction",
+        "var p=0;var res=0;var q=0;var result={tag:9};var log='';var t=0; \
+         function C(executor){executor(function(v){log='r'+v},function(e){log='j'+e});return result} \
+         p=new Promise(function(resolve){res=resolve});p.constructor={}; \
+         p.constructor[Symbol.species]=C;q=p.then(function(v){return v+1});t=7;t",
+        &[
+            "var p;var res;var q;var result;var log;var t;(q===result)+':'+q.tag+':'+log",
+            "var p;var res;var q;var result;var log;var t;res(41);0",
+            "var p;var res;var q;var result;var log;var t;log",
+        ],
+        &[(true, "true:9:"), (true, "0"), (true, "r42")],
+    );
+}
+
+/// A custom Promise subclass selected by `finally` remains threaded through
+/// the pending callback-result await, including its outer capability and the
+/// subclass prototype, across a checkpoint boundary.
+#[test]
+fn a_custom_species_finally_await_survives_resume() {
+    assert_twin(
+        "ih-prms-custom-species-finally",
+        "var P=class extends Promise{};var gate=0;var release=0;var q=0;var g='';var t=0; \
+         gate=new Promise(function(resolve){release=resolve});var p=Promise.resolve(5); \
+         p.constructor={};p.constructor[Symbol.species]=P; \
+         q=p.finally(function(){return gate});t=7;t",
+        &[
+            "var P;var gate;var release;var q;var g;var t;(q instanceof P)+':'+(q.constructor===P)+':'+g",
+            "var P;var gate;var release;var q;var g;var t;q.then(function(v){g='r'+v},function(e){g='j'+e});release(1);0",
+            "var P;var gate;var release;var q;var g;var t;g",
+        ],
+        &[(true, "true:true:"), (true, "0"), (true, "r5")],
+    );
+}
+
 /// A `.then` reaction registered BEFORE the split fires after it: the
 /// pending reaction row (handler + derived capability) travels.
 #[test]

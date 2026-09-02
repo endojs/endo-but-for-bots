@@ -27,7 +27,7 @@ use crate::format::{
 use crate::slot_codec::{decode_slots, encode_slots, SLOT_RECORD_BYTES};
 use ironhorse_vm::{
     dtf_component_key_static, ChunkArena, CollatorData, DateTimeFormatData, IntlTables,
-    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData, Payload,
+    IteratorRow, Kind, ListFormatData, LocaleData, MeterState, NumberFormatData,
     PluralRulesData, SegmentIteratorData, SegmenterData, SegmentsData, Slot, SlotArena,
     COST_TABLE_VERSION,
 };
@@ -2536,28 +2536,10 @@ pub(crate) fn decode_promise_cluster(
             "promise cluster: guards not densely referenced",
         ));
     }
-    // A reaction's capability slots. `User`, `FinallyReturn`, and
-    // `FinallyAwait`
-    // reactions always carry a full `new_promise_capability` pair —
-    // both halves alive while the reaction is pending (the reaction's
-    // own slots mark them), both naming one promise and one guard with
-    // opposite polarity. The drain recovers the DERIVED promise
-    // through `resolve` alone, so a cross-wired capability would
-    // silently settle whatever promise the crafted slot binds. A
-    // `Combine` reaction carries NO capability — its payload is its
-    // kind — so any populated slot on one can only be crafted.
-    let fn_row_of = |slot: &Slot| -> Option<&ironhorse_vm::PromiseFnRow> {
-        if slot.kind != Kind::Reference {
-            return None;
-        }
-        match slot.value {
-            Payload::Reference(r) => functions
-                .binary_search_by_key(&r.0, |row| row.function)
-                .ok()
-                .map(|i| &functions[i]),
-            _ => None,
-        }
-    };
+    // A reaction's capability slots may be any callable references supplied by
+    // a custom species constructor, including native resolving functions from
+    // unrelated pairs. Callability is checked after every persisted function
+    // population has restored. A `Combine` reaction carries NO capability.
     let mut comb_pending = vec![0u32; combinators.len()];
     let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
     for r in promises.iter().flat_map(|row| row.reactions.iter()) {
@@ -2589,19 +2571,11 @@ pub(crate) fn decode_promise_cluster(
                 ));
             }
         } else {
-            let (Some(res), Some(rej)) = (fn_row_of(&r.resolve), fn_row_of(&r.reject)) else {
+            let both_references = r.resolve.kind == Kind::Reference
+                && r.reject.kind == Kind::Reference;
+            if !both_references {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction capability names no resolving function",
-                ));
-            };
-            if res.reject
-                || !rej.reject
-                || res.guard == u32::MAX
-                || res.promise != rej.promise
-                || res.guard != rej.guard
-            {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: reaction capability is not one resolving pair",
                 ));
             }
             // `FinallyAwait.a` is its original-rejection boolean. The
@@ -2609,6 +2583,8 @@ pub(crate) fn decode_promise_cluster(
             // different value is a second encoding of the same machine.
             let payload_ok = if r.kind == 11 {
                 r.a <= 1 && r.b == 0 && r.on_rejected.kind == Kind::Undefined
+            } else if r.kind == 1 {
+                r.a == 0 && r.b == 0 && r.on_rejected.kind == Kind::Reference
             } else {
                 r.a == 0 && r.b == 0
             };
