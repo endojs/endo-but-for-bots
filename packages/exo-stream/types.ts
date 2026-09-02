@@ -76,6 +76,13 @@ export interface MakeReaderOptions<
   readPattern?: Pattern;
   /** Pattern for TReadReturn (return value) */
   readReturnPattern?: Pattern;
+  /**
+   * Latch the reader to a single active stream: a second `stream()` call
+   * rejects rather than starting a second walk over the same underlying
+   * iterator (which would split the element set and open a second pre-ack
+   * window). Default `false`. Meaningful only for `readerFromIterator`.
+   */
+  once?: boolean;
 }
 
 /**

@@ -51,17 +51,17 @@ const makeTemporaryRoot = (t, prefix) => {
  * how far a streaming grep walked. `readFileText` is the only power the search
  * engine uses to read file *contents*; the directory walk uses `readDirectory`.
  */
-const countingPowers = () => {
+const makeCountingPowers = () => {
   const counters = { readFileText: 0, readDirectory: 0 };
   const wrapped = {
     ...filePowers,
-    readFileText: async p => {
+    readFileText: async filePath => {
       counters.readFileText += 1;
-      return filePowers.readFileText(p);
+      return filePowers.readFileText(filePath);
     },
-    readDirectory: async p => {
+    readDirectory: async filePath => {
       counters.readDirectory += 1;
-      return filePowers.readDirectory(p);
+      return filePowers.readDirectory(filePath);
     },
   };
   // The default node powers carry no native `search`, so `provideSearch` builds
@@ -136,10 +136,10 @@ test('streamGrep with glob omitted searches the whole tree, equal to grep()', as
 test('streamGlob on a subView is scoped to the sub-root, like glob', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
-  const sub = await E(mount).subView('src');
-  const eager = [...(await E(sub).glob('**'))];
-  const streamed = await collect(E(sub).streamGlob('**'));
-  t.true(streamed.every(p => !p.startsWith('..')));
+  const subView = await E(mount).subView('src');
+  const eager = [...(await E(subView).glob('**'))];
+  const streamed = await collect(E(subView).streamGlob('**'));
+  t.true(streamed.every(filePath => !filePath.startsWith('..')));
   t.deepEqual(streamed, eager);
 });
 
@@ -155,7 +155,7 @@ test('streamGrep is incremental: closing after one match leaves later files unre
       'needle here\n',
     );
   }
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
@@ -200,7 +200,7 @@ test('streamGrep with buffer 0 does not read ahead of demand', async t => {
       'hit\n',
     );
   }
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
@@ -235,7 +235,7 @@ test('breaking out of a streamGrep for-await leaves the remaining files unread',
       'stop\n',
     );
   }
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
@@ -345,7 +345,7 @@ test('a sparse streamGrep observes a mid-stream revoke without reading to the en
       i === 0 ? 'needle here\n' : 'no match on this line\n',
     );
   }
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const { mount, control } = makeRevocableMount({
     rootPath: root,
     readOnly: false,
@@ -380,7 +380,7 @@ test('streamGlob never yields denied names or entries escaping the mount', async
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   const paths = await collect(E(mount).streamGlob('**'));
-  const segments = paths.flatMap(p => p.split('/'));
+  const segments = paths.flatMap(filePath => filePath.split('/'));
   for (const denied of ['.ssh', '.aws', '.env', '.SSH', '.gnupg']) {
     t.false(
       segments.includes(denied),
@@ -388,7 +388,7 @@ test('streamGlob never yields denied names or entries escaping the mount', async
     );
   }
   t.false(
-    paths.some(p => p.includes('escape-target')),
+    paths.some(filePath => filePath.includes('escape-target')),
     'the escaping symlink target is never enumerated',
   );
   // The strongest statement: identical to the eager, already-filtered glob.
@@ -415,7 +415,7 @@ test('streamGrep never reads denied files or escaping symlinks', async t => {
 
 // --- Pattern guard: the reader self-describes its element shape ---
 
-test('streamGlob readPattern is M.string() and every element matches it', async t => {
+test('streamGlob readPattern is a no-limit M.string() and every element matches it', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   const reader = E(mount).streamGlob('**');
@@ -516,6 +516,71 @@ test('streamGrep streams a match line longer than the default string-length limi
     eager.map(match => match.text),
     'stream and eager grep agree on match text, the long line included',
   );
+});
+
+test('streamGrep streams a match line past 10 MB — no residual finite ceiling', async t => {
+  // A prior revision capped the readPattern at 10,000,000 chars, so a single
+  // line past it aborted the whole stream (dropping every later match), a
+  // parity break eager grep does not share. The pattern now opts out of any
+  // finite stringLengthLimit, so even a > 10 MB line streams whole and the
+  // matches after it survive. [purist / spec-keeper / wire-watcher findings]
+  t.timeout(120_000);
+  const root = makeTemporaryRoot(t, 'mount-stream-huge-line-');
+  const hugeLine = 'z'.repeat(10_000_001); // one past the old 10 MB ceiling
+  const source = ['needle before', `needle ${hugeLine}`, 'needle after'].join(
+    '\n',
+  );
+  fs.writeFileSync(path.join(root, 'huge.txt'), `${source}\n`);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  const records = await collect(E(mount).streamGrep('needle'));
+  t.is(records.length, 3, 'the match after a > 10 MB line is not lost');
+  t.true(
+    /** @type {string} */ (records[1].text).length > 10_000_000,
+    'the > 10 MB match line streams whole, untruncated',
+  );
+  t.is(
+    /** @type {any} */ (records[2].text),
+    'needle after',
+    'later matches survive the over-10-MB line (no stream-fatal abort)',
+  );
+});
+
+// --- Once-only: a search reader latches to a single active stream ---
+// readerFromIterator({ once: true }) rejects a second stream() rather than
+// starting a second walk over the shared iterator (which would split the
+// element set and open a second pre-ack window). The mount's search readers are
+// minted this way, so a grantee cannot open k concurrent streams to scale the
+// pre-ack / post-revoke window as k×buffer. [warden finding 1]
+
+test('readerFromIterator({ once: true }) rejects a second stream()', async t => {
+  const { readerFromIterator } =
+    await import('@endo/exo-stream/reader-from-iterator.js');
+  const reader = readerFromIterator(
+    (async function* g() {
+      yield 'a';
+      yield 'b';
+    })(),
+    { readPattern: M.string(), once: true },
+  );
+  const collected = await collect(reader);
+  t.deepEqual(collected, ['a', 'b'], 'the first stream drains normally');
+  await t.throwsAsync(() => collect(reader), {
+    message: /once-only/,
+  });
+});
+
+test('a mount search reader is once-only: a second consumer rejects', async t => {
+  const { root } = buildMountFixture(t);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+  const reader = E(mount).streamGlob('**');
+  const first = await collect(reader);
+  t.true(first.length > 0, 'the first stream drains normally');
+  await t.throwsAsync(() => collect(reader), {
+    message: /once-only/,
+  });
 });
 
 // --- Record correspondence: { line, text } identifies the matched source line ---
@@ -732,7 +797,7 @@ test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
       'needle\n',
     );
   }
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
@@ -845,17 +910,17 @@ test('streamGrep enumerates the whole tree before the first match, but reads onl
   fs.writeFileSync(path.join(directory, 'deep.txt'), 'deep-needle\n');
 
   // Learn the full-walk directory-read count from a complete streamGlob pass.
-  const glob = countingPowers();
+  const globWalkPowers = makeCountingPowers();
   const globMount = makeMount({
     rootPath: root,
     readOnly: false,
-    filePowers: glob.powers,
+    filePowers: globWalkPowers.powers,
   });
   await collect(E(globMount).streamGlob('**'));
-  const fullWalkDirReads = glob.counters.readDirectory;
-  t.true(fullWalkDirReads >= depth, 'the fixture is genuinely deep');
+  const fullWalkDirectoryReads = globWalkPowers.counters.readDirectory;
+  t.true(fullWalkDirectoryReads >= depth, 'the fixture is genuinely deep');
 
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
@@ -874,7 +939,7 @@ test('streamGrep enumerates the whole tree before the first match, but reads onl
   // been enumerated (same directory reads as a full glob walk).
   t.is(
     counters.readDirectory,
-    fullWalkDirReads,
+    fullWalkDirectoryReads,
     'the whole confined tree is walked before the first match (eager walk)',
   );
   // But content reads are incremental: only the first file was read, not the
@@ -892,7 +957,7 @@ test('streamGrep enumerates the whole tree before the first match, but reads onl
 
 test('breaking out of a streamGlob for-await stops cleanly with no late reads', async t => {
   const { root } = buildMountFixture(t);
-  const { powers, counters } = countingPowers();
+  const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
@@ -900,8 +965,8 @@ test('breaking out of a streamGlob for-await stops cleanly with no late reads', 
   });
 
   let seen = 0;
-  for await (const p of iterateReader(E(mount).streamGlob('**'))) {
-    t.is(typeof p, 'string');
+  for await (const filePath of iterateReader(E(mount).streamGlob('**'))) {
+    t.is(typeof filePath, 'string');
     seen += 1;
     if (seen === 1) {
       break; // triggers iterator.return()

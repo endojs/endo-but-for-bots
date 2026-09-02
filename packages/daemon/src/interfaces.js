@@ -699,7 +699,10 @@ export const MountInterface = M.interface('EndoMount', {
   // trip — the same synchronous-remotable shape `followNameChanges`, `entry`,
   // and `readOnly` use. There is no `maxResults`: the consumer's pull-based
   // flow control is the bound, and `buffer` (the pre-ack window) is clamped by
-  // the producer. See designs/mount-stream-glob-grep.md.
+  // the producer. With `buffer: 0` a mid-stream `revoke()` cuts the next pull;
+  // a non-zero `buffer` may still deliver up to that many already-acknowledged
+  // elements first, bounded per reader (the reader is once-only). See
+  // designs/mount-stream-glob-grep.md.
   streamGlob: M.call(M.string())
     .optional(M.splitRecord({}, { buffer: M.number() }))
     .returns(M.remotable('PassableReader')),

@@ -876,6 +876,7 @@ layer can push down and fuse into a single enumerate-and-scan pass. It returns t
 { file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
 options.maxResults: number — Cap on the number of match records (default 1000).
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
+Results are capped; for incremental or unbounded result sets use streamGrep(grep, { glob }), its streaming form.
 Example: glorp("src/**/*.js", "TODO") -> every TODO line under src.
 
 ## streamGlob(pattern, options?) -> PassableReader<string>
@@ -884,12 +885,16 @@ Streaming glob: a reader that yields matching mount-relative paths one at a time
 UTF-16-sorted order as glob(), with the same dialect, deny filtering, and confinement.
 pattern: string — A glob pattern (same dialect as glob()).
 options.buffer: number — Elements the producer may pre-acknowledge ahead of demand, for
-high-latency links (default 0, fully synchronized; clamped to 1024).
+high-latency links (default 0, fully synchronized; clamped to 1024). Each pre-acknowledged element
+costs one round trip, so omitting buffer (the default 0) is one round trip per path.
 Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. Unlike glob(), there is no
 10,000-result cap.
 Because glob order is a global sort, the directory walk is eager: the whole match set is walked
 before the first element, so streamGlob bounds message size rather than time-to-first-result, and
 closing the iterator early does not stop the walk (unlike streamGrep's incremental content reads).
+With buffer 0 a mid-stream revoke() rejects the next pull immediately; a non-zero buffer may still
+deliver up to that many already-buffered elements first (the reader is once-only, so that window is
+per reader, not multiplied across concurrent streams).
 Example: for await (const p of iterateReader(E(mount).streamGlob("**/*.js"))) { ... }
 
 ## streamGrep(pattern, options?) -> PassableReader<{ file, line, text }>
@@ -901,12 +906,14 @@ options.glob: string — Restrict the search to files matching this glob (piped 
 batches, so no full path array round-trips as grep's argument and the 10,000-path cap is dropped).
 Omit to search every file under the mount face.
 options.buffer: number — Pre-acknowledge window for high-latency links (default 0; clamped to 1024).
+Each pre-acknowledged element costs one round trip, so the default 0 is one round trip per record.
 Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. There is no maxResults cap.
 Content reads are incremental — closing the iterator early leaves the remaining files' contents
 unread — but the directory walk is eager (the whole tree is enumerated before the first match, like
 streamGlob), so early close bounds file reads, not the walk. With buffer 0 a mid-stream revoke()
 rejects the next pull immediately; a non-zero buffer may still deliver up to that many
-already-buffered elements first.
+already-buffered elements first (the reader is once-only, so that window is per reader, not
+multiplied across concurrent streams).
 Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { ... }
 
 # EndoMountFile - A file within a mounted directory.

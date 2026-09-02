@@ -1382,7 +1382,11 @@ export interface EndoMount extends PathEntryIssuer {
    * message size, not time-to-first-result, and closing the iterator early does
    * not stop the walk (unlike `streamGrep`, whose content reads early close
    * genuinely elides). Its streaming win is the absent result cap and the
-   * one-element-at-a-time message size.
+   * one-element-at-a-time message size. With `buffer: 0` a mid-stream `revoke()`
+   * rejects the next pull immediately; a non-zero `buffer` may still deliver up
+   * to that many already-acknowledged elements first — and the reader is
+   * once-only, so that window is bounded per reader, not multiplied across
+   * concurrent streams.
    */
   streamGlob(
     pattern: string,
@@ -1397,7 +1401,11 @@ export interface EndoMount extends PathEntryIssuer {
    * `maxResults`. Content reads are incremental — early close leaves the
    * remaining files' contents unread — but the directory walk is eager (the
    * whole confined tree is enumerated before the first match), like
-   * `streamGlob`, so early close bounds file reads, not the walk.
+   * `streamGlob`, so early close bounds file reads, not the walk. With
+   * `buffer: 0` a mid-stream `revoke()` rejects the next pull immediately; a
+   * non-zero `buffer` may still deliver up to that many already-acknowledged
+   * elements first — and the reader is once-only, so that window is bounded per
+   * reader.
    */
   streamGrep(
     pattern: string,

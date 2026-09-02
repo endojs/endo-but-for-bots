@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-09 |
+| **Updated** | 2026-09-02 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Implemented ([PR #1085](https://github.com/endojs/endo-but-for-bots/pull/1085)) |
 | **Source** | Review comment on [PR #127](https://github.com/endojs/endo-but-for-bots/pull/127#discussion_r3548861664) (mount extensions help text) |
@@ -118,13 +119,19 @@ the stream breaks with an error:
 
 1. `streamGlob()` / `streamGrep()` call `provideSearch(filePowers)` and wrap the
    engine's batch generator (`search.globPaths` / `search.grepFiles`, driven at
-   `batchSize: 1` so the walk granularity matches one-element-at-a-time demand) in
+   `batchSize: 1` so the yield granularity is one path per batch) in
    an async generator that re-checks `assertLive()`. The `globPaths` path source
    is wrapped in a liveness-checking generator (`assertLivePathBatches`) that
    asserts before surfacing each path batch, and `assertLive()` runs again before
-   each yield — so a mid-stream `revoke()` is observed within one path batch even
-   during the eager glob walk or a sparse grep that yields no match for many
-   files (bounding post-revoke filesystem work to a single path batch).
+   each yield. Because `globPaths` produces a *globally sorted* result, it runs
+   the entire directory walk to completion before its first batch, so this check
+   cannot observe a `revoke()` *during* the enumeration — the walk runs to
+   completion. Where it is load-bearing is `streamGrep`'s content-read phase:
+   after enumeration, path batches feed `grepFiles` one at a time, so a
+   mid-stream `revoke()` bounds post-revoke *content reads* to a single path
+   batch, including a sparse grep that yields no match for many files. For
+   `streamGlob` the enumeration is the only filesystem work, so the check earns
+   nothing beyond the per-yield `assertLive()` there.
 2. `glob()` / `grep()` are unchanged: they collect the *same* engine generators up
    to `GLOB_MAX_RESULTS` / `maxResults`. The stream methods just omit the cap and
    hand the generator to `readerFromIterator` instead of an accumulator array.
@@ -154,9 +161,10 @@ const streamGlob = (pattern, options = {}) => {
   const search = provideSearch(filePowers);
   const generate = async function* generate() {
     assertLive();
-    // `assertLivePathBatches` asserts liveness before surfacing each path batch,
-    // so a mid-stream revoke() is observed within one batch even across the
-    // eager walk — not only at the next yield.
+    // `assertLivePathBatches` asserts liveness before surfacing each path batch.
+    // The global sort runs the whole walk to completion before the first batch,
+    // so this bounds post-revoke *content reads* (streamGrep) to one batch; the
+    // enumeration itself is uninterruptible.
     const paths = assertLivePathBatches(
       search.globPaths(currentDir, pattern, {
         deniedSegments, confinementRoot, batchSize: 1,
@@ -236,10 +244,13 @@ methods throw; `iterateReader` surfaces it as a thrown error at the consumer's
 case: without it, a grep that matches nothing for many files would reach the
 per-yield `assertLive()` only at the (never-arriving) next match, so a revoke
 would go unobserved and the daemon would keep reading files to the end of the
-walk; with it, the walk halts within one path batch. A revoked-but-never-pulled
-stream holds only a suspended generator closure (no open file handles between
-pulls), so no separate teardown registration with the revocation context is
-needed.
+tree; with it, post-revoke *content reads* halt within one path batch. This
+bounds content reads only — the directory *enumeration* has already run to
+completion before the first path batch (the global sort; see § Backpressure and
+cancellation), so a `revoke()` landing during the walk is not observed until the
+walk finishes. A revoked-but-never-pulled stream holds only a suspended
+generator closure (no open file handles between pulls), so no separate teardown
+registration with the revocation context is needed.
 
 Revocation is **not** an atomic cutoff when `buffer > 0`. With a non-zero
 pre-ack window the producer pump pulls (and settles) up to `buffer` elements
@@ -247,8 +258,9 @@ ahead of consumer demand, each past its own `assertLive()` at pull time. A
 `revoke()` after those pulls have settled cannot un-deliver them: the consumer
 still receives up to the clamped buffer's worth of already-acknowledged
 elements, and only the first pull past the drained buffer rejects. The clamp
-(`STREAM_BUFFER_MAX`) bounds this revocation-latency window *per active
-`stream()` call*.
+(`STREAM_BUFFER_MAX`) bounds this revocation-latency window; because the search
+readers are latched to a single active stream (see below), the bound is *per
+reader*.
 
 Note **who chooses `buffer`.** `makeRevocableMount` deliberately splits the
 `EndoMount` facet (the search/stream authority) from the `EndoMountControl`
@@ -257,22 +269,24 @@ levels — the less-trusted party typically holds `EndoMount`, and `buffer` is a
 argument to *its* `streamGlob`/`streamGrep` calls. So the party that `revoke()`
 is used *against* is the one that selects `buffer`; the revoking party has no
 per-grant lever to pin it to `0` (there is no `buffer` ceiling on `makeMount`
-today). The clamp bounds the per-`stream()` worst case — after `revoke()` an
+today). The clamp bounds the per-reader worst case: after `revoke()` an
 untrusted grantee that requested `buffer: STREAM_BUFFER_MAX` receives at most
-`STREAM_BUFFER_MAX` further elements *per active stream*. It is **not** a global
-per-reader bound: `PassableReader.stream` is not once-only, and a grantee that
-holds the reader can open *k* concurrent streams over it, each with its own
-pre-ack window, so both the pre-ack memory and the post-revoke delivery scale as
-*k×buffer*. This is a property of the shared exo-stream reader (a grantee that
-already holds the reader is spending its own memory to read faster), not a new
-hole this design opens; a per-grant `buffer` ceiling on
-`makeMount`/`makeRevocableMount`, or latching a reader to a single active
-stream, is the future refinement that would make the bound per-reader (see
-Follow-up). A grantee that itself wants a hard cutoff keeps `buffer` at the
-default `0`, where the pump never pre-pulls and the next pull after `revoke()`
-rejects with no further delivery. The test plan pins the per-stream worst case
-(revoke immediately after a `buffer > 0` stream starts; assert the post-revoke
-delivery is bounded by the clamped buffer).
+`STREAM_BUFFER_MAX` further elements. This is a *per-reader* bound because the
+search readers are minted once-only (`readerFromIterator({ once: true })`): a
+second `stream()` on the same reader rejects rather than starting a second walk
+over the shared iterator, which would otherwise both split the element set and
+open a second pre-ack window (so `k` concurrent streams could scale the pre-ack
+memory and post-revoke delivery as *k×buffer*). Latching to a single active
+stream is exactly what a per-request producer wants — a per-search reader has no
+meaningful second consumer. The one remaining lever the *revoker* still lacks is
+a `buffer` ceiling on `makeMount`/`makeRevocableMount` itself (the grantee, not
+the revoker, chooses `buffer` within `[0, STREAM_BUFFER_MAX]`); pinning that per
+grant is the residual refinement recorded in § Follow-up. A grantee that itself
+wants a hard cutoff keeps `buffer` at the default `0`, where the pump never
+pre-pulls and the next pull after `revoke()` rejects with no further delivery.
+The test plan pins both the per-reader worst case (revoke immediately after a
+`buffer > 0` stream starts; assert the post-revoke delivery is bounded by the
+clamped buffer) and the once-only latch (a second `stream()` rejects).
 
 ### Confinement, deny patterns, and attenuations
 
@@ -364,11 +378,16 @@ it landed on `llm` after the mount stack merged.
    marshalling, not the walk. The caps remain on the eager variants, whose
    purpose (bounded single-message results) they fit.
 3. **Clamp the `buffer` option** rather than trusting the caller, so the
-   per-`stream()` pre-ack window is bounded. (This bounds the marshalled pre-ack
+   pre-ack window is bounded. (This bounds the marshalled pre-ack
    window, not the whole daemon-side high-water mark: the engine's global sort
-   still materializes the full path set internally before the first batch, and a
-   consumer holding the reader can open several concurrent streams — see
-   § Revocation.)
+   still materializes the full path set internally before the first batch. The
+   readers are minted once-only, so the window is bounded per reader — a grantee
+   cannot open a second concurrent stream to multiply it. See § Revocation.)
+8. **Mint the search readers once-only** (`readerFromIterator({ once: true })`).
+   A per-search reader has no meaningful second consumer, and a second `stream()`
+   over the shared iterator would both split the element set and open a second
+   pre-ack window; latching keeps the pre-ack and post-revoke windows bounded per
+   reader, not per concurrent stream.
 4. **One shared engine** (`@endo/platform/fs/search`) for eager and streaming
    variants, preventing behavioral drift in confinement, deny patterns, and
    ordering.
@@ -424,7 +443,35 @@ Covered on a temporary directory tree with `makeMount`:
 - Streaming search remains an `EndoMount` capability. A later design may
   consider `ReadableTree` and `SnapshotTree`, but this design keeps those
   structural views minimal and does not add search to them.
-- The producer clamps `buffer` at 1,024 elements. This is a bounded
-  pre-ack window that accommodates high-latency consumers without allowing
-  an unbounded daemon-side memory commitment. An implementation may lower
-  the limit only with measurement and a corresponding design update.
+- The producer clamps `buffer` at 1,024 elements. This bounds the *pre-ack*
+  window (the marshalled elements pre-pulled ahead of demand), not the whole
+  daemon-side memory high-water mark: the engine's global sort materializes the
+  full path set internally before the first batch regardless of `buffer`, so the
+  clamp caps only the marshalled window, not that internal set. The specific
+  value 1,024 is an **unmeasured provisional ceiling** — large enough not to
+  constrain a high-latency consumer in practice, small enough that its worst-case
+  pre-materialization is a bounded element count — not a benchmarked optimum.
+  Revisit it under measurement (`packages/daemon/test/bench-daemon.js` /
+  `packages/benchmark`, reported per `packages/chacha12/BENCH.md`) if the
+  round-trip or memory cost ever matters; there is no asymmetric "lower only with
+  measurement" gate, since no measurement backs the current value either.
+
+## Follow-up
+
+- **Per-grant `buffer` ceiling.** The search readers are now minted once-only, so
+  the post-revoke delivery window is bounded per reader (§ Revocation). The one
+  lever the *revoker* still lacks is a `buffer` ceiling on
+  `makeMount`/`makeRevocableMount`: the grantee chooses `buffer` within `[0,
+  STREAM_BUFFER_MAX]`, and the revoker cannot pin a grant to `0` short of handing
+  a face whose `buffer` is capped lower. Adding a per-grant ceiling would let the
+  revoking party bound the post-revoke delivery window it is exposed to, not only
+  the grantee. Deferred: the once-only latch already removes the *k×buffer*
+  multiplier, so this is a refinement of the residual single-stream window, not a
+  correctness gap.
+- **Interruptible enumeration.** `globPaths` runs the whole directory walk to
+  completion before its first batch (the global sort), so a `revoke()` during
+  enumeration is not observed until the walk finishes; only the content-read
+  phase is bounded to one path batch. Making the enumeration itself observe
+  revocation would require the engine to surface partial, pre-sort batches (or a
+  cancellation token threaded into `walk`), which the shared engine does not
+  expose today.
