@@ -265,12 +265,18 @@ slots + one linked `fxNewSlot` (`33024` fixed body) per element + the one-time
 object's `fxNewObjectInstance` slot + per member a `65792` body + the key-name
 intern (a novel name one `fxNewSlot`) + the key-string chunk + the recursive
 value. Numbers classify exactly as XS (`INTEGER` iff integral, in `txInteger`
-range, and non-zero). Honest named skips: a reviver argument
-(`JSON.parse:reviver`), a non-string argument needing coercion
-(`JSON.parse:non-string`), a surrogate/astral `\u` escape (`JSON.parse:astral`),
-malformed input whose `SyntaxError` partial metering is unmodeled
-(`JSON.parse:syntax`), and re-serializing a parsed object's runtime-interned key
-(`JSON.stringify:interned-key`, child-5's interned-key rendering gap). Together
+range, and non-zero).
+The later compatibility pass adds the complete post-order reviver walk:
+mutation-sensitive array/object traversal, child deletion and replacement,
+abrupt completion, the correct holder receiver, and the modern third-argument
+context whose `source` property preserves the original primitive token.
+The no-reviver path retains its bit-exact metering; callback traversal is
+covered for observable agreement rather than exact computrons.
+Remaining honest named skips include a surrogate/astral `\u` escape
+(`JSON.parse:astral`), malformed input whose `SyntaxError` partial metering is
+unmodeled (`JSON.parse:syntax`), and re-serializing a parsed object's
+runtime-interned key (`JSON.stringify:interned-key`, child-5's interned-key
+rendering gap). Together
 this lifts `built-ins/JSON` to `total=138 covered=15 divergent=0` (from 2 before
 this child), and the curated `stage3b-json-metering.js` corpus + the
 `gen_json_structured_program` and `gen_json_parse_program` differential fuzz arms

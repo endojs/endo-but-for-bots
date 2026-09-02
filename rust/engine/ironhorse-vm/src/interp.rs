@@ -2912,6 +2912,23 @@ struct RegExpData {
     last_index: f64,
 }
 
+/// The parallel source tree retained only while `JSON.parse` runs a reviver.
+/// Container nodes mirror the parsed value's original children; primitive
+/// nodes retain both the original value and its exact token byte range so the
+/// reviver's modern third argument can expose `{ source }` iff the property was
+/// not observably replaced before its post-order visit.
+#[derive(Clone, Debug)]
+enum JsonSource {
+    Empty,
+    Primitive {
+        original: Slot,
+        start: usize,
+        end: usize,
+    },
+    Array(Vec<JsonSource>),
+    Object(Vec<(u16, JsonSource)>),
+}
+
 /// The program-local symbol ids of the RegExp accessor getters, resolved at
 /// [`Interp::link_intrinsics`]. Each is `None` when the program never names
 /// that getter.
@@ -33350,18 +33367,12 @@ impl Interp {
                 }
             }
             NativeMethod::JsonParse => {
-                // A reviver argument (2nd) re-walks the result under a callback;
-                // out of scope — self-name.
-                if argc > 1 {
-                    let arg1 = self
-                        .stack
-                        .get(base + 5)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    if arg1.kind == Kind::Reference {
-                        return Err(Halt::Unsupported("JSON.parse:reviver"));
-                    }
-                }
+                let reviver = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let has_reviver = self.is_callable_value(reviver);
                 // `JSON.parse` applies ToString before tokenization.
                 let units = self.to_string_units(code, arg0)?;
                 let input = String::from_utf16_lossy(&units).into_bytes();
@@ -33369,7 +33380,8 @@ impl Interp {
                 let mut pos = 0usize;
                 let mut cost: u64 = 0;
                 self.json_parse_whitespace(&input, &mut pos);
-                let value = self.json_parse_value(&input, &mut pos, &mut cost)?;
+                let (value, source) =
+                    self.json_parse_value(&input, &mut pos, &mut cost, has_reviver)?;
                 self.json_parse_whitespace(&input, &mut pos);
                 if pos != input.len() {
                     // Trailing content after the value: XS's "missing EOF"
@@ -33377,7 +33389,25 @@ impl Interp {
                     return Err(self.catchable_syntax_error());
                 }
                 self.meter.tick_raw(cost);
-                Ok(value)
+                if !has_reviver {
+                    return Ok(value);
+                }
+                // InternalizeJSONProperty starts from a fresh wrapper whose
+                // empty-string property holds the parsed root. The recursive
+                // walk performs mutation-sensitive Get/Delete/Define operations
+                // and calls the reviver post-order.
+                let holder = self.slots.alloc(Slot::instance(self.object_proto));
+                let root_id = self.intern_key("");
+                self.set_own_unmetered(holder, root_id, value);
+                self.json_internalize_property(
+                    code,
+                    &input,
+                    holder,
+                    root_id,
+                    Some(source),
+                    reviver,
+                    0,
+                )
             }
             _ => Err(Halt::Unsupported("json:unmodeled")),
         }
@@ -33605,34 +33635,88 @@ impl Interp {
         input: &[u8],
         pos: &mut usize,
         cost: &mut u64,
-    ) -> Result<Slot, Halt> {
+        track_source: bool,
+    ) -> Result<(Slot, JsonSource), Halt> {
         if *pos >= input.len() {
             return Err(self.catchable_syntax_error());
         }
+        let start = *pos;
         match input[*pos] {
-            b'{' => self.json_parse_object(input, pos, cost),
-            b'[' => self.json_parse_array(input, pos, cost),
+            b'{' => self.json_parse_object(input, pos, cost, track_source),
+            b'[' => self.json_parse_array(input, pos, cost, track_source),
             b'"' => {
                 let bytes = self.json_parse_string_bytes(input, pos)?;
                 // The tokenizer's `s = fxNewChunk(the, size + 1)`: always a
                 // chunk, even for the empty string (unlike an interned literal).
                 *cost += (((bytes.len() as u64 + 1) + 7) & !7) + 16;
                 let off = self.alloc_str_text(&bytes);
-                Ok(Slot::of(Kind::String, Payload::String(off)))
+                let value = Slot::of(Kind::String, Payload::String(off));
+                let source = if track_source {
+                    JsonSource::Primitive {
+                        original: value,
+                        start,
+                        end: *pos,
+                    }
+                } else {
+                    JsonSource::Empty
+                };
+                Ok((value, source))
             }
             b't' => {
                 self.json_parse_keyword(input, pos, b"true")?;
-                Ok(Slot::of(Kind::Boolean, Payload::Boolean(true)))
+                let value = Slot::of(Kind::Boolean, Payload::Boolean(true));
+                let source = if track_source {
+                    JsonSource::Primitive {
+                        original: value,
+                        start,
+                        end: *pos,
+                    }
+                } else {
+                    JsonSource::Empty
+                };
+                Ok((value, source))
             }
             b'f' => {
                 self.json_parse_keyword(input, pos, b"false")?;
-                Ok(Slot::of(Kind::Boolean, Payload::Boolean(false)))
+                let value = Slot::of(Kind::Boolean, Payload::Boolean(false));
+                let source = if track_source {
+                    JsonSource::Primitive {
+                        original: value,
+                        start,
+                        end: *pos,
+                    }
+                } else {
+                    JsonSource::Empty
+                };
+                Ok((value, source))
             }
             b'n' => {
                 self.json_parse_keyword(input, pos, b"null")?;
-                Ok(Slot::null())
+                let value = Slot::null();
+                let source = if track_source {
+                    JsonSource::Primitive {
+                        original: value,
+                        start,
+                        end: *pos,
+                    }
+                } else {
+                    JsonSource::Empty
+                };
+                Ok((value, source))
             }
-            b'-' | b'0'..=b'9' => self.json_parse_number(input, pos),
+            b'-' | b'0'..=b'9' => {
+                let value = self.json_parse_number(input, pos)?;
+                let source = if track_source {
+                    JsonSource::Primitive {
+                        original: value,
+                        start,
+                        end: *pos,
+                    }
+                } else {
+                    JsonSource::Empty
+                };
+                Ok((value, source))
+            }
             _ => Err(self.catchable_syntax_error()),
         }
     }
@@ -33818,22 +33902,34 @@ impl Interp {
         input: &[u8],
         pos: &mut usize,
         cost: &mut u64,
-    ) -> Result<Slot, Halt> {
+        track_source: bool,
+    ) -> Result<(Slot, JsonSource), Halt> {
         *pos += 1; // past '['
         *cost += JSON_PARSE_ARRAY_INSTANCE_METERING;
         let inst = self.new_array_unmetered();
         let mut length: u32 = 0;
+        let mut sources = Vec::new();
         self.json_parse_whitespace(input, pos);
         if *pos < input.len() && input[*pos] == b']' {
             *pos += 1;
             self.arrays.get_mut(&inst).unwrap().length = 0;
-            return Ok(Slot::of(Kind::Reference, Payload::Reference(inst)));
+            return Ok((
+                Slot::of(Kind::Reference, Payload::Reference(inst)),
+                if track_source {
+                    JsonSource::Array(sources)
+                } else {
+                    JsonSource::Empty
+                },
+            ));
         }
         loop {
             self.json_parse_whitespace(input, pos);
             *cost += JSON_PARSE_ARRAY_ELEMENT_METERING;
-            let v = self.json_parse_value(input, pos, cost)?;
+            let (v, source) = self.json_parse_value(input, pos, cost, track_source)?;
             self.arrays.get_mut(&inst).unwrap().insert_item(length, v, &mut self.side_refs);
+            if track_source {
+                sources.push(source);
+            }
             length += 1;
             self.json_parse_whitespace(input, pos);
             match input.get(*pos) {
@@ -33850,7 +33946,14 @@ impl Interp {
         self.arrays.get_mut(&inst).unwrap().length = length;
         // `fxCacheArray`: one chunk of `length * sizeof(txSlot)` bytes.
         *cost += length as u64 * 32 + 16;
-        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+        Ok((
+            Slot::of(Kind::Reference, Payload::Reference(inst)),
+            if track_source {
+                JsonSource::Array(sources)
+            } else {
+                JsonSource::Empty
+            },
+        ))
     }
 
     /// Parse a JSON object (`fxParseJSONObject`): the instance slot, and per
@@ -33861,14 +33964,23 @@ impl Interp {
         input: &[u8],
         pos: &mut usize,
         cost: &mut u64,
-    ) -> Result<Slot, Halt> {
+        track_source: bool,
+    ) -> Result<(Slot, JsonSource), Halt> {
         *pos += 1; // past '{'
         *cost += JSON_PARSE_OBJECT_INSTANCE_METERING;
         let inst = self.slots.alloc(Slot::instance(self.object_proto));
+        let mut sources = Vec::new();
         self.json_parse_whitespace(input, pos);
         if *pos < input.len() && input[*pos] == b'}' {
             *pos += 1;
-            return Ok(Slot::of(Kind::Reference, Payload::Reference(inst)));
+            return Ok((
+                Slot::of(Kind::Reference, Payload::Reference(inst)),
+                if track_source {
+                    JsonSource::Object(sources)
+                } else {
+                    JsonSource::Empty
+                },
+            ));
         }
         loop {
             self.json_parse_whitespace(input, pos);
@@ -33892,8 +34004,15 @@ impl Interp {
             }
             *pos += 1;
             self.json_parse_whitespace(input, pos);
-            let v = self.json_parse_value(input, pos, cost)?;
+            let (v, source) = self.json_parse_value(input, pos, cost, track_source)?;
             self.set_own_unmetered(inst, id, v);
+            if track_source {
+                if let Some((_, prior)) = sources.iter_mut().find(|(key, _)| *key == id) {
+                    *prior = source;
+                } else {
+                    sources.push((id, source));
+                }
+            }
             self.json_parse_whitespace(input, pos);
             match input.get(*pos) {
                 Some(b',') => {
@@ -33906,7 +34025,166 @@ impl Interp {
                 _ => return Err(self.catchable_syntax_error()),
             }
         }
-        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+        Ok((
+            Slot::of(Kind::Reference, Payload::Reference(inst)),
+            if track_source {
+                JsonSource::Object(sources)
+            } else {
+                JsonSource::Empty
+            },
+        ))
+    }
+
+    /// `InternalizeJSONProperty(holder, name, reviver)`, including the pinned
+    /// XS implementation of the ES2024 reviver `context.source` extension.
+    /// The property value is read at visit time, so an earlier reviver call can
+    /// replace or delete a later sibling exactly as the specification permits.
+    fn json_internalize_property(
+        &mut self,
+        code: &[u8],
+        input: &[u8],
+        holder: crate::value::SlotIndex,
+        name: u16,
+        source: Option<JsonSource>,
+        reviver: Slot,
+        depth: usize,
+    ) -> Result<Slot, Halt> {
+        // Mirror XS's `mxCheckCStack` fail-closed boundary without risking the
+        // Rust host stack on a callback-mutated cyclic/deep replacement graph.
+        const JSON_REVIVER_RECURSION_CAP: usize = 1024;
+        if depth >= JSON_REVIVER_RECURSION_CAP {
+            return Err(Halt::StackOverflow(depth));
+        }
+        let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
+        let value = self.mop_get(code, holder, name, holder_slot)?;
+        if let Payload::Reference(object) = value.value {
+            if value.kind == Kind::Reference {
+                if self.array_generic_is_array(object)? {
+                    let length = self.array_generic_length(code, object)?;
+                    for index in 0..length {
+                        let id = self.array_generic_index_id(index);
+                        let child_source = match source.as_ref() {
+                            Some(JsonSource::Array(children)) => {
+                                usize::try_from(index).ok().and_then(|i| children.get(i).cloned())
+                            }
+                            _ => None,
+                        };
+                        let revived = self.json_internalize_property(
+                            code,
+                            input,
+                            object,
+                            id,
+                            child_source,
+                            reviver,
+                            depth + 1,
+                        )?;
+                        if revived.kind == Kind::Undefined {
+                            let _ = self.mop_delete(code, object, id)?;
+                        } else {
+                            self.json_create_data_property(code, object, id, revived)?;
+                        }
+                    }
+                } else {
+                    let keys = self.json_enumerable_own_string_keys(code, object)?;
+                    for id in keys {
+                        let child_source = match source.as_ref() {
+                            Some(JsonSource::Object(children)) => children
+                                .iter()
+                                .find_map(|(key, child)| (*key == id).then(|| child.clone())),
+                            _ => None,
+                        };
+                        let revived = self.json_internalize_property(
+                            code,
+                            input,
+                            object,
+                            id,
+                            child_source,
+                            reviver,
+                            depth + 1,
+                        )?;
+                        if revived.kind == Kind::Undefined {
+                            let _ = self.mop_delete(code, object, id)?;
+                        } else {
+                            self.json_create_data_property(code, object, id, revived)?;
+                        }
+                    }
+                }
+            }
+        }
+        let key = self.property_key_slot(name)?;
+        let context = self.json_reviver_context(input, source.as_ref(), value);
+        self.run_callback(code, reviver, holder_slot, &[key, value, context])
+    }
+
+    /// Snapshot the enumerable own string keys used by the object branch of
+    /// `InternalizeJSONProperty`. Both key enumeration and descriptor reads go
+    /// through the MOP so a replacement Proxy remains fully observable.
+    fn json_enumerable_own_string_keys(
+        &mut self,
+        code: &[u8],
+        object: crate::value::SlotIndex,
+    ) -> Result<Vec<u16>, Halt> {
+        let keys = self.mop_own_keys(code, object)?;
+        let mut out = Vec::new();
+        for key in keys {
+            if key.kind == Kind::Symbol {
+                continue;
+            }
+            let id = self.to_property_id(code, key)?;
+            if self
+                .mop_get_own_property(code, object, id)?
+                .is_some_and(|descriptor| descriptor.enumerable == Some(true))
+            {
+                out.push(id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// `CreateDataProperty` for a revived child. A false return is deliberately
+    /// ignored: the abstract operation is not the throwing variant here.
+    fn json_create_data_property(
+        &mut self,
+        code: &[u8],
+        object: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        let descriptor = OrdinaryDescriptor {
+            value: Some(value),
+            writable: Some(true),
+            enumerable: Some(true),
+            configurable: Some(true),
+            ..OrdinaryDescriptor::default()
+        };
+        let _ = self.mop_define_own_property(code, object, id, descriptor)?;
+        Ok(())
+    }
+
+    /// Allocate the reviver's always-present context object. Primitive values
+    /// whose current value is SameValue to the parser's original token receive
+    /// an own `source` string containing the exact JSON token; containers and
+    /// observably replaced primitives receive an empty object.
+    fn json_reviver_context(
+        &mut self,
+        input: &[u8],
+        source: Option<&JsonSource>,
+        value: Slot,
+    ) -> Slot {
+        let context = self.slots.alloc(Slot::instance(self.object_proto));
+        if let Some(JsonSource::Primitive {
+            original,
+            start,
+            end,
+        }) = source
+        {
+            if self.same_value(*original, value) && *start <= *end && *end <= input.len() {
+                let source_value = self.new_string_metered(&input[*start..*end]);
+                let source_id = self.intern_key("source");
+                self.set_own_unmetered(context, source_id, source_value);
+            }
+        }
+        Slot::of(Kind::Reference, Payload::Reference(context))
     }
 
     /// The UTF-16 code units of a string receiver, for a primitive string or a
