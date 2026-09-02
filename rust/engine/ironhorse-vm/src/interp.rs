@@ -36419,7 +36419,7 @@ impl Interp {
         &mut self,
         code: &[u8],
         constructor: Slot,
-        length: u32,
+        length: u64,
     ) -> Result<(Slot, TypedArrayData), Halt> {
         let result = self.construct_value(
             code,
@@ -36428,7 +36428,7 @@ impl Interp {
             constructor,
         )?;
         let ta = self.validate_typed_array(result)?;
-        if ta.length < length {
+        if u64::from(ta.length) < length {
             return Err(self.catchable_type_error());
         }
         Ok((result, ta))
@@ -36531,7 +36531,7 @@ impl Interp {
                     };
                     let done = self.mop_get(code, step_inst, done_id, step)?;
                     if self.truthy(&done) {
-                        let length = values.len() as u32;
+                        let length = values.len() as u64;
                         let (result, ta) =
                             self.typed_array_static_create(code, constructor, length)?;
                         for (index, mut value) in values.into_iter().enumerate() {
@@ -36565,8 +36565,9 @@ impl Interp {
             };
             let length_value = self.arraylike_length(code, array_like_inst, array_like)?;
             let length = self.to_length_value(code, length_value)?;
-            let length = u32::try_from(length).map_err(|_| self.catchable_type_error())?;
             let (result, ta) = self.typed_array_static_create(code, constructor, length)?;
+            let length = u32::try_from(length)
+                .expect("successful TypedArrayCreate length fits the internal view width");
             for index in 0..length {
                 let mut value =
                     self.arraylike_index(code, array_like_inst, u64::from(index), array_like)?;
@@ -36583,7 +36584,7 @@ impl Interp {
             return Ok(result);
         }
 
-        let length = u32::try_from(args.len()).map_err(|_| self.catchable_type_error())?;
+        let length = args.len() as u64;
         let (result, ta) = self.typed_array_static_create(code, constructor, length)?;
         for (index, value) in args.into_iter().enumerate() {
             self.typed_array_element_set(code, ta, index as u32, value)?;

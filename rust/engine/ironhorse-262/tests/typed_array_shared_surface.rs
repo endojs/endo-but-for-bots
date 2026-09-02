@@ -45,6 +45,7 @@ fn shared_from_and_of_construct_concrete_typed_arrays() {
         "var log=[]; function C(n){log.push('C');return new Int8Array(n)} var o={length:1,get 0(){log.push('g');return 1}}; Int8Array.from.call(C,o); log.join('')",
         "function C(){return new Int8Array(0)} try{Int8Array.from.call(C,[1]);false}catch(e){e instanceof TypeError}",
         "function C(){return new Int8Array(0)} try{Int8Array.of.call(C,1);false}catch(e){e instanceof TypeError}",
+        "var called=false,argument=-1; function C(length){called=true;argument=length;return new Uint8Array(0)} try{Int8Array.from.call(C,{length:4294967296})}catch(e){} called+':'+argument",
     ] {
         agrees(source);
     }

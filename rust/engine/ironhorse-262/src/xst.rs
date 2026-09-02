@@ -597,11 +597,13 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // follows that rule. Keep this exact XS defect from
                     // becoming a false over-acceptance.
                     Verdict::RunSkip("oracle-xs-typedarray-sort-detach".into())
-                } else if oracle_defers_typed_array_sort_to_number(run) {
-                    // Pinned XS checks detachment before coercing the guest
-                    // comparator result. The specification requires ToNumber
-                    // first, and the official case observes that side effect.
-                    Verdict::RunSkip("oracle-xs-typedarray-sort-tonumber".into())
+                } else if oracle_misses_typed_array_sort_post_coercion_detachment(run) {
+                    // Pinned XS does coerce the guest comparator result, then
+                    // returns without performing the required post-coercion
+                    // detachment check. The official case observes both facts.
+                    Verdict::RunSkip(
+                        "oracle-xs-typedarray-sort-post-coercion-detach".into(),
+                    )
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -723,22 +725,25 @@ fn oracle_misses_typed_array_set_detachment(run: &DualRun) -> bool {
 /// all distinctive source operations so no unrelated sort failure is hidden.
 fn oracle_misses_typed_array_sort_detachment(run: &DualRun) -> bool {
     run.oracle_parsed
-        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run.oracle_error == "Test262Error: Expected a TypeError but got a Test262Error"
         && run.source.contains("$DETACHBUFFER(sample.buffer)")
         && run.source.contains("sample.sort(comparefn)")
         && run.source.contains("assert.throws(TypeError")
 }
 
-/// Pinned XS performs the `%TypedArray%.prototype.sort%` detachment check
-/// before ToNumber-coercing the comparator result. The official case returns an
-/// object whose `Symbol.toPrimitive` flips a sentinel and requires that side
-/// effect before the TypeError. Restrict this exclusion to that exact shape.
-fn oracle_defers_typed_array_sort_to_number(run: &DualRun) -> bool {
+/// Pinned XS ToNumber-coerces the `%TypedArray%.prototype.sort%` comparator
+/// result, but then omits the required detachment throw. The official case's
+/// `Symbol.toPrimitive` flips a sentinel before `assert.throws` reports that no
+/// exception occurred. Restrict this exclusion to that exact outcome and
+/// source shape.
+fn oracle_misses_typed_array_sort_post_coercion_detachment(run: &DualRun) -> bool {
     run.oracle_parsed
-        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run.oracle_error
+            == "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
         && run.source.contains("$DETACHBUFFER(ab)")
         && run.source.contains("[Symbol.toPrimitive]() { called = true; }")
         && run.source.contains("ta.sort(function(a, b)")
+        && run.source.contains("assert.throws(TypeError")
         && run.source.contains("assert.sameValue(true, called)")
 }
 
@@ -2386,9 +2391,10 @@ mod tests {
     fn oracle_typed_array_sort_detachment_bug_is_a_precise_exclusion() {
         let mut run = synthetic_ironhorse_only_complete(
             true,
-            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all",
+            "Test262Error: Expected a TypeError but got a Test262Error",
         );
-        run.source = "var comparefn = function() { \
+        run.source = "var calls = 0; var comparefn = function() { \
+            if (calls++) throw new Test262Error('second comparator call'); \
             $DETACHBUFFER(sample.buffer); }; \
             assert.throws(TypeError, function() { sample.sort(comparefn); });"
             .to_string();
@@ -2405,7 +2411,7 @@ mod tests {
             crate::report::Category::Infrastructure
         );
 
-        run.source = "$DETACHBUFFER(sample.buffer); sample.sort(comparefn);".to_string();
+        run.oracle_error = "Test262Error: a different assertion failed".to_string();
         assert!(!oracle_misses_typed_array_sort_detachment(&run));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
@@ -2414,24 +2420,28 @@ mod tests {
     }
 
     #[test]
-    fn oracle_typed_array_sort_to_number_bug_is_a_precise_exclusion() {
+    fn oracle_typed_array_sort_post_coercion_detachment_bug_is_a_precise_exclusion() {
         let mut run = synthetic_ironhorse_only_complete(
             true,
-            "Test262Error: Expected SameValue(«true», «false»)",
+            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all",
         );
-        run.source = "ta.sort(function(a, b) { \
-            $DETACHBUFFER(ab); return { \
-            [Symbol.toPrimitive]() { called = true; } }; }); \
+        run.source = "assert.throws(TypeError, function() { \
+            ta.sort(function(a, b) { $DETACHBUFFER(ab); return { \
+            [Symbol.toPrimitive]() { called = true; } }; }); }); \
             assert.sameValue(true, called);"
             .to_string();
-        assert!(oracle_defers_typed_array_sort_to_number(&run));
+        assert!(oracle_misses_typed_array_sort_post_coercion_detachment(
+            &run
+        ));
         assert_eq!(
             evaluate_positive(&Config::default(), &run, false),
-            Verdict::RunSkip("oracle-xs-typedarray-sort-tonumber".into())
+            Verdict::RunSkip("oracle-xs-typedarray-sort-post-coercion-detach".into())
         );
 
-        run.source = "$DETACHBUFFER(ab); ta.sort(function(a, b) {});".to_string();
-        assert!(!oracle_defers_typed_array_sort_to_number(&run));
+        run.oracle_error = "Test262Error: a different assertion failed".to_string();
+        assert!(!oracle_misses_typed_array_sort_post_coercion_detachment(
+            &run
+        ));
         assert!(matches!(
             evaluate_positive(&Config::default(), &run, false),
             Verdict::Fail(_)
