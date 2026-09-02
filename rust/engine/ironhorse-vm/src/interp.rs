@@ -28245,6 +28245,12 @@ impl Interp {
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
+                        Payload::Reference(r) if self.arguments_objects.contains(&r) => {
+                            b"[object Arguments]"
+                        }
+                        Payload::Reference(r) if self.arrays.contains_key(&r) => {
+                            b"[object Array]"
+                        }
                         Payload::BigInt(_) => b"[object BigInt]",
                         _ if wrapper_tag.is_some() => wrapper_tag.unwrap(),
                         _ if self.is_callable_value(this) => b"[object Function]",
@@ -29574,8 +29580,22 @@ impl Interp {
             // (`fxSetIndexSize`); each written element meters `mxMeterSome(5)`.
             NativeMethod::ArrayFill => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("fill:non-dense-array")),
+                    Some(i)
+                        if (1..argc.min(3)).all(|index| {
+                            matches!(
+                                self.stack.get(base + 4 + index).map(|slot| slot.kind),
+                                Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                            )
+                        }) && self.array_fill_fast_safe(i, base) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_fill(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let value = if argc > 0 { arg0 } else { Slot::undefined() };
                 let length = self.arrays[&inst].length;
@@ -30819,19 +30839,42 @@ impl Interp {
             // body (frame + per-element read + the result chunk). Modeled by
             // running the default-separator join and adding the prelude.
             NativeMethod::ArrayToString => {
-                if matches!(this.value, Payload::Reference(reference)
-                    if this.kind == Kind::Reference
-                        && self.typed_arrays.contains_key(&reference))
-                {
-                    self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
-                    let result = self.typed_array_join(this, base, 0, code)?;
-                    self.stack.truncate(base);
-                    self.push(result);
-                    return Ok(());
+                let typed_reference = match this.value {
+                    Payload::Reference(reference)
+                        if this.kind == Kind::Reference
+                            && self.typed_arrays.contains_key(&reference) =>
+                    {
+                        Some(reference)
+                    }
+                    _ => None,
+                };
+                if let Some(reference) = typed_reference {
+                    let join_id = self.intern_key("join");
+                    if self.chain_resolves_native_data_method(
+                        reference,
+                        join_id,
+                        NativeMethod::TypedArrayJoin,
+                    ) {
+                        self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
+                        let result = self.typed_array_join(this, base, 0, code)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 }
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("toString:non-dense-array")),
+                    Some(i)
+                        if self.array_to_string_fast_safe(i)
+                            && self.array_join_fast_safe(i) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_to_string(code, this)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
                 let length = self.arrays[&inst].length;
@@ -35762,6 +35805,21 @@ impl Interp {
         })
     }
 
+    /// Whether `fill` can write its selected dense range directly without
+    /// bypassing an own non-writable data descriptor. Bound coercion is direct
+    /// and side-effect-free when the caller selects this path.
+    fn array_fill_fast_safe(&self, inst: crate::value::SlotIndex, base: usize) -> bool {
+        let length = self.arrays[&inst].length;
+        let start = self.arg_to_index(base, 1, 0, length);
+        let end = self.arg_to_index(base, 2, length, length);
+        (start..end).all(|index| {
+            self.arrays[&inst]
+                .items()
+                .get(&index)
+                .is_some_and(|item| item.flag & XS_DONT_SET_FLAG == 0)
+        })
+    }
+
     /// Whether `join` can snapshot the compact item table and use the
     /// calibrated primitive-only path. Mapped arguments must read through
     /// their live parameter cells, objects and Symbols require the general
@@ -35787,6 +35845,51 @@ impl Interp {
             },
             _ => false,
         })
+    }
+
+    /// Whether `Array.prototype.toString` can assume its `join` lookup resolves
+    /// to the frozen intrinsic data property. Any own override, prototype
+    /// replacement, accessor, or guest replacement of `%Array.prototype%.join`
+    /// must use the observable generic Get/Call path.
+    fn array_to_string_fast_safe(&mut self, inst: crate::value::SlotIndex) -> bool {
+        if self.instance_prototype(inst) != self.array_proto {
+            return false;
+        }
+        let join_was_interned = self.symbol_ids.contains_key("join");
+        let join_id = self.intern_key("join");
+        if self.chain_resolves_native_data_method(inst, join_id, NativeMethod::ArrayJoin) {
+            return true;
+        }
+        let join_was_never_installed = !join_was_interned
+            || usize::from(join_id) > self.installed_names_len;
+        join_was_never_installed && !self.chain_has_descriptor(inst, join_id)
+    }
+
+    /// Whether an ordinary prototype walk reaches exactly the expected native
+    /// data method before any Proxy or other property. This is the conservative
+    /// gate for fast paths that would otherwise bypass an observable `Get`.
+    fn chain_resolves_native_data_method(
+        &self,
+        inst: crate::value::SlotIndex,
+        id: u16,
+        expected: NativeMethod,
+    ) -> bool {
+        let mut current = inst;
+        while !current.is_null() {
+            if self.proxies.contains_key(&current) {
+                return false;
+            }
+            if let Some(property) = self.find_property(current, id) {
+                return match self.slots.get(property).value {
+                    Payload::Reference(function) => {
+                        self.method_of(function) == Some(expected)
+                    }
+                    _ => false,
+                };
+            }
+            current = self.instance_prototype(current);
+        }
+        false
     }
 
     /// The dense path carries separator strings through UTF-8 text. Direct
@@ -36076,6 +36179,48 @@ impl Interp {
             }
         }
         Ok(self.new_string_units(&result))
+    }
+
+    /// Generic `Array.prototype.toString`: observe `Get(array, "join")`, call
+    /// it when callable, or fall back to the intrinsic
+    /// `%Object.prototype%.toString` method with the same receiver.
+    fn array_generic_to_string(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+        let object = self.array_to_object(this)?;
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let join_was_interned = self.symbol_ids.contains_key("join");
+        let join_id = self.intern_key("join");
+        let mut join = self.mop_get(code, inst, join_id, object)?;
+        let inherits_array_proto = inst == self.array_proto
+            || self.prototype_chain_has(inst, self.array_proto);
+        let join_was_never_installed = !join_was_interned
+            || usize::from(join_id) > self.installed_names_len;
+        if join.kind == Kind::Undefined
+            && inherits_array_proto
+            && !self.arguments_objects.contains(&inst)
+            && join_was_never_installed
+            && !self.chain_has_descriptor(inst, join_id)
+        {
+            if let Some((&function, _)) = self
+                .functions
+                .iter()
+                .find(|(_, info)| info.method == Some(NativeMethod::ArrayJoin))
+            {
+                join = Slot::of(Kind::Reference, Payload::Reference(function));
+            }
+        }
+        let method = if self.is_callable_value(join) {
+            join
+        } else {
+            let to_string_id = self.intern_key("toString");
+            let object_proto = Slot::of(
+                Kind::Reference,
+                Payload::Reference(self.object_proto),
+            );
+            self.mop_get(code, self.object_proto, to_string_id, object_proto)?
+        };
+        self.call_any(code, method, object, &[])
     }
 
     /// Generic `Array.prototype.push` / `pop` over an arbitrary object. The
@@ -36563,6 +36708,69 @@ impl Interp {
             }
             count -= 1;
             steps += 1;
+        }
+        Ok(object)
+    }
+
+    /// Generic `Array.prototype.fill`. `length`, `start`, and `end` are
+    /// observed in specification order, then every selected index is written
+    /// with the throwing object MOP so inherited setters, Proxies, mapped
+    /// arguments, and descriptor failures remain visible.
+    fn array_generic_fill(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        let value = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let start_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let end_arg = self
+            .stack
+            .get(base + 6)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let object = self.array_to_object(this)?;
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+        let relative_index = |integer: f64| -> u64 {
+            if integer == f64::NEG_INFINITY {
+                0
+            } else if integer < 0.0 {
+                (length as f64 + integer).max(0.0) as u64
+            } else {
+                integer.min(length as f64) as u64
+            }
+        };
+        let start = if argc < 2 || start_arg.kind == Kind::Undefined {
+            0
+        } else {
+            relative_index(self.array_to_integer_or_infinity(code, start_arg)?)
+        };
+        let end = if argc < 3 || end_arg.kind == Kind::Undefined {
+            length
+        } else {
+            relative_index(self.array_to_integer_or_infinity(code, end_arg)?)
+        };
+        const GENERIC_FILL_CAP: u64 = 1 << 24;
+        for index in start..end {
+            if index - start >= GENERIC_FILL_CAP {
+                return Err(Halt::Unsupported("fill:oversized-array-like"));
+            }
+            let id = self.array_generic_index_id(index);
+            if !self.mop_set(code, inst, id, value, object)? {
+                return Err(self.catchable_type_error());
+            }
         }
         Ok(object)
     }
