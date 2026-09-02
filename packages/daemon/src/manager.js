@@ -46,10 +46,7 @@ import { makeEndoRegistry, makeRegistryTable } from './registry.js';
 import { makeDirectoryMaker } from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
-import {
-  makeDeferredTasks,
-  makePinTransientTask,
-} from './deferred-tasks.js';
+import { makeDeferredTasks, makePinTransientTask } from './deferred-tasks.js';
 import {
   runAfterPersistBeforeCommitHook,
   setPinTransientForTests,
@@ -594,10 +591,7 @@ const makeDaemonCore = async (
     // deadlock the serial queue. Callers that must not reenter during a
     // CapTP commit (notably unpinTransient) pass through formulaGraphJobs
     // exclusively instead of this path.
-    if (
-      lockContext === undefined &&
-      ownedFormulaGraphLockContext !== null
-    ) {
+    if (lockContext === undefined && ownedFormulaGraphLockContext !== null) {
       return asyncFn(ownedFormulaGraphLockContext);
     }
     const result = await formulaGraphJobs.enqueue(async () => {
@@ -4619,9 +4613,7 @@ const makeDaemonCore = async (
         // so any related unreachable residue is collected.
         await persistencePowers.deleteFormula(formulaNumber);
         formulaGraph.sweepUnreachable();
-        const error =
-          commitError ||
-          Error('Name commit rejected before write');
+        const error = commitError || Error('Name commit rejected before write');
         // @ts-expect-error tag for tests
         error.commitOutcome = 'rejected-before-write';
         throw error;
@@ -4640,8 +4632,7 @@ const makeDaemonCore = async (
         options.pin(id);
       }
       const error =
-        commitError ||
-        Error('Name commit failed with ambiguous outcome');
+        commitError || Error('Name commit failed with ambiguous outcome');
       // @ts-expect-error tag
       error.commitOutcome = 'ambiguous';
       throw error;
@@ -4752,10 +4743,8 @@ const makeDaemonCore = async (
           content: contentSha256,
         };
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers1, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers1, ctx),
         );
       })
     );
@@ -4797,10 +4786,8 @@ const makeDaemonCore = async (
           ...(deniedSegments !== undefined ? { deniedSegments } : {}),
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers2, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers2, ctx),
         );
       })
     );
@@ -4835,10 +4822,8 @@ const makeDaemonCore = async (
           ...(deniedSegments !== undefined ? { deniedSegments } : {}),
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers3, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers3, ctx),
         );
       })
     );
@@ -4966,10 +4951,8 @@ const makeDaemonCore = async (
           ...(identity && { identity }),
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers4, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers4, ctx),
         );
       })
     );
@@ -5021,10 +5004,8 @@ const makeDaemonCore = async (
           policy,
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers5, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers5, ctx),
         );
       })
     );
@@ -5054,10 +5035,8 @@ const makeDaemonCore = async (
           policy,
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers6, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers6, ctx),
         );
       })
     );
@@ -5112,10 +5091,8 @@ const makeDaemonCore = async (
           audience,
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers7, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers7, ctx),
         );
       })
     );
@@ -5154,10 +5131,8 @@ const makeDaemonCore = async (
           policy,
         });
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers8, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers8, ctx),
         );
       })
     );
@@ -5215,10 +5190,8 @@ const makeDaemonCore = async (
           content: treeSha256,
         };
 
-        return formulateWithCommit(
-          formulaNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers9, ctx),
+        return formulateWithCommit(formulaNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers9, ctx),
         );
       })
     );
@@ -5259,10 +5232,8 @@ const makeDaemonCore = async (
           guestName,
         };
 
-        return formulateWithCommit(
-          invitationNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers10, ctx),
+        return formulateWithCommit(invitationNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers10, ctx),
         );
       })
     );
@@ -5325,10 +5296,8 @@ const makeDaemonCore = async (
           proposedName: channelProposedName,
         };
 
-        return formulateWithCommit(
-          channelNumber,
-          formula,
-          ctx => deferredTasks.commit(commitIdentifiers11, ctx),
+        return formulateWithCommit(channelNumber, formula, ctx =>
+          deferredTasks.commit(commitIdentifiers11, ctx),
         );
       })
     );
@@ -5528,7 +5497,12 @@ const makeDaemonCore = async (
           type: 'directory',
           petStore: storeId,
         };
-        const result = await formulate(formulaNumber, formula, localNodeNumber, lockContext);
+        const result = await formulate(
+          formulaNumber,
+          formula,
+          localNodeNumber,
+          lockContext,
+        );
         pinTransient(result.id);
         return result;
       })
@@ -6063,12 +6037,11 @@ const makeDaemonCore = async (
         await randomHex256()
       );
 
-      const { id: storeId } =
-        await formulateNumberedPetStore(
-          storeFormulaNumber,
-          localNodeNumber,
-          lockContext,
-        );
+      const { id: storeId } = await formulateNumberedPetStore(
+        storeFormulaNumber,
+        localNodeNumber,
+        lockContext,
+      );
 
       /** @type {PromiseFormula} */
       const promiseFormula = {
@@ -6594,9 +6567,8 @@ const makeDaemonCore = async (
           { label: 'host' },
           lockContext,
         );
-        const { id: networksDirectoryId } = await formulateNetworksDirectory(
-          lockContext,
-        );
+        const { id: networksDirectoryId } =
+          await formulateNetworksDirectory(lockContext);
         const { id: pinsDirectoryId } = await formulateDirectory(
           localNodeNumber,
           lockContext,
@@ -6622,7 +6594,12 @@ const makeDaemonCore = async (
           leastAuthority: leastAuthorityId,
         };
 
-        const result = await formulate(formulaNumber, formula, localNodeNumber, lockContext);
+        const result = await formulate(
+          formulaNumber,
+          formula,
+          localNodeNumber,
+          lockContext,
+        );
         formulaGraph.addRoot(result.id);
         return result;
       })

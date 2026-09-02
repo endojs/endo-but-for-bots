@@ -83,23 +83,20 @@ test.serial(
   },
 );
 
-test.serial(
-  'eval --no-wait construction failure surfaces on show',
-  async t => {
+test.serial('eval --no-wait construction failure surfaces on show', async t => {
+  await runEndo(['purge', '-f'], { reject: false });
+  await runEndo(['start']);
+  try {
+    await runEndo([
+      'eval',
+      '--no-wait',
+      '-n',
+      'fail-result',
+      'throw new Error("cli-boom")',
+    ]);
+    const error = await t.throwsAsync(runEndo(['show', 'fail-result']));
+    t.regex(`${error.stderr}\n${error.stdout}`, /cli-boom/);
+  } finally {
     await runEndo(['purge', '-f'], { reject: false });
-    await runEndo(['start']);
-    try {
-      await runEndo([
-        'eval',
-        '--no-wait',
-        '-n',
-        'fail-result',
-        'throw new Error("cli-boom")',
-      ]);
-      const error = await t.throwsAsync(runEndo(['show', 'fail-result']));
-      t.regex(`${error.stderr}\n${error.stdout}`, /cli-boom/);
-    } finally {
-      await runEndo(['purge', '-f'], { reject: false });
-    }
-  },
-);
+  }
+});

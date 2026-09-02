@@ -551,12 +551,12 @@ export const makeDirectoryMaker = ({
         /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
         const tasks = makeDeferredTasks();
         tasks.push(
-        makeStoreIdentifierTask(
-          (p, id) => storeIdentifier(p, id),
-          namePath,
-          ids => ids.readableBlobId,
-        ),
-      );
+          makeStoreIdentifierTask(
+            (p, id) => storeIdentifier(p, id),
+            namePath,
+            ids => ids.readableBlobId,
+          ),
+        );
         await formulateReadableBlob(/** @type {any} */ (readerRef), tasks);
         return;
       }

@@ -67,7 +67,12 @@ test.serial('make --no-wait without -n errors', async t => {
   await runEndo(['start']);
   try {
     const error = await t.throwsAsync(
-      runEndo(['make', '--no-wait', '--UNCONFINED', path.join(capletDir, 'index.js')]),
+      runEndo([
+        'make',
+        '--no-wait',
+        '--UNCONFINED',
+        path.join(capletDir, 'index.js'),
+      ]),
     );
     t.regex(
       `${error.stderr}\n${error.stdout}`,
@@ -111,9 +116,10 @@ test.serial(
       // construction failure. Accept either a successful show or a descriptive
       // non-empty inspector path.
       t.true(
-        show.exitCode === 0 || /made-caplet|object|Function|ping/i.test(
-          `${show.stdout}\n${show.stderr}`,
-        ),
+        show.exitCode === 0 ||
+          /made-caplet|object|Function|ping/i.test(
+            `${show.stdout}\n${show.stderr}`,
+          ),
         `show should observe the made value: ${show.stdout}\n${show.stderr}`,
       );
     } finally {

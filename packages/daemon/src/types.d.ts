@@ -2372,9 +2372,7 @@ export type DaemonicPersistencePowers = {
     selectedFormulaId: string,
     state: 'pending' | 'committed',
   ) => Promise<void>;
-  getPendingNameCommit: (
-    commitId: string,
-  ) => Promise<
+  getPendingNameCommit: (commitId: string) => Promise<
     | {
         commitId: string;
         formulaId: string;
@@ -2517,10 +2515,7 @@ export type FormulaGraphLockContext = object;
  * - rejected-before-write: proven that no name write occurred
  * - ambiguous: failure without proof that no write occurred (e.g. lost remote ack)
  */
-export type CommitOutcome =
-  | 'committed'
-  | 'rejected-before-write'
-  | 'ambiguous';
+export type CommitOutcome = 'committed' | 'rejected-before-write' | 'ambiguous';
 
 /**
  * Two-phase deferred task: preflight (path syntax only) then commit under

@@ -7585,9 +7585,8 @@ test('invalid result path rejects before formula persistence', async t => {
   const { host, config } = await prepareHost(t);
   await E(host).provideWorker(['w1']);
   const before = openTestDb(config.statePath).listFormulas().length;
-  await t.throwsAsync(
-    () =>
-      E(host).startEvaluate('w1', '1', [], [], /** @type {any} */ (['', ''])),
+  await t.throwsAsync(() =>
+    E(host).startEvaluate('w1', '1', [], [], /** @type {any} */ (['', ''])),
   );
   const after = openTestDb(config.statePath).listFormulas().length;
   t.is(after, before, 'no formula should be persisted for invalid path');
@@ -7615,13 +7614,7 @@ test('pause between persist and commit: no controller until commit', async t => 
       // ignore
     }
 
-    const receiptP = E(host).startEvaluate(
-      'w1',
-      '99',
-      [],
-      [],
-      'paused-eval',
-    );
+    const receiptP = E(host).startEvaluate('w1', '99', [], [], 'paused-eval');
 
     // Wait until the daemon marks that it entered the pause window.
     const pausedMarker = `${hookPath}.paused`;
@@ -7630,7 +7623,10 @@ test('pause between persist and commit: no controller until commit', async t => 
       // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
-    t.true(fs.existsSync(pausedMarker), 'hook should pause after formula persist');
+    t.true(
+      fs.existsSync(pausedMarker),
+      'hook should pause after formula persist',
+    );
     // Name should not yet be committed while the daemon holds the pause.
     t.false(await E(host).has('paused-eval'));
 
@@ -7834,13 +7830,12 @@ test('Group B reply, editMessage, and sendValue settle promptly', async t => {
 test('startMakeUnconfined returns receipt with required result name', async t => {
   const { host } = await prepareHost(t);
   // Missing result name rejects.
-  await t.throwsAsync(
-    () =>
-      E(/** @type {any} */ (host)).startMakeUnconfined(
-        '@node',
-        'file:///tmp/nope.js',
-        undefined,
-      ),
+  await t.throwsAsync(() =>
+    E(/** @type {any} */ (host)).startMakeUnconfined(
+      '@node',
+      'file:///tmp/nope.js',
+      undefined,
+    ),
   );
 });
 
@@ -7914,7 +7909,11 @@ test('rejected-before-write sweeps unreferenced formula JSON', async t => {
     // Proven no-write: no net formula growth for the aborted eval (bootstrap
     // formulas remain; the aborted formula must not stick around).
     const pending = openTestDb(config.statePath).listPendingNameCommits();
-    t.is(pending.length, 0, 'provisional record deleted on rejected-before-write');
+    t.is(
+      pending.length,
+      0,
+      'provisional record deleted on rejected-before-write',
+    );
     // Formula count should not have grown permanently for the aborted write.
     t.true(
       after <= before + 2,
@@ -8030,13 +8029,7 @@ test('concurrent unpin during pause-before-commit is serialized', async t => {
     } catch {
       // ignore
     }
-    const receiptP = E(host).startEvaluate(
-      'w1',
-      '2',
-      [],
-      [],
-      'during-pause',
-    );
+    const receiptP = E(host).startEvaluate('w1', '2', [], [], 'during-pause');
     const pausedMarker = `${hookPath}.paused`;
     const pauseDeadline = Date.now() + 10_000;
     while (!fs.existsSync(pausedMarker) && Date.now() < pauseDeadline) {
@@ -8077,7 +8070,10 @@ test('concurrent unpin during pause-before-commit is serialized', async t => {
       // eslint-disable-next-line no-await-in-loop
       await new Promise(r => setTimeout(r, 20));
     }
-    t.true(fs.existsSync(`${hookPath}.unpin-done`), 'unpin finishes after lock');
+    t.true(
+      fs.existsSync(`${hookPath}.unpin-done`),
+      'unpin finishes after lock',
+    );
     // Give collection cleanup a moment.
     await new Promise(r => setTimeout(r, 100));
     t.false(
@@ -8254,20 +8250,18 @@ test('startMakeArchive returns receipt; formulaDeps retain blob without tmp name
 
 test('startMakeFromTree and startMakeUnconfinedFromTree require result name', async t => {
   const { host } = await prepareHost(t);
-  await t.throwsAsync(
-    () =>
-      E(/** @type {any} */ (host)).startMakeFromTree(
-        undefined,
-        'missing-tree',
-        undefined,
-      ),
+  await t.throwsAsync(() =>
+    E(/** @type {any} */ (host)).startMakeFromTree(
+      undefined,
+      'missing-tree',
+      undefined,
+    ),
   );
-  await t.throwsAsync(
-    () =>
-      E(/** @type {any} */ (host)).startMakeUnconfinedFromTree(
-        undefined,
-        'missing-tree',
-        undefined,
-      ),
+  await t.throwsAsync(() =>
+    E(/** @type {any} */ (host)).startMakeUnconfinedFromTree(
+      undefined,
+      'missing-tree',
+      undefined,
+    ),
   );
 });

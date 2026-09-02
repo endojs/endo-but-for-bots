@@ -102,7 +102,10 @@ test('makeStoreIdentifierTask classifies TypeError as rejected-before-write', as
 
 test('makePinTransientTask pins on commit only', async t => {
   const pinned = [];
-  const task = makePinTransientTask(id => pinned.push(id), ids => ids.handleId);
+  const task = makePinTransientTask(
+    id => pinned.push(id),
+    ids => ids.handleId,
+  );
   await task.preflight();
   t.deepEqual(pinned, []);
   t.is(await task.commit({ handleId: 'h1' }, {}), 'committed');

@@ -20,9 +20,7 @@ import {
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
-import {
-  makeDeferredTasks,
-} from './deferred-tasks.js';
+import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { externalizeId } from './locator.js';
 

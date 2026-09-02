@@ -1563,12 +1563,12 @@ export const makeHostMaker = ({
 
       if (resultName !== undefined) {
         tasks.push(
-        makeStoreIdentifierTask(
-          (p, id) => E(directory).storeIdentifier(p, id),
-          namePathFrom(resultName),
-          ids => ids.capletId,
-        ),
-      );
+          makeStoreIdentifierTask(
+            (p, id) => E(directory).storeIdentifier(p, id),
+            namePathFrom(resultName),
+            ids => ids.capletId,
+          ),
+        );
       }
 
       return {
@@ -1944,10 +1944,14 @@ export const makeHostMaker = ({
       options = {},
     ) => {
       petNamePathFrom(resultName);
-      const { id } = await makeUnconfinedFromTreeInternal(workerName, treeName, {
-        ...options,
-        resultName,
-      });
+      const { id } = await makeUnconfinedFromTreeInternal(
+        workerName,
+        treeName,
+        {
+          ...options,
+          resultName,
+        },
+      );
       return harden({
         id,
         locator: formatLocator(id, 'make-unconfined'),
@@ -2670,12 +2674,12 @@ export const makeHostMaker = ({
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);
         tasks.push(
-        makeStoreIdentifierTask(
-          (p, id) => E(directory).storeIdentifier(p, id),
-          resultNamePath,
-          ids => ids.evalId,
-        ),
-      );
+          makeStoreIdentifierTask(
+            (p, id) => E(directory).storeIdentifier(p, id),
+            resultNamePath,
+            ids => ids.evalId,
+          ),
+        );
       }
 
       const { id: evalId } = await formulateEval(
