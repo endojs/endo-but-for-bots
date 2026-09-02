@@ -1948,6 +1948,12 @@ pub enum NativeMethod {
     /// `Object.is(x, y)` — ECMAScript SameValue (NaN equals NaN, signed
     /// zeros differ, and objects compare by identity).
     ObjectIs,
+    /// `Object.hasOwn(object, key)` — `HasOwnProperty(? ToObject(object),
+    /// ? ToPropertyKey(key))`.
+    ObjectHasOwn,
+    /// `Object.assign(target, ...sources)` — copy each source's live own
+    /// enumerable string and symbol properties through the object MOP.
+    ObjectAssign,
     /// `Object.fromEntries(iterable)` for the dense-Array iterable path. Entry
     /// objects are read by keys `0` and `1` (not iterated themselves).
     ObjectFromEntries,
@@ -6410,6 +6416,10 @@ impl Interp {
         // instance (not the prototype), bound at link time only when the
         // program references the name.
         if let Some(&object_ctor) = self.intrinsics.get("Object") {
+            let assign = self.alloc_named_method(NativeMethod::ObjectAssign, "assign", 2);
+            self.proto_methods.push((object_ctor, "assign", assign));
+            let has_own = self.alloc_named_method(NativeMethod::ObjectHasOwn, "hasOwn", 2);
+            self.proto_methods.push((object_ctor, "hasOwn", has_own));
             let is = self.alloc_named_method(NativeMethod::ObjectIs, "is", 2);
             self.proto_methods.push((object_ctor, "is", is));
             let from_entries =
@@ -7255,6 +7265,13 @@ impl Interp {
         ] {
             let mf = self.alloc_method(m);
             self.intrinsics.insert(name, mf);
+            // `Number.parseInt` and `Number.parseFloat` are aliases of the
+            // corresponding global functions, including function identity.
+            if matches!(name, "parseInt" | "parseFloat") {
+                if let Some(&ctor) = self.intrinsics.get("Number") {
+                    self.proto_methods.push((ctor, name, mf));
+                }
+            }
         }
     }
 
@@ -9064,6 +9081,116 @@ impl Interp {
         let floor = self.installed_names_len;
         let names = self.symbol_names.clone();
         self.install_intrinsic_bindings(&names, false, move |id| (id as usize) > floor);
+    }
+
+    /// Ensure `inst` exposes every modeled string-named own intrinsic before
+    /// `[[OwnPropertyKeys]]` observes it. A constructor reached through a
+    /// runtime-computed global name can exist before any of its member names
+    /// entered the program symbol table. Direct property access installs one
+    /// requested name, but own-key reflection must reveal the whole surface.
+    ///
+    /// Existing ids are only collected, never reinstalled: if guest code has
+    /// already deleted or replaced an intrinsic property, its id lies at or
+    /// below `installed_names_len` and the partial install leaves that edit
+    /// alone. Newly interned names describe boot properties that have never
+    /// been observable in this machine, so their create-only installation is
+    /// sound and unmetered.
+    fn materialize_intrinsic_own_surface(&mut self, inst: crate::value::SlotIndex) {
+        let mut member_names: Vec<&'static str> = self
+            .proto_methods
+            .iter()
+            .filter_map(|(owner, name, _)| (*owner == inst).then_some(*name))
+            .chain(
+                self.proto_data
+                    .iter()
+                    .filter_map(|(owner, name, _)| (*owner == inst).then_some(*name)),
+            )
+            .chain(
+                self.proto_value_data
+                    .iter()
+                    .filter_map(|(owner, name, _)| (*owner == inst).then_some(*name)),
+            )
+            .chain(
+                self.proto_accessors
+                    .iter()
+                    .filter_map(|(owner, name, _, _)| (*owner == inst).then_some(*name)),
+            )
+            .collect();
+        if self.intrinsics.get("Symbol").copied() == Some(inst) {
+            member_names.extend(self.well_known_symbols.iter().map(|(name, _)| *name));
+        }
+        if self
+            .error_stack_accessor
+            .is_some_and(|(owner, _, _)| owner == inst)
+        {
+            member_names.push("stack");
+        }
+        if member_names.is_empty() {
+            return;
+        }
+        member_names.sort_unstable();
+        member_names.dedup();
+        let floor = self.installed_names_len;
+        for name in member_names {
+            self.intern_key_unmetered(name);
+        }
+        if self.symbol_names.len() > floor {
+            let names = self.symbol_names.clone();
+            self.install_intrinsic_bindings(&names, false, move |id| (id as usize) > floor);
+        }
+    }
+
+    /// String-key creation order for a standard intrinsic object's modeled
+    /// boot properties. XS creates callable members in case-insensitive name
+    /// order, followed by data constants in their declaration order. The VM's
+    /// native-function allocation order is an implementation detail and must
+    /// not leak through `[[OwnPropertyKeys]]`.
+    fn intrinsic_own_string_order(
+        &self,
+        inst: crate::value::SlotIndex,
+    ) -> Option<Vec<u16>> {
+        if !self.intrinsics.values().any(|owner| *owner == inst) {
+            return None;
+        }
+        let mut callable_names: Vec<&'static str> = self
+            .proto_methods
+            .iter()
+            .filter_map(|(owner, name, _)| {
+                (*owner == inst && !matches!(*name, "length" | "name" | "prototype"))
+                    .then_some(*name)
+            })
+            .chain(self.proto_accessors.iter().filter_map(|(owner, name, _, _)| {
+                (*owner == inst && !matches!(*name, "length" | "name" | "prototype"))
+                    .then_some(*name)
+            }))
+            .collect();
+        callable_names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
+        callable_names.dedup();
+
+        let mut names = callable_names;
+        for (owner, name, _) in &self.proto_data {
+            if *owner == inst && !names.contains(name) {
+                names.push(*name);
+            }
+        }
+        for (owner, name, _) in &self.proto_value_data {
+            if *owner == inst && !names.contains(name) {
+                names.push(*name);
+            }
+        }
+        if self.intrinsics.get("Symbol").copied() == Some(inst) {
+            for (name, _) in &self.well_known_symbols {
+                if !names.contains(name) {
+                    names.push(*name);
+                }
+            }
+        }
+        Some(
+            names
+                .into_iter()
+                .filter_map(|name| self.symbol_ids.get(name).copied())
+                .collect(),
+        )
     }
 
     /// The installed-names floor (wave-6 W6-7): ids at or below it keep
@@ -28875,6 +29002,25 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 Slot::boolean(self.same_value(arg0, right))
             }
+            NativeMethod::ObjectHasOwn => {
+                let key = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.object_has_own_property(code, arg0, key)?
+            }
+            NativeMethod::ObjectAssign => {
+                let sources: Vec<Slot> = (1..argc)
+                    .map(|index| {
+                        self.stack
+                            .get(base + 4 + index)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
+                    .collect();
+                self.object_assign(code, arg0, &sources)?
+            }
             NativeMethod::ObjectFromEntries => self.object_from_entries(code, arg0)?,
             // `Object.keys(o)`: a fresh `Array` of `o`'s own enumerable
             // string-keyed property names, in creation order (XS's
@@ -29086,34 +29232,18 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("getOwnPropertyNames:exotic-object"));
                 }
-                let ids = self
-                    .own_all_string_ids(inst)
-                    .ok_or(Halt::Unsupported("getOwnPropertyNames:unknown-key"))?;
-                let n = ids.len() as u32;
+                let keys: Vec<Slot> = self
+                    .mop_own_keys(code, inst)?
+                    .into_iter()
+                    .filter(|key| key.kind == Kind::String)
+                    .collect();
+                let n = keys.len() as u32;
                 self.meter.tick_raw(OBJECT_KEYS_FRAME_METERING);
                 self.meter.tick_raw(self.array_chunk_size_metering(n));
                 for _ in 0..n {
                     self.meter.tick_slot_alloc();
                 }
-                let result = self.slots.alloc(Slot::instance(self.array_proto));
-                let mut data = ArrayData::default();
-                data.length = n;
-                for (i, id) in ids.into_iter().enumerate() {
-                    let name = self
-                        .symbol_names
-                        .get((id - 1) as usize)
-                        .cloned()
-                        .or_else(|| {
-                            self.symbol_ids
-                                .iter()
-                                .find_map(|(name, &key)| (key == id).then(|| name.clone()))
-                        })
-                        .ok_or(Halt::Unsupported("getOwnPropertyNames:unknown-key"))?;
-                    let off = self.alloc_str_text(name.as_bytes());
-                    data.insert_item(i as u32, Slot::of(Kind::String, Payload::String(off)), &mut self.side_refs);
-                }
-                self.arrays.insert(result, data);
-                Slot::of(Kind::Reference, Payload::Reference(result))
+                self.array_from_slots(&keys)
             }
             NativeMethod::ObjectCreate => {
                 let prototype = match arg0.value {
@@ -29530,11 +29660,13 @@ impl Interp {
                 if !self.is_ordinary_object(inst) {
                     return Err(Halt::Unsupported("getOwnPropertyDescriptors:exotic-object"));
                 }
-                let slots = self.own_property_slots(inst);
-                let mut props: Vec<(u16, OrdinaryDescriptor)> = Vec::new();
-                for &p in &slots {
-                    let s = self.slots.get(p);
-                    props.push((s.id, self.ordinary_get_own_descriptor(inst, s.id).unwrap()));
+                let keys = self.mop_own_keys(code, inst)?;
+                let mut props: Vec<(u16, OrdinaryDescriptor)> = Vec::with_capacity(keys.len());
+                for key in keys {
+                    let id = self.to_property_id(code, key)?;
+                    if let Some(descriptor) = self.mop_get_own_property(code, inst, id)? {
+                        props.push((id, descriptor));
+                    }
                 }
                 self.meter.tick_raw(GOPDS_FRAME_METERING);
                 let result = self.slots.alloc(Slot::instance(self.object_proto));
@@ -32489,7 +32621,8 @@ impl Interp {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error()),
         };
-        let len = to_length_u64(to_number(&self.arraylike_length(code, inst, value)?));
+        let length = self.arraylike_length(code, inst, value)?;
+        let len = self.to_length_value(code, length)?;
         let mut out = Vec::new();
         for i in 0..len {
             out.push(self.arraylike_index(code, inst, i, value)?);
@@ -42330,44 +42463,6 @@ impl Interp {
         Some(ids)
     }
 
-    /// The ids of **all** of `inst`'s own string-keyed data properties
-    /// (enumerable or not), in property-creation order — XS's `fxOwnKeys` for
-    /// `Reflect.ownKeys` over an ordinary object with no integer-index keys.
-    /// Unlike [`Self::own_enumerable_ids`] it keeps non-enumerable keys, but
-    /// like it returns `None` for a property ironhorse cannot classify (an accessor
-    /// own property, or an id with no program-symbol name), so the caller
-    /// honest-skips rather than emit a wrong key set. Symbol-keyed properties
-    /// (a later increment) are not present in the covered grammar's ordinary
-    /// objects, so a well-formed data-property chain is fully string-keyed.
-    fn own_all_string_ids(&self, inst: crate::value::SlotIndex) -> Option<Vec<u16>> {
-        let mut ids = Vec::new();
-        let mut cur = self.slots.get(inst).next;
-        while !cur.is_null() {
-            let s = self.slots.get(cur);
-            // `Reflect.ownKeys` returns the string keys THEN the symbol keys;
-            // ironhorse renders only the string portion, so an object carrying a
-            // symbol-keyed property is an honest skip (the symbol elements
-            // cannot be placed in the string-keyed result faithfully).
-            if self.is_symbol_key_id(s.id) {
-                return None;
-            }
-            if self.string_key_name(s.id).is_none() {
-                return None;
-            }
-            ids.push(s.id);
-            cur = s.next;
-        }
-        // Newest-first chain → creation order.
-        ids.reverse();
-        ids.sort_by_key(|id| {
-            self.string_key_name(*id)
-                .and_then(|name| string_to_index(&name))
-                .map(|index| (0u8, index))
-                .unwrap_or((1u8, 0))
-        });
-        Some(ids)
-    }
-
     /// Whether `inst` is an *ordinary* object — one whose whole own-property
     /// set lives in the slot-arena property chain, with no exotic side table
     /// (array/typed-array/collection/buffer/view/wrapper). Error instances are
@@ -43311,7 +43406,8 @@ impl Interp {
             Payload::Reference(i) if value.kind == Kind::Reference => i,
             _ => return Err(self.catchable_type_error()),
         };
-        let len = to_length_u64(to_number(&self.arraylike_length(code, inst, value)?));
+        let length = self.arraylike_length(code, inst, value)?;
+        let len = self.to_length_value(code, length)?;
         let mut out = Vec::new();
         for i in 0..len {
             let element = self.arraylike_index(code, inst, i, value)?;
@@ -43740,6 +43836,47 @@ impl Interp {
         Ok(Slot::boolean(present))
     }
 
+    /// `Object.assign(target, ...sources)` (ECMA-262 20.1.2.1). The key list
+    /// for each source is snapshotted once, but its descriptor and value are
+    /// read live before a throwing `Set` on the target. Nullish sources are
+    /// skipped; every other primitive is boxed through the same ToObject path
+    /// used by generic Array methods.
+    fn object_assign(
+        &mut self,
+        code: &[u8],
+        target: Slot,
+        sources: &[Slot],
+    ) -> Result<Slot, Halt> {
+        let to = self.array_to_object(target)?;
+        let Payload::Reference(target_inst) = to.value else {
+            unreachable!("ToObject target")
+        };
+        for source in sources {
+            if matches!(source.kind, Kind::Null | Kind::Undefined) {
+                continue;
+            }
+            let from = self.array_to_object(*source)?;
+            let Payload::Reference(source_inst) = from.value else {
+                unreachable!("ToObject source")
+            };
+            let keys = self.mop_own_keys(code, source_inst)?;
+            for key in keys {
+                let id = self.to_property_id(code, key)?;
+                let Some(descriptor) = self.mop_get_own_property(code, source_inst, id)? else {
+                    continue;
+                };
+                if descriptor.enumerable != Some(true) {
+                    continue;
+                }
+                let value = self.mop_get(code, source_inst, id, from)?;
+                if !self.mop_set(code, target_inst, id, value, to)? {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+        Ok(to)
+    }
+
     /// Whether object `o` has `id` as an own property — `O.[[GetOwnProperty]]`
     /// projected to presence, dispatched on the receiver's exotic shape. Exotic
     /// own names (`length`/`name`/`prototype`, integer indices) are matched by
@@ -44121,6 +44258,7 @@ impl Interp {
         if self.proxies.contains_key(&inst) {
             return self.proxy_own_keys(code, inst);
         }
+        self.materialize_intrinsic_own_surface(inst);
         // An exotic-array target: integer indices ascending, then the Array's
         // exotic `length` (ordinary and deletable for an arguments object),
         // then the remaining ordinary string keys and symbol keys.
@@ -44155,25 +44293,102 @@ impl Interp {
             }
             return Ok(out);
         }
-        // A function target: `length`, `name`, then ordinary own keys, then
-        // `prototype` (if it has one) — the non-configurable key ownKeys
-        // invariants require the trap result to preserve.
+        // Integer-indexed TypedArray own keys: each live element index in
+        // ascending order, then ordinary string and symbol expandos. A
+        // detached view has zero observable indexed keys.
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            let length = if self.detached_buffers.contains(&ta.buffer) {
+                0
+            } else {
+                ta.length
+            };
+            let mut out = Vec::new();
+            for index in 0..length {
+                let id = self.intern_key(&index.to_string());
+                out.push(self.property_key_slot(id)?);
+            }
+            for id in self.ordered_own_key_ids(inst) {
+                if self
+                    .string_key_name(id)
+                    .is_some_and(|name| string_to_index(&name).is_some())
+                {
+                    continue;
+                }
+                out.push(self.property_key_slot(id)?);
+            }
+            return Ok(out);
+        }
+        // A boxed String exposes UTF-16 indices followed by its non-enumerable
+        // `length`, then any ordinary expandos. Other primitive wrappers have
+        // only their ordinary own-property chain.
+        if let Some(Slot {
+            kind: Kind::String,
+            value: Payload::String(offset),
+            ..
+        }) = self.wrapper_data.get(&inst).copied()
+        {
+            let mut out = Vec::new();
+            for index in 0..self.str_len(offset) {
+                let id = self.intern_key(&index.to_string());
+                out.push(self.property_key_slot(id)?);
+            }
+            let length_id = self.intern_key("length");
+            out.push(self.property_key_slot(length_id)?);
+            for id in self.ordered_own_key_ids(inst) {
+                if id == length_id
+                    || self
+                        .string_key_name(id)
+                        .is_some_and(|name| string_to_index(&name).is_some())
+                {
+                    continue;
+                }
+                out.push(self.property_key_slot(id)?);
+            }
+            return Ok(out);
+        }
+        // A function target: `length`, `name`, `prototype` (if it has one),
+        // then later-created ordinary own keys. The non-configurable key
+        // ownKeys invariants require a proxy trap result to preserve them.
         if self.functions.contains_key(&inst) {
             let mut out = Vec::new();
             let length_id = self.intern_key("length");
             let name_id = self.intern_key("name");
             let prototype_id = self.intern_key("prototype");
             let has_proto = self.ctor_prototype.contains_key(&inst);
+            let ordinary_ids = self.ordered_own_key_ids(inst);
+            for &id in &ordinary_ids {
+                if !self.is_symbol_key_id(id)
+                    && self
+                        .string_key_name(id)
+                        .is_some_and(|name| string_to_index(&name).is_some())
+                {
+                    out.push(self.property_key_slot(id)?);
+                }
+            }
             out.push(self.property_key_slot(length_id)?);
             out.push(self.property_key_slot(name_id)?);
-            for id in self.ordered_own_key_ids(inst) {
-                if id == length_id || id == name_id || (has_proto && id == prototype_id) {
+            if has_proto {
+                out.push(self.property_key_slot(prototype_id)?);
+            }
+            let intrinsic_ids = self.intrinsic_own_string_order(inst).unwrap_or_default();
+            for &id in &intrinsic_ids {
+                if ordinary_ids.contains(&id) {
+                    out.push(self.property_key_slot(id)?);
+                }
+            }
+            for id in ordinary_ids {
+                if id == length_id
+                    || id == name_id
+                    || (has_proto && id == prototype_id)
+                    || intrinsic_ids.contains(&id)
+                    || (!self.is_symbol_key_id(id)
+                        && self
+                            .string_key_name(id)
+                            .is_some_and(|name| string_to_index(&name).is_some()))
+                {
                     continue;
                 }
                 out.push(self.property_key_slot(id)?);
-            }
-            if has_proto {
-                out.push(self.property_key_slot(prototype_id)?);
             }
             return Ok(out);
         }
@@ -47464,10 +47679,14 @@ fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
         }
         _ => return None,
     };
+    // Pinned XS treats a legacy `-00-` month as January rather than as the
+    // month preceding January. Positive months retain the ordinary 1-based
+    // to zero-based conversion, including normalization past December.
+    let month_index = (month - 1).max(0);
     let Some(clock) = clock else {
         return Some(date_from_components_exact([
             year as f64,
-            (month - 1) as f64,
+            month_index as f64,
             day as f64,
             0.0,
             0.0,
@@ -47504,7 +47723,7 @@ fn parse_xs_legacy_iso_string(text: &str) -> Option<f64> {
     let (hour, minute, second, millis) = parse_xs_legacy_date_clock(clock)?;
     let local = date_from_components_exact([
         year as f64,
-        (month - 1) as f64,
+        month_index as f64,
         day as f64,
         hour as f64,
         minute as f64,

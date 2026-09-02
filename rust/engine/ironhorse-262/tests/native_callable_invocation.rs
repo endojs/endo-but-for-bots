@@ -274,10 +274,17 @@ fn apply_array_like_arg_array() {
         "function f() {} var o = { get length() { throw new RangeError('L'); } }; \
          var ok; try { f.apply(null, o); ok = false; } catch (e) { ok = e instanceof RangeError; } ok",
     );
+    // `length` applies the observable ToNumber/ToLength path before any index
+    // read, including object coercion and the BigInt TypeError boundary.
+    agrees(
+        "var log=[];function f(x){return x}var o={get length(){log.push('g');return {valueOf(){log.push('v');return 1}}},0:7};f.apply(null,o)+':'+log.join('')",
+    );
+    agrees(
+        "var ok=false;try{(function(){}).apply(null,{length:1n})}catch(e){ok=e instanceof TypeError}ok",
+    );
     // An abrupt index getter propagates.
     agrees(
         "function f() {} var o = { length: 1, get 0() { throw new TypeError('I'); } }; \
          var ok; try { f.apply(null, o); ok = false; } catch (e) { ok = e instanceof TypeError; } ok",
     );
 }
-

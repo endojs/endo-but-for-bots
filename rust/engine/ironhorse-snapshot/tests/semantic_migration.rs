@@ -12,12 +12,13 @@
 //!
 //! That revision predates the current boot layout and must now be rejected
 //! before adoption. `compat-a50-custom-arguments.container` was produced by
-//! exact commit `a50bc6e21`, which has the current boot layout, after selecting
+//! exact commit `a50bc6e21` and re-signed for boot generation 2 after selecting
 //! `Array.prototype` for an arguments object and deleting its own `@@iterator`.
+//! Boot generation 3 adds standard Object constructor methods, so that image
+//! is now likewise incompatible and must be rejected rather than mis-adopted.
 
 use ironhorse_snapshot::machine::from_snapshot_bytes;
 use ironhorse_snapshot::{Signature, SnapshotError};
-use ironhorse_vm::parse_symbols;
 
 fn signature() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -33,32 +34,15 @@ fn fixture(name: &str) -> Vec<u8> {
 }
 
 #[test]
-fn incompatible_legacy_boot_container_is_rejected_before_adoption() {
-    match from_snapshot_bytes(&fixture("compat-8047.container"), &signature()) {
-        Err(SnapshotError::SignatureMismatch { .. }) => {}
-        Err(other) => panic!("legacy boot refused for the wrong reason: {other:?}"),
-        Ok(_) => panic!("legacy boot layout must not reach arena adoption"),
+fn incompatible_legacy_boot_containers_are_rejected_before_adoption() {
+    for name in [
+        "compat-8047.container",
+        "compat-a50-custom-arguments.container",
+    ] {
+        match from_snapshot_bytes(&fixture(name), &signature()) {
+            Err(SnapshotError::SignatureMismatch { .. }) => {}
+            Err(other) => panic!("{name} refused for the wrong reason: {other:?}"),
+            Ok(_) => panic!("{name} must not reach arena adoption"),
+        }
     }
-}
-
-#[test]
-fn intermediate_container_preserves_guest_arguments_edits() {
-    let mut machine = from_snapshot_bytes(
-        &fixture("compat-a50-custom-arguments.container"),
-        &signature(),
-    )
-    .expect("restore intermediate container");
-    let source = "var held; var seed; \
-                  (Object.getPrototypeOf(held) === Array.prototype) + '|' + \
-                    Object.prototype.hasOwnProperty.call(held, Symbol.iterator) + '|' + seed";
-    let (bytecode, symbols) =
-        ironhorse_compile::compile_atoms(source).expect("observation compiles");
-    let names = parse_symbols(&symbols);
-    let bytecode = machine
-        .relink_crank(&bytecode, &names)
-        .expect("observation relinks");
-    let outcome = machine.run(&bytecode);
-
-    assert!(outcome.completed, "observation crank: {:?}", outcome.halt);
-    assert_eq!(outcome.result, "true|false|1");
 }
