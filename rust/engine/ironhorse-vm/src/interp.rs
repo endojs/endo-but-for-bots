@@ -5807,6 +5807,8 @@ impl Interp {
                 }
                 NativeMethod::ArrayPush => self.alloc_named_method(m, name, 1),
                 NativeMethod::ArrayPop => self.alloc_named_method(m, name, 0),
+                NativeMethod::ArrayShift => self.alloc_named_method(m, name, 0),
+                NativeMethod::ArrayUnshift => self.alloc_named_method(m, name, 1),
                 NativeMethod::ArraySlice => self.alloc_named_method(m, name, 2),
                 NativeMethod::ArrayConcat => self.alloc_named_method(m, name, 1),
                 NativeMethod::ArrayWith | NativeMethod::ArrayToSpliced => {
@@ -12204,6 +12206,40 @@ impl Interp {
                             Slot::integer(self.arrays[&array].length as i32),
                             XS_DONT_ENUM_FLAG,
                         );
+                        // A non-strict simple parameter list creates a mapped
+                        // arguments object. XS compiles each formal's
+                        // initialization immediately after this instruction as
+                        // `argument i; var_closure k`; retain the closure-cell
+                        // edge in the indexed item so later parameter writes are
+                        // observed by `arguments[i]`, including after the frame
+                        // returns or a snapshot round-trip. Duplicate parameter
+                        // names map only their last occurrence.
+                        if op == XS_CODE_ARGUMENTS_SLOPPY {
+                            let formal_count = code[pc + 1] as usize;
+                            let cells = self.sloppy_argument_cells(
+                                code,
+                                pc + size as usize,
+                                formal_count,
+                            );
+                            for (index, cell) in cells.into_iter().enumerate() {
+                                let Some(cell) = cell else { continue };
+                                if index >= self.arrays[&array].length as usize {
+                                    continue;
+                                }
+                                let mut mapped =
+                                    Slot::of(Kind::Closure, Payload::Reference(cell));
+                                mapped.flag = self.arrays[&array]
+                                    .items()
+                                    .get(&(index as u32))
+                                    .map(|item| item.flag)
+                                    .unwrap_or(0);
+                                self.arrays.get_mut(&array).unwrap().insert_item(
+                                    index as u32,
+                                    mapped,
+                                    &mut self.side_refs,
+                                );
+                            }
+                        }
                     }
                     self.push(Slot::of(Kind::Reference, Payload::Reference(array)));
                     pc += size as usize;
@@ -29333,7 +29369,12 @@ impl Interp {
             // the prototype chain; all other receivers use the generic MOP.
             NativeMethod::ArrayPush => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) if self.array_push_fast_safe(i, argc) => i,
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_push_fast_safe(i, argc) =>
+                    {
+                        i
+                    }
                     _ => {
                         let result =
                             self.array_generic_push_pop(code, m, this, base, argc)?;
@@ -29379,7 +29420,12 @@ impl Interp {
             // non-configurable last element must take the throwing MOP path.
             NativeMethod::ArrayPop => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) if self.array_pop_fast_safe(i) => i,
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_pop_fast_safe(i) =>
+                    {
+                        i
+                    }
                     _ => {
                         let result =
                             self.array_generic_push_pop(code, m, this, base, argc)?;
@@ -29769,8 +29815,19 @@ impl Interp {
             // (else 2+4), the shrink chunk, and `mxMeterSome((length-1)*10)`.
             NativeMethod::ArrayShift => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("shift:non-dense-array")),
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_shift_fast_safe(i) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result =
+                            self.array_generic_shift_unshift(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 self.meter.tick_builtin_some(2);
@@ -29804,8 +29861,19 @@ impl Interp {
             // shift, `mxMeterSome(4)` per inserted argument, `mxMeterSome(2)`.
             NativeMethod::ArrayUnshift => {
                 let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => return Err(Halt::Unsupported("unshift:non-dense-array")),
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_unshift_fast_safe(i, argc) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result =
+                            self.array_generic_shift_unshift(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(());
+                    }
                 };
                 let length = self.arrays[&inst].length;
                 let c = argc as u32;
@@ -29837,7 +29905,7 @@ impl Interp {
                     a.length = length + c;
                 }
                 self.meter.tick_builtin_some(2);
-                Slot::integer((length + c) as i32)
+                Self::array_index_number(u64::from(length + c))
             }
             // `Array.prototype.copyWithin(target[, start[, end]])` — dense fast
             // path. Copy the block `[start, end)` (clamped to fit) to `target`
@@ -35502,22 +35570,34 @@ impl Interp {
         if new_length > u64::from(u32::MAX) {
             return false;
         }
-        if argc == 0 {
+        self.array_new_index_writes_fast_safe(inst, length, new_length)
+    }
+
+    /// Whether creating every index in `[start, end)` can bypass ordinary
+    /// `[[Set]]`: the receiver must be extensible, and no inherited exotic,
+    /// accessor, non-writable property, or Proxy may intercept a write.
+    fn array_new_index_writes_fast_safe(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        start: u64,
+        end: u64,
+    ) -> bool {
+        if start == end {
             return true;
         }
         if !self.instance_extensible(inst) {
             return false;
         }
-        for index in length..new_length {
+        for index in start..end {
             let name = index.to_string();
-            let Some(&id) = self.symbol_ids.get(&name) else {
-                continue;
-            };
+            let id = self.symbol_ids.get(&name).copied();
             let mut owner = self.instance_prototype(inst);
             while !owner.is_null() {
                 if self.proxies.contains_key(&owner)
-                    || self.ordinary_get_own_descriptor(owner, id).is_some()
-                    || self.exotic_own_descriptor(owner, id).is_some()
+                    || id.is_some_and(|id| {
+                        self.ordinary_get_own_descriptor(owner, id).is_some()
+                            || self.exotic_own_descriptor(owner, id).is_some()
+                    })
                 {
                     return false;
                 }
@@ -35542,6 +35622,61 @@ impl Interp {
             .items()
             .get(&(array.length - 1))
             .is_some_and(|item| item.flag & XS_DONT_DELETE_FLAG == 0)
+    }
+
+    /// Whether `shift` can update every retained packed element, delete the
+    /// last one, and shrink `length` without an observable descriptor failure.
+    fn array_shift_fast_safe(&self, inst: crate::value::SlotIndex) -> bool {
+        if !self.array_length_writable(inst) {
+            return false;
+        }
+        let array = &self.arrays[&inst];
+        if array.length == 0 {
+            return true;
+        }
+        for index in 0..array.length - 1 {
+            if array
+                .items()
+                .get(&index)
+                .map_or(true, |item| item.flag & XS_DONT_SET_FLAG != 0)
+            {
+                return false;
+            }
+        }
+        array
+            .items()
+            .get(&(array.length - 1))
+            .is_some_and(|item| item.flag & XS_DONT_DELETE_FLAG == 0)
+    }
+
+    /// Whether `unshift` can rewrite all existing packed indices and create
+    /// the appended tail without observing descriptors or prototypes.
+    fn array_unshift_fast_safe(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        argc: usize,
+    ) -> bool {
+        if !self.array_length_writable(inst) {
+            return false;
+        }
+        let length = u64::from(self.arrays[&inst].length);
+        let Some(new_length) = length.checked_add(argc as u64) else {
+            return false;
+        };
+        if new_length > u64::from(u32::MAX) {
+            return false;
+        }
+        if argc == 0 {
+            return true;
+        }
+        if self.arrays[&inst]
+            .items()
+            .values()
+            .any(|item| item.flag & XS_DONT_SET_FLAG != 0)
+        {
+            return false;
+        }
+        self.array_new_index_writes_fast_safe(inst, length, new_length)
     }
 
     /// Whether a dense allocating method may use its compact result path.
@@ -35794,6 +35929,134 @@ impl Interp {
                 Ok(value)
             }
             _ => unreachable!("generic push/pop method"),
+        }
+    }
+
+    /// Generic `Array.prototype.shift` / `unshift`. Both algorithms use
+    /// `LengthOfArrayLike` and the object MOP for every `HasProperty`, `Get`,
+    /// throwing `Set`, and `DeletePropertyOrThrow`, preserving sparse holes,
+    /// inherited indices, Proxy order, primitive boxing, and Array descriptor
+    /// constraints.
+    fn array_generic_shift_unshift(
+        &mut self,
+        code: &[u8],
+        method: NativeMethod,
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        if matches!(this.kind, Kind::Null | Kind::Undefined) {
+            return Err(self.catchable_type_error());
+        }
+        let object = match this.value {
+            Payload::Reference(_) if this.kind == Kind::Reference => this,
+            _ => match self.from_async_box_primitive(this) {
+                Some(object) => Slot::of(Kind::Reference, Payload::Reference(object)),
+                None => return Err(self.catchable_type_error()),
+            },
+        };
+        let Payload::Reference(inst) = object.value else {
+            unreachable!("ToObject result")
+        };
+        let length = self.array_generic_length(code, inst)?;
+        let length_id = self.intern_key("length");
+        const GENERIC_MOVE_CAP: u64 = 1 << 24;
+
+        match method {
+            NativeMethod::ArrayShift => {
+                if length == 0 {
+                    if !self.mop_set(code, inst, length_id, Slot::integer(0), object)? {
+                        return Err(self.catchable_type_error());
+                    }
+                    return Ok(Slot::undefined());
+                }
+                let first_id = self.array_generic_index_id(0);
+                let first = self.mop_get(code, inst, first_id, object)?;
+                let mut linear_steps = 0u64;
+                for k in 1..length {
+                    if linear_steps >= GENERIC_MOVE_CAP {
+                        return Err(Halt::Unsupported("shift:oversized-array-like"));
+                    }
+                    linear_steps += 1;
+                    let from_id = self.array_generic_index_id(k);
+                    let to_id = self.array_generic_index_id(k - 1);
+                    if self.mop_has(code, inst, from_id)? {
+                        let value = self.mop_get(code, inst, from_id, object)?;
+                        if !self.mop_set(code, inst, to_id, value, object)? {
+                            return Err(self.catchable_type_error());
+                        }
+                    } else if !self.mop_delete(code, inst, to_id)? {
+                        return Err(self.catchable_type_error());
+                    }
+                }
+                let last_id = self.array_generic_index_id(length - 1);
+                if !self.mop_delete(code, inst, last_id)? {
+                    return Err(self.catchable_type_error());
+                }
+                if !self.mop_set(
+                    code,
+                    inst,
+                    length_id,
+                    Self::array_index_number(length - 1),
+                    object,
+                )? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(first)
+            }
+            NativeMethod::ArrayUnshift => {
+                let new_length = length
+                    .checked_add(argc as u64)
+                    .filter(|new_length| *new_length <= 9_007_199_254_740_991)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                let args: Vec<Slot> = (0..argc)
+                    .map(|index| {
+                        self.stack
+                            .get(base + 4 + index)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
+                    .collect();
+                if argc > 0 {
+                    let count = argc as u64;
+                    let mut k = length;
+                    let mut linear_steps = 0u64;
+                    while k > 0 {
+                        if linear_steps >= GENERIC_MOVE_CAP {
+                            return Err(Halt::Unsupported("unshift:oversized-array-like"));
+                        }
+                        linear_steps += 1;
+                        k -= 1;
+                        let from_id = self.array_generic_index_id(k);
+                        let to_id = self.array_generic_index_id(k + count);
+                        if self.mop_has(code, inst, from_id)? {
+                            let value = self.mop_get(code, inst, from_id, object)?;
+                            if !self.mop_set(code, inst, to_id, value, object)? {
+                                return Err(self.catchable_type_error());
+                            }
+                        } else if !self.mop_delete(code, inst, to_id)? {
+                            return Err(self.catchable_type_error());
+                        }
+                    }
+                    for (index, value) in args.into_iter().enumerate() {
+                        let id = self.array_generic_index_id(index as u64);
+                        if !self.mop_set(code, inst, id, value, object)? {
+                            return Err(self.catchable_type_error());
+                        }
+                    }
+                }
+                if !self.mop_set(
+                    code,
+                    inst,
+                    length_id,
+                    Self::array_index_number(new_length),
+                    object,
+                )? {
+                    return Err(self.catchable_type_error());
+                }
+                Ok(Self::array_index_number(new_length))
+            }
+            _ => unreachable!("generic shift/unshift method"),
         }
     }
 
@@ -39439,6 +39702,53 @@ impl Interp {
         }
     }
 
+    /// Recover the closure-cell mapping encoded by the compiler immediately
+    /// after `arguments_sloppy`. Each formal initialization is emitted as
+    /// `argument i; var_closure k`; duplicate names reuse `k`, and only their
+    /// last occurrence remains mapped by the arguments exotic object.
+    fn sloppy_argument_cells(
+        &self,
+        code: &[u8],
+        mut pc: usize,
+        formal_count: usize,
+    ) -> Vec<Option<crate::value::SlotIndex>> {
+        let mut cells = vec![None; formal_count];
+        let mut pending_argument = None;
+        let mut initialized = 0usize;
+        while pc < code.len() && initialized < formal_count {
+            let Some(op) = Opcode::from_u8(code[pc]) else {
+                break;
+            };
+            let Some(size) = crate::opcode::instruction_len(code, pc) else {
+                break;
+            };
+            match op {
+                Opcode::XS_CODE_ARGUMENT => {
+                    pending_argument = code.get(pc + 1).copied().map(usize::from);
+                }
+                Opcode::XS_CODE_VAR_CLOSURE_1 | Opcode::XS_CODE_VAR_CLOSURE_2 => {
+                    if let Some(argument) = pending_argument.take() {
+                        let k = self.closure_index(op, code, pc);
+                        if let Some(cell) = self.closure_cell(k) {
+                            for former in &mut cells {
+                                if *former == Some(cell) {
+                                    *former = None;
+                                }
+                            }
+                            if let Some(mapped) = cells.get_mut(argument) {
+                                *mapped = Some(cell);
+                            }
+                        }
+                        initialized += 1;
+                    }
+                }
+                _ => {}
+            }
+            pc += size;
+        }
+        cells
+    }
+
     /// Point closure scope slot `k` at a different heap cell (XS's
     /// `slot->value.closure = variable`), preserving the slot's `Closure`
     /// kind and binding id. Used by `reset_closure`/`refresh_closure` to
@@ -40121,7 +40431,7 @@ impl Interp {
             // integer-indexed exotic `[[Get]]` above and never reaches here.)
             if self.arrays.contains_key(&inst) {
                 if let Some(s) = self.arrays[&inst].items().get(&index).copied() {
-                    Ok(Slot::of(s.kind, s.value))
+                    Ok(self.array_item_value(inst, s))
                 } else {
                     let id = self.intern_key(&index.to_string());
                     self.ordinary_get(code, inst, id, obj)
@@ -40325,6 +40635,23 @@ impl Interp {
         }
     }
 
+    /// Project a compact array item into its observable ECMAScript value.
+    /// Sloppy mapped arguments keep a closure-cell edge in the item so the
+    /// parameter binding remains live; every other item is already a value.
+    fn array_item_value(&self, inst: crate::value::SlotIndex, item: Slot) -> Slot {
+        if self.arguments_objects.contains(&inst)
+            && item.kind == Kind::Closure
+            && matches!(item.value, Payload::Reference(_))
+        {
+            let Payload::Reference(cell) = item.value else {
+                unreachable!()
+            };
+            let value = self.slots.get(cell);
+            return Slot::of(value.kind, value.value);
+        }
+        Slot::of(item.kind, item.value)
+    }
+
     /// Set array item `index = value` (XS's `fxSetIndexProperty` +
     /// `fxRunDefine`). Grows the item chunk when the index is new (metered by
     /// [`Self::array_item_grow_metering`]) and bumps `length` when the index
@@ -40336,6 +40663,22 @@ impl Interp {
         value: Slot,
         define: bool,
     ) {
+        if self.arguments_objects.contains(&inst) {
+            if let Some(Slot {
+                kind: Kind::Closure,
+                value: Payload::Reference(cell),
+                ..
+            }) = self.arrays[&inst].items().get(&index).copied()
+            {
+                let target = self.slots.get_mut(cell);
+                target.kind = value.kind;
+                target.value = value.value;
+                if define {
+                    self.meter.tick_raw(ARRAY_ITEM_DEFINE_STEP_METERING);
+                }
+                return;
+            }
+        }
         let is_new = !self
             .arrays
             .get(&inst)
@@ -40607,8 +40950,9 @@ impl Interp {
         }
 
         if let Some(value) = self.arrays[&inst].items().get(&index).copied() {
+            let observable_value = self.array_item_value(inst, value);
             let current = OrdinaryDescriptor {
-                value: Some(Slot::of(value.kind, value.value)),
+                value: Some(observable_value),
                 writable: Some(value.flag & XS_DONT_SET_FLAG == 0),
                 enumerable: Some(value.flag & XS_DONT_ENUM_FLAG == 0),
                 configurable: Some(value.flag & XS_DONT_DELETE_FLAG == 0),
@@ -40616,6 +40960,58 @@ impl Interp {
             };
             if !self.is_compatible_descriptor(true, &descriptor, Some(&current)) {
                 return false;
+            }
+            let mapped_cell = match (value.kind, value.value) {
+                (Kind::Closure, Payload::Reference(cell))
+                    if self.arguments_objects.contains(&inst) =>
+                {
+                    Some(cell)
+                }
+                _ => None,
+            };
+            if let Some(cell) = mapped_cell {
+                if !descriptor.is_accessor() {
+                    if let Some(new_value) = descriptor.value {
+                        let target = self.slots.get_mut(cell);
+                        target.kind = new_value.kind;
+                        target.value = new_value.value;
+                    }
+                    let mut flag = value.flag;
+                    if let Some(writable) = descriptor.writable {
+                        if writable {
+                            flag &= !XS_DONT_SET_FLAG;
+                        } else {
+                            flag |= XS_DONT_SET_FLAG;
+                        }
+                    }
+                    if let Some(enumerable) = descriptor.enumerable {
+                        if enumerable {
+                            flag &= !XS_DONT_ENUM_FLAG;
+                        } else {
+                            flag |= XS_DONT_ENUM_FLAG;
+                        }
+                    }
+                    if let Some(configurable) = descriptor.configurable {
+                        if configurable {
+                            flag &= !XS_DONT_DELETE_FLAG;
+                        } else {
+                            flag |= XS_DONT_DELETE_FLAG;
+                        }
+                    }
+                    if descriptor.writable == Some(false) {
+                        let current = self.slots.get(cell);
+                        let mut replacement = Slot::of(current.kind, current.value);
+                        replacement.flag = flag;
+                        self.arrays.get_mut(&inst).unwrap().insert_item(
+                            index,
+                            replacement,
+                            &mut self.side_refs,
+                        );
+                    } else if let Some(item) = self.arrays.get_mut(&inst).unwrap().items_mut().get_mut(&index) {
+                        item.flag = flag;
+                    }
+                    return true;
+                }
             }
             if descriptor.value.is_some()
                 && descriptor.writable.is_none()
@@ -41395,31 +41791,13 @@ impl Interp {
                 return Ok(false);
             }
         } else {
-            let mut prototype = self.instance_prototype(inst);
-            while !prototype.is_null() {
-                // A proxy in the prototype chain runs its own `[[Set]]`
-                // (ECMA-262 OrdinarySet: `parent.[[Set]](P, V, Receiver)`).
-                if self.proxies.contains_key(&prototype) {
-                    return self.proxy_set(code, prototype, id, value, receiver);
-                }
-                if let Some(descriptor) = self
-                    .ordinary_get_own_descriptor(prototype, id)
-                    .or_else(|| self.exotic_own_descriptor(prototype, id))
-                {
-                    if descriptor.is_accessor() {
-                        let setter = descriptor.set.unwrap_or_else(Slot::undefined);
-                        if setter.kind == Kind::Undefined {
-                            return Ok(false);
-                        }
-                        self.run_callback(code, setter, receiver, &[value])?;
-                        return Ok(true);
-                    }
-                    if descriptor.writable == Some(false) {
-                        return Ok(false);
-                    }
-                    break;
-                }
-                prototype = self.instance_prototype(prototype);
+            // OrdinarySet delegates an own-property miss to the immediate
+            // parent's complete `[[Set]]`. Do not flatten this into a
+            // descriptor scan: a Proxy or integer-indexed exotic prototype
+            // has behavior even when its own descriptor is absent.
+            let parent = self.instance_prototype(inst);
+            if !parent.is_null() {
+                return self.mop_set(code, parent, id, value, receiver);
             }
         }
         let receiver_inst = match receiver.value {
@@ -42410,8 +42788,9 @@ impl Interp {
         }
         let idx = self.string_key_name(id).and_then(|n| string_to_index(&n))?;
         let s = a.items().get(&idx).copied()?;
+        let value = self.array_item_value(inst, s);
         Some(OrdinaryDescriptor {
-            value: Some(Slot::of(s.kind, s.value)),
+            value: Some(value),
             writable: Some(s.flag & XS_DONT_SET_FLAG == 0),
             enumerable: Some(s.flag & XS_DONT_ENUM_FLAG == 0),
             configurable: Some(s.flag & XS_DONT_DELETE_FLAG == 0),
@@ -42463,6 +42842,11 @@ impl Interp {
     ) -> Result<bool, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_delete(code, inst, id);
+        }
+        if let Some(&ta) = self.typed_arrays.get(&inst) {
+            if let Some(index) = self.ta_numeric_index_at(id, 0) {
+                return Ok(self.ta_valid_index(ta, index).is_none());
+            }
         }
         if self.arrays.contains_key(&inst) {
             let name = self.string_key_name(id);

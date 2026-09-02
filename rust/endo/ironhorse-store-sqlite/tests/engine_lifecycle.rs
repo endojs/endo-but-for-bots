@@ -238,6 +238,22 @@ fn closure_results_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "43");
 }
 
+/// A sloppy arguments object's mapped index retains its closure-cell edge in
+/// the array side table. The parameter write happens only after a full SQLite
+/// close/reopen, proving that both the mapping and its live value persist.
+#[test]
+fn mapped_arguments_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "mapped-arguments",
+        &[
+            "var updateMapped = (function (a) { var x = arguments; return function (v) { if (arguments.length) a = v; return x[0]; }; })(4);",
+            "var updateMapped; updateMapped(9)",
+            "var updateMapped; updateMapped()",
+        ],
+    );
+    assert_eq!(last, "9");
+}
+
 /// Arrow-specific function metadata and closure-environment captures survive
 /// a full SQLite close/reopen cycle. This covers all three lexical bindings
 /// stored by `STORE_ARROW`: `this`, `new.target`, and the method home object
@@ -622,12 +638,13 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
          "Array.prototype.sort; Array.prototype.toSorted; a.sort; a.toSorted; \
          Array.prototype.slice; a.slice; Array.prototype.concat; a.concat; \
          Array.prototype.push; Array.prototype.pop; \
+         Array.prototype.shift; Array.prototype.unshift; \
          Array.prototype.with; Array.prototype.toReversed; \
          Array.prototype.toSpliced; Array.prototype.with.name; \
          Array.prototype.sort.call; Uint8Array; Reflect.ownKeys; Reflect.set; \
          Object.prototype.hasOwnProperty; Symbol.isConcatSpreadable; \
          a.join; a.length; 'con'; 'structor'; \
-         (function (y, z) { return y; });",
+         (function (h, y, z) { return y; });",
         &[
             "a = [3, 1, 2]; k = 'con' + 'structor'; delete Array.prototype[k]; t = 7;",
             "a.sort(function (x, y) { return x - y; }); t = a.join(','); t",
@@ -650,6 +667,7 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
              q = q.slice(0, 3); \
              f = {length: 4294967297}; f[4294967296] = 5; \
              b = {length: 0}; Array.prototype.push.call(b, 6, 7); \
+             h = {0: 2, length: 1}; Array.prototype.unshift.call(h, 1); \
              inst[Symbol.isConcatSpreadable] = true; z = [0].concat(inst); \
              delete inst[Symbol.isConcatSpreadable]; \
              t = inst.join(',') + ':' + Reflect.ownKeys(inst).join(',') + ':' + t; t",
@@ -661,11 +679,12 @@ fn array_sort_and_change_by_copy_natives_survive_sqlite_sleep_cycles() {
                  v.join(',') + ':' + Array.prototype.slice.call(f, 4294967296).join(',') + ':' + \
                  Object.prototype.hasOwnProperty.call(Array.prototype, k) + ':' + \
                  Array.prototype.pop.call(b) + ':' + b.length + ':' + b[0] + ':' + z.join(','); t",
+            "t = t + ':' + Array.prototype.shift.call(h) + ':' + h.length + ':' + h[0]; t",
         ],
     );
     assert_eq!(
         last,
-        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2"
+        "1,2:0,1:1,2:0,1:1,8,3:with:2:toReversed:0:toSpliced:2:1:false:3:slice:2:7:1:concat:1:1,2,3,4:5:false:7:1:6:0,1,2:1:1:2"
     );
 }
 
