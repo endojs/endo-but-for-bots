@@ -7,6 +7,10 @@ import {
   mapSnapshot,
   makeMountReadPowers,
 } from '../src/snapshot-mapper.js';
+import {
+  makeNpmRegistryTree,
+  makePackageRegistryTree,
+} from '../src/registry-tree.js';
 
 const utf8Encoder = new TextEncoder();
 
@@ -295,6 +299,42 @@ test('makeMountReadPowers reads from a workspace member compartment', async t =>
   const powers = makeMountReadPowers({ entrySource, resolution });
   const bytes = await powers.read('lib-b/index.js');
   t.is(new TextDecoder().decode(bytes), 'module.exports = 42;');
+});
+
+test('makeMountReadPowers late-binds through a registry tree', async t => {
+  const moduleBlob = Far('LateBoundModuleBlob', {
+    text: async () => 'export const late = true;',
+    json: async () => undefined,
+    streamBase64: async () => undefined,
+    help: () => 'late-bound module',
+  });
+  const packageTree = Far('LateBoundPackageTree', {
+    help: () => 'late-bound package tree',
+    has: async () => true,
+    list: async () => ['index.js'],
+    lookup: async path => (path === 'index.js' ? moduleBlob : undefined),
+    sha256: () => 'late-bound-hash',
+    getInfo: async () => harden({ hash: 'late-bound-hash' }),
+  });
+  const operations = harden({
+    listVersions: async name => (name === 'late' ? ['1.0.0'] : undefined),
+    providePackageTree: async () =>
+      harden({ treeRef: packageTree, integrity: 'sha512-late' }),
+  });
+  const registryRoot = makePackageRegistryTree({
+    npm: makeNpmRegistryTree(operations),
+  });
+  const powers = makeMountReadPowers({
+    entrySource: makeFakeTree({}),
+    resolution: harden({
+      packagesByKey: harden({}),
+      keys: harden([]),
+      resolutionHash: '',
+    }),
+    registryRoot,
+  });
+  const bytes = await powers.read('late@1.0.0/index.js');
+  t.is(new TextDecoder().decode(bytes), 'export const late = true;');
 });
 
 test('mapSnapshot produces the {compartmentMap, resolution, readPowers} trio', async t => {

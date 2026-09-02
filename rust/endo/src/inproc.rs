@@ -32,10 +32,154 @@ use std::time::SystemTime;
 
 use tokio::sync::Notify;
 
+use crate::cas::{ContentStore, TreeManifest};
 use crate::codec;
+use crate::fetch::{HttpClient, OfflineClient, UreqClient};
+use crate::npmrc::NpmConfig;
 use crate::paths::EndoPaths;
+use crate::registry::RegistryTable;
+use crate::registry_tree::{EndorRegistryTreeAdapter, RegistryTreeError, RegistryVersionLeaf};
 use crate::supervisor::Supervisor;
 use crate::types::{Envelope, Handle, Message, WorkerInfo};
+
+use xsnap::powers::registry::{
+    RegistryHost, RegistryHostError, RegistryHostErrorKind, RegistryPackageLeaf, RegistryTreeEntry,
+};
+
+struct EndorRegistryHost {
+    http: Box<dyn HttpClient + Send>,
+    cas: ContentStore,
+    table: RegistryTable,
+    config: NpmConfig,
+}
+
+impl EndorRegistryHost {
+    fn adapter(&self) -> EndorRegistryTreeAdapter<'_, dyn HttpClient + Send> {
+        EndorRegistryTreeAdapter::with_config(
+            self.http.as_ref(),
+            &self.cas,
+            &self.table,
+            self.config.clone(),
+        )
+    }
+
+    fn backend_error(message: impl Into<String>) -> RegistryHostError {
+        RegistryHostError {
+            kind: RegistryHostErrorKind::Backend,
+            message: message.into(),
+        }
+    }
+
+    fn load_tree(&self, hash: &str) -> Result<TreeManifest, RegistryHostError> {
+        let bytes = self
+            .cas
+            .fetch(hash)
+            .map_err(|error| Self::backend_error(format!("read tree {hash}: {error}")))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|error| Self::backend_error(format!("decode tree {hash}: {error}")))
+    }
+}
+
+fn map_registry_error(error: RegistryTreeError) -> RegistryHostError {
+    let kind = match &error {
+        RegistryTreeError::NotFound(_) => RegistryHostErrorKind::NotFound,
+        RegistryTreeError::Offline(_) => RegistryHostErrorKind::Offline,
+        RegistryTreeError::Tampered(_) => RegistryHostErrorKind::Tampered,
+        RegistryTreeError::Backend(_) => RegistryHostErrorKind::Backend,
+    };
+    RegistryHostError {
+        kind,
+        message: error.to_string(),
+    }
+}
+
+impl RegistryHost for EndorRegistryHost {
+    fn has_package(&self, name: &str) -> bool {
+        self.adapter().has_package(name)
+    }
+
+    fn list_versions(&self, name: &str) -> Result<Vec<String>, RegistryHostError> {
+        self.adapter()
+            .list_versions(name)
+            .map_err(map_registry_error)
+    }
+
+    fn provide_package_tree(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<RegistryPackageLeaf, RegistryHostError> {
+        let RegistryVersionLeaf {
+            tree_hash,
+            integrity,
+        } = self
+            .adapter()
+            .provide_package_tree(name, version)
+            .map_err(map_registry_error)?;
+        Ok(RegistryPackageLeaf {
+            tree_hash,
+            integrity,
+        })
+    }
+
+    fn list_tree(&self, tree_hash: &str) -> Result<Vec<String>, RegistryHostError> {
+        Ok(self.load_tree(tree_hash)?.entries.keys().cloned().collect())
+    }
+
+    fn lookup_tree(
+        &self,
+        tree_hash: &str,
+        name: &str,
+    ) -> Result<RegistryTreeEntry, RegistryHostError> {
+        let entry = self
+            .load_tree(tree_hash)?
+            .entries
+            .get(name)
+            .cloned()
+            .ok_or_else(|| RegistryHostError {
+                kind: RegistryHostErrorKind::NotFound,
+                message: format!("tree {tree_hash} has no entry {name}"),
+            })?;
+        Ok(RegistryTreeEntry {
+            kind: entry.entry_type,
+            hash: entry.hash,
+            size: entry.size,
+        })
+    }
+
+    fn read_blob(&self, hash: &str) -> Result<Vec<u8>, RegistryHostError> {
+        self.cas
+            .fetch(hash)
+            .map_err(|error| Self::backend_error(format!("read blob {hash}: {error}")))
+    }
+}
+
+fn make_registry_host(paths: &EndoPaths) -> io::Result<EndorRegistryHost> {
+    let project_dir = std::env::current_dir().ok();
+    let home_dir = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut config = NpmConfig::load(project_dir.as_deref(), home_dir.as_deref());
+    if let Ok(registry_url) = std::env::var("ENDO_REGISTRY_URL") {
+        if !registry_url.trim().is_empty() {
+            config.set_default_registry(&registry_url);
+        }
+    }
+    let offline = std::env::var("ENDO_REGISTRY_OFFLINE")
+        .map(|value| value == "1")
+        .unwrap_or(false);
+    let http: Box<dyn HttpClient + Send> = if offline {
+        Box::new(OfflineClient)
+    } else {
+        Box::new(UreqClient::with_config(config.clone()))
+    };
+    let cas = ContentStore::open(&paths.state_path.join("store-sha256"))?;
+    let table = RegistryTable::open(&paths.state_path.join("registry.db"))?;
+    Ok(EndorRegistryHost {
+        http,
+        cas,
+        table,
+        config,
+    })
+}
 
 /// Spawn the manager bundle inside this process.
 ///
@@ -68,11 +212,12 @@ pub fn spawn_inproc_xs_manager(
         }
     }
 
+    let registry = make_registry_host(paths)?;
     spawn_inproc_xs_peer(
         sup,
         "<in-process manager>".to_string(),
         Some(shutdown_notify),
-        Box::new(|transport| xsnap::run_xs_manager_inproc(transport)),
+        Box::new(move |transport| xsnap::run_xs_manager_inproc(transport, Box::new(registry))),
     )
 }
 
