@@ -2353,7 +2353,7 @@ pub enum NativeMethod {
     /// is an array exotic object.
     ArrayIsArray,
     /// `Array.of(...items)` — a static: a new array whose elements are the
-    /// arguments (`fx_Array_of`, always elements, never a length).
+    /// arguments (always elements, never a length).
     ArrayOf,
     /// `Array.prototype.values()` / `keys()` / `entries()`
     /// (`fx_Array_prototype_values` &co.): construct an Array Iterator over the
@@ -6148,7 +6148,7 @@ impl Interp {
         if let Some(&array_ctor) = self.intrinsics.get("Array") {
             let mf = self.alloc_method(NativeMethod::ArrayIsArray);
             self.proto_methods.push((array_ctor, "isArray", mf));
-            let of = self.alloc_method(NativeMethod::ArrayOf);
+            let of = self.alloc_named_method(NativeMethod::ArrayOf, "of", 0);
             self.proto_methods.push((array_ctor, "of", of));
             let from = self.alloc_named_method(NativeMethod::ArrayFrom, "from", 1);
             self.proto_methods.push((array_ctor, "from", from));
@@ -25030,6 +25030,61 @@ impl Interp {
         }
     }
 
+    // ------------------------------------------------------------------
+    // `Array.of` (ECMA-262 23.1.2.3). Construction, indexed property
+    // definition, and the final throwing length assignment deliberately use
+    // the same observable MOP paths as `Array.from`.
+    // ------------------------------------------------------------------
+
+    fn array_of(&mut self, code: &[u8], base: usize, argc: usize) -> Result<Slot, Halt> {
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.array_of_inner(code, base, argc);
+        self.jumps = saved_jumps;
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            },
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn array_of_inner(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        self.meter.tick_builtin();
+        let constructor = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let target = match self.array_from_make_target(code, constructor, Some(argc as u64))? {
+            Ok(target) => target,
+            Err(error) => return Ok(Err(error)),
+        };
+        for index in 0..argc {
+            let value = self
+                .stack
+                .get(base + 4 + index)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            if let Err(error) = self.array_from_define(code, target, index as u64, value)? {
+                return Ok(Err(error));
+            }
+        }
+        match self.array_from_set_length(code, target, argc as u64)? {
+            Ok(()) => Ok(Ok(Slot::of(
+                Kind::Reference,
+                Payload::Reference(target),
+            ))),
+            Err(error) => Ok(Err(error)),
+        }
+    }
+
     /// Normalize one operation executed behind Array.from's native try
     /// boundary. A JS throw becomes its realm value; an implementation halt
     /// remains a halt.
@@ -32934,18 +32989,7 @@ impl Interp {
                 };
                 Slot::boolean(r)
             }
-            // `Array.of(...items)` (`fx_Array_of`): its per-element metering has
-            // a first-element chunk-transition outlier (~2<<14 over the steady
-            // per-element step) plus a steady ~1<<14 per-element residual over
-            // the C's `mxMeterSome(4)` that traces to the variadic static-call
-            // argument marshalling / `fxCreateArray`+`fxSetIndexSize` interaction
-            // rather than the documented body meter. It does not reduce to a
-            // faithful constant this stage, so this self-names an honest skip
-            // rather than shipping a fitted (unfaithful) meter.
-            NativeMethod::ArrayOf => {
-                let _ = base;
-                return Err(Halt::Unsupported("Array.of:metering"));
-            }
+            NativeMethod::ArrayOf => self.array_of(code, base, argc)?,
             // `Array.prototype.values()`/`keys()`/`entries()`: build an Array
             // Iterator over the receiver.
             NativeMethod::ArrayValues | NativeMethod::ArrayKeys | NativeMethod::ArrayEntries => {
