@@ -15,6 +15,20 @@ fn assert_result_agrees(source: &str, expected: &str) {
     assert!(run.result_agrees, "results must agree for {source}");
 }
 
+fn assert_exact(source: &str) {
+    let run = dual_run(source).expect("pinned XS oracle is available");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+    assert!(run.result_agrees, "{source}: {run:?}");
+    assert!(
+        run.computrons_agree,
+        "{source}: oracle={} ({}) ironhorse={} ({})",
+        run.oracle_computrons,
+        run.oracle_meter_raw,
+        run.ironhorse_computrons,
+        run.ironhorse_meter_raw,
+    );
+}
+
 #[test]
 fn object_call_boxes_boolean_number_and_string() {
     assert_result_agrees(
@@ -48,6 +62,21 @@ fn object_value_of_applies_to_object() {
         "try{Object.prototype.valueOf.call(undefined);false}catch(e){e instanceof TypeError}",
     ] {
         assert_result_agrees(source, "true");
+    }
+}
+
+#[test]
+fn object_value_of_coercion_is_computron_exact() {
+    for source in [
+        "try{Object.prototype.valueOf.call(undefined)}catch(e){};true",
+        "try{Object.prototype.valueOf.call(null)}catch(e){};true",
+        "Object.prototype.valueOf.call(true);true",
+        "Object.prototype.valueOf.call(7);true",
+        "Object.prototype.valueOf.call('x');true",
+        "Object.prototype.valueOf.call(Symbol());true",
+        "Object.prototype.valueOf.call(1n);true",
+    ] {
+        assert_exact(source);
     }
 }
 
