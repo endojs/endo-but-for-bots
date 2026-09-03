@@ -780,6 +780,21 @@ fn iterator_from_wrappers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn regexp_string_iterators_survive_sqlite_sleep_cycles() {
+    let last = carry_scenario(
+        "carry-regexp-string-iterator",
+        "''.matchAll; it.next; q.value; q.value.index; q.done;",
+        &[
+            "it = 'a1b22'.matchAll(/(\\d+)/g); it.next(); t = 7; t",
+            "q = it.next(); \
+             t = q.value[0] + ':' + q.value[1] + ':' + q.value.index + ':' + q.done; t",
+            "q = it.next(); t = t + ':' + q.value + ':' + q.done; t",
+        ],
+    );
+    assert_eq!(last, "22:22:3:false:undefined:true");
+}
+
+#[test]
 fn array_of_results_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "array-of-results",

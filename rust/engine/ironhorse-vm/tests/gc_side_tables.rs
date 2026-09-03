@@ -109,6 +109,20 @@ fn iterator_from_wrapper_keeps_its_iterated_object_and_next_method_alive() {
     assert_eq!(out.result, "1");
 }
 
+#[test]
+fn regexp_string_iterator_keeps_its_cloned_matcher_alive() {
+    // The cloned RegExp is not guest-visible. After the original literal is
+    // dropped, the kind-9 iterator row is its only owner across collection.
+    let crank1 = "var it = 0; var churn = 0; churn = []; \
+                  it = 'a1b22'.matchAll(/(\\d+)/g); it.next(); 0;";
+    let crank2 = &format!(
+        "var it; var churn; var t = 0; {CHURN} t = it.next().value[0]; t"
+    );
+    let out = run_two_cranks_with_gc(crank1, crank2);
+    assert!(out.completed, "crank 2: {:?}", out.halt);
+    assert_eq!(out.result, "22");
+}
+
 /// The mainline's `dates` table (Date epoch-ms records, 2026-08-28
 /// rebase) joins the same net from both directions: a LIVE Date's
 /// record survives a full collection, and a DEAD Date's record is

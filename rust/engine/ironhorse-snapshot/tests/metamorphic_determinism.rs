@@ -255,10 +255,11 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for String.prototype.replaceAll, RegExp @@replace, and
         // boot-layout signature generation 11. Boot-heap content only; format
         // unchanged.
-        // Re-pinned for String.raw, locale-aware String methods, and
-        // boot-layout signature generation 12. Boot-heap content only; format
+        // Re-pinned for String/RegExp `matchAll`, the RegExp String Iterator,
+        // RegExp `@@species`, immutable well-known Symbol constants, and
+        // boot-layout signature generation 13. Boot-heap content only; format
         // unchanged.
-        "1b877f1cb0c514e0133fbc8415b65fa1c51264a0800b55ff321a3049abae2cef",
+        "f4769aa684a3f64e7b5a3fc755f57e5f7c69eb7b44db0de57fdd4e567e315947",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -437,9 +438,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for String.prototype.replaceAll, RegExp
         // @@replace, and boot generation 11. Schema and format remain
         // unchanged.
-        // Re-pinned with the blob for String.raw, locale-aware String methods,
-        // and boot generation 12. Schema and format remain unchanged.
-        "4bff40c59edac8d36bdbd61cbd0e5505ca8795963e017aeb704365214a93bd31",
+        // Re-pinned with the blob for the matchAll family, immutable
+        // well-known Symbol constants, and boot generation 13. Schema and
+        // format remain unchanged.
+        "f248a906645d6c15d3d686f70df44e4ee5e689bdfac30af048ebeab1479c04bf",
         "epoch-3 seal chain"
     );
 }
