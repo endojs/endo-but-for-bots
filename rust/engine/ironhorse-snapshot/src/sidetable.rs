@@ -767,6 +767,7 @@ mod tests {
             "promise_proto",
             "generator_proto", "generator_function_proto", "async_function_proto",
             "async_generator_proto", "async_generator_function_proto", "regexp_proto",
+            "regexp_replace_method",
             "iterator_proto", "iterator_wrapper_proto", "map_iterator_proto",
             "set_iterator_proto", "date_proto",
             "locale_proto", "collator_proto", "list_format_proto",

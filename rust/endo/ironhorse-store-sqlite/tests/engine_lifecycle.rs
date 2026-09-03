@@ -201,6 +201,20 @@ fn unicode_normalization_results_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "233:101:769:ffi");
 }
 
+#[test]
+fn replace_all_results_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "replace-all",
+        &[
+            "plain = 'a-b-a'.replaceAll('a', 'xy'); plain",
+            "empty = plain.replaceAll('', '.'); empty",
+            "global = empty.replaceAll(/\\./g, '_'); global",
+            "plain + ':' + empty + ':' + global",
+        ],
+    );
+    assert_eq!(last, "xy-b-xy:.x.y.-.b.-.x.y.:_x_y_-_b_-_x_y_");
+}
+
 /// Stateful RegExp matching persists a UTF-16 `lastIndex` while its matcher
 /// resumes over XS-style CESU-8, including an astral code point that spans two
 /// code units. The final crank also covers non-ASCII regexp splitting after a
