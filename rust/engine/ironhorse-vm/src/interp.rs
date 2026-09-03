@@ -13686,6 +13686,25 @@ impl Interp {
                     self.push(Slot::of(Kind::Reference, Payload::Reference(inst)));
                     pc += size as usize;
                 }
+                // `instantiate` (`XS_CODE_INSTANTIATE`): create the object
+                // literal whose written `__proto__: value` member selected
+                // this prelude. An object value becomes the exact prototype,
+                // `null` creates a null-prototype object, and every primitive
+                // is ignored in favor of `%Object.prototype%`. The member is
+                // not subsequently defined as an own data property.
+                XS_CODE_INSTANTIATE => {
+                    let value = self.pop();
+                    let proto = match (value.kind, value.value) {
+                        (Kind::Reference, Payload::Reference(proto)) => proto,
+                        (Kind::Null, _) => crate::value::SlotIndex::NULL,
+                        _ => self.object_proto,
+                    };
+                    self.meter.tick_builtin();
+                    self.meter.tick_slot_alloc();
+                    let inst = self.slots.alloc(Slot::instance(proto));
+                    self.push(Slot::of(Kind::Reference, Payload::Reference(inst)));
+                    pc += size as usize;
+                }
                 // `array` (`XS_CODE_ARRAY`): `fxNewArray(the, 0)` — push a
                 // reference to a fresh empty exotic array. The array-literal
                 // prelude stores it, sets `.length`, then fills item slots via
