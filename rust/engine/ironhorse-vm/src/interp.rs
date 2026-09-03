@@ -33955,16 +33955,20 @@ impl Interp {
             // `Array.prototype.values()`/`keys()`/`entries()`: build an Array
             // Iterator over the receiver.
             NativeMethod::ArrayValues | NativeMethod::ArrayKeys | NativeMethod::ArrayEntries => {
-                let arr = match this.value {
-                    Payload::Reference(i) if self.arrays.contains_key(&i) => i,
-                    _ => return Err(Halt::Unsupported("array-iterator:non-array")),
+                // CreateArrayIterator performs ToObject but does not require an
+                // Array exotic. The iterator's next method re-reads
+                // LengthOfArrayLike and indexed properties through the MOP, so
+                // ordinary objects, primitive wrappers, and Proxies remain live.
+                let object = self.array_to_object(this)?;
+                let Payload::Reference(iterated) = object.value else {
+                    unreachable!("ToObject result")
                 };
                 let kind = match m {
                     NativeMethod::ArrayValues => 0u8,
                     NativeMethod::ArrayKeys => 1u8,
                     _ => 2u8,
                 };
-                self.make_array_iterator(arr, kind)
+                self.make_array_iterator(iterated, kind)
             }
             // `%ArrayIteratorPrototype%.next()`.
             NativeMethod::ArrayIteratorNext => {

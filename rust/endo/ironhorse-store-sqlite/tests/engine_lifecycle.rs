@@ -752,6 +752,19 @@ fn global_accessor_bindings_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn generic_array_iterators_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "generic-array-iterator",
+        &[
+            "var source={length:2,0:'a',1:'b'};var iterator=Array.prototype.values.call(source);var seen=iterator.next().value;seen",
+            "var source;var iterator;var seen;source[1]='z';seen+=iterator.next().value;seen",
+            "var iterator;var seen;seen+':'+iterator.next().done",
+        ],
+    );
+    assert_eq!(last, "az:true");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",
