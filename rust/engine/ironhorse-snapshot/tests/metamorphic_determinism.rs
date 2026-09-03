@@ -246,7 +246,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // content only; format unchanged.
         // Re-pinned for `%WrapForValidIteratorPrototype%` and boot-layout
         // signature generation 7. Boot-heap content only; format unchanged.
-        "02c1db398a397abe01ce848bcdadfd580342e89491cc3b9eefc22a49429a7ede",
+        // Re-pinned for Array.of's standard name metadata and boot-layout
+        // signature generation 8. Boot-heap content only; format unchanged.
+        "4508c45356615005608ff8c8f44148d390be7204beaf0190aabedf01ac65798f",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -415,7 +417,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for `%WrapForValidIteratorPrototype%` and
         // boot-layout signature generation 7. Schema and format remain
         // unchanged.
-        "9db796def4154d44887be1ce93f1e5d89f3586d7eb0e741918100145d5bb81b2",
+        // Re-pinned with the blob for Array.of's standard name metadata and
+        // boot-layout signature generation 8. Schema and format remain
+        // unchanged.
+        "57661eaa0e65dc1a59a0373f0ff8271886d8aacb6327dab5920f96b04fa6939c",
         "epoch-3 seal chain"
     );
 }
