@@ -174,6 +174,19 @@ fn strings_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn json_parsed_unicode_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "json-unicode",
+        &[
+            "var parsed=JSON.parse('{\"😀\":\"\\\\ud800\",\"pair\":\"\\\\ud83d\\\\ude00\"}'); parsed.pair",
+            "parsed['😀'].charCodeAt(0)+':'+parsed.pair.length+':'+parsed.pair.charCodeAt(0)+':'+parsed.pair.charCodeAt(1)",
+            "JSON.stringify(parsed)",
+        ],
+    );
+    assert_eq!(last, "{\"😀\":\"\\ud800\",\"pair\":\"😀\"}");
+}
+
+#[test]
 fn unicode_case_results_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "unicode-case",
