@@ -1035,6 +1035,18 @@ fn boxed_symbols_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn object_value_of_wrappers_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "object-value-of-wrappers",
+        &[
+            "var numberObject=Object.prototype.valueOf.call(7);var bigintObject=Object.prototype.valueOf.call(9n);",
+            "(numberObject instanceof Number)+':'+numberObject.valueOf()+':'+(bigintObject instanceof BigInt)+':'+bigintObject.valueOf()",
+        ],
+    );
+    assert_eq!(last, "true:7:true:9");
+}
+
+#[test]
 fn sloppy_this_wrappers_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "sloppy-this-wrappers",

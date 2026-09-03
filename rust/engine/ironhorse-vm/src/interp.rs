@@ -31382,8 +31382,10 @@ impl Interp {
             // (`enter_call_dot_apply`) and never reaches here.
             NativeMethod::FunctionApply => return Err(Halt::Unsupported("apply:unexpected")),
             NativeMethod::FunctionPrototype => Slot::undefined(),
-            // `Object.prototype.valueOf`: returns the receiver unchanged.
-            NativeMethod::ObjectValueOf => this,
+            // `Object.prototype.valueOf`: `ToObject(this)`. Object receivers
+            // retain their identity, primitive receivers become their realm
+            // wrappers, and nullish receivers throw a catchable TypeError.
+            NativeMethod::ObjectValueOf => self.array_to_object(this)?,
             // `<wrapper>.valueOf`: the wrapped primitive.
             NativeMethod::WrapperValueOf => match this.value {
                 Payload::Reference(r) => self.wrapper_data.get(&r).copied().unwrap_or(this),

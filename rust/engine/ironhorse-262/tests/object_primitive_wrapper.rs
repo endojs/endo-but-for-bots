@@ -36,6 +36,22 @@ fn object_call_boxes_boolean_number_and_string() {
 }
 
 #[test]
+fn object_value_of_applies_to_object() {
+    for source in [
+        "var o={};Object.prototype.valueOf.call(o)===o",
+        "Object.prototype.valueOf.call(7) instanceof Number",
+        "Object.prototype.valueOf.call(false) instanceof Boolean",
+        "Object.prototype.valueOf.call('x') instanceof String",
+        "Object.prototype.valueOf.call(Symbol()) instanceof Symbol",
+        "Object.prototype.valueOf.call(1n) instanceof BigInt",
+        "try{Object.prototype.valueOf.call(null);false}catch(e){e instanceof TypeError}",
+        "try{Object.prototype.valueOf.call(undefined);false}catch(e){e instanceof TypeError}",
+    ] {
+        assert_result_agrees(source, "true");
+    }
+}
+
+#[test]
 fn object_construct_boxes_primitive_values() {
     assert_result_agrees(
         "var o = new Object(false); '' + (o instanceof Boolean) + ',' + o.valueOf()",
