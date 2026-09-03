@@ -14,7 +14,7 @@ test('nested package.json changing type', async t => {
   t.plan(1);
 
   const fixture = new URL(
-    'fixtures-nested-pkg/node_modules/app/index.js',
+    'fixtures/node-modules/nested-package-json/node_modules/app/index.js',
     import.meta.url,
   ).toString();
 

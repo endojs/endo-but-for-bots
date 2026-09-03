@@ -203,6 +203,54 @@ fn read_tree_manifest(cas: &ContentStore, tree_hash: &str) -> TreeManifest {
     }
 }
 
+/// Per-directory module flavor from every `package.json` in a
+/// package tree, for Node's nearest-ancestor rule: a `.js` file's
+/// parser is decided by the closest `package.json` at or above its
+/// directory — `"type": "module"` means ESM, anything else (or an
+/// absent `type`) means CommonJS. Dual-build packages ship a nested
+/// marker (`esm/package.json` with `"type": "module"`) over a
+/// CommonJS root, so a single package-root flag misparses one half.
+fn esm_flavor_by_dir(
+    files: &BTreeMap<String, Vec<u8>>,
+    root_default: bool,
+) -> BTreeMap<String, bool> {
+    let mut flavors = BTreeMap::new();
+    flavors.insert(String::new(), root_default);
+    for (path, bytes) in files {
+        if Path::new(path).file_name().and_then(|n| n.to_str()) != Some("package.json") {
+            continue;
+        }
+        let dir = match path.rfind('/') {
+            Some(i) => path[..i].to_string(),
+            None => String::new(),
+        };
+        let esm = serde_json::from_slice::<serde_json::Value>(bytes)
+            .ok()
+            .map(|doc| doc.get("type").and_then(|t| t.as_str()) == Some("module"))
+            .unwrap_or(root_default);
+        flavors.insert(dir, esm);
+    }
+    flavors
+}
+
+/// The flavor for one module path: walk from its directory toward
+/// the package root, first `package.json` directory wins.
+fn esm_default_for(path: &str, flavors: &BTreeMap<String, bool>) -> bool {
+    let mut dir = match path.rfind('/') {
+        Some(i) => &path[..i],
+        None => "",
+    };
+    loop {
+        if let Some(&esm) = flavors.get(dir) {
+            return esm;
+        }
+        match dir.rfind('/') {
+            Some(i) => dir = &dir[..i],
+            None => return *flavors.get("").unwrap_or(&false),
+        }
+    }
+}
+
 /// A module source normalized for the archive registry: the ESM text
 /// the loader hosts, plus — for a CommonJS module — the raw source
 /// the runtime CJS loader evaluates with a working `require`.
@@ -319,6 +367,7 @@ pub fn load_assembled_archive(
     for (key, compartment) in &parsed {
         let files = &files_by_key[key];
         let manifest = &manifests[key];
+        let flavors = esm_flavor_by_dir(files, manifest.esm_by_default);
 
         let mut modules: HashMap<String, ModuleDescriptor> = HashMap::new();
         for (path, bytes) in files {
@@ -331,7 +380,7 @@ pub fn load_assembled_archive(
                     sha512: None,
                 },
             );
-            let normalized = normalize_to_esm(path, bytes, manifest.esm_by_default, key);
+            let normalized = normalize_to_esm(path, bytes, esm_default_for(path, &flavors), key);
             sources.insert((key.clone(), specifier.clone()), normalized.esm);
             if let Some(raw) = normalized.cjs_raw {
                 cjs_sources.insert((key.clone(), specifier), raw);
@@ -739,6 +788,69 @@ mod tests {
         let mjs = normalize_to_esm("index.mjs", b"export default 2;", false, "dep-v1.0.0");
         assert_eq!(mjs.esm, "export default 2;");
         assert!(mjs.cjs_raw.is_none());
+    }
+
+    // This is also the fixture consumed by compartment-mapper's
+    // nested-pkg.test.js. Keeping its package files in one place makes both
+    // implementations exercise the same nested-package-json shape.
+    const NESTED_PACKAGE_JSON_FIXTURE: &[(&str, &str)] = &[
+        (
+            "package.json",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/package.json"
+            )),
+        ),
+        (
+            "afolder/package.json",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/afolder/package.json"
+            )),
+        ),
+        (
+            "afolder/file.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/afolder/file.js"
+            )),
+        ),
+        (
+            "afolder/anotherfolder/file2.js",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../packages/compartment-mapper/test/fixtures/node-modules/nested-package-json/node_modules/apackage/afolder/anotherfolder/file2.js"
+            )),
+        ),
+    ];
+
+    /// The nearest `package.json` decides a `.js` file's parser, as in Node.
+    /// The shared fixture has a CommonJS package root and an auxiliary nested
+    /// marker that makes the whole `afolder/` subtree ESM.
+    #[test]
+    fn shared_nested_package_json_fixture_scopes_module_flavor() {
+        let files: BTreeMap<String, Vec<u8>> = NESTED_PACKAGE_JSON_FIXTURE
+            .iter()
+            .map(|(path, source)| (path.to_string(), source.as_bytes().to_vec()))
+            .collect();
+
+        let flavors = esm_flavor_by_dir(&files, false);
+        assert!(!esm_default_for("index.js", &flavors));
+        assert!(esm_default_for("afolder/file.js", &flavors));
+        assert!(esm_default_for("afolder/anotherfolder/file2.js", &flavors));
+
+        // The mirror shape: an ESM root with a nested CommonJS
+        // marker (`cjs/package.json` with no `type`, meaning
+        // CommonJS, nearest wins).
+        let mut mirror: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        mirror.insert(
+            "package.json".into(),
+            b"{\"type\":\"module\"}".to_vec(),
+        );
+        mirror.insert("cjs/package.json".into(), b"{}".to_vec());
+        let mirror_flavors = esm_flavor_by_dir(&mirror, true);
+        assert!(esm_default_for("index.js", &mirror_flavors));
+        assert!(!esm_default_for("cjs/index.js", &mirror_flavors));
     }
 
     /// A CJS module with statically detectable export names gets a

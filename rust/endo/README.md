@@ -13,7 +13,7 @@ archive runner depending on the subcommand.
 cargo build --release -p endo --bin endor
 ```
 
-The xsnap library `include_str!`s three JS bundles that are generated
+The xsnap library `include_str!`s four JS bundles that are generated
 rather than committed (`.gitignore`), so they must be produced before
 `cargo build`:
 
@@ -21,9 +21,10 @@ rather than committed (`.gitignore`), so they must be produced before
 | --- | --- |
 | `ses_boot.js` | `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs` |
 | `worker_bootstrap.js` | `packages/daemon/scripts/bundle-bus-worker-xs.mjs` |
+| `archive_text_endowments.js` (a bundle of `@endo/base64` plus the WHATWG `atob`/`btoa` adaptation layer, the codec oracle for archive compartments) | `packages/daemon/scripts/bundle-archive-text-endowments-xs.mjs` |
 | `daemon_bootstrap.js` (the manager bundle, kept under its legacy filename to minimize bundler churn) | `packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs` |
 
-The first two run from a clean checkout. The third does not yet; see
+The first three run from a clean checkout. The fourth does not yet; see
 [Implementation status](#implementation-status) below, where
 `packages/thixotrope/scripts/bundle-xs-worker.mjs` writes a throwing stub
 so the crate still compiles.

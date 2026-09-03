@@ -897,6 +897,28 @@ pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 /// declared in `ffi.rs` but never called). The realm runs on
 /// unrepaired intrinsics and `polyfills.js`'s deep-freeze `harden`.
 /// Tracked in `designs/worker-rust-xs.md` § Known Gaps.
+
+/// Web-platform text endowments for archive compartments, evaluated as
+/// a side-effecting script after the base endowments object so it
+/// installs onto `globalThis.__archiveEndowments`: the machine's
+/// `TextEncoder` and `TextDecoder` globals (native-backed where
+/// installed, otherwise the `POLYFILLS` pure-JS pair — evaluate
+/// `POLYFILLS` first on machines that skip the SES bootstrap), plus
+/// `atob` and `btoa`. npm packages' browser and dual builds lean on
+/// these; all four are pure byte/string transforms carrying no new
+/// authority.
+///
+/// The base64 codec is NOT reimplemented in Rust or hand-rolled in JS
+/// here: this is a bundle of `@endo/base64` (the single behavioral
+/// oracle for the byte<->string transform, its alphabet, padding, and
+/// RFC 4648 error semantics) plus the thin WHATWG `atob`/`btoa`
+/// adaptation layer — forgiving-base64 whitespace handling, optional
+/// trailing padding, and the `InvalidCharacterError` name — that
+/// `@endo/base64` deliberately does not provide. Generated from
+/// `packages/daemon/src/archive-text-endowments-xs.js` by
+/// `packages/daemon/scripts/bundle-archive-text-endowments-xs.mjs`.
+pub const ARCHIVE_TEXT_ENDOWMENTS_JS: &str = include_str!("archive_text_endowments.js");
+
 pub const SES_BOOT: &str = include_str!("ses_boot.js");
 
 /// The bundled worker JavaScript. Self-executing IIFE that installs
@@ -1720,6 +1742,7 @@ pub fn run_xs_program(
                     "__archiveEndowments.URL = globalThis.URL; \
                      __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
                 );
+                machine.eval(ARCHIVE_TEXT_ENDOWMENTS_JS);
                 let cursor = std::io::Cursor::new(bytes);
                 let archive = archive::load_archive(cursor)
                     .map_err(|e| XsnapError::Archive(format!("cannot read archive: {e}")))?;
@@ -1963,7 +1986,14 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
     machine.register_worker_io();
     register_host_powers(&machine);
 
-    // Provide archive endowments (shared with the supervised path).
+    // This path skips the SES bootstrap, so evaluate the polyfills
+    // here (typeof-guarded, so a machine with native codecs keeps
+    // them) to guarantee the TextEncoder/TextDecoder globals the
+    // text endowments below hand into archive compartments.
+    machine.eval(POLYFILLS);
+
+    // Provide archive endowments (shared with the supervised path),
+    // then append the web-platform text codecs.
     machine.eval(ARCHIVE_ENDOWMENTS_JS);
     // URL/URLSearchParams ride the host's WHATWG parser; a separate
     // statement to keep the endowments blob's conflict surface small.
@@ -1972,6 +2002,8 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
         "__archiveEndowments.URL = globalThis.URL; \
          __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
     );
+    machine.eval(ARCHIVE_TEXT_ENDOWMENTS_JS);
+
     if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
             "archive installation failed".to_string(),
@@ -2587,6 +2619,64 @@ mod tests {
                 "host global should not be modified by guest compartment"),
             other => panic!("expected 'original', got {:?}", js_value_debug(&other)),
         }
+    }
+
+    #[test]
+    fn archive_text_endowments_provide_codecs() {
+        // The archive text endowments hand compartments working
+        // TextEncoder/TextDecoder (the POLYFILLS pair on a machine
+        // without native codecs) plus `atob`/`btoa`. The base64 codec
+        // is `@endo/base64`, bundled (see ARCHIVE_TEXT_ENDOWMENTS_JS),
+        // so it remains the behavioral oracle: the RFC 4648 §10 vectors
+        // below are lifted verbatim from `@endo/base64`'s own
+        // `test/main.test.js`. The endowment adds only the WHATWG shell:
+        // browser error semantics (`InvalidCharacterError`) and
+        // forgiving-base64 whitespace + optional-padding handling.
+        let machine = new_machine();
+        machine.eval(POLYFILLS);
+        machine.eval("globalThis.__archiveEndowments = {};");
+        machine.eval(ARCHIVE_TEXT_ENDOWMENTS_JS);
+        let verdict = machine
+            .eval_to_string(
+                "(function () { \
+                    var E = globalThis.__archiveEndowments; \
+                    var enc = new E.TextEncoder().encode('h\\u00e9\\u2603'); \
+                    var dec = new E.TextDecoder().decode(enc); \
+                    if (dec !== 'h\\u00e9\\u2603') return 'decode mismatch: ' + dec; \
+                    /* RFC 4648 §10 vectors — the @endo/base64 oracle set. */ \
+                    var vectors = [ \
+                        ['', ''], ['f', 'Zg=='], ['fo', 'Zm8='], \
+                        ['foo', 'Zm9v'], ['foob', 'Zm9vYg=='], \
+                        ['fooba', 'Zm9vYmE='], ['foobar', 'Zm9vYmFy'] \
+                    ]; \
+                    for (var i = 0; i < vectors.length; i++) { \
+                        var plain = vectors[i][0], coded = vectors[i][1]; \
+                        if (E.btoa(plain) !== coded) \
+                            return 'btoa(' + plain + '): ' + E.btoa(plain); \
+                        if (E.atob(coded) !== plain) \
+                            return 'atob(' + coded + '): ' + E.atob(coded); \
+                    } \
+                    /* Forgiving-base64: whitespace and absent padding. */ \
+                    if (E.atob(' aGVs\\nbG8= ') !== 'hello') return 'forgiving whitespace failed'; \
+                    if (E.atob('Zm8') !== 'fo') return 'forgiving unpadded failed'; \
+                    /* Binary round-trip (bytes outside ASCII). */ \
+                    if (E.atob(E.btoa('\\x0d\\x02\\x09\\xff\\xfe')) !== '\\x0d\\x02\\x09\\xff\\xfe') \
+                        return 'binary round-trip failed'; \
+                    /* Malformed / alphabet / padding edge cases reject as ICE. */ \
+                    var bad = ['a', 'Z%', 'aGVsbG8@']; \
+                    for (var j = 0; j < bad.length; j++) { \
+                        var threw = false; \
+                        try { E.atob(bad[j]); } catch (e) { threw = e.name === 'InvalidCharacterError'; } \
+                        if (!threw) return 'atob(' + bad[j] + ') must throw InvalidCharacterError'; \
+                    } \
+                    var threw2 = false; \
+                    try { E.btoa('\\u0100'); } catch (e) { threw2 = e.name === 'InvalidCharacterError'; } \
+                    if (!threw2) return 'btoa beyond U+00FF must throw InvalidCharacterError'; \
+                    return 'ok'; \
+                })()",
+            )
+            .unwrap();
+        assert_eq!(verdict, "ok");
     }
 
     #[test]
