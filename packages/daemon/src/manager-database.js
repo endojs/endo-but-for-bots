@@ -41,9 +41,9 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
  * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
  * @property {(storeNumber: string) => void} deleteSyncedMeta
- * @property {(secretId: string) => ({secretId: string, backendRef: string, purpose: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string} | undefined)} getSecretRecord
- * @property {(record: {secretId: string, backendRef: string, purpose: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}) => void} writeSecretRecord
- * @property {() => Array<{secretId: string, backendRef: string, purpose: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}>} listSecretRecords
+ * @property {(secretId: string) => ({secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string} | undefined)} getSecretRecord
+ * @property {(record: {secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}) => void} writeSecretRecord
+ * @property {() => Array<{secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}>} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
  * @property {(event: import('./types.js').SecretAuditEvent) => void} writeSecretAuditEvent
@@ -120,7 +120,7 @@ const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS secret_record (
     secret_id TEXT PRIMARY KEY,
     backend_ref TEXT NOT NULL,
-    purpose TEXT NOT NULL,
+    description TEXT NOT NULL,
     state TEXT NOT NULL,
     generation TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -296,21 +296,21 @@ export const makeDaemonDatabase = (config, options) => {
   );
 
   const stmtGetSecretRecord = prepare(
-    'SELECT secret_id AS secretId, backend_ref AS backendRef, purpose, state, generation, created_at AS createdAt, updated_at AS updatedAt FROM secret_record WHERE secret_id = ?',
+    'SELECT secret_id AS secretId, backend_ref AS backendRef, description, state, generation, created_at AS createdAt, updated_at AS updatedAt FROM secret_record WHERE secret_id = ?',
   );
   const stmtWriteSecretRecord = prepare(
     `INSERT INTO secret_record
-       (secret_id, backend_ref, purpose, state, generation, created_at, updated_at)
+       (secret_id, backend_ref, description, state, generation, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(secret_id) DO UPDATE SET
        backend_ref = excluded.backend_ref,
-       purpose = excluded.purpose,
+       description = excluded.description,
        state = excluded.state,
        generation = excluded.generation,
        updated_at = excluded.updated_at`,
   );
   const stmtListSecretRecords = prepare(
-    'SELECT secret_id AS secretId, backend_ref AS backendRef, purpose, state, generation, created_at AS createdAt, updated_at AS updatedAt FROM secret_record ORDER BY created_at, secret_id',
+    'SELECT secret_id AS secretId, backend_ref AS backendRef, description, state, generation, created_at AS createdAt, updated_at AS updatedAt FROM secret_record ORDER BY created_at, secret_id',
   );
   const stmtGetSecretGrant = prepare(
     'SELECT secret_id AS secretId FROM secret_grant WHERE grant_id = ?',
@@ -656,7 +656,7 @@ export const makeDaemonDatabase = (config, options) => {
     stmtWriteSecretRecord.run(
       record.secretId,
       record.backendRef,
-      record.purpose,
+      record.description,
       record.state,
       String(record.generation),
       record.createdAt,

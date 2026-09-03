@@ -1469,6 +1469,7 @@ test.serial(
       encodeBase64(new TextEncoder().encode(canary)),
     );
     t.is(summary.state, 'active');
+    t.is(summary.description, 'Publish release artifacts');
 
     const secretId = await E(host).identify('secrets', 'release');
     t.truthy(secretId);
@@ -1484,6 +1485,7 @@ test.serial(
     await restart(config);
     const { host: hostAfter } = await makeHost(config, cancelled);
     const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
+    t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
     t.is(
       new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
       canary,
