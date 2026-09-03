@@ -134,6 +134,43 @@ export const contentLocatorMethodGuards = harden({
 
 export const EnvelopeInterface = M.interface('EndoEnvelope', {});
 
+export const SecretBlobInterface = M.interface('SecretBlob', {
+  help: M.call().returns(M.string()),
+  getPurpose: M.call().returns(M.promise()),
+  // Uint8Array is mutable and therefore not passable. Base64 is the wire
+  // envelope only; the backend and manager continue to store arbitrary bytes.
+  readBase64: M.call().returns(M.promise()),
+});
+
+export const SecretAdminInterface = M.interface('SecretAdmin', {
+  getSummary: M.call().returns(M.promise()),
+  replaceBase64: M.call(M.string()).returns(M.promise()),
+  setPurpose: M.call(M.string()).returns(M.promise()),
+  revoke: M.call().returns(M.promise()),
+});
+
+export const SecretImporterInterface = M.interface('SecretImporter', {
+  createBase64: M.call(M.string(), M.string(), M.string()).returns(M.promise()),
+});
+
+export const SecretCatalogInterface = M.interface('SecretCatalog', {
+  list: M.call().returns(M.promise()),
+});
+
+export const SecretAuditReaderInterface = M.interface('SecretAuditReader', {
+  list: M.call().optional(M.bigint()).returns(M.promise()),
+});
+
+export const SecretManagerDirectoryInterface = M.interface(
+  'SecretManagerDirectory',
+  {
+    help: M.call().returns(M.string()),
+    has: M.call(M.string()).returns(M.promise()),
+    list: M.call().returns(M.promise()),
+    lookup: M.call(M.any()).returns(M.promise()),
+  },
+);
+
 export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
 });

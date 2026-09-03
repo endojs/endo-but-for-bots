@@ -41,6 +41,13 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
  * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
  * @property {(storeNumber: string) => void} deleteSyncedMeta
+ * @property {(secretId: string) => ({secretId: string, backendRef: string, purpose: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string} | undefined)} getSecretRecord
+ * @property {(record: {secretId: string, backendRef: string, purpose: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}) => void} writeSecretRecord
+ * @property {() => Array<{secretId: string, backendRef: string, purpose: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}>} listSecretRecords
+ * @property {(grantId: string) => string | undefined} getSecretIdForGrant
+ * @property {(grantId: string, secretId: string) => void} writeSecretGrant
+ * @property {(event: import('./types.js').SecretAuditEvent) => void} writeSecretAuditEvent
+ * @property {(limit: number) => import('./types.js').SecretAuditEvent[]} listSecretAuditEvents
  */
 
 // Node's ObjectWrap cleanup hook can be removed during GC without a current
@@ -49,7 +56,7 @@ import { q } from '@endo/errors';
 // Retain wrappers until process teardown, when an Environment is available.
 const retainedForProcessLifetime = new Set();
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS schema_version (
@@ -109,6 +116,36 @@ const SCHEMA_SQL = `
     local_clock INTEGER NOT NULL DEFAULT 0,
     remote_acked_clock INTEGER NOT NULL DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS secret_record (
+    secret_id TEXT PRIMARY KEY,
+    backend_ref TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    state TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS secret_grant (
+    grant_id TEXT PRIMARY KEY,
+    secret_id TEXT NOT NULL REFERENCES secret_record(secret_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS secret_audit_event (
+    event_id TEXT PRIMARY KEY,
+    secret_id TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    outcome TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    operation_id TEXT NOT NULL,
+    grant_id TEXT,
+    reason_code TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_secret_audit_time
+    ON secret_audit_event(occurred_at, event_id);
 `;
 
 /**
@@ -256,6 +293,36 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtDeleteSyncedMeta = prepare(
     'DELETE FROM synced_store_meta WHERE store_number = ?',
+  );
+
+  const stmtGetSecretRecord = prepare(
+    'SELECT secret_id AS secretId, backend_ref AS backendRef, purpose, state, generation, created_at AS createdAt, updated_at AS updatedAt FROM secret_record WHERE secret_id = ?',
+  );
+  const stmtWriteSecretRecord = prepare(
+    `INSERT INTO secret_record
+       (secret_id, backend_ref, purpose, state, generation, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(secret_id) DO UPDATE SET
+       backend_ref = excluded.backend_ref,
+       purpose = excluded.purpose,
+       state = excluded.state,
+       generation = excluded.generation,
+       updated_at = excluded.updated_at`,
+  );
+  const stmtListSecretRecords = prepare(
+    'SELECT secret_id AS secretId, backend_ref AS backendRef, purpose, state, generation, created_at AS createdAt, updated_at AS updatedAt FROM secret_record ORDER BY created_at, secret_id',
+  );
+  const stmtGetSecretGrant = prepare(
+    'SELECT secret_id AS secretId FROM secret_grant WHERE grant_id = ?',
+  );
+  const stmtWriteSecretGrant = prepare(
+    'INSERT OR REPLACE INTO secret_grant (grant_id, secret_id) VALUES (?, ?)',
+  );
+  const stmtWriteSecretAudit = prepare(
+    'INSERT INTO secret_audit_event (event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, grant_id, reason_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const stmtListSecretAudit = prepare(
+    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, grant_id AS grantId, reason_code AS reasonCode FROM secret_audit_event ORDER BY occurred_at DESC, event_id DESC LIMIT ?',
   );
 
   // -- Formula operations --
@@ -565,6 +632,93 @@ export const makeDaemonDatabase = (config, options) => {
     stmtDeleteSyncedMeta.run(storeNumber);
   };
 
+  /** @param {Record<string, unknown>} row */
+  const decodeSecretRecord = row => ({
+    ...row,
+    state: /** @type {'active' | 'revoked' | 'unavailable'} */ (row.state),
+    generation: BigInt(/** @type {string} */ (row.generation)),
+  });
+
+  /** @param {string} secretId */
+  const getSecretRecord = secretId => {
+    const row = /** @type {Record<string, unknown> | undefined} */ (
+      stmtGetSecretRecord.get(secretId)
+    );
+    return row === undefined
+      ? undefined
+      : /** @type {ReturnType<DaemonDatabase['getSecretRecord']>} */ (
+          decodeSecretRecord(row)
+        );
+  };
+
+  /** @param {Parameters<DaemonDatabase['writeSecretRecord']>[0]} record */
+  const writeSecretRecord = record => {
+    stmtWriteSecretRecord.run(
+      record.secretId,
+      record.backendRef,
+      record.purpose,
+      record.state,
+      String(record.generation),
+      record.createdAt,
+      record.updatedAt,
+    );
+  };
+
+  const listSecretRecords = () =>
+    /** @type {ReturnType<DaemonDatabase['listSecretRecords']>} */ (
+      /** @type {Record<string, unknown>[]} */ (
+        stmtListSecretRecords.all()
+      ).map(decodeSecretRecord)
+    );
+
+  /** @param {string} grantId */
+  const getSecretIdForGrant = grantId => {
+    const row = /** @type {{secretId: string} | undefined} */ (
+      stmtGetSecretGrant.get(grantId)
+    );
+    return row?.secretId;
+  };
+
+  /**
+   * @param {string} grantId
+   * @param {string} secretId
+   */
+  const writeSecretGrant = (grantId, secretId) => {
+    stmtWriteSecretGrant.run(grantId, secretId);
+  };
+
+  /** @param {import('./types.js').SecretAuditEvent} event */
+  const writeSecretAuditEvent = event => {
+    stmtWriteSecretAudit.run(
+      event.eventId,
+      event.secretId,
+      event.operation,
+      event.outcome,
+      String(event.generation),
+      event.occurredAt,
+      event.operationId,
+      event.grantId ?? null,
+      event.reasonCode ?? null,
+    );
+  };
+
+  /** @param {number} limit */
+  const listSecretAuditEvents = limit =>
+    /** @type {import('./types.js').SecretAuditEvent[]} */ (
+      /** @type {Record<string, unknown>[]} */ (
+        stmtListSecretAudit.all(limit)
+      ).map(row => {
+        /** @type {Record<string, unknown>} */
+        const event = {
+          ...row,
+          generation: BigInt(/** @type {string} */ (row.generation)),
+        };
+        if (event.grantId === null) delete event.grantId;
+        if (event.reasonCode === null) delete event.reasonCode;
+        return event;
+      })
+    );
+
   const close = () => {
     db.close();
   };
@@ -604,6 +758,13 @@ export const makeDaemonDatabase = (config, options) => {
     getSyncedMeta,
     setSyncedMeta,
     deleteSyncedMeta,
+    getSecretRecord,
+    writeSecretRecord,
+    listSecretRecords,
+    getSecretIdForGrant,
+    writeSecretGrant,
+    writeSecretAuditEvent,
+    listSecretAuditEvents,
   });
 };
 harden(makeDaemonDatabase);

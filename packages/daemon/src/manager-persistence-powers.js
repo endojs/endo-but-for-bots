@@ -61,6 +61,13 @@ export const makeDaemonicPersistencePowers = (
     listRetention,
     replaceRetention,
     deleteAllRetention,
+    getSecretRecord,
+    writeSecretRecord,
+    listSecretRecords,
+    getSecretIdForGrant,
+    writeSecretGrant,
+    writeSecretAuditEvent,
+    listSecretAuditEvents,
   } = daemonDb;
 
   const initializePersistence = async () => {
@@ -117,6 +124,14 @@ export const makeDaemonicPersistencePowers = (
     };
   };
 
+  const provideSecretStoreKey = async () => {
+    const existing = getState('secret_store_key_v1');
+    if (existing !== undefined) return fromHex(existing);
+    const keyHex = await cryptoPowers.randomHex256();
+    setState('secret_store_key_v1', keyHex);
+    return fromHex(keyHex);
+  };
+
   // Content store uses the filesystem for streaming binary data.
   // Large blobs do not belong in SQLite.  The four-method
   // `store`/`fetch`/`has`/`remove` contract lives in `@endo/daemon-cas`;
@@ -144,6 +159,7 @@ export const makeDaemonicPersistencePowers = (
     initializePersistence,
     provideRootNonce,
     provideRootKeypair,
+    provideSecretStoreKey,
     makeContentStore: makeSnapshotContentStore,
     readFormula: async formulaNumber => readFormula(formulaNumber),
     writeFormula: async (formulaNumber, nodeNumber, formula) =>
@@ -163,6 +179,13 @@ export const makeDaemonicPersistencePowers = (
     listRetention,
     replaceRetention,
     deleteAllRetention,
+    getSecretRecord,
+    writeSecretRecord,
+    listSecretRecords,
+    getSecretIdForGrant,
+    writeSecretGrant,
+    writeSecretAuditEvent,
+    listSecretAuditEvents,
   });
 };
 harden(makeDaemonicPersistencePowers);

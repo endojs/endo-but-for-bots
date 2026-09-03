@@ -6,14 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
-[daemon-capability-credentials](daemon-capability-credentials.md) (added
-2026-09-03; an Endo-native capability-authorized secret-store seam, stable
-`SecretReference` plus caretaker/controller facets, use-specific grants instead
-of generic byte extraction, one-use sealed operator ingress, metadata-only audit
-and future Secret Space, and a separate provider-broker boundary for hosted
-Codex/Claude subscription credentials; incorporates three adversarial review
-rounds and rejects the exploratory generic `writeSecret` and shared
-`auth.json` paths),
+[daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
+2026-09-03; a singleton, capability-authorized manager for arbitrary secret
+bytes, with management facets under the special `@secrets` directory and
+individual `SecretBlob` capabilities in the ordinary `secrets` pet store;
+uses existing `lookup` and `marshal` formulas, supports replacement,
+revocation, metadata-only audit, and a value-blind Secret Blobs Space, and
+leaves OAuth, signing, brokers, and consumer-specific policy to layers above
+it),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -317,7 +317,7 @@ LLM-agent stack).*
 | [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) | 2026-05-21 | 2026-05-21 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-09-03 | Not Started |
-| [daemon-capability-credentials](daemon-capability-credentials.md) | 2026-09-03 | — | Proposed |
+| [daemon-secret-manager](daemon-secret-manager.md) | 2026-09-03 | 2026-09-03 | Implemented (local backend) |
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-05-19 | Reference |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
@@ -500,9 +500,10 @@ The 2026-09-01 rebase adds [endo-workflow](endo-workflow.md) (Proposed) to M3, i
 The same 2026-09-01 pass flips [endo-workflow](endo-workflow.md) from Proposed to **In Progress** (implementation landed as `packages/workflow`), so Proposed returns 40 -> 39.
 
 The 2026-09-03 update adds
-[daemon-capability-credentials](daemon-capability-credentials.md) (Proposed) to
-M10.
-Its estimate decomposes the existing `daemon-capability-bank` credential-store
+[daemon-secret-manager](daemon-secret-manager.md) to M10.
+Its local backend and Secret Blobs Space are implemented; operation-journal,
+XS encryption-power, and production KMS/HSM hardening remain.
+Its estimate decomposes the existing `daemon-capability-bank` secret-storage
 slice and does not increase the milestone aggregate.
 
 ## Roadmap
@@ -707,7 +708,7 @@ flowchart TD
         dfsw[filesystem-watchers]
         dcsgc[daemon-content-store-gc]
         dpers[daemon-capability-persona]
-        dsecret[daemon-capability-credentials<br/><i>PROPOSED</i>]
+        dsecret[daemon-secret-manager<br/><i>IMPLEMENTED (LOCAL)</i>]
         dbank[daemon-capability-bank]
         icancel[inventory-cancel-and-liveness]
         dmkar[daemon-make-archive<br/><i>IN PROGRESS</i>]
@@ -1344,7 +1345,7 @@ ecosystem.
 | ~~daemon-os-sandbox-plugin~~ | Superseded | Replaced by `endo-posix-sandbox`; retained as historical proposal |
 | endo-posix-sandbox | In Progress | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
 | daemon-capability-persona | Not Started | Epithets and delegation |
-| daemon-capability-credentials | Proposed | Capability-authorized external secret store, stable reference/controller facets, use-specific grants, sealed ingress, audit, rotation/revocation, and provider-broker separation; no ACL or UI in the initial slices |
+| daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, replacement, revocation, metadata-only audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
@@ -1696,7 +1697,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
-| daemon-capability-credentials | XL | 4-6 weeks | 10 | Endo-native external SecretStore service, secret records, sealed ingress, and bounded Git/HTTP consumers; capability possession is the only authorization; decomposes the credential-store slice already included in daemon-capability-bank, so this estimate is not additive to that row |
+| daemon-secret-manager | XL | 4-6 weeks | 10 | Endo-native singleton for arbitrary secret bytes, pluggable durable backend, `@secrets` management directory, ordinary `secrets` pet store, existing lookup/marshal formulas, audit, replacement, revocation, restart durability with a recorded crash-reconciliation gap, canary leak tests, and the Secret Blobs Space; capability possession is the only authorization; decomposes the secret-storage slice already included in daemon-capability-bank, so this estimate is not additive to that row |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
 | endoclaw-browser | M-L | 1.5 weeks | 10 | Playwright-backed, origin-confined; smallest cut in PR #106 |
 | endoclaw-channel-bridges | M | 4-5 days | 10 | Vercel `chat` SDK adapters |
@@ -1743,7 +1744,7 @@ date of this pass.
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
-| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-credentials`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
 | **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 

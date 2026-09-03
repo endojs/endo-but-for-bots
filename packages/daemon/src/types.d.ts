@@ -1556,6 +1556,71 @@ export interface EndoGuest extends EndoAgent {
   sendValue: Mail['sendValue'];
 }
 
+export type SecretState = 'active' | 'revoked' | 'unavailable';
+
+export type SecretSummary = {
+  secretId: string;
+  purpose: string;
+  state: SecretState;
+  generation: bigint;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export interface SecretBlob {
+  help(): string;
+  getPurpose(): Promise<string>;
+  readBase64(): Promise<string>;
+}
+
+export interface SecretAdmin {
+  getSummary(): Promise<SecretSummary>;
+  replaceBase64(bytesBase64: string): Promise<void>;
+  setPurpose(purpose: string): Promise<void>;
+  revoke(): Promise<void>;
+}
+
+export interface SecretImporter {
+  createBase64(
+    name: string,
+    purpose: string,
+    bytesBase64: string,
+  ): Promise<SecretSummary>;
+}
+
+export interface SecretCatalogEntry {
+  secretId: string;
+  summary: SecretSummary;
+  admin: SecretAdmin;
+}
+
+export interface SecretCatalog {
+  list(): Promise<SecretCatalogEntry[]>;
+}
+
+export type SecretAuditEvent = {
+  eventId: string;
+  secretId: string;
+  operation: 'create' | 'release' | 'replace' | 'rename' | 'revoke';
+  outcome: 'attempted' | 'succeeded' | 'failed';
+  generation: bigint;
+  occurredAt: string;
+  operationId: string;
+  grantId?: string;
+  reasonCode?: string;
+};
+
+export interface SecretAuditReader {
+  list(limit?: bigint): Promise<SecretAuditEvent[]>;
+}
+
+export interface SecretManagerDirectory {
+  help(): string;
+  has(name: string): Promise<boolean>;
+  list(): Promise<string[]>;
+  lookup(path: string | string[]): Promise<unknown>;
+}
+
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
@@ -2170,6 +2235,16 @@ export type CryptoPowers = {
   randomHex256: () => Promise<string>;
   generateEd25519Keypair: () => Promise<Ed25519Keypair>;
   ed25519Sign: (privateKey: Uint8Array, message: Uint8Array) => Uint8Array;
+  sealSecret: (
+    key: Uint8Array,
+    plaintext: Uint8Array,
+    associatedData: Uint8Array,
+  ) => Uint8Array;
+  openSecret: (
+    key: Uint8Array,
+    sealed: Uint8Array,
+    associatedData: Uint8Array,
+  ) => Uint8Array;
 };
 
 export type FilePowers = {
@@ -2305,6 +2380,7 @@ export type DaemonicPersistencePowers = {
   initializePersistence: () => Promise<void>;
   provideRootNonce: () => Promise<RootNonceDescriptor>;
   provideRootKeypair: () => Promise<RootKeypairDescriptor>;
+  provideSecretStoreKey: () => Promise<Uint8Array>;
   makeContentStore: () => import('@endo/platform/fs/lite/types').SnapshotStore;
   readFormula: (
     formulaNumber: FormulaNumber,
@@ -2333,6 +2409,39 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
+  getSecretRecord: (secretId: string) =>
+    | {
+        secretId: string;
+        backendRef: string;
+        purpose: string;
+        state: SecretState;
+        generation: bigint;
+        createdAt: string;
+        updatedAt: string;
+      }
+    | undefined;
+  writeSecretRecord: (record: {
+    secretId: string;
+    backendRef: string;
+    purpose: string;
+    state: SecretState;
+    generation: bigint;
+    createdAt: string;
+    updatedAt: string;
+  }) => void;
+  listSecretRecords: () => Array<{
+    secretId: string;
+    backendRef: string;
+    purpose: string;
+    state: SecretState;
+    generation: bigint;
+    createdAt: string;
+    updatedAt: string;
+  }>;
+  getSecretIdForGrant: (grantId: string) => string | undefined;
+  writeSecretGrant: (grantId: string, secretId: string) => void;
+  writeSecretAuditEvent: (event: SecretAuditEvent) => void;
+  listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
 };
 
 export interface DaemonWorkerFacet {}

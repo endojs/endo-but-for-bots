@@ -17,6 +17,7 @@ import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
+import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -1452,6 +1453,80 @@ test('mailboxes persist messages across restart', async t => {
     ],
   );
 });
+
+test.serial(
+  'secret lookup capabilities and values survive restart',
+  async t => {
+    const { cancelled, config, host } = await prepareHost(t);
+    const canary = 'CANARY-daemon-secret-value';
+
+    t.true((await E(host).list()).includes('@secrets'));
+    t.deepEqual(await E(host).list('@secrets'), ['audit', 'catalog', 'create']);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    const summary = await E(importer).createBase64(
+      'release',
+      'Publish release artifacts',
+      encodeBase64(new TextEncoder().encode(canary)),
+    );
+    t.is(summary.state, 'active');
+
+    const secretId = await E(host).identify('secrets', 'release');
+    t.truthy(secretId);
+    const formula = await E(E(host).diagnostics()).getFormula(secretId);
+    t.is(formula.type, 'lookup');
+    t.false(JSON.stringify(formula).includes(canary));
+    const blob = await E(host).lookup(['secrets', 'release']);
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
+      canary,
+    );
+
+    await restart(config);
+    const { host: hostAfter } = await makeHost(config, cancelled);
+    const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
+      canary,
+    );
+
+    const guest = await E(hostAfter).provideGuest('secret-recipient');
+    await E(hostAfter).send(
+      'secret-recipient',
+      ['Use ', ' without reading it in the agent session.'],
+      ['credential'],
+      [['secrets', 'release']],
+    );
+    const [message] = await E(guest).listMessages();
+    await E(guest).adopt(message.number, 'credential', 'release-credential');
+    const delegated = await E(guest).lookup('release-credential');
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(delegated).readBase64())),
+      canary,
+    );
+
+    const sqlite = await fsp.readFile(
+      path.join(config.statePath, 'endo.sqlite'),
+    );
+    t.false(sqlite.includes(new TextEncoder().encode(canary)));
+    const secretFiles = await fsp.readdir(
+      path.join(config.statePath, 'secret-store-v1'),
+    );
+    const envelope = await fsp.readFile(
+      path.join(config.statePath, 'secret-store-v1', secretFiles[0]),
+    );
+    t.false(envelope.includes(new TextEncoder().encode(canary)));
+
+    const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
+    const [entry] = await E(catalog).list();
+    await E(entry.admin).revoke();
+    await t.throwsAsync(() => E(delegated).readBase64(), {
+      message: /Secret operation failed/,
+    });
+    await t.throwsAsync(() => E(blobAfter).readBase64(), {
+      message: /Secret operation failed/,
+    });
+  },
+);
 
 test('rehydrated requests can be resolved after restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);

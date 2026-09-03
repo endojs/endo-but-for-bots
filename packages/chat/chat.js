@@ -40,6 +40,7 @@ import { whylipComponent } from './whylip-component.js';
 import { peersComponent } from './peers-component.js';
 import { flootComponent } from './floot-component.js';
 import { workflowComponent } from './workflow-component.js';
+import { secretsComponent } from './secrets-component.js';
 import {
   renderProfileBar,
   mountMentionNotifyArea,
@@ -254,6 +255,10 @@ const bodyComponent = (
       onProfileChange,
       activeSpaceInfo.workflowPath,
     );
+  }
+
+  if (activeSpaceInfo && activeSpaceInfo.mode === 'secrets') {
+    return secretsComponent($parent, rootPowers, profilePath);
   }
 
   /** @type {{ dispose: () => void } | null} */
@@ -1670,7 +1675,7 @@ const bodyComponent = (
 
 /**
  * @typedef {object} ActiveSpaceInfo
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow'} mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} mode
  * @property {string} [channelPetName]
  * @property {string} [proposedName]
  * @property {string} [whylipSystemPrompt]
