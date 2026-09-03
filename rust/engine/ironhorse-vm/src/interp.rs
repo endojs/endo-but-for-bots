@@ -2705,6 +2705,9 @@ pub enum NativeMethod {
     /// annexB stub is literally `*mxResult = *mxThis` — no instance check, no
     /// recompilation, arguments ignored — so the mirror returns `this` as-is.
     RegExpCompile,
+    /// `%RegExp.prototype%[Symbol.replace](string, replaceValue)`: coerce the
+    /// subject and drive the shared RegExp replacement worker.
+    RegExpReplace,
     /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an
     /// error instance, `name[: message]` plus one `\n at <fn> ()` line per
     /// construction-time frame; `undefined` for a non-error object; a
@@ -2728,6 +2731,10 @@ pub enum NativeMethod {
     /// (`fx_String_prototype_replace`): string-or-RegExp pattern with a
     /// string replacement carrying the `$`-substitution grammar.
     StringReplace,
+    /// `String.prototype.replaceAll(pattern, replacement)`: validates that a
+    /// RegExp search is global, then replaces every non-overlapping string
+    /// occurrence or delegates through `@@replace`.
+    StringReplaceAll,
     /// `String.prototype.split(separator[, limit])`
     /// (`fx_String_prototype_split`): split on a string-or-RegExp separator.
     StringSplit,
@@ -4615,6 +4622,8 @@ pub struct Interp {
     /// instance (and a `/.../` literal) chains to it and `exec`/`test`/the
     /// accessor getters resolve.
     regexp_proto: crate::value::SlotIndex,
+    /// Boot-minted `%RegExp.prototype%[Symbol.replace]` function identity.
+    regexp_replace_method: crate::value::SlotIndex,
     /// The program-local symbol id of `lastIndex` (XS's `mxID(_lastIndex)`),
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
@@ -5622,6 +5631,7 @@ impl Interp {
             prototype_key_id: None,
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
+            regexp_replace_method: crate::value::SlotIndex::NULL,
             last_index_id: None,
             regexp_getter_ids: RegExpGetterIds::default(),
             regexp_result_ids: RegExpResultIds::default(),
@@ -6552,6 +6562,11 @@ impl Interp {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.regexp_proto, name, mf));
         }
+        self.regexp_replace_method = self.alloc_named_method(
+            NativeMethod::RegExpReplace,
+            "[Symbol.replace]",
+            2,
+        );
         for (native, methods) in [
             (
                 Native::DisposableStack,
@@ -7575,6 +7590,7 @@ impl Interp {
             ("match", 1, StringMatch),
             ("search", 1, StringSearch),
             ("replace", 2, StringReplace),
+            ("replaceAll", 2, StringReplaceAll),
             ("split", 2, StringSplit),
         ] {
             let mf = self.alloc_named_method(m, name, arity);
@@ -21197,7 +21213,20 @@ impl Interp {
                     } else {
                         String::from_utf16_lossy(&self.to_string_units(code, flags_arg)?)
                     };
-                    self.build_regexp(pattern, flags)?
+                    let regexp = self.build_regexp(pattern, flags)?;
+                    if has_target {
+                        let target = new_target.expect("a RegExp construct has a new.target");
+                        let proto = self.get_prototype_from_constructor(
+                            code,
+                            target,
+                            self.regexp_proto,
+                        )?;
+                        let Payload::Reference(instance) = regexp.value else {
+                            unreachable!("build_regexp returns an object")
+                        };
+                        self.slots.get_mut(instance).value = Payload::Reference(proto);
+                    }
+                    regexp
                 }
             }
             // `ArrayBuffer(...)` / `SharedArrayBuffer(...)` called WITHOUT `new`
@@ -22903,6 +22932,128 @@ impl Interp {
         self.regexp_set_last_index(code, inst, Slot::number(next as f64))
     }
 
+    /// Read `%RegExp.prototype%.flags` through the observable property seam.
+    /// IronHorse keeps the intrinsic RegExp accessors implicit, so the default
+    /// getter is expanded here into its eight ordered flag-property reads;
+    /// own/inherited overrides and proxies still route through `[[Get]]`.
+    fn regexp_flags_units(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+        reject_nullish: bool,
+    ) -> Result<Vec<u16>, Halt> {
+        let flags_id = self.intern_key("flags");
+        if !self.regexps.contains_key(&inst)
+            || !self.regexp_getter_uses_default(inst, flags_id)
+        {
+            let flags = self.mop_get(code, inst, flags_id, receiver)?;
+            if reject_nullish && matches!(flags.kind, Kind::Undefined | Kind::Null) {
+                return Err(self.catchable_type_error());
+            }
+            return self.to_string_units(code, flags);
+        }
+
+        use ironhorse_regexp::{
+            XS_REGEXP_D, XS_REGEXP_G, XS_REGEXP_I, XS_REGEXP_M, XS_REGEXP_S, XS_REGEXP_U,
+            XS_REGEXP_V, XS_REGEXP_Y,
+        };
+        let mut units = Vec::with_capacity(8);
+        for (name, flag, unit) in [
+            ("hasIndices", XS_REGEXP_D, b'd' as u16),
+            ("global", XS_REGEXP_G, b'g' as u16),
+            ("ignoreCase", XS_REGEXP_I, b'i' as u16),
+            ("multiline", XS_REGEXP_M, b'm' as u16),
+            ("dotAll", XS_REGEXP_S, b's' as u16),
+            ("unicode", XS_REGEXP_U, b'u' as u16),
+            ("unicodeSets", XS_REGEXP_V, b'v' as u16),
+            ("sticky", XS_REGEXP_Y, b'y' as u16),
+        ] {
+            let id = self.intern_key(name);
+            let value = if self.regexp_getter_uses_default(inst, id) {
+                Slot::boolean(self.regexps[&inst].program.flags() & flag != 0)
+            } else {
+                self.mop_get(code, inst, id, receiver)?
+            };
+            if self.truthy(&value) {
+                units.push(unit);
+            }
+        }
+        self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
+        let _ = self.new_string_units(&units);
+        Ok(units)
+    }
+
+    /// Whether the existing internal replacement worker is observationally
+    /// equivalent to the generic `@@replace` algorithm. The fast path is only
+    /// valid when every implicit flag accessor and `exec` is still the realm
+    /// default and no Proxy interrupts the prototype walk.
+    fn regexp_replace_fast_safe(&self, inst: crate::value::SlotIndex) -> bool {
+        let default_accessor_unshadowed = |name: &str| {
+            let Some(&id) = self.symbol_ids.get(name) else {
+                return true;
+            };
+            let mut current = inst;
+            while !current.is_null() {
+                if self.proxies.contains_key(&current) {
+                    return false;
+                }
+                if self.find_property(current, id).is_some() {
+                    return false;
+                }
+                if current == self.regexp_proto {
+                    return true;
+                }
+                current = self.instance_prototype(current);
+            }
+            false
+        };
+        if ![
+            "flags",
+            "hasIndices",
+            "global",
+            "ignoreCase",
+            "multiline",
+            "dotAll",
+            "unicode",
+            "unicodeSets",
+            "sticky",
+        ]
+        .iter()
+        .all(|name| default_accessor_unshadowed(name))
+        {
+            return false;
+        }
+
+        let Some(&exec_id) = self.symbol_ids.get("exec") else {
+            // Sparse intrinsic linking leaves the default method implicit when
+            // no source unit names it; RegExpExec then takes the builtin arm.
+            return true;
+        };
+        let mut current = inst;
+        while !current.is_null() {
+            if self.proxies.contains_key(&current) {
+                return false;
+            }
+            if let Some(property) = self.find_property(current, exec_id) {
+                if current != self.regexp_proto {
+                    return false;
+                }
+                let slot = self.slots.get(property);
+                let Payload::Reference(function) = slot.value else {
+                    return false;
+                };
+                return slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
+                    && self.method_of(function) == Some(NativeMethod::RegExpExec);
+            }
+            if current == self.regexp_proto {
+                return true;
+            }
+            current = self.instance_prototype(current);
+        }
+        false
+    }
+
     /// `AdvanceStringIndex(S, index, unicode)`: advance by one UTF-16 code
     /// unit, except that `u`/`v` mode consumes a valid surrogate pair as one
     /// code point. An index at/past the end still advances by one.
@@ -23548,6 +23699,79 @@ impl Interp {
         Ok(self.new_string_units(&out))
     }
 
+    /// The ordinary-string branch of `String.prototype.replaceAll`. Search
+    /// positions are collected as non-overlapping UTF-16 code-unit matches;
+    /// an empty search matches before, between, and after every code unit.
+    /// Replacement conversion happens once even when there is no match, while
+    /// a callable replacement is invoked and converted once per position.
+    fn string_replace_all_plain(
+        &mut self,
+        code: &[u8],
+        subject: Slot,
+        search: Slot,
+        replacement: Slot,
+    ) -> Result<Slot, Halt> {
+        let subject_units = match subject.value {
+            Payload::String(off) => self.str_units(off),
+            _ => unreachable!("replaceAll subject was already converted to String"),
+        };
+        let search_units = self.to_string_units(code, search)?;
+        let functional = self.is_callable_value(replacement);
+        let replacement_units = if functional {
+            None
+        } else {
+            Some(self.to_string_units(code, replacement)?)
+        };
+
+        let mut positions = Vec::new();
+        if search_units.is_empty() {
+            positions.extend(0..=subject_units.len());
+        } else {
+            let mut next = 0usize;
+            while next + search_units.len() <= subject_units.len() {
+                let Some(relative) = subject_units[next..]
+                    .windows(search_units.len())
+                    .position(|window| window == search_units)
+                else {
+                    break;
+                };
+                let position = next + relative;
+                positions.push(position);
+                next = position + search_units.len();
+            }
+        }
+        if positions.is_empty() {
+            return Ok(subject);
+        }
+
+        let mut out = Vec::new();
+        let mut next_source_position = 0usize;
+        for position in positions {
+            out.extend_from_slice(&subject_units[next_source_position..position]);
+            let substitution = if functional {
+                let matched = self.new_string_units(&search_units);
+                let value = self.invoke_value(
+                    code,
+                    replacement,
+                    Slot::undefined(),
+                    &[matched, Slot::number(position as f64), subject],
+                )?;
+                self.to_string_units(code, value)?
+            } else {
+                Self::string_plain_substitution(
+                    &subject_units,
+                    &search_units,
+                    position,
+                    replacement_units.as_deref().unwrap(),
+                )
+            };
+            out.extend_from_slice(&substitution);
+            next_source_position = position + search_units.len();
+        }
+        out.extend_from_slice(&subject_units[next_source_position..]);
+        Ok(self.new_string_units(&out))
+    }
+
     /// `String.prototype.replace(regexp, replacement)` (`fx_String_prototype_
     /// replace` → `fx_RegExp_prototype_replace` via the `Symbol.replace`
     /// protocol). XS reads `flags` (the eight-property cascade), collects one
@@ -23683,6 +23907,272 @@ impl Interp {
         self.meter.tick_chunk_new((assembled.len() + 1) as u64);
         let off = self.chunks.alloc(&units_to_be16(&assembled));
         Ok(Slot::of(Kind::String, Payload::String(off)))
+    }
+
+    /// The fully generic `%RegExp.prototype%[Symbol.replace]` algorithm. It
+    /// deliberately collects result objects before reading their array-like
+    /// fields, then performs every `Get` and coercion through the MOP so an
+    /// overridden `exec`, Proxy, accessor result, or RegExp subclass observes
+    /// the standard order and abrupt-completion behavior.
+    fn regexp_replace_generic(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        receiver: Slot,
+        subject: Slot,
+        replacement: Slot,
+    ) -> Result<Slot, Halt> {
+        let subject_units = match subject.value {
+            Payload::String(off) if subject.kind == Kind::String => self.str_units(off),
+            _ => unreachable!("RegExp @@replace subject was already converted to String"),
+        };
+        let functional = self.is_callable_value(replacement);
+        let replacement_units = if functional {
+            None
+        } else {
+            Some(self.to_string_units(code, replacement)?)
+        };
+
+        // RegExpBuiltinExec materializes these standard result properties only
+        // when the sparse realm has an id for them. The algorithm references
+        // them regardless of guest source spelling, so seed the same ids here
+        // before the first exec result is built.
+        let index_id = self.intern_key("index");
+        let groups_id = self.intern_key("groups");
+        if self.regexp_result_ids.index.is_none() {
+            self.regexp_result_ids.index = Some(index_id);
+        }
+        if self.regexp_result_ids.groups.is_none() {
+            self.regexp_result_ids.groups = Some(groups_id);
+        }
+
+        let flags = self.regexp_flags_units(code, inst, receiver, false)?;
+        let global = flags.contains(&(b'g' as u16));
+        if global {
+            let last_index_id = self.regexp_last_index_id();
+            if !self.mop_set(code, inst, last_index_id, Slot::integer(0), receiver)? {
+                return Err(self.catchable_type_error());
+            }
+        }
+
+        let full_unicode = flags.contains(&(b'u' as u16)) || flags.contains(&(b'v' as u16));
+        let zero_id = self.intern_key("0");
+        let mut results = Vec::new();
+        loop {
+            let result = self.regexp_exec_abstract(code, inst, receiver, subject)?;
+            if result.kind == Kind::Null {
+                break;
+            }
+            let Payload::Reference(result_inst) = result.value else {
+                unreachable!("RegExpExec validates object-or-null results")
+            };
+            results.push(result);
+            if !global {
+                break;
+            }
+            let matched = self.mop_get(code, result_inst, zero_id, result)?;
+            let matched = self.to_string_units(code, matched)?;
+            if matched.is_empty() {
+                let last_index_id = self.regexp_last_index_id();
+                let last_index = self.mop_get(code, inst, last_index_id, receiver)?;
+                let index = self.to_length_value(code, last_index)?;
+                let next = Self::advance_string_index(&subject_units, index, full_unicode);
+                if !self.mop_set(
+                    code,
+                    inst,
+                    last_index_id,
+                    Slot::number(next as f64),
+                    receiver,
+                )? {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+
+        let mut assembled = Vec::new();
+        let mut next_source_position = 0usize;
+        for result in results {
+            let Payload::Reference(result_inst) = result.value else {
+                unreachable!("collected RegExpExec result is an object")
+            };
+            let result_length = self.arraylike_length(code, result_inst, result)?;
+            let result_length = self.to_length_value(code, result_length)?;
+            let captures_count = result_length.saturating_sub(1);
+            const GENERIC_CAPTURE_CAP: u64 = 1 << 24;
+            if captures_count > GENERIC_CAPTURE_CAP {
+                return Err(Halt::Unsupported("RegExp.replace:oversized-result"));
+            }
+
+            let matched = self.mop_get(code, result_inst, zero_id, result)?;
+            let matched = self.to_string_slot(code, matched)?;
+            let matched_units = match matched.value {
+                Payload::String(off) => self.str_units(off),
+                _ => unreachable!("ToString returns a String slot"),
+            };
+            let index = self.mop_get(code, result_inst, index_id, result)?;
+            let position = self.array_to_integer_or_infinity(code, index)?;
+            let position = if position <= 0.0 {
+                0
+            } else if position >= subject_units.len() as f64 {
+                subject_units.len()
+            } else {
+                position as usize
+            };
+
+            let mut captures = Vec::with_capacity(captures_count as usize);
+            for capture_number in 1..=captures_count {
+                let id = self.array_generic_index_id(capture_number);
+                let capture = self.mop_get(code, result_inst, id, result)?;
+                if capture.kind == Kind::Undefined {
+                    captures.push(capture);
+                } else {
+                    captures.push(self.to_string_slot(code, capture)?);
+                }
+            }
+            let named_captures = self.mop_get(code, result_inst, groups_id, result)?;
+            let replacement_units = if functional {
+                let mut args = Vec::with_capacity(
+                    captures.len() + 3 + usize::from(named_captures.kind != Kind::Undefined),
+                );
+                args.push(matched);
+                args.extend(captures.iter().copied());
+                args.push(Self::array_index_number(position as u64));
+                args.push(subject);
+                if named_captures.kind != Kind::Undefined {
+                    args.push(named_captures);
+                }
+                let value =
+                    self.invoke_value(code, replacement, Slot::undefined(), &args)?;
+                self.to_string_units(code, value)?
+            } else {
+                let named = if named_captures.kind == Kind::Undefined {
+                    None
+                } else {
+                    let object = self.array_to_object(named_captures)?;
+                    let Payload::Reference(object_inst) = object.value else {
+                        unreachable!("ToObject returns an object")
+                    };
+                    Some((object_inst, object))
+                };
+                self.regexp_generic_substitution(
+                    code,
+                    &matched_units,
+                    &subject_units,
+                    position,
+                    &captures,
+                    named,
+                    replacement_units.as_deref().unwrap(),
+                )?
+            };
+
+            // Ill-behaved exec results can move backwards. Their property
+            // reads, coercions, and replacer call above still occur, but the
+            // corresponding source segment and replacement are ignored.
+            if position >= next_source_position {
+                assembled.extend_from_slice(&subject_units[next_source_position..position]);
+                assembled.extend_from_slice(&replacement_units);
+                next_source_position = position.saturating_add(matched_units.len());
+            }
+        }
+        if next_source_position < subject_units.len() {
+            assembled.extend_from_slice(&subject_units[next_source_position..]);
+        }
+        Ok(self.new_string_units(&assembled))
+    }
+
+    /// `GetSubstitution` over already-coerced generic captures. Named capture
+    /// reads remain live and observable while replacement tokens are scanned.
+    fn regexp_generic_substitution(
+        &mut self,
+        code: &[u8],
+        matched: &[u16],
+        subject: &[u16],
+        position: usize,
+        captures: &[Slot],
+        named_captures: Option<(crate::value::SlotIndex, Slot)>,
+        replacement: &[u16],
+    ) -> Result<Vec<u16>, Halt> {
+        let tail = position.saturating_add(matched.len()).min(subject.len());
+        let mut out = Vec::with_capacity(replacement.len());
+        let mut i = 0;
+        while i < replacement.len() {
+            if replacement[i] != b'$' as u16 || i + 1 >= replacement.len() {
+                out.push(replacement[i]);
+                i += 1;
+                continue;
+            }
+            match replacement[i + 1] {
+                c if c == b'$' as u16 => {
+                    out.push(b'$' as u16);
+                    i += 2;
+                }
+                c if c == b'&' as u16 => {
+                    out.extend_from_slice(matched);
+                    i += 2;
+                }
+                c if c == b'`' as u16 => {
+                    out.extend_from_slice(&subject[..position]);
+                    i += 2;
+                }
+                c if c == b'\'' as u16 => {
+                    out.extend_from_slice(&subject[tail..]);
+                    i += 2;
+                }
+                c if (b'0' as u16..=b'9' as u16).contains(&c) => {
+                    let first = (c - b'0' as u16) as usize;
+                    let mut capture = 0usize;
+                    let mut consumed = 0usize;
+                    if i + 2 < replacement.len()
+                        && (b'0' as u16..=b'9' as u16).contains(&replacement[i + 2])
+                    {
+                        let two = first * 10
+                            + (replacement[i + 2] - b'0' as u16) as usize;
+                        if (1..=captures.len()).contains(&two) {
+                            capture = two;
+                            consumed = 3;
+                        }
+                    }
+                    if consumed == 0 && (1..=captures.len()).contains(&first) {
+                        capture = first;
+                        consumed = 2;
+                    }
+                    if consumed == 0 {
+                        out.push(b'$' as u16);
+                        i += 1;
+                    } else {
+                        let capture = captures[capture - 1];
+                        if let Payload::String(off) = capture.value {
+                            out.extend_from_slice(&self.str_units(off));
+                        }
+                        i += consumed;
+                    }
+                }
+                c if c == b'<' as u16 && named_captures.is_some() => {
+                    if let Some(relative) = replacement[i + 2..]
+                        .iter()
+                        .position(|&unit| unit == b'>' as u16)
+                    {
+                        let end = i + 2 + relative;
+                        let name = String::from_utf16_lossy(&replacement[i + 2..end]);
+                        let id = self.intern_key(&name);
+                        let (object_inst, object) = named_captures.unwrap();
+                        let capture = self.mop_get(code, object_inst, id, object)?;
+                        if capture.kind != Kind::Undefined {
+                            out.extend_from_slice(&self.to_string_units(code, capture)?);
+                        }
+                        i = end + 1;
+                    } else {
+                        out.extend_from_slice(&[b'$' as u16, b'<' as u16]);
+                        i += 2;
+                    }
+                }
+                _ => {
+                    out.push(b'$' as u16);
+                    i += 1;
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// The capture count (result-array length, including the whole match at 0)
@@ -33577,6 +34067,36 @@ impl Interp {
                 }
                 Slot::undefined()
             }
+            NativeMethod::RegExpReplace => {
+                let regexp = match this.value {
+                    Payload::Reference(regexp) if this.kind == Kind::Reference => regexp,
+                    _ => return Err(self.catchable_type_error()),
+                };
+                let replacement = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let subject = if arg0.kind == Kind::String {
+                    arg0
+                } else {
+                    let units = self.to_string_units(code, arg0)?;
+                    self.new_string_units(&units)
+                };
+                if self.regexps.contains_key(&regexp)
+                    && self.regexp_replace_fast_safe(regexp)
+                {
+                    self.string_replace(code, regexp, subject, replacement)?
+                } else {
+                    self.regexp_replace_generic(
+                        code,
+                        regexp,
+                        this,
+                        subject,
+                        replacement,
+                    )?
+                }
+            }
             NativeMethod::RegExpToString => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
@@ -33693,12 +34213,51 @@ impl Interp {
                         let units = self.string_this_units(code, this)?;
                         self.new_string_units(&units)
                     };
-                    match arg0.value {
-                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                            self.string_replace(code, r, subject, repl)?
-                        }
-                        _ => self.string_replace_plain(code, subject, arg0, repl)?,
+                    self.string_replace_plain(code, subject, arg0, repl)?
+                }
+            }
+            // `String.prototype.replaceAll`: RequireObjectCoercible precedes
+            // the observable IsRegExp/flags check. A custom `@@replace` still
+            // receives the original receiver; otherwise the string branch
+            // replaces every non-overlapping UTF-16 occurrence. IronHorse's
+            // intrinsic RegExp `@@replace` delegates to the shared global
+            // matcher worker.
+            NativeMethod::StringReplaceAll => {
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error());
+                }
+                let repl = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let is_regexp = if matches!(arg0.kind, Kind::Undefined | Kind::Null) {
+                    false
+                } else {
+                    self.string_is_regexp(code, arg0)?
+                };
+                if is_regexp {
+                    let Payload::Reference(search_object) = arg0.value else {
+                        unreachable!("IsRegExp is false for primitive values")
+                    };
+                    let flags =
+                        self.regexp_flags_units(code, search_object, arg0, true)?;
+                    if !flags.contains(&(b'g' as u16)) {
+                        return Err(self.catchable_type_error());
                     }
+                }
+
+                let replace_method = self.string_protocol_method(code, arg0, "replace")?;
+                if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    self.string_replace_all_plain(code, subject, arg0, repl)?
                 }
             }
             // `String.prototype.split(separator[, limit])`: a custom
@@ -43710,6 +44269,12 @@ impl Interp {
                     XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
                 ),
             ],
+            Some("replace") => vec![(
+                self.regexp_proto,
+                self.regexp_replace_method,
+                "boot RegExp.prototype @@replace method",
+                XS_DONT_ENUM_FLAG,
+            )],
             _ => return,
         };
         for (owner, method, label, flags) in installs {
@@ -54720,6 +55285,7 @@ impl Interp {
             self.generator_proto,
             self.async_function_proto,
             self.regexp_proto,
+            self.regexp_replace_method,
             self.math_object,
         ]);
         for (holder, _, method) in &self.proto_methods {
