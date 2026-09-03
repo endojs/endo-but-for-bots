@@ -875,6 +875,18 @@ fn boxed_symbols_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn sloppy_this_wrappers_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "sloppy-this-wrappers",
+        &[
+            "var f=function(){return this};var s=f.call('abc');var q=Symbol('s');var y=f.call(q);var b=f.call(12n);var t=0;t",
+            "var s;var q;var y;var b;var t;t=s[1]+':'+s.length+':'+(y.valueOf()===q)+':'+(b.valueOf()+1n);t",
+        ],
+    );
+    assert_eq!(last, "b:3:true:13");
+}
+
+#[test]
 fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
     // `%TypedArray%` and `%TypedArray.prototype%` are boot-rebuilt shared
     // intermediates. Concrete constructors, prototypes, instances, and their
