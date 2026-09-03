@@ -711,6 +711,20 @@ fn observable_error_arguments_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn error_to_string_accessors_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "error-to-string-accessors",
+        &[
+            "var value={get name(){return '\\ud800'},get message(){return 'boom'}}; \
+             var text;",
+            "var value;var text;text=Error.prototype.toString.call(value);text.length",
+            "var text;text.length+':'+text.charCodeAt(0)+':'+text.slice(3)",
+        ],
+    );
+    assert_eq!(last, "7:55296:boom");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",

@@ -60,6 +60,22 @@ fn native_errors_have_the_right_realm_surface() {
 }
 
 #[test]
+fn error_to_string_observes_properties_and_preserves_utf16() {
+    for source in [
+        "var log=[];var value={get name(){log.push('n');return 'Named'},get message(){log.push('m');return 7}};Error.prototype.toString.call(value)+':'+log.join('')",
+        "var log=[];var value=new Proxy({name:'N',message:'M'},{get:function(t,k,r){log.push(String(k));return Reflect.get(t,k,r)}});Error.prototype.toString.call(value)+':'+log.join(',')",
+        "var log=[];var value={get name(){log.push('n');throw 17},get message(){log.push('m');return 'no'}};var caught;try{Error.prototype.toString.call(value)}catch(e){caught=e}caught+':'+log.join('')",
+        "Error.prototype.toString.call({name:undefined,message:'m'})",
+        "Error.prototype.toString.call({name:'',message:'m'})",
+        "Error.prototype.toString.call({name:'n',message:''})",
+        "var text=Error.prototype.toString.call({name:'\\ud800',message:'\\udfff'});text.length+':'+text.charCodeAt(0)+':'+text.charCodeAt(3)",
+        "try{Error.prototype.toString.call({name:Symbol('n'),message:'m'});false}catch(e){e instanceof TypeError}",
+    ] {
+        assert_result_agrees(source);
+    }
+}
+
+#[test]
 fn aggregate_error_consumes_general_iterables_in_specification_order() {
     for source in [
         "new AggregateError(function*(){yield 1;yield 2}()).errors.join(',')",
