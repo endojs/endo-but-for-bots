@@ -695,6 +695,22 @@ fn iterator_terminal_helpers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn iterator_from_wrappers_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "iterator-from-wrapper",
+        &[
+            "base = { n: 0, next: function () { return this.n < 3 ? \
+                 { value: ++this.n } : { done: true }; } }; \
+             wrapped = Iterator.from(base); t = wrapped.next().value; t",
+            "t = wrapped.toArray().join(','); t",
+            "base.return = function () { return { value: 9, done: true }; }; \
+             r = wrapped.return(); t = r.value + ':' + r.done; t",
+        ],
+    );
+    assert_eq!(last, "9:true");
+}
+
+#[test]
 fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
     // `%Function.prototype%` and the identity of its `@@hasInstance` method
     // are boot-rebuilt, while the lazily installed symbol property and a

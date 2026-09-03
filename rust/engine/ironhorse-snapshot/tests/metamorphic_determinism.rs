@@ -244,7 +244,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for generator instances inheriting the shared Iterator
         // helper surface and boot-layout signature generation 6. Boot-heap
         // content only; format unchanged.
-        "d1b824a77f83d09e13a218086cf02f8c696df9c65fde72b19100cd86609a9fcc",
+        // Re-pinned for `%WrapForValidIteratorPrototype%` and boot-layout
+        // signature generation 7. Boot-heap content only; format unchanged.
+        "02c1db398a397abe01ce848bcdadfd580342e89491cc3b9eefc22a49429a7ede",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -410,7 +412,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for generator inheritance from
         // `%Iterator.prototype%` and boot-layout signature generation 6.
         // Schema and format remain unchanged.
-        "d1dd00a174c4193d44b7006033c732ccabddebea944c5ee283624f93c45d93c9",
+        // Re-pinned with the blob for `%WrapForValidIteratorPrototype%` and
+        // boot-layout signature generation 7. Schema and format remain
+        // unchanged.
+        "9db796def4154d44887be1ce93f1e5d89f3586d7eb0e741918100145d5bb81b2",
         "epoch-3 seal chain"
     );
 }

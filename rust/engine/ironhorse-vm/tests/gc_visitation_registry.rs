@@ -274,6 +274,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("async_function_proto", &[Req::GcRoots], "boot anchor"),
     ("regexp_proto", &[Req::GcRoots], "boot anchor"),
     ("iterator_proto", &[Req::GcRoots], "boot anchor (llm Iterator global, 2026-08-28 rebase)"),
+    ("iterator_wrapper_proto", &[Req::GcRoots], "boot anchor (%WrapForValidIteratorPrototype%)"),
     ("map_iterator_proto", &[Req::GcRoots], "boot anchor (llm Map/Set iterator protos)"),
     ("set_iterator_proto", &[Req::GcRoots], "boot anchor (llm Map/Set iterator protos)"),
     ("date_proto", &[Req::GcRoots], "boot anchor (llm Date core; rooted beside its siblings)"),

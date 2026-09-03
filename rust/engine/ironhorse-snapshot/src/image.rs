@@ -3275,9 +3275,10 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=7 (array values/keys/
-        // entries, for-in, string, collection keys/values/entries).
-        if kind > 7 {
+        // The engine's cursor kinds are 0..=8 (array values/keys/entries,
+        // for-in, string, collection keys/values/entries, Iterator.from
+        // generic wrappers).
+        if kind > 8 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -4174,6 +4175,18 @@ pub(crate) fn check_image_slot_bounds(
                     "iterator cursors: collection cursor names no covering row",
                 ));
             }
+        }
+        if r.kind == 8
+            && (r.iterable == u32::MAX
+                || r.result == u32::MAX
+                || r.index != 0
+                || r.done
+                || !r.enum_keys.is_empty()
+                || !r.str_bytes.is_empty())
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed Iterator.from wrapper",
+            ));
         }
         if r.kind == 3
             && r.enum_keys
@@ -5191,7 +5204,7 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[row(5), row(3)])).is_err());
         // Unknown kind.
         let mut bad = row(1);
-        bad.kind = 8;
+        bad.kind = 9;
         assert!(decode_iterators(&encode_iterators(&[bad])).is_err());
         // A string cursor splitting a UTF-16 unit, and one past its text.
         let mut odd = row(1);
