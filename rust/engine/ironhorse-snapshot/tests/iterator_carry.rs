@@ -113,6 +113,21 @@ fn resumed_array_iterators_continue_their_walk() {
 }
 
 #[test]
+fn resumed_iterators_are_consumed_by_terminal_helpers() {
+    assert_twin(
+        "ih-iter-twin-terminal-helpers",
+        "var it = 0; var found = 0; var t = 0; \
+         it = [1, 2, 3, 4].values(); it.next(); \
+         found = [5, 6, 7].values(); t = 7; t",
+        &[
+            "var it; var t; t = it.reduce(function (a, v) { return a + v; }, 10); t",
+            "var found; var t; t = found.find(function (v) { return v === 6; }); t",
+        ],
+        &["19", "6"],
+    );
+}
+
+#[test]
 fn resumed_string_iterator_steps_surrogate_pairs_whole() {
     // 'ab😀c': crank 1 consumes 'a'; the resumed cursor must yield 'b',
     // then the astral character as ONE two-unit string (the byte
