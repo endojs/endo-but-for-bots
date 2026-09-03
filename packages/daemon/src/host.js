@@ -5,8 +5,9 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EndoSturdyRefs, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, SturdyRefGrant, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
+/** @import { SturdyRef } from '@endo/pass-style' */
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
@@ -39,6 +40,10 @@ import {
 } from './locator.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
+import {
+  isSturdyRef,
+  resolveSturdyRefToIdWith,
+} from './sturdyref-resolution.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
@@ -46,6 +51,7 @@ import { makeFormulaRecord } from './formula-record.js';
 import {
   DiagnosticsInterface,
   HostInterface,
+  SturdyRefsInterface,
   TracesInterface,
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
@@ -291,6 +297,14 @@ harden(normalizeHttpClientPolicy);
  * @param {object} args
  * @param {DaemonCore['provide']} args.provide
  * @param {DaemonCore['provideStoreController']} args.provideStoreController
+ * @param {(formulaIdentifier: FormulaIdentifier, type?: string) => Promise<{ sturdyRef: SturdyRef, grantHandle: string }>} args.mintSturdyRefGrant
+ * @param {() => Promise<SturdyRefGrant[]>} args.getSturdyRefGrants
+ * @param {(grantHandle: string) => Promise<boolean>} args.deleteSturdyRefGrant
+ * @param {(uri: string) => Promise<FormulaIdentifier>} args.acceptSturdyRefUri
+ *   Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI and
+ *   internalize it (design cut 5).
+ * @param {(sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>} [args.internalizeForeignSturdyRef]
+ *   The daemon's foreign-SturdyRef internalizer (design cut 5).
  * @param {DaemonCore['cancelValue']} args.cancelValue
  * @param {DaemonCore['formulateWorker']} args.formulateWorker
  * @param {DaemonCore['formulateHost']} args.formulateHost
@@ -346,6 +360,11 @@ harden(normalizeHttpClientPolicy);
 export const makeHostMaker = ({
   provide,
   provideStoreController,
+  mintSturdyRefGrant,
+  getSturdyRefGrants,
+  deleteSturdyRefGrant,
+  acceptSturdyRefUri,
+  internalizeForeignSturdyRef,
   cancelValue,
   formulateWorker,
   formulateHost,
@@ -1346,18 +1365,30 @@ export const makeHostMaker = ({
         (resultName !== undefined ? `eval:${resultName}` : 'eval');
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamePaths.map(petNameOrPath => {
-        const petNamePath = namePathFrom(petNameOrPath);
-        if (petNamePath.length === 1) {
-          const id = petStore.identifyLocal(petNamePath[0]);
-          if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+      const endowmentFormulaIdsOrPaths = await Promise.all(
+        petNamePaths.map(async petNameOrPath => {
+          if (isSturdyRef(petNameOrPath)) {
+            // A SturdyRef slot resolves to a formula identifier at the
+            // facet boundary; the swiss number never reaches the worker. A
+            // foreign SturdyRef internalizes through the OCapN capability
+            // (cut 5).
+            return resolveSturdyRefToIdWith(
+              petNameOrPath,
+              internalizeForeignSturdyRef,
+            );
           }
-          return /** @type {FormulaIdentifier} */ (id);
-        }
+          const petNamePath = namePathFrom(petNameOrPath);
+          if (petNamePath.length === 1) {
+            const id = petStore.identifyLocal(petNamePath[0]);
+            if (id === undefined) {
+              throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            }
+            return /** @type {FormulaIdentifier} */ (id);
+          }
 
-        return petNamePath;
-      });
+          return petNamePath;
+        }),
+      );
 
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);
@@ -2170,6 +2201,63 @@ export const makeHostMaker = ({
       return E(endoBootstrap).followPeerChanges();
     };
 
+    // The SturdyRef EXPORT facet (design cut 3, "daemon as C"), vended
+    // host-only. Its methods delegate to the daemon-core exporter: minting is
+    // a host-tier act, and because the guest facet has no `sturdyRefs` method
+    // a confined guest never reaches the daemon-private swiss-num store. The
+    // returned grant handle is the marshalable management reference; the raw
+    // wire-tier SturdyRef stays daemon-side for the OCapN wire codec (cut 4+).
+    // Memoized so repeated `sturdyRefs()` calls return one stable facet.
+    let sturdyRefsExo;
+    /** @type {EndoHost['sturdyRefs']} */
+    const sturdyRefs = async () => {
+      if (sturdyRefsExo === undefined) {
+        sturdyRefsExo = makeExo(
+          'EndoSturdyRefs',
+          /** @type {any} */ (SturdyRefsInterface),
+          {
+            /** @type {EndoSturdyRefs['provideSturdyRef']} */
+            provideSturdyRef: async (petNameOrPath, type) => {
+              const namePath = namePathFrom(petNameOrPath);
+              const id = await E(directory).identify(...namePath);
+              if (id === undefined) {
+                throw new TypeError(`Unknown pet name: ${q(petNameOrPath)}`);
+              }
+              const { grantHandle } = await mintSturdyRefGrant(
+                /** @type {FormulaIdentifier} */ (id),
+                type,
+              );
+              return grantHandle;
+            },
+            /** @type {EndoSturdyRefs['listSturdyRefGrants']} */
+            listSturdyRefGrants: async () => getSturdyRefGrants(),
+            /** @type {EndoSturdyRefs['revokeSturdyRefGrant']} */
+            revokeSturdyRefGrant: async grantHandle =>
+              deleteSturdyRefGrant(grantHandle),
+            /**
+             * Accept a foreign SturdyRef carried out-of-band as an `ocapn://`
+             * URI (design cut 5, "daemon as B"): internalize it to a local
+             * formula identifier and bind it under a pet name so it can be
+             * looked up, identified, and re-enlivened on demand. Host-tier only
+             * (the URI is secret-bearing); a confined guest has no `sturdyRefs`
+             * facet, so it never reaches this accept surface.
+             *
+             * @type {EndoSturdyRefs['acceptSturdyRefUri']}
+             */
+            acceptSturdyRefUri: async (uri, petName) => {
+              const id = await acceptSturdyRefUri(uri);
+              if (petName !== undefined) {
+                const { namePath } = petNamePathFrom(petName);
+                await E(directory).storeIdentifier(namePath, id);
+              }
+              return id;
+            },
+          },
+        );
+      }
+      return sturdyRefsExo;
+    };
+
     /** @type {EndoHost['getPeerInfo']} */
     const getPeerInfo = async () => {
       const addresses = await getAllNetworkAddresses(networksDirectoryId);
@@ -2589,6 +2677,7 @@ export const makeHostMaker = ({
       listKnownPeers,
       followPeerChanges,
       locateWithHints,
+      sturdyRefs,
       adoptFromLocator,
       deliver,
       makeChannel: makeChannelCmd,

@@ -16,6 +16,7 @@ import { encodeBase64 } from '@endo/base64';
 import { mapReader } from '@endo/stream';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { locationToLocationId } from '@endo/ocapn';
 import {
   checkinTree as platformCheckinTree,
   snapshotTreeMethods,
@@ -52,6 +53,10 @@ import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
+import { makeSturdyRefStore } from './sturdyref-store.js';
+import { makeOcapnIdentity } from './ocapn.js';
+import { makeKnownSturdyRefsStore } from './known-sturdyrefs-store.js';
+import { makeForeignSturdyRefInternalizer } from './foreign-sturdyref.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
   assertName,
@@ -121,6 +126,7 @@ import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
+/** @import { OcapnIdentity, SturdyRefStore, KnownSturdyRefsStore } from './types.js' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
@@ -613,6 +619,27 @@ const makeDaemonCore = async (
 
   const { id: knownPeersId } = await preformulate('peers', {
     type: 'known-peers-store',
+  });
+  // The daemon's swiss-num store: the durable, daemon-private table backing
+  // SturdyRef EXPORT (design cut 3). Its formula number keys the store's rows
+  // in daemon state, so mints survive restart.
+  const { id: sturdyRefStoreId } = await preformulate('sturdyrefs', {
+    type: 'sturdyref-store',
+  });
+  // The daemon's OCapN identity (design cut 4): a distinct keypair (its formula
+  // number keys the persisted private key) and the self peer-locator baked into
+  // wire-tier SturdyRef mints. Closely held: reached only from daemon core.
+  const { id: ocapnId } = await preformulate('ocapn', {
+    type: 'ocapn',
+  });
+  // The foreign-SturdyRef dedup index (design cut 5): maps a foreign
+  // `(location, swissNum)` grant to the `ocapn-sturdyref` formula formulated
+  // for it (and a foreign peer identity to its `ocapn-peer`), so repeated
+  // internalizations converge on one formula identifier. Its formula number
+  // keys the index in daemon state. Closely held: reached only from daemon
+  // core (like known-peers-store).
+  const { id: knownSturdyRefsId } = await preformulate('known-sturdyrefs', {
+    type: 'known-sturdyrefs-store',
   });
   const { id: leastAuthorityId } = await preformulate('least-authority', {
     type: 'least-authority',
@@ -1149,6 +1176,16 @@ const makeDaemonCore = async (
   });
 
   formulaGraph.addRoot(knownPeersId);
+  // The swiss-num store is a daemon singleton reached only from daemon core;
+  // root it so it is never collected (like known-peers-store above).
+  formulaGraph.addRoot(sturdyRefStoreId);
+  // The OCapN identity is a daemon singleton reached only from daemon core;
+  // root it so its keypair-backed identity is never collected.
+  formulaGraph.addRoot(ocapnId);
+  // The foreign-SturdyRef dedup index is a daemon singleton reached only from
+  // daemon core; root it so the internalized-foreign-SturdyRef bindings are
+  // never collected.
+  formulaGraph.addRoot(knownSturdyRefsId);
   formulaGraph.addRoot(leastAuthorityId);
   formulaGraph.addRoot(mainWorkerId);
   formulaGraph.addRoot(endoFormulaId);
@@ -4172,6 +4209,48 @@ const makeDaemonCore = async (
         assertValidNumber,
       );
     },
+    'sturdyref-store': (_formula, _context, _id, formulaNumber) =>
+      makeSturdyRefStore({
+        getState: persistencePowers.getState,
+        setState: persistencePowers.setState,
+        stateKey: `sturdyref-store/${formulaNumber}`,
+        makeSha256: cryptoPowers.makeSha256,
+      }),
+    ocapn: async (_formula, _context, _id, formulaNumber) =>
+      makeOcapnIdentity({
+        getState: persistencePowers.getState,
+        setState: persistencePowers.setState,
+        stateKey: `ocapn/${formulaNumber}`,
+        randomHex256,
+        store: /** @type {SturdyRefStore} */ (await provide(sturdyRefStoreId)),
+        provide,
+        // No netlayer factory is threaded through the daemon's platform powers
+        // yet, so the daemon's OCapN client stays UNARMED (the provisional
+        // cut-4 default; which netlayers arm by default is the maintainer's
+        // cut-5 open question). The identity, mint/export, dedup index, seam
+        // fallback, and URI accept are all wired; the live dial+fetch path an
+        // armed client provides is exercised directly against `makeOcapn` over
+        // a `tcp-test-only` netlayer in the OCapN package tests. Arming the
+        // daemon's own client is the tracked follow-up.
+      }),
+    'known-sturdyrefs-store': (_formula, _context, _id, formulaNumber) =>
+      // The foreign-SturdyRef dedup index (design cut 5). A JSON-blob keyed
+      // store like sturdyref-store; its formula number keys the index in
+      // daemon state.
+      makeKnownSturdyRefsStore({
+        getState: persistencePowers.getState,
+        setState: persistencePowers.setState,
+        stateKey: `known-sturdyrefs-store/${formulaNumber}`,
+        makeSha256: cryptoPowers.makeSha256,
+      }),
+    'ocapn-peer': ({ location }, context) =>
+      // Behold, forward reference:
+      // eslint-disable-next-line no-use-before-define
+      makeOcapnPeer(location, context),
+    'ocapn-sturdyref': ({ ocapnPeer: ocapnPeerId, swissNum }, context) =>
+      // Behold, forward reference:
+      // eslint-disable-next-line no-use-before-define
+      makeOcapnSturdyRef(ocapnPeerId, swissNum, context),
     'pet-inspector': ({ petStore: petStoreId }) =>
       // Behold, unavoidable forward-reference:
       // eslint-disable-next-line no-use-before-define
@@ -6775,6 +6854,21 @@ const makeDaemonCore = async (
     getFormulaType: id => formulaForId.get(id)?.type,
   });
 
+  // The foreign-SturdyRef internalizer (design cut 5), used by the facet seams
+  // in directory/guest/host to resolve a SturdyRef this daemon did not mint. It
+  // needs the OCapN identity, the dedup index, and the ocapn-peer/ocapn-sturdyref
+  // formulate helpers — all defined further below — so a stable wrapper closes
+  // over a holder that is filled in once those are in scope. Until then (and in
+  // a facet with no OCapN capability), it resolves to `undefined`, so the seam
+  // degrades to exactly the local-only #541 behavior.
+  /** @type {((sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>) | undefined} */
+  let foreignSturdyRefInternalizer;
+  /** @type {(sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>} */
+  const internalizeForeignSturdyRef = async sturdyRef =>
+    foreignSturdyRefInternalizer === undefined
+      ? undefined
+      : foreignSturdyRefInternalizer(sturdyRef);
+
   const { makeIdentifiedDirectory, makeDirectoryNode } = makeDirectoryMaker({
     provide,
     provideStoreController,
@@ -6785,6 +6879,7 @@ const makeDaemonCore = async (
     formulateReadableBlob,
     pinTransient,
     unpinTransient,
+    internalizeForeignSturdyRef,
   });
 
   const makeMailbox = makeMailboxMaker({
@@ -6830,6 +6925,7 @@ const makeDaemonCore = async (
     isLocalKey,
     pinTransient,
     unpinTransient,
+    internalizeForeignSturdyRef,
   });
 
   /**
@@ -7188,10 +7284,208 @@ const makeDaemonCore = async (
     return getMountHostPath(scratchMountId);
   };
 
+  // The daemon's SturdyRef exporter (design cut 3, "daemon as C"): mints,
+  // serves, lists, and revokes wire-tier SturdyRefs over the swiss-num store,
+  // held closely by daemon core and reached only through the host facet. It
+  // now lives inside the `ocapn` identity singleton (cut 4), built over the
+  // daemon's real self peer-locator rather than cut 3's placeholder.
+  /** @type {OcapnIdentity | undefined} */
+  let ocapnIdentityMemo;
+  const getOcapnIdentity = async () => {
+    if (ocapnIdentityMemo === undefined) {
+      ocapnIdentityMemo = /** @type {OcapnIdentity} */ (await provide(ocapnId));
+    }
+    return ocapnIdentityMemo;
+  };
+  const getSturdyRefExporter = async () => (await getOcapnIdentity()).exporter;
+  /**
+   * @param {FormulaIdentifier} formulaIdentifier
+   * @param {string} [type]
+   */
+  const mintSturdyRefGrant = async (formulaIdentifier, type) =>
+    (await getSturdyRefExporter()).mintGrant(formulaIdentifier, type);
+  const getSturdyRefGrants = async () =>
+    (await getSturdyRefExporter()).listGrants();
+  /** @param {string} grantHandle */
+  const deleteSturdyRefGrant = async grantHandle =>
+    (await getSturdyRefExporter()).revokeGrant(grantHandle);
+
+  // --- Foreign-SturdyRef internalization (design cut 5, "daemon as B") -----
+
+  /** @param {Uint8Array} bytes */
+  const bytesToHex = bytes => {
+    let hex = '';
+    for (const byte of bytes) {
+      hex += byte.toString(16).padStart(2, '0');
+    }
+    return hex;
+  };
+  /** @param {string} hex */
+  const bytesFromHex = hex => {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let index = 0; index < bytes.length; index += 1) {
+      bytes[index] = parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+    }
+    return bytes;
+  };
+  /**
+   * Encode a swiss-num (string or bytes) for JSON persistence in an
+   * `ocapn-sturdyref` formula body, tagging the branch so a byte secret and
+   * its ASCII spelling never collide on decode.
+   *
+   * @param {string | Uint8Array} swissNum
+   * @returns {{ string: string } | { bytesHex: string }}
+   */
+  const encodeSwissNumForFormula = swissNum =>
+    typeof swissNum === 'string'
+      ? { string: swissNum }
+      : { bytesHex: bytesToHex(swissNum) };
+  /**
+   * Recover the exact swiss-num a foreign fetch needs from an
+   * `ocapn-sturdyref` formula body.
+   *
+   * @param {{ string: string } | { bytesHex: string }} encoded
+   * @returns {string | Uint8Array}
+   */
+  const decodeSwissNumFromFormula = encoded =>
+    'string' in encoded ? encoded.string : bytesFromHex(encoded.bytesHex);
+
+  /**
+   * Formulate (lazily, without dialing) the `ocapn-peer` for a foreign peer
+   * identity. Lazy like `formulatePeer`: the dial happens on first `provide`,
+   * not at registration.
+   *
+   * @param {import('@endo/ocapn').OcapnLocation} location
+   * @returns {Promise<FormulaIdentifier>}
+   */
+  const formulateOcapnPeer = async location => {
+    const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
+    /** @type {import('./types.js').OcapnPeerFormula} */
+    const formula = { type: 'ocapn-peer', location };
+    return formulateLazy(formulaNumber, formula);
+  };
+
+  /**
+   * Formulate (lazily, without enlivening) the `ocapn-sturdyref` over a peer.
+   *
+   * @param {FormulaIdentifier} ocapnPeerId
+   * @param {string | Uint8Array} swissNum
+   * @returns {Promise<FormulaIdentifier>}
+   */
+  const formulateOcapnSturdyRef = async (ocapnPeerId, swissNum) => {
+    const formulaNumber = /** @type {FormulaNumber} */ (await randomHex256());
+    /** @type {import('./types.js').OcapnSturdyRefFormula} */
+    const formula = {
+      type: 'ocapn-sturdyref',
+      ocapnPeer: ocapnPeerId,
+      swissNum: encodeSwissNumForFormula(swissNum),
+    };
+    return formulateLazy(formulaNumber, formula);
+  };
+
+  /**
+   * The `ocapn-peer` formula's value (design cut 5): a daemon-local facet over
+   * the foreign peer's session. Its `enliven(swissNum)` dials-and-fetches
+   * through the OCapN client (which memoizes the session per location, so
+   * repeated enlivens of different swiss-nums at one peer share one session).
+   * The value is daemon-private; only its enlivened results — themselves
+   * daemon-local presences — ever reach a worker.
+   *
+   * @param {import('@endo/ocapn').OcapnLocation} location
+   * @param {Context} _context
+   */
+  const makeOcapnPeer = async (location, _context) => {
+    const ocapn = await getOcapnIdentity();
+    return harden({
+      location,
+      /** @param {string | Uint8Array} swissNum */
+      enliven: swissNum => ocapn.enliven(location, swissNum),
+    });
+  };
+
+  /**
+   * The `ocapn-sturdyref` formula's value (design cut 5): the enlivened
+   * presence for a foreign SturdyRef. `thisDiesIfThatDies(ocapnPeerId)` binds
+   * this formula's life to its peer, so a future peer-context cancellation
+   * (session loss) drops this cached presence and the next `provide` re-dials.
+   *
+   * @param {FormulaIdentifier} ocapnPeerId
+   * @param {{ string: string } | { bytesHex: string }} encodedSwissNum
+   * @param {Context} context
+   */
+  const makeOcapnSturdyRef = async (ocapnPeerId, encodedSwissNum, context) => {
+    context.thisDiesIfThatDies(ocapnPeerId);
+    const peer =
+      /** @type {{ enliven: (s: string | Uint8Array) => Promise<unknown> }} */ (
+        await provide(ocapnPeerId)
+      );
+    return peer.enliven(decodeSwissNumFromFormula(encodedSwissNum));
+  };
+
+  // Build the internalizer once its async dependencies (the OCapN identity,
+  // the swiss-num store, the dedup index) resolve, memoized. `reveal` and
+  // `getSelfLocation` are then synchronous over the resolved identity, exactly
+  // the module's contract.
+  /** @type {((sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>) | undefined} */
+  let internalizerMemo;
+  const getForeignSturdyRefInternalizer = async () => {
+    if (internalizerMemo === undefined) {
+      const ocapn = await getOcapnIdentity();
+      const store = /** @type {SturdyRefStore} */ (
+        await provide(sturdyRefStoreId)
+      );
+      const knownSturdyRefs = /** @type {KnownSturdyRefsStore} */ (
+        await provide(knownSturdyRefsId)
+      );
+      internalizerMemo = makeForeignSturdyRefInternalizer({
+        reveal: sturdyRef => ocapn.reveal(sturdyRef),
+        getSelfLocation: () => ocapn.getSelfLocation(),
+        locationToLocationId,
+        store,
+        knownSturdyRefs,
+        formulateOcapnPeer,
+        formulateOcapnSturdyRef,
+      });
+    }
+    return internalizerMemo;
+  };
+  // Fill the holder the facet seams captured above.
+  foreignSturdyRefInternalizer = async sturdyRef =>
+    (await getForeignSturdyRefInternalizer())(sturdyRef);
+
+  /**
+   * Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI
+   * (design cut 5, `acceptSturdyRefUri`), materialize it, and internalize it to
+   * a local formula identifier. The secret-bearing URI is consumed here and
+   * never logged. Rejects when the URI is not a sturdyref URI, or when the
+   * materialized SturdyRef cannot be internalized.
+   *
+   * @param {string} uri
+   * @returns {Promise<FormulaIdentifier>}
+   */
+  const acceptSturdyRefUri = async uri => {
+    const ocapn = await getOcapnIdentity();
+    const sturdyRef = ocapn.materializeFromUri(uri);
+    const id = await internalizeForeignSturdyRef(sturdyRef);
+    if (id === undefined) {
+      // materializeFromUri put the details in reveal's reach, so this only
+      // happens if the identity has no capability for the location — surface
+      // it secret-free.
+      throw makeError(
+        X`ocapn: could not internalize the sturdyref carried by the URI`,
+      );
+    }
+    return id;
+  };
+
   const makeHost = makeHostMaker({
     gitClone,
     provide,
     provideStoreController,
+    mintSturdyRefGrant,
+    getSturdyRefGrants,
+    deleteSturdyRefGrant,
+    acceptSturdyRefUri,
     cancelValue,
     formulateWorker,
     formulateHost,

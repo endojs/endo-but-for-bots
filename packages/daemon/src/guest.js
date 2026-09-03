@@ -12,6 +12,10 @@ import {
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
+import {
+  isSturdyRef,
+  resolveSturdyRefToIdWith,
+} from './sturdyref-resolution.js';
 
 /** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
@@ -33,6 +37,8 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {(node: string) => boolean} args.isLocalKey
  * @param {DaemonCore['pinTransient']} [args.pinTransient]
  * @param {DaemonCore['unpinTransient']} [args.unpinTransient]
+ * @param {(sturdyRef: unknown) => Promise<FormulaIdentifier | undefined>} [args.internalizeForeignSturdyRef]
+ *   The daemon's foreign-SturdyRef internalizer (design cut 5).
  */
 export const makeGuestMaker = ({
   provide,
@@ -49,6 +55,7 @@ export const makeGuestMaker = ({
   isLocalKey,
   pinTransient = /** @param {any} _id */ _id => {},
   unpinTransient = /** @param {any} _id */ _id => {},
+  internalizeForeignSturdyRef,
 }) => {
   /**
    * @param {FormulaIdentifier} guestId
@@ -253,18 +260,30 @@ export const makeGuestMaker = ({
       const workerId = await prepareWorkerFormulation(workerName, tasks.push);
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamesOrPaths.map(petNameOrPath => {
-        const petNamePath = namePathFrom(petNameOrPath);
-        if (petNamePath.length === 1) {
-          const id = specialStore.identifyLocal(petNamePath[0]);
-          if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+      const endowmentFormulaIdsOrPaths = await Promise.all(
+        petNamesOrPaths.map(async petNameOrPath => {
+          if (isSturdyRef(petNameOrPath)) {
+            // A SturdyRef slot resolves to a formula identifier at the
+            // facet boundary; the swiss number never reaches the worker. A
+            // foreign SturdyRef internalizes through the OCapN capability
+            // (cut 5).
+            return resolveSturdyRefToIdWith(
+              petNameOrPath,
+              internalizeForeignSturdyRef,
+            );
           }
-          return /** @type {FormulaIdentifier} */ (id);
-        }
+          const petNamePath = namePathFrom(petNameOrPath);
+          if (petNamePath.length === 1) {
+            const id = specialStore.identifyLocal(petNamePath[0]);
+            if (id === undefined) {
+              throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            }
+            return /** @type {FormulaIdentifier} */ (id);
+          }
 
-        return petNamePath;
-      });
+          return petNamePath;
+        }),
+      );
 
       if (resultName !== undefined) {
         const { namePath: resultNamePath } = petNamePathFrom(resultName);

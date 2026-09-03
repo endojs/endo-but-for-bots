@@ -550,6 +550,59 @@ export type KnownPeersStoreFormula = {
   type: 'known-peers-store';
 };
 
+type SturdyRefStoreFormula = {
+  type: 'sturdyref-store';
+};
+
+export type OcapnFormula = {
+  type: 'ocapn';
+};
+
+/**
+ * The foreign-SturdyRef dedup index (design cut 5): maps a foreign
+ * `(location, swissNum)` grant to the `ocapn-sturdyref` formula already
+ * formulated for it, and a foreign peer identity to its `ocapn-peer`. A daemon
+ * singleton, reached only from daemon core.
+ */
+type KnownSturdyRefsStoreFormula = {
+  type: 'known-sturdyrefs-store';
+};
+
+/**
+ * A live OCapN session to a foreign peer (design cut 5). Formulated lazily,
+ * one per foreign peer identity (the Locators draft's same-peer rule); its
+ * value is the session via the daemon's OCapN client `provideSession`. On
+ * session end it cancels its own context so dependent `ocapn-sturdyref`
+ * presences drop and the next use re-dials — exactly as `peer` does for the
+ * `EndoGateway` stack.
+ */
+type OcapnPeerFormula = {
+  type: 'ocapn-peer';
+  /** The foreign peer's OCapN location (designator, transport, hints). */
+  location: import('@endo/ocapn').OcapnLocation;
+};
+
+/**
+ * A foreign SturdyRef internalized as a local formula (design cut 5). Depends
+ * on its `ocapn-peer`; its value is the enlivened presence
+ * (`bootstrap.fetch(swissNum)` over the peer's session). The formula body
+ * holds the swiss-num (daemon-private state, the same trust domain as the
+ * swiss-num store's rows), encoded for JSON persistence. The local formula
+ * identifier denotes the durable designation "the object the peer at
+ * `location` serves for `swissNum`", re-enlivened on demand.
+ */
+type OcapnSturdyRefFormula = {
+  type: 'ocapn-sturdyref';
+  /** The `ocapn-peer` formula this SturdyRef enlivens over. */
+  ocapnPeer: FormulaIdentifier;
+  /**
+   * The swiss-num, JSON-encoded: `{ string }` for an ASCII secret,
+   * `{ bytesHex }` for a raw-byte secret (a foreign implementation's random),
+   * so the exact secret round-trips into the fetch unchanged.
+   */
+  swissNum: { string: string } | { bytesHex: string };
+};
+
 export type PetStoreFormula = {
   type: 'pet-store';
 };
@@ -675,6 +728,11 @@ export type Formula =
   | HandleFormula
   | PetInspectorFormula
   | KnownPeersStoreFormula
+  | SturdyRefStoreFormula
+  | OcapnFormula
+  | KnownSturdyRefsStoreFormula
+  | OcapnPeerFormula
+  | OcapnSturdyRefFormula
   | PetStoreFormula
   | MailboxStoreFormula
   | MailHubFormula
@@ -927,6 +985,134 @@ export type KnownPeersStore = Omit<
   has(nodeNumber: NodeNumber): boolean;
   identifyLocal(nodeNumber: NodeNumber): string | undefined;
   storeIdentifier(nodeNumber: NodeNumber, id: string): Promise<void>;
+};
+
+/**
+ * A secret-free description of one minted SturdyRef grant, returned by
+ * `listSturdyRefGrants`. The `grantHandle` (the SHA-256 hash of the
+ * swiss-num) names the grant without conferring it; the swiss-num itself
+ * never appears here.
+ */
+export type SturdyRefGrant = {
+  grantHandle: string;
+  formulaIdentifier: FormulaIdentifier;
+  mintedAt: number;
+  type?: string;
+};
+
+/**
+ * The daemon's swiss-num store (formula type `sturdyref-store`): the durable,
+ * daemon-private table backing a daemon's SturdyRef EXPORT. Rows map a
+ * swiss-num to a local formula identifier plus mint metadata (mint date, the
+ * grant handle, an optional advisory `type` hint), and persist through the
+ * daemon's key/value state so a minted SturdyRef survives daemon restart.
+ * Reachable only from daemon core and host-tier facets; never a worker or
+ * guest. See designs/sturdy-refs-cross-peer-bridge.md § "Mint and export".
+ */
+export type SturdyRefStore = {
+  /**
+   * Bind a fresh swiss-num to a local formula identifier (mint a grant) and
+   * return the grant handle (the SHA-256 hash of the swiss-num).
+   */
+  mint(
+    swissNum: string,
+    formulaIdentifier: FormulaIdentifier,
+    mintedAt: number,
+    type?: string,
+  ): string;
+  /**
+   * The store read side backing the OCapN `locator`: the formula identifier a
+   * swiss-num resolves to, or `undefined` when no (or a revoked) row matches.
+   */
+  getBySwissNum(swissNum: string): FormulaIdentifier | undefined;
+  /** Every current grant as a secret-free {@link SturdyRefGrant} record. */
+  list(): SturdyRefGrant[];
+  /**
+   * Revoke every row whose grant handle matches (revocation by forgetting).
+   * Returns whether anything was removed.
+   */
+  revokeByHandle(grantHandle: string): boolean;
+};
+
+/**
+ * The daemon's OCapN identity (formula type `ocapn`, design cut 4): a distinct
+ * Ed25519 keypair generated at formulation and persisted so the identity is
+ * stable across restarts, the self peer-locator derived from it, and the
+ * daemon's OCapN client EXPORT surface (the cut-3 exporter) built over that
+ * real self-location. Closely held: the `ocapn` formula is a daemon singleton
+ * reached only from daemon core, never vended through a host or guest facet, so
+ * no worker or guest can reach the OCapN capability or a netlayer handle (the
+ * no-location confinement invariant). See
+ * designs/sturdy-refs-cross-peer-bridge.md § "The daemon's OCapN identity and
+ * self-location".
+ */
+export type OcapnIdentity = {
+  /** The daemon's self peer-locator, baked into every wire-tier mint. */
+  getSelfLocation(): import('@endo/ocapn').OcapnLocation;
+  /** The SturdyRef EXPORT surface, built over the real self-location. */
+  exporter: import('./sturdyref-store.js').SturdyRefExporter;
+  /** Whether a netlayer is armed, so the dial+serve client exists (cut 5). */
+  isArmed: boolean;
+  /**
+   * Tear down the dial+serve client and its armed netlayer (cut 6). A no-op when
+   * unarmed. Without it an armed identity leaks its listening socket.
+   */
+  shutdown(): void;
+  /**
+   * The closely-held reveal (cut 5): the off-band `(location, swissNum)` of a
+   * SturdyRef this daemon minted or materialized (self-mint, wire arrival, or
+   * `ocapn://` URI), or `undefined` for a forged look-alike / foreign-instance
+   * mint.
+   */
+  reveal(sturdyRef: unknown):
+    | {
+        location: import('@endo/ocapn').OcapnLocation;
+        secret: string | Uint8Array;
+      }
+    | undefined;
+  /** Dial a foreign peer and fetch by swiss-num (cut 5); rejects when unarmed. */
+  enliven(
+    location: import('@endo/ocapn').OcapnLocation,
+    swissNum: string | Uint8Array,
+  ): Promise<unknown>;
+  /** Provide (or reuse) the live session to a foreign peer (cut 5). */
+  provideSession(
+    location: import('@endo/ocapn').OcapnLocation,
+  ): Promise<unknown>;
+  /** Materialize a foreign SturdyRef from an out-of-band `ocapn://` URI (cut 5). */
+  materializeFromUri(uri: string): import('@endo/pass-style').SturdyRef;
+  /** Format an `ocapn://` sturdyref URI for a revealable SturdyRef (cut 5). */
+  formatUri(sturdyRef: import('@endo/pass-style').SturdyRef): string;
+};
+
+/**
+ * The foreign-SturdyRef dedup index (formula type `known-sturdyrefs-store`,
+ * design cut 5): maps a foreign `(locationId, sha256(swissNum))` grant to the
+ * `ocapn-sturdyref` formula formulated for it, and a `locationId` to its
+ * `ocapn-peer`, so repeated internalizations of the same foreign object
+ * converge on one formula identifier. Never holds a swiss-num; daemon-private.
+ */
+export type KnownSturdyRefsStore = {
+  /** The `ocapn-sturdyref` id for a foreign grant, or `undefined`. */
+  getSturdyRef(
+    locationId: string,
+    swissNum: string | Uint8Array,
+  ): FormulaIdentifier | undefined;
+  /** Record the `ocapn-sturdyref` id for a foreign grant. */
+  setSturdyRef(
+    locationId: string,
+    swissNum: string | Uint8Array,
+    formulaIdentifier: FormulaIdentifier,
+  ): void;
+  /** The `ocapn-peer` id for a foreign peer identity, or `undefined`. */
+  getPeer(locationId: string): FormulaIdentifier | undefined;
+  /** Record the `ocapn-peer` id for a foreign peer identity. */
+  setPeer(locationId: string, formulaIdentifier: FormulaIdentifier): void;
+  /**
+   * Forget every index entry pointing at a formula identifier (both peer and
+   * sturdyref keyspaces). Returns whether anything was removed.
+   */
+  forget(formulaIdentifier: FormulaIdentifier): boolean;
 };
 
 /**
@@ -1558,6 +1744,49 @@ export interface EndoGuest extends EndoAgent {
 
 export type FarEndoGuest = FarRef<EndoGuest>;
 
+/**
+ * The daemon's SturdyRef EXPORT facet (design cut 3, "daemon as C"), vended
+ * host-only by `EndoHost.sturdyRefs`. Minting binds a fresh 256-bit swiss-num
+ * to a local value in the daemon's `sturdyref-store` and constructs the
+ * wire-tier SturdyRef through the daemon's OCapN client (held daemon-side for
+ * the wire codec); the store read side backs the client's bootstrap `fetch`.
+ * See designs/sturdy-refs-cross-peer-bridge.md § "Mint and export".
+ */
+export interface EndoSturdyRefs {
+  /**
+   * Mint a durable, revocable grant EXPORTING the value at `petNamePath`
+   * backed by a fresh swiss-num, and return its grant handle (the SHA-256
+   * hash of the swiss-num). Each call draws a fresh swiss-num, so two grants
+   * for one value are independently revocable and converge on the value only
+   * at enlivenment. The raw wire-tier SturdyRef stays daemon-side (its
+   * dialable out-of-band form awaits the real self-location of cut 4); the
+   * handle is the marshalable reference a host uses to list and revoke.
+   */
+  provideSturdyRef(
+    petNamePath: string | string[],
+    type?: string,
+  ): Promise<string>;
+  /** List this daemon's minted grants, without ever revealing a swiss-num. */
+  listSturdyRefGrants(): Promise<SturdyRefGrant[]>;
+  /**
+   * Revoke a grant by its handle: forgetting the row makes every future fetch
+   * of that swiss-num miss. Returns whether a grant was removed.
+   */
+  revokeSturdyRefGrant(grantHandle: string): Promise<boolean>;
+  /**
+   * Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI and
+   * internalize it (design cut 5, "daemon as B"): resolve it through the
+   * closely-held OCapN capability to a local `ocapn-sturdyref` formula
+   * identifier that re-enlivens on demand, optionally binding it under
+   * `petName`. Returns the formula identifier. The URI is secret-bearing, so
+   * this is a host-only surface; a confined guest never reaches it.
+   */
+  acceptSturdyRefUri(
+    uri: string,
+    petName?: string | string[],
+  ): Promise<FormulaIdentifier>;
+}
+
 export interface EndoHost extends EndoAgent {
   form(
     recipientNameOrPath: string | string[],
@@ -1808,6 +2037,14 @@ export interface EndoHost extends EndoAgent {
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
+  /**
+   * The daemon's SturdyRef EXPORT surface (design cut 3, "daemon as C"):
+   * mint, list, and revoke wire-tier SturdyRef grants. Vended as a dedicated
+   * remotable rather than inlined here because the host interface guard is at
+   * its method cap; being reachable only through the host facet is itself the
+   * tier gate that keeps minting host-only (a confined guest never gets it).
+   */
+  sturdyRefs(): Promise<EndoSturdyRefs>;
   makeChannel(
     petName: string | string[],
     proposedName: string,
@@ -2317,6 +2554,18 @@ export type DaemonicPersistencePowers = {
   deleteFormula: (formulaNumber: FormulaNumber) => Promise<void>;
   listFormulas: () => Promise<Array<{ number: string; node: string }>>;
   listFormulaNumbersByNode: (nodeNumber: string) => string[];
+  /**
+   * Read a value from the daemon-private key/value state table, or
+   * `undefined` when the key is absent. Backs small, mutable, daemon-core
+   * singletons (for example the SturdyRef swiss-num store, whose rows are a
+   * JSON blob keyed by the store's formula number). Not for confined values.
+   */
+  getState: (key: string) => string | undefined;
+  /**
+   * Write (insert or replace) a value into the daemon-private key/value
+   * state table.
+   */
+  setState: (key: string, value: string) => void;
   writeAgentKey: (
     publicKey: string,
     privateKey: string,

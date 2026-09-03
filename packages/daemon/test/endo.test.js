@@ -14,6 +14,7 @@ import { execFile } from 'child_process';
 import { promisify as nodePromisify } from 'util';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import { formatSturdyRefUri } from '@endo/ocapn';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
@@ -3084,6 +3085,237 @@ test('getFormula normalizes unknown-identifier-on-local-node error', async t => 
   await t.throwsAsync(() => E(E(host).diagnostics()).getFormula(unknownId), {
     message: /getFormula could not resolve unknown identifier/u,
   });
+});
+
+// SturdyRef EXPORT (design cut 3, "daemon as C"): the host mints durable,
+// revocable grants over the daemon's swiss-num store, lists them without
+// leaking secrets, and revokes by forgetting. The raw wire-tier SturdyRef
+// stays daemon-side (its dialable form awaits the real self-location of cut
+// 4); the marshalable grant handle is what the host client sees.
+test('host mints, lists, and revokes SturdyRef grants', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue('hello sturdy', 'thing');
+  const id = await E(host).identify('thing');
+
+  const sturdyRefs = await E(host).sturdyRefs();
+  const grantHandle = await E(sturdyRefs).provideSturdyRef(['thing']);
+  t.is(typeof grantHandle, 'string');
+  t.is(grantHandle.length, 64, 'a grant handle is a SHA-256 hex digest');
+
+  const grants = await E(sturdyRefs).listSturdyRefGrants();
+  t.is(grants.length, 1);
+  t.is(grants[0].grantHandle, grantHandle);
+  t.is(grants[0].formulaIdentifier, id);
+  t.is(typeof grants[0].mintedAt, 'number');
+
+  // Two mints of one value yield distinct grants that name the same formula:
+  // independently revocable, converging on one value.
+  const secondHandle = await E(sturdyRefs).provideSturdyRef(['thing']);
+  t.not(secondHandle, grantHandle, 'each mint draws a fresh swiss-num');
+  const two = await E(sturdyRefs).listSturdyRefGrants();
+  t.is(two.length, 2);
+  t.deepEqual(new Set(two.map(g => g.formulaIdentifier)), new Set([id]));
+
+  // Revoke by handle (revocation by forgetting): the other grant survives.
+  t.is(await E(sturdyRefs).revokeSturdyRefGrant(grantHandle), true);
+  const afterRevoke = await E(sturdyRefs).listSturdyRefGrants();
+  t.is(afterRevoke.length, 1);
+  t.is(afterRevoke[0].grantHandle, secondHandle);
+  // Revoking an already-forgotten handle is a no-op.
+  t.is(await E(sturdyRefs).revokeSturdyRefGrant(grantHandle), false);
+});
+
+test('SturdyRef grants survive daemon restart and still serve', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+  let grantHandle;
+  let id;
+  {
+    const { host } = await makeHost(config, cancelled);
+    await E(host).storeValue('durable value', 'thing');
+    id = await E(host).identify('thing');
+    const sturdyRefs = await E(host).sturdyRefs();
+    grantHandle = await E(sturdyRefs).provideSturdyRef(['thing'], 'note');
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const sturdyRefs = await E(host).sturdyRefs();
+    const grants = await E(sturdyRefs).listSturdyRefGrants();
+    t.is(grants.length, 1, 'the swiss-num row survived restart');
+    t.is(grants[0].grantHandle, grantHandle);
+    t.is(grants[0].formulaIdentifier, id);
+    t.is(grants[0].type, 'note');
+    // The exported value is still resolvable after restart (still serves).
+    t.is(await E(host).lookup(['thing']), 'durable value');
+  }
+});
+
+test('a confined guest cannot reach the SturdyRef export facet', async t => {
+  const { host } = await prepareHost(t);
+  const guest = E(host).provideGuest('guest');
+  // The guest's own facet has no `sturdyRefs` method: minting is host-tier,
+  // so the guard-level tier gate rejects the call.
+  await t.throwsAsync(() => E(guest).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+  // Nor does the guest's view of its host expose it.
+  const guestsHost = E(guest).lookup(['@host']);
+  await t.throwsAsync(() => E(guestsHost).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+});
+
+// The `ocapn` singleton (design cut 4) holds the daemon's OCapN identity and,
+// once cut 5 arms a netlayer, its dial authority. It is closely held: a
+// daemon-core preformulated formula with no pet name and no facet accessor, so
+// no worker or guest can name it, reach it, or reach a netlayer handle through
+// it (the no-location confinement invariant). This is the endowment sweep the
+// cut's test plan requires.
+test('the ocapn capability and netlayer handles never cross a facet boundary', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue('confined value', 'thing');
+
+  // The identity has no pet name: nothing a worker or guest is handed as its
+  // namespace can name it, so `identify` misses and it is absent from `list`.
+  t.is(await E(host).identify('ocapn'), undefined);
+  const names = await E(host).list();
+  t.false(names.includes('ocapn'));
+
+  // A confined guest reaches neither the identity nor a netlayer: there is no
+  // accessor method on the guest facet nor on its view of its host. The
+  // guest's `@host` resolves to a bare Handle (open/receive only), so even
+  // `identify` — the mildest namespace probe — is absent, not merely a miss.
+  const guest = E(host).provideGuest('guest');
+  await t.throwsAsync(() => E(guest).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+  const guestsHost = E(guest).lookup(['@host']);
+  await t.throwsAsync(() => E(guestsHost).identify('ocapn'), {
+    message: /target has no method "identify"/u,
+  });
+
+  // Even the host, which CAN mint, never receives the raw OCapN capability or
+  // a netlayer: minting hands back only an opaque grant handle, and the
+  // location-bearing SturdyRef (designator, transport, secret) stays
+  // daemon-side. What crosses the boundary is a bare SHA-256 hex digest.
+  const sturdyRefs = await E(host).sturdyRefs();
+  const grantHandle = await E(sturdyRefs).provideSturdyRef(['thing']);
+  t.is(typeof grantHandle, 'string');
+  t.regex(grantHandle, /^[0-9a-f]{64}$/u);
+  const grants = await E(sturdyRefs).listSturdyRefGrants();
+  const grantFields = new Set(Object.keys(grants[0]));
+  for (const leak of ['location', 'designator', 'transport', 'secret']) {
+    t.false(grantFields.has(leak), `grant listing must not carry ${leak}`);
+  }
+});
+
+// Foreign-SturdyRef internalization (design cut 5, "daemon as B"): a foreign
+// SturdyRef carried out-of-band as an `ocapn://` URI internalizes at the facet
+// seam to a LOCAL `ocapn-sturdyref` formula identifier that re-enlivens on
+// demand. These exercise the durable half — accept, dedup, identify, name-write,
+// locate — which needs no live dial (formulation is lazy); the live dial+fetch
+// half is proven over a real `tcp-test-only` netlayer in
+// test/ocapn.test.js ("armed cross-peer enliven"), since the daemon threads no
+// netlayer yet (cut-4's provisional unarmed default; arming is the maintainer's
+// open question, tracked for cut 6).
+const makeForeignSturdyRefUri = swissByte => {
+  const foreignLocation = harden({
+    type: 'ocapn-peer',
+    designator: 'peerc7fq2example4designator5only6zzz',
+    transport: 'tcp-testing-only',
+    hints: false,
+  });
+  const secret = new Uint8Array(24);
+  for (let i = 0; i < 24; i += 1) secret[i] = (i * 37 + swissByte) % 256;
+  return {
+    foreignLocation,
+    secret,
+    uri: formatSturdyRefUri({ location: foreignLocation, swissNum: secret }),
+  };
+};
+
+test('host accepts a foreign SturdyRef URI, internalizes it, dedups, and locates it without leaking the foreign locator', async t => {
+  const { host } = await prepareHost(t);
+  const sturdyRefs = await E(host).sturdyRefs();
+  const { uri, foreignLocation } = makeForeignSturdyRefUri(11);
+
+  // Accept + name-write: the URI resolves to a LOCAL formula identifier.
+  const id = await E(sturdyRefs).acceptSturdyRefUri(uri, 'foreign');
+  t.notThrows(() => parseId(id), 'a well-formed local formula identifier');
+  const { node } = parseId(id);
+  const selfInfo = await E(host).getPeerInfo();
+  t.is(
+    node,
+    selfInfo.node,
+    'the identifier denotes a LOCAL formula (no foreign node)',
+  );
+
+  // The name-write bound it: identify recovers the same identifier.
+  t.is(
+    await E(host).identify('foreign'),
+    id,
+    'name-write bound the identifier',
+  );
+
+  // Dedup: accepting the SAME foreign (location, swissNum) again converges on
+  // the SAME formula identifier — a stable identifier across internalizations.
+  const again = await E(sturdyRefs).acceptSturdyRefUri(uri);
+  t.is(
+    again,
+    id,
+    'dedup: repeated internalizations yield one stable identifier',
+  );
+
+  // A different foreign swiss-num at the same peer is a distinct grant.
+  const { uri: uri2 } = makeForeignSturdyRefUri(200);
+  const id2 = await E(sturdyRefs).acceptSturdyRefUri(uri2);
+  t.not(id2, id, 'a distinct foreign grant internalizes to a distinct formula');
+
+  // Confinement (no-location): `locate` returns the ordinary endo:// locator
+  // at the granularity "this daemon holds it" — it names the LOCAL formula and
+  // its ocapn-sturdyref type, never the foreign peer designator or the secret.
+  const locator = await E(host).locate('foreign');
+  t.regex(locator, /type=ocapn-sturdyref/u, 'located as an ocapn-sturdyref');
+  t.false(
+    locator.includes(foreignLocation.designator),
+    'the foreign peer designator never appears in the locator',
+  );
+  t.false(locator.includes('tcp-testing-only'), 'no foreign transport leak');
+});
+
+test('a confined guest cannot reach the foreign-SturdyRef accept surface, and enliven is daemon-side only', async t => {
+  const { host } = await prepareHost(t);
+  const { uri } = makeForeignSturdyRefUri(42);
+  const sturdyRefs = await E(host).sturdyRefs();
+  await E(sturdyRefs).acceptSturdyRefUri(uri, 'foreign');
+
+  // Confinement (no-location): `acceptSturdyRefUri` lives on the host-only
+  // `sturdyRefs` facet. A confined guest has no `sturdyRefs` method at all, so
+  // it can never accept a secret-bearing URI nor reach the dial capability.
+  const guest = E(host).provideGuest('guest');
+  await t.throwsAsync(() => E(guest).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+  const guestsHost = E(guest).lookup(['@host']);
+  await t.throwsAsync(() => E(guestsHost).sturdyRefs(), {
+    message: /target has no method "sturdyRefs"/u,
+  });
+
+  // Enliven happens ONLY daemon-side, via the closely-held OCapN capability.
+  // With no netlayer armed the daemon cannot dial, so provisioning the value
+  // rejects — proving the seam reaches the mediator's dial path (a guest never
+  // does) — and the rejection is secret-free (never the swiss-num).
+  const error = await t.throwsAsync(() => E(host).lookup('foreign'));
+  const { secret } = makeForeignSturdyRefUri(42);
+  const secretHex = Array.from(secret)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  t.false(
+    String(error).includes(secretHex),
+    'the rejection never names the swiss-num',
+  );
 });
 
 test('read unknown node id', async t => {
@@ -7489,6 +7721,10 @@ test('readLog follow discovers new logs and settles on disconnect', async t => {
     () => 'settled',
     () => 'settled',
   );
+  // Attach the cancellation handler before tearing down CapTP. The client
+  // connection has derived promises that reject during teardown, and this
+  // keeps the expected disconnect from being reported as unhandled.
+  cancelled.catch(() => {});
   cancel(Error('readLog follow new-log test done'));
   t.is(await pending, 'settled');
 });

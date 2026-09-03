@@ -21,6 +21,7 @@ import {
   toolResultToSmallcaps,
   smallcapsMarshal,
 } from '@endo/agent-tools/adapters/smallcaps.js';
+import { makeSturdyRefEscrow } from '@endo/agent-tools/sturdyref-escrow.js';
 import { applyEdits } from '@endo/agentry/edit-text';
 
 import { tools } from './tools/index.js';
@@ -85,9 +86,10 @@ const verbatimArgFields = new Set(['pattern', 'glob']);
  *
  * @param {string} name
  * @param {Record<string, unknown>} rawArgs
+ * @param {{ redeem: (value: unknown) => unknown }} sturdyRefEscrow
  * @returns {Record<string, unknown>} SmallCaps-decoded, validated args.
  */
-const decodeToolArgs = (name, rawArgs) => {
+const decodeToolArgs = (name, rawArgs, sturdyRefEscrow) => {
   // Split off the verbatim (non-SmallCaps) fields before decoding: their raw
   // string values (glob/regexp sources) must not pass through the SmallCaps
   // codec, which would throw on or silently coerce a pattern whose first
@@ -114,23 +116,26 @@ const decodeToolArgs = (name, rawArgs) => {
     .../** @type {any} */ (smallcapsMarshal.fromCapData({ body, slots: [] })),
     ...verbatim,
   };
+  const redeemed = /** @type {Record<string, unknown>} */ (
+    sturdyRefEscrow.redeem(decoded)
+  );
 
   const pattern = paramsByTool.get(name);
-  if (pattern === undefined) return decoded;
+  if (pattern === undefined) return redeemed;
 
   try {
-    mustMatch(harden(decoded), pattern, `${name} args`);
-    return decoded;
+    mustMatch(harden(redeemed), pattern, `${name} args`);
+    return redeemed;
   } catch (err) {
     // Secondary fallback: some smaller LLMs emit nested arrays/objects as
     // JSON-encoded strings even within an otherwise-SmallCaps payload.
     // Retry once with those fields un-JSON-fied (same idea as the old
     // `validateAndFixupArgs` retry).
-    if (typeof decoded !== 'object' || decoded === null) throw err;
+    if (typeof redeemed !== 'object' || redeemed === null) throw err;
     let fixedAny = false;
     /** @type {Record<string, unknown>} */
-    const next = { ...decoded };
-    for (const [key, val] of Object.entries(decoded)) {
+    const next = { ...redeemed };
+    for (const [key, val] of Object.entries(redeemed)) {
       // Verbatim fields (glob/regexp sources) are never re-parsed: a pattern
       // that happens to be valid JSON (e.g. `"true"`, `"123"`) must still reach
       // the tool as the literal string the LLM authored.
@@ -155,9 +160,13 @@ const decodeToolArgs = (name, rawArgs) => {
  * it must always resolve (errors propagate as the tool's `details`/`content`).
  *
  * @param {any} powers - Guest powers
+ * @param {{ redeem: (value: unknown) => unknown }} [sturdyRefEscrow]
  * @returns {(name: string, args: ToolCallArgs) => Promise<unknown>}
  */
-export const makeExecuteTool = powers => {
+export const makeExecuteTool = (
+  powers,
+  sturdyRefEscrow = makeSturdyRefEscrow(),
+) => {
   const executeTool = async (name, rawArgs) => {
     // Pi delivers tool args as an already-JSON-parsed plain object.
     // Decode via the rigorous SmallCaps codec: `"+N"` → BigInt, `"!<s>"` →
@@ -166,7 +175,9 @@ export const makeExecuteTool = powers => {
     // malformed args record fails fast with a structured error instead of
     // cascading into a confusing E(powers).<method>() failure mid-dispatch.
     const argsRecord = /** @type {Record<string, unknown>} */ (rawArgs ?? {});
-    const args = /** @type {ToolCallArgs} */ (decodeToolArgs(name, argsRecord));
+    const args = /** @type {ToolCallArgs} */ (
+      decodeToolArgs(name, argsRecord, sturdyRefEscrow)
+    );
     switch (name) {
       // Self-documentation
       case 'help': {
@@ -506,9 +517,15 @@ harden(makeExecuteTool);
  * @param {string} name
  * @param {string} summary
  * @param {(name: string, args: any) => Promise<any>} executeTool
+ * @param {{ render: (value: unknown) => unknown }} [sturdyRefEscrow]
  * @returns {AgentTool<any>}
  */
-export function toAgentTool(name, summary, executeTool) {
+export function toAgentTool(
+  name,
+  summary,
+  executeTool,
+  sturdyRefEscrow = makeSturdyRefEscrow(),
+) {
   return {
     name,
     label: name,
@@ -516,16 +533,17 @@ export function toAgentTool(name, summary, executeTool) {
     parameters: { type: 'object', additionalProperties: true },
     execute: async (_toolCallId, params, _signal, _onUpdate) => {
       const result = await executeTool(name, params);
+      const rendered = sturdyRefEscrow.render(result);
       // Encode the tool result as SmallCaps so the model reads BigInts as
       // `"+N"` strings (consistent with the encoding it must produce for
       // inbound messageNumber fields) and strings starting with special
       // chars as `"!<s>"`. Plain strings pass through unwrapped. The encoder is
       // the shared `toolResultToSmallcaps` from `@endo/agent-tools/adapters/smallcaps.js`.
-      const text = toolResultToSmallcaps(result);
+      const text = toolResultToSmallcaps(rendered);
       /** @type {AgentToolResult<any>} */
       const toolResult = {
         content: [{ type: 'text', text }],
-        details: result,
+        details: rendered,
       };
       return toolResult;
     },

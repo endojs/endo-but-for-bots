@@ -50,6 +50,7 @@
   },
   "dependencies": {
     "@endo/ascii": "workspace:^",
+    "@endo/base64": "workspace:^",
     "@endo/bytes": "workspace:^",
     "@endo/cbor": "workspace:^",
     "@endo/eventual-send": "workspace:^",
@@ -62,6 +63,7 @@
     "@endo/pass-style": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
+    "@endo/sturdyref": "workspace:^",
     "@endo/syrup-frame": "workspace:^",
     "@endo/utf8": "workspace:^",
     "@noble/curves": "^2.3.0",

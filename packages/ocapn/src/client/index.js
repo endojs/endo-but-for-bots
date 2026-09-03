@@ -4,7 +4,7 @@
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
- * @import { SturdyRef } from './sturdyrefs.js'
+ * @import { SturdyRef } from '@endo/pass-style'
  * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
@@ -928,6 +928,20 @@ export const makeOcapn = async ({
      */
     makeSturdyRef(location, secret) {
       return sturdyRefTracker.makeSturdyRef(location, secret);
+    },
+    /**
+     * Closely-held reveal: return the off-band `(location, secret[,
+     * type])` details of a `SturdyRef` this client minted or
+     * materialized from the wire, or `undefined` for a forged
+     * look-alike or a SturdyRef minted by a foreign instance. This is
+     * the only operation that yields the secret, so it is held by the
+     * client (never a property on the SturdyRef itself).
+     *
+     * @param {SturdyRef} sturdyRef
+     * @returns {import('./sturdyrefs.js').SturdyRefLocator | undefined}
+     */
+    reveal(sturdyRef) {
+      return sturdyRefTracker.reveal(sturdyRef);
     },
     /**
      * Resolve a `SturdyRef` to a live capability. Local SturdyRefs flow

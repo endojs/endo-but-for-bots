@@ -57,6 +57,7 @@
     "@endo/cli": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

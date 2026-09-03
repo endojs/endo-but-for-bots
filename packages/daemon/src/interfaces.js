@@ -14,6 +14,7 @@ import {
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
 import {
+  NameShape,
   NamePathShape,
   NameOrPathShape,
   NamesOrPathsShape,
@@ -24,6 +25,39 @@ import {
 // Pet-name and pet-path shapes are canonical in `./type-guards.js`
 // (re-exported as `@endo/daemon/type-guards.js` for consumers like
 // `@endo/lal`).  See that module for the contract.
+
+// A SturdyRef is the first-class `'sturdyRef'` pass-style category
+// (packages/pass-style). `M.kind('sturdyRef')` admits any properly
+// constructed SturdyRef and rejects every other passable. A SturdyRef
+// may appear only at the authority-reviewed positions on the daemon's agent
+// surface: lookup, maybeLookup, list, and evaluate slots. The facet resolves
+// it to a formula identifier via the daemon's closely-held resolution
+// capability before the existing pet-name-path code path runs. `list` returns
+// only local pet names, not identifiers or locators. See
+// designs/sturdy-refs-ocapn-enlivenment.md § "Daemon: SturdyRef as
+// pet-name-path substitute" (cut 3) and § "Migration / staged adoption".
+// `M.sturdyRef()` in `@endo/patterns` is a deferred follow-up (blocked on
+// the `@endo/marshal` rank-order for sturdyref); `M.kind('sturdyRef')` is
+// the structural recognizer used here in its place.
+const SturdyRefShape = M.kind('sturdyRef');
+
+// The admitted lookup sum: a single pet-name, a pet-name-path, or a
+// SturdyRef.
+const NameOrPathOrSturdyRefShape = M.or(NameOrPathShape, SturdyRefShape);
+
+// The rest-arg equivalent for `.rest(NamePathShape)` methods, whose
+// collected rest array is matched as a whole. Each segment may be a
+// string (a pet-name) and the whole-path SturdyRef form is admitted as
+// a single-element rest carrying one SturdyRef, mirroring how a
+// SturdyRef stands in for an entire pet-name-path.
+const NamePathOrSturdyRefRestShape = M.or(
+  NamePathShape,
+  M.arrayOf(M.or(NameShape, SturdyRefShape)),
+);
+
+// Each entry of an evaluate slots array may itself be a SturdyRef in place of
+// a pet-name-path.
+const NamesOrPathsOrSturdyRefsShape = M.arrayOf(NameOrPathOrSturdyRefShape);
 
 // Edge names for message edges (same pattern as Name)
 const EdgeNameShape = M.string();
@@ -58,7 +92,9 @@ const EvaluateMethodGuard = M.call(
   M.or(NameOrPathShape, M.undefined()),
   M.string(),
   M.arrayOf(M.string()),
-  NamesOrPathsShape,
+  // Each slot's petNamePath may be a SturdyRef (cut 3 read-side
+  // widening). The result name (optional, below) stays a pet-name.
+  NamesOrPathsOrSturdyRefsShape,
 )
   .optional(NameOrPathShape)
   .returns(M.promise());
@@ -98,6 +134,14 @@ export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
 // reader).
 export const nameHubMethodGuards = harden({
   ...readableNameHubMethodGuards,
+  // A SturdyRef may stand in only for the authority-reviewed lookup and list
+  // inputs. These override the corresponding entries from
+  // `readableNameHubMethodGuards` (whose pet-name-only shape stays the
+  // portable, non-daemon contract). Identifier, locator, mutation, and
+  // reverse methods are intentionally not widened.
+  lookup: M.call(NameOrPathOrSturdyRefShape).returns(M.promise()),
+  maybeLookup: M.call(NameOrPathOrSturdyRefShape).returns(M.any()),
+  list: M.call().rest(NamePathOrSturdyRefRestShape).returns(M.promise()),
   identify: M.call().rest(NamePathShape).returns(M.promise()),
   locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
@@ -257,6 +301,24 @@ export const GuestInterface = M.interface('EndoGuest', {
   deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
+});
+
+// The daemon's SturdyRef EXPORT facet (design cut 3, "daemon as C"), vended
+// host-only by `EndoHost.sturdyRefs`. `provideSturdyRef` returns a grant
+// handle (a hex string) — the marshalable management reference — while the
+// raw wire-tier SturdyRef stays daemon-side for the OCapN wire codec.
+export const SturdyRefsInterface = M.interface('EndoSturdyRefs', {
+  provideSturdyRef: M.call(NameOrPathShape)
+    .optional(M.string())
+    .returns(M.promise()),
+  listSturdyRefGrants: M.call().returns(M.promise()),
+  revokeSturdyRefGrant: M.call(M.string()).returns(M.promise()),
+  // Accept a foreign SturdyRef carried out-of-band as an `ocapn://` URI and
+  // internalize it (design cut 5, "daemon as B"), optionally binding it under
+  // a pet name. The URI argument is secret-bearing, so this facet is host-only.
+  acceptSturdyRefUri: M.call(M.string())
+    .optional(NameOrPathShape)
+    .returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {
@@ -469,6 +531,12 @@ export const HostInterface = M.interface('EndoHost', {
   followPeerChanges: M.call().returns(M.promise()),
   // Locate a formula with connection hints.
   locateWithHints: M.call().rest(NamePathShape).returns(M.promise()),
+  // The SturdyRef EXPORT facet (design cut 3). Host-tier only: this accessor
+  // is deliberately absent from GuestInterface, so a confined guest can never
+  // reach the minting surface or the daemon-private swiss-num store — the
+  // guard-level tier gate. A dedicated sub-facet (SturdyRefsInterface) rather
+  // than inlined methods because this interface is at its method-guard cap.
+  sturdyRefs: M.call().returns(M.promise()),
   // Adopt a value from a locator with connection hints
   adoptFromLocator: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
   // Create an invitation

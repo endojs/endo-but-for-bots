@@ -4,7 +4,7 @@
 /**
  * @import { ReferenceKit } from '../client/ref-kit.js'
  * @import { HandoffGiveDetails } from '../client/grant-tracker.js'
- * @import { SturdyRef } from '../client/sturdyrefs.js'
+ * @import { SturdyRef } from '@endo/pass-style'
  * @import { SyrupCodec, SyrupRecordCodec, SyrupRecordUnionCodec } from '../syrup/codec.js'
  * @import { OcapnWriter, OcapnCodec } from '../codec-interface.js'
  * @import { OcapnLocation, OcapnPublicKeyDescriptor, OcapnSignature } from './components.js'
@@ -13,6 +13,7 @@
 
 import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
+import { toIndexableUint8Array } from '@endo/bytes/indexed.js';
 
 import { makeCodec, makeRecordUnionCodec } from '../syrup/codec.js';
 import {
@@ -26,7 +27,7 @@ import {
   OcapnPublicKeyCodec,
   OcapnSignatureCodec,
 } from './components.js';
-import { getSturdyRefDetails } from '../client/sturdyrefs.js';
+import { getSturdyRefLocator } from '../client/sturdyrefs.js';
 import { encodeSwissnum } from '../client/util.js';
 
 /**
@@ -322,7 +323,21 @@ export const makeDescCodecs = referenceKit => {
     syrupReader => {
       const node = OcapnPeerCodec.read(syrupReader);
       const swissNum = syrupReader.readBytestring();
-      const value = referenceKit.makeSturdyRef(node, swissNum);
+      const secretBytes = toIndexableUint8Array(swissNum);
+      // Materialize a friendly string secret only when the swiss-num is
+      // strictly printable-ASCII (every byte <= 0x7f), symmetric with the
+      // write path's `encodeSwissnum`, which validates the same alphabet.
+      // Otherwise keep the raw bytes so a non-ASCII swiss-num (e.g. a
+      // Spritely Goblins 24-byte random) round-trips read-to-write
+      // unchanged. Note `new TextDecoder('ascii')` is the WHATWG
+      // windows-1252 decoder, which never throws and would silently
+      // corrupt bytes > 0x7f into a lossy string, so the ASCII decision is
+      // made explicitly over the bytes rather than by a fatal decode.
+      const isAscii = secretBytes.every(byte => byte <= 0x7f);
+      const secret = isAscii
+        ? new TextDecoder('ascii').decode(secretBytes)
+        : secretBytes;
+      const value = referenceKit.makeSturdyRef(node, secret);
       return value;
     },
     /**
@@ -330,11 +345,11 @@ export const makeDescCodecs = referenceKit => {
      * @param {OcapnWriter} writer
      */
     (sturdyRef, writer) => {
-      const details = getSturdyRefDetails(sturdyRef);
-      if (!details) {
+      const locator = getSturdyRefLocator(sturdyRef);
+      if (!locator) {
         throw Error('Cannot serialize: not a valid SturdyRef object');
       }
-      const { location, secret } = details;
+      const { location, secret } = locator;
       OcapnPeerCodec.write(location, writer);
       // String secrets get ASCII-encoded; raw-bytes secrets ride the
       // wire verbatim so non-ASCII swissnums (e.g. Spritely Goblins'

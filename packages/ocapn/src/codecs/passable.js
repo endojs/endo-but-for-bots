@@ -223,7 +223,7 @@ export const makePassableCodecs = descCodecs => {
       // Special Cases
       signedHandoffReceive: HandOffUnionCodec,
       signedHandoffGive: HandOffUnionCodec,
-      sturdyref: OcapnSturdyRefCodec,
+      sturdyRef: OcapnSturdyRefCodec,
     },
   );
 

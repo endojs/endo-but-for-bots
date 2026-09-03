@@ -21,6 +21,9 @@
       "path": "../far/tsconfig.composite.json"
     },
     {
+      "path": "../harden/tsconfig.composite.json"
+    },
+    {
       "path": "../marshal/tsconfig.composite.json"
     },
     {

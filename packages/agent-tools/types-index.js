@@ -1,4 +1,5 @@
 export { makeTool } from './src/tool.js';
+export { makeSturdyRefEscrow } from './src/sturdyref-escrow.js';
 export { makeGitHistoryTool, makeGitTool } from './src/json-tools/git.js';
 export { makeGitMountTools } from './src/json-tools/git-mount.js';
 export { makeGitRemoteTool } from './src/json-tools/git-remote.js';

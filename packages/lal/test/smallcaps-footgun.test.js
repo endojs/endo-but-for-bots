@@ -28,6 +28,8 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { Agent as PiAgent } from '@earendil-works/pi-agent-core';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { makeSturdyRefEscrow } from '@endo/agent-tools/sturdyref-escrow.js';
+import { makeSturdyRef } from '@endo/pass-style';
 
 import { makeExecuteTool, toAgentTool } from '../tool-dispatch.js';
 import { tools } from '../tools/index.js';
@@ -583,4 +585,40 @@ test('petNameOrPath string (no sigil) passes through decode unchanged', async t 
   t.is(dispatched.length, 1);
   t.is(dispatched[0].args.petNameOrPath, 'my-file');
   t.is(typeof dispatched[0].args.petNameOrPath, 'string');
+});
+
+test('a tool handle redeems to its sturdyref before Lal dispatch', async t => {
+  const sturdyRef = makeSturdyRef();
+  const sturdyRefEscrow = makeSturdyRefEscrow({
+    randomBytes: bytes => bytes.fill(1),
+  });
+  /** @type {unknown} */
+  let received;
+  const powers = harden({
+    lookup(value) {
+      received = value;
+      return 'resolved';
+    },
+  });
+  const publish = toAgentTool(
+    'publish',
+    'publish a sturdyref',
+    async () => harden({ ref: sturdyRef }),
+    sturdyRefEscrow,
+  );
+  const published = await publish.execute('publish', {}, undefined, undefined);
+  const text = /** @type {{ text: string }} */ (published.content[0]).text;
+  const handle = JSON.parse(text).ref;
+
+  const executeTool = makeExecuteTool(powers, sturdyRefEscrow);
+  t.is(await executeTool('lookup', { petNameOrPath: handle }), 'resolved');
+  t.is(received, sturdyRef);
+  await t.throwsAsync(
+    () =>
+      executeTool(
+        'lookup',
+        /** @type {any} */ ({ petNameOrPath: 'sturdyref:forged' }),
+      ),
+    { message: 'unknown sturdyref handle' },
+  );
 });
