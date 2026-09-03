@@ -765,6 +765,19 @@ fn generic_array_iterators_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn proxy_array_brand_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "proxy-array-brand",
+        &[
+            "var pair=Proxy.revocable([],{});Array.isArray(pair.proxy)",
+            "var pair;var before=Array.isArray(pair.proxy);pair.revoke();before",
+            "var pair;var before;var threw=false;try{Array.isArray(pair.proxy)}catch(e){threw=e instanceof TypeError}before+':'+threw",
+        ],
+    );
+    assert_eq!(last, "true:true");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",
