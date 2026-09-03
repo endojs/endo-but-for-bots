@@ -277,6 +277,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("regexp_match_method", &[Req::GcRoots], "lazy well-known boot method"),
     ("regexp_match_all_method", &[Req::GcRoots], "lazy well-known boot method"),
     ("regexp_search_method", &[Req::GcRoots], "lazy well-known boot method"),
+    ("regexp_split_method", &[Req::GcRoots], "lazy well-known boot method"),
     ("iterator_proto", &[Req::GcRoots], "boot anchor (llm Iterator global, 2026-08-28 rebase)"),
     ("iterator_wrapper_proto", &[Req::GcRoots], "boot anchor (%WrapForValidIteratorPrototype%)"),
     ("map_iterator_proto", &[Req::GcRoots], "boot anchor (llm Map/Set iterator protos)"),
