@@ -82,6 +82,30 @@ fn retained_function_and_closure_call_across_cranks() {
 }
 
 #[test]
+fn retained_function_call_and_apply_across_cranks() {
+    agrees(&[
+        "var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0",
+        "f.call(o, 2, 3)",
+    ]);
+    agrees(&[
+        "var f = function (a, b) { return this.k + a + b; }; var o = { k: 10 }; 0",
+        "f.apply(o, [4, 5])",
+    ]);
+}
+
+#[test]
+fn retained_call_and_apply_throws_reach_current_crank_handlers() {
+    agrees(&[
+        "var f = function () { throw new RangeError('call'); }; 0",
+        "var out; try { f.call(null); } catch (e) { out = e.name + ':' + e.message; } out",
+    ]);
+    agrees(&[
+        "var f = function () { throw new RangeError('apply'); }; 0",
+        "var out; try { f.apply(null, []); } catch (e) { out = e.name + ':' + e.message; } out",
+    ]);
+}
+
+#[test]
 fn an_aborting_crank_compares_and_stops() {
     let runs = dual_run_cranks(&[
         "var e = 0; e = new RangeError('later'); 0",

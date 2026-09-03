@@ -665,6 +665,21 @@ fn the_callability_cluster_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn apply_array_like_paths_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "apply-array-like",
+        &[
+            "var o={k:20};var f=function(x,k,v){return x+k+v+this.k};var t;",
+            "var o;var f;var t; \
+             t=f.apply(o,{length:3,0:1,1:2,2:3})+':'+f.call(o,1,2,3)+':'+ \
+             Math.max.apply(null,{length:3,0:2,1:9,2:4});t",
+            "var t;t",
+        ],
+    );
+    assert_eq!(last, "26:26:9");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",
