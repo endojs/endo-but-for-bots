@@ -10438,3 +10438,85 @@ button.btn-spinner::after {
     transition: opacity 100ms ease-in-out;
   }
 }
+/* Secret management Space */
+.secrets-space {
+  box-sizing: border-box;
+  height: 100%;
+  overflow: auto;
+  padding: 24px;
+}
+
+.secrets-header,
+.secret-summary {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.secrets-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.secrets-clipboard-status {
+  color: var(--muted-color, #555);
+}
+
+.secret-create-form,
+.secret-card,
+.secret-audit {
+  border: 1px solid var(--border-color, #d0d0d0);
+  border-radius: 8px;
+  margin-block: 16px;
+  padding: 16px;
+}
+
+.secret-create-form label,
+.secret-card form {
+  display: grid;
+  gap: 6px;
+  margin-block: 10px;
+}
+
+.secret-create-form input,
+.secret-card input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.secret-state {
+  border-radius: 999px;
+  padding: 2px 8px;
+  text-transform: uppercase;
+}
+
+.secret-revoked {
+  opacity: 0.72;
+}
+
+.secret-danger {
+  border-left: 3px solid var(--error-color, #b00020);
+  margin-block-start: 12px;
+  padding-inline-start: 12px;
+}
+
+.secret-danger summary {
+  cursor: pointer;
+}
+
+.secrets-error {
+  color: var(--error-color, #b00020);
+}
+
+.secret-audit table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.secret-audit th,
+.secret-audit td {
+  border-bottom: 1px solid var(--border-color, #d0d0d0);
+  padding: 6px;
+  text-align: left;
+}

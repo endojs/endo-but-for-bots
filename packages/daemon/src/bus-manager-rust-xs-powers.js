@@ -541,11 +541,21 @@ export const makeXsCryptoPowers = () => {
     return fromHex(sigHex);
   };
 
+  const sealSecret = () => {
+    throw new Error('Local encrypted secret backend is unavailable on XS');
+  };
+
+  const openSecret = () => {
+    throw new Error('Local encrypted secret backend is unavailable on XS');
+  };
+
   return harden({
     makeSha256,
     randomHex256,
     generateEd25519Keypair,
     ed25519Sign,
+    sealSecret,
+    openSecret,
   });
 };
 harden(makeXsCryptoPowers);

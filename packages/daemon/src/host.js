@@ -342,6 +342,8 @@ harden(normalizeHttpClientPolicy);
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
+ * @param {ReturnType<import('./secret-manager.js').makeSecretManager>} args.secretManager
+ * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
  */
 export const makeHostMaker = ({
   provide,
@@ -424,6 +426,8 @@ export const makeHostMaker = ({
     return undefined;
   },
   traceAggregator = undefined,
+  secretManager,
+  formulateSecretLookup,
 }) => {
   /**
    * @param {FormulaIdentifier} hostId
@@ -499,6 +503,7 @@ export const makeHostMaker = ({
       '@nets': networksDirectoryId,
       '@planes': planesDirectoryId,
       '@pins': pinsDirectoryId,
+      '@secrets': hostId,
       '@none': leastAuthorityId,
     };
     if (mailHubId !== undefined) {
@@ -517,6 +522,19 @@ export const makeHostMaker = ({
       getNetworkAddresses,
       getContentSources,
     );
+    const secretDirectory = secretManager.makeHostDirectory({
+      bindGrant: async (grantId, name) => {
+        await null;
+        if (!(await directory.has('secrets'))) {
+          await directory.makeDirectory(['secrets']);
+        }
+        await formulateSecretLookup(
+          hostId,
+          /** @type {NamePath} */ (['@secrets', 'use', grantId]),
+          id => directory.storeIdentifier(['secrets', name], id),
+        );
+      },
+    });
     const mailbox = await makeMailbox({
       petStore: specialStore,
       agentNodeNumber,
@@ -2260,13 +2278,13 @@ export const makeHostMaker = ({
 
     const { reverseIdentify } = specialStore;
     const {
-      has,
+      has: directoryHas,
       identify,
-      lookup,
-      maybeLookup,
+      lookup: directoryLookup,
+      maybeLookup: directoryMaybeLookup,
       locate,
       reverseLocate,
-      list,
+      list: directoryList,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -2287,6 +2305,46 @@ export const makeHostMaker = ({
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
     } = directory;
+
+    /** @type {EndoHost['has']} */
+    const has = async (...petNamePath) => {
+      if (petNamePath[0] === '@secrets') {
+        if (petNamePath.length === 1) return true;
+        return E(secretDirectory).has(petNamePath[1]);
+      }
+      return directoryHas(...petNamePath);
+    };
+
+    /** @type {EndoHost['lookup']} */
+    const lookup = petNameOrPath => {
+      const path = namePathFrom(petNameOrPath);
+      if (path[0] === '@secrets') {
+        if (path.length === 1) return Promise.resolve(secretDirectory);
+        return E(secretDirectory).lookup(path.slice(1));
+      }
+      return directoryLookup(petNameOrPath);
+    };
+
+    /** @type {EndoHost['maybeLookup']} */
+    const maybeLookup = petNameOrPath => {
+      const path = namePathFrom(petNameOrPath);
+      if (path[0] === '@secrets') {
+        if (path.length === 1) return Promise.resolve(secretDirectory);
+        return E(secretDirectory)
+          .lookup(path.slice(1))
+          .catch(() => undefined);
+      }
+      return directoryMaybeLookup(petNameOrPath);
+    };
+
+    /** @type {EndoHost['list']} */
+    const list = async (...petNamePath) => {
+      if (petNamePath[0] === '@secrets') {
+        if (petNamePath.length !== 1) throw new TypeError('Unknown path');
+        return /** @type {Promise<Name[]>} */ (E(secretDirectory).list());
+      }
+      return directoryList(...petNamePath);
+    };
 
     const makeDirectory = async petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);
