@@ -19080,12 +19080,12 @@ impl Interp {
             .generators
             .get(&gen)
             .map(|g| g.state)
-            .ok_or(Halt::Unsupported("generator:not-a-generator"))?;
+            .ok_or_else(|| self.catchable_type_error())?;
         match state {
             GeneratorState::Executing => {
-                // Re-entrant resume of a running generator: `TypeError`
-                // ("generator is running") in XS — a named skip for now.
-                return Err(Halt::Unsupported("generator:already-running"));
+                // Re-entrant resume of a running generator is an ordinary
+                // catchable `TypeError` ("generator is running" in XS).
+                return Err(self.catchable_type_error());
             }
             GeneratorState::Completed => return self.generator_done_result(status, sent),
             GeneratorState::SuspendedStart => {
@@ -19285,6 +19285,17 @@ impl Interp {
                 reject,
             });
         self.kick_async_generator(code, gen)?;
+        Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
+    }
+
+    /// Return the rejected promise required when an AsyncGenerator prototype
+    /// method is borrowed onto a receiver without `[[AsyncGeneratorState]]`.
+    /// Unlike the synchronous Generator methods, this validation failure does
+    /// not throw from the call itself.
+    fn reject_async_generator_brand(&mut self) -> Result<Slot, Halt> {
+        let (promise, _resolve, reject) = self.new_promise_capability();
+        let error = self.build_error("TypeError", 0, 0);
+        self.reject_via_function(reject, error)?;
         Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
     }
 
@@ -34143,7 +34154,7 @@ impl Interp {
                 // Set kind maps entries→2, keys→0, values→1.
                 match self.collections[&inst].kind {
                     CollKind::Map | CollKind::Set => {}
-                    _ => return Err(Halt::Unsupported("collection-iterator:weak")),
+                    _ => return Err(self.catchable_type_error()),
                 }
                 let iter_kind = match m {
                     NativeMethod::CollKeys => 5u8,
@@ -34161,7 +34172,7 @@ impl Interp {
                 };
                 match self.collections[&inst].kind {
                     CollKind::Map | CollKind::Set => {}
-                    _ => return Err(Halt::Unsupported("collection-clear:weak")),
+                    _ => return Err(self.catchable_type_error()),
                 }
                 if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
                     return Err(self.catchable_type_error());
@@ -34326,48 +34337,51 @@ impl Interp {
             }
             // `%GeneratorPrototype%.next/return/throw` (`fx_Generator_prototype_
             // aux`): resume the suspended body and return `{value, done}`. A
-            // non-generator receiver is a `TypeError` in XS — an honest skip.
+            // non-generator receiver is a catchable `TypeError`.
             NativeMethod::GeneratorNext => {
                 let gen = match this.value {
                     Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("generator:next-non-generator")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Next)?
             }
             NativeMethod::GeneratorReturn => {
                 let gen = match this.value {
                     Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("generator:return-non-generator")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Return)?
             }
             NativeMethod::GeneratorThrow => {
                 let gen = match this.value {
                     Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("generator:throw-non-generator")),
+                    _ => return Err(self.catchable_type_error()),
                 };
                 self.resume_generator(code, gen, arg0, GenStatus::Throw)?
             }
             NativeMethod::AsyncGeneratorNext => {
-                let gen = match this.value {
-                    Payload::Reference(r) if self.async_generators.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("async-generator:next-non-generator")),
-                };
-                self.enqueue_async_generator(code, gen, arg0, GenStatus::Next)?
+                match this.value {
+                    Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                        self.enqueue_async_generator(code, r, arg0, GenStatus::Next)?
+                    }
+                    _ => self.reject_async_generator_brand()?,
+                }
             }
             NativeMethod::AsyncGeneratorReturn => {
-                let gen = match this.value {
-                    Payload::Reference(r) if self.async_generators.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("async-generator:return-non-generator")),
-                };
-                self.enqueue_async_generator(code, gen, arg0, GenStatus::Return)?
+                match this.value {
+                    Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                        self.enqueue_async_generator(code, r, arg0, GenStatus::Return)?
+                    }
+                    _ => self.reject_async_generator_brand()?,
+                }
             }
             NativeMethod::AsyncGeneratorThrow => {
-                let gen = match this.value {
-                    Payload::Reference(r) if self.async_generators.contains_key(&r) => r,
-                    _ => return Err(Halt::Unsupported("async-generator:throw-non-generator")),
-                };
-                self.enqueue_async_generator(code, gen, arg0, GenStatus::Throw)?
+                match this.value {
+                    Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                        self.enqueue_async_generator(code, r, arg0, GenStatus::Throw)?
+                    }
+                    _ => self.reject_async_generator_brand()?,
+                }
             }
             NativeMethod::AsyncIteratorIdentity => this,
             // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
@@ -38544,7 +38558,7 @@ impl Interp {
         let is_set = match self.collections[&inst].kind {
             CollKind::Map => false,
             CollKind::Set => true,
-            _ => return Err(Halt::Unsupported("collection-forEach:weak")),
+            _ => return Err(self.catchable_type_error()),
         };
         let callback = self
             .stack
