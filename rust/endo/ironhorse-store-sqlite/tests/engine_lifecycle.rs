@@ -173,6 +173,20 @@ fn strings_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "seed-growseed-grow");
 }
 
+#[test]
+fn unicode_case_results_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "unicode-case",
+        &[
+            "s = 'A\\u03A3 Stra\\u00DFe \\u0130'; lo = s.toLowerCase(); lo",
+            "up = lo.toUpperCase(); up",
+            "up.length + ':' + up.charCodeAt(1) + ':' + up.indexOf('SS') + ':' + \
+             up.charCodeAt(up.length - 1)",
+        ],
+    );
+    assert_eq!(last, "13:931:7:775");
+}
+
 /// Stateful RegExp matching persists a UTF-16 `lastIndex` while its matcher
 /// resumes over XS-style CESU-8, including an astral code point that spans two
 /// code units. The final crank also covers non-ASCII regexp splitting after a
