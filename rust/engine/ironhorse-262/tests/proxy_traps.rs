@@ -144,6 +144,19 @@ fn own_keys_trap_and_object_keys() {
     );
 }
 
+#[test]
+fn array_is_array_transparently_unwraps_proxies() {
+    for source in [
+        "Array.isArray(new Proxy([],{}))",
+        "Array.isArray(new Proxy(new Proxy([],{}),{}))",
+        "Array.isArray(new Proxy({},{}))",
+        "var hits=0;var p=new Proxy([],{get:function(){hits++}});Array.isArray(p)+':'+hits",
+        "var r=Proxy.revocable([],{});r.revoke();try{Array.isArray(r.proxy);false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+}
+
 // -------------------------------------------------------------------------
 // §3  Prototype and extensibility traps.
 // -------------------------------------------------------------------------
