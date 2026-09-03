@@ -80,8 +80,18 @@ fn abrupt_index_reads_consume_the_current_cursor() {
 }
 
 #[test]
+fn reentrant_index_reads_preserve_nested_advancement() {
+    let source = "var nested,i,source={length:2,1:'b'};Object.defineProperty(source,'0',{get:function(){nested=i.next().value;return'a'}});i=Array.prototype.values.call(source);var first=i.next().value;first+':'+nested+':'+i.next().done";
+    let run = dual_run(source).expect("the pinned XS oracle must start");
+    assert_eq!(run.agreement, Agreement::IronhorseOnlyComplete, "{run:?}");
+    assert_eq!(run.ironhorse_result, "a:b:true", "{run:?}");
+}
+
+#[test]
 fn generic_iterator_uses_the_pinned_u32_length_profile() {
     agrees("Array.prototype.keys.call({length:4294967297}).next().done");
+    agrees("var r=Array.prototype.values.call({length:4294967297,0:7}).next();r.done+':'+r.value");
+    agrees("(function(){arguments.length=4294967297;return Array.prototype.keys.call(arguments).next().done})(1)");
 }
 
 #[test]
@@ -98,6 +108,10 @@ fn generic_iterator_advancement_is_computron_exact() {
         "var p=new Proxy({length:1},{get:function(t,k,r){return Reflect.get(t,k,r)}});Array.prototype.keys.call(p).next().value",
         "var p=new Proxy({length:1,0:7},{get:function(t,k,r){return Reflect.get(t,k,r)}});Array.prototype.values.call(p).next().value",
         "var p=new Proxy({length:1,0:7},{get:function(t,k,r){return Reflect.get(t,k,r)}});Array.prototype.entries.call(p).next().value.join(':')",
+        "var p=new Proxy(new Proxy({length:1},{}),{});Array.prototype.keys.call(p).next().value",
+        "var p=new Proxy(Object('a'),{});Array.prototype.values.call(p).next().value",
+        "var p=new Proxy({length:1,0:7},{});Array.prototype.values.call(p).next().value",
+        "var p=new Proxy({length:1},{});Array.prototype.keys.call(p).next().value",
     ] {
         agrees_exact(source);
     }
