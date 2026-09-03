@@ -739,6 +739,19 @@ fn exotic_object_spread_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn global_accessor_bindings_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "global-accessor-bindings",
+        &[
+            "var hidden=1;Object.defineProperty(this,'x',{configurable:true,get:function(){return hidden},set:function(v){hidden=v}});x",
+            "x=7;x",
+            "hidden+':'+x",
+        ],
+    );
+    assert_eq!(last, "7:7");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",
