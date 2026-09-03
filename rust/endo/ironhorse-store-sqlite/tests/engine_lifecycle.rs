@@ -166,11 +166,11 @@ fn builtin_brand_errors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "builtin-brand-errors",
         &[
-            "var weak=new WeakMap();var iterator=(function*(){yield 1})();iterator.next();",
-            "var weak;var iterator;var n=0;try{Map.prototype.clear.call(weak)}catch(e){n+=e instanceof TypeError}try{Object.getPrototypeOf(iterator).next.call({})}catch(e){n+=e instanceof TypeError}n",
+            "var weak=new WeakMap();var iterator=(function*(){yield 1})();iterator.next();var mapClear=Map.prototype.clear;var proxyClear=new Proxy(mapClear,{});var set=new Set([1]);",
+            "var weak;var iterator;var mapClear;var proxyClear;var set;var n=0;try{mapClear.call(weak)}catch(e){n+=e instanceof TypeError}try{Object.getPrototypeOf(iterator).next.call({})}catch(e){n+=e instanceof TypeError}try{mapClear.call(set)}catch(e){n+=e instanceof TypeError}try{proxyClear.apply(set,[])}catch(e){n+=e instanceof TypeError}n+':'+set.size",
         ],
     );
-    assert_eq!(last, "2");
+    assert_eq!(last, "4:1");
 }
 
 /// String state: chunk-arena content (UTF-16 payloads) round-trips,
@@ -774,6 +774,19 @@ fn generic_array_iterators_survive_sqlite_sleep_cycles() {
         ],
     );
     assert_eq!(last, "az:true");
+}
+
+#[test]
+fn abrupt_array_iterator_cursor_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "abrupt-array-iterator-cursor",
+        &[
+            "var calls=0;var source={length:2,get 0(){calls++;throw 1},1:'b'};var iterator=Array.prototype.values.call(source);",
+            "var calls;var iterator;try{iterator.next()}catch(e){}calls",
+            "var calls;var iterator;iterator.next().value+':'+calls",
+        ],
+    );
+    assert_eq!(last, "b:1");
 }
 
 #[test]

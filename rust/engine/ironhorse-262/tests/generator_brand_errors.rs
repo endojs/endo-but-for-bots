@@ -38,3 +38,23 @@ fn async_generator_methods_reject_for_incompatible_receivers() {
     assert!(run.run.result_agrees, "{:?}", run.run);
     assert_eq!(run.ironhorse_signal.as_deref(), Some("ntruertruettrue"));
 }
+
+#[test]
+fn async_generator_brand_rejections_include_the_reject_call_metering() {
+    for method in ["next", "return", "throw"] {
+        let source = format!(
+            "var g;Object.getPrototypeOf(async function*(){{}}()).{method}.call({{}})\
+             .then(undefined,function(e){{g=e instanceof TypeError}})"
+        );
+        let run = dual_run_async(&source, "g").expect("the XS oracle machine must start");
+        assert_eq!(run.run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+        assert_eq!(run.ironhorse_signal.as_deref(), Some("true"), "{source}");
+        assert!(
+            run.run.computrons_agree,
+            "{source}: oracle={} ironhorse={} delta={}",
+            run.run.oracle_computrons,
+            run.run.ironhorse_computrons,
+            run.run.ironhorse_computrons as i64 - run.run.oracle_computrons as i64,
+        );
+    }
+}
