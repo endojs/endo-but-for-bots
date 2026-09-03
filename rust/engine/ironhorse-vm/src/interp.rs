@@ -20563,13 +20563,15 @@ impl Interp {
             // completion/abort value stringifies as `name` or `name: message`
             // (XS's `Error.prototype.toString`), not a primitive. `has_target`
             // is immaterial — an Error called as a function constructs too.
-            Native::Error => self.build_error("Error", base, argc),
-            Native::EvalError => self.build_error("EvalError", base, argc),
-            Native::RangeError => self.build_error("RangeError", base, argc),
-            Native::ReferenceError => self.build_error("ReferenceError", base, argc),
-            Native::SyntaxError => self.build_error("SyntaxError", base, argc),
-            Native::TypeError => self.build_error("TypeError", base, argc),
-            Native::URIError => self.build_error("URIError", base, argc),
+            Native::Error => self.build_native_error(code, "Error", base, argc)?,
+            Native::EvalError => self.build_native_error(code, "EvalError", base, argc)?,
+            Native::RangeError => self.build_native_error(code, "RangeError", base, argc)?,
+            Native::ReferenceError => {
+                self.build_native_error(code, "ReferenceError", base, argc)?
+            }
+            Native::SyntaxError => self.build_native_error(code, "SyntaxError", base, argc)?,
+            Native::TypeError => self.build_native_error(code, "TypeError", base, argc)?,
+            Native::URIError => self.build_native_error(code, "URIError", base, argc)?,
             // `new AggregateError(errors, message)` (`fx_AggregateError`):
             // the base error (name "AggregateError", message from arg **1**),
             // plus an own `errors` Array built by iterating arg 0.
@@ -28287,6 +28289,98 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(inst))
     }
 
+    /// Construct an Error-family value from an observable native call.
+    /// Unlike the internal-error path above, the public constructors perform
+    /// `ToString(message)`, `HasProperty(options, "cause")`, and
+    /// `Get(options, "cause")` through the ordinary call/MOP seams so guest
+    /// accessors and proxies run in specification order.
+    fn build_native_error(
+        &mut self,
+        code: &[u8],
+        name: &'static str,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        self.meter.tick_builtin();
+        let inst = self.new_object();
+        self.meter.tick_raw(ERROR_CONSTRUCT_EXTRA);
+        if let Some(proto) = self
+            .intrinsics
+            .get(name)
+            .and_then(|&constructor| self.prototype_of(constructor))
+        {
+            self.slots.get_mut(inst).value = Payload::Reference(proto);
+        }
+
+        let message_units = if argc >= 1 {
+            let argument = self
+                .stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            if argument.kind == Kind::Undefined {
+                None
+            } else {
+                let units = self.to_string_units(code, argument)?;
+                self.meter.tick_raw(ERROR_MESSAGE_METERING);
+                Some(units)
+            }
+        } else {
+            None
+        };
+        self.error_data.insert(
+            inst,
+            ErrorInfo {
+                name,
+                message: message_units
+                    .as_ref()
+                    .map(|units| String::from_utf16_lossy(units)),
+                frames: self.capture_error_frames(),
+            },
+        );
+        if let Some(units) = message_units {
+            let message_id = self.intern_key_unmetered("message");
+            let offset = self.chunks.alloc(&units_to_be16(&units));
+            self.set_own_unmetered_with_flag(
+                inst,
+                message_id,
+                Slot::of(Kind::String, Payload::String(offset)),
+                XS_DONT_ENUM_FLAG,
+            );
+        }
+
+        if argc >= 2 {
+            let options = self
+                .stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            self.install_error_cause(code, inst, options)?;
+        }
+        Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    /// `InstallErrorCause(O, options)` for an already-created Error object.
+    /// Primitive options are ignored. Object options use the full MOP so an
+    /// inherited cause, accessor, or Proxy trap is observable.
+    fn install_error_cause(
+        &mut self,
+        code: &[u8],
+        error: crate::value::SlotIndex,
+        options: Slot,
+    ) -> Result<(), Halt> {
+        let options_ref = match options.value {
+            Payload::Reference(options_ref) if options.kind == Kind::Reference => options_ref,
+            _ => return Ok(()),
+        };
+        let cause_id = self.intern_key_unmetered("cause");
+        if self.mop_has(code, options_ref, cause_id)? {
+            let cause = self.mop_get(code, options_ref, cause_id, options)?;
+            self.set_own_unmetered_with_flag(error, cause_id, cause, XS_DONT_ENUM_FLAG);
+        }
+        Ok(())
+    }
+
     /// An **engine-internal** error carrying XS's descriptive message text
     /// (the `mxRunDebug`/`mxRunDebugID` diagnostics the pinned oracle emits,
     /// e.g. `"get f: undefined variable"`). Built exactly like
@@ -28415,7 +28509,7 @@ impl Interp {
         {
             self.slots.get_mut(inst).value = Payload::Reference(proto);
         }
-        let message: Option<String> = if argc >= 2 {
+        let message_units: Option<Vec<u16>> = if argc >= 2 {
             let a = self
                 .stack
                 .get(base + 5)
@@ -28424,9 +28518,9 @@ impl Interp {
             if a.kind == Kind::Undefined {
                 None
             } else {
-                let text = self.value_to_string(code, a)?;
+                let units = self.to_string_units(code, a)?;
                 self.meter.tick_raw(ERROR_MESSAGE_METERING);
-                Some(text)
+                Some(units)
             }
         } else {
             None
@@ -28435,15 +28529,17 @@ impl Interp {
             inst,
             ErrorInfo {
                 name: "AggregateError",
-                message: message.clone(),
+                message: message_units
+                    .as_ref()
+                    .map(|units| String::from_utf16_lossy(units)),
                 frames: self.capture_error_frames(),
             },
         );
-        if let Some(text) = message {
+        if let Some(units) = message_units {
             // Interned, not looked up — the machine-global key rule
             // `build_error` documents.
             let mid = self.intern_key_unmetered("message");
-            let off = self.alloc_str_text(text.as_bytes());
+            let off = self.chunks.alloc(&units_to_be16(&units));
             self.set_own_unmetered_with_flag(
                 inst,
                 mid,
@@ -28457,14 +28553,7 @@ impl Interp {
                 .get(base + 6)
                 .copied()
                 .unwrap_or_else(Slot::undefined);
-            if let (Payload::Reference(options), Some(&cause_id)) =
-                (options.value, self.symbol_ids.get("cause"))
-            {
-                if self.instance_has(options, cause_id).0 {
-                    let cause = self.instance_get(options, cause_id);
-                    self.set_own_unmetered_with_flag(inst, cause_id, cause, XS_DONT_ENUM_FLAG);
-                }
-            }
+            self.install_error_cause(code, inst, options)?;
         }
         let err_elems = self.aggregate_error_elements(code, errors_slot)?;
         // The `errors` Array (`fxNewArrayInstance` + the copied elements +

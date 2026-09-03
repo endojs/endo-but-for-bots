@@ -696,6 +696,21 @@ fn aggregate_error_iterables_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn observable_error_arguments_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "observable-error-arguments",
+        &[
+            "var message={toString:function(){return 'boom'}}; \
+             var options={get cause(){return {code:17}}};var error;",
+            "var message;var options;var error; \
+             error=new TypeError(message,options);error.message+':'+error.cause.code",
+            "var error;error.name+':'+error.message+':'+error.cause.code",
+        ],
+    );
+    assert_eq!(last, "TypeError:boom:17");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",
