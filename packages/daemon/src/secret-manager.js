@@ -83,6 +83,7 @@ const decodeSecret = bytesBase64 => {
  * @property {() => SecretRecord[]} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
+ * @property {(secretId: string) => void} deleteSecret
  * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
  */
@@ -168,8 +169,6 @@ export const makeSecretManager = ({
 
   /** @type {Map<string, import('./types.js').SecretBlob>} */
   const blobs = new Map();
-  /** @type {Map<string, import('./types.js').SecretAdmin>} */
-  const admins = new Map();
   /** @type {Map<string, Promise<unknown>>} */
   const mutationTails = new Map();
 
@@ -264,12 +263,14 @@ export const makeSecretManager = ({
     return blob;
   };
 
-  /** @param {string} secretId */
-  const provideAdmin = secretId => {
-    const existing = admins.get(secretId);
-    if (existing !== undefined) return existing;
+  /**
+   * @param {string} secretId
+   * @param {() => Promise<Array<{ grantId: string, path: string[] }>>} listKnownGrantPaths
+   * @param {(entries: Array<{ grantId: string, path: string[] }>) => Promise<void>} removeKnownGrantPaths
+   */
+  const makeAdmin = (secretId, listKnownGrantPaths, removeKnownGrantPaths) => {
     requireRecord(secretId);
-    const admin = makeExo(`SecretAdmin ${secretId}`, SecretAdminInterface, {
+    return makeExo(`SecretAdmin ${secretId}`, SecretAdminInterface, {
       getSummary: async () => summaryFor(requireRecord(secretId)),
       replaceBase64: bytesBase64 =>
         serializeMutation(secretId, async () => {
@@ -388,21 +389,52 @@ export const makeSecretManager = ({
             throw fixedError('BACKEND_CLEANUP_FAILED');
           }
         }),
+      delete: () =>
+        serializeMutation(secretId, async () => {
+          const before = requireRecord(secretId);
+          if (before.state !== 'revoked') {
+            throw fixedError('NOT_REVOKED');
+          }
+          const operationId = await randomHex256();
+          await audit(
+            secretId,
+            'delete',
+            'attempted',
+            before.generation,
+            operationId,
+          );
+          try {
+            // Revocation backends are required to be idempotent. Retrying here
+            // prevents deletion from discarding the only cleanup reference
+            // after an earlier backend-revocation failure.
+            await backend.revoke(operationId, before.backendRef);
+            const paths = (await listKnownGrantPaths()).filter(
+              ({ grantId }) =>
+                persistence.getSecretIdForGrant(grantId) === secretId,
+            );
+            await removeKnownGrantPaths(paths);
+            persistence.deleteSecret(secretId);
+            await audit(
+              secretId,
+              'delete',
+              'succeeded',
+              before.generation,
+              operationId,
+            );
+          } catch {
+            await audit(
+              secretId,
+              'delete',
+              'failed',
+              before.generation,
+              operationId,
+              { reasonCode: 'DELETE_FAILED' },
+            );
+            throw fixedError('DELETE_FAILED');
+          }
+        }),
     });
-    admins.set(secretId, admin);
-    return admin;
   };
-
-  const catalog = makeExo('SecretCatalog', SecretCatalogInterface, {
-    list: async () =>
-      harden(
-        persistence.listSecretRecords().map(record => ({
-          secretId: record.secretId,
-          summary: summaryFor(record),
-          admin: provideAdmin(record.secretId),
-        })),
-      ),
-  });
 
   const auditReader = makeExo('SecretAuditReader', SecretAuditReaderInterface, {
     list: async (limit = 100n) => {
@@ -414,8 +446,58 @@ export const makeSecretManager = ({
   /**
    * @param {object} hostPowers
    * @param {(grantId: string, name: string) => Promise<void>} hostPowers.bindGrant
+   * @param {() => Promise<Array<{ grantId: string, path: string[] }>>} hostPowers.listKnownGrantPaths
+   * @param {(entries: Array<{ grantId: string, path: string[] }>) => Promise<void>} hostPowers.removeKnownGrantPaths
    */
-  const makeHostDirectory = ({ bindGrant }) => {
+  const makeHostDirectory = ({
+    bindGrant,
+    listKnownGrantPaths,
+    removeKnownGrantPaths,
+  }) => {
+    /** @type {Map<string, import('./types.js').SecretAdmin>} */
+    const admins = new Map();
+
+    /** @param {string} secretId */
+    const provideAdmin = secretId => {
+      const existing = admins.get(secretId);
+      if (existing !== undefined) return existing;
+      const admin = makeAdmin(
+        secretId,
+        listKnownGrantPaths,
+        removeKnownGrantPaths,
+      );
+      admins.set(secretId, admin);
+      return admin;
+    };
+
+    const catalog = makeExo('SecretCatalog', SecretCatalogInterface, {
+      list: async () => {
+        const knownPaths = await listKnownGrantPaths();
+        /** @type {Map<string, string[][]>} */
+        const pathsBySecretId = new Map();
+        for (const { grantId, path } of knownPaths) {
+          const secretId = persistence.getSecretIdForGrant(grantId);
+          if (secretId !== undefined) {
+            const paths = pathsBySecretId.get(secretId);
+            if (paths === undefined) {
+              pathsBySecretId.set(secretId, [path]);
+            } else {
+              paths.push(path);
+            }
+          }
+        }
+        return harden(
+          persistence.listSecretRecords().map(record => ({
+            secretId: record.secretId,
+            summary: summaryFor(record),
+            petNamePaths: (pathsBySecretId.get(record.secretId) || []).sort(
+              (left, right) => left.join('/').localeCompare(right.join('/')),
+            ),
+            admin: provideAdmin(record.secretId),
+          })),
+        );
+      },
+    });
     const importer = makeExo('SecretImporter', SecretImporterInterface, {
       createBase64: async (name, description, bytesBase64) => {
         assertPetName(name);

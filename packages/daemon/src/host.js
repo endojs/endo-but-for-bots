@@ -522,7 +522,70 @@ export const makeHostMaker = ({
       getNetworkAddresses,
       getContentSources,
     );
-    const secretDirectory = secretManager.makeHostDirectory({
+    /**
+     * Inspect one inventory path without resolving its value.
+     * @param {Name[]} path
+     * @returns {Promise<{ grantId: string, path: Name[] } | undefined>}
+     */
+    const identifySecretGrantPath = async path => {
+      const id = await E(directory).identify(...path);
+      if (id === undefined) return undefined;
+      try {
+        const formula = await getFormulaForId(
+          /** @type {FormulaIdentifier} */ (id),
+        );
+        if (
+          formula.type === 'lookup' &&
+          formula.hub === hostId &&
+          formula.path.length === 3 &&
+          formula.path[0] === '@secrets' &&
+          formula.path[1] === 'use'
+        ) {
+          return harden({ grantId: formula.path[2], path: [...path] });
+        }
+      } catch {
+        // A foreign or collected formula is not a locally known secret grant.
+      }
+      return undefined;
+    };
+
+    const listKnownGrantPaths = async () => {
+      await null;
+      const rootNames = (await E(directory).list()).filter(
+        name => !name.startsWith('@'),
+      );
+      /** @type {Name[][]} */
+      const paths = rootNames.map(name => [name]);
+      if (await E(directory).has('secrets')) {
+        try {
+          const secretNames = await E(directory).list('secrets');
+          paths.push(
+            ...secretNames.map(name => namePathFrom(['secrets', name])),
+          );
+        } catch {
+          // `secrets` is an ordinary mutable pet name and may no longer name a
+          // directory. Direct host aliases remain discoverable in that case.
+        }
+      }
+      const entries = await Promise.all(paths.map(identifySecretGrantPath));
+      return harden(entries.filter(entry => entry !== undefined));
+    };
+
+    const removeKnownGrantPaths = async entries => {
+      await null;
+      for (const entry of entries) {
+        // Re-check immediately before removal so a concurrent rename or
+        // overwrite cannot turn catalog cleanup into deletion of another cap.
+        // eslint-disable-next-line no-await-in-loop
+        const current = await identifySecretGrantPath(entry.path);
+        if (current?.grantId === entry.grantId) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(directory).remove(...entry.path);
+        }
+      }
+    };
+
+    const secretManagerDirectory = secretManager.makeHostDirectory({
       bindGrant: async (grantId, name) => {
         await null;
         if (!(await directory.has('secrets'))) {
@@ -534,6 +597,8 @@ export const makeHostMaker = ({
           id => directory.storeIdentifier(['secrets', name], id),
         );
       },
+      listKnownGrantPaths,
+      removeKnownGrantPaths,
     });
     const mailbox = await makeMailbox({
       petStore: specialStore,
@@ -2310,7 +2375,7 @@ export const makeHostMaker = ({
     const has = async (...petNamePath) => {
       if (petNamePath[0] === '@secrets') {
         if (petNamePath.length === 1) return true;
-        return E(secretDirectory).has(petNamePath[1]);
+        return E(secretManagerDirectory).has(petNamePath[1]);
       }
       return directoryHas(...petNamePath);
     };
@@ -2319,8 +2384,8 @@ export const makeHostMaker = ({
     const lookup = petNameOrPath => {
       const path = namePathFrom(petNameOrPath);
       if (path[0] === '@secrets') {
-        if (path.length === 1) return Promise.resolve(secretDirectory);
-        return E(secretDirectory).lookup(path.slice(1));
+        if (path.length === 1) return Promise.resolve(secretManagerDirectory);
+        return E(secretManagerDirectory).lookup(path.slice(1));
       }
       return directoryLookup(petNameOrPath);
     };
@@ -2329,8 +2394,8 @@ export const makeHostMaker = ({
     const maybeLookup = petNameOrPath => {
       const path = namePathFrom(petNameOrPath);
       if (path[0] === '@secrets') {
-        if (path.length === 1) return Promise.resolve(secretDirectory);
-        return E(secretDirectory)
+        if (path.length === 1) return Promise.resolve(secretManagerDirectory);
+        return E(secretManagerDirectory)
           .lookup(path.slice(1))
           .catch(() => undefined);
       }
@@ -2341,7 +2406,9 @@ export const makeHostMaker = ({
     const list = async (...petNamePath) => {
       if (petNamePath[0] === '@secrets') {
         if (petNamePath.length !== 1) throw new TypeError('Unknown path');
-        return /** @type {Promise<Name[]>} */ (E(secretDirectory).list());
+        return /** @type {Promise<Name[]>} */ (
+          E(secretManagerDirectory).list()
+        );
       }
       return directoryList(...petNamePath);
     };

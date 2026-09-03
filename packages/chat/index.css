@@ -10508,6 +10508,31 @@ button.btn-spinner::after {
   overflow-wrap: anywhere;
 }
 
+.secret-pet-names {
+  margin-block: 12px;
+}
+
+.secret-pet-names > span:first-child {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-block-end: 4px;
+}
+
+.secret-pet-names ul {
+  margin: 0;
+  padding-inline-start: 20px;
+}
+
+.secret-pet-names code {
+  overflow-wrap: anywhere;
+}
+
+.secret-path-missing {
+  color: var(--muted-color, #555);
+  font-style: italic;
+}
+
 .secret-state {
   border-radius: 999px;
   padding: 2px 8px;
@@ -10515,7 +10540,7 @@ button.btn-spinner::after {
 }
 
 .secret-revoked {
-  opacity: 0.72;
+  border-style: dashed;
 }
 
 .secret-danger {
@@ -10526,6 +10551,35 @@ button.btn-spinner::after {
 
 .secret-danger summary {
   cursor: pointer;
+}
+
+.secret-danger-sections {
+  display: grid;
+  gap: 16px;
+  margin-block-start: 12px;
+}
+
+.secret-danger-section {
+  border: 1px solid var(--border-color, #d0d0d0);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.secret-danger-section h3 {
+  margin-block: 0 8px;
+}
+
+.secret-danger-section p {
+  margin-block: 8px 12px;
+}
+
+.secret-revoke-section,
+.secret-delete-section {
+  border-color: var(--error-color, #b00020);
+}
+
+.secret-delete-section {
+  margin-block-start: 12px;
 }
 
 .secrets-error {

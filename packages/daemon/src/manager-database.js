@@ -46,6 +46,7 @@ import { q } from '@endo/errors';
  * @property {() => Array<{secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}>} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
+ * @property {(secretId: string) => void} deleteSecret
  * @property {(event: import('./types.js').SecretAuditEvent) => void} writeSecretAuditEvent
  * @property {(limit: number) => import('./types.js').SecretAuditEvent[]} listSecretAuditEvents
  */
@@ -317,6 +318,12 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtWriteSecretGrant = prepare(
     'INSERT OR REPLACE INTO secret_grant (grant_id, secret_id) VALUES (?, ?)',
+  );
+  const stmtDeleteSecretGrants = prepare(
+    'DELETE FROM secret_grant WHERE secret_id = ?',
+  );
+  const stmtDeleteSecretRecord = prepare(
+    'DELETE FROM secret_record WHERE secret_id = ?',
   );
   const stmtWriteSecretAudit = prepare(
     'INSERT INTO secret_audit_event (event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, grant_id, reason_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -687,6 +694,14 @@ export const makeDaemonDatabase = (config, options) => {
     stmtWriteSecretGrant.run(grantId, secretId);
   };
 
+  /** @param {string} secretId */
+  const deleteSecret = secretId => {
+    // Delete grants first so a crash cannot leave a grant pointing at a
+    // missing record. Retrying after either statement is safe.
+    stmtDeleteSecretGrants.run(secretId);
+    stmtDeleteSecretRecord.run(secretId);
+  };
+
   /** @param {import('./types.js').SecretAuditEvent} event */
   const writeSecretAuditEvent = event => {
     stmtWriteSecretAudit.run(
@@ -763,6 +778,7 @@ export const makeDaemonDatabase = (config, options) => {
     listSecretRecords,
     getSecretIdForGrant,
     writeSecretGrant,
+    deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
   });

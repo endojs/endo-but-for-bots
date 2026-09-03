@@ -1519,7 +1519,15 @@ test.serial(
     t.false(envelope.includes(new TextEncoder().encode(canary)));
 
     const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
+    await E(hostAfter).copy(['secrets', 'release'], ['release-alias']);
     const [entry] = await E(catalog).list();
+    t.deepEqual(entry.petNamePaths, [
+      ['release-alias'],
+      ['secrets', 'release'],
+    ]);
+    await t.throwsAsync(() => E(entry.admin).delete(), {
+      message: /Secret operation failed/,
+    });
     await E(entry.admin).revoke();
     await t.throwsAsync(() => E(delegated).readBase64(), {
       message: /Secret operation failed/,
@@ -1527,6 +1535,16 @@ test.serial(
     await t.throwsAsync(() => E(blobAfter).readBase64(), {
       message: /Secret operation failed/,
     });
+    await E(entry.admin).delete();
+    t.false(await E(hostAfter).has('secrets', 'release'));
+    t.false(await E(hostAfter).has('release-alias'));
+    t.deepEqual(await E(catalog).list(), []);
+    const audit = await E(hostAfter).lookup(['@secrets', 'audit']);
+    t.true(
+      (await E(audit).list()).some(
+        event => event.operation === 'delete' && event.outcome === 'succeeded',
+      ),
+    );
   },
 );
 
