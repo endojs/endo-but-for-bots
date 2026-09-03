@@ -1060,6 +1060,18 @@ fn array_buffer_slice_results_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn binary_data_expandos_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "binary-data-expandos",
+        &[
+            "var buffer=new ArrayBuffer(4);var view=new DataView(buffer);buffer[0]=7;view[1]=8;",
+            "var buffer;var view;Object.prototype.hasOwnProperty.call(buffer,'0')+':'+buffer[0]+':'+Object.prototype.hasOwnProperty.call(view,'1')+':'+view[1]",
+        ],
+    );
+    assert_eq!(last, "true:7:true:8");
+}
+
+#[test]
 fn array_buffer_transfer_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "array-buffer-transfer",
