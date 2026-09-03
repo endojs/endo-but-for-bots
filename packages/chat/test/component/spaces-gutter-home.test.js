@@ -307,37 +307,40 @@ test.serial('setActivePath highlights the space at that path', async t => {
   t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
 });
 
-test.serial('setActivePath keeps the open space when two share a path', async t => {
-  const storedValues = new Map();
-  for (const id of ['1', '2']) {
-    storedValues.set(
-      `spaces/${id}`,
-      harden({
-        id,
-        name: `View ${id}`,
-        icon: '🧙',
-        profilePath: ['work-agent'],
-        mode: 'inbox',
-        scheme: 'auto',
-      }),
+test.serial(
+  'setActivePath keeps the open space when two share a path',
+  async t => {
+    const storedValues = new Map();
+    for (const id of ['1', '2']) {
+      storedValues.set(
+        `spaces/${id}`,
+        harden({
+          id,
+          name: `View ${id}`,
+          icon: '🧙',
+          profilePath: ['work-agent'],
+          mode: 'inbox',
+          scheme: 'auto',
+        }),
+      );
+    }
+
+    const { $container, gutter } = await setupGutter({ storedValues });
+
+    gutter.selectSpace('2');
+    await waitFor(
+      () => !!$container.querySelector('.space-item[data-space-id="2"].active'),
     );
-  }
 
-  const { $container, gutter } = await setupGutter({ storedValues });
-
-  gutter.selectSpace('2');
-  await waitFor(
-    () => !!$container.querySelector('.space-item[data-space-id="2"].active'),
-  );
-
-  // The path alone cannot say which of the two is open, so being told about the
-  // path the open space already has must leave the highlight where it is —
-  // deriving from the path would snap it to whichever space came first.
-  gutter.setActivePath(['work-agent']);
-  await tick(50);
-  t.truthy($container.querySelector('.space-item[data-space-id="2"].active'));
-  t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
-});
+    // The path alone cannot say which of the two is open, so being told about the
+    // path the open space already has must leave the highlight where it is —
+    // deriving from the path would snap it to whichever space came first.
+    gutter.setActivePath(['work-agent']);
+    await tick(50);
+    t.truthy($container.querySelector('.space-item[data-space-id="2"].active'));
+    t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
+  },
+);
 
 // ── Test 2: Right-click regular space shows both Edit and Delete ──
 
