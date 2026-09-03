@@ -48,7 +48,7 @@ fn constructor_statics_reject_invalid_calls_catchably() {
 fn string_builtins_expose_standard_name_and_length_metadata() {
     for source in [
         "String.fromCharCode.name+':'+String.fromCharCode.length+':'+String.fromCodePoint.name+':'+String.fromCodePoint.length",
-        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
+        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','normalize','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
         "String.prototype[Symbol.iterator].name+':'+String.prototype[Symbol.iterator].length",
     ] {
         agrees(source);
@@ -103,6 +103,35 @@ fn unicode_case_conversion_preserves_lone_surrogates() {
     for source in [
         "var s=String.fromCharCode(0xD800,65);var r=s.toLowerCase();r.charCodeAt(0)+':'+r.charCodeAt(1)",
         "var s=String.fromCharCode(97,0xDC00);var r=s.toUpperCase();r.charCodeAt(0)+':'+r.charCodeAt(1)",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn unicode_normalization_supports_all_forms_and_preserves_utf16() {
+    for source in [
+        "'e\\u0301'.normalize() === '\\u00E9'",
+        "'\\u00E9'.normalize('NFD').split('').map(function(c){return c.charCodeAt(0).toString(16)}).join(',')",
+        "'\\uFB03'.normalize('NFKC')",
+        "'\\u2460'.normalize('NFKD')",
+        "String.fromCodePoint(0x1D15E).normalize('NFD').split('').map(function(c){return c.charCodeAt(0).toString(16)}).join(',')",
+        "var s=String.fromCharCode(0xD800,0x65,0x301,0xDC00);var r=s.normalize();r.charCodeAt(0)+':'+r.charCodeAt(1)+':'+r.charCodeAt(2)",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn unicode_normalization_observes_coercion_order_and_errors() {
+    for source in [
+        "String.prototype.normalize.call({toString:function(){return 'e\\u0301'}})",
+        "var log=[];var r={toString:function(){log.push('this');return 'e\\u0301'}};var f={toString:function(){log.push('form');return 'NFC'}};String.prototype.normalize.call(r,f)+':'+log.join(',')",
+        "try { 'x'.normalize('nfc'); false } catch (e) { e instanceof RangeError }",
+        "try { 'x'.normalize(null); false } catch (e) { e instanceof RangeError }",
+        "try { 'x'.normalize(Symbol()); false } catch (e) { e instanceof TypeError }",
+        "var marker={};try{'x'.normalize({toString:function(){throw marker}});false}catch(e){e===marker}",
+        "try { String.prototype.normalize.call(null); false } catch (e) { e instanceof TypeError }",
     ] {
         agrees(source);
     }
