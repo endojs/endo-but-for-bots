@@ -54,6 +54,23 @@ fn native_errors_have_the_right_realm_surface() {
 }
 
 #[test]
+fn aggregate_error_consumes_general_iterables_in_specification_order() {
+    for source in [
+        "new AggregateError(function*(){yield 1;yield 2}()).errors.join(',')",
+        "new AggregateError('ab').errors.join(',')",
+        "var a=[];a.length=2;a[1]=3;var e=new AggregateError(a);e.errors.length+':'+String(e.errors[0])+':'+e.errors[1]",
+        "(function(a){a=9;return new AggregateError(arguments).errors[0]})(3)",
+        "var log=[];var source={n:0,[Symbol.iterator]:function(){log.push('i');return this},next:function(){log.push('n');return this.n++<1?{value:7,done:false}:{done:true}}};var message={toString:function(){log.push('m');return 'boom'}};var e=new AggregateError(source,message);e.message+':'+e.errors[0]+':'+log.join('')",
+        "var log=[];var a=[1,2];a[Symbol.iterator]=function(){log.push('i');return [8][Symbol.iterator]()};var e=new AggregateError(a);e.errors.join(',')+':'+log.join('')",
+        "var gets=0;var source={ [Symbol.iterator]:function(){var n=0;return {get next(){gets++;return function(){return n++<1?{value:6,done:false}:{done:true}}}}}};new AggregateError(source).errors[0]+':'+gets",
+        "var closed=0;var source={ [Symbol.iterator]:function(){return this},next:function(){throw 9},return:function(){closed++;return {done:true}}};var caught;try{new AggregateError(source)}catch(e){caught=e}String(caught)+':'+closed",
+        "try{new AggregateError({})}catch(e){e instanceof TypeError}",
+    ] {
+        assert_result_agrees(source);
+    }
+}
+
+#[test]
 fn object_to_primitive_drives_string_and_numeric_operations() {
     for source in [
         "var o = { valueOf() { return 4; } }; o + 3",
