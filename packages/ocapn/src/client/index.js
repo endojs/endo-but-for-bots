@@ -5,7 +5,7 @@
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
  * @import { SturdyRef } from './sturdyrefs.js'
- * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
+ * @import { Client, Connection, InternalSession, LocationId, Logger, MakeLocatorForSession, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -185,6 +185,16 @@ const makeSessionManager = () => {
  * @param {OcapnCodec} options.codec
  * @param {AnyNetwork | NetworkFactory} options.network
  * @param {NonceLocator} [options.locator]
+ * @param {MakeLocatorForSession} [options.makeLocatorForSession] - Optional
+ *   per-session locator factory. When provided, each established
+ *   session builds its own `NonceLocator` for *incoming*
+ *   `bootstrap.fetch` calls by invoking this factory with the
+ *   authenticated remote designator and a `abortSession` callback,
+ *   instead of sharing the single `locator`. This is the seam an
+ *   embedder uses to scope miss counters and rate limits to one
+ *   authenticated peer/connection: a session that abuses `fetch` can be
+ *   bounded or torn down without affecting any other peer's session.
+ *   Outgoing self-local `SturdyRef` resolution still uses `locator`.
  * @param {string} [options.debugLabel]
  * @param {boolean} [options.verbose]
  * @param {Map<string, any>} [options.giftTable]
@@ -202,6 +212,7 @@ export const makeOcapn = async ({
   codec,
   network: networkArg,
   locator = new Map(),
+  makeLocatorForSession = undefined,
   debugLabel = 'ocapn',
   verbose = false,
   giftTable = new Map(),
@@ -593,6 +604,28 @@ export const makeOcapn = async ({
   };
 
   const prepareOcapn = (connection, sessionId, peerLocation) => {
+    const endSession = () => {
+      const activeSession = sessionManager.getActiveSession(
+        locationToLocationId(peerLocation),
+      );
+      if (activeSession) {
+        sessionManager.endSession(activeSession);
+      }
+    };
+    // When the embedder supplies a per-session locator factory, this
+    // session's *incoming* `bootstrap.fetch` calls resolve against a
+    // freshly-built locator scoped to this authenticated peer, so miss
+    // counters and rate limits cannot leak across peers or sessions.
+    // Absent the factory, every session shares the one injected
+    // locator (the historical behavior).
+    const sessionSturdyRefTracker = makeLocatorForSession
+      ? makeSturdyRefTracker(
+          makeLocatorForSession({
+            remoteDesignator: peerLocation.designator,
+            abortSession: endSession,
+          }),
+        )
+      : sturdyRefTracker;
     return makeOcapnCore(
       logger,
       connection,
@@ -601,17 +634,10 @@ export const makeOcapn = async ({
       provideInternalSession,
       sessionManager.getActiveSession,
       sessionManager.getPeerPublicKeyForSessionId,
-      () => {
-        const activeSession = sessionManager.getActiveSession(
-          locationToLocationId(peerLocation),
-        );
-        if (activeSession) {
-          sessionManager.endSession(activeSession);
-        }
-      },
+      endSession,
       grantTracker,
       giftTable,
-      sturdyRefTracker,
+      sessionSturdyRefTracker,
       codec,
       cryptography,
       debugLabel,
