@@ -665,6 +665,27 @@ fn the_callability_cluster_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "general-iterable-collections",
+        &[
+            "var setSource={n:0,[Symbol.iterator]:function(){this.n=0;return this}, \
+             next:function(){return this.n<3?{value:++this.n,done:false}:{done:true}}}; \
+             var mapSource={n:0,[Symbol.iterator]:function(){this.n=0;return this}, \
+             next:function(){this.n++;return this.n<=2? \
+                 {value:[this.n,this.n*10],done:false}:{done:true}}};var s;var m;var t;",
+            "var setSource;var mapSource;var s;var m;var t; \
+             s=new Set(setSource);t=s.size+':'+s.has(2);t",
+            "var setSource;var mapSource;var s;var m;var t; \
+             m=new Map(mapSource);t=m.size+':'+m.get(2);t",
+            "var setSource;var mapSource;var s;var m;var t; \
+             t=s.has(3)+':'+m.get(1)+':'+m.get(2);t",
+        ],
+    );
+    assert_eq!(last, "true:10:20");
+}
+
+#[test]
 fn a_suspended_generator_survives_sqlite_sleep_cycles() {
     let last = carry_scenario(
         "carry-generators",
