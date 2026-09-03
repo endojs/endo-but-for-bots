@@ -708,7 +708,7 @@ flowchart TD
         dfsw[filesystem-watchers]
         dcsgc[daemon-content-store-gc]
         dpers[daemon-capability-persona]
-        dsecret[daemon-secret-manager<br/><i>IMPLEMENTED (LOCAL)</i>]
+        dsecret["daemon-secret-manager<br/><i>IMPLEMENTED (LOCAL)</i>"]
         dbank[daemon-capability-bank]
         icancel[inventory-cancel-and-liveness]
         dmkar[daemon-make-archive<br/><i>IN PROGRESS</i>]
