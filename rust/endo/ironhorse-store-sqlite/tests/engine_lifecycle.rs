@@ -711,6 +711,23 @@ fn iterator_from_wrappers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn array_of_results_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "array-of-results",
+        &[
+            "function C(n) { this.received = n; } \
+             custom = Array.of.call(C, 1, 2); dense = Array.of(4, 5); \
+             custom.received + ':' + dense.length",
+            "custom[1] = custom[1] + dense[0]; \
+             custom.received + ':' + custom[1] + ':' + dense[1]",
+            "Object.getOwnPropertyDescriptor(Array.of, 'name').value + ':' + \
+             custom.received + ':' + custom[1] + ':' + dense[1]",
+        ],
+    );
+    assert_eq!(last, "of:2:6:5");
+}
+
+#[test]
 fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
     // `%Function.prototype%` and the identity of its `@@hasInstance` method
     // are boot-rebuilt, while the lazily installed symbol property and a
