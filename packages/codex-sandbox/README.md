@@ -77,7 +77,7 @@ operator diagnostics should retain the transport it created in `start()`.
 `reportCleanupFailure` must write late teardown failures to operator-visible
 telemetry; they are also retained in the client's bounded `status()` result.
 
-Read [SECURITY.md](./SECURITY.md),
+Read [SECURITY-MODEL.md](./SECURITY-MODEL.md),
 [SANDBOX-CONTRACT.md](./SANDBOX-CONTRACT.md),
 [SUBSCRIPTION-AUTH.md](./SUBSCRIPTION-AUTH.md), and
 [MERGE-BLOCKERS.md](./MERGE-BLOCKERS.md) before enabling hosted sessions.
