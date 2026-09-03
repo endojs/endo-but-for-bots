@@ -43441,25 +43441,15 @@ impl Interp {
                     // `fxStringToIndex` success two extra code units.
                     self.meter.tick_code_n(2);
                     Some(Slot::of(Kind::At, Payload::At(crate::value::XS_NO_ID, idx)))
-                } else if canonical_numeric_index_string(&s).is_none()
-                    && !self.symbol_ids.contains_key(&s)
-                    && self.default_keys.contains(s.as_str())
-                {
-                    // A boot default-key name that the *program* never named as
-                    // a symbol (so `link_intrinsics` never linked its inherited
-                    // method under a known id): ironhorse cannot tell an absent-own
-                    // read of such a name from an inherited built-in it has not
-                    // modeled, so a computed read would risk a wrong `undefined`
-                    // (e.g. `o["hasOwnProperty"]` — inherited in XS, unlinked
-                    // here). Self-name rather than answer unsoundly. A name the
-                    // program *does* reference statically is a program symbol
-                    // (in `symbol_ids`) and resolves exactly as its `o.name`
-                    // static access already does; a genuinely-novel name
-                    // (absent from `default_keys`) can be no built-in property,
-                    // so its miss is a sound `undefined` — interned below.
-                    None
                 } else {
                     let id = self.intern_key(&s);
+                    // A runtime-computed name can be the first reference to a
+                    // standard global, method, or accessor. Complete the same
+                    // create-only lazy install used by reflective ToPropertyKey
+                    // operations before the following property opcode observes
+                    // the object. The installed-name floor preserves earlier
+                    // guest deletion and replacement.
+                    self.install_pending_intrinsics();
                     Some(Slot::of(Kind::At, Payload::At(id, 0)))
                 }
             }

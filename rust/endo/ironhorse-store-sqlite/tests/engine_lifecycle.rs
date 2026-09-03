@@ -207,6 +207,22 @@ fn object_properties_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "33");
 }
 
+/// A boot-default name first produced at runtime must install the inherited
+/// intrinsic before use, while a later deletion must remain deleted across
+/// repeated SQLite close/reopen boundaries.
+#[test]
+fn computed_intrinsic_names_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "computed-intrinsic-names",
+        &[
+            "var k='hasOwn'+'Property';var f={}[k];var t=f.call({x:1},'x');t",
+            "k='to'+'String';delete Object.prototype[k];t=7;t",
+            "t=typeof ({})[k];t",
+        ],
+    );
+    assert_eq!(last, "undefined");
+}
+
 /// Property deletion frees a slot: the free list crosses the store
 /// (order preserved) and a post-resume allocation reuses the freed
 /// record exactly as the uninterrupted machine's does — locked by the
