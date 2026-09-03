@@ -29265,37 +29265,35 @@ impl Interp {
     /// method reads inherited `name`/`message` properties and applies the
     /// shared string-hint primitive conversion, rather than consulting the
     /// native Error side table (the method is intentionally generic).
-    fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<String, Halt> {
+    fn error_to_string(&mut self, code: &[u8], this: Slot) -> Result<Vec<u16>, Halt> {
         let inst = match this.value {
-            Payload::Reference(inst) => inst,
+            Payload::Reference(inst) if this.kind == Kind::Reference => inst,
             _ => return Err(self.catchable_type_error()),
         };
-        let name_value = self
-            .symbol_ids
-            .get("name")
-            .map(|&id| self.instance_get(inst, id))
-            .unwrap_or_else(Slot::undefined);
-        let message_value = self
-            .symbol_ids
-            .get("message")
-            .map(|&id| self.instance_get(inst, id))
-            .unwrap_or_else(Slot::undefined);
+        let name_id = self.intern_key_unmetered("name");
+        let message_id = self.intern_key_unmetered("message");
+        let name_value = self.mop_get(code, inst, name_id, this)?;
         let name = if name_value.kind == Kind::Undefined {
-            "Error".to_string()
+            "Error".encode_utf16().collect()
         } else {
-            self.value_to_string(code, name_value)?
+            self.to_string_units(code, name_value)?
         };
+        let message_value = self.mop_get(code, inst, message_id, this)?;
         let message = if message_value.kind == Kind::Undefined {
-            String::new()
+            Vec::new()
         } else {
-            self.value_to_string(code, message_value)?
+            self.to_string_units(code, message_value)?
         };
         if name.is_empty() {
             Ok(message)
         } else if message.is_empty() {
             Ok(name)
         } else {
-            Ok(format!("{name}: {message}"))
+            let mut result = Vec::with_capacity(name.len() + message.len() + 2);
+            result.extend_from_slice(&name);
+            result.extend_from_slice(&[':' as u16, ' ' as u16]);
+            result.extend_from_slice(&message);
+            Ok(result)
         }
     }
 
@@ -31472,10 +31470,10 @@ impl Interp {
             }
             // `Error.prototype.toString`: `name` / `name: message`.
             NativeMethod::ErrorToString => {
-                let s = self.error_to_string(code, this)?;
+                let units = self.error_to_string(code, this)?;
                 self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);
-                self.meter.tick_chunk_new(s.len() as u64);
-                let off = self.alloc_str_text(s.as_bytes());
+                self.meter.tick_chunk_new(units.len() as u64);
+                let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
             // `<wrapper>.toString`: stringify the wrapped primitive with the
