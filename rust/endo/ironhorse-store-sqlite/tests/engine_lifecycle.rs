@@ -1047,6 +1047,18 @@ fn object_value_of_wrappers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn observable_prototype_walks_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "observable-prototype-walks",
+        &[
+            "var prototype={};var calls=0;var object=new Proxy({},{getPrototypeOf:function(){calls++;return prototype}});",
+            "prototype.isPrototypeOf(object)+':'+calls",
+        ],
+    );
+    assert_eq!(last, "true:1");
+}
+
+#[test]
 fn sloppy_this_wrappers_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "sloppy-this-wrappers",

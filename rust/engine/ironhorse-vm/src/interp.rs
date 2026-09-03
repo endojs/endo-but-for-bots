@@ -7913,25 +7913,6 @@ impl Interp {
         })
     }
 
-    /// Whether `target` appears in `obj`'s prototype chain — the core of
-    /// `fxOrdinaryHasInstance`. The prototype is the instance slot's payload
-    /// reference (XS's `instance->value.instance.prototype`); the walk
-    /// follows it to the chain root (`NULL`).
-    fn prototype_chain_has(
-        &self,
-        obj: crate::value::SlotIndex,
-        target: crate::value::SlotIndex,
-    ) -> bool {
-        let mut cur = self.instance_prototype(obj);
-        while !cur.is_null() {
-            if cur == target {
-                return true;
-            }
-            cur = self.instance_prototype(cur);
-        }
-        false
-    }
-
     /// ECMAScript `InstanceofOperator(O, C)`. The right operand must be an
     /// object; its `@@hasInstance` method is read through the full MOP and, if
     /// present, called with `C` as `this` and `O` as its sole argument.
@@ -31666,16 +31647,36 @@ impl Interp {
                 self.object_has_own_property(code, this, arg0)?
             }
             // `Object.prototype.isPrototypeOf(v)`: is the receiver in `v`'s
-            // prototype chain.
+            // prototype chain. A non-object `v` short-circuits before the
+            // receiver is boxed; otherwise walk `v.[[GetPrototypeOf]]`
+            // observably so Proxy traps and abrupt completions participate.
             NativeMethod::ObjectIsPrototypeOf => {
-                let r = match (this.value, arg0.value) {
-                    (Payload::Reference(proto), Payload::Reference(o)) => {
-                        self.prototype_chain_has(o, proto)
-                    }
-                    _ => false,
-                };
                 self.meter.tick_raw(METHOD_HAS_OWN_PROPERTY_METERING);
-                Slot::boolean(r)
+                let mut object = match arg0.value {
+                    Payload::Reference(object) if arg0.kind == Kind::Reference => object,
+                    _ => {
+                        self.stack.truncate(base);
+                        self.push(Slot::boolean(false));
+                        return Ok(());
+                    }
+                };
+                let prototype = self.array_to_object(this)?;
+                let Payload::Reference(prototype) = prototype.value else {
+                    unreachable!("ToObject returns a reference")
+                };
+                loop {
+                    let parent = self.mop_get_prototype(code, object)?;
+                    match (parent.kind, parent.value) {
+                        (Kind::Reference, Payload::Reference(parent)) => {
+                            if parent == prototype {
+                                break Slot::boolean(true);
+                            }
+                            object = parent;
+                        }
+                        (Kind::Null, _) => break Slot::boolean(false),
+                        _ => return Err(self.catchable_type_error()),
+                    }
+                }
             }
             NativeMethod::ObjectIs => {
                 let right = self
