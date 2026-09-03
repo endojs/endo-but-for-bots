@@ -612,6 +612,37 @@ export const makeOcapn = async ({
         sessionManager.endSession(activeSession);
       }
     };
+    // The abort callback handed to a per-session locator must actually
+    // sever the transport, not merely deregister the session: `endSession`
+    // alone leaves `connection.isDestroyed` false, so the pump keeps
+    // dispatching this peer's subsequent (possibly pipelined) frames and a
+    // miss-bounded locator's teardown would be inert. Route through the
+    // core's own `abort()` — the same full teardown a remote `op:abort`
+    // triggers — which unplugs the session first (so no further message is
+    // sent), then closes the connection (flipping `isDestroyed` so the
+    // pump stops feeding frames) and clears the bookkeeping. It closes via
+    // the transport's generic disconnect, naming nothing. The severance is
+    // deferred one turn so the in-flight `bootstrap.fetch` that crossed the
+    // bound still flushes its uniform `secret not found` rejection first:
+    // the bound-crossing miss must look exactly like any other miss (the
+    // locator has already refused, synchronously, to serve anything
+    // further on this session).
+    /** @type {ReturnType<typeof makeOcapnCore> | undefined} */
+    let core;
+    const abortSession = () => {
+      Promise.resolve()
+        .then(() => {
+          if (core) {
+            core.abort();
+          } else {
+            // Defensive fallback for the (unreached) case where the bound
+            // is somehow crossed before `core` is assigned this same turn.
+            sendAbortAndClose(connection);
+            endSession();
+          }
+        })
+        .catch(error => logger.info(`abortSession teardown failed`, error));
+    };
     // When the embedder supplies a per-session locator factory, this
     // session's *incoming* `bootstrap.fetch` calls resolve against a
     // freshly-built locator scoped to this authenticated peer, so miss
@@ -622,11 +653,11 @@ export const makeOcapn = async ({
       ? makeSturdyRefTracker(
           makeLocatorForSession({
             remoteDesignator: peerLocation.designator,
-            abortSession: endSession,
+            abortSession,
           }),
         )
       : sturdyRefTracker;
-    return makeOcapnCore(
+    core = makeOcapnCore(
       logger,
       connection,
       sessionId,
@@ -672,6 +703,7 @@ export const makeOcapn = async ({
           }
         : undefined,
     );
+    return core;
   };
 
   /**

@@ -62,6 +62,35 @@ single concrete pluggable that `makeOcapn` runs against. Import
 `syrupCodec` from `@endo/ocapn/syrup` or `cborCodec` from `@endo/ocapn/cbor`,
 and pair it with a network whose `codec` matches.
 
+### Per-session locators
+
+By default every session shares the one injected `locator`. To scope a
+peer's incoming `bootstrap.fetch` resolution to that authenticated peer —
+so miss counters or rate limits cannot leak across peers — pass an
+optional `makeLocatorForSession` factory alongside `locator`:
+
+```js
+const ocapn = await makeOcapn({
+  codec: syrupCodec,
+  network,
+  locator, // still used for the daemon's own outgoing SturdyRef resolution
+  makeLocatorForSession: ({ remoteDesignator, abortSession }) => {
+    // Return a fresh `NonceLocator` for this session. `remoteDesignator`
+    // is the authenticated peer's stable identity (key per-peer
+    // accounting on it); `abortSession()` severs this session — a locator
+    // that has seen too many misses can call it to enforce a per-session
+    // bound without revealing which presentation crossed it.
+    return makeMyPerSessionLocator({ remoteDesignator, abortSession });
+  },
+});
+```
+
+`@endo/daemon`'s `makeFormulaNonceLocator` (from
+`@endo/daemon/formula-nonce-locator.js`) is a ready-made pairing: its `get`
+serves as the shared `locator` and its `makeLocatorForSession` supplies this
+hook, bounding each session's failed presentations against a
+formula-identifier oracle.
+
 ## Status
 
 This package is a work in progress and is not yet published to npm.

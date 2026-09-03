@@ -218,10 +218,25 @@ test('the per-session miss bound aborts the abusive session but not a valid peer
     localNodeNumber: localNode,
     missBound: 3,
   });
+  // Wrap the endpoint's session factory to observe that crossing the
+  // bound actually reaches the session-teardown callback over the wire
+  // (the callback the ocapn client binds to a real connection-severing
+  // abort, not a bookkeeping-only deregister). A mere "each fetch throws"
+  // assertion cannot tell a torn-down session from one that kept
+  // answering, so we count the aborts the transport path triggers.
+  let wireAborts = 0;
+  const observedMakeLocatorForSession = context =>
+    endpoint.makeLocatorForSession({
+      ...context,
+      abortSession: () => {
+        wireAborts += 1;
+        context.abortSession();
+      },
+    });
   const server = await makeClient({
     codec: syrupCodec,
     designator: 'server-bound',
-    makeLocatorForSession: endpoint.makeLocatorForSession,
+    makeLocatorForSession: observedMakeLocatorForSession,
   });
   const prober = await makeClient({
     codec: syrupCodec,
@@ -244,6 +259,17 @@ test('the per-session miss bound aborts the abusive session but not a valid peer
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => prober.client.enlivenSturdyRef(ref));
   }
+
+  // Crossing the bound reached the real session-teardown callback over
+  // the wire — the abuse is actually severed, not merely rejected each
+  // time. (The bound is per-connection: a fresh dial re-handshakes into a
+  // new session with its own counter, which is why the prober's 4th probe
+  // still throws rather than the process wedging — cross-reconnect
+  // aggregation is left to an embedder keying on `remoteDesignator`.)
+  t.true(
+    wireAborts >= 1,
+    'the abusive session was torn down over the wire, not just rejected',
+  );
 
   // The holder, a different authenticated peer, fetches its valid guest
   // capability unaffected by the prober crossing its bound.

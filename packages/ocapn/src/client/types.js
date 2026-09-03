@@ -356,6 +356,17 @@
  * `formatLocator`/`parseLocator` URI helpers in `@endo/daemon`, which
  * use the word `Locator` for the addressable URI form.
  *
+ * The `secret` a locator is presented is a `string` for the common
+ * canonical-ASCII wire Swiss number, so a plain `Map` (whose `get`
+ * accepts a `string` key) is a valid `NonceLocator`. On the incoming
+ * `bootstrap.fetch` path the bootstrap may instead hand a raw
+ * `Uint8Array` for a non-ASCII wire secret; the parameter stays typed
+ * `string` so `Map` and other string-keyed tables remain assignable, and
+ * a locator that wants to serve that branch simply widens its own `get`
+ * to accept `string | Uint8Array` (assignable here by contravariance),
+ * as `@endo/daemon`'s `makeFormulaNonceLocator` does. A string-only
+ * locator misses on the `Uint8Array` branch, which is the safe default.
+ *
  * @typedef {object} NonceLocator
  * @property {(secret: string) => unknown | Promise<unknown>} get
  */
