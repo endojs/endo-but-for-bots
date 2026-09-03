@@ -329,3 +329,56 @@
   color: #f87171;
   font-size: 0.8rem;
 }
+
+/* An approval waiting on you is the only actionable thing on this screen, so it
+   goes above the diagram rather than below it. The statechart is now tall
+   enough (routing edges around states costs vertical space) that the panel sat
+   off-screen on a phone — it was reported as "the approval screen is not
+   present", which is what being below the fold looks like. */
+.wf-approval {
+  order: -1;
+}
+
+/* ── Narrow screens ────────────────────────────────────────────────────────
+   The three-column grid reserves 34rem of chrome, which is wider than a phone.
+   Stack it instead: runs, then the selected run, then its timeline. */
+@media (max-width: 900px) {
+  .wf-app {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    overflow-y: auto;
+  }
+
+  .wf-rail {
+    /* Enough to browse without pushing the run itself off the screen. */
+    max-height: 32vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color, #ccc3);
+  }
+
+  .wf-side {
+    max-height: 45vh;
+    border-left: none;
+    border-top: 1px solid var(--border-color, #ccc3);
+  }
+
+  /* Scroll the chart rather than squashing it: a statechart compressed to
+     phone width is unreadable, and the horizontal flow is the thing it says. */
+  .wf-main {
+    overflow-x: auto;
+  }
+
+  .wf-statechart {
+    min-width: 560px;
+  }
+
+  /* Comfortable touch targets. */
+  .wf-rail-run,
+  .wf-approval-actions button {
+    min-height: 40px;
+  }
+
+  .wf-scrubber input {
+    min-height: 32px;
+  }
+}
