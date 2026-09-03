@@ -22,6 +22,12 @@ const makeHarness = () => {
     listSecretRecords: () => [...records.values()],
     getSecretIdForGrant: id => grants.get(id),
     writeSecretGrant: (grantId, secretId) => grants.set(grantId, secretId),
+    deleteSecret: secretId => {
+      for (const [grantId, grantSecretId] of grants) {
+        if (grantSecretId === secretId) grants.delete(grantId);
+      }
+      records.delete(secretId);
+    },
     writeSecretAuditEvent: event => events.push(event),
     listSecretAuditEvents: limit => events.slice(-limit).reverse(),
   });
@@ -39,11 +45,28 @@ const makeHarness = () => {
     },
   });
   const bindings = [];
-  const makeManager = () =>
-    makeSecretManager({ persistence, backend, randomHex256 });
+  const makeManager = (backendPower = backend) =>
+    makeSecretManager({
+      persistence,
+      backend: backendPower,
+      randomHex256,
+    });
   const makeDirectory = manager =>
     manager.makeHostDirectory({
       bindGrant: async (grantId, name) => bindings.push({ grantId, name }),
+      listKnownGrantPaths: async () =>
+        bindings.map(({ grantId, name }) => ({
+          grantId,
+          path: ['secrets', name],
+        })),
+      removeKnownGrantPaths: async entries => {
+        for (const { grantId } of entries) {
+          const index = bindings.findIndex(
+            binding => binding.grantId === grantId,
+          );
+          if (index >= 0) bindings.splice(index, 1);
+        }
+      },
     });
   return {
     records,
@@ -51,6 +74,7 @@ const makeHarness = () => {
     events,
     values,
     bindings,
+    backend,
     makeManager,
     makeDirectory,
   };
@@ -76,6 +100,7 @@ test('secret facets remain separated and durable across manager restart', async 
   const catalog = await E(directory).lookup('catalog');
   const [entry] = await E(catalog).list();
   t.is(entry.secretId, summary.secretId);
+  t.deepEqual(entry.petNamePaths, [['secrets', 'github-release']]);
   t.false('__getMethodNames__' in entry.summary);
   t.false(
     // eslint-disable-next-line no-underscore-dangle
@@ -118,6 +143,17 @@ test('secret facets remain separated and durable across manager restart', async 
   await t.throwsAsync(() => E(blob).readBase64(), {
     message: /Secret operation failed/,
   });
+
+  await E(entry.admin).delete();
+  t.deepEqual(await E(catalog).list(), []);
+  t.deepEqual(harness.bindings, []);
+  t.false(harness.grants.has(grantId));
+  t.deepEqual(
+    harness.events
+      .filter(({ operation }) => operation === 'delete')
+      .map(({ outcome }) => outcome),
+    ['attempted', 'succeeded'],
+  );
 
   const persisted = JSON.stringify({
     records: [...harness.records.values()].map(record => ({
@@ -166,6 +202,7 @@ test('a revoke racing a backend read fails the release closed', async t => {
       listSecretRecords: () => [...harness.records.values()],
       getSecretIdForGrant: id => harness.grants.get(id),
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
+      deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit => harness.events.slice(-limit),
     }),
@@ -191,6 +228,39 @@ test('fixed failures do not reflect secret input', async t => {
     E(importer).createBase64('bad', 'Valid description', canary),
   );
   t.false(error.message.includes(canary));
+});
+
+test('delete retries failed backend revocation before forgetting metadata', async t => {
+  const harness = makeHarness();
+  let revokeAttempts = 0;
+  const backend = harden({
+    ...harness.backend,
+    revoke: async (operationId, ref) => {
+      revokeAttempts += 1;
+      if (revokeAttempts === 1) throw new Error('backend unavailable');
+      return harness.backend.revoke(operationId, ref);
+    },
+  });
+  const directory = harness.makeDirectory(harness.makeManager(backend));
+  const importer = await E(directory).lookup('create');
+  const summary = await E(importer).createBase64(
+    'retry-cleanup',
+    'Retry backend cleanup',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const catalog = await E(directory).lookup('catalog');
+  const [entry] = await E(catalog).list();
+
+  await t.throwsAsync(() => E(entry.admin).revoke(), {
+    message: /Secret operation failed/,
+  });
+  t.is(harness.records.get(summary.secretId)?.state, 'revoked');
+  t.true(harness.records.has(summary.secretId));
+
+  await E(entry.admin).delete();
+  t.is(revokeAttempts, 2);
+  t.false(harness.records.has(summary.secretId));
+  t.false(harness.values.has(summary.secretId));
 });
 
 test('replace cannot race revocation into resurrecting a secret', async t => {
@@ -225,6 +295,7 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
       listSecretRecords: () => [...harness.records.values()],
       getSecretIdForGrant: id => harness.grants.get(id),
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
+      deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
       listSecretAuditEvents: limit => harness.events.slice(-limit),
     }),

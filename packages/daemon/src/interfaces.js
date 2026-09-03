@@ -147,6 +147,7 @@ export const SecretAdminInterface = M.interface('SecretAdmin', {
   replaceBase64: M.call(M.string()).returns(M.promise()),
   setDescription: M.call(M.string()).returns(M.promise()),
   revoke: M.call().returns(M.promise()),
+  delete: M.call().returns(M.promise()),
 });
 
 export const SecretImporterInterface = M.interface('SecretImporter', {

@@ -21,6 +21,7 @@ harden(textToBase64);
  * @typedef {object} SecretRow
  * @property {string} secretId
  * @property {SecretSummary} summary
+ * @property {string[][]} petNamePaths
  * @property {string} descriptionDraft
  * @property {string} replacementDraft
  */
@@ -45,6 +46,7 @@ harden(textToBase64);
  * @param {(secretId: string, open: boolean) => void} props.onDangerToggle
  * @param {(secretId: string) => void} props.onReplace
  * @param {(secretId: string) => void} props.onRevoke
+ * @param {(secretId: string) => void} props.onDelete
  * @param {() => void} props.onClearClipboard
  * @param {() => void} props.onRefresh
  */
@@ -64,6 +66,7 @@ const SecretsView = ({
   onDangerToggle,
   onReplace,
   onRevoke,
+  onDelete,
   onClearClipboard,
   onRefresh,
 }) =>
@@ -189,120 +192,178 @@ const SecretsView = ({
       h('h2', null, 'Catalog'),
       loading && rows.length === 0 ? h('p', null, 'Loading…') : null,
       rows.length === 0 && !loading ? h('p', null, 'No secrets yet.') : null,
-      ...rows.map(({ secretId, summary, descriptionDraft, replacementDraft }) =>
-        h(
-          'article',
-          { class: `secret-card secret-${summary.state}`, key: secretId },
+      ...rows.map(
+        ({
+          secretId,
+          summary,
+          petNamePaths,
+          descriptionDraft,
+          replacementDraft,
+        }) =>
           h(
-            'div',
-            { class: 'secret-summary' },
+            'article',
+            { class: `secret-card secret-${summary.state}`, key: secretId },
             h(
-              'code',
-              { class: 'secret-id', title: secretId },
-              secretId.slice(0, 12),
-            ),
-            h('span', { class: 'secret-state' }, summary.state),
-            h('span', null, `generation ${summary.generation}`),
-          ),
-          h(
-            'form',
-            {
-              autocomplete: 'off',
-              /** @param {{ preventDefault: () => void }} event */
-              onSubmit: event => {
-                event.preventDefault();
-                onDescription(secretId);
-              },
-            },
-            h('input', {
-              'aria-label': 'Description (not secret)',
-              name: 'description',
-              value: descriptionDraft,
-              maxlength: 200,
-              disabled: loading || summary.state === 'revoked',
-              /** @param {{ target: { value: string } }} event */
-              onInput: event =>
-                onDescriptionInput(secretId, event.target.value),
-            }),
-            h(
-              'button',
-              {
-                type: 'submit',
-                disabled: loading || summary.state === 'revoked',
-              },
-              'Update description',
-            ),
-          ),
-          summary.state === 'revoked'
-            ? null
-            : h(
-                'details',
-                {
-                  class: 'secret-danger',
-                  /** @param {{ currentTarget: { open: boolean } }} event */
-                  onToggle: event =>
-                    onDangerToggle(secretId, event.currentTarget.open),
-                },
-                h('summary', null, 'Danger zone'),
-                h(
-                  'p',
-                  null,
-                  'Replacement changes the value returned to every holder of this secret capability.',
-                ),
-                h(
-                  'form',
-                  {
-                    class: 'secret-replace-form',
-                    autocomplete: 'off',
-                    /** @param {{ preventDefault: () => void }} event */
-                    onSubmit: event => {
-                      event.preventDefault();
-                      onReplace(secretId);
-                    },
-                  },
-                  h(
-                    'label',
-                    null,
-                    'Replacement secret value (UTF-8)',
-                    h('input', {
-                      type: 'password',
-                      name: 'value',
-                      required: true,
-                      autocomplete: 'off',
-                      autocapitalize: 'off',
-                      'data-1p-ignore': 'true',
-                      'data-lpignore': 'true',
-                      spellcheck: false,
-                      disabled: loading,
-                      value: replacementDraft,
-                      /** @param {{ target: { value: string } }} event */
-                      onInput: event =>
-                        onReplaceInput(secretId, event.target.value),
-                    }),
-                  ),
-                  h(
-                    'button',
-                    { type: 'submit', disabled: loading },
-                    'Replace value',
-                  ),
-                ),
-                h(
-                  'p',
-                  null,
-                  'Revocation permanently denies this secret capability, including delegated copies.',
-                ),
-                h(
-                  'button',
-                  {
-                    type: 'button',
-                    class: 'secret-revoke',
-                    disabled: loading,
-                    onClick: () => onRevoke(secretId),
-                  },
-                  'Confirm revocation',
-                ),
+              'div',
+              { class: 'secret-summary' },
+              h(
+                'code',
+                { class: 'secret-id', title: secretId },
+                secretId.slice(0, 12),
               ),
-        ),
+              h('span', { class: 'secret-state' }, summary.state),
+              h('span', null, `generation ${summary.generation}`),
+            ),
+            h(
+              'div',
+              { class: 'secret-pet-names' },
+              h('span', null, 'Inventory paths'),
+              petNamePaths.length === 0
+                ? h('span', { class: 'secret-path-missing' }, 'No known paths')
+                : h(
+                    'ul',
+                    null,
+                    ...petNamePaths.map(path =>
+                      h(
+                        'li',
+                        { key: path.join('/') },
+                        h('code', null, path.join('/')),
+                      ),
+                    ),
+                  ),
+            ),
+            h(
+              'form',
+              {
+                autocomplete: 'off',
+                /** @param {{ preventDefault: () => void }} event */
+                onSubmit: event => {
+                  event.preventDefault();
+                  onDescription(secretId);
+                },
+              },
+              h('input', {
+                'aria-label': 'Description (not secret)',
+                name: 'description',
+                value: descriptionDraft,
+                maxlength: 200,
+                disabled: loading || summary.state === 'revoked',
+                /** @param {{ target: { value: string } }} event */
+                onInput: event =>
+                  onDescriptionInput(secretId, event.target.value),
+              }),
+              h(
+                'button',
+                {
+                  type: 'submit',
+                  disabled: loading || summary.state === 'revoked',
+                },
+                'Update description',
+              ),
+            ),
+            h(
+              'details',
+              {
+                class: 'secret-danger',
+                /** @param {{ currentTarget: { open: boolean } }} event */
+                onToggle: event =>
+                  onDangerToggle(secretId, event.currentTarget.open),
+              },
+              h('summary', null, 'Danger zone'),
+              summary.state === 'revoked'
+                ? h(
+                    'section',
+                    { class: 'secret-danger-section secret-delete-section' },
+                    h('h3', null, 'Delete record'),
+                    h(
+                      'p',
+                      null,
+                      'Remove this revoked record and its known inventory paths. Audit history remains.',
+                    ),
+                    h(
+                      'button',
+                      {
+                        type: 'button',
+                        class: 'secret-delete',
+                        disabled: loading,
+                        onClick: () => onDelete(secretId),
+                      },
+                      'Delete revoked secret',
+                    ),
+                  )
+                : h(
+                    'div',
+                    { class: 'secret-danger-sections' },
+                    h(
+                      'section',
+                      { class: 'secret-danger-section secret-replace-section' },
+                      h('h3', null, 'Replace value'),
+                      h(
+                        'p',
+                        null,
+                        'Replacement changes the value returned to every holder of this secret capability.',
+                      ),
+                      h(
+                        'form',
+                        {
+                          class: 'secret-replace-form',
+                          autocomplete: 'off',
+                          /** @param {{ preventDefault: () => void }} event */
+                          onSubmit: event => {
+                            event.preventDefault();
+                            onReplace(secretId);
+                          },
+                        },
+                        h(
+                          'label',
+                          null,
+                          'Replacement secret value (UTF-8)',
+                          h('input', {
+                            type: 'password',
+                            name: 'value',
+                            required: true,
+                            autocomplete: 'off',
+                            autocapitalize: 'off',
+                            'data-1p-ignore': 'true',
+                            'data-lpignore': 'true',
+                            spellcheck: false,
+                            disabled: loading,
+                            value: replacementDraft,
+                            /** @param {{ target: { value: string } }} event */
+                            onInput: event =>
+                              onReplaceInput(secretId, event.target.value),
+                          }),
+                        ),
+                        h(
+                          'button',
+                          { type: 'submit', disabled: loading },
+                          'Replace value',
+                        ),
+                      ),
+                    ),
+                    h(
+                      'section',
+                      { class: 'secret-danger-section secret-revoke-section' },
+                      h('h3', null, 'Revoke access'),
+                      h(
+                        'p',
+                        null,
+                        'Revocation permanently denies this secret capability, including delegated copies.',
+                      ),
+                      h(
+                        'button',
+                        {
+                          type: 'button',
+                          class: 'secret-revoke',
+                          disabled: loading,
+                          onClick: () => onRevoke(secretId),
+                        },
+                        'Confirm revocation',
+                      ),
+                    ),
+                  ),
+            ),
+          ),
       ),
     ),
     h(
@@ -467,6 +528,10 @@ export const secretsComponent = (
           if (loading) return;
           void mutate(async () => E(requireAdmin(secretId)).revoke());
         },
+        onDelete: secretId => {
+          if (loading) return;
+          void mutate(async () => E(requireAdmin(secretId)).delete());
+        },
         onClearClipboard: () => clearClipboard(),
         onRefresh: () => {
           if (!loading) void refresh();
@@ -528,9 +593,15 @@ export const secretsComponent = (
       return harden({
         secretId: entry.secretId,
         summary: entry.summary,
+        petNamePaths: entry.petNamePaths || [],
         descriptionDraft: descriptionDrafts.get(entry.secretId) || '',
         replacementDraft: replacementDrafts.get(entry.secretId) || '',
       });
+    });
+    rows.sort((left, right) => {
+      const leftRevoked = left.summary.state === 'revoked' ? 1 : 0;
+      const rightRevoked = right.summary.state === 'revoked' ? 1 : 0;
+      return leftRevoked - rightRevoked;
     });
     events = auditEvents;
   };

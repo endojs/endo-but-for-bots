@@ -37,8 +37,13 @@ test('secret metadata survives updates without invalidating grants', async t => 
   );
 
   t.is(database.getSecretIdForGrant('grant-id'), record.secretId);
+
   t.is(database.getSecretRecord(record.secretId)?.generation, 2n);
   t.is(database.listSecretRecords().length, 1);
+
+  database.deleteSecret(record.secretId);
+  t.is(database.getSecretRecord(record.secretId), undefined);
+  t.is(database.getSecretIdForGrant('grant-id'), undefined);
 
   const sqlite = await readFile(path.join(statePath, 'endo.sqlite'));
   t.false(sqlite.includes(new TextEncoder().encode('CANARY-secret-value')));

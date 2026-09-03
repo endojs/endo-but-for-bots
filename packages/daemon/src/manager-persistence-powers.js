@@ -66,6 +66,7 @@ export const makeDaemonicPersistencePowers = (
     listSecretRecords,
     getSecretIdForGrant,
     writeSecretGrant,
+    deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
   } = daemonDb;
@@ -184,6 +185,7 @@ export const makeDaemonicPersistencePowers = (
     listSecretRecords,
     getSecretIdForGrant,
     writeSecretGrant,
+    deleteSecret,
     writeSecretAuditEvent,
     listSecretAuditEvents,
   });

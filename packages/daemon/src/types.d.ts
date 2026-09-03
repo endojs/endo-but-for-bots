@@ -1566,6 +1566,7 @@ export interface SecretAdmin {
   replaceBase64(bytesBase64: string): Promise<void>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
+  delete(): Promise<void>;
 }
 
 export interface SecretImporter {
@@ -1579,6 +1580,7 @@ export interface SecretImporter {
 export interface SecretCatalogEntry {
   secretId: string;
   summary: SecretSummary;
+  petNamePaths: string[][];
   admin: SecretAdmin;
 }
 
@@ -1589,7 +1591,8 @@ export interface SecretCatalog {
 export type SecretAuditEvent = {
   eventId: string;
   secretId: string;
-  operation: 'create' | 'release' | 'replace' | 'set-description' | 'revoke';
+  operation:
+    'create' | 'release' | 'replace' | 'set-description' | 'revoke' | 'delete';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;
@@ -2428,6 +2431,7 @@ export type DaemonicPersistencePowers = {
   }>;
   getSecretIdForGrant: (grantId: string) => string | undefined;
   writeSecretGrant: (grantId: string, secretId: string) => void;
+  deleteSecret: (secretId: string) => void;
   writeSecretAuditEvent: (event: SecretAuditEvent) => void;
   listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
 };

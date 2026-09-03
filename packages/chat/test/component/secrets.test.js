@@ -41,9 +41,17 @@ test.serial(
       replaceBase64: value => calls.push(['replace', value]),
       setDescription: description => calls.push(['description', description]),
       revoke: () => calls.push(['revoke']),
+      delete: () => calls.push(['delete']),
     });
     const catalog = Far('MockSecretCatalog', {
-      list: () => [{ secretId: summary.secretId, summary, admin }],
+      list: () => [
+        {
+          secretId: summary.secretId,
+          summary,
+          petNamePaths: [['release-token'], ['secrets', 'github-release']],
+          admin,
+        },
+      ],
     });
     const audit = Far('MockSecretAudit', {
       list: () => [],
@@ -88,6 +96,8 @@ test.serial(
         .querySelector('.secret-summary')
         .textContent.includes('Release publishing'),
     );
+    t.true($parent.textContent.includes('release-token'));
+    t.true($parent.textContent.includes('secrets/github-release'));
 
     const $createPanel = $parent.querySelector('.secret-create-panel');
     const $danger = $parent.querySelector('.secret-danger');
@@ -235,9 +245,12 @@ test.serial(
         throw new Error(canary);
       },
       revoke: () => undefined,
+      delete: () => undefined,
     });
     const catalog = Far('RaceSecretCatalog', {
-      list: () => [{ secretId: summary.secretId, summary, admin }],
+      list: () => [
+        { secretId: summary.secretId, summary, petNamePaths: [], admin },
+      ],
     });
     const audit = Far('RaceSecretAudit', {
       list: () => auditEvents,
@@ -292,3 +305,93 @@ test.serial(
     t.false($parent.textContent.includes(canary));
   },
 );
+
+test.serial('secret Space orders and deletes revoked records', async t => {
+  const document = testDocument;
+  const activeSummary = harden({
+    secretId: 'active-secret',
+    description: 'Still usable',
+    state: 'active',
+    generation: 1n,
+    createdAt: '2026-09-03T00:00:01.000Z',
+    updatedAt: '2026-09-03T00:00:01.000Z',
+  });
+  const revokedSummary = harden({
+    secretId: 'revoked-secret',
+    description: 'No longer usable',
+    state: 'revoked',
+    generation: 2n,
+    createdAt: '2026-09-03T00:00:00.000Z',
+    updatedAt: '2026-09-03T00:00:02.000Z',
+  });
+  let includeRevoked = true;
+  const deleted = [];
+  const activeAdmin = Far('ActiveSecretAdmin', {
+    replaceBase64: () => undefined,
+    setDescription: () => undefined,
+    revoke: () => undefined,
+    delete: () => undefined,
+  });
+  const revokedAdmin = Far('RevokedSecretAdmin', {
+    replaceBase64: () => undefined,
+    setDescription: () => undefined,
+    revoke: () => undefined,
+    delete: () => {
+      deleted.push(revokedSummary.secretId);
+      includeRevoked = false;
+    },
+  });
+  const catalog = Far('OrderedSecretCatalog', {
+    list: () => [
+      ...(includeRevoked
+        ? [
+            {
+              secretId: revokedSummary.secretId,
+              summary: revokedSummary,
+              petNamePaths: [['secrets', 'retired']],
+              admin: revokedAdmin,
+            },
+          ]
+        : []),
+      {
+        secretId: activeSummary.secretId,
+        summary: activeSummary,
+        petNamePaths: [['secrets', 'current']],
+        admin: activeAdmin,
+      },
+    ],
+  });
+  const audit = Far('OrderedSecretAudit', { list: () => [] });
+  const powers = Far('OrderedSecretPowers', {
+    lookup: path => {
+      const key = Array.isArray(path) ? path.join('/') : path;
+      if (key === '@secrets/catalog') return catalog;
+      if (key === '@secrets/audit') return audit;
+      throw new Error('unknown path');
+    },
+  });
+
+  const $parent = document.createElement('div');
+  document.body.appendChild($parent);
+  const cleanup = secretsComponent($parent, powers, []);
+  t.teardown(cleanup);
+  await waitFor(() => $parent.querySelectorAll('.secret-card').length === 2);
+
+  const cards = [...$parent.querySelectorAll('.secret-card')];
+  t.true(cards[0].classList.contains('secret-active'));
+  t.true(cards[1].classList.contains('secret-revoked'));
+  t.is(
+    cards[0].querySelector('.secret-replace-section h3').textContent,
+    'Replace value',
+  );
+  t.is(
+    cards[0].querySelector('.secret-revoke-section h3').textContent,
+    'Revoke access',
+  );
+  t.true(cards[1].textContent.includes('secrets/retired'));
+
+  cards[1].querySelector('.secret-delete').click();
+  await waitFor(() => deleted.length === 1);
+  await waitFor(() => $parent.querySelectorAll('.secret-card').length === 1);
+  t.deepEqual(deleted, ['revoked-secret']);
+});

@@ -116,6 +116,7 @@ interface SecretAdmin {
   replaceBase64(bytesBase64: string): Promise<void>;
   setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
+  delete(): Promise<void>;
 }
 
 interface SecretImporter {
@@ -131,6 +132,7 @@ interface SecretCatalog {
     Array<{
       secretId: string;
       summary: SecretSummary;
+      petNamePaths: string[][];
       admin: SecretAdmin;
     }>
   >;
@@ -156,6 +158,14 @@ It can replace, update the description of, and revoke but cannot read.
 `SecretCatalog` enumerates management facets, not read facets.
 The Secret Blobs Space uses the catalog to render and manage secrets without
 receiving `SecretBlob` presences.
+Each entry also carries the currently known paths for that grant in the host's
+ordinary inventory.
+These paths are derived from the live pet stores and lookup formulas, not
+retained as aliases in manager metadata, so normal rename and removal operations
+cannot make the catalog stale.
+The implementation reports direct host aliases and entries in the ordinary
+`secrets` pet store; it neither claims authority to enumerate recipients'
+inventories nor resolves a secret capability to discover them.
 
 `SecretImporter` is a host-local facade over the singleton manager.
 It is also endowed with the authority to formulate a read grant and bind its
@@ -207,6 +217,12 @@ do not make destructive actions ambiguous.
 
 Revocation is placed behind a visibly labeled danger-zone confirmation because
 it denies all delegated copies and is not an inventory rename or removal.
+Within the danger zone, replacement and revocation are separate bordered
+sections with distinct headings and consequences.
+Active and unavailable records appear before revoked records, regardless of
+record creation order.
+A revoked card offers deletion of the manager record and locally known pet-name
+paths; the audit history remains visible.
 Errors shown in the Space are fixed messages and never include caught exception
 text, method arguments, or backend responses.
 Mutation controls are disabled while an operation is pending, and a failed
@@ -405,8 +421,15 @@ Backend revocation follows as a retryable cleanup operation.
 
 Removing or garbage-collecting a lookup formula is not revocation and never
 implicitly deletes backend material.
-The catalog retains the management record until an explicit retention or purge
-operation is designed and invoked.
+The catalog retains the management record until a holder of its administration
+facet explicitly deletes it after revocation.
+Deletion removes the record, grant mappings, and locally known inventory paths
+but retains audit events.
+It first retries the backend's idempotent revoke operation so a prior cleanup
+failure cannot turn record deletion into an unreachable backend secret.
+It cannot enumerate or retract names in other agents' inventories; those
+delegated formulas are already inert after revocation and fail closed after the
+record is deleted.
 
 Revocation cannot retract bytes already returned by `readBase64()` or undo an
 upstream action already performed with them.
@@ -415,13 +438,20 @@ upstream action already performed with them.
 
 The singleton manager is the mandatory mediation point because no backend
 record capability leaves it.
-It records create, read, replace, description change, and revoke operations.
+It records create, read, replace, description change, revoke, and delete
+operations.
 
 ```ts
 type SecretAuditEvent = {
   eventId: string;
   secretId: string;
-  operation: 'create' | 'release' | 'replace' | 'set-description' | 'revoke';
+  operation:
+    | 'create'
+    | 'release'
+    | 'replace'
+    | 'set-description'
+    | 'revoke'
+    | 'delete';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;
@@ -494,8 +524,8 @@ boundary necessarily includes any process to which plaintext is delivered.
 - restart, message delegation, replacement, revocation-race, and canary tests;
   and
 - a Secret Blobs Space that creates, enumerates, replaces, updates descriptions,
-  revokes,
-  and audits without receiving a read facet.
+  revokes, deletes revoked records, shows locally known inventory paths, and
+  audits without receiving a read facet.
 
 ### Deferred hardening
 
@@ -514,7 +544,6 @@ boundary necessarily includes any process to which plaintext is delivered.
    forward the inventory grant exactly as ordinary capability delegation?
 4. Which stable daemon invocation fields can a narrow `AuditContext` expose
    without turning debugging internals into a security contract?
-5. What retention and explicit purge policy should follow revocation?
 
 ## References
 
