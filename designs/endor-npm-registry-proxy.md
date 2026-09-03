@@ -11,15 +11,6 @@
 
 All five phases implemented:
 
-The finish line was reverified on 2026-08-01 with a clean
-application containing only `package.json` and `main.js`:
-`endor run main.js` fetched and executed `semver@7.5.4` and its
-transitive CommonJS dependencies, and a second `endor run
---offline main.js` produced the same `semver=7.5.4` result from
-the SQLite registry table and CAS. `endor registry verify`
-reported three packages verified and zero incomplete; the
-application had no lockfile and no `node_modules` directory.
-
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
   `get_meta`/`set_meta`, `count`. Schema matches the design:
@@ -94,8 +85,9 @@ application had no lockfile and no `node_modules` directory.
   package's CAS tree and report entries whose blobs are
   missing, exiting non-zero on incompleteness).
 
-Known gaps recorded below. The two execution gaps this section
-used to record are both resolved. Directory-relative
+Post-finish-line extensions and constraints are recorded below.
+The two execution gaps this section used to record are both
+resolved. Directory-relative
 resolution: the archive loader's resolve hook resolves `./`
 and `../` specifiers against the referrer module's directory
 (escaping the package root is a clean error), so multi-file
@@ -135,6 +127,17 @@ quick-start entry — get Node-style **module-syntax detection**
 with `SyntaxError: invalid import`; dynamic `import()` and
 keyword mentions in strings/comments/nested scopes do not flip a
 real CJS file.
+
+### Reverification
+
+The finish line was reverified on 2026-08-01 with a clean
+application containing only `package.json` and `main.js`:
+`endor run main.js` fetched and executed `semver@7.5.4` and its
+transitive CommonJS dependencies, and a second `endor run
+--offline main.js` produced the same `semver@7.5.4` result from
+the SQLite registry table and CAS. `endor registry verify`
+reported three packages verified and zero incomplete; the
+application had no lockfile and no `node_modules` directory.
 
 ## What is the Problem Being Solved?
 
@@ -560,7 +563,7 @@ The tree's children are the package's files, stored as blobs.
       `nextTick` rides the promise queue, `versions` has no
       `node` key (Node-detection takes its non-Node branch),
       and the event-emitter surface (`on`, `once`, `emit`,
-      …) is chainable no-ops. The rest of Node's `process`
+      ...) is chainable no-ops. The rest of Node's `process`
       surface (`stdout`, `exit`, signals, `hrtime`) stays
       absent; packages touching it fail with a clean undefined
       read. Verified by real execution: `endor run` of a

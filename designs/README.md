@@ -369,7 +369,7 @@ LLM-agent stack).*
 | [conservative-regexp-subset](conservative-regexp-subset.md) | 2026-07-10 | 2026-07-29 | Not Started |
 | [ironhorse-panic](ironhorse-panic.md) | 2026-08-17 | 2026-09-01 | Proposed |
 | [endor-run-expanded](endor-run-expanded.md) | 2026-04-17 | 2026-08-27 | In Progress |
-| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-04-17 | In Progress |
+| [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-08-01 | **Complete** |
 | [endor-registry-proxy-worker](endor-registry-proxy-worker.md) | 2026-08-06 | — | Proposed |
 | [daemon-make-archive](daemon-make-archive.md) | 2026-04-23 | 2026-04-24 | In Progress |
 | [daemon-form-request](daemon-form-request.md) | 2026-02-25 | 2026-03-02 | **Complete** |
@@ -506,6 +506,11 @@ Its local backend and Secret Blobs Space are implemented; operation-journal,
 XS encryption-power, and production KMS/HSM hardening remain.
 Its estimate decomposes the existing `daemon-capability-bank` secret-storage
 slice and does not increase the milestone aggregate.
+
+This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
+from In Progress to **Complete** (finish line reverified 2026-08-01), so
+Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
+unchanged.
 
 ## Roadmap
 
@@ -718,7 +723,7 @@ flowchart TD
         nrtree[npm-registry-as-directory-tree]
         dwimvs[mvs-resolver]
         dwisnap[snapshot-mapper]
-        ernpm[endor-npm-registry-proxy<br/><i>IN PROGRESS</i>]
+        ernpm[endor-npm-registry-proxy<br/><i>COMPLETE</i>]
         npubatten[npm-dev-publisher-attenuation<br/><i>PROPOSED</i>]
         erworker[endor-registry-proxy-worker<br/><i>PROPOSED</i>]
         ercas[daemon-cas-management<br/><i>IN PROGRESS</i>]
