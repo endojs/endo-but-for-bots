@@ -18,7 +18,11 @@ import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 
 import { RegistryNotFoundError } from './errors.js';
-import { parseRangeMajor, satisfiesRange } from './mvs-resolver.js';
+import {
+  parseRangeMajor,
+  resolutionHashPreimage,
+  satisfiesRange,
+} from './mvs-resolver.js';
 import { comparePublishedVersions } from './registry-tree.js';
 
 /** @param {string | Uint8Array} source */
@@ -328,11 +332,11 @@ export const resolveRegistryTree = async (
     }
   }
   const keys = harden(Object.keys(packagesByKey).sort());
-  const hashPreimage = keys
-    .map(key => `${key}\t${packagesByKey[key].integrity}`)
-    .join('\n');
+  // Shared injective preimage (see `resolutionHashPreimage`): keys and
+  // integrity strings are registry-controlled, so the former `\t`/`\n` join
+  // was non-injective and two closures could collide onto one cache key.
   const resolutionHash = await (options.sha256 ?? fallbackHash)(
-    encodeUtf8(hashPreimage),
+    encodeUtf8(resolutionHashPreimage(keys, packagesByKey)),
   );
 
   return harden({

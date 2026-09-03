@@ -17,10 +17,25 @@ is the immutable content-addressed package tree.
 - `makePackageRegistryTree({ npm })` builds the stable registry-family root.
 - `resolveRegistryTree(entryPackageJson, registryRoot, options)` performs an
   eager, same-vat MVS walk and emits a reusable `RegistryResolution`.
+- `lookupPackageVersion(registryRoot, name, version)` resolves the standard
+  `npm`/name/version path to an immutable package tree.
 - `makeLookupTreeView(tree)` attenuates an enumerable fixture tree for
-  production-shape tests.
+  production-shape tests, withholding `list` at every depth while forwarding the
+  wrapped node's own `getInfo` (integrity and consistency metadata survive).
 - `makeDeprecatedEndoRegistryAdapter(root, options)` is the explicitly obtained
-  compatibility path for the old `lookup(name, version)` and `list()` protocol.
+  compatibility surface for callers still on the old method protocol. It is a
+  **partial** migration path, not a drop-in: `fetch(name, version)` and
+  `lookup(name, version)` traverse the tree (so `lookup` now materializes a
+  version leaf rather than being the old pure cache probe, and throws offline
+  where the old surface returned `undefined`); `list()` is a permanent empty
+  stub — the tree exposes no registry-wide enumeration — and `resolve` throws
+  unless the caller injects its own resolver through `options.resolve`.
+
+Registry failures are reported through the structured error factories the root
+re-exports — `RegistryNotFoundError`, `RegistryPathSyntaxError`,
+`RegistryTamperedError`, `RegistryMissingPackageError`, `RegistryNetworkError`,
+and `RegistryOfflineError` — which a caller can branch on with the
+`registryErrorName` / `isRegistryError` / `isPackageRegistryError` predicates.
 
 The tree reports its read consistency through `getInfo().temporal`: `stable` at
 the configured root, `live` at package-name and version-listing nodes, and

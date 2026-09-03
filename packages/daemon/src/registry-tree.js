@@ -12,6 +12,7 @@ import {
   RegistryNotFoundError,
   RegistryOfflineError,
   RegistryTamperedError,
+  makeEndorNpmRegistryTree,
   makeNpmRegistryTree,
   makePackageRegistryTree,
 } from '@endo/exo-npm';
@@ -195,6 +196,9 @@ export const makeEndorPackageRegistryTree = hostPowers => {
     },
   });
 
-  return makePackageRegistryTree({ npm: makeNpmRegistryTree(operations) });
+  // Use the Endor-labelled constructor so a deployed Endor hub's `help()` and
+  // `Alleged:` diagnostics identify the backend that actually answered — the
+  // one the conformance suite's `'Endor'` row exercises.
+  return makePackageRegistryTree({ npm: makeEndorNpmRegistryTree(operations) });
 };
 harden(makeEndorPackageRegistryTree);
