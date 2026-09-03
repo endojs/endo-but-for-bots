@@ -161,6 +161,18 @@ fn globals_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "16");
 }
 
+#[test]
+fn builtin_brand_errors_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "builtin-brand-errors",
+        &[
+            "var weak=new WeakMap();var iterator=(function*(){yield 1})();iterator.next();",
+            "var weak;var iterator;var n=0;try{Map.prototype.clear.call(weak)}catch(e){n+=e instanceof TypeError}try{Object.getPrototypeOf(iterator).next.call({})}catch(e){n+=e instanceof TypeError}n",
+        ],
+    );
+    assert_eq!(last, "2");
+}
+
 /// String state: chunk-arena content (UTF-16 payloads) round-trips,
 /// growing across cranks; the final read composes pre- and
 /// post-suspend string data.
