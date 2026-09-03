@@ -255,11 +255,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for String.prototype.replaceAll, RegExp @@replace, and
         // boot-layout signature generation 11. Boot-heap content only; format
         // unchanged.
-        // Re-pinned for String/RegExp `matchAll`, the RegExp String Iterator,
-        // RegExp `@@species`, immutable well-known Symbol constants, and
-        // boot-layout signature generation 13. Boot-heap content only; format
-        // unchanged.
-        "f4769aa684a3f64e7b5a3fc755f57e5f7c69eb7b44db0de57fdd4e567e315947",
+        // Re-pinned for the complete RegExp `@@match`/`@@search` protocol
+        // methods and boot-layout signature generation 14. Boot-heap content
+        // only; format unchanged.
+        "15b988de1408ffb55f5b3f603719c4cf118c94d7952f3917db0812185033b6dd",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -438,10 +437,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for String.prototype.replaceAll, RegExp
         // @@replace, and boot generation 11. Schema and format remain
         // unchanged.
-        // Re-pinned with the blob for the matchAll family, immutable
-        // well-known Symbol constants, and boot generation 13. Schema and
-        // format remain unchanged.
-        "f248a906645d6c15d3d686f70df44e4ee5e689bdfac30af048ebeab1479c04bf",
+        // Re-pinned with the blob for RegExp `@@match`/`@@search` and boot
+        // generation 14. Schema and format remain unchanged.
+        "c41cd6a5e708fa1d7265b19fc1652f122a7c71b7951c69dc3058a3a143080708",
         "epoch-3 seal chain"
     );
 }

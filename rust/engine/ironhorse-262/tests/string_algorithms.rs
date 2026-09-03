@@ -557,3 +557,53 @@ fn regexp_string_iterator_is_lazy_global_and_unicode_correct() {
     assert_eq!(run.agreement, Agreement::BothComplete);
     assert_eq!(run.ironhorse_result, "true:true:true:true");
 }
+
+#[test]
+fn regexp_match_protocol_is_generic_and_observable() {
+    for source in [
+        "RegExp.prototype[Symbol.match].name+':'+RegExp.prototype[Symbol.match].length",
+        "var d=Object.getOwnPropertyDescriptor(RegExp.prototype,Symbol.match);d.writable+':'+d.enumerable+':'+d.configurable",
+        "var r={get flags(){throw 'flags'}};try{RegExp.prototype[Symbol.match].call(r,'');false}catch(e){e==='flags'}",
+        "var r={flags:'g',lastIndex:0,get exec(){throw 'exec'}};try{RegExp.prototype[Symbol.match].call(r,'');false}catch(e){e==='exec'&&r.lastIndex===0}",
+        "var seen;var r={flags:'',exec:function(s){seen=[this===r,s];return {0:'x',index:2}}};var q=RegExp.prototype[Symbol.match].call(r,{toString:function(){return 'abc'}});q[0]+':'+seen.join(':')",
+        "var n=0;var r={flags:'g',lastIndex:7,exec:function(){n++;return n===1?{0:''}:n===2?{0:'x'}:null}};RegExp.prototype[Symbol.match].call(r,'ab').join(',')+':'+r.lastIndex+':'+n",
+        "try{RegExp.prototype[Symbol.match].call(1,'');false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn regexp_search_protocol_restores_last_index_and_returns_live_index() {
+    for source in [
+        "RegExp.prototype[Symbol.search].name+':'+RegExp.prototype[Symbol.search].length",
+        "var d=Object.getOwnPropertyDescriptor(RegExp.prototype,Symbol.search);d.writable+':'+d.enumerable+':'+d.configurable",
+        "var seen;var r={lastIndex:4,exec:function(s){seen=[this===r,s,this.lastIndex];this.lastIndex=8;return {index:3}}};RegExp.prototype[Symbol.search].call(r,{toString:function(){return 'abc'}})+':'+r.lastIndex+':'+seen.join(':')",
+        "var r={lastIndex:0,exec:function(){return {get index(){return 'sentinel'}}}};RegExp.prototype[Symbol.search].call(r,'')",
+        "var r={lastIndex:-0,exec:function(){return null}};Object.is(RegExp.prototype[Symbol.search].call(r,''),-1)+':'+Object.is(r.lastIndex,-0)",
+        "var marker={};var r={get lastIndex(){throw marker}};try{RegExp.prototype[Symbol.search].call(r,'');false}catch(e){e===marker}",
+        "try{RegExp.prototype[Symbol.search].call(null,'');false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn string_regexp_protocol_override_metering_preserves_pinned_xs_totals() {
+    for source in [
+        "'abc'.match({[Symbol.match]:function(s){return s.length}})",
+        "'abc'.search({[Symbol.search]:function(s){return s.length}})",
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert_eq!(run.agreement, Agreement::BothComplete, "`{source}`");
+        assert!(run.result_agrees, "`{source}` result diverged");
+        assert!(
+            run.computrons_agree,
+            "`{source}` meter diverged: oracle={} ({}) ironhorse={} ({})",
+            run.oracle_computrons,
+            run.oracle_meter_raw,
+            run.ironhorse_computrons,
+            run.ironhorse_meter_raw,
+        );
+    }
+}

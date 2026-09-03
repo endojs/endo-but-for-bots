@@ -22,7 +22,6 @@ test/intrinsics/MapPrototype/intrinsic-metadata.js
 test/intrinsics/Math/intrinsic-metadata.js
 test/intrinsics/Reflect/intrinsic-metadata.js
 test/intrinsics/RegExpPrototype/intrinsic-metadata.js
-test/intrinsics/RegExpStringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/SetPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/TypedArray/intrinsic-metadata.js
