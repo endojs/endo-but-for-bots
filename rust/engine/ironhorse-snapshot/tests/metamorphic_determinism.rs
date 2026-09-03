@@ -260,7 +260,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // only; format unchanged.
         // Re-pinned for RegExp `@@split` and boot-layout signature generation
         // 15. Boot-heap content only; format unchanged.
-        "d2c9d19242981a87a0bd4150ec07f8eb51318ae6f474cc4693028eaac95f5ddb",
+        // Re-pinned for ArrayBuffer `slice` metadata, `@@species`, and
+        // `@@toStringTag`, with boot-layout signature generation 16.
+        // Boot-heap content only; format unchanged.
+        "7f4763cce129d34bf4a89db9eab9388dfd67f06865e86aebbcaa58538c91df25",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -443,7 +446,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // generation 14. Schema and format remain unchanged.
         // Re-pinned with the blob for RegExp `@@split` and boot generation 15.
         // Schema and format remain unchanged.
-        "413766f4130a5cc8b17b17b19fbb63de294ee6e8eeb004d8862bcc1ab095fd92",
+        // Re-pinned with the blob for ArrayBuffer `slice` metadata,
+        // `@@species`, and `@@toStringTag`, with boot generation 16.
+        // Schema and format remain unchanged.
+        "bb2ce55935b9d7621b76e5dbc6ff74775ae22aee95b5916b80a1ebbde378445b",
         "epoch-3 seal chain"
     );
 }

@@ -887,6 +887,19 @@ fn sloppy_this_wrappers_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn array_buffer_slice_results_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "array-buffer-slice",
+        &[
+            "var b=new ArrayBuffer(5);var v=new Uint8Array(b);v.set([10,20,30,40,50]);var c;0",
+            "c=b.slice(1,4);0",
+            "v[2]=99;c.byteLength+':'+new Uint8Array(c).join(',')+':'+Object.prototype.toString.call(c)+':'+(ArrayBuffer[Symbol.species]===ArrayBuffer)",
+        ],
+    );
+    assert_eq!(last, "3:20,30,40:[object ArrayBuffer]:true");
+}
+
+#[test]
 fn abstract_typed_array_hierarchy_survives_sqlite_sleep_cycles() {
     // `%TypedArray%` and `%TypedArray.prototype%` are boot-rebuilt shared
     // intermediates. Concrete constructors, prototypes, instances, and their
