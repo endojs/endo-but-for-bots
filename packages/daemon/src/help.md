@@ -699,25 +699,30 @@ blobs, so generic code can read a content hash off any blob or tree.
 
 Check if an entry exists at the given path.
 names: string[] - Path segments.
-Example: has("index.html") → true
-Example: has("assets", "style.css") → true
+Example: has("index.html") -> true
+Example: has("assets", "style.css") -> true
 
 ## list(...names) -> Promise<string[]>
 
 List entry names at the given path (or root).
 names: string[] - Path segments (optional, defaults to root).
-Example: list() → ["index.html", "app.js", "assets"]
-Example: list("assets") → ["style.css", "logo.png"]
+Example: list() -> ["index.html", "app.js", "assets"]
+Example: list("assets") -> ["style.css", "logo.png"]
 
 ## lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>
 
 Get the value at a name or path.
 nameOrPath: string | string[] - Name or path segments.
 Returns EndoReadable for files, ReadableTree for subdirectories.
-Example: lookup("index.html") → EndoReadable
-Example: lookup(["assets", "style.css"]) → EndoReadable
+Example: lookup("index.html") -> EndoReadable
+Example: lookup(["assets", "style.css"]) -> EndoReadable
 
 # EndoMount - Live mutable access to a filesystem directory.
+
+Paths: an array is a sequence of segments (["src", "foo.js"]); a plain
+string is a single name. These forms are equivalent for one name. Segments
+must not contain "/", so readText("src/foo.js") is rejected; pass
+readText(["src", "foo.js"]) for a nested path.
 
 All paths are confined to the mount root. Symlinks that escape
 the root are invisible. Use readOnly() for an attenuated view.
@@ -737,6 +742,13 @@ Get documentation for this interface or a specific method.
 Return the structural kind of this lookup result.
 Use this before choosing directory-only or file-only methods.
 
+## entry(path) -> EndoMountEntry
+
+Mint a path token for this mount.
+path: string | string[] — One name or an array of names. A string is
+equivalent to a one-element array and is never split on "/".
+Pass the token to any path-taking method: readText(entry(["src", "foo.js"])).
+
 ## has(...pathSegments | entry) -> Promise<boolean>
 
 Check if a path exists within the mount.
@@ -753,43 +765,48 @@ Entries with symlinks escaping the mount root are excluded.
 
 Resolve a path within the mount.
 path: string | string[] | EndoMountEntry — A string is one segment; an array
-is a sequence of segments. For a slash-joined nested path, use
-lookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).
+is a sequence of segments. For a nested path, pass
+lookup(["dir", "file.txt"]) or an entry minted from that array.
 Returns EndoMount for directories, EndoMountFile for files.
 
 ## readText(path) -> Promise<string>
 
 Read a file as UTF-8 text.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a string
+containing a slash is rejected.
 Throws if the file does not exist.
 
 ## maybeReadText(path) -> Promise<string | undefined>
 
 Read a file as UTF-8 text, returning undefined if missing.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a string
+containing a slash is rejected.
 
 ## writeText(path, content) -> Promise<void>
 
 Write UTF-8 text to a file at the given path.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a string
+containing a slash is rejected.
 content: string — Text content to write.
 Creates parent directories as needed. Throws if read-only.
 
 ## remove(path) -> Promise<void>
 
 Remove a file or empty directory.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a string
+containing a slash is rejected.
 
 ## move(from, to) -> Promise<void>
 
 Rename an entry within the mount.
-from: string | string[] — Source name or path segments.
-to: string | string[] — Destination name or path segments.
+from, to: string | string[] — One segment, or an array of segments; a string
+containing a slash is rejected.
 
 ## makeDirectory(path) -> Promise<EndoMount>
 
 Create a directory (and missing parents) at the given path; returns a sub-mount.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments,
+or a mount entry; a string containing a slash is rejected.
 
 ## followNameChanges(...pathSegments) -> AsyncIterator
 
@@ -803,13 +820,15 @@ Releases the underlying OS watcher when the iterator is dropped.
 ## makeFile(path, content?) -> Promise<void>
 
 Create a file at the given path, with optional initial text content.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments,
+or a mount entry; a string containing a slash is rejected.
 content: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.
 
 ## write(path, value) -> Promise<void>
 
 Materialize a ReadableBlob or ReadableTree at the given path.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments,
+or a mount entry; a string containing a slash is rejected.
 value: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.
 
 ## copy(from, to) -> Promise<void>
@@ -822,8 +841,55 @@ Both endpoints are confinement-checked.
 ## stat(path) -> Promise<EndoMountStat | undefined>
 
 Query metadata for a path within the mount.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments,
+or a mount entry; a string containing a slash is rejected.
 Returns undefined when the path is missing or escapes the mount.
+
+## glob(pattern) -> Promise<string[]>
+
+Recursively enumerate paths matching a glob pattern, relative to this mount face.
+pattern: string — slash-separated segments. The only metacharacters are `*` and `**`.
+`*` matches zero or more characters within one segment (never `/`, and it does match
+leading-dot names); `**` as a whole segment matches zero or more directory levels,
+and a trailing `**` additionally matches file descendants. Every other character is
+a literal. Denied names never appear, even when named literally. Symlinks that
+escape the mount root, or resolve into a denied directory, are excluded. Results
+include directories and files, are sorted by UTF-16 code unit, and are capped at
+10,000 with silent truncation.
+Example: glob("**/*.js") returns all JavaScript files at any depth.
+
+## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
+
+Search file contents for a regular expression across selected files.
+pattern: string — an ECMAScript RegExp source, evaluated as `new RegExp(pattern)`
+with no flags. NOTE: a caller-supplied source may catastrophically backtrack and
+stall the daemon; supply trusted patterns.
+paths: string[] | Promise<string[]> — which files to search. Await a glob result
+to compose the two: `grep(pattern, await glob("src/**/*.js"))`.
+Omit it to search every file under the mount face.
+options.maxResults: number — non-negative safe-integer cap on match records
+(default 1000). NaN, Infinity, negatives, and fractions are rejected.
+Each match yields one `{ file, line, text }` record: file is the mount-relative
+path, line is 1-based, text is the whole line with a trailing carriage return
+stripped. A path that is denied, escapes the mount, resolves into a denied
+directory, is a directory, or cannot be read is skipped silently.
+Example: grep("TODO", await glob("src/**/*.js")) returns every TODO line under src.
+
+## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
+
+Fused glob+grep: enumerate the files matching the glob pattern, then search them
+for the grep pattern in one call.
+globPattern: string — a glob pattern (same dialect as glob()); selects the search set.
+grepPattern: string — an ECMAScript RegExp source (same as grep()); the pattern each
+matched file is searched for. NOTE: same ReDoS hazard as grep — supply trusted patterns.
+Both patterns are required, so a native filesystem layer can fuse the enumerate-and-scan
+into a single pass. It returns the same `{ file, line, text }` records as grep and honors
+the same confinement and deny-pattern filtering. The glob enumeration is capped at
+10,000 files (silent truncation), then grep's maxResults caps the match records.
+options.maxResults: number — non-negative safe-integer cap on match records (default 1000).
+`glorp(g, p)` is the fused equivalent of `grep(p, glob(g))`; prefer it when you have both
+patterns up front.
+Example: glorp("src/**/*.js", "TODO") returns every TODO line in a .js file under src.
 
 ## readOnly() -> ReadableTree
 

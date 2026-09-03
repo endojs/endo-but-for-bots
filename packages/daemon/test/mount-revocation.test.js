@@ -133,10 +133,9 @@ test('default deny: followNameChanges snapshot omits restricted names', async t 
 test('default deny: entry() denies a restricted segment in string and array forms', async t => {
   const rootPath = makeDenyFixture(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
-  // Both the slash-joined string form and the array form deny eagerly at
-  // mint, so a restricted name never reaches an entry handle in the first
-  // place — the two forms enforce identically.
-  await t.throwsAsync(() => E(mount).entry('.ssh/id_rsa'), {
+  // Both the single-name string form and the path array form deny eagerly at
+  // mint, so a restricted name never reaches an entry handle.
+  await t.throwsAsync(() => E(mount).entry('.ssh'), {
     message: /Access denied/,
   });
   await t.throwsAsync(() => E(mount).entry(['.ssh', 'id_rsa']), {
@@ -336,7 +335,7 @@ test('revocation: propagates to an entry minted before revoke', async t => {
     readOnly: false,
     filePowers,
   });
-  const entry = await E(mount).entry('a/b.txt');
+  const entry = await E(mount).entry(['a', 'b.txt']);
   t.deepEqual(await E(entry).segments(), ['a', 'b.txt']);
 
   E(control).revoke();

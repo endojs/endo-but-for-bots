@@ -2199,6 +2199,14 @@ export type FilePowers = {
   // Node powers omit it. Declared here so the XS factory's return value
   // structurally satisfies FilePowers without an excess-property error.
   readLink?: (path: string) => Promise<string | undefined>;
+  /**
+   * Optional platform-native search engine. When present, `provideSearch`
+   * (`@endo/platform/fs/search`) uses it verbatim in place of the normative JS
+   * engine, and `glorp` dispatches to its `glorpFiles` for a single fused
+   * enumerate-and-scan pass. Structurally optional so the Node powers (which
+   * rely on the JS engine) satisfy `FilePowers` without it.
+   */
+  search?: import('@endo/platform/fs/search.types').Search;
   pathIdentity: (path: string) => Promise<string>;
   statPath: (path: string) => Promise<{
     kind: 'file' | 'directory' | 'symlink';

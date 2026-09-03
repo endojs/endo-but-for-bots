@@ -107,7 +107,67 @@ test('glorp requires both patterns', async t => {
     // rejects it at the exo boundary before the method body runs.
     // @ts-expect-error deliberate arity violation under test
     () => E(mount).glorp('src/**/*.js'),
-    undefined,
+    {
+      message: /arg|argument|arity|glorp/i,
+    },
     'a single-argument glorp is rejected by the interface guard',
+  );
+});
+
+test('glorp rejects invalid maxResults', async t => {
+  const { root } = buildMountFixture(t);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  // NaN, Infinity, negatives, and fractions are hazards the interface guard
+  // admits (M.number()) but the method body rejects.
+  for (const bad of [NaN, Infinity, -1, 1.5]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => E(mount).glorp('src/**/*.js', 'export', { maxResults: bad }),
+      { message: /maxResults/i },
+      `maxResults ${String(bad)} is rejected`,
+    );
+  }
+});
+
+test('glorp clamps maxResults above the ceiling', async t => {
+  const { root } = buildMountFixture(t);
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  // A finite safe integer above GREP_MAX_RESULTS clamps rather than throwing.
+  const result = await E(mount).glorp('src/**/*.js', 'export', {
+    maxResults: 1_000_000,
+  });
+  t.true([...result].length <= 4, 'clamped cap does not over-collect');
+});
+
+test('glorp dispatches to a native search.glorpFiles when present', async t => {
+  const { root } = buildMountFixture(t);
+  // A file powers object whose `search` carries a fused `glorpFiles` should be
+  // used in preference to the JS composition; prove the seam is live by
+  // recording the call and returning a sentinel batch.
+  let called = false;
+  const nativeSearch = harden({
+    globPaths: () => {
+      throw Error('globPaths should not be called when glorpFiles is present');
+    },
+    grepFiles: () => {
+      throw Error('grepFiles should not be called when glorpFiles is present');
+    },
+    glorpFiles: async function* glorpFiles() {
+      called = true;
+      yield harden([
+        { file: 'synthetic.js', line: 1, text: 'native fused match' },
+      ]);
+    },
+  });
+  const mount = makeMount({
+    rootPath: root,
+    readOnly: false,
+    filePowers: { ...filePowers, search: nativeSearch },
+  });
+  const result = await E(mount).glorp('**/*.js', 'export');
+  t.true(called, 'the native glorpFiles seam was consulted');
+  t.deepEqual(
+    [...result],
+    [{ file: 'synthetic.js', line: 1, text: 'native fused match' }],
   );
 });

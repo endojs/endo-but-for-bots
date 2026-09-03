@@ -205,6 +205,8 @@ test('namePathFrom passes through array', t => {
 test('namePathFrom validates', t => {
   t.throws(() => namePathFrom(''), { message: /Invalid/ });
   t.throws(() => namePathFrom([]), { message: /Invalid/ });
+  t.throws(() => namePathFrom('a/b'), { message: /Invalid name/ });
+  t.throws(() => namePathFrom(['a/b']), { message: /Invalid name/ });
 });
 
 // --- petNamePathFrom ---

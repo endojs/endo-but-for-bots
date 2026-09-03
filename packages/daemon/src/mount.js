@@ -33,9 +33,37 @@ import {
 } from './interfaces.js';
 
 // Re-exported from the platform search engine (the eager `glob()` collector's
-// post-sort cap). Kept as a `mount.js` export so consumers and the
-// cross-language contract test bind to the one canonical constant.
-export { GLOB_MAX_RESULTS };
+// post-sort cap and the `grep`/`glorp` match-record cap). Kept as `mount.js`
+// exports so consumers and the cross-language contract test bind to the one
+// canonical constants.
+export { GLOB_MAX_RESULTS, GREP_MAX_RESULTS };
+
+/**
+ * Coerce a caller-supplied `maxResults` option into a non-negative safe integer
+ * capped at `ceiling`. The interface guard admits any `M.number()`, so `NaN`,
+ * `Infinity`, negatives, and fractions reach the method body; each is a hazard:
+ * `NaN` makes the cap comparison always false (a full-tree scan returning `[]`),
+ * `Infinity` disables the cap, and negatives/fractions misbehave. Reject all but
+ * non-negative safe integers, and clamp a finite value above the ceiling down
+ * to it. `undefined` yields the default cap.
+ *
+ * @param {number | undefined} maxResults
+ * @param {number} ceiling
+ * @returns {number}
+ */
+const clampMaxResults = (maxResults, ceiling) => {
+  if (maxResults === undefined) {
+    return ceiling;
+  }
+  if (typeof maxResults !== 'number' || !Number.isSafeInteger(maxResults)) {
+    throw RangeError(`maxResults must be a safe integer, got ${q(maxResults)}`);
+  }
+  if (maxResults < 0) {
+    throw RangeError(`maxResults must be non-negative, got ${q(maxResults)}`);
+  }
+  return Math.min(maxResults, ceiling);
+};
+harden(clampMaxResults);
 
 const mountEntryRecords = new WeakMap();
 const mountRecords = new WeakMap();
@@ -258,7 +286,7 @@ const assertValidSegment = segment => {
     segment.includes('\0')
   ) {
     throw new Error(
-      `Path segment must not contain '/', '\\', or '\\0' (a string is one segment; pass ["dir", "file.txt"] or entry("dir/file.txt") for nested paths): ${q(segment)}`,
+      `Path segment must not contain '/', '\\', or '\\0' (a string is one segment; pass ["dir", "file.txt"] for nested paths): ${q(segment)}`,
     );
   }
 };
@@ -639,25 +667,17 @@ const makeMountExo = ctx => {
   };
 
   /**
-   * `entry()` is the one mount API where a string is a slash-joined
-   * selector rather than a single name.  Other path-bearing convenience
-   * methods keep their existing single-name string compatibility.
-   *
-   * @param {string | readonly string[]} pathArg
+   * @param {string | readonly string[]} pathArgument
    * @returns {string[]}
    */
-  const segmentsFromEntryPathArg = pathArg => {
-    if (Array.isArray(pathArg)) {
-      return normalizeSegments(currentSegments, pathArg, deniedSegments);
+  const segmentsFromEntryPathArgument = pathArgument => {
+    if (Array.isArray(pathArgument)) {
+      return normalizeSegments(currentSegments, pathArgument, deniedSegments);
     }
-    if (typeof pathArg !== 'string') {
+    if (typeof pathArgument !== 'string') {
       throw new Error('entry() path must be a string or array');
     }
-    return normalizeSegments(
-      currentSegments,
-      pathArg.split('/'),
-      deniedSegments,
-    );
+    return normalizeSegments(currentSegments, [pathArgument], deniedSegments);
   };
 
   /**
@@ -817,6 +837,10 @@ const makeMountExo = ctx => {
         deniedSegments === undefined ? undefined : [...deniedSegments],
       confinementRoot,
     })) {
+      // A revoke landing mid-walk must not keep delivering paths; the entry
+      // gate only covers method start, so re-check per batch (mirroring
+      // followChanges).
+      assertLive();
       paths.push(...batch);
       if (paths.length >= GLOB_MAX_RESULTS) {
         break;
@@ -849,7 +873,7 @@ const makeMountExo = ctx => {
   const grep = async (pattern, paths = undefined, options = {}) => {
     await null;
     assertLive();
-    const { maxResults = GREP_MAX_RESULTS } = options;
+    const maxResults = clampMaxResults(options.maxResults, GREP_MAX_RESULTS);
     const search = provideSearch(filePowers);
     /** @type {Array<{ file: string, line: number, text: string }>} */
     const matches = [];
@@ -859,6 +883,10 @@ const makeMountExo = ctx => {
       confinementRoot,
       maxResults,
     })) {
+      // A revoke landing mid-walk must not keep delivering file contents; the
+      // entry gate only covers method start, so re-check per batch (mirroring
+      // followChanges).
+      assertLive();
       matches.push(...batch);
       if (matches.length >= maxResults) {
         break;
@@ -867,17 +895,15 @@ const makeMountExo = ctx => {
     return harden(matches.slice(0, maxResults));
   };
 
-  // Fused glob+grep: enumerate the files matching the `glob` pattern and
-  // search them for the `grep` pattern, returning grep's `{ file, line, text }`
+  // Fused glob+grep: enumerate the files matching the `globPattern` and
+  // search them for the `grepPattern`, returning grep's `{ file, line, text }`
   // records. Both patterns are required positionals (unlike grep's optional
   // `paths`), so the whole operation is expressible as a single call whose two
   // patterns a native filesystem layer can push down and fuse into one
   // enumerate-and-scan pass — no glob result set round-trips through JS. The
-  // reference implementation here composes the decoupled surface directly by
-  // calling the lexical `glob` and `grep` above — the same
-  // `grep(pattern, glob(g))` seam grep already exposes, with the glob result
-  // awaited before it becomes grep's `paths` argument. A native powers layer
-  // may override `glorp` with a single fused call.
+  // reference implementation composes the lexical `glob` then `grep` (the same
+  // `grep(pattern, glob(g))` seam), or dispatches to a native
+  // `search.glorpFiles` when the file powers supply one.
   /**
    * @param {string} globPattern
    * @param {string} grepPattern
@@ -886,7 +912,36 @@ const makeMountExo = ctx => {
   const glorp = async (globPattern, grepPattern, options = {}) => {
     await null;
     assertLive();
-    const { maxResults = GREP_MAX_RESULTS } = options;
+    const maxResults = clampMaxResults(options.maxResults, GREP_MAX_RESULTS);
+    // A native powers layer may expose a fused `glorpFiles` on its `search`
+    // engine; when present, dispatch to it so the whole enumerate-and-scan pass
+    // runs in one native walk with no glob result-set round-trip through JS.
+    // Otherwise compose the lexical `glob` then `grep` (the same
+    // `grep(pattern, glob(g))` seam), which `provideSearch` resolves through
+    // `filePowers.search` when a native `globPaths`/`grepFiles` is present.
+    const search = provideSearch(filePowers);
+    if (search.glorpFiles !== undefined) {
+      /** @type {Array<{ file: string, line: number, text: string }>} */
+      const matches = [];
+      for await (const batch of search.glorpFiles(
+        currentDir,
+        globPattern,
+        grepPattern,
+        {
+          deniedSegments:
+            deniedSegments === undefined ? undefined : [...deniedSegments],
+          confinementRoot,
+          maxResults,
+        },
+      )) {
+        assertLive();
+        matches.push(...batch);
+        if (matches.length >= maxResults) {
+          break;
+        }
+      }
+      return harden(matches.slice(0, maxResults));
+    }
     const paths = await glob(globPattern);
     return grep(grepPattern, paths, { maxResults });
   };
@@ -900,7 +955,7 @@ const makeMountExo = ctx => {
       if (typeof pathArg === 'string' && pathArg.includes('/')) {
         const cause = /** @type {Error} */ (error);
         throw new Error(
-          `${cause.message}; use an array of path segments or entry() for a slash-joined path`,
+          `${cause.message}; use an array of path segments for a nested path`,
           { cause: error },
         );
       }
@@ -963,9 +1018,9 @@ const makeMountExo = ctx => {
     });
   };
 
-  const entry = pathArg => {
+  const entry = pathArgument => {
     assertLive();
-    return makeEntry(segmentsFromEntryPathArg(pathArg));
+    return makeEntry(segmentsFromEntryPathArgument(pathArgument));
   };
 
   const makeDirectory = async pathArg => {

@@ -630,13 +630,13 @@ test('lookup results expose a kind discriminator and targeted cross-type errors'
   });
 });
 
-test('lookup explains the array and entry forms for slash-joined strings', async t => {
+test('lookup explains the array form for nested paths', async t => {
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   fs.mkdirSync(path.join(rootPath, 'dir'));
 
   const error = await t.throwsAsync(() => E(mount).lookup('dir/value.txt'), {
-    message: /array of path segments or entry\(\)/,
+    message: /array of path segments/,
   });
   t.regex(/** @type {Error} */ (error.cause).message, /slash|segment/i);
 });
