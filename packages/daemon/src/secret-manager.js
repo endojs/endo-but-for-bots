@@ -17,7 +17,7 @@ import { assertPetName } from './pet-name.js';
 /** @import { SecretAuditEvent, SecretSummary } from './types.js' */
 
 const MAX_SECRET_BYTES = 1024 * 1024;
-const MAX_PURPOSE_LENGTH = 200;
+const MAX_DESCRIPTION_LENGTH = 200;
 
 export const secretBlobHelp =
   'This capability grants access to secret bytes. Prefer proposing a formula that receives it as an endowment. Do not call readBase64() unless the task specifically requires learning the secret value.';
@@ -26,17 +26,17 @@ harden(secretBlobHelp);
 const fixedError = code => makeError(X`Secret operation failed: ${q(code)}`);
 
 /**
- * @param {string} purpose
+ * @param {string} description
  */
-const assertPurpose = purpose => {
+const assertDescription = description => {
   if (
-    typeof purpose !== 'string' ||
-    purpose.length === 0 ||
-    purpose.length > MAX_PURPOSE_LENGTH ||
-    purpose.includes('\n') ||
-    purpose.includes('\r')
+    typeof description !== 'string' ||
+    description.length === 0 ||
+    description.length > MAX_DESCRIPTION_LENGTH ||
+    description.includes('\n') ||
+    description.includes('\r')
   ) {
-    throw fixedError('INVALID_PURPOSE');
+    throw fixedError('INVALID_DESCRIPTION');
   }
 };
 
@@ -69,7 +69,7 @@ const decodeSecret = bytesBase64 => {
  * @typedef {object} SecretRecord
  * @property {string} secretId
  * @property {string} backendRef
- * @property {string} purpose
+ * @property {string} description
  * @property {'active' | 'revoked' | 'unavailable'} state
  * @property {bigint} generation
  * @property {string} createdAt
@@ -113,7 +113,7 @@ export const makeSecretManager = ({
     harden(
       /** @type {SecretSummary} */ ({
         secretId: record.secretId,
-        purpose: record.purpose,
+        description: record.description,
         state: record.state,
         generation: record.generation,
         createdAt: record.createdAt,
@@ -207,7 +207,7 @@ export const makeSecretManager = ({
     if (secretId === undefined) throw fixedError('UNKNOWN_GRANT');
     const blob = makeExo(`SecretBlob ${grantId}`, SecretBlobInterface, {
       help: () => secretBlobHelp,
-      getPurpose: async () => requireRecord(secretId).purpose,
+      getDescription: async () => requireRecord(secretId).description,
       readBase64: async () => {
         const before = requireRecord(secretId);
         if (before.state !== 'active') throw fixedError('REVOKED');
@@ -313,26 +313,26 @@ export const makeSecretManager = ({
             bytes.fill(0);
           }
         }),
-      setPurpose: purpose =>
+      setDescription: description =>
         serializeMutation(secretId, async () => {
-          assertPurpose(purpose);
+          assertDescription(description);
           const before = requireRecord(secretId);
           if (before.state === 'revoked') throw fixedError('REVOKED');
           const operationId = await randomHex256();
           await audit(
             secretId,
-            'set-purpose',
+            'set-description',
             'attempted',
             before.generation,
             operationId,
           );
           try {
             persistence.writeSecretRecord(
-              harden({ ...before, purpose, updatedAt: now() }),
+              harden({ ...before, description, updatedAt: now() }),
             );
             await audit(
               secretId,
-              'set-purpose',
+              'set-description',
               'succeeded',
               before.generation,
               operationId,
@@ -340,13 +340,13 @@ export const makeSecretManager = ({
           } catch {
             await audit(
               secretId,
-              'set-purpose',
+              'set-description',
               'failed',
               before.generation,
               operationId,
-              { reasonCode: 'SET_PURPOSE_FAILED' },
+              { reasonCode: 'SET_DESCRIPTION_FAILED' },
             );
-            throw fixedError('SET_PURPOSE_FAILED');
+            throw fixedError('SET_DESCRIPTION_FAILED');
           }
         }),
       revoke: () =>
@@ -417,9 +417,9 @@ export const makeSecretManager = ({
    */
   const makeHostDirectory = ({ bindGrant }) => {
     const importer = makeExo('SecretImporter', SecretImporterInterface, {
-      createBase64: async (name, purpose, bytesBase64) => {
+      createBase64: async (name, description, bytesBase64) => {
         assertPetName(name);
-        assertPurpose(purpose);
+        assertDescription(description);
         const bytes = decodeSecret(bytesBase64);
         const secretId = await randomHex256();
         const grantId = await randomHex256();
@@ -432,7 +432,7 @@ export const makeSecretManager = ({
             /** @type {SecretRecord} */ ({
               secretId,
               backendRef,
-              purpose,
+              description,
               state: 'active',
               generation: 1n,
               createdAt,
@@ -484,6 +484,6 @@ harden(makeSecretManager);
 
 export const secretManagerLimits = harden({
   maxSecretBytes: MAX_SECRET_BYTES,
-  maxPurposeLength: MAX_PURPOSE_LENGTH,
+  maxDescriptionLength: MAX_DESCRIPTION_LENGTH,
 });
 harden(secretManagerLimits);

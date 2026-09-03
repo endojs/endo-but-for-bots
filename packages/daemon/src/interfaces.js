@@ -136,7 +136,7 @@ export const EnvelopeInterface = M.interface('EndoEnvelope', {});
 
 export const SecretBlobInterface = M.interface('SecretBlob', {
   help: M.call().returns(M.string()),
-  getPurpose: M.call().returns(M.promise()),
+  getDescription: M.call().returns(M.promise()),
   // Uint8Array is mutable and therefore not passable. Base64 is the wire
   // envelope only; the backend and manager continue to store arbitrary bytes.
   readBase64: M.call().returns(M.promise()),
@@ -145,7 +145,7 @@ export const SecretBlobInterface = M.interface('SecretBlob', {
 export const SecretAdminInterface = M.interface('SecretAdmin', {
   getSummary: M.call().returns(M.promise()),
   replaceBase64: M.call(M.string()).returns(M.promise()),
-  setPurpose: M.call(M.string()).returns(M.promise()),
+  setDescription: M.call(M.string()).returns(M.promise()),
   revoke: M.call().returns(M.promise()),
 });
 

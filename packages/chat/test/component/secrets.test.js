@@ -30,7 +30,7 @@ test.serial(
     const calls = [];
     const summary = harden({
       secretId: 'secret-1234567890',
-      purpose: 'Release publishing',
+      description: 'Release publishing',
       state: 'active',
       generation: 1n,
       createdAt: '2026-09-03T00:00:00.000Z',
@@ -39,7 +39,7 @@ test.serial(
     const admin = Far('MockSecretAdmin', {
       getSummary: () => summary,
       replaceBase64: value => calls.push(['replace', value]),
-      setPurpose: purpose => calls.push(['purpose', purpose]),
+      setDescription: description => calls.push(['description', description]),
       revoke: () => calls.push(['revoke']),
     });
     const catalog = Far('MockSecretCatalog', {
@@ -49,8 +49,8 @@ test.serial(
       list: () => [],
     });
     const importer = Far('MockSecretImporter', {
-      createBase64: (name, purpose, value) => {
-        calls.push(['create', name, purpose, value]);
+      createBase64: (name, description, value) => {
+        calls.push(['create', name, description, value]);
         return summary;
       },
     });
@@ -88,7 +88,7 @@ test.serial(
 
     const $create = $parent.querySelector('.secret-create-form');
     const $name = $create.elements.namedItem('name');
-    const $purpose = $create.elements.namedItem('purpose');
+    const $description = $create.elements.namedItem('description');
     const $value = $create.elements.namedItem('value');
     const $replacement = $parent.querySelector(
       '.secret-card input[name="value"]',
@@ -101,8 +101,8 @@ test.serial(
     t.is($replacement.getAttribute('data-lpignore'), 'true');
     $name.value = 'release';
     $name.dispatchEvent(new Event('input', { bubbles: true }));
-    $purpose.value = 'Release publishing';
-    $purpose.dispatchEvent(new Event('input', { bubbles: true }));
+    $description.value = 'Release publishing';
+    $description.dispatchEvent(new Event('input', { bubbles: true }));
     $value.value = canary;
     $value.dispatchEvent(new Event('input', { bubbles: true }));
     $create.dispatchEvent(
@@ -119,6 +119,25 @@ test.serial(
     ]);
     t.is($value.value, '');
     t.false($parent.textContent.includes(canary));
+
+    const $descriptionUpdate = $parent.querySelector(
+      '.secret-card input[name="description"]',
+    );
+    $descriptionUpdate.value = 'Publishes release artifacts';
+    $descriptionUpdate.dispatchEvent(new Event('input', { bubbles: true }));
+    $descriptionUpdate.form.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await waitFor(() =>
+      calls.some(([operation]) => operation === 'description'),
+    );
+    t.true(
+      calls.some(
+        call =>
+          call[0] === 'description' &&
+          call[1] === 'Publishes release artifacts',
+      ),
+    );
 
     const $revoke = $parent.querySelector('.secret-revoke');
     t.is($revoke.textContent, 'Confirm revocation');

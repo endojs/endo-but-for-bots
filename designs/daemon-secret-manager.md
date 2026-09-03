@@ -36,7 +36,7 @@ identity-based authorization decision.
 The manager is responsible for:
 
 - storing an arbitrary bounded `Uint8Array` in an injected backend;
-- giving the record a non-secret human-readable purpose;
+- giving the record a non-secret human-readable description;
 - minting separately delegable read and administration facets;
 - replacing the current bytes without changing existing read capabilities;
 - revoking all future reads;
@@ -99,12 +99,12 @@ The method guards enforce this intentionally small initial vocabulary.
 ```ts
 interface SecretBlob {
   readBase64(): Promise<string>;
-  getPurpose(): Promise<string>;
+  getDescription(): Promise<string>;
   help(): string;
 }
 
 type SecretSummary = {
-  purpose: string;
+  description: string;
   state: 'active' | 'revoked' | 'unavailable';
   generation: bigint;
   createdAt: string;
@@ -114,14 +114,14 @@ type SecretSummary = {
 interface SecretAdmin {
   getSummary(): Promise<SecretSummary>;
   replaceBase64(bytesBase64: string): Promise<void>;
-  setPurpose(purpose: string): Promise<void>;
+  setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
 }
 
 interface SecretImporter {
   createBase64(
     name: string,
-    purpose: string,
+    description: string,
     bytesBase64: string,
   ): Promise<SecretSummary>;
 }
@@ -151,7 +151,7 @@ not passable.
 The manager decodes at ingress and the backend stores arbitrary bytes.
 
 `SecretAdmin` is not derivable from `SecretBlob`.
-It can replace, update the purpose of, and revoke but cannot read.
+It can replace, update the description of, and revoke but cannot read.
 
 `SecretCatalog` enumerates management facets, not read facets.
 The Secret Blobs Space uses the catalog to render and manage secrets without
@@ -162,12 +162,15 @@ It is also endowed with the authority to formulate a read grant and bind its
 identifier under `secrets/<name>` in that host's ordinary inventory.
 It returns metadata, not the new read facet.
 
-The `purpose` string is descriptive metadata only.
+The `description` string is advisory metadata only.
 It is mutable, non-unique, and never interpreted as policy or authority.
 It must be short, single-line, and validated, and the UI must state that it is
 not secret.
+It may include the intended use, but no wording in the description
+authorizes or restricts use; authority follows capability possession and
+delegation.
 
-The `help()` text is static and does not interpolate the purpose:
+The `help()` text is static and does not interpolate the description:
 
 > This capability grants access to secret bytes.
 > Prefer proposing a formula that receives it as an endowment.
@@ -192,8 +195,8 @@ It must not use a text input or textarea for secret bytes.
 The UI keeps these controls in confined, controlled state and clears that state
 synchronously on submission, before awaiting the manager operation, so a
 submitted value is not left in the live DOM.
-Purpose and inventory-name controls remain ordinary text because their values
-are explicitly non-secret metadata.
+Description and inventory-name controls remain ordinary text because their
+values are explicitly non-secret metadata.
 
 Revocation is placed behind a visibly labeled danger-zone confirmation because
 it denies all delegated copies and is not an inventory rename or removal.
@@ -310,7 +313,7 @@ Creating `secrets/github-release` proceeds as a recoverable operation:
 
 1. The UI resolves `@secrets/create` without resolving the normal
    `secrets` inventory entry.
-2. The importer validates the pet name and non-secret purpose.
+2. The importer validates the pet name and non-secret description.
 3. The manager records a pending operation and sends the bytes to its selected
    backend.
 4. The backend returns a sturdy `StoredSecret` capability.
@@ -398,13 +401,13 @@ upstream action already performed with them.
 
 The singleton manager is the mandatory mediation point because no backend
 record capability leaves it.
-It records create, read, replace, purpose change, and revoke operations.
+It records create, read, replace, description change, and revoke operations.
 
 ```ts
 type SecretAuditEvent = {
   eventId: string;
   secretId: string;
-  operation: 'create' | 'release' | 'replace' | 'set-purpose' | 'revoke';
+  operation: 'create' | 'release' | 'replace' | 'set-description' | 'revoke';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;
@@ -419,7 +422,7 @@ type SecretAuditEvent = {
 };
 ```
 
-Audit events exclude secret bytes, ciphertext, hashes, lengths, purpose text,
+Audit events exclude secret bytes, ciphertext, hashes, lengths, description text,
 backend locators, arbitrary reason text, and exception messages.
 Application logs contain only an audit event identifier and fixed diagnostic
 codes.
@@ -455,7 +458,7 @@ formula type:
 4. Message attachment passes a formula identifier without resolving or reading
    the secret.
 5. No general logger receives method arguments, results, backend bodies, or
-   purpose strings from secret operations.
+   description strings from secret operations.
 6. Fixed errors contain no secret-dependent text.
 7. Tests scan formula storage, SQLite, logs, traces, errors, and message records
    for canary secret values.
@@ -476,7 +479,7 @@ boundary necessarily includes any process to which plaintext is delivered.
 - `@secrets` management routing and ordinary `secrets/<name>` lookup formulas;
 - restart, message delegation, replacement, revocation-race, and canary tests;
   and
-- a Secret Blobs Space that creates, enumerates, replaces, updates purposes,
+- a Secret Blobs Space that creates, enumerates, replaces, updates descriptions,
   revokes,
   and audits without receiving a read facet.
 

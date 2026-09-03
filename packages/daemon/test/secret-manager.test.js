@@ -66,7 +66,7 @@ test('secret facets remain separated and durable across manager restart', async 
     encodeBase64(new TextEncoder().encode(canary)),
   );
 
-  t.is(summary.purpose, 'Publish GitHub releases');
+  t.is(summary.description, 'Publish GitHub releases');
   t.deepEqual(
     harness.bindings.map(({ name }) => name),
     ['github-release'],
@@ -85,6 +85,7 @@ test('secret facets remain separated and durable across manager restart', async 
   const restartedDirectory = harness.makeDirectory(harness.makeManager());
   const blob = await E(restartedDirectory).lookup(['use', grantId]);
   t.is(await E(blob).help(), secretBlobHelp);
+  t.is(await E(blob).getDescription(), 'Publish GitHub releases');
   t.is(
     new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
     canary,
@@ -97,13 +98,21 @@ test('secret facets remain separated and durable across manager restart', async 
     new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
     'replacement',
   );
-  await E(entry.admin).setPurpose('Publish future releases');
-  t.is((await E(entry.admin).getSummary()).purpose, 'Publish future releases');
+  await E(entry.admin).setDescription('Publish future releases');
+  t.is(
+    (await E(entry.admin).getSummary()).description,
+    'Publish future releases',
+  );
   t.deepEqual(
     harness.events
-      .filter(({ operation }) => operation === 'set-purpose')
+      .filter(({ operation }) => operation === 'set-description')
       .map(({ outcome }) => outcome),
     ['attempted', 'succeeded'],
+  );
+  t.false(
+    harness.events.some(event =>
+      Object.values(event).includes('Publish future releases'),
+    ),
   );
   await E(entry.admin).revoke();
   await t.throwsAsync(() => E(blob).readBase64(), {
@@ -179,7 +188,7 @@ test('fixed failures do not reflect secret input', async t => {
   const directory = harness.makeDirectory(harness.makeManager());
   const importer = await E(directory).lookup('create');
   const error = await t.throwsAsync(() =>
-    E(importer).createBase64('bad', 'Valid purpose', canary),
+    E(importer).createBase64('bad', 'Valid description', canary),
   );
   t.false(error.message.includes(canary));
 });

@@ -1548,7 +1548,7 @@ export type SecretState = 'active' | 'revoked' | 'unavailable';
 
 export type SecretSummary = {
   secretId: string;
-  purpose: string;
+  description: string;
   state: SecretState;
   generation: bigint;
   createdAt: string;
@@ -1557,21 +1557,21 @@ export type SecretSummary = {
 
 export interface SecretBlob {
   help(): string;
-  getPurpose(): Promise<string>;
+  getDescription(): Promise<string>;
   readBase64(): Promise<string>;
 }
 
 export interface SecretAdmin {
   getSummary(): Promise<SecretSummary>;
   replaceBase64(bytesBase64: string): Promise<void>;
-  setPurpose(purpose: string): Promise<void>;
+  setDescription(description: string): Promise<void>;
   revoke(): Promise<void>;
 }
 
 export interface SecretImporter {
   createBase64(
     name: string,
-    purpose: string,
+    description: string,
     bytesBase64: string,
   ): Promise<SecretSummary>;
 }
@@ -1589,7 +1589,7 @@ export interface SecretCatalog {
 export type SecretAuditEvent = {
   eventId: string;
   secretId: string;
-  operation: 'create' | 'release' | 'replace' | 'set-purpose' | 'revoke';
+  operation: 'create' | 'release' | 'replace' | 'set-description' | 'revoke';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;
@@ -2401,7 +2401,7 @@ export type DaemonicPersistencePowers = {
     | {
         secretId: string;
         backendRef: string;
-        purpose: string;
+        description: string;
         state: SecretState;
         generation: bigint;
         createdAt: string;
@@ -2411,7 +2411,7 @@ export type DaemonicPersistencePowers = {
   writeSecretRecord: (record: {
     secretId: string;
     backendRef: string;
-    purpose: string;
+    description: string;
     state: SecretState;
     generation: bigint;
     createdAt: string;
@@ -2420,7 +2420,7 @@ export type DaemonicPersistencePowers = {
   listSecretRecords: () => Array<{
     secretId: string;
     backendRef: string;
-    purpose: string;
+    description: string;
     state: SecretState;
     generation: bigint;
     createdAt: string;

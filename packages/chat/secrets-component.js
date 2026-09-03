@@ -21,7 +21,7 @@ harden(textToBase64);
  * @typedef {object} SecretRow
  * @property {string} secretId
  * @property {SecretSummary} summary
- * @property {string} purposeDraft
+ * @property {string} descriptionDraft
  * @property {string} replacementDraft
  */
 
@@ -35,11 +35,11 @@ harden(textToBase64);
  * @param {boolean} props.loading
  * @param {string | null} props.error
  * @param {'cleared' | 'failed' | null} props.clipboardStatus
- * @param {{ name: string, purpose: string, value: string }} props.createDraft
- * @param {(field: 'name' | 'purpose' | 'value', value: string) => void} props.onCreateInput
+ * @param {{ name: string, description: string, value: string }} props.createDraft
+ * @param {(field: 'name' | 'description' | 'value', value: string) => void} props.onCreateInput
  * @param {() => void} props.onCreate
- * @param {(secretId: string, purpose: string) => void} props.onPurposeInput
- * @param {(secretId: string) => void} props.onPurpose
+ * @param {(secretId: string, description: string) => void} props.onDescriptionInput
+ * @param {(secretId: string) => void} props.onDescription
  * @param {(secretId: string, value: string) => void} props.onReplaceInput
  * @param {(secretId: string) => void} props.onReplace
  * @param {(secretId: string) => void} props.onRevoke
@@ -55,8 +55,8 @@ const SecretsView = ({
   createDraft,
   onCreateInput,
   onCreate,
-  onPurposeInput,
-  onPurpose,
+  onDescriptionInput,
+  onDescription,
   onReplaceInput,
   onReplace,
   onRevoke,
@@ -134,15 +134,15 @@ const SecretsView = ({
       h(
         'label',
         null,
-        'Purpose (not secret)',
+        'Description (not secret)',
         h('input', {
-          name: 'purpose',
+          name: 'description',
           required: true,
           maxlength: 200,
           autocomplete: 'off',
-          value: createDraft.purpose,
+          value: createDraft.description,
           /** @param {{ target: { value: string } }} event */
-          onInput: event => onCreateInput('purpose', event.target.value),
+          onInput: event => onCreateInput('description', event.target.value),
         }),
       ),
       h(
@@ -171,14 +171,14 @@ const SecretsView = ({
       h('h2', null, 'Catalog'),
       loading && rows.length === 0 ? h('p', null, 'Loading…') : null,
       rows.length === 0 && !loading ? h('p', null, 'No secrets yet.') : null,
-      ...rows.map(({ secretId, summary, purposeDraft, replacementDraft }) =>
+      ...rows.map(({ secretId, summary, descriptionDraft, replacementDraft }) =>
         h(
           'article',
           { class: `secret-card secret-${summary.state}`, key: secretId },
           h(
             'div',
             { class: 'secret-summary' },
-            h('strong', null, summary.purpose),
+            h('strong', null, summary.description),
             h('span', { class: 'secret-state' }, summary.state),
             h('span', null, `generation ${summary.generation}`),
           ),
@@ -189,21 +189,22 @@ const SecretsView = ({
               /** @param {{ preventDefault: () => void }} event */
               onSubmit: event => {
                 event.preventDefault();
-                onPurpose(secretId);
+                onDescription(secretId);
               },
             },
             h('input', {
-              name: 'purpose',
-              value: purposeDraft,
+              name: 'description',
+              value: descriptionDraft,
               maxlength: 200,
               disabled: summary.state === 'revoked',
               /** @param {{ target: { value: string } }} event */
-              onInput: event => onPurposeInput(secretId, event.target.value),
+              onInput: event =>
+                onDescriptionInput(secretId, event.target.value),
             }),
             h(
               'button',
               { type: 'submit', disabled: summary.state === 'revoked' },
-              'Update purpose',
+              'Update description',
             ),
           ),
           h(
@@ -327,9 +328,9 @@ export const secretsComponent = (
   let rows = [];
   /** @type {SecretAuditEvent[]} */
   let events = [];
-  let createDraft = { name: '', purpose: '', value: '' };
+  let createDraft = { name: '', description: '', value: '' };
   /** @type {Map<string, string>} */
-  const purposeDrafts = new Map();
+  const descriptionDrafts = new Map();
   /** @type {Map<string, string>} */
   const replacementDrafts = new Map();
   let loading = true;
@@ -344,7 +345,7 @@ export const secretsComponent = (
     const viewRows = rows.map(row =>
       harden({
         ...row,
-        purposeDraft: purposeDrafts.get(row.secretId) || '',
+        descriptionDraft: descriptionDrafts.get(row.secretId) || '',
         replacementDraft: replacementDrafts.get(row.secretId) || '',
       }),
     );
@@ -361,26 +362,30 @@ export const secretsComponent = (
           render();
         },
         onCreate: () => {
-          const { name, purpose, value } = createDraft;
-          createDraft = { name: '', purpose: '', value: '' };
+          const { name, description, value } = createDraft;
+          createDraft = { name: '', description: '', value: '' };
           render();
           void mutate(async () => {
             const importer = E(/** @type {any} */ (powers)).lookup([
               '@secrets',
               'create',
             ]);
-            await E(importer).createBase64(name, purpose, textToBase64(value));
+            await E(importer).createBase64(
+              name,
+              description,
+              textToBase64(value),
+            );
           });
         },
-        onPurposeInput: (secretId, purpose) => {
-          purposeDrafts.set(secretId, purpose);
+        onDescriptionInput: (secretId, description) => {
+          descriptionDrafts.set(secretId, description);
           render();
         },
-        onPurpose: secretId => {
-          const purpose = purposeDrafts.get(secretId);
-          if (purpose === undefined) return;
+        onDescription: secretId => {
+          const description = descriptionDrafts.get(secretId);
+          if (description === undefined) return;
           void mutate(async () =>
-            E(requireAdmin(secretId)).setPurpose(purpose),
+            E(requireAdmin(secretId)).setDescription(description),
           );
         },
         onReplaceInput: (secretId, value) => {
@@ -454,8 +459,8 @@ export const secretsComponent = (
       admins.clear();
       rows = entries.map(entry => {
         admins.set(entry.secretId, entry.admin);
-        if (!purposeDrafts.has(entry.secretId)) {
-          purposeDrafts.set(entry.secretId, entry.summary.purpose);
+        if (!descriptionDrafts.has(entry.secretId)) {
+          descriptionDrafts.set(entry.secretId, entry.summary.description);
         }
         if (!replacementDrafts.has(entry.secretId)) {
           replacementDrafts.set(entry.secretId, '');
@@ -463,7 +468,7 @@ export const secretsComponent = (
         return harden({
           secretId: entry.secretId,
           summary: entry.summary,
-          purposeDraft: purposeDrafts.get(entry.secretId) || '',
+          descriptionDraft: descriptionDrafts.get(entry.secretId) || '',
           replacementDraft: replacementDrafts.get(entry.secretId) || '',
         });
       });
@@ -498,7 +503,7 @@ export const secretsComponent = (
   return () => {
     disposed = true;
     admins.clear();
-    purposeDrafts.clear();
+    descriptionDrafts.clear();
     replacementDrafts.clear();
     unmount($mount);
     $mount.remove();
