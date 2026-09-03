@@ -680,6 +680,22 @@ fn apply_array_like_paths_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn aggregate_error_iterables_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "aggregate-error-iterable",
+        &[
+            "var source={n:0,[Symbol.iterator]:function(){this.n=0;return this}, \
+             next:function(){return this.n<2?{value:++this.n,done:false}:{done:true}}}; \
+             var error;var values;",
+            "var source;var error;var values; \
+             error=new AggregateError(source,'boom');values=error.errors;error.message",
+            "var error;var values;error.name+':'+error.message+':'+values.join(',')",
+        ],
+    );
+    assert_eq!(last, "AggregateError:boom:1,2");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",
