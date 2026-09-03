@@ -319,16 +319,35 @@ export const makeSecretManager = ({
           const before = requireRecord(secretId);
           if (before.state === 'revoked') throw fixedError('REVOKED');
           const operationId = await randomHex256();
-          persistence.writeSecretRecord(
-            harden({ ...before, purpose, updatedAt: now() }),
-          );
           await audit(
             secretId,
-            'rename',
-            'succeeded',
+            'set-purpose',
+            'attempted',
             before.generation,
             operationId,
           );
+          try {
+            persistence.writeSecretRecord(
+              harden({ ...before, purpose, updatedAt: now() }),
+            );
+            await audit(
+              secretId,
+              'set-purpose',
+              'succeeded',
+              before.generation,
+              operationId,
+            );
+          } catch {
+            await audit(
+              secretId,
+              'set-purpose',
+              'failed',
+              before.generation,
+              operationId,
+              { reasonCode: 'SET_PURPOSE_FAILED' },
+            );
+            throw fixedError('SET_PURPOSE_FAILED');
+          }
         }),
       revoke: () =>
         serializeMutation(secretId, async () => {

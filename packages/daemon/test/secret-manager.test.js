@@ -97,6 +97,14 @@ test('secret facets remain separated and durable across manager restart', async 
     new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
     'replacement',
   );
+  await E(entry.admin).setPurpose('Publish future releases');
+  t.is((await E(entry.admin).getSummary()).purpose, 'Publish future releases');
+  t.deepEqual(
+    harness.events
+      .filter(({ operation }) => operation === 'set-purpose')
+      .map(({ outcome }) => outcome),
+    ['attempted', 'succeeded'],
+  );
   await E(entry.admin).revoke();
   await t.throwsAsync(() => E(blob).readBase64(), {
     message: /Secret operation failed/,

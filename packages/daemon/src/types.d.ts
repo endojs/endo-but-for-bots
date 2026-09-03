@@ -1589,7 +1589,7 @@ export interface SecretCatalog {
 export type SecretAuditEvent = {
   eventId: string;
   secretId: string;
-  operation: 'create' | 'release' | 'replace' | 'rename' | 'revoke';
+  operation: 'create' | 'release' | 'replace' | 'set-purpose' | 'revoke';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;
