@@ -810,6 +810,19 @@ fn regexp_match_and_search_protocols_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn regexp_split_protocol_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "regexp-split-protocol",
+        &[
+            "var sp=RegExp.prototype[Symbol.split];var re=/(b)/;var t=0;t",
+            "var sp;var re;var t;t=sp.call(re,'abc').join(':');t",
+            "var sp;var re;var t;function C(){return {lastIndex:0,exec:function(){if(this.lastIndex===1){this.lastIndex=2;return {0:'y',1:'Z',length:2}}return null}}}var r={constructor:{[Symbol.species]:C},flags:''};t=t+'|'+sp.call(r,'xy').join(':');t",
+        ],
+    );
+    assert_eq!(last, "a:b:c|x:Z:");
+}
+
+#[test]
 fn array_of_results_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "array-of-results",

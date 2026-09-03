@@ -1531,36 +1531,31 @@ pub const STRING_REPLACE_MATCH_METERING: u64 = 311272;
 /// i<c; i++)` capture-push loop (`mxGetIndex(i)` + `fxToString`) feeding the
 /// substitution, one per capture beyond the whole match. Calibrated raw-exact.
 pub const STRING_REPLACE_PER_CAPTURE: u64 = 49152;
-/// The native residual of `String.prototype.split` (`fx_String_prototype_
-/// split` → `fx_RegExp_prototype_split` via the `Symbol.split` protocol) BEYOND
-/// the `flags` cascade, the splitter construction, the per-step exec/`lastIndex`
-/// framing, and the explicit segment allocations: the String host frame + the
-/// `withRegexp` dispatch + the array setup. Calibrated raw-exact.
-pub const STRING_SPLIT_FRAME_METERING: u64 = 0;
-/// The residual of `split`'s species-constructor path: `mxGetID(_constructor)`
-/// + `fxToSpeciesConstructor` + `mxNew` + the `"y"` flag concat + the
-/// `mxRunCount(2)` splitter-construction framing (the construction's own slot/
-/// chunk/compile costs are charged explicitly by `build_split_splitter`).
-/// Calibrated raw-exact.
-pub const STRING_SPLIT_SPECIES_METERING: u64 = 672736;
-/// The per-loop-step residual of `split`: `mxSetID(_lastIndex)` (set the sticky
-/// scan position) + the sticky-`exec` dispatch framing, once per position
-/// walked. Calibrated raw-exact.
-pub const STRING_SPLIT_PER_STEP_METERING: u64 = 212984;
-/// The extra residual of a `split` step that matched: `mxGetID(_lastIndex)`
-/// (read the match end `e`) + the `fxIsSameValue(e, p)` check + the branch.
-/// Calibrated raw-exact.
-pub const STRING_SPLIT_MATCH_STEP_METERING: u64 = 163872;
+/// The native residual of `String.prototype.split`'s successful `@@split`
+/// protocol dispatch, beyond the observable method lookup and invocation.
+/// Calibrated raw-exact against the pinned XS profile.
+pub const STRING_SPLIT_PROTOCOL_FRAME_METERING: u64 = 180728;
+/// The fixed native residual of `%RegExp.prototype%[@@split]` beyond the
+/// observable `SpeciesConstructor`, `flags`, sticky construction, and result
+/// array work performed through the ordinary object MOP below. Calibrated
+/// raw-exact against the pinned XS profile.
+pub const REGEXP_SPLIT_FRAME_METERING: u64 = 475088;
+/// The per-position native loop residual of `%RegExp.prototype%[@@split]`,
+/// beyond the observable `lastIndex` write and abstract `RegExpExec` call.
+/// Calibrated raw-exact against the pinned XS profile.
+pub const REGEXP_SPLIT_PER_STEP_METERING: u64 = 212984;
+/// The extra native residual of a successful split step, including the
+/// observable `lastIndex` read and the `e == p` branch. Calibrated raw-exact.
+pub const REGEXP_SPLIT_MATCH_STEP_METERING: u64 = 163872;
 /// XS's `e == p` empty-match advance omits six `mxMeterOne` operations that
-/// the ordinary matched-step residual above includes. Subtract that branch
-/// discount after observing `lastIndex`. Calibrated raw-exact.
-pub const STRING_SPLIT_EMPTY_ADVANCE_DISCOUNT: u64 = 98304;
-/// The per-capture-group residual of a `split` match: the `mxGetIndex(i)` read
-/// of each capture inserted between splits. Calibrated raw-exact.
-pub const STRING_SPLIT_PER_CAPTURE_METERING: u64 = 65568;
-/// The residual of the empty-subject `split` path (`size == 0`): the single
-/// `exec` framing + the null check, in place of the position loop. Calibrated.
-pub const STRING_SPLIT_EMPTY_METERING: u64 = 131064;
+/// the ordinary successful-step residual includes. Calibrated raw-exact.
+pub const REGEXP_SPLIT_EMPTY_ADVANCE_DISCOUNT: u64 = 98304;
+/// The native residual for each captured value inserted into a split result,
+/// beyond its observable property read and result write. Calibrated raw-exact.
+pub const REGEXP_SPLIT_PER_CAPTURE_METERING: u64 = 65568;
+/// The empty-subject path's single-exec residual, beyond the fixed worker
+/// frame. Calibrated raw-exact against the pinned XS profile.
+pub const REGEXP_SPLIT_EMPTY_METERING: u64 = 131064;
 /// The extra residual of a `g`/`y` (stateful) `exec`/`test`: the
 /// `fxCacheUnicodeToUTF8Offset` (read `lastIndex`) + `fxCacheUTF8ToUnicode
 /// Offset` (write it back) remap framing. Charged on the advancing path.
@@ -2726,6 +2721,9 @@ pub enum NativeMethod {
     /// `%RegExp.prototype%[Symbol.search](string)`: execute from zero and
     /// restore the receiver's observable `lastIndex`.
     RegExpSearch,
+    /// `%RegExp.prototype%[Symbol.split](string, limit)`: construct the sticky
+    /// species matcher and emit intervening substrings and captures.
+    RegExpSplit,
     /// `%RegExpStringIteratorPrototype%.next()`: drive `RegExpExec` lazily,
     /// including global zero-length-match advancement.
     RegExpStringIteratorNext,
@@ -4661,6 +4659,8 @@ pub struct Interp {
     regexp_match_all_method: crate::value::SlotIndex,
     /// Boot-minted `%RegExp.prototype%[Symbol.search]` function identity.
     regexp_search_method: crate::value::SlotIndex,
+    /// Boot-minted `%RegExp.prototype%[Symbol.split]` function identity.
+    regexp_split_method: crate::value::SlotIndex,
     /// The program-local symbol id of `lastIndex` (XS's `mxID(_lastIndex)`),
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
@@ -5675,6 +5675,7 @@ impl Interp {
             regexp_match_method: crate::value::SlotIndex::NULL,
             regexp_match_all_method: crate::value::SlotIndex::NULL,
             regexp_search_method: crate::value::SlotIndex::NULL,
+            regexp_split_method: crate::value::SlotIndex::NULL,
             last_index_id: None,
             regexp_getter_ids: RegExpGetterIds::default(),
             regexp_result_ids: RegExpResultIds::default(),
@@ -6639,6 +6640,11 @@ impl Interp {
             NativeMethod::RegExpSearch,
             "[Symbol.search]",
             1,
+        );
+        self.regexp_split_method = self.alloc_named_method(
+            NativeMethod::RegExpSplit,
+            "[Symbol.split]",
+            2,
         );
         let _ = self.alloc_named_method(
             NativeMethod::RegExpSpeciesGetter,
@@ -23552,6 +23558,137 @@ impl Interp {
         self.mop_get(code, result_inst, index_id, result)
     }
 
+    /// `%RegExp.prototype%[@@split]`: construct the observable species with a
+    /// sticky flag, then execute it at each UTF-16 position. Result creation
+    /// and capture reads use the ordinary object MOP so custom constructors,
+    /// accessors, proxies, and abrupt completions retain specification order.
+    fn regexp_split(
+        &mut self,
+        code: &[u8],
+        regexp: Slot,
+        input: Slot,
+        limit_slot: Slot,
+    ) -> Result<Slot, Halt> {
+        let regexp_inst = match regexp.value {
+            Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let subject = self.to_string_slot(code, input)?;
+        let subject_units = match subject.value {
+            Payload::String(off) if subject.kind == Kind::String => self.str_units(off),
+            _ => unreachable!("ToString returns a String"),
+        };
+
+        let constructor = self.regexp_species_constructor(code, regexp)?;
+        let flags = self.regexp_flags_units(code, regexp_inst, regexp, false)?;
+        let full_unicode = flags
+            .iter()
+            .any(|unit| *unit == b'u' as u16 || *unit == b'v' as u16);
+        let mut new_flags = flags;
+        if !new_flags.contains(&(b'y' as u16)) {
+            new_flags.push(b'y' as u16);
+        }
+        let flags_slot = self.new_string_units(&new_flags);
+        let splitter = self.construct_value(
+            code,
+            constructor,
+            &[regexp, flags_slot],
+            constructor,
+        )?;
+        let splitter_inst = match splitter.value {
+            Payload::Reference(inst) if splitter.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+
+        let array = self.new_array();
+        let array_slot = Slot::of(Kind::Reference, Payload::Reference(array));
+        let limit = self.string_split_limit(code, limit_slot)? as u64;
+        self.meter.tick_raw(REGEXP_SPLIT_FRAME_METERING);
+        if limit == 0 {
+            return Ok(array_slot);
+        }
+
+        let size = subject_units.len();
+        let mut count = 0u64;
+        if size == 0 {
+            self.meter.tick_raw(REGEXP_SPLIT_EMPTY_METERING);
+            let result =
+                self.regexp_exec_abstract(code, splitter_inst, splitter, subject)?;
+            if result.kind == Kind::Null {
+                let empty = self.new_string_units(&[]);
+                self.array_generic_create_data_property(code, array, count, empty)?;
+            }
+            return Ok(array_slot);
+        }
+
+        let mut p = 0usize;
+        let mut q = 0usize;
+        while q < size {
+            self.meter.tick_raw(REGEXP_SPLIT_PER_STEP_METERING);
+            self.regexp_set_last_index(
+                code,
+                splitter_inst,
+                Slot::number(q as f64),
+            )?;
+            let result =
+                self.regexp_exec_abstract(code, splitter_inst, splitter, subject)?;
+            if result.kind == Kind::Null {
+                q = Self::advance_string_index(
+                    &subject_units,
+                    q as u64,
+                    full_unicode,
+                ) as usize;
+                continue;
+            }
+
+            self.meter.tick_raw(REGEXP_SPLIT_MATCH_STEP_METERING);
+            let e = self
+                .regexp_last_index_length(code, splitter_inst)?
+                .min(size as u64) as usize;
+            if e == p {
+                self.meter
+                    .untick_raw(REGEXP_SPLIT_EMPTY_ADVANCE_DISCOUNT);
+                q = Self::advance_string_index(
+                    &subject_units,
+                    q as u64,
+                    full_unicode,
+                ) as usize;
+                continue;
+            }
+
+            let segment = self.new_string_units(&subject_units[p..q]);
+            self.array_generic_create_data_property(code, array, count, segment)?;
+            count += 1;
+            if count == limit {
+                return Ok(array_slot);
+            }
+
+            p = e;
+            let result_inst = match result.value {
+                Payload::Reference(inst) if result.kind == Kind::Reference => inst,
+                _ => unreachable!("RegExpExec returns an object or null"),
+            };
+            let length_id = self.intern_key("length");
+            let result_length = self.mop_get(code, result_inst, length_id, result)?;
+            let capture_count = self.to_length_value(code, result_length)?.saturating_sub(1);
+            for capture_index in 1..=capture_count {
+                self.meter.tick_raw(REGEXP_SPLIT_PER_CAPTURE_METERING);
+                let capture_id = self.array_generic_index_id(capture_index);
+                let capture = self.mop_get(code, result_inst, capture_id, result)?;
+                self.array_generic_create_data_property(code, array, count, capture)?;
+                count += 1;
+                if count == limit {
+                    return Ok(array_slot);
+                }
+            }
+            q = p;
+        }
+
+        let tail = self.new_string_units(&subject_units[p..size]);
+        self.array_generic_create_data_property(code, array, count, tail)?;
+        Ok(array_slot)
+    }
+
     /// `%RegExp.prototype%[@@matchAll]`: coerce the input, clone the receiver
     /// through `SpeciesConstructor`, transfer its observable `lastIndex`, and
     /// create a lazy RegExp String Iterator. The iterator records `global` and
@@ -24727,59 +24864,6 @@ impl Interp {
         out
     }
 
-    /// Build the ephemeral **splitter** RegExp `split` constructs via the
-    /// species constructor (`new RegExp(this, flags + "y")`): the source is
-    /// `this`'s source, the flags are `this`'s flags with `y` (sticky) ensured.
-    /// Charges the same construction cost `build_regexp` does (slots + compile
-    /// meter + code/data chunks + ctor frame). Returns the splitter instance,
-    /// or a named skip if the (already-compiled) pattern somehow fails to
-    /// recompile.
-    fn build_split_splitter(
-        &mut self,
-        inst: crate::value::SlotIndex,
-    ) -> Result<crate::value::SlotIndex, Halt> {
-        let (source, mut flags) = {
-            let d = &self.regexps[&inst];
-            (d.source.clone(), d.flags.clone())
-        };
-        if !flags.contains('y') {
-            flags.push('y');
-        }
-        let program = match ironhorse_regexp::compile(&source, &flags) {
-            Ok(p) => p,
-            Err(ironhorse_regexp::CompileError::Unsupported(name)) => {
-                return Err(Halt::Unsupported(name))
-            }
-            Err(_) => return Err(Halt::Unsupported("String.split:splitter-recompile")),
-        };
-        for _ in 0..4 {
-            self.meter.tick_slot_alloc();
-        }
-        self.meter.tick_raw(program.compile_meter_raw);
-        let code_bytes = program.compile_meter_raw / XS_PARSE_REGEXP_METERING;
-        self.meter.tick_chunk_new(code_bytes);
-        let data_bytes = (program.capture_count * 8
-            + program.name_count * 4
-            + program.assertion_count * 16
-            + program.quantifier_count * 12) as u64;
-        self.meter.tick_chunk_new(data_bytes);
-        self.meter.tick_raw(REGEXP_CTOR_FRAME_METERING);
-        let canonical = Self::regexp_flag_string(program.flags());
-        let proto = self.regexp_proto;
-        let sp = self.slots.alloc(Slot::instance(proto));
-        self.regexps.insert(
-            sp,
-            RegExpData {
-                program,
-                source,
-                flags: canonical,
-                last_index: 0.0,
-            },
-        );
-        self.install_regexp_last_index(sp, Slot::integer(0));
-        Ok(sp)
-    }
-
     /// `GetMethod(value, @@name)` for String prototype protocols. The protocol
     /// is consulted only when `value` is an Object; primitive arguments proceed
     /// directly to coercion without reading their wrapper prototypes. Object
@@ -24950,101 +25034,6 @@ impl Interp {
         if segments.len() < limit {
             push(self, &subject_units[from..], &mut segments);
         }
-        Ok(self.finish_split_array(array, segments))
-    }
-
-    /// `String.prototype.split(regexp[, limit])` (`fx_String_prototype_split`
-    /// → `fx_RegExp_prototype_split` via the `Symbol.split` protocol): build a
-    /// sticky splitter (`new RegExp(this, flags+"y")`), then walk the subject,
-    /// sticky-`exec`-ing at each position, emitting the text between matches
-    /// (plus each capture group) as array elements. `inst` is the RegExp
-    /// argument, `subject` the receiver string, `limit` the split cap. A
-    /// non-RegExp separator (the `withoutRegexp` string-split path) self-names.
-    fn string_split(
-        &mut self,
-        code: &[u8],
-        inst: crate::value::SlotIndex,
-        subject: Slot,
-        limit_slot: Slot,
-    ) -> Result<Slot, Halt> {
-        let subject_units = self.to_string_units(code, subject)?;
-        let subject = if subject.kind == Kind::String {
-            subject
-        } else {
-            let off = self.chunks.alloc(&units_to_be16(&subject_units));
-            Slot::of(Kind::String, Payload::String(off))
-        };
-        let limit = self.string_split_limit(code, limit_slot)? as u64;
-        self.meter.tick_raw(STRING_SPLIT_FRAME_METERING);
-        // `mxGetID(_flags)` in the worker (the eight-property cascade) + the
-        // species-constructor lookup/new framing.
-        self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
-        self.meter.tick_raw(STRING_SPLIT_SPECIES_METERING);
-        let splitter = self.build_split_splitter(inst)?;
-        let unicode = self.regexps[&splitter].program.flags()
-            & (ironhorse_regexp::XS_REGEXP_U | ironhorse_regexp::XS_REGEXP_V)
-            != 0;
-        // The result array + its `fxNewInstance`.
-        let array = self.new_array_unmetered();
-        let mut segments: Vec<Slot> = Vec::new();
-        let size = subject_units.len();
-        let push_segment = |this: &mut Self, from: usize, to: usize, segs: &mut Vec<Slot>| {
-            // `split_aux`: a `fxNewSlot` + the substring `fxNewChunk`.
-            this.meter.tick_slot_alloc();
-            segs.push(this.new_string_units(&subject_units[from..to]));
-        };
-        if limit == 0 {
-            return Ok(self.finish_split_array(array, segments));
-        }
-        if size == 0 {
-            // Empty subject: one exec; a match yields `[]`, a miss `[""]`.
-            self.meter.tick_raw(STRING_SPLIT_EMPTY_METERING);
-            self.regexp_set_last_index(code, splitter, Slot::integer(0))?;
-            let (res, _start) = self.regexp_exec_inner(code, splitter, subject)?;
-            if res.kind == Kind::Null {
-                push_segment(self, 0, 0, &mut segments);
-            }
-            return Ok(self.finish_split_array(array, segments));
-        }
-        let mut p = 0usize;
-        let mut q = 0usize;
-        while q < size {
-            self.meter.tick_raw(STRING_SPLIT_PER_STEP_METERING);
-            self.regexp_set_last_index(code, splitter, Slot::number(q as f64))?;
-            let (res, start) = self.regexp_exec_inner(code, splitter, subject)?;
-            if start.is_none() {
-                q = Self::advance_string_index(&subject_units, q as u64, unicode) as usize;
-            } else {
-                // A matched step: `mxGetID(_lastIndex)` (read `e`) + the
-                // `fxIsSameValue(e, p)` check.
-                self.meter.tick_raw(STRING_SPLIT_MATCH_STEP_METERING);
-                let e = self.regexp_last_index_length(code, splitter)? as usize;
-                if e == p {
-                    self.meter
-                        .untick_raw(STRING_SPLIT_EMPTY_ADVANCE_DISCOUNT);
-                    q = Self::advance_string_index(&subject_units, q as u64, unicode) as usize;
-                } else {
-                    push_segment(self, p, q, &mut segments);
-                    if segments.len() as u64 == limit {
-                        return Ok(self.finish_split_array(array, segments));
-                    }
-                    // The capture groups (result[1..]) inserted between splits.
-                    let cap_count = self.regexp_capture_count(res);
-                    for i in 1..cap_count {
-                        self.meter.tick_slot_alloc();
-                        self.meter.tick_raw(STRING_SPLIT_PER_CAPTURE_METERING);
-                        let cap = self.array_index_slot(res, i as u32);
-                        segments.push(cap);
-                        if segments.len() as u64 == limit {
-                            return Ok(self.finish_split_array(array, segments));
-                        }
-                    }
-                    p = e;
-                    q = p;
-                }
-            }
-        }
-        push_segment(self, p, size, &mut segments);
         Ok(self.finish_split_array(array, segments))
     }
 
@@ -34505,6 +34494,14 @@ impl Interp {
             NativeMethod::RegExpMatch => self.regexp_match(code, this, arg0)?,
             NativeMethod::RegExpMatchAll => self.regexp_match_all(code, this, arg0)?,
             NativeMethod::RegExpSearch => self.regexp_search(code, this, arg0)?,
+            NativeMethod::RegExpSplit => {
+                let limit = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.regexp_split(code, this, arg0, limit)?
+            }
             NativeMethod::RegExpReplace => {
                 let regexp = match this.value {
                     Payload::Reference(regexp) if this.kind == Kind::Reference => regexp,
@@ -34718,14 +34715,11 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 let split_method = self.string_protocol_method(code, arg0, "split")?;
                 if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
+                    self.meter
+                        .tick_raw(STRING_SPLIT_PROTOCOL_FRAME_METERING);
                     self.invoke_value(code, split_method, arg0, &[this, limit])?
                 } else {
-                    match arg0.value {
-                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                            self.string_split(code, r, this, limit)?
-                        }
-                        _ => self.string_split_plain(code, this, arg0, limit)?,
-                    }
+                    self.string_split_plain(code, this, arg0, limit)?
                 }
             }
         };
@@ -44834,6 +44828,12 @@ impl Interp {
                 self.regexp_proto,
                 self.regexp_search_method,
                 "boot RegExp.prototype @@search method",
+                XS_DONT_ENUM_FLAG,
+            )],
+            Some("split") => vec![(
+                self.regexp_proto,
+                self.regexp_split_method,
+                "boot RegExp.prototype @@split method",
                 XS_DONT_ENUM_FLAG,
             )],
             _ => return,
@@ -55892,6 +55892,7 @@ impl Interp {
             self.regexp_match_method,
             self.regexp_match_all_method,
             self.regexp_search_method,
+            self.regexp_split_method,
             self.math_object,
         ]);
         for (holder, _, method) in &self.proto_methods {

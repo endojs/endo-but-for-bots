@@ -607,3 +607,64 @@ fn string_regexp_protocol_override_metering_preserves_pinned_xs_totals() {
         );
     }
 }
+
+#[test]
+fn regexp_split_protocol_is_generic_and_observable() {
+    for source in [
+        "RegExp.prototype[Symbol.split].name+':'+RegExp.prototype[Symbol.split].length",
+        "var d=Object.getOwnPropertyDescriptor(RegExp.prototype,Symbol.split);d.writable+':'+d.enumerable+':'+d.configurable",
+        "var seen;function C(r,f){seen=f;return /x/y}var r={constructor:{[Symbol.species]:C},flags:'u'};RegExp.prototype[Symbol.split].call(r,'a');seen",
+        "var n=0;function C(){return {lastIndex:0,exec:function(){n++;if(this.lastIndex===1){this.lastIndex=2;return {0:'b',1:'cap',length:2}}return null}}}var r={constructor:{[Symbol.species]:C},flags:''};RegExp.prototype[Symbol.split].call(r,'abc').join('|')+':'+n",
+        "/(?:)/u[Symbol.split]('\\ud834\\udf06').length",
+        "try{RegExp.prototype[Symbol.split].call(1,'');false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+
+    // Current ECMA-262 constructs the sticky species matcher before coercing
+    // `limit`. The pinned XS oracle still performs the legacy limit-first
+    // sequence, so preserve the standards-correct result explicitly.
+    let source = "var log=[];function C(r,f){log.push('construct:'+f);return {lastIndex:0,exec:function(){return null}}}var species={};Object.defineProperty(species,Symbol.species,{get:function(){log.push('species');return C}});var r={get constructor(){log.push('constructor');return species},get flags(){log.push('flags');return ''}};var s={toString:function(){log.push('string');return 'a'}};var l={valueOf:function(){log.push('limit');return 0}};RegExp.prototype[Symbol.split].call(r,s,l);log.join(',')";
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert_eq!(
+        run.ironhorse_result,
+        "string,constructor,species,flags,construct:y,limit"
+    );
+    assert_eq!(
+        run.oracle_result,
+        "string,limit,constructor,species,flags,construct:y"
+    );
+}
+
+#[test]
+fn deleting_regexp_split_selects_the_plain_string_fallback() {
+    agrees("var r=/b/;delete RegExp.prototype[Symbol.split];'x/b/y'.split(r).join('|')");
+}
+
+#[test]
+fn regexp_split_protocol_metering_preserves_pinned_xs_totals() {
+    for source in [
+        "'a,b,c'.split(/,/)",
+        "'abc'.split(/,/)",
+        "'a1b2c'.split(/[0-9]/)",
+        "''.split(/,/)",
+        "'axbxc'.split(/(x)/)",
+        "'a,b'.split(/,/,5)",
+        "'a1b2c'.split(/([0-9])/)",
+        "'ab'.split(/(?:)/)",
+        "RegExp.prototype[Symbol.split].call(/,/, 'a,b')",
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert!(
+            run.is_bit_exact(),
+            "`{source}` is not bit exact: oracle={:?}/{}/{} ironhorse={:?}/{}/{}",
+            run.oracle_result,
+            run.oracle_computrons,
+            run.oracle_meter_raw,
+            run.ironhorse_result,
+            run.ironhorse_computrons,
+            run.ironhorse_meter_raw,
+        );
+    }
+}
