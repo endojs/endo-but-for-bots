@@ -31,6 +31,19 @@ fn primitive_keys_use_their_string_spelling() {
 }
 
 #[test]
+fn computed_names_lazily_install_intrinsics_without_resurrecting_edits() {
+    for source in [
+        "typeof globalThis['Pro' + 'mise']",
+        "var k='hasOwn'+'Property';var f={}[k];f.call({x:1},'x')",
+        "var p=Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()));var k='con'+'structor';p[k].name",
+        "var k='con'+'structor';var o={};o[k]=7;o[k]",
+        "var k='to'+'String';delete Object.prototype[k];typeof ({})[k]",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
 fn primitive_keys_work_in_class_and_accessor_definitions() {
     for source in [
         "class C{[null](){return 1}static[true](){return 2}}new C().null()+C.true()",
