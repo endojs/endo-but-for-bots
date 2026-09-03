@@ -47,6 +47,7 @@
     "test:safe-datatransfer": "node test/safe-datatransfer/run.mjs"
   },
   "dependencies": {
+    "@endo/base64": "workspace:^",
     "@endo/captp": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/eventual-send": "workspace:^",

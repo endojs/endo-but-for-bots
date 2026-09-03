@@ -14,7 +14,7 @@ import {
 } from './interfaces.js';
 import { assertPetName } from './pet-name.js';
 
-/** @import { SecretAuditEvent, SecretSummary } from './types.js' */
+/** @import { SecretAdmin, SecretAuditEvent, SecretBlob, SecretRecord, SecretSummary } from './types.js' */
 
 const MAX_SECRET_BYTES = 1024 * 1024;
 const MAX_DESCRIPTION_LENGTH = 200;
@@ -66,15 +66,27 @@ const decodeSecret = bytesBase64 => {
 };
 
 /**
- * @typedef {object} SecretRecord
- * @property {string} secretId
- * @property {string} backendRef
- * @property {string} description
- * @property {'active' | 'revoked' | 'unavailable'} state
- * @property {bigint} generation
- * @property {string} createdAt
- * @property {string} updatedAt
+ * Decode secret bytes for the duration of one operation and zero the plaintext
+ * on every exit path, including guard failures before the backend is reached.
+ *
+ * The `await` in `return await` is load-bearing: returning the promise
+ * unawaited would run the `finally` and zero the buffer out from under the
+ * operation still reading it.
+ *
+ * @template T
+ * @param {string} bytesBase64
+ * @param {(bytes: Uint8Array) => Promise<T>} operation
+ * @returns {Promise<T>}
  */
+const withDecodedSecret = async (bytesBase64, operation) => {
+  const bytes = decodeSecret(bytesBase64);
+  await null;
+  try {
+    return await operation(bytes);
+  } finally {
+    bytes.fill(0);
+  }
+};
 
 /**
  * @typedef {object} SecretPersistence
@@ -94,6 +106,8 @@ const decodeSecret = bytesBase64 => {
  * @property {(backendRef: string) => Promise<Uint8Array>} read
  * @property {(operationId: string, backendRef: string, bytes: Uint8Array) => Promise<void>} replace
  * @property {(operationId: string, backendRef: string) => Promise<void>} revoke
+ *   Idempotent: revoking already-revoked material must succeed, because
+ *   `SecretAdmin.delete` retries revocation before forgetting the record.
  */
 
 /**
@@ -141,7 +155,6 @@ export const makeSecretManager = ({
    * @param {bigint} generation
    * @param {string} operationId
    * @param {object} [extra]
-   * @param {string} [extra.grantId]
    * @param {string} [extra.reasonCode]
    */
   const audit = async (
@@ -167,10 +180,20 @@ export const makeSecretManager = ({
     );
   };
 
-  /** @type {Map<string, import('./types.js').SecretBlob>} */
+  /** @type {Map<string, SecretBlob>} */
   const blobs = new Map();
   /** @type {Map<string, Promise<unknown>>} */
   const mutationTails = new Map();
+
+  /**
+   * Secrets whose backing bytes are mid-replacement. `serializeMutation`
+   * admits at most one replacement per secret, so a Set suffices. A release
+   * that samples the record while a replacement is in flight may have read
+   * post-write bytes that the pre-replacement generation does not describe.
+   *
+   * @type {Set<string>}
+   */
+  const replacementsInFlight = new Set();
 
   /**
    * Serialize lifecycle mutations per secret so a replace cannot resurrect a
@@ -204,7 +227,12 @@ export const makeSecretManager = ({
     if (existing !== undefined) return existing;
     const secretId = persistence.getSecretIdForGrant(grantId);
     if (secretId === undefined) throw fixedError('UNKNOWN_GRANT');
-    const blob = makeExo(`SecretBlob ${grantId}`, SecretBlobInterface, {
+    // The tag is deliberately constant. An exo tag becomes the remotable's
+    // interface name, which marshal transmits verbatim across CapTP and
+    // exo-tools splices into guard-violation messages, so a tag bearing the
+    // grant identifier would publish a live read capability to every recipient
+    // of the blob and into every guard-violation message that mentions it.
+    const blob = makeExo('SecretBlob', SecretBlobInterface, {
       help: () => secretBlobHelp,
       getDescription: async () => requireRecord(secretId).description,
       readBase64: async () => {
@@ -217,7 +245,6 @@ export const makeSecretManager = ({
           'attempted',
           before.generation,
           operationId,
-          { grantId },
         );
         let bytes;
         try {
@@ -229,7 +256,12 @@ export const makeSecretManager = ({
           const after = requireRecord(secretId);
           if (
             after.state !== 'active' ||
-            after.generation !== before.generation
+            after.generation !== before.generation ||
+            // A replacement whose bytes have physically landed but whose
+            // generation is not yet committed would otherwise release the new
+            // bytes under the old generation, so the audit trail would name a
+            // version that was never the one released.
+            replacementsInFlight.has(secretId)
           ) {
             bytes.fill(0);
             throw fixedError('STALE_RELEASE');
@@ -240,7 +272,6 @@ export const makeSecretManager = ({
             'succeeded',
             after.generation,
             operationId,
-            { grantId },
           );
           const bytesBase64 = encodeBase64(bytes);
           bytes.fill(0);
@@ -253,7 +284,7 @@ export const makeSecretManager = ({
             'failed',
             before.generation,
             operationId,
-            { grantId, reasonCode: 'RELEASE_FAILED' },
+            { reasonCode: 'RELEASE_FAILED' },
           );
           throw fixedError('RELEASE_FAILED');
         }
@@ -274,45 +305,57 @@ export const makeSecretManager = ({
       getSummary: async () => summaryFor(requireRecord(secretId)),
       replaceBase64: bytesBase64 =>
         serializeMutation(secretId, async () => {
-          const bytes = decodeSecret(bytesBase64);
+          // State is checked before the caller's bytes are parsed, so a
+          // rejected replacement never leaves a decoded plaintext buffer
+          // outside the zeroing scope below.
           const before = requireRecord(secretId);
           if (before.state !== 'active') throw fixedError('REVOKED');
-          const operationId = await randomHex256();
-          await audit(
-            secretId,
-            'replace',
-            'attempted',
-            before.generation,
-            operationId,
-          );
-          try {
-            await backend.replace(operationId, before.backendRef, bytes);
-            const updated = harden({
-              ...before,
-              generation: before.generation + 1n,
-              updatedAt: now(),
-            });
-            persistence.writeSecretRecord(updated);
+          return withDecodedSecret(bytesBase64, async bytes => {
+            const operationId = await randomHex256();
             await audit(
               secretId,
               'replace',
-              'succeeded',
-              updated.generation,
-              operationId,
-            );
-          } catch {
-            await audit(
-              secretId,
-              'replace',
-              'failed',
+              'attempted',
               before.generation,
               operationId,
-              { reasonCode: 'REPLACE_FAILED' },
             );
-            throw fixedError('REPLACE_FAILED');
-          } finally {
-            bytes.fill(0);
-          }
+            replacementsInFlight.add(secretId);
+            try {
+              await backend.replace(operationId, before.backendRef, bytes);
+              const updated = harden({
+                ...before,
+                generation: before.generation + 1n,
+                updatedAt: now(),
+              });
+              persistence.writeSecretRecord(updated);
+              // Synchronously adjacent to the commit: no reader turn can
+              // interleave, so no release observes post-write bytes under the
+              // pre-replacement generation, and a release starting after the
+              // commit is not spuriously failed by a stale marker.
+              replacementsInFlight.delete(secretId);
+              await audit(
+                secretId,
+                'replace',
+                'succeeded',
+                updated.generation,
+                operationId,
+              );
+            } catch {
+              await audit(
+                secretId,
+                'replace',
+                'failed',
+                before.generation,
+                operationId,
+                { reasonCode: 'REPLACE_FAILED' },
+              );
+              throw fixedError('REPLACE_FAILED');
+            } finally {
+              // Idempotent with the clear above; this one covers the failure
+              // exits, where no generation is ever committed.
+              replacementsInFlight.delete(secretId);
+            }
+          });
         }),
       setDescription: description =>
         serializeMutation(secretId, async () => {
@@ -454,7 +497,7 @@ export const makeSecretManager = ({
     listKnownGrantPaths,
     removeKnownGrantPaths,
   }) => {
-    /** @type {Map<string, import('./types.js').SecretAdmin>} */
+    /** @type {Map<string, SecretAdmin>} */
     const admins = new Map();
 
     /** @param {string} secretId */
@@ -502,38 +545,41 @@ export const makeSecretManager = ({
       createBase64: async (name, description, bytesBase64) => {
         assertPetName(name);
         assertDescription(description);
-        const bytes = decodeSecret(bytesBase64);
-        const secretId = await randomHex256();
-        const grantId = await randomHex256();
-        const operationId = await randomHex256();
-        const createdAt = now();
-        await audit(secretId, 'create', 'attempted', 1n, operationId);
-        try {
-          const backendRef = await backend.create(operationId, secretId, bytes);
-          const record = harden(
-            /** @type {SecretRecord} */ ({
+        return withDecodedSecret(bytesBase64, async bytes => {
+          const secretId = await randomHex256();
+          const grantId = await randomHex256();
+          const operationId = await randomHex256();
+          const createdAt = now();
+          await audit(secretId, 'create', 'attempted', 1n, operationId);
+          try {
+            const backendRef = await backend.create(
+              operationId,
               secretId,
-              backendRef,
-              description,
-              state: 'active',
-              generation: 1n,
-              createdAt,
-              updatedAt: createdAt,
-            }),
-          );
-          persistence.writeSecretRecord(record);
-          persistence.writeSecretGrant(grantId, secretId);
-          await bindGrant(grantId, name);
-          await audit(secretId, 'create', 'succeeded', 1n, operationId);
-          return summaryFor(record);
-        } catch {
-          await audit(secretId, 'create', 'failed', 1n, operationId, {
-            reasonCode: 'CREATE_FAILED',
-          });
-          throw fixedError('CREATE_FAILED');
-        } finally {
-          bytes.fill(0);
-        }
+              bytes,
+            );
+            const record = harden(
+              /** @type {SecretRecord} */ ({
+                secretId,
+                backendRef,
+                description,
+                state: 'active',
+                generation: 1n,
+                createdAt,
+                updatedAt: createdAt,
+              }),
+            );
+            persistence.writeSecretRecord(record);
+            persistence.writeSecretGrant(grantId, secretId);
+            await bindGrant(grantId, name);
+            await audit(secretId, 'create', 'succeeded', 1n, operationId);
+            return summaryFor(record);
+          } catch {
+            await audit(secretId, 'create', 'failed', 1n, operationId, {
+              reasonCode: 'CREATE_FAILED',
+            });
+            throw fixedError('CREATE_FAILED');
+          }
+        });
       },
     });
 
@@ -545,9 +591,12 @@ export const makeSecretManager = ({
       if (names.length === 2 && names[0] === 'use') {
         return provideBlob(names[1]);
       }
-      if (names.length === 2 && names[0] === 'admin') {
-        return provideAdmin(names[1]);
-      }
+      // There is deliberately no `admin/<secretId>` path. A secretId is
+      // published on the catalog, importer, and audit surfaces and in the
+      // backend's on-disk file name, so treating it as a selector would make
+      // every one of those surfaces a source of replace/revoke/delete
+      // authority. Administration facets are vended only by `catalog`, which
+      // already carries that authority.
       throw fixedError('UNKNOWN_PATH');
     };
 

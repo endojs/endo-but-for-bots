@@ -743,9 +743,6 @@ flowchart TD
         enetfetch -.-> dtools
         enetfetch --> dgitremote
         dmount --> dcsgc
-        dgitremote --> dsecret
-        docapn --> dsecret
-        oortho --> dsecret
         dsecret --> dbank
         dsand --> dbank
         dfs --> dbank

@@ -4,6 +4,7 @@
 |---|---|
 | **Created** | 2026-09-03 |
 | **Updated** | 2026-09-03 |
+| **Author** | kumavis (prompted) |
 | **Status** | Implemented (local backend) |
 
 ## Summary
@@ -30,6 +31,19 @@ reading or copying the bytes.
 All authorization is capability possession.
 This design introduces no access-control list, role lookup, principal check, or
 identity-based authorization decision.
+
+The store is therefore single-principal.
+`secret_record`, `secret_grant`, and `secret_audit_event` carry no owning-host
+column, and `SecretCatalog.list()` returns a `SecretAdmin` for every record in
+the daemon, so any holder of a `@secrets` root administers all of them.
+This is not enforced against child hosts, and cannot be at this layer: a host
+created by `provideHost` already reaches the root host through its ambient
+`@endo` special name, so it is a full-authority peer rather than a lower-trust
+principal.
+Withholding `@secrets` from non-root hosts is namespace hygiene, not
+containment.
+Per-space secrets require both an owning-principal column and attenuating or
+withholding `@endo` on non-root hosts; an owner column alone is bypassable.
 
 ## Scope
 
@@ -105,7 +119,7 @@ interface SecretBlob {
 
 type SecretSummary = {
   description: string;
-  state: 'active' | 'revoked' | 'unavailable';
+  state: 'active' | 'revoked';
   generation: bigint;
   createdAt: string;
   updatedAt: string;
@@ -219,8 +233,8 @@ Revocation is placed behind a visibly labeled danger-zone confirmation because
 it denies all delegated copies and is not an inventory rename or removal.
 Within the danger zone, replacement and revocation are separate bordered
 sections with distinct headings and consequences.
-Active and unavailable records appear before revoked records, regardless of
-record creation order.
+Active records appear before revoked records, regardless of record creation
+order.
 A revoked card offers deletion of the manager record and locally known pet-name
 paths; the audit history remains visible.
 Errors shown in the Space are fixed messages and never include caught exception
@@ -250,20 +264,31 @@ grant authority.
 
 ```ts
 interface SecretBackend {
-  create(operationId: string, bytes: Uint8Array): Promise<StoredSecret>;
-}
-
-interface StoredSecret {
-  read(): Promise<Uint8Array>;
-  replace(operationId: string, bytes: Uint8Array): Promise<void>;
-  revoke(operationId: string): Promise<void>;
+  create(
+    operationId: string,
+    secretId: string,
+    bytes: Uint8Array,
+  ): Promise<string>;
+  read(backendRef: string): Promise<Uint8Array>;
+  replace(
+    operationId: string,
+    backendRef: string,
+    bytes: Uint8Array,
+  ): Promise<void>;
+  revoke(operationId: string, backendRef: string): Promise<void>;
 }
 ```
 
-`StoredSecret` is a sturdy per-record backend capability.
-It never leaves the singleton manager.
-The manager wraps it with the externally delegable `SecretBlob` and
+`create` returns a `backendRef`: an opaque string naming the stored record,
+persisted on the manager's own record and passed back to every later
+operation.
+It is a designator, not a capability — authority to act on it comes from
+holding the backend, which never leaves the singleton manager.
+The manager wraps that authority with the externally delegable `SecretBlob` and
 `SecretAdmin` facets so every operation passes through manager state and audit.
+
+`revoke` must be idempotent: `SecretAdmin.delete` retries revocation so that an
+earlier cleanup failure cannot strand backend material.
 
 A conforming backend must document and test:
 
@@ -309,15 +334,14 @@ An inventory read grant is represented as:
 }
 ```
 
-An administration facet may be represented as:
-
-```js
-{
-  type: 'lookup',
-  hub: '<formula identifier for the private manager hub>',
-  path: ['admin', '<random 256-bit secret identifier>'],
-}
-```
+Administration facets are not addressable by a durable `lookup` path.
+A secret identifier is published on the catalog, importer, and audit surfaces
+and in the backend's record name, so treating it as a path selector would turn
+every one of those surfaces into a source of replace, revoke, and delete
+authority.
+`SecretCatalog.list()` is the only vendor of `SecretAdmin`.
+Durable, separately delegable administration is deferred; it requires its own
+unguessable selector, persisted alongside the record.
 
 The manager hub is the authority amplifier.
 The random path component is a Swiss number and grants no authority without the
@@ -346,8 +370,8 @@ Creating `secrets/github-release` proceeds as a recoverable operation:
 2. The importer validates the pet name and non-secret description.
 3. The manager records a pending operation and sends the bytes to its selected
    backend.
-4. The backend returns a sturdy `StoredSecret` capability.
-5. The manager commits the active record, backend capability reference, first
+4. The backend returns an opaque `backendRef` naming the stored record.
+5. The manager commits the active record, that backend reference, first
    generation, and audit event.
 6. Under the formula-graph lock, the daemon formulates an existing `lookup`
    recipe for a fresh read grant and binds that identifier as
@@ -456,7 +480,6 @@ type SecretAuditEvent = {
   generation: bigint;
   occurredAt: string;
   operationId: string;
-  grantId?: string;
   invocationId?: string;
   parentInvocationId?: string;
   workerFormulaId?: string;
@@ -507,6 +530,17 @@ formula type:
 7. Tests scan formula storage, SQLite, logs, traces, errors, and message records
    for canary secret values.
 8. Revocation is checked immediately before every backend read.
+9. The audit facet never emits a redeemable grant identifier. A grant
+   identifier is read authority — `@secrets/use/<grantId>` mints a `SecretBlob`
+   for whoever presents it — and the manager hub is a daemon singleton, so any
+   holder of `@secrets/audit` could otherwise redeem one.
+10. An exo tag never carries a grant identifier. A tag becomes the remotable's
+    interface name, which marshal transmits across CapTP and splices into
+    guard-violation messages.
+11. A release that overlaps an uncommitted replacement fails closed rather than
+    returning bytes the recorded generation does not describe. A release whose
+    physical fetch preceded the new bytes is also failed, because the two are
+    indistinguishable at the point the record is sampled.
 
 JavaScript cannot guarantee timely zeroization of every engine copy of a
 `Uint8Array`.
@@ -532,8 +566,12 @@ boundary necessarily includes any process to which plaintext is delivered.
 - a durable operation journal and reconciliation for crashes between a backend
   mutation and its metadata commit;
 - an XS authenticated-encryption host power;
-- a production KMS/HSM backend; and
-- explicit audit retention, export, and purge policy.
+- a production KMS/HSM backend;
+- explicit audit retention, export, and purge policy;
+- per-principal partitioning of records, grants, and audit events, which
+  requires attenuating ambient `@endo` first (see Summary); and
+- durable, separately delegable administration facets, which require their own
+  unguessable selector persisted alongside the record.
 
 ## Open Questions
 
