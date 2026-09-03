@@ -151,7 +151,7 @@ not passable.
 The manager decodes at ingress and the backend stores arbitrary bytes.
 
 `SecretAdmin` is not derivable from `SecretBlob`.
-It can replace, rename, and revoke but cannot read.
+It can replace, update the purpose of, and revoke but cannot read.
 
 `SecretCatalog` enumerates management facets, not read facets.
 The Secret Blobs Space uses the catalog to render and manage secrets without
@@ -404,7 +404,7 @@ It records create, read, replace, purpose change, and revoke operations.
 type SecretAuditEvent = {
   eventId: string;
   secretId: string;
-  operation: 'create' | 'release' | 'replace' | 'rename' | 'revoke';
+  operation: 'create' | 'release' | 'replace' | 'set-purpose' | 'revoke';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;
@@ -476,7 +476,8 @@ boundary necessarily includes any process to which plaintext is delivered.
 - `@secrets` management routing and ordinary `secrets/<name>` lookup formulas;
 - restart, message delegation, replacement, revocation-race, and canary tests;
   and
-- a Secret Blobs Space that creates, enumerates, replaces, renames, revokes,
+- a Secret Blobs Space that creates, enumerates, replaces, updates purposes,
+  revokes,
   and audits without receiving a read facet.
 
 ### Deferred hardening
