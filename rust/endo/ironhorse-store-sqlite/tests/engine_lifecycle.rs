@@ -629,6 +629,30 @@ fn boot_minted_iterator_natives_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn iterator_prototype_accessors_survive_sqlite_sleep_cycles() {
+    // Both pairs are omitted from ACCS and rebuilt from deterministic boot
+    // structure, using the restored string- and symbol-key tables. Exercise
+    // them after last-connection close/reopen boundaries.
+    let last = carry_scenario(
+        "carry-iterator-accessors",
+        "Iterator.prototype; Object.create; Object.getOwnPropertyDescriptor; \
+         Symbol.toStringTag; q.get; q.set; q.enumerable; q.configurable; \
+         q.name; q.length; Object.prototype.toString.call; o.constructor; a.join;",
+        &[
+            "o = Object.create(Iterator.prototype); t = 7; t",
+            "q = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+             s = Object.getOwnPropertyDescriptor(Iterator.prototype, Symbol.toStringTag); \
+             t = [q.get.name, q.get.length, q.set.name, q.set.length, \
+                  q.enumerable, q.configurable, s.get.name, s.get.length, \
+                  s.set.name, s.set.length, s.enumerable, s.configurable].join(':'); t",
+            "o.constructor = 42; o[Symbol.toStringTag] = 'Saved'; \
+             t = Object.prototype.toString.call(o) + ':' + o.constructor; t",
+        ],
+    );
+    assert_eq!(last, "[object Saved]:42");
+}
+
+#[test]
 fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
     // `%Function.prototype%` and the identity of its `@@hasInstance` method
     // are boot-rebuilt, while the lazily installed symbol property and a

@@ -574,6 +574,15 @@ struct AccessorData {
     set: Option<Slot>,
 }
 
+/// A property key for a deterministic boot accessor. String keys use the
+/// realm's append-only name table; well-known symbols use the descriptor-key
+/// table and are installed only during the initial full intrinsic link.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProtoAccessorKey {
+    String(&'static str),
+    WellKnownSymbol(&'static str),
+}
+
 /// Result of writing through XS's exotic closure-environment behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EnvironmentSet {
@@ -2726,6 +2735,18 @@ pub enum NativeMethod {
     MapIteratorNext,
     SetIteratorNext,
     IteratorFrom,
+    /// `get Iterator.prototype.constructor`: returns the realm's `%Iterator%`
+    /// constructor without inspecting the receiver.
+    IteratorConstructorGetter,
+    /// `set Iterator.prototype.constructor`: the string-keyed instance of
+    /// `SetterThatIgnoresPrototypeProperties`.
+    IteratorConstructorSetter,
+    /// `get Iterator.prototype[Symbol.toStringTag]`: returns `"Iterator"`
+    /// without inspecting the receiver.
+    IteratorToStringTagGetter,
+    /// `set Iterator.prototype[Symbol.toStringTag]`: the symbol-keyed instance
+    /// of `SetterThatIgnoresPrototypeProperties`.
+    IteratorToStringTagSetter,
     /// One of the Iterator Helper prototype methods, indexed in the order
     /// installed by `create_intrinsics`.
     IteratorHelper(u8),
@@ -4180,9 +4201,9 @@ pub struct Interp {
     /// only when the program references the name; unmetered.
     proto_data: Vec<(crate::value::SlotIndex, &'static str, String)>,
     /// Native prototype **accessor** properties to bind at link time:
-    /// `(prototype, property name, getter function, guard name)`. Each installs
-    /// a real ordinary accessor property `{get, set: undefined,
-    /// enumerable: false, configurable: true}` — a live slot in the prototype's
+    /// `(prototype, property key, getter function, optional setter function,
+    /// guard name)`. Each installs a real ordinary accessor property with
+    /// non-enumerable, configurable attributes — a live slot in the prototype's
     /// property chain carrying `XS_GETTER_FLAG|XS_SETTER_FLAG` plus an
     /// `accessors` entry — so it is revealed by
     /// `Object.getOwnPropertyDescriptor` and invoked on read with the receiver
@@ -4198,11 +4219,14 @@ pub struct Interp {
     /// constructor, `NumberFormat` — is referenced; such a program always
     /// aborts in the oracle at the missing `Intl`, so its metering is never
     /// compared. The property key is interned **unmetered** (XS builds this
-    /// accessor at realm boot, off the guest meter).
+    /// accessor at realm boot, off the guest meter). Well-known-symbol entries
+    /// instead install during the initial full link, when their descriptor-key
+    /// ids are minted, and never reinstall during a later crank relink.
     proto_accessors: Vec<(
         crate::value::SlotIndex,
-        &'static str,
+        ProtoAccessorKey,
         crate::value::SlotIndex,
+        Option<crate::value::SlotIndex>,
         &'static str,
     )>,
     /// The well-known symbols (`Symbol.iterator`, `Symbol.hasInstance`, …) as
@@ -5824,7 +5848,13 @@ impl Interp {
             // The two realm-local identity links required of every built-in
             // constructor.  They are installed only when the program names
             // the corresponding key, like the rest of the boot surface.
-            self.proto_methods.push((proto, "constructor", f));
+            // `%Iterator.prototype%.constructor` is the web-compat accessor
+            // specified by ES2025, not the ordinary writable data property
+            // shared by the other intrinsic prototypes. Its getter/setter are
+            // installed below once the iterator prototype identity is known.
+            if native != Native::Iterator {
+                self.proto_methods.push((proto, "constructor", f));
+            }
             self.proto_methods.push((f, "prototype", proto));
             // `<TypedArray>.BYTES_PER_ELEMENT` and its
             // `<TypedArray>.prototype.BYTES_PER_ELEMENT` twin: the element
@@ -5855,6 +5885,40 @@ impl Interp {
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
         if let Some(&iterator_ctor) = self.intrinsics.get("Iterator") {
+            let constructor_getter = self.alloc_named_method(
+                NativeMethod::IteratorConstructorGetter,
+                "get constructor",
+                0,
+            );
+            let constructor_setter = self.alloc_named_method(
+                NativeMethod::IteratorConstructorSetter,
+                "set constructor",
+                1,
+            );
+            self.proto_accessors.push((
+                self.iterator_proto,
+                ProtoAccessorKey::String("constructor"),
+                constructor_getter,
+                Some(constructor_setter),
+                "Iterator",
+            ));
+            let tag_getter = self.alloc_named_method(
+                NativeMethod::IteratorToStringTagGetter,
+                "get [Symbol.toStringTag]",
+                0,
+            );
+            let tag_setter = self.alloc_named_method(
+                NativeMethod::IteratorToStringTagSetter,
+                "set [Symbol.toStringTag]",
+                1,
+            );
+            self.proto_accessors.push((
+                self.iterator_proto,
+                ProtoAccessorKey::WellKnownSymbol("toStringTag"),
+                tag_getter,
+                Some(tag_setter),
+                "Iterator",
+            ));
             let from = self.alloc_named_method(NativeMethod::IteratorFrom, "from", 1);
             self.proto_methods.push((iterator_ctor, "from", from));
             for (op, (name, arity)) in [
@@ -6016,8 +6080,13 @@ impl Interp {
             ("buffer", NativeMethod::TypedArrayBufferGetter),
         ] {
             let getter = self.alloc_named_method(method, &format!("get {name}"), 0);
-            self.proto_accessors
-                .push((typed_array_proto, name, getter, "TypedArray"));
+            self.proto_accessors.push((
+                typed_array_proto,
+                ProtoAccessorKey::String(name),
+                getter,
+                None,
+                "TypedArray",
+            ));
         }
         let from = self.alloc_named_method(NativeMethod::TypedArrayFrom, "from", 1);
         let of = self.alloc_named_method(NativeMethod::TypedArrayOf, "of", 0);
@@ -6972,8 +7041,13 @@ impl Interp {
         // time. Installed as a real native accessor via `proto_accessors`.
         let format_getter =
             self.alloc_named_method(NativeMethod::NumberFormatFormatGetter, "get format", 0);
-        self.proto_accessors
-            .push((number_format_proto, "format", format_getter, "NumberFormat"));
+        self.proto_accessors.push((
+            number_format_proto,
+            ProtoAccessorKey::String("format"),
+            format_getter,
+            None,
+            "NumberFormat",
+        ));
         for (name, method, arity) in [
             ("formatToParts", NativeMethod::NumberFormatFormatToParts, 1),
             ("formatRange", NativeMethod::NumberFormatFormatRange, 2),
@@ -8302,7 +8376,25 @@ impl Interp {
         // enumerable: false, configurable: true}` and a `.format` read invokes
         // the getter with the receiver as `this`. Bound only when referenced.
         let accessors = std::mem::take(&mut self.proto_accessors);
-        for &(proto, pname, getter, guard) in &accessors {
+        for &(proto, key, getter, setter, guard) in &accessors {
+            if let ProtoAccessorKey::WellKnownSymbol(name) = key {
+                if full {
+                    if let Some(pid) = self.well_known_symbol_property_id(name) {
+                        self.set_own_accessor_unmetered(
+                            proto,
+                            pid,
+                            Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                            setter.map(|function| {
+                                Slot::of(Kind::Reference, Payload::Reference(function))
+                            }),
+                        );
+                    }
+                }
+                continue;
+            }
+            let ProtoAccessorKey::String(pname) = key else {
+                unreachable!()
+            };
             // Install only when the owning constructor is referenced (so a
             // non-Intl program's metering is untouched), then force-intern the
             // property key **without** metering — the tests read it by string,
@@ -8321,17 +8413,20 @@ impl Interp {
             } else {
                 self.symbol_ids.get(guard).copied().is_some_and(&keep)
             };
-            if guard_is_kept {
-                    let pid = self.intern_key_unmetered(pname);
-                    if !full && self.find_property(proto, pid).is_some() {
-                        continue;
-                    }
-                    self.set_own_accessor_unmetered(
-                        proto,
-                        pid,
-                        Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
-                        None,
-                    );
+            let property_is_kept = self.symbol_ids.get(pname).copied().is_some_and(&keep);
+            if guard_is_kept || property_is_kept {
+                let pid = self.intern_key_unmetered(pname);
+                if !full && self.find_property(proto, pid).is_some() {
+                    continue;
+                }
+                self.set_own_accessor_unmetered(
+                    proto,
+                    pid,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    setter.map(|function| {
+                        Slot::of(Kind::Reference, Payload::Reference(function))
+                    }),
+                );
             }
         }
         self.proto_accessors = accessors;
@@ -9264,7 +9359,10 @@ impl Interp {
             .chain(
                 self.proto_accessors
                     .iter()
-                    .filter_map(|(owner, name, _, _)| (*owner == inst).then_some(*name)),
+                    .filter_map(|(owner, key, _, _, _)| match key {
+                        ProtoAccessorKey::String(name) if *owner == inst => Some(*name),
+                        _ => None,
+                    }),
             )
             .collect();
         if self.intrinsics.get("Symbol").copied() == Some(inst) {
@@ -9310,10 +9408,17 @@ impl Interp {
                 (*owner == inst && !matches!(*name, "length" | "name" | "prototype"))
                     .then_some(*name)
             })
-            .chain(self.proto_accessors.iter().filter_map(|(owner, name, _, _)| {
-                (*owner == inst && !matches!(*name, "length" | "name" | "prototype"))
-                    .then_some(*name)
-            }))
+            .chain(self.proto_accessors.iter().filter_map(
+                |(owner, key, _, _, _)| match key {
+                    ProtoAccessorKey::String(name)
+                        if *owner == inst
+                            && !matches!(*name, "length" | "name" | "prototype") =>
+                    {
+                        Some(*name)
+                    }
+                    _ => None,
+                },
+            ))
             .collect();
         callable_names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
         callable_names.dedup();
@@ -9538,10 +9643,11 @@ impl Interp {
     /// GRADUATED: they travel in the `ERRD` and `ABUF`/`TARR`/`DVIW`
     /// atoms now.)
     /// One accessor class is exempt: an entry that IS a boot
-    /// [`Self::proto_accessors`] seed — same `(proto, id)` key, the
-    /// seed's own getter, no setter (today: the `Intl.NumberFormat`
-    /// `format` getter, installed on first `Intl` reference). Its
-    /// getter is a boot-minted native whose `FuncInfo` lives on every
+    /// [`Self::proto_accessors`] seed — same `(proto, resolved key)` pair, the
+    /// seed's own getter and optional setter (today: the
+    /// `Intl.NumberFormat` `format` getter and the ES2025 Iterator
+    /// `constructor` and `Symbol.toStringTag` pairs). Each callable is a
+    /// boot-minted native whose `FuncInfo` lives on every
     /// fresh boot, so [`Self::restore_snapshot_state`] re-derives the
     /// entry exactly ([`Self::rebuild_boot_accessors`]) — the
     /// `RebuiltAtRestore` pattern, not a carry. A guest REDEFINITION
@@ -9787,19 +9893,35 @@ impl Interp {
             .collect()
     }
 
+    /// Resolve a deterministic boot accessor key without creating any state.
+    /// Restore has already rebuilt both key tables before accessor seeds are
+    /// re-derived, so a missing id means the property was never installed.
+    fn boot_accessor_key_id(&self, key: ProtoAccessorKey) -> Option<u16> {
+        match key {
+            ProtoAccessorKey::String(name) => self.symbol_ids.get(name).copied(),
+            ProtoAccessorKey::WellKnownSymbol(name) => {
+                let descriptor = self.well_known_symbols.iter().find_map(|(candidate, value)| {
+                    (*candidate == name).then_some(value.value)
+                })?;
+                match descriptor {
+                    Payload::Reference(descriptor) => {
+                        self.symbol_key_ids.get(&descriptor).copied()
+                    }
+                    _ => None,
+                }
+            }
+        }
+    }
+
     /// Whether an `accessors` entry is exactly a boot
-    /// [`Self::proto_accessors`] seed: seed proto and interned seed
-    /// name as the key, the seed getter (by slot identity) as the
-    /// getter, and no setter.
+    /// [`Self::proto_accessors`] seed: seed proto and resolved seed key, and
+    /// the seed getter/setter (by slot identity).
     fn is_boot_seed_accessor(
         &self,
         owner: crate::value::SlotIndex,
         id: u16,
         data: &AccessorData,
     ) -> bool {
-        if data.set.is_some() {
-            return false;
-        }
         let getter = match data.get {
             Some(Slot {
                 value: Payload::Reference(g),
@@ -9807,9 +9929,25 @@ impl Interp {
             }) => g,
             _ => return false,
         };
-        self.proto_accessors.iter().any(|&(proto, pname, seed, _)| {
-            proto == owner && seed == getter && self.symbol_ids.get(pname) == Some(&id)
-        })
+        self.proto_accessors
+            .iter()
+            .any(|&(proto, key, seed_getter, seed_setter, _)| {
+                let setter_matches = match (data.set, seed_setter) {
+                    (None, None) => true,
+                    (
+                        Some(Slot {
+                            value: Payload::Reference(actual),
+                            ..
+                        }),
+                        Some(expected),
+                    ) => actual == expected,
+                    _ => false,
+                };
+                proto == owner
+                    && seed_getter == getter
+                    && setter_matches
+                    && self.boot_accessor_key_id(key) == Some(id)
+            })
     }
 
     /// Re-derive the boot-seeded prototype accessor entries after a
@@ -9826,8 +9964,8 @@ impl Interp {
     /// rebuilds nothing.
     fn rebuild_boot_accessors(&mut self) {
         let seeds = std::mem::take(&mut self.proto_accessors);
-        for &(proto, pname, getter, _) in &seeds {
-            let Some(&pid) = self.symbol_ids.get(pname) else {
+        for &(proto, key, getter, setter, _) in &seeds {
+            let Some(pid) = self.boot_accessor_key_id(key) else {
                 continue;
             };
             let Some(p) = self.find_property(proto, pid) else {
@@ -9842,7 +9980,9 @@ impl Interp {
                 (proto, pid),
                 AccessorData {
                     get: Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
-                    set: None,
+                    set: setter.map(|function| {
+                        Slot::of(Kind::Reference, Payload::Reference(function))
+                    }),
                 },
             );
         }
@@ -10548,17 +10688,6 @@ impl Interp {
                 .insert(owner, crate::value::SlotIndex(row.proxy));
         }
         true
-    }
-
-    fn accessor_function_persists(&self, value: Option<Slot>) -> bool {
-        let Some(Slot {
-            value: Payload::Reference(function),
-            ..
-        }) = value
-        else {
-            return value.is_none();
-        };
-        self.function_persists(function)
     }
 
     /// Snapshot guest accessor getter/setter mappings. Exact boot seeds are
@@ -11747,6 +11876,12 @@ impl Interp {
             self.symbol_key_ids.insert(crate::value::SlotIndex(desc), id);
         }
         self.next_symbol_key_id = next;
+        // `restore_snapshot_state` can rebuild only string-keyed boot
+        // accessors because this table is restored afterwards. Re-run the
+        // idempotent derivation now so well-known-symbol seeds (notably
+        // `%Iterator.prototype%[@@toStringTag]`) regain their native pair
+        // before serialized guest accessor rows are overlaid.
+        self.rebuild_boot_accessors();
         true
     }
 
@@ -14264,10 +14399,12 @@ impl Interp {
                                     Err(halt) => return halt,
                                 }
                             }
-                        } else if !match self.ordinary_set(code, inst, id, value, obj) {
-                            Ok(accepted) => accepted,
-                            Err(halt) => return halt,
-                        } {
+                        } else if !dispatch_result!(
+                            self.ordinary_set(code, inst, id, value, obj),
+                            pc,
+                            self,
+                            return_depth
+                        ) {
                             // A frozen / non-writable property, or a new key on a
                             // non-extensible object: XS's `mxBehaviorSetProperty`
                             // stores nothing. A **sloppy** callee silently
@@ -32792,6 +32929,21 @@ impl Interp {
                     _ => return Err(Halt::Unsupported("Iterator.from:wrapper")),
                 }
             }
+            NativeMethod::IteratorConstructorGetter => {
+                let constructor = self
+                    .intrinsics
+                    .get("Iterator")
+                    .copied()
+                    .ok_or(Halt::Unsupported("Iterator:missing-constructor"))?;
+                Slot::of(Kind::Reference, Payload::Reference(constructor))
+            }
+            NativeMethod::IteratorToStringTagGetter => {
+                self.new_string_metered(b"Iterator")
+            }
+            NativeMethod::IteratorConstructorSetter
+            | NativeMethod::IteratorToStringTagSetter => {
+                self.iterator_prototype_setter(code, m, this, arg0)?
+            }
             NativeMethod::IteratorHelper(6) => self.iterator_to_array(code, this)?,
             NativeMethod::IteratorHelper(_) => {
                 return Err(Halt::Unsupported("Iterator.helper"));
@@ -40023,6 +40175,54 @@ impl Interp {
         })
     }
 
+    /// ES2025 `SetterThatIgnoresPrototypeProperties`, specialized to the two
+    /// accessor properties on `%Iterator.prototype%`. An inherited assignment
+    /// creates a normal own data property instead of recursing back into this
+    /// setter; an existing own descriptor receives ordinary strict `Set`
+    /// semantics. Assignment to the home prototype itself is rejected.
+    fn iterator_prototype_setter(
+        &mut self,
+        code: &[u8],
+        method: NativeMethod,
+        this: Slot,
+        value: Slot,
+    ) -> Result<Slot, Halt> {
+        let inst = match this.value {
+            Payload::Reference(inst) if this.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        if inst == self.iterator_proto {
+            return Err(self.catchable_type_error());
+        }
+        let id = match method {
+            NativeMethod::IteratorConstructorSetter => self.intern_key_unmetered("constructor"),
+            NativeMethod::IteratorToStringTagSetter => self
+                .well_known_symbol_property_id("toStringTag")
+                .ok_or(Halt::Unsupported("Iterator.setter:missing-toStringTag"))?,
+            _ => unreachable!("only Iterator prototype setters dispatch here"),
+        };
+        let accepted = if self.mop_get_own_property(code, inst, id)?.is_some() {
+            self.mop_set(code, inst, id, value, this)?
+        } else {
+            self.mop_define_own_property(
+                code,
+                inst,
+                id,
+                OrdinaryDescriptor {
+                    value: Some(value),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(true),
+                    ..OrdinaryDescriptor::default()
+                },
+            )?
+        };
+        if !accepted {
+            return Err(self.catchable_type_error());
+        }
+        Ok(Slot::undefined())
+    }
+
     /// `CompareArrayElements(x, y, comparator)`. Undefined values sort after
     /// every defined value without invoking the guest comparator. The default
     /// ordering compares the UTF-16 code-unit sequences produced by `ToString`;
@@ -44624,6 +44824,41 @@ impl Interp {
         self.run_callback(code, getter, receiver, &[])
     }
 
+    /// Invoke an accessor setter with `receiver` as `this`. Boot accessors can
+    /// carry native-method setters (the ES2025 Iterator prototype accessors),
+    /// while guest accessors carry bytecode functions. Both paths deliberately
+    /// discard the setter's return value.
+    fn invoke_setter(
+        &mut self,
+        code: &[u8],
+        setter: Slot,
+        receiver: Slot,
+        value: Slot,
+    ) -> Result<(), Halt> {
+        if let Payload::Reference(f) = setter.value {
+            if let Some(m) = self.method_of(f) {
+                let base = self.stack.len();
+                self.push(receiver);
+                self.push(setter);
+                self.push(Slot::undefined());
+                self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                self.push(value);
+                return match self.call_native_method(m, base, 1, code) {
+                    Ok(()) => {
+                        let _ = self.pop();
+                        Ok(())
+                    }
+                    Err(h) => {
+                        self.stack.truncate(base);
+                        Err(h)
+                    }
+                };
+            }
+        }
+        let _ = self.run_callback(code, setter, receiver, &[value])?;
+        Ok(())
+    }
+
     fn ordinary_get(
         &mut self,
         code: &[u8],
@@ -44673,7 +44908,7 @@ impl Interp {
                 if setter.kind == Kind::Undefined {
                     return Ok(false);
                 }
-                self.run_callback(code, setter, receiver, &[value])?;
+                self.invoke_setter(code, setter, receiver, value)?;
                 return Ok(true);
             }
             if descriptor.writable == Some(false) {
@@ -53982,9 +54217,12 @@ impl Interp {
         // crank that names its guard installs it, the pending getter
         // function (and its owning prototype) is reachable ONLY here —
         // exactly like its rooted `proto_methods`/`proto_data` siblings.
-        for (holder, _, getter, _) in &self.proto_accessors {
+        for (holder, _, getter, setter, _) in &self.proto_accessors {
             roots.push(*holder);
             roots.push(*getter);
+            if let Some(setter) = setter {
+                roots.push(*setter);
+            }
         }
         // Symbol.for registry entries are strong per spec.
         roots.extend(self.symbol_registry.values().copied());
