@@ -198,13 +198,17 @@ fn object_properties_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "objects",
         &[
-            "var o = { a: 1, b: 2 };",
+            "var p = { inherited: 7 }; \
+             var o = { __proto__: p, a: 1, b: 2, \
+                 get c() { return this.a + this.inherited; } }; \
+             var n = { __proto__: null, x: 2 };",
             "o.a = o.a + o.b;",
             "o.b = o.a * 10;",
-            "o.a + o.b",
+            "(o.a + o.b + o.c) + ':' + (Object.getPrototypeOf(o) === p) + \
+             ':' + (Object.getPrototypeOf(n) === null) + ':' + n.x",
         ],
     );
-    assert_eq!(last, "33");
+    assert_eq!(last, "43:true:true:2");
 }
 
 /// A boot-default name first produced at runtime must install the inherited
