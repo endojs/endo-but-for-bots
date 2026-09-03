@@ -361,6 +361,27 @@
  */
 
 /**
+ * The context `makeOcapn`'s `makeLocatorForSession` factory receives
+ * when a session is established. `remoteDesignator` is the authenticated
+ * peer's designator (its stable transport identity), so an embedder can
+ * key per-peer accounting on it. `abortSession` tears this session down;
+ * a locator that has seen too many misses can call it to enforce a
+ * per-session bound without leaking which presentation crossed it.
+ *
+ * @typedef {object} SessionLocatorContext
+ * @property {string} remoteDesignator
+ * @property {() => void} abortSession
+ */
+
+/**
+ * Builds a fresh `NonceLocator` for one established session's incoming
+ * `bootstrap.fetch` calls. Called once per session with that session's
+ * {@link SessionLocatorContext}.
+ *
+ * @typedef {(context: SessionLocatorContext) => NonceLocator} MakeLocatorForSession
+ */
+
+/**
  * The session-manager instance returned by `makeOcapn`.
  *
  * @template [Bootstrap=OcapnBootstrap]
