@@ -45,6 +45,19 @@ fn native_apply_forwards_dense_array() {
     agrees("Math.max.apply(null)");
     agrees("Math.max.apply(null, undefined)");
     agrees("Math.max.apply(null, null)");
+    // CreateListFromArrayLike also accepts ordinary objects and reads holes or
+    // materialized accessors through the full property MOP.
+    agrees("Math.max.apply(null, {length:3,0:2,1:9,2:4})");
+    agrees("Math.max.apply(null, [,7])");
+    agrees(
+        "var log=[];var a=[];a.length=2;Object.defineProperty(a,'0',{get:function(){log.push(0);return 8}}); \
+         Math.max.apply(null,a)+':'+log.join(',')",
+    );
+    agrees("(function(){return Math.max.apply(null,arguments)})(2,9,4)");
+    agrees(
+        "var log=[];var args=new Proxy({length:2,0:3,1:8},{get:function(t,k){log.push(k);return t[k]}}); \
+         Math.max.apply(null,args)+':'+log.join(',')",
+    );
 }
 
 #[test]
@@ -290,6 +303,14 @@ fn apply_array_like_arg_array() {
     agrees(
         "function f() { return String(arguments[0]) + '/' + arguments.length; } \
          f.apply(null, {length: 2})",
+    );
+    agrees(
+        "function f(a,b){return String(a)+':'+b}var args=[,2];f.apply(null,args)",
+    );
+    agrees(
+        "function f(a){return a}var old=Array.prototype[0];Array.prototype[0]=6; \
+         var args=new Array(1),r=f.apply(null,args); \
+         old===undefined?delete Array.prototype[0]:Array.prototype[0]=old;r",
     );
     // The `arguments` object of another call forwards through apply.
     agrees(
