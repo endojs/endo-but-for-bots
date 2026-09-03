@@ -6363,14 +6363,12 @@ impl Interp {
             self.proto_methods.push((self.promise_proto, name, mf));
         }
         // `%GeneratorPrototype%` (`xsGenerator.c`'s `fxBuildGenerator`): a boot
-        // object carrying `next`/`return`/`throw`. XS chains it to
-        // `%IteratorPrototype%`; ironhorse has no separate `%IteratorPrototype%`
-        // (its array iterators chain straight to `%Object.prototype%`), so
-        // `%GeneratorPrototype%` does too — the covered surface (`.next`,
-        // `for-of`) reaches the same methods. A generator function's
-        // `.prototype` chains to this (see `new_generator_function`), so a
-        // generator instance resolves these by the ordinary chain walk.
-        let generator_proto = self.slots.alloc(Slot::instance(self.object_proto));
+        // object carrying `next`/`return`/`throw` and chaining to
+        // `%Iterator.prototype%`. A generator function's `.prototype` chains
+        // to this (see `new_generator_function`), so generator instances both
+        // resolve their resume methods and inherit the standard Iterator
+        // helpers through the ordinary prototype walk.
+        let generator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
         self.generator_proto = generator_proto;
         for (name, m) in [
             ("next", NativeMethod::GeneratorNext),
@@ -20421,10 +20419,22 @@ impl Interp {
                 self.meter.tick_raw(SYMBOL_CREATE_METERING);
                 Slot::of(Kind::Symbol, Payload::Reference(d))
             }
-            // The intrinsic Iterator constructor is abstract. Direct call and
-            // direct construction both throw; derived construction is left as
-            // an explicit later increment.
-            Native::Iterator => return Err(self.catchable_type_error()),
+            // The intrinsic Iterator constructor is abstract only when called
+            // directly or used as its own `new.target`. A derived constructor's
+            // `super()` (and `Reflect.construct(Iterator, [], NewTarget)`) uses
+            // OrdinaryCreateFromConstructor(NewTarget, "%Iterator.prototype%")
+            // so subclasses can acquire the shared helper surface without any
+            // additional internal slots.
+            Native::Iterator => {
+                if !has_target || !derived_native_construct {
+                    return Err(self.catchable_type_error());
+                }
+                let target = new_target.expect("a derived native construct has a new.target");
+                let proto =
+                    self.get_prototype_from_constructor(code, target, self.iterator_proto)?;
+                let inst = self.slots.alloc(Slot::instance(proto));
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
             // `Array(...)` / `new Array(...)` (`fx_Array`): both forms build the
             // same array. A single number argument is the length (a holey
             // array of that length); a single non-number, or two-or-more
@@ -32944,7 +32954,9 @@ impl Interp {
             | NativeMethod::IteratorToStringTagSetter => {
                 self.iterator_prototype_setter(code, m, this, arg0)?
             }
-            NativeMethod::IteratorHelper(6) => self.iterator_to_array(code, this)?,
+            NativeMethod::IteratorHelper(op @ 5..=10) => {
+                self.iterator_terminal_helper(code, op, this, base, argc)?
+            }
             NativeMethod::IteratorHelper(_) => {
                 return Err(Halt::Unsupported("Iterator.helper"));
             }
@@ -36441,48 +36453,220 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(iter))
     }
 
-    /// `Iterator.prototype.toArray` for the intrinsic iterator families. The
-    /// generic user-defined `next` protocol remains an honest named gap; this
-    /// path advances the same native iterator state used by ordinary `.next()`
-    /// calls and appends each yielded value to a fresh Array.
-    fn iterator_to_array(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
-        let iter = match this.value {
-            Payload::Reference(i) if self.iterators.contains_key(&i) => i,
-            Payload::Reference(_) => return Err(Halt::Unsupported("Iterator.toArray:generic")),
-            _ => return Err(self.catchable_type_error()),
+    /// Invoke one of the eager Iterator helpers (`reduce`, `toArray`,
+    /// `forEach`, `some`, `every`, or `find`) behind a native try boundary.
+    /// Their shared implementation below drives the public direct-iterator
+    /// protocol rather than inspecting ironhorse's iterator side table, so
+    /// user iterators, proxies, accessors, and overridden built-in `next`
+    /// methods all remain observable.
+    fn iterator_terminal_helper(
+        &mut self,
+        code: &[u8],
+        op: u8,
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.iterator_terminal_helper_inner(code, op, this, base, argc);
+        self.jumps = saved_jumps;
+        match outcome {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(error)) => match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            },
+            Err(halt) => Err(halt),
+        }
+    }
+
+    /// IteratorClose with a normal completion. Unlike the abrupt-close helper
+    /// used by `Array.from`, failures from getting/calling `return` replace the
+    /// pending value, and a non-object return result is a TypeError.
+    fn iterator_close_normal(
+        &mut self,
+        code: &[u8],
+        iterator: Slot,
+        completion: Slot,
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        let Payload::Reference(inst) = iterator.value else {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
         };
-        let array = self.new_array();
-        let mut length = 0u32;
-        loop {
-            let result = self.array_iterator_next(code, iter)?;
-            let Payload::Reference(result_obj) = result.value else {
-                return Err(Halt::Unsupported("Iterator.toArray:bad-result"));
+        let return_id = self.intern_key("return");
+        let return_method = match self.array_from_try(|this| {
+            this.mop_get(code, inst, return_id, iterator)
+        })? {
+            Ok(method) => method,
+            Err(error) => return Ok(Err(error)),
+        };
+        if matches!(return_method.kind, Kind::Undefined | Kind::Null) {
+            return Ok(Ok(completion));
+        }
+        if !self.is_callable_value(return_method) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+        let inner = match self.array_from_try(|this| {
+            this.call_any(code, return_method, iterator, &[])
+        })? {
+            Ok(value) => value,
+            Err(error) => return Ok(Err(error)),
+        };
+        if inner.kind != Kind::Reference {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+        Ok(Ok(completion))
+    }
+
+    /// The common direct-iterator loop for the eager Iterator helpers. The
+    /// operation ids follow `create_intrinsics`: 5 reduce, 6 toArray, 7
+    /// forEach, 8 some, 9 every, 10 find.
+    fn iterator_terminal_helper_inner(
+        &mut self,
+        code: &[u8],
+        op: u8,
+        iterator: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Result<Slot, Slot>, Halt> {
+        let inst = match iterator.value {
+            Payload::Reference(inst) if iterator.kind == Kind::Reference => inst,
+            _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+        };
+        let callback = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        if op != 6 && !self.is_callable_value(callback) {
+            // ES2025 creates the incomplete iterator record before validating
+            // the callback. IteratorClose therefore observes `return`, but it
+            // has not yet read `next`; the original TypeError always wins.
+            let error = self.build_error("TypeError", 0, 0);
+            return Ok(Err(self.array_from_close(code, iterator, error)?));
+        }
+
+        let value_id = self.intern_key("value");
+        let done_id = self.intern_key("done");
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+        let next_id = self.intern_key("next");
+        let next_method = match self.array_from_try(|this| {
+            this.mop_get(code, inst, next_id, iterator)
+        })? {
+            Ok(method) if self.is_callable_value(method) => method,
+            Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            Err(error) => return Ok(Err(error)),
+        };
+
+        let mut counter = 0u64;
+        let mut accumulator = if op == 5 && argc >= 2 {
+            self.stack
+                .get(base + 5)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        } else {
+            Slot::uninitialized()
+        };
+        let mut items = Vec::new();
+
+        for _ in 0..1_000_000u64 {
+            let step = match self.array_from_try(|this| {
+                this.call_any(code, next_method, iterator, &[])
+            })? {
+                Ok(step) => step,
+                // IteratorStepValue failures propagate directly and do not
+                // invoke `return`.
+                Err(error) => return Ok(Err(error)),
             };
-            let done = self
-                .done_id
-                .map(|id| self.instance_get(result_obj, id))
-                .is_some_and(|value| self.truthy(&value));
-            if done {
-                break;
+            let step_inst = match step.value {
+                Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+            let done = match self.array_from_try(|this| {
+                this.mop_get(code, step_inst, done_id, step)
+            })? {
+                Ok(done) => done,
+                Err(error) => return Ok(Err(error)),
+            };
+            if self.truthy(&done) {
+                return Ok(match op {
+                    5 if accumulator.kind == Kind::Uninitialized => {
+                        Err(self.build_error("TypeError", 0, 0))
+                    }
+                    5 => Ok(accumulator),
+                    6 => {
+                        // CreateArrayFromList at completion. Retain the
+                        // existing toArray allocation/meter shape: one real
+                        // Array instance followed by its dense item chunk.
+                        let array = self.new_array();
+                        let length = items.len() as u32;
+                        let data = self.arrays.get_mut(&array).unwrap();
+                        data.length = length;
+                        for (index, value) in items.iter().enumerate() {
+                            data.insert_item(index as u32, *value, &mut self.side_refs);
+                        }
+                        if length != 0 {
+                            self.meter
+                                .tick_raw(self.array_chunk_size_metering(length));
+                        }
+                        Ok(Slot::of(Kind::Reference, Payload::Reference(array)))
+                    }
+                    7 => Ok(Slot::undefined()),
+                    8 => Ok(Slot::boolean(false)),
+                    9 => Ok(Slot::boolean(true)),
+                    10 => Ok(Slot::undefined()),
+                    _ => unreachable!("terminal Iterator helper id"),
+                });
             }
-            let value = self
-                .value_id
-                .map(|id| self.instance_get(result_obj, id))
-                .unwrap_or_else(Slot::undefined);
-            // The write routes through the counted accessor so the
-            // side-ref page counts move with it (the seam's bulk-table
-            // discipline; a raw map insert desyncs the parity net).
-            self.arrays
-                .get_mut(&array)
-                .unwrap()
-                .insert_item(length, value, &mut self.side_refs);
-            length += 1;
+            let value = match self.array_from_try(|this| {
+                this.mop_get(code, step_inst, value_id, step)
+            })? {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+
+            if op == 6 {
+                items.push(value);
+                counter += 1;
+                continue;
+            }
+            if op == 5 && accumulator.kind == Kind::Uninitialized {
+                accumulator = value;
+                counter = 1;
+                continue;
+            }
+
+            let args = if op == 5 {
+                vec![accumulator, value, Slot::number(counter as f64)]
+            } else {
+                vec![value, Slot::number(counter as f64)]
+            };
+            let result = match self.array_from_try(|this| {
+                this.call_any(code, callback, Slot::undefined(), &args)
+            })? {
+                Ok(result) => result,
+                Err(error) => {
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+            };
+            match op {
+                5 => accumulator = result,
+                7 => {}
+                8 if self.truthy(&result) => {
+                    return self.iterator_close_normal(code, iterator, Slot::boolean(true));
+                }
+                9 if !self.truthy(&result) => {
+                    return self.iterator_close_normal(code, iterator, Slot::boolean(false));
+                }
+                10 if self.truthy(&result) => {
+                    return self.iterator_close_normal(code, iterator, value);
+                }
+                8..=10 => {}
+                _ => unreachable!("terminal Iterator helper id"),
+            }
+            counter += 1;
         }
-        self.arrays.get_mut(&array).unwrap().length = length;
-        if length != 0 {
-            self.meter.tick_raw(self.array_chunk_size_metering(length));
-        }
-        Ok(Slot::of(Kind::Reference, Payload::Reference(array)))
+        Err(Halt::StepLimit(self.n_dispatched))
     }
 
     /// `fx_MapIterator_prototype_next` / `fx_SetIterator_prototype_next`: yield

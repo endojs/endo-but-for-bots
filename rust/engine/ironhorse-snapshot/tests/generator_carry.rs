@@ -112,6 +112,21 @@ fn mid_walk_generator_continues_after_resume() {
     );
 }
 
+/// A carried generator retains both its saved activation and the boot-derived
+/// `%GeneratorPrototype%` -> `%Iterator.prototype%` link, so an eager helper
+/// can consume the rest of the walk after resume.
+#[test]
+fn resumed_generator_inherits_iterator_helpers() {
+    assert_memory_and_file(
+        "ih-genr-iterator-helper",
+        "var it = 0; var t = 0; \
+         function* g() { yield 1; yield 2; yield 3; } \
+         it = g(); it.next(); t = 7; t",
+        &["var it; var t; t = it.toArray().join(','); t"],
+        &["2,3"],
+    );
+}
+
 /// Locals and sent values compose across the boundary: the saved
 /// frame's accumulator continues from its pre-checkpoint value, and
 /// `next(v)` feeds the suspended `yield` expression after resume.

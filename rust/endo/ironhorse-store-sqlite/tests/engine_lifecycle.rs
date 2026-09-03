@@ -669,6 +669,28 @@ fn iterator_prototype_accessors_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn iterator_terminal_helpers_survive_sqlite_sleep_cycles() {
+    let last = carry_scenario(
+        "carry-iterator-terminal-helpers",
+        "Iterator.prototype.reduce; Iterator.prototype.find; \
+         Object.create; i.next; j.next; j.return; j.n; closed; \
+         i.length; i.values; j.value; j.done; k.next; k.toArray; k.join;",
+        &[
+            "i = [1, 2, 3, 4].values(); i.next(); \
+             j = Object.create(Iterator.prototype); j.n = 0; closed = 0; \
+             j.next = function () { return this.n < 3 ? \
+                 { value: ++this.n } : { done: true }; }; \
+             j.return = function () { closed++; return {}; }; \
+             g = function* () { yield 3; yield 4; }; k = g(); k.next(); t = 7; t",
+            "t = i.reduce(function (a, v) { return a + v; }, 10); t",
+            "t = j.find(function (v, k) { return v === 2 && k === 1; }) + \
+                 ':' + closed + ':' + k.toArray().join(','); t",
+        ],
+    );
+    assert_eq!(last, "2:1:4");
+}
+
+#[test]
 fn instanceof_intrinsics_and_custom_handlers_survive_sqlite_sleep_cycles() {
     // `%Function.prototype%` and the identity of its `@@hasInstance` method
     // are boot-rebuilt, while the lazily installed symbol property and a
