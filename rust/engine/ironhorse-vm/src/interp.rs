@@ -2410,12 +2410,14 @@ pub enum NativeMethod {
     /// plus the result chunk.
     StringConcat,
     /// `String.prototype.toLowerCase()` / `toUpperCase()`
-    /// (`fx_String_prototype_toCase`): case mapping over the code points;
-    /// `mxMeterSome(count)` plus the result chunk. ASCII-only fast path — a
-    /// non-ASCII code point self-names an honest skip (full Unicode case
-    /// folding is not modeled this stage).
+    /// (`fx_String_prototype_toCase`): locale-insensitive Unicode case mapping
+    /// over scalar runs, preserving unpaired UTF-16 surrogates;
+    /// `mxMeterSome(count)` plus the result chunk.
     StringToLowerCase,
     StringToUpperCase,
+    /// `String.prototype.normalize([form])`: Unicode NFC/NFD/NFKC/NFKD
+    /// normalization over scalar runs, preserving unpaired UTF-16 surrogates.
+    StringNormalize,
     /// `String.prototype.repeat(count)` (`fx_String_prototype_repeat`): the
     /// receiver repeated `count` times; `mxMeterSome(count)` plus the result
     /// chunk. A negative/`Infinity` count is a RangeError.
@@ -7560,6 +7562,7 @@ impl Interp {
             ("concat", 1, StringConcat),
             ("toLowerCase", 0, StringToLowerCase),
             ("toUpperCase", 0, StringToUpperCase),
+            ("normalize", 0, StringNormalize),
             ("repeat", 1, StringRepeat),
             ("trim", 0, StringTrim),
             ("padStart", 1, StringPadStart),
@@ -33088,6 +33091,7 @@ impl Interp {
             | NativeMethod::StringConcat
             | NativeMethod::StringToLowerCase
             | NativeMethod::StringToUpperCase
+            | NativeMethod::StringNormalize
             | NativeMethod::StringRepeat
             | NativeMethod::StringTrim
             | NativeMethod::StringTrimStart
@@ -36326,6 +36330,31 @@ impl Interp {
             StringToLowerCase | StringToUpperCase => {
                 let up = m == StringToUpperCase;
                 let out = unicode_case_convert_utf16(&content, up);
+                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
+                self.meter.tick_builtin_some(ulen as u64);
+                self.new_string_units(&out)
+            }
+            // normalize: default to NFC, otherwise coerce `form` after the
+            // receiver and accept only the four exact normalization names.
+            // ICU4X performs the Unicode algorithm over valid scalar runs;
+            // the helper retains JavaScript's unpaired UTF-16 surrogates.
+            StringNormalize => {
+                let form_units = match argn(0) {
+                    None
+                    | Some(Slot {
+                        kind: Kind::Undefined,
+                        ..
+                    }) => vec![0x4E, 0x46, 0x43],
+                    Some(value) => self.to_string_units(code, value)?,
+                };
+                let form = match form_units.as_slice() {
+                    [0x4E, 0x46, 0x43] => UnicodeNormalizationForm::Nfc,
+                    [0x4E, 0x46, 0x44] => UnicodeNormalizationForm::Nfd,
+                    [0x4E, 0x46, 0x4B, 0x43] => UnicodeNormalizationForm::Nfkc,
+                    [0x4E, 0x46, 0x4B, 0x44] => UnicodeNormalizationForm::Nfkd,
+                    _ => return Err(self.catchable_range_error()),
+                };
+                let out = unicode_normalize_utf16(&content, form);
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 self.meter.tick_builtin_some(ulen as u64);
                 self.new_string_units(&out)
@@ -51944,6 +51973,65 @@ fn unicode_case_convert_utf16(units: &[u16], upper: bool) -> Vec<u16> {
             out.extend(scalar_run.to_uppercase().encode_utf16());
         } else {
             out.extend(scalar_run.to_lowercase().encode_utf16());
+        }
+        scalar_run.clear();
+    };
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        match decoded {
+            Ok(ch) => scalar_run.push(ch),
+            Err(error) => {
+                flush(&mut scalar_run, &mut out);
+                out.push(error.unpaired_surrogate());
+            }
+        }
+    }
+    flush(&mut scalar_run, &mut out);
+    out
+}
+
+#[derive(Clone, Copy)]
+enum UnicodeNormalizationForm {
+    Nfc,
+    Nfd,
+    Nfkc,
+    Nfkd,
+}
+
+/// Normalize a JavaScript UTF-16 string without replacing lone surrogates.
+/// ICU4X's UTF-16 entry point deliberately maps invalid pairs to U+FFFD, so
+/// valid scalar runs are normalized separately and each unpaired surrogate is
+/// copied verbatim as a normalization boundary.
+fn unicode_normalize_utf16(
+    units: &[u16],
+    form: UnicodeNormalizationForm,
+) -> Vec<u16> {
+    let mut out = Vec::with_capacity(units.len());
+    let mut scalar_run = String::new();
+    let flush = |scalar_run: &mut String, out: &mut Vec<u16>| {
+        if scalar_run.is_empty() {
+            return;
+        }
+        match form {
+            UnicodeNormalizationForm::Nfc => {
+                let normalized =
+                    icu_normalizer::ComposingNormalizer::new_nfc().normalize(scalar_run);
+                out.extend(normalized.as_ref().encode_utf16());
+            }
+            UnicodeNormalizationForm::Nfd => {
+                let normalized =
+                    icu_normalizer::DecomposingNormalizer::new_nfd().normalize(scalar_run);
+                out.extend(normalized.as_ref().encode_utf16());
+            }
+            UnicodeNormalizationForm::Nfkc => {
+                let normalized =
+                    icu_normalizer::ComposingNormalizer::new_nfkc().normalize(scalar_run);
+                out.extend(normalized.as_ref().encode_utf16());
+            }
+            UnicodeNormalizationForm::Nfkd => {
+                let normalized =
+                    icu_normalizer::DecomposingNormalizer::new_nfkd().normalize(scalar_run);
+                out.extend(normalized.as_ref().encode_utf16());
+            }
         }
         scalar_run.clear();
     };
