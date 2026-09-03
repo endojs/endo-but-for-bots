@@ -777,6 +777,19 @@ fn generic_array_iterators_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn deleted_index_high_water_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "deleted-index-high-water",
+        &[
+            "var source={length:4294967297,0:7};delete source[0]",
+            "var source;var first=Array.prototype.values.call(source).next();var seen=first.done+':'+first.value;seen",
+            "var source;var seen;seen+':'+Object.keys(source).join(',')",
+        ],
+    );
+    assert_eq!(last, "false:undefined:length");
+}
+
+#[test]
 fn abrupt_array_iterator_cursor_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "abrupt-array-iterator-cursor",

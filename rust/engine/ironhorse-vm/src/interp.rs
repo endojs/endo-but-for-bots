@@ -408,11 +408,22 @@ pub const FUNCTION_LOCAL_METERING: u64 = 280;
 /// constructor, independent of body or arity. Accrued once per constructor
 /// entry at `begin`, in [`Interp::run_constructor`].
 pub const CONSTRUCTOR_HOST_FRAME_METERING: u64 = 2 << 16;
-/// Additional callable-Proxy dispatch frames for `proxy.call(...)` and
-/// `proxy.apply(...)` after the ordinary Function trampoline reshapes the
-/// arguments. Calibrated against the pinned XS oracle.
-pub const CALLABLE_PROXY_CALL_METERING: u64 = 508936;
-pub const CALLABLE_PROXY_APPLY_METERING: u64 = 508936;
+/// The Function.prototype call/apply trampoline work specific to a callable
+/// Proxy receiver. The Proxy's own target/trap-sensitive `[[Call]]` costs are
+/// charged centrally by [`Interp::proxy_call`], so direct, bound, and abstract
+/// calls all see them and these helpers add only the syntactic trampoline.
+pub const CALLABLE_PROXY_DOT_TRAMPOLINE_METERING: u64 = 4 << 16;
+/// Callable Proxy `[[Call]]` residuals, split by the operation that actually
+/// runs. A transparent layer forwarding to another Proxy is cheaper than the
+/// terminal layer; terminal forwarding differs for user/bound functions,
+/// native functions, and native methods. An active `apply` trap has its own
+/// path. Calibrated raw-exact against the pinned XS 9.0 oracle.
+pub const PROXY_CALL_FORWARD_PROXY_METERING: u64 = 98_816;
+pub const PROXY_CALL_FORWARD_USER_METERING: u64 = 377_912;
+pub const PROXY_CALL_FORWARD_BOUND_METERING: u64 = 377_904;
+pub const PROXY_CALL_FORWARD_NATIVE_METERING: u64 = 427_096;
+pub const PROXY_CALL_FORWARD_METHOD_METERING: u64 = 246_792;
+pub const PROXY_CALL_TRAP_METERING: u64 = 475_664;
 
 /// Per-method raw 16.16 costs for the native prototype methods, measured
 /// against the pin `48ee02d8cfe0` via the differential raw-gap. Each is the
@@ -432,12 +443,24 @@ pub const OBJECT_VALUE_OF_PRIMITIVE_METERING: u64 = 32776;
 /// metering unit in the pin.
 pub const OBJECT_VALUE_OF_NULL_CREDIT: u64 = 97456;
 pub const OBJECT_VALUE_OF_UNDEFINED_CREDIT: u64 = 97448;
-/// The observable `Proxy.[[GetPrototypeOf]]` trap frame beyond the ordinary
-/// call and target-invariant work metered by the shared helpers.
-pub const PROXY_GET_PROTOTYPE_TRAP_METERING: u64 = 164080;
+/// `Proxy.[[GetPrototypeOf]]` residuals split by the operation and validation
+/// outcome that actually runs. Transparent Proxy-to-Proxy forwarding recurs;
+/// a terminal ordinary target has the smaller forwarding residual.
+pub const PROXY_GET_PROTOTYPE_FORWARD_PROXY_METERING: u64 = 98_816;
+pub const PROXY_GET_PROTOTYPE_FORWARD_TARGET_METERING: u64 = 33_288;
+/// Successful active trap on an extensible target.
+pub const PROXY_GET_PROTOTYPE_TRAP_METERING: u64 = 164_080;
 /// The shorter `Proxy.[[GetPrototypeOf]]` frame when the trap throws before
 /// its return-value and invariant checks.
-pub const PROXY_GET_PROTOTYPE_THROW_METERING: u64 = 98824;
+pub const PROXY_GET_PROTOTYPE_THROW_METERING: u64 = 98_824;
+/// Active-trap validation paths: invalid return type; non-extensible target
+/// with a mismatching prototype; and non-extensible target with a valid match.
+pub const PROXY_GET_PROTOTYPE_PRIMITIVE_METERING: u64 = 17_480;
+pub const PROXY_GET_PROTOTYPE_INVARIANT_REJECT_METERING: u64 = 33_896;
+pub const PROXY_GET_PROTOTYPE_FIXED_SUCCESS_METERING: u64 = 131_312;
+/// IronHorse's shared realm-TypeError path is this much heavier than XS when
+/// GetMethod finds a present but non-callable `getPrototypeOf` trap.
+pub const PROXY_GET_PROTOTYPE_NONCALLABLE_CREDIT: u64 = 113_600;
 /// `Object.keys(o)` fixed base: the native-method frame plus the
 /// `fxNewArray(0)` result-instance allocation and the `fxOwnKeys` walk setup,
 /// for an object with **no** enumerable keys (the empty-result case).
@@ -1223,6 +1246,11 @@ pub const ARRAY_ITERATOR_ELEMENT_READ: u64 = 2 << 14;
 /// directly; ordinary objects, primitive wrappers, and Proxies perform the
 /// observable `length` lookup and carry this one-computron residual.
 pub const ARRAY_ITERATOR_GENERIC_RECEIVER_METERING: u64 = 1 << 16;
+/// XS keeps arguments in resident indexed storage even though their `length`
+/// is an ordinary property. Its wide-length fallback avoids part of the
+/// generic property path; credit that raw fractional difference before
+/// repeated calls accumulate into whole computrons.
+pub const ARRAY_ITERATOR_WIDE_ARGUMENTS_CREDIT: u64 = 15_560;
 /// Additional raw residual for the String-exotic generic iterator path. The
 /// wrapper exposes synthetic UTF-16 indices and `length`, which XS accounts
 /// beyond the ordinary-object `fxGetArrayLimit` step.
@@ -1247,6 +1275,14 @@ pub const ARRAY_ITERATOR_PROXY_VALUE_METERING: u64 = 327216;
 pub const ARRAY_ITERATOR_PROXY_FORWARD_METERING: u64 = 98816;
 pub const ARRAY_ITERATOR_PROXY_FORWARD_TARGET_METERING: u64 = 98032;
 pub const ARRAY_ITERATOR_PROXY_VALUE_FORWARD_TARGET_METERING: u64 = 130072;
+/// A transparent target reached by `Reflect.get` inside an active iterator
+/// Proxy trap carries the active host frame through to the terminal target.
+pub const ARRAY_ITERATOR_PROXY_ACTIVE_FORWARD_TARGET_METERING: u64 = 131080;
+pub const ARRAY_ITERATOR_PROXY_VALUE_ACTIVE_FORWARD_TARGET_METERING: u64 = 163328;
+/// Transition from a transparent outer Proxy to an active inner trap. The
+/// value read has an additional half-computron host-frame component.
+pub const ARRAY_ITERATOR_PROXY_FORWARD_ACTIVE_METERING: u64 = 8;
+pub const ARRAY_ITERATOR_PROXY_VALUE_FORWARD_ACTIVE_METERING: u64 = 32256;
 /// The raw 16.16 cost of `XS_CODE_FOR_OF` (`fxRunForOf` → `fxGetIterator`)
 /// beyond the `values()` iterator creation it performs: the `fxGetIterator`
 /// host frame, the `arr[Symbol.iterator]` lookup, and the zero-argument call
@@ -1809,6 +1845,18 @@ struct ProxyData {
     target: crate::value::SlotIndex,
     handler: crate::value::SlotIndex,
     revoked: bool,
+}
+
+/// Transient metering context for a recursive `Reflect.get(target, key, …)`
+/// issued by an active Proxy trap while an Array Iterator performs its
+/// `length` or indexed-value Get. It is installed only when the active trap's
+/// target is another Proxy and is restored before the trap call returns.
+#[derive(Copy, Clone, Debug)]
+struct ArrayIteratorProxyGetContext {
+    target: crate::value::SlotIndex,
+    id: u16,
+    trap_metering: u64,
+    meter_terminal_wrapper: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -4119,6 +4167,8 @@ pub struct Interp {
     /// what makes an instance a proxy: [`Interp::is_ordinary_object`] excludes
     /// it and every internal-method dispatch site routes it to the trap logic.
     proxies: std::collections::HashMap<crate::value::SlotIndex, ProxyData>,
+    /// Synchronous recursive-Get context; always `None` at a crank boundary.
+    array_iterator_proxy_get_context: Option<ArrayIteratorProxyGetContext>,
     /// Maps a `revoke` function slot (returned by `Proxy.revocable`) to the
     /// proxy instance it revokes (`fx_Proxy_revoke`'s bound `[[RevocableProxy]]`).
     proxy_revokers: std::collections::HashMap<crate::value::SlotIndex, crate::value::SlotIndex>,
@@ -5599,6 +5649,7 @@ impl Interp {
             functions: std::collections::HashMap::new(),
             bound_functions: std::collections::HashMap::new(),
             proxies: std::collections::HashMap::new(),
+            array_iterator_proxy_get_context: None,
             proxy_revokers: std::collections::HashMap::new(),
             call_stack: Vec::new(),
             args: Vec::new(),
@@ -12472,6 +12523,7 @@ impl Interp {
             && self.gen_run_stack.is_empty()
             && self.async_run_stack.is_empty()
             && self.async_gen_run_stack.is_empty()
+            && self.array_iterator_proxy_get_context.is_none()
             && self.exception.kind == Kind::Undefined
             && !self.id_space_exhausted
     }
@@ -29014,7 +29066,8 @@ impl Interp {
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
         if is_proxy {
-            self.meter.tick_raw(CALLABLE_PROXY_CALL_METERING);
+            self.meter
+                .tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
         if is_bound || is_proxy {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
@@ -29107,7 +29160,8 @@ impl Interp {
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
         if is_proxy {
-            self.meter.tick_raw(CALLABLE_PROXY_APPLY_METERING);
+            self.meter
+                .tick_raw(CALLABLE_PROXY_DOT_TRAMPOLINE_METERING);
         }
         if is_bound || is_proxy {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
@@ -39726,6 +39780,10 @@ impl Interp {
                 // representation honest rather than allowing it to wrap.
                 let length = self.array_iterator_generic_length(code, st.iterable)?;
                 if length > u64::from(u32::MAX) {
+                    if self.arguments_objects.contains(&st.iterable) {
+                        self.meter
+                            .untick_raw(ARRAY_ITERATOR_WIDE_ARGUMENTS_CREDIT);
+                    }
                     u64::from(self.resident_indexed_limit(st.iterable))
                 } else {
                     length
@@ -40390,13 +40448,16 @@ impl Interp {
             ARRAY_ITERATOR_PROXY_KEYS_METERING,
             true,
             false,
+            false,
         )?;
         self.to_length_value(code, raw)
     }
 
     /// The greatest resident own array-index plus one. XS's practical u32
     /// Array Iterator profile falls back to this storage limit when an
-    /// ordinary `length` exceeds the cursor domain.
+    /// ordinary `length` exceeds the cursor domain. An ordinary indexed
+    /// property's internal tombstone retains the high-water mark after its
+    /// visible property is deleted, matching XS's resident indexed-array slot.
     fn resident_indexed_limit(&self, o: crate::value::SlotIndex) -> u32 {
         let array_limit = self.arrays.get(&o).map_or(0, |array| {
             array
@@ -40419,7 +40480,9 @@ impl Interp {
             })
             .max()
             .unwrap_or(0);
-        array_limit.max(property_limit)
+        array_limit
+            .max(property_limit)
+            .max(self.internal_indexed_limit(o))
     }
 
     /// `? HasProperty(O, ToString(k))`.
@@ -40461,6 +40524,7 @@ impl Interp {
             id,
             recv,
             ARRAY_ITERATOR_PROXY_VALUE_METERING,
+            false,
             false,
             false,
         )
@@ -46680,8 +46744,11 @@ impl Interp {
         let mut out = Vec::new();
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
-            out.push(cur);
-            cur = self.slots.get(cur).next;
+            let slot = self.slots.get(cur);
+            if slot.flag & XS_INTERNAL_FLAG == 0 {
+                out.push(cur);
+            }
+            cur = slot.next;
         }
         // Newest-first chain → creation order.
         out.reverse();
@@ -48446,7 +48513,22 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        self.mop_get_with_proxy_metering(code, inst, id, receiver, 0, false, false)
+        if let Some(context) = self
+            .array_iterator_proxy_get_context
+            .filter(|context| context.target == inst && context.id == id)
+        {
+            return self.mop_get_with_proxy_metering(
+                code,
+                inst,
+                id,
+                receiver,
+                context.trap_metering,
+                context.meter_terminal_wrapper,
+                false,
+                true,
+            );
+        }
+        self.mop_get_with_proxy_metering(code, inst, id, receiver, 0, false, false, false)
     }
 
     /// `O.[[Get]](P, Receiver)` with a caller-owned residual for each Proxy
@@ -48461,6 +48543,7 @@ impl Interp {
         proxy_trap_metering: u64,
         meter_terminal_wrapper: bool,
         meter_forwarded_target: bool,
+        after_active_trap: bool,
     ) -> Result<Slot, Halt> {
         if self.proxies.contains_key(&inst) {
             return self.proxy_get_with_metering(
@@ -48471,19 +48554,24 @@ impl Interp {
                 proxy_trap_metering,
                 meter_terminal_wrapper,
                 meter_forwarded_target,
+                after_active_trap,
             );
         }
         if meter_forwarded_target {
             let terminal_is_wrapper = self.wrapper_data.contains_key(&inst);
-            self.meter.tick_raw(
-                if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING
-                    && !terminal_is_wrapper
-                {
-                    ARRAY_ITERATOR_PROXY_VALUE_FORWARD_TARGET_METERING
+            self.meter.tick_raw(if after_active_trap {
+                if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
+                    ARRAY_ITERATOR_PROXY_VALUE_ACTIVE_FORWARD_TARGET_METERING
                 } else {
-                    ARRAY_ITERATOR_PROXY_FORWARD_TARGET_METERING
-                },
-            );
+                    ARRAY_ITERATOR_PROXY_ACTIVE_FORWARD_TARGET_METERING
+                }
+            } else if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING
+                && !terminal_is_wrapper
+            {
+                ARRAY_ITERATOR_PROXY_VALUE_FORWARD_TARGET_METERING
+            } else {
+                ARRAY_ITERATOR_PROXY_FORWARD_TARGET_METERING
+            });
         }
         if meter_terminal_wrapper {
             if let Some(value) = self.wrapper_data.get(&inst) {
@@ -48914,18 +49002,28 @@ impl Interp {
         proxy: crate::value::SlotIndex,
     ) -> Result<Slot, Halt> {
         let (target, handler) = self.proxy_target_handler(proxy)?;
-        let trap = match self.proxy_trap(code, handler, "getPrototypeOf")? {
-            Some(t) => t,
-            None => return self.mop_get_prototype(code, target),
-        };
+        // Inline GetMethod here because its non-callable rejection has a
+        // distinct XS meter outcome from a throwing getter. Other proxy traps
+        // continue to share `proxy_trap`.
+        let trap_id = self.intern_key("getPrototypeOf");
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let trap = self.mop_get(code, handler, trap_id, handler_slot)?;
+        if trap.kind == Kind::Undefined || trap.kind == Kind::Null {
+            self.meter.tick_raw(if self.proxies.contains_key(&target) {
+                PROXY_GET_PROTOTYPE_FORWARD_PROXY_METERING
+            } else {
+                PROXY_GET_PROTOTYPE_FORWARD_TARGET_METERING
+            });
+            return self.mop_get_prototype(code, target);
+        }
+        if !self.is_callable_value(trap) {
+            self.meter
+                .untick_raw(PROXY_GET_PROTOTYPE_NONCALLABLE_CREDIT);
+            return Err(self.catchable_type_error());
+        };
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let result = match self.invoke_value(code, trap, handler_slot, &[target_slot]) {
-            Ok(result) => {
-                self.meter
-                    .tick_raw(PROXY_GET_PROTOTYPE_TRAP_METERING);
-                result
-            }
+            Ok(result) => result,
             Err(error) => {
                 self.meter
                     .tick_raw(PROXY_GET_PROTOTYPE_THROW_METERING);
@@ -48933,15 +49031,23 @@ impl Interp {
             }
         };
         if result.kind != Kind::Reference && result.kind != Kind::Null {
+            self.meter
+                .tick_raw(PROXY_GET_PROTOTYPE_PRIMITIVE_METERING);
             return Err(self.catchable_type_error());
         }
         if self.mop_is_extensible(code, target)? {
+            self.meter
+                .tick_raw(PROXY_GET_PROTOTYPE_TRAP_METERING);
             return Ok(result);
         }
         let target_proto = self.mop_get_prototype(code, target)?;
         if !self.same_value(result, target_proto) {
+            self.meter
+                .tick_raw(PROXY_GET_PROTOTYPE_INVARIANT_REJECT_METERING);
             return Err(self.catchable_type_error());
         }
+        self.meter
+            .tick_raw(PROXY_GET_PROTOTYPE_FIXED_SUCCESS_METERING);
         Ok(result)
     }
 
@@ -49170,7 +49276,7 @@ impl Interp {
         id: u16,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        self.proxy_get_with_metering(code, proxy, id, receiver, 0, false, false)
+        self.proxy_get_with_metering(code, proxy, id, receiver, 0, false, false, false)
     }
 
     fn proxy_get_with_metering(
@@ -49182,6 +49288,7 @@ impl Interp {
         proxy_trap_metering: u64,
         meter_terminal_wrapper: bool,
         meter_forwarded_target: bool,
+        after_active_trap: bool,
     ) -> Result<Slot, Halt> {
         let (target, handler) = self.proxy_target_handler(proxy)?;
         let trap = match self.proxy_trap(code, handler, "get")? {
@@ -49199,15 +49306,35 @@ impl Interp {
                     proxy_trap_metering,
                     meter_terminal_wrapper,
                     meter_forwarded_target || proxy_trap_metering != 0,
+                    after_active_trap,
                 )
             }
         };
+        if meter_forwarded_target {
+            self.meter.tick_raw(
+                if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
+                    ARRAY_ITERATOR_PROXY_VALUE_FORWARD_ACTIVE_METERING
+                } else {
+                    ARRAY_ITERATOR_PROXY_FORWARD_ACTIVE_METERING
+                },
+            );
+        }
         self.meter.tick_raw(proxy_trap_metering);
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
-        let trap_result =
-            self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver])?;
+        let saved_context = self.array_iterator_proxy_get_context;
+        if proxy_trap_metering != 0 && self.proxies.contains_key(&target) {
+            self.array_iterator_proxy_get_context = Some(ArrayIteratorProxyGetContext {
+                target,
+                id,
+                trap_metering: proxy_trap_metering,
+                meter_terminal_wrapper,
+            });
+        }
+        let trap_result = self.invoke_value(code, trap, handler_slot, &[target_slot, key, receiver]);
+        self.array_iterator_proxy_get_context = saved_context;
+        let trap_result = trap_result?;
         if let Some(d) = self.mop_get_own_property(code, target, id)? {
             if d.configurable == Some(false) {
                 if d.is_data()
@@ -49374,8 +49501,34 @@ impl Interp {
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let trap = match self.proxy_trap(code, handler, "apply")? {
             Some(t) => t,
-            None => return self.invoke_value(code, target_slot, this, args),
+            None => {
+                let metering = if self.proxies.contains_key(&target) {
+                    PROXY_CALL_FORWARD_PROXY_METERING
+                } else if self.bound_functions.contains_key(&target) {
+                    PROXY_CALL_FORWARD_BOUND_METERING
+                } else if self.native_of(target).is_some() {
+                    PROXY_CALL_FORWARD_NATIVE_METERING
+                } else if let Some(method) = self.method_of(target) {
+                    if matches!(
+                        method,
+                        NativeMethod::CollForEach
+                            | NativeMethod::CollEntries
+                            | NativeMethod::CollKeys
+                            | NativeMethod::CollValues
+                            | NativeMethod::CollClear
+                    ) {
+                        PROXY_CALL_FORWARD_METHOD_METERING
+                    } else {
+                        PROXY_CALL_FORWARD_NATIVE_METERING
+                    }
+                } else {
+                    PROXY_CALL_FORWARD_USER_METERING
+                };
+                self.meter.tick_raw(metering);
+                return self.invoke_value(code, target_slot, this, args);
+            }
         };
+        self.meter.tick_raw(PROXY_CALL_TRAP_METERING);
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let arg_array = self.array_from_slots(args);
         self.invoke_value(code, trap, handler_slot, &[target_slot, this, arg_array])
@@ -49862,6 +50015,11 @@ impl Interp {
             self.deleted_fn_meta.insert((inst, id));
             return true;
         }
+        let deleted_index_limit = self
+            .is_ordinary_object(inst)
+            .then(|| self.string_key_name(id).as_deref().and_then(string_to_index))
+            .flatten()
+            .map(|index| index.saturating_add(1));
         let mut prev = inst;
         let mut cur = self.slots.get(inst).next;
         while !cur.is_null() {
@@ -49875,9 +50033,34 @@ impl Interp {
                 if s.flag & XS_DONT_DELETE_FLAG != 0 {
                     return false;
                 }
-                // Unlink `cur` from the chain and free its slot.
-                self.slots.get_mut(prev).next = s.next;
-                self.slots.free(cur);
+                // XS retains an ordinary object's resident indexed-array
+                // high-water mark after deleting a visible indexed property.
+                // Reuse the deleted property slot as an internal numeric
+                // tombstone: heap snapshots and SQLite pages then carry the
+                // state without a new side-table/schema row. Ordinary
+                // property enumeration filters internal slots.
+                let retained_here = if let Some(limit) = deleted_index_limit {
+                    let existing = self.internal_indexed_limit_slot(inst);
+                    if let Some(tombstone) = existing {
+                        let retained = self.internal_indexed_limit(inst).max(limit);
+                        self.slots.get_mut(tombstone).value = Payload::Number(f64::from(retained));
+                        false
+                    } else {
+                        let tombstone = self.slots.get_mut(cur);
+                        tombstone.id = crate::value::XS_NO_ID;
+                        tombstone.flag = XS_INTERNAL_FLAG;
+                        tombstone.kind = Kind::Number;
+                        tombstone.value = Payload::Number(f64::from(limit));
+                        true
+                    }
+                } else {
+                    false
+                };
+                if !retained_here {
+                    // Unlink `cur` from the chain and free its slot.
+                    self.slots.get_mut(prev).next = s.next;
+                    self.slots.free(cur);
+                }
                 // Keep the global-object fast index one-to-one with the chain:
                 // `delete globalThis.x` (or `delete` of a sloppy global) must
                 // drop the `global_props` entry too, else identifier resolution
@@ -49893,6 +50076,38 @@ impl Interp {
             cur = s.next;
         }
         true
+    }
+
+    /// Find the internal ordinary-indexed-storage high-water tombstone.
+    /// `XS_NO_ID + XS_INTERNAL_FLAG + Number` is unobservable as a property
+    /// and mirrors the internal slot shape XS itself keeps on indexed objects.
+    fn internal_indexed_limit_slot(
+        &self,
+        inst: crate::value::SlotIndex,
+    ) -> Option<crate::value::SlotIndex> {
+        let mut cur = self.slots.get(inst).next;
+        while !cur.is_null() {
+            let slot = self.slots.get(cur);
+            if slot.id == crate::value::XS_NO_ID
+                && slot.flag & XS_INTERNAL_FLAG != 0
+                && slot.kind == Kind::Number
+            {
+                return Some(cur);
+            }
+            cur = slot.next;
+        }
+        None
+    }
+
+    fn internal_indexed_limit(&self, inst: crate::value::SlotIndex) -> u32 {
+        self.internal_indexed_limit_slot(inst)
+            .and_then(|slot| match self.slots.get(slot).value {
+                Payload::Number(limit) if limit >= 0.0 && limit <= f64::from(u32::MAX) => {
+                    Some(limit as u32)
+                }
+                _ => None,
+            })
+            .unwrap_or(0)
     }
 
     /// Read a **named** property `id` of a primitive string (XS's string

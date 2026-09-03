@@ -720,6 +720,10 @@ mod tests {
             // every return decrements it before control can reach a
             // persistence boundary.
             "dispatch_depth",
+            // Array Iterator Proxy-Get context is installed only around one
+            // synchronous trap call and restored on both success and throw.
+            // `is_quiescent` additionally refuses a leaked context.
+            "array_iterator_proxy_get_context",
             // Poison latch for the property-key id-space meet: provably
             // never set at a persistable boundary — the dispatch loop
             // halts on it before the next instruction and `is_quiescent`
