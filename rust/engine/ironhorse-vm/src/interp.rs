@@ -33946,7 +33946,9 @@ impl Interp {
             NativeMethod::ArrayIsArray => {
                 self.meter.tick_raw(ARRAY_ISARRAY_METERING);
                 let r = match arg0.value {
-                    Payload::Reference(r) => self.arrays.contains_key(&r),
+                    Payload::Reference(r) if arg0.kind == Kind::Reference => {
+                        self.array_generic_is_array(r)?
+                    }
                     _ => false,
                 };
                 Slot::boolean(r)
