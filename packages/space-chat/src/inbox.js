@@ -402,6 +402,9 @@ harden(RequestBody);
  * @param {bigint} props.number - The message number, passed to `showValue`.
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {((target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void) | undefined} [props.showPaths]
+ *   Opens the read-only retention-paths panel for the chip's value. Optional;
+ *   the chain-link reveal button hides when absent.
  * @param {(text: string) => void} props.setError
  */
 const TokenChip = ({
@@ -410,6 +413,7 @@ const TokenChip = ({
   number,
   powers,
   showValue,
+  showPaths,
   setError,
 }) => {
   const [title, setTitle] = useState('Open value');
@@ -479,6 +483,24 @@ const TokenChip = ({
       },
     },
     h('b', null, `@${edgeName}`),
+    showPaths && locator
+      ? h(
+          'button',
+          {
+            class: 'retention-paths-reveal',
+            type: 'button',
+            title: 'Show retention paths',
+            'aria-label': 'Show retention paths',
+            /** @param {{ stopPropagation: () => void }} event */
+            onClick: event => {
+              event.stopPropagation();
+              showPaths({ locator, label: `@${edgeName}` });
+            },
+          },
+          // U+1F517 LINK SYMBOL — the chain-link "paths" glyph.
+          '🔗',
+        )
+      : null,
   );
 };
 harden(TokenChip);
@@ -495,9 +517,10 @@ harden(TokenChip);
  * @param {InboxMessage} props.message
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {((target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void)} [props.showPaths]
  * @param {(text: string) => void} props.setError
  */
-const PackageBody = ({ message, powers, showValue, setError }) => {
+const PackageBody = ({ message, powers, showValue, showPaths, setError }) => {
   const { number, senderChip } = message;
   const { strings, names, ids } = /** @type {any} */ (message.raw);
   const stringParts = Array.isArray(strings) ? strings : [];
@@ -524,6 +547,7 @@ const PackageBody = ({ message, powers, showValue, setError }) => {
       number,
       powers,
       showValue,
+      showPaths,
       setError,
     });
   };
@@ -975,6 +999,7 @@ harden(ValueBody);
  * @param {InboxMessage} props.message
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {((target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void)} [props.showPaths]
  * @param {Map<string, string>} props.formDescriptions
  * @param {(text: string) => void} props.setError
  * @param {(error: unknown) => void} props.reportError
@@ -983,6 +1008,7 @@ const MessageContent = ({
   message,
   powers,
   showValue,
+  showPaths,
   formDescriptions,
   setError,
   reportError,
@@ -991,7 +1017,13 @@ const MessageContent = ({
     case 'request':
       return h(RequestBody, { message, powers, setError, reportError });
     case 'package':
-      return h(PackageBody, { message, powers, showValue, setError });
+      return h(PackageBody, {
+        message,
+        powers,
+        showValue,
+        showPaths,
+        setError,
+      });
     case 'definition':
       return h(DefinitionBody, { message, powers, setError });
     case 'form':
@@ -1178,6 +1210,7 @@ harden(HistoryPanel);
  * @param {InboxMessage} props.message
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {((target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void)} [props.showPaths]
  * @param {Map<string, string>} props.formDescriptions
  * @param {(error: unknown) => void} props.reportError
  * @param {boolean} [props.isEdited] - True when at least one revision exists.
@@ -1186,6 +1219,7 @@ const MessageEnvelope = ({
   message,
   powers,
   showValue,
+  showPaths,
   formDescriptions,
   reportError,
   isEdited,
@@ -1229,6 +1263,7 @@ const MessageEnvelope = ({
           message,
           powers,
           showValue,
+          showPaths,
           formDescriptions,
           setError,
           reportError,
@@ -1374,6 +1409,9 @@ harden(toInboxMessage);
  * @param {object} props
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
+ * @param {((target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void)} [props.showPaths]
+ *   Opens the read-only retention-paths panel for a value chip. Optional; the
+ *   chain-link reveal button hides when absent.
  * @param {Map<string, string>} props.formDescriptions
  * @param {() => Promise<boolean>} props.measureNearBottom - Resolves true when
  *   the host container is scrolled within ~80px of the bottom (read at an
@@ -1403,6 +1441,7 @@ harden(toInboxMessage);
 export const InboxRoot = ({
   powers,
   showValue,
+  showPaths,
   formDescriptions,
   measureNearBottom,
   scrollToBottom,
@@ -1555,6 +1594,7 @@ export const InboxRoot = ({
           message,
           powers,
           showValue,
+          showPaths,
           formDescriptions,
           reportError,
           isEdited: editedNumbers.has(String(message.number)),

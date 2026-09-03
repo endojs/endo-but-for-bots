@@ -471,6 +471,7 @@ const VALUE_FRAME_HTML = `
           <option value="promise">Promise</option>
           <option value="remotable">Remotable</option>
         </select>
+        <button id="value-show-paths" class="value-flip-button" aria-label="Show retention paths" title="Show retention paths">&#128279;</button>
         <button id="value-flip-to-formula" class="value-flip-button" aria-label="Show formula" title="Show formula (F)">&#9881;&#65039;</button>
       </div>
       <div id="value-value"></div>
@@ -506,8 +507,16 @@ const VALUE_FRAME_HTML = `
  * @param {ERef<EndoHost>} powers
  * @param {object} options
  * @param {(hostName: string) => Promise<void>} options.enterProfile
+ * @param {(target: { id?: string, petNamePath?: string[], label?: string }) => void} [options.showPaths]
+ *   Opens the read-only retention-paths panel for the currently-shown value.
+ *   Optional so existing callers that do not wire a panel keep working (the
+ *   chain-link button hides itself when absent).
  */
-export const valueComponent = ($parent, powers, { enterProfile }) => {
+export const valueComponent = (
+  $parent,
+  powers,
+  { enterProfile, showPaths },
+) => {
   // Build and own the modal frame, rather than querying chat.js's page
   // template. The component appends `$frame` to the host container and removes
   // it on `dispose()`, so it carries no dependency on host markup or IDs.
@@ -545,6 +554,13 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
   const $enterProfile = /** @type {HTMLButtonElement} */ (
     $frame.querySelector('#value-enter-profile')
   );
+  // Retention-paths reveal button (hidden when no panel is wired).
+  const $showPaths = /** @type {HTMLButtonElement} */ (
+    $frame.querySelector('#value-show-paths')
+  );
+  if ($showPaths && !showPaths) {
+    $showPaths.style.display = 'none';
+  }
   // Back-face (formula) chrome.
   const $flipToFormula = /** @type {HTMLButtonElement} */ (
     $frame.querySelector('#value-flip-to-formula')
@@ -734,6 +750,16 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
   const onFlip = () => {
     flipFace().catch(window.reportError);
   };
+  // Open the retention-paths panel for whatever value is currently shown. The
+  // panel resolves the locator itself from the id / pet-name path.
+  const onShowPaths = () => {
+    if (!showPaths) return;
+    showPaths({
+      id: currentId,
+      petNamePath: currentPetNamePath,
+      label: valueLabel(),
+    });
+  };
 
   $close.addEventListener('click', onClose);
   $frame.addEventListener('click', onFrameClick);
@@ -741,6 +767,8 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
   $enterProfile.addEventListener('click', onEnterProfile);
   if ($flipToFormula) $flipToFormula.addEventListener('click', onFlip);
   if ($flipToValue) $flipToValue.addEventListener('click', onFlip);
+  if ($showPaths && showPaths)
+    $showPaths.addEventListener('click', onShowPaths);
 
   /**
    * Mirror the recto (value) title bar onto the verso (formula) title bar,
@@ -1260,6 +1288,8 @@ export const valueComponent = ($parent, powers, { enterProfile }) => {
     $enterProfile.removeEventListener('click', onEnterProfile);
     if ($flipToFormula) $flipToFormula.removeEventListener('click', onFlip);
     if ($flipToValue) $flipToValue.removeEventListener('click', onFlip);
+    if ($showPaths && showPaths)
+      $showPaths.removeEventListener('click', onShowPaths);
     unmount($valueMount);
     unmount($actionsMount);
     unmount($backFaceMount);

@@ -61,6 +61,9 @@ harden(dropTargetPath);
 /**
  * @typedef {object} InventoryOptions
  * @property {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} showValue
+ * @property {(target: { id?: string, petNamePath?: string[], locator?: string, label?: string }) => void} [showPaths]
+ *   Opens the read-only retention-paths panel for an item. Optional; the
+ *   chain-link reveal button hides when absent.
  * @property {((petName: string | string[], formulaId: string) => void)} [onSelectConversation]
  * @property {string | null} [activeConversationPetName]
  * @property {(error: unknown) => void} reportError - Host-supplied sink for
@@ -226,6 +229,7 @@ const InventoryItem = ({
 }) => {
   const {
     showValue,
+    showPaths,
     onSelectConversation,
     activeConversationPetName,
     reportError,
@@ -295,6 +299,13 @@ const InventoryItem = ({
       disposed = true;
     };
   }, [powers, name]);
+
+  // Reveal retention paths: the item already knows its pet-name path, which the
+  // panel resolves to a locator. No-op when no panel is wired.
+  const revealPaths = showPaths
+    ? () =>
+        showPaths({ petNamePath: itemPath, label: `@${itemPath.join('/')}` })
+    : undefined;
 
   // Inspect: resolve the item's id + value and hand them to the host viewer.
   const inspectItem = () => {
@@ -589,6 +600,7 @@ const InventoryItem = ({
           removeDisabled,
           removeTitle,
           onInspect: inspectItem,
+          onPaths: revealPaths,
           onCancel: () =>
             E(powers).cancel(/** @type {[string, ...string[]]} */ (itemPath)),
           onRemove: () =>

@@ -28,6 +28,8 @@ const CANCEL_TITLES = harden(
  * @param {boolean} props.removeDisabled - True for special or immutable items.
  * @param {string} props.removeTitle
  * @param {() => void} props.onInspect
+ * @param {(() => void) | undefined} [props.onPaths] - Opens the retention-paths
+ *   panel for this item. Omitted when no panel is wired (button hidden).
  * @param {() => Promise<unknown>} props.onCancel - Cancels the incarnation.
  * @param {() => void} props.onRemove
  */
@@ -36,6 +38,7 @@ export const ItemActions = ({
   removeDisabled,
   removeTitle,
   onInspect,
+  onPaths,
   onCancel,
   onRemove,
 }) => {
@@ -88,6 +91,22 @@ export const ItemActions = ({
       { class: 'info-button', title: 'Inspect', onClick: onInspect },
       'ℹ',
     ),
+    onPaths
+      ? h(
+          'button',
+          {
+            class: 'paths-button retention-paths-reveal',
+            title: 'Show retention paths',
+            /** @param {{ stopPropagation: () => void }} e */
+            onClick: e => {
+              e.stopPropagation();
+              onPaths();
+            },
+          },
+          // U+1F517 LINK SYMBOL — the chain-link "paths" glyph.
+          '🔗',
+        )
+      : null,
     h(
       'button',
       {

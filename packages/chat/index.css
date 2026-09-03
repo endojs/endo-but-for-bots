@@ -10438,3 +10438,193 @@ button.btn-spinner::after {
     transition: opacity 100ms ease-in-out;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * Retention paths panel (design daemon-retention-paths.md § Chat UI, Phase 4).
+ * A small chain-link reveal button on each value chip opens a floating,
+ * read-only panel listing every retaining path, sourced reactively from the
+ * host's followRetentionPaths subscription.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+/* The chain-link "paths" reveal affordance next to a value chip. */
+.retention-paths-reveal {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+  margin-left: 2px;
+  font-size: 0.85em;
+  line-height: 1;
+  opacity: 0.55;
+  border-radius: var(--radius-sm);
+}
+
+.retention-paths-reveal:hover,
+.retention-paths-reveal:focus-visible {
+  opacity: 1;
+  background: var(--accent-light);
+}
+
+/* The floating panel reuses the modal `.frame` overlay + `.window` chrome. */
+.retention-paths-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 340px;
+  max-width: min(560px, calc(100vw - 48px));
+  max-height: min(70vh, 560px);
+  overflow: auto;
+}
+
+.retention-paths-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 8px;
+}
+
+.retention-paths-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.retention-paths-close {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--text-secondary);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.retention-paths-close:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.retention-paths-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.retention-paths-status {
+  font-size: 13px;
+  color: var(--text-secondary);
+  padding: 8px 4px;
+}
+
+.retention-paths-error {
+  color: #e03131;
+}
+
+/* One retaining path: a heading plus a root-to-leaf chain. */
+.retention-path-block {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+}
+
+.retention-path-heading {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.retention-path-chain {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.retention-path-segment {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+}
+
+.retention-path-segment-type {
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.retention-path-segment-leaf {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+}
+
+.retention-path-rootbadge,
+.retention-path-leafbadge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.retention-path-leafbadge {
+  color: var(--accent-hover);
+  background: var(--bg-primary);
+}
+
+/* The edge between two segments: pet chip, field arrow, or cross-peer tag. */
+.retention-path-edge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-left: 14px;
+}
+
+.retention-path-petchip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-light);
+  border: 1px solid var(--border-light);
+}
+
+.retention-path-petname {
+  color: var(--text-primary);
+}
+
+.retention-path-petstore {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.retention-path-fieldedge {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--text-secondary);
+  font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.retention-path-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-light);
+}
+
+.retention-path-tag-retention {
+  color: var(--accent-hover);
+}

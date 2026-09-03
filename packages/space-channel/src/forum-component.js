@@ -71,6 +71,9 @@ import {
  * @param {unknown} channel - Channel or ChannelMember reference
  * @param {object} options
  * @param {(value: unknown, id?: string, petNamePath?: string[]) => void | Promise<void>} options.showValue
+ * @param {(target: { locator?: string, id?: string, petNamePath?: string[], label?: string }) => void} [options.showPaths]
+ *   Opens the read-only retention-paths panel for a value chip. Optional; the
+ *   chain-link reveal button hides when absent.
  * @param {string} [options.personaId]
  * @param {string} [options.ownMemberId]
  * @param {(info: { number: bigint, memberId: string, authorName: string, preview: string }) => void} [options.onReply]
@@ -85,6 +88,7 @@ export const forumComponent = async (
   channel,
   {
     showValue,
+    showPaths,
     personaId,
     ownMemberId,
     onReply,
@@ -408,7 +412,27 @@ export const forumComponent = async (
             }
           },
         },
-        `@${edgeName}`,
+        h('b', null, `@${edgeName}`),
+        showPaths && message.ids && message.ids[index]
+          ? h(
+              'button',
+              {
+                class: 'retention-paths-reveal',
+                type: 'button',
+                title: 'Show retention paths',
+                /** @param {{ stopPropagation: () => void }} event */
+                onClick: event => {
+                  event.stopPropagation();
+                  showPaths({
+                    locator: message.ids[index],
+                    label: `@${edgeName}`,
+                  });
+                },
+              },
+              // U+1F517 LINK SYMBOL — the chain-link "paths" glyph.
+              '🔗',
+            )
+          : null,
       );
     };
 

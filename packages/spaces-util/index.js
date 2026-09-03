@@ -24,3 +24,15 @@ export { assertValidLocator, idFromLocator } from './src/locator.js';
 export { lookupPath } from './src/name-hub.js';
 export { tokenAutocompleteComponent } from './src/token-autocomplete.js';
 export { chatBarComponent } from './src/chat-bar-component.js';
+export {
+  RetentionPathsView,
+  PathsRevealButton,
+  applyRetentionDelta,
+  classifyLabel,
+  segmentTypeLabel,
+  pathKey,
+} from './src/retention-paths.js';
+export {
+  retentionPathsComponent,
+  resolveRetentionLocator,
+} from './src/retention-paths-panel.js';

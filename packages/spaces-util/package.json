@@ -28,6 +28,8 @@
     "./form-fields.js": "./src/form-fields.js",
     "./value-vnodes.js": "./src/value-vnodes.js",
     "./value-component.js": "./src/value-component.js",
+    "./retention-paths.js": "./src/retention-paths.js",
+    "./retention-paths-panel.js": "./src/retention-paths-panel.js",
     "./formula-view.js": "./src/formula-view.js",
     "./formula-view-registry.js": "./src/formula-view-registry.js",
     "./value-render.js": "./src/value-render.js",
