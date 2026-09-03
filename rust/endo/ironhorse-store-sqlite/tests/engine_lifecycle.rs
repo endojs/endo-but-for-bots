@@ -790,6 +790,19 @@ fn abrupt_array_iterator_cursor_survives_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn reentrant_array_iterator_cursor_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "reentrant-array-iterator-cursor",
+        &[
+            "var nested;var iterator;var source={length:2,1:'b'};Object.defineProperty(source,'0',{get:function(){nested=iterator.next().value;return'a'}});iterator=Array.prototype.values.call(source);",
+            "var nested;var iterator;iterator.next().value+':'+nested",
+            "var iterator;iterator.next().done",
+        ],
+    );
+    assert_eq!(last, "true");
+}
+
+#[test]
 fn proxy_array_brand_survives_sqlite_sleep_cycles() {
     let last = run_scenario(
         "proxy-array-brand",

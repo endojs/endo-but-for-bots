@@ -18,6 +18,20 @@ fn agrees(source: &str) {
     );
 }
 
+fn agrees_exact(source: &str) {
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+    assert!(run.result_agrees, "{source}: {run:?}");
+    assert!(
+        run.computrons_agree,
+        "{source}: oracle={} ({}) ironhorse={} ({})",
+        run.oracle_computrons,
+        run.oracle_meter_raw,
+        run.ironhorse_computrons,
+        run.ironhorse_meter_raw,
+    );
+}
+
 #[test]
 fn collection_methods_validate_their_internal_slot() {
     agrees(
@@ -66,7 +80,7 @@ fn shared_collection_methods_retain_their_declaring_brand() {
         "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.call(s);false}catch(e){e instanceof TypeError&&s.size===1}",
         "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.apply(s,[]);false}catch(e){e instanceof TypeError&&s.size===1}",
     ] {
-        agrees(source);
+        agrees_exact(source);
     }
 }
 
