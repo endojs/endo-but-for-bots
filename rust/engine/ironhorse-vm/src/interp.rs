@@ -2598,6 +2598,9 @@ pub enum NativeMethod {
     /// `[begin, end)` byte range (relative-index clamped like
     /// `Array.prototype.slice`), copied out of the receiver's backing store.
     ArrayBufferSlice,
+    /// `get ArrayBuffer[Symbol.species]`: the standard accessor returns its
+    /// receiver.
+    ArrayBufferSpeciesGetter,
     /// `ArrayBuffer.prototype.resize` — recognized-but-unimplemented (a
     /// resizable buffer is an honest named skip this stage does not model).
     ArrayBufferResize,
@@ -6374,7 +6377,7 @@ impl Interp {
             let mf = self.alloc_named_method(NativeMethod::ObjectGroupBy, "groupBy", 2);
             self.proto_methods.push((object_ctor, "groupBy", mf));
         }
-        // `%ArrayBuffer.prototype%`: the `slice` method (a dense fast path)
+        // `%ArrayBuffer.prototype%`: the species-constructing `slice` method
         // plus the recognized-but-unimplemented methods bound so a reference
         // is an honest NAMED skip (`Halt::Unsupported`) rather than a
         // completion divergence. `byteLength` is an accessor getter routed
@@ -6384,9 +6387,10 @@ impl Interp {
             .get("ArrayBuffer")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
+        let slice = self.alloc_named_method(NativeMethod::ArrayBufferSlice, "slice", 2);
+        self.proto_methods
+            .push((self.arraybuffer_proto, "slice", slice));
         for (name, m) in [
-            ("slice", NativeMethod::ArrayBufferSlice),
-            // Recognized-but-unimplemented (honest named skips).
             ("resize", NativeMethod::ArrayBufferResize),
             ("transfer", NativeMethod::ArrayBufferTransfer),
             ("concat", NativeMethod::ArrayBufferConcat),
@@ -6399,6 +6403,13 @@ impl Interp {
         if let Some(&ab_ctor) = self.intrinsics.get("ArrayBuffer") {
             let is_view = self.alloc_method(NativeMethod::ArrayBufferIsView);
             self.proto_methods.push((ab_ctor, "isView", is_view));
+            // Installed under the well-known symbol key during the full
+            // intrinsic-link pass, once that realm-local key id is available.
+            let _ = self.alloc_named_method(
+                NativeMethod::ArrayBufferSpeciesGetter,
+                "get [Symbol.species]",
+                0,
+            );
         }
         // `%DataView.prototype%`: the endian-aware `get<Type>`/`set<Type>`
         // methods (each dispatching to the shared `fx_DataView_prototype_get`/
@@ -8659,6 +8670,7 @@ impl Interp {
             }
             for (proto, tag) in [
                 (self.math_object, "Math"),
+                (self.arraybuffer_proto, "ArrayBuffer"),
                 (self.list_format_proto, "Intl.ListFormat"),
                 (self.plural_rules_proto, "Intl.PluralRules"),
                 (self.segmenter_proto, "Intl.Segmenter"),
@@ -8736,6 +8748,23 @@ impl Interp {
             }) {
                 self.set_own_accessor_unmetered(
                     regexp_ctor,
+                    species_id,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    None,
+                );
+            }
+        }
+        // `ArrayBuffer[@@species]` has the same accessor shape as Promise's
+        // and RegExp's but a distinct getter identity.
+        if let (Some(species_id), Some(&array_buffer_ctor)) = (
+            self.well_known_symbol_property_id("species"),
+            self.intrinsics.get("ArrayBuffer"),
+        ) {
+            if let Some(getter) = self.functions.iter().find_map(|(&function, info)| {
+                (info.method == Some(NativeMethod::ArrayBufferSpeciesGetter)).then_some(function)
+            }) {
+                self.set_own_accessor_unmetered(
+                    array_buffer_ctor,
                     species_id,
                     Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
                     None,
@@ -34106,16 +34135,8 @@ impl Interp {
                 self.collection_table_resize(inst);
                 Slot::undefined()
             }
-            // `ArrayBuffer.prototype.slice(begin, end)` builds its result by
-            // invoking the species constructor (`this.constructor`,
-            // `fxToSpeciesConstructor`, `mxNew`/`mxRunCount`) — a
-            // symbol-keyed corner whose full protocol metering is a later
-            // increment; honest named skip.
             NativeMethod::ArrayBufferSlice => {
-                if self.array_buffer_ref(this).is_none() {
-                    return Err(Halt::Unsupported("array-buffer-slice:non-buffer"));
-                }
-                return Err(Halt::Unsupported("array-buffer-slice:species-constructor"));
+                self.array_buffer_slice(code, this, base, argc)?
             }
             // `ArrayBuffer.prototype.resize`/`transfer`/`concat`:
             // recognized-but-unimplemented (resizable/transfer/concat are a
@@ -34370,7 +34391,9 @@ impl Interp {
             NativeMethod::PromiseFinally => {
                 self.promise_finally_dispatch(code, this, arg0)?
             }
-            NativeMethod::PromiseSpeciesGetter | NativeMethod::RegExpSpeciesGetter => this,
+            NativeMethod::PromiseSpeciesGetter
+            | NativeMethod::RegExpSpeciesGetter
+            | NativeMethod::ArrayBufferSpeciesGetter => this,
             // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
             // the derived promise, resolve each (dense-Array) element to a
             // promise, and register a native COMBINE reaction on it; the shared
@@ -41612,6 +41635,121 @@ impl Interp {
             Payload::Reference(r) if self.array_buffers.contains_key(&r) => Some(r),
             _ => None,
         }
+    }
+
+    /// `SpeciesConstructor(buffer, %ArrayBuffer%)`. Constructor and
+    /// `@@species` reads use the full object MOP, and an undefined constructor
+    /// or nullish species selects the realm intrinsic.
+    fn array_buffer_species_constructor(
+        &mut self,
+        code: &[u8],
+        buffer: Slot,
+        buffer_ref: crate::value::SlotIndex,
+    ) -> Result<Slot, Halt> {
+        let default_ref = *self
+            .intrinsics
+            .get("ArrayBuffer")
+            .expect("ArrayBuffer intrinsic is linked");
+        let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
+        let constructor_id = self.intern_key("constructor");
+        let constructor = self.mop_get(code, buffer_ref, constructor_id, buffer)?;
+        if constructor.kind == Kind::Undefined {
+            return Ok(default);
+        }
+        let constructor_ref = match constructor.value {
+            Payload::Reference(reference) if constructor.kind == Kind::Reference => reference,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let species_id = self
+            .well_known_symbol_property_id("species")
+            .expect("well-known species symbol");
+        let species = self.mop_get(code, constructor_ref, species_id, constructor)?;
+        let selected = if matches!(species.kind, Kind::Null | Kind::Undefined) {
+            default
+        } else {
+            species
+        };
+        if !self.is_constructor_value(selected) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(selected)
+    }
+
+    /// `ArrayBuffer.prototype.slice(start, end)`: clamp both relative indices,
+    /// construct through `SpeciesConstructor`, validate the returned buffer,
+    /// recheck source detachment after user code, and copy the surviving byte
+    /// range into the result.
+    fn array_buffer_slice(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
+        let source = self
+            .array_buffer_ref(this)
+            .ok_or_else(|| self.catchable_type_error())?;
+        if self.shared_buffers.contains(&source) || self.detached_buffers.contains(&source) {
+            return Err(self.catchable_type_error());
+        }
+        let length = self.array_buffers[&source].length;
+        let start_arg = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let end_arg = self
+            .stack
+            .get(base + 5)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let first = Self::typed_array_relative_index(
+            self.array_to_integer_or_infinity(code, start_arg)?,
+            length,
+        );
+        let final_index = if argc < 2 || end_arg.kind == Kind::Undefined {
+            length
+        } else {
+            Self::typed_array_relative_index(
+                self.array_to_integer_or_infinity(code, end_arg)?,
+                length,
+            )
+        };
+        let new_length = final_index.saturating_sub(first);
+
+        let constructor = self.array_buffer_species_constructor(code, this, source)?;
+        let result = self.construct_value(
+            code,
+            constructor,
+            &[Slot::number(new_length as f64)],
+            constructor,
+        )?;
+        let result_ref = self
+            .array_buffer_ref(result)
+            .ok_or_else(|| self.catchable_type_error())?;
+        if self.shared_buffers.contains(&result_ref)
+            || self.detached_buffers.contains(&result_ref)
+            || result_ref == source
+            || self.array_buffers[&result_ref].length < new_length
+        {
+            return Err(self.catchable_type_error());
+        }
+        if self.detached_buffers.contains(&source) {
+            return Err(self.catchable_type_error());
+        }
+
+        let current_length = self.array_buffers[&source].length;
+        let count = new_length.min(current_length.saturating_sub(first));
+        if count > 0 {
+            let source_buffer = self.array_buffers[&source];
+            let bytes = self.chunks.payload(source_buffer.data)
+                [first as usize..(first + count) as usize]
+                .to_vec();
+            let target_buffer = self.array_buffers[&result_ref];
+            let out = self.chunks.slice_mut(target_buffer.data, count as usize);
+            out[..count as usize].copy_from_slice(&bytes);
+        }
+        Ok(result)
     }
 
     /// `ValidateTypedArray(this)`: enforce the receiver brand and reject a
