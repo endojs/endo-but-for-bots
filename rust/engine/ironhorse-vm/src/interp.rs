@@ -8379,13 +8379,16 @@ impl Interp {
                 self.done_id = Some(self.intern_key("done"));
             }
         }
-        // `Array.from` and `Object.fromEntries` perform the full iterator
-        // protocol even when the guest source never spells `next`, `value`,
-        // or `done`.  Reify those boot-default names before prototype-method
-        // linking so the mandatory observable `Get(iterator, "next")` sees
-        // `%ArrayIteratorPrototype%.next` (and can also observe an own
-        // override/getter on the returned iterator).
-        if self.symbol_ids.contains_key("from") || self.symbol_ids.contains_key("fromEntries") {
+        // `Array.from`, `Object.fromEntries`, and `AggregateError` perform the
+        // full iterator protocol even when the guest source never spells
+        // `next`, `value`, or `done`. Reify those boot-default names before
+        // prototype-method linking so the mandatory observable
+        // `Get(iterator, "next")` sees `%ArrayIteratorPrototype%.next` (and can
+        // also observe an own override/getter on the returned iterator).
+        if self.symbol_ids.contains_key("from")
+            || self.symbol_ids.contains_key("fromEntries")
+            || self.symbol_ids.contains_key("AggregateError")
+        {
             for name in ["next", "done", "value", "return"] {
                 self.intern_key(name);
             }
@@ -20569,10 +20572,8 @@ impl Interp {
             Native::URIError => self.build_error("URIError", base, argc),
             // `new AggregateError(errors, message)` (`fx_AggregateError`):
             // the base error (name "AggregateError", message from arg **1**),
-            // plus an own `errors` Array built by iterating arg 0. Only a dense
-            // Array errors argument is modeled; any other iterable drives the
-            // general `fxGetIterator` protocol and self-names an honest skip.
-            Native::AggregateError => self.build_aggregate_error(base, argc)?,
+            // plus an own `errors` Array built by iterating arg 0.
+            Native::AggregateError => self.build_aggregate_error(code, base, argc)?,
             Native::SuppressedError => {
                 let message = (argc >= 3).then(|| arg(2));
                 self.build_suppressed_error(arg(0), arg(1), message)
@@ -28389,33 +28390,19 @@ impl Interp {
     /// error (name "AggregateError", message from arg **1**), plus an own
     /// `errors` Array built by iterating arg 0. XS builds the base with
     /// `fx_Error_aux(..., 1)`, then a fresh Array instance whose elements are
-    /// copied from the `fxGetIterator`/`fxIteratorNext` walk of arg 0. ironhorse
-    /// models the common **dense Array** errors argument (reading its elements
-    /// directly); any other iterable drives the general iterator protocol and
-    /// self-names an honest skip.
-    fn build_aggregate_error(&mut self, base: usize, argc: usize) -> Result<Slot, Halt> {
-        // The errors argument (arg 0) must be a dense Array; anything else
-        // (a non-array iterable, or a sparse array) self-names.
+    /// copied from the `fxGetIterator`/`fxIteratorNext` walk of arg 0. Message
+    /// conversion and cause installation precede iterator acquisition.
+    fn build_aggregate_error(
+        &mut self,
+        code: &[u8],
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Halt> {
         let errors_slot = self
             .stack
             .get(base + 4)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        let err_elems: Vec<Slot> = match errors_slot.value {
-            Payload::Reference(arr) if self.arrays.contains_key(&arr) => {
-                let data = &self.arrays[&arr];
-                let len = data.length;
-                if (0..len).any(|i| !data.items().contains_key(&i)) {
-                    return Err(Halt::Unsupported("native-call:AggregateError:sparse-errors"));
-                }
-                (0..len).map(|i| data.items()[&i]).collect()
-            }
-            _ => {
-                return Err(Halt::Unsupported(
-                    "native-call:AggregateError:iterable-errors",
-                ))
-            }
-        };
         // The base error (identical to `build_error` but the message is arg 1,
         // XS's `fx_Error_aux(..., 1)`).
         self.meter.tick_builtin();
@@ -28437,9 +28424,9 @@ impl Interp {
             if a.kind == Kind::Undefined {
                 None
             } else {
-                let bytes = self.to_string_bytes_metered(a);
+                let text = self.value_to_string(code, a)?;
                 self.meter.tick_raw(ERROR_MESSAGE_METERING);
-                Some(String::from_utf8_lossy(&bytes).into_owned())
+                Some(text)
             }
         } else {
             None
@@ -28479,6 +28466,7 @@ impl Interp {
                 }
             }
         }
+        let err_elems = self.aggregate_error_elements(code, errors_slot)?;
         // The `errors` Array (`fxNewArrayInstance` + the copied elements +
         // `fxCacheArray`) plus the `fxGetIterator`/`fxIteratorNext` walk cost.
         let n = err_elems.len() as u64;
@@ -28501,6 +28489,46 @@ impl Interp {
             XS_DONT_ENUM_FLAG,
         );
         Ok(Slot::of(Kind::Reference, Payload::Reference(inst)))
+    }
+
+    /// `IterableToList(errors)` for `AggregateError`. Preserve the calibrated
+    /// dense-Array path only when the observable iterator operations still
+    /// resolve to the intrinsic Array iterator; sparse/custom inputs take the
+    /// full protocol path.
+    fn aggregate_error_elements(
+        &mut self,
+        code: &[u8],
+        errors: Slot,
+    ) -> Result<Vec<Slot>, Halt> {
+        if let Payload::Reference(array) = errors.value {
+            if errors.kind == Kind::Reference && self.arrays.contains_key(&array) {
+                let iterator_id = self
+                    .well_known_symbol_property_id("iterator")
+                    .expect("well-known iterator symbol");
+                let next_id = self.intern_key("next");
+                let return_id = self.intern_key("return");
+                let intrinsic_protocol = self.chain_resolves_native_data_method(
+                    array,
+                    iterator_id,
+                    NativeMethod::ArrayValues,
+                ) && self.chain_resolves_native_data_method(
+                    self.array_iterator_proto,
+                    next_id,
+                    NativeMethod::ArrayIteratorNext,
+                ) && !self.chain_has_descriptor(self.array_iterator_proto, return_id);
+                let dense = {
+                    let data = &self.arrays[&array];
+                    (0..data.length).all(|index| data.items().contains_key(&index))
+                };
+                if intrinsic_protocol && dense {
+                    let data = &self.arrays[&array];
+                    return Ok((0..data.length)
+                        .map(|index| self.array_item_value(array, data.items()[&index]))
+                        .collect());
+                }
+            }
+        }
+        self.iterable_to_list(code, errors)
     }
 
     /// `Function.prototype.bind(thisArg, ...boundArgs)`
@@ -34920,6 +34948,123 @@ impl Interp {
             out.push(self.arraylike_index(code, inst, i, value)?);
         }
         Ok(out)
+    }
+
+    /// `IterableToList(items)` (ECMA-262 7.4.19): acquire the iterator and its
+    /// `next` method once, then collect every IteratorStepValue result. An
+    /// abrupt iterator step propagates directly; there is no later per-element
+    /// operation requiring IteratorClose.
+    fn iterable_to_list(&mut self, code: &[u8], items: Slot) -> Result<Vec<Slot>, Halt> {
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.iterable_to_list_inner(code, items);
+        self.jumps = saved_jumps;
+        match outcome {
+            Ok(Ok(values)) => Ok(values),
+            Ok(Err(error)) => match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            },
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn iterable_to_list_inner(
+        &mut self,
+        code: &[u8],
+        items: Slot,
+    ) -> Result<Result<Vec<Slot>, Slot>, Halt> {
+        let value_id = self.intern_key("value");
+        let done_id = self.intern_key("done");
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let iterator_method = match items.value {
+            Payload::Reference(object) if items.kind == Kind::Reference => {
+                match self.array_from_try(|this| {
+                    this.mop_get(code, object, iterator_id, items)
+                })? {
+                    Ok(method) => method,
+                    Err(error) => return Ok(Err(error)),
+                }
+            }
+            _ => {
+                let proto = match items.kind {
+                    Kind::String => self.string_proto,
+                    Kind::Integer | Kind::Number => self.number_proto,
+                    Kind::Symbol => self.symbol_proto,
+                    Kind::BigInt => self.bigint_proto,
+                    Kind::Boolean => self
+                        .intrinsics
+                        .get("Boolean")
+                        .and_then(|&constructor| self.ctor_prototype.get(&constructor).copied())
+                        .unwrap_or(crate::value::SlotIndex::NULL),
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if proto.is_null() {
+                    Slot::undefined()
+                } else {
+                    match self.array_from_try(|this| {
+                        this.mop_get(code, proto, iterator_id, items)
+                    })? {
+                        Ok(method) => method,
+                        Err(error) => return Ok(Err(error)),
+                    }
+                }
+            }
+        };
+        if !self.is_callable_value(iterator_method) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+        let iterator = match self
+            .array_from_try(|this| this.call_any(code, iterator_method, items, &[]))?
+        {
+            Ok(iterator) => iterator,
+            Err(error) => return Ok(Err(error)),
+        };
+        let iterator_inst = match iterator.value {
+            Payload::Reference(iterator_inst) if iterator.kind == Kind::Reference => iterator_inst,
+            _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+        };
+        let next_id = self.intern_key("next");
+        let next = match self
+            .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
+        {
+            Ok(next) if self.is_callable_value(next) => next,
+            Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            Err(error) => return Ok(Err(error)),
+        };
+        let mut values = Vec::new();
+        for _ in 0..1_000_000u64 {
+            let step = match self
+                .array_from_try(|this| this.call_any(code, next, iterator, &[]))?
+            {
+                Ok(step) => step,
+                Err(error) => return Ok(Err(error)),
+            };
+            let step_inst = match step.value {
+                Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+            let done = match self
+                .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
+            {
+                Ok(done) => done,
+                Err(error) => return Ok(Err(error)),
+            };
+            if self.truthy(&done) {
+                return Ok(Ok(values));
+            }
+            let value = match self
+                .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
+            {
+                Ok(value) => value,
+                Err(error) => return Ok(Err(error)),
+            };
+            values.push(value);
+        }
+        Err(Halt::StepLimit(self.n_dispatched))
     }
 
     /// Dispatch a Map/Set/WeakMap/WeakSet mutator or query method (xsMapSet.c).
