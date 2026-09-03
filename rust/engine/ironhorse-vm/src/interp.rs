@@ -1501,21 +1501,21 @@ pub const REGEXP_EXEC_PER_CAPTURE: u64 = 32;
 /// drives (the `test` host frame + the `mxGetID(_exec)` + `mxRunCount(1)`
 /// re-entrant call framing). Calibrated raw-exact.
 pub const REGEXP_TEST_FRAME_METERING: u64 = 147456;
-/// The native residual of `String.prototype.search` (`fx_String_prototype_
-/// search` → `fx_RegExp_prototype_search` via the `Symbol.search` protocol)
-/// BEYOND the `exec` cost it drives: the String host frame, the `withRegexp`
-/// dispatch (`mxGetID(_Symbol_search)` + `mxCall` + `mxRunCount(1)`), and the
-/// worker's `lastIndex` save/reset/restore. Calibrated raw-exact.
-pub const STRING_SEARCH_FRAME_METERING: u64 = 475568;
-/// The extra residual of `search` on a match: the `mxGetID(_index)` read of the
-/// exec-result's `index` (skipped on the `-1` no-match path). Calibrated.
-pub const STRING_SEARCH_INDEX_GET_METERING: u64 = 32768;
-/// The native residual of the non-global `String.prototype.match`
-/// (`fx_String_prototype_match` → `fx_RegExp_prototype_match` via the
-/// `Symbol.match` protocol) BEYOND the `exec` cost it drives: the String host
-/// frame, the `withRegexp` dispatch, and the worker's `flags` get (the
-/// eight-property cascade). Calibrated raw-exact.
-pub const STRING_MATCH_FRAME_METERING: u64 = 1081800;
+/// The shared native residual of `String.prototype.match` and `.search`
+/// around their symbol-protocol calls: the String host frame plus the
+/// `withRegexp` lookup/call framing. Calibrated raw-exact against direct
+/// custom-protocol calls on the pin.
+pub const STRING_REGEXP_PROTOCOL_FRAME_METERING: u64 = 230440;
+/// The native residual of `%RegExp.prototype%[@@match]` beyond its observable
+/// `flags` getter and the `RegExpExec` cost it drives. Calibrated raw-exact.
+pub const REGEXP_MATCH_FRAME_METERING: u64 = 195992;
+/// The base native residual of `%RegExp.prototype%[@@search]` beyond the
+/// `RegExpExec` cost it drives: the host frame and `lastIndex`
+/// save/reset/restore work. Calibrated raw-exact.
+pub const REGEXP_SEARCH_FRAME_METERING: u64 = 245128;
+/// The extra residual of `@@search` on a match: the result's `index` property
+/// read, skipped on the `-1` no-match path. Calibrated raw-exact.
+pub const REGEXP_SEARCH_INDEX_GET_METERING: u64 = 32768;
 /// The native residual of `String.prototype.replace` (`fx_String_prototype_
 /// replace` → `fx_RegExp_prototype_replace` via the `Symbol.replace` protocol)
 /// BEYOND the `exec` cost, the explicit `flags` cascade, the segment-list
@@ -2717,9 +2717,15 @@ pub enum NativeMethod {
     /// `%RegExp.prototype%[Symbol.replace](string, replaceValue)`: coerce the
     /// subject and drive the shared RegExp replacement worker.
     RegExpReplace,
+    /// `%RegExp.prototype%[Symbol.match](string)`: drive abstract `RegExpExec`
+    /// once or collect every global match.
+    RegExpMatch,
     /// `%RegExp.prototype%[Symbol.matchAll](string)`: clone through the
     /// observable species constructor and return a lazy RegExp String Iterator.
     RegExpMatchAll,
+    /// `%RegExp.prototype%[Symbol.search](string)`: execute from zero and
+    /// restore the receiver's observable `lastIndex`.
+    RegExpSearch,
     /// `%RegExpStringIteratorPrototype%.next()`: drive `RegExpExec` lazily,
     /// including global zero-length-match advancement.
     RegExpStringIteratorNext,
@@ -4649,8 +4655,12 @@ pub struct Interp {
     regexp_proto: crate::value::SlotIndex,
     /// Boot-minted `%RegExp.prototype%[Symbol.replace]` function identity.
     regexp_replace_method: crate::value::SlotIndex,
+    /// Boot-minted `%RegExp.prototype%[Symbol.match]` function identity.
+    regexp_match_method: crate::value::SlotIndex,
     /// Boot-minted `%RegExp.prototype%[Symbol.matchAll]` function identity.
     regexp_match_all_method: crate::value::SlotIndex,
+    /// Boot-minted `%RegExp.prototype%[Symbol.search]` function identity.
+    regexp_search_method: crate::value::SlotIndex,
     /// The program-local symbol id of `lastIndex` (XS's `mxID(_lastIndex)`),
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
@@ -5662,7 +5672,9 @@ impl Interp {
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
             regexp_replace_method: crate::value::SlotIndex::NULL,
+            regexp_match_method: crate::value::SlotIndex::NULL,
             regexp_match_all_method: crate::value::SlotIndex::NULL,
+            regexp_search_method: crate::value::SlotIndex::NULL,
             last_index_id: None,
             regexp_getter_ids: RegExpGetterIds::default(),
             regexp_result_ids: RegExpResultIds::default(),
@@ -6613,9 +6625,19 @@ impl Interp {
             "[Symbol.replace]",
             2,
         );
+        self.regexp_match_method = self.alloc_named_method(
+            NativeMethod::RegExpMatch,
+            "[Symbol.match]",
+            1,
+        );
         self.regexp_match_all_method = self.alloc_named_method(
             NativeMethod::RegExpMatchAll,
             "[Symbol.matchAll]",
+            1,
+        );
+        self.regexp_search_method = self.alloc_named_method(
+            NativeMethod::RegExpSearch,
+            "[Symbol.search]",
             1,
         );
         let _ = self.alloc_named_method(
@@ -23411,6 +23433,125 @@ impl Interp {
         }
     }
 
+    /// `%RegExp.prototype%[@@match]`: run abstract `RegExpExec` once for a
+    /// non-global receiver, or repeatedly collect each whole-match string.
+    /// Empty global matches advance the observable `lastIndex`, including a
+    /// complete surrogate pair in `u`/`v` mode.
+    fn regexp_match(
+        &mut self,
+        code: &[u8],
+        regexp: Slot,
+        input: Slot,
+    ) -> Result<Slot, Halt> {
+        let regexp_inst = match regexp.value {
+            Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        self.meter.tick_raw(REGEXP_MATCH_FRAME_METERING);
+        let subject = self.to_string_slot(code, input)?;
+        let subject_units = match subject.value {
+            Payload::String(off) if subject.kind == Kind::String => self.str_units(off),
+            _ => unreachable!("ToString returns a String"),
+        };
+        let flags = self.regexp_flags_units(code, regexp_inst, regexp, false)?;
+        let global = flags.contains(&(b'g' as u16));
+        if !global {
+            return self.regexp_exec_abstract(code, regexp_inst, regexp, subject);
+        }
+        let full_unicode = flags
+            .iter()
+            .any(|unit| *unit == b'u' as u16 || *unit == b'v' as u16);
+        self.regexp_set_last_index(code, regexp_inst, Slot::integer(0))?;
+
+        let matches = self.new_array();
+        let mut count = 0u64;
+        loop {
+            let result =
+                self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
+            if result.kind == Kind::Null {
+                return if count == 0 {
+                    Ok(Slot::null())
+                } else {
+                    Ok(Slot::of(Kind::Reference, Payload::Reference(matches)))
+                };
+            }
+            let Payload::Reference(result_inst) = result.value else {
+                unreachable!("RegExpExec returns an object or null")
+            };
+            let zero_id = self.array_generic_index_id(0);
+            let whole = self.mop_get(code, result_inst, zero_id, result)?;
+            let match_string = self.to_string_slot(code, whole)?;
+            self.array_generic_create_data_property(
+                code,
+                matches,
+                count,
+                match_string,
+            )?;
+            count = count.saturating_add(1);
+
+            let empty = match match_string.value {
+                Payload::String(off) if match_string.kind == Kind::String => {
+                    self.str_len(off) == 0
+                }
+                _ => unreachable!("ToString returns a String"),
+            };
+            if empty {
+                let index = self.regexp_last_index_length(code, regexp_inst)?;
+                let next = Self::advance_string_index(
+                    &subject_units,
+                    index,
+                    full_unicode,
+                );
+                self.regexp_set_last_index(
+                    code,
+                    regexp_inst,
+                    Slot::number(next as f64),
+                )?;
+            }
+        }
+    }
+
+    /// `%RegExp.prototype%[@@search]`: search from `lastIndex = 0`, then
+    /// restore the exact prior value when the matcher changed it. The result's
+    /// `index` property is returned without coercion.
+    fn regexp_search(
+        &mut self,
+        code: &[u8],
+        regexp: Slot,
+        input: Slot,
+    ) -> Result<Slot, Halt> {
+        let regexp_inst = match regexp.value {
+            Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        self.meter.tick_raw(REGEXP_SEARCH_FRAME_METERING);
+        let subject = self.to_string_slot(code, input)?;
+        let previous = self.regexp_get_last_index(code, regexp_inst)?;
+        let zero = Slot::number(0.0);
+        if !self.same_value(previous, zero) {
+            self.regexp_set_last_index(code, regexp_inst, zero)?;
+        }
+        // `RegExpBuiltinExec` creates the result's own `index` property. Its
+        // key must be interned before invoking `exec`, even when guest source
+        // never spells the name and `@@search` is the only consumer.
+        let index_id = self.intern_key("index");
+        self.regexp_result_ids.index = Some(index_id);
+        let result =
+            self.regexp_exec_abstract(code, regexp_inst, regexp, subject)?;
+        let current = self.regexp_get_last_index(code, regexp_inst)?;
+        if !self.same_value(current, previous) {
+            self.regexp_set_last_index(code, regexp_inst, previous)?;
+        }
+        if result.kind == Kind::Null {
+            return Ok(Slot::integer(-1));
+        }
+        let Payload::Reference(result_inst) = result.value else {
+            unreachable!("RegExpExec returns an object or null")
+        };
+        self.meter.tick_raw(REGEXP_SEARCH_INDEX_GET_METERING);
+        self.mop_get(code, result_inst, index_id, result)
+    }
+
     /// `%RegExp.prototype%[@@matchAll]`: coerce the input, clone the receiver
     /// through `SpeciesConstructor`, transfer its observable `lastIndex`, and
     /// create a lazy RegExp String Iterator. The iterator records `global` and
@@ -23839,84 +23980,6 @@ impl Interp {
         let subject = self.to_string_slot(code, arg0)?;
         let result = self.regexp_exec_abstract(code, inst, receiver, subject)?;
         Ok(Slot::boolean(result.kind != Kind::Null))
-    }
-
-    /// `String.prototype.search(regexp)` (`fx_String_prototype_search` →
-    /// `fx_RegExp_prototype_search` via the `Symbol.search` protocol): drive
-    /// the full `exec` from `lastIndex = 0` (temporarily; XS restores it) and
-    /// return the match's `index`, or `-1`. `inst` is the RegExp argument,
-    /// `subject` the receiver string slot. A non-RegExp argument (the
-    /// `withoutRegexp` coerce-to-RegExp path) self-names.
-    fn string_search(
-        &mut self,
-        code: &[u8],
-        inst: crate::value::SlotIndex,
-        subject: Slot,
-    ) -> Result<Slot, Halt> {
-        self.meter.tick_raw(STRING_SEARCH_FRAME_METERING);
-        let saved = self.regexp_get_last_index(code, inst)?;
-        let zero = Slot::integer(0);
-        // @@search sets/restores only when the observed value differs, which
-        // permits a frozen non-global RegExp whose lastIndex is already zero.
-        if !self.same_value(saved, zero) {
-            self.regexp_set_last_index(code, inst, zero)?;
-        }
-        let (_res, start) = self.regexp_exec_inner(code, inst, subject)?;
-        let current = self.regexp_get_last_index(code, inst)?;
-        if !self.same_value(current, saved) {
-            self.regexp_set_last_index(code, inst, saved)?;
-        }
-        match start {
-            Some(s) => {
-                // The `mxGetID(_index)` read of the result's `index`.
-                self.meter.tick_raw(STRING_SEARCH_INDEX_GET_METERING);
-                Ok(Slot::integer(s))
-            }
-            None => Ok(Slot::integer(-1)),
-        }
-    }
-
-    /// `String.prototype.match(regexp)` (`fx_String_prototype_match` →
-    /// `fx_RegExp_prototype_match` via the `Symbol.match` protocol). The
-    /// non-global path returns `exec`'s result (the match array or `null`)
-    /// directly; `inst` is the RegExp argument, `subject` the receiver string.
-    /// The global path resets `lastIndex`, collects each whole match, and
-    /// advances past an empty match so the loop always makes progress.
-    fn string_match(
-        &mut self,
-        code: &[u8],
-        inst: crate::value::SlotIndex,
-        subject: Slot,
-    ) -> Result<Slot, Halt> {
-        let global = self.regexps[&inst].program.flags() & ironhorse_regexp::XS_REGEXP_G != 0;
-        self.meter.tick_raw(STRING_MATCH_FRAME_METERING);
-        if !global {
-            return Ok(self.regexp_exec_inner(code, inst, subject)?.0);
-        }
-
-        let subject_units = self
-            .string_receiver_units(subject)
-            .expect("match subject was already converted to a string");
-        self.regexp_set_last_index(code, inst, Slot::integer(0))?;
-        let mut matches = Vec::new();
-        loop {
-            let (result, _) = self.regexp_exec_inner(code, inst, subject)?;
-            if result.kind == Kind::Null {
-                break;
-            }
-            let whole = self.array_index_slot(result, 0);
-            let empty = matches!(whole.value, Payload::String(off) if self.str_len(off) == 0);
-            self.meter.tick_slot_alloc();
-            matches.push(whole);
-            if empty {
-                self.regexp_advance_last_index(code, inst, &subject_units)?;
-            }
-        }
-        if matches.is_empty() {
-            return Ok(Slot::null());
-        }
-        let array = self.new_array_unmetered();
-        Ok(self.finish_split_array(array, matches))
     }
 
     /// `GetSubstitution` for an ordinary string search (no captures or named
@@ -34439,9 +34502,9 @@ impl Interp {
                 }
                 Slot::undefined()
             }
-            NativeMethod::RegExpMatchAll => {
-                self.regexp_match_all(code, this, arg0)?
-            }
+            NativeMethod::RegExpMatch => self.regexp_match(code, this, arg0)?,
+            NativeMethod::RegExpMatchAll => self.regexp_match_all(code, this, arg0)?,
+            NativeMethod::RegExpSearch => self.regexp_search(code, this, arg0)?,
             NativeMethod::RegExpReplace => {
                 let regexp = match this.value {
                     Payload::Reference(regexp) if this.kind == Kind::Reference => regexp,
@@ -34497,6 +34560,8 @@ impl Interp {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
                     return Err(self.catchable_type_error());
                 }
+                self.meter
+                    .tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let search_method = self.string_protocol_method(code, arg0, "search")?;
                 if !matches!(search_method.kind, Kind::Undefined | Kind::Null) {
                     self.invoke_value(code, search_method, arg0, &[this])?
@@ -34507,24 +34572,22 @@ impl Interp {
                         let units = self.string_this_units(code, this)?;
                         self.new_string_units(&units)
                     };
-                    match arg0.value {
-                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                            self.string_search(code, r, subject)?
-                        }
-                        _ => {
-                            let pattern = if arg0.kind == Kind::Undefined {
-                                String::new()
-                            } else {
-                                let units = self.to_string_units(code, arg0)?;
-                                String::from_utf16_lossy(&units)
-                            };
-                            let regexp = self.build_regexp(pattern, String::new())?;
-                            let Payload::Reference(inst) = regexp.value else {
-                                unreachable!()
-                            };
-                            self.string_search(code, inst, subject)?
-                        }
-                    }
+                    let regexp_constructor = *self
+                        .intrinsics
+                        .get("RegExp")
+                        .expect("RegExp intrinsic is linked");
+                    let constructor = Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(regexp_constructor),
+                    );
+                    let matcher = self.construct_value(
+                        code,
+                        constructor,
+                        &[arg0],
+                        constructor,
+                    )?;
+                    let method = self.string_protocol_method(code, matcher, "search")?;
+                    self.invoke_value(code, method, matcher, &[subject])?
                 }
             }
             // `String.prototype.match`: a custom `regexp[Symbol.match]` is
@@ -34535,6 +34598,8 @@ impl Interp {
                 if matches!(this.kind, Kind::Undefined | Kind::Null) {
                     return Err(self.catchable_type_error());
                 }
+                self.meter
+                    .tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
                 let match_method = self.string_protocol_method(code, arg0, "match")?;
                 if !matches!(match_method.kind, Kind::Undefined | Kind::Null) {
                     self.invoke_value(code, match_method, arg0, &[this])?
@@ -34545,24 +34610,22 @@ impl Interp {
                         let units = self.string_this_units(code, this)?;
                         self.new_string_units(&units)
                     };
-                    match arg0.value {
-                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
-                            self.string_match(code, r, subject)?
-                        }
-                        _ => {
-                            let pattern = if arg0.kind == Kind::Undefined {
-                                String::new()
-                            } else {
-                                let units = self.to_string_units(code, arg0)?;
-                                String::from_utf16_lossy(&units)
-                            };
-                            let regexp = self.build_regexp(pattern, String::new())?;
-                            let Payload::Reference(inst) = regexp.value else {
-                                unreachable!()
-                            };
-                            self.string_match(code, inst, subject)?
-                        }
-                    }
+                    let regexp_constructor = *self
+                        .intrinsics
+                        .get("RegExp")
+                        .expect("RegExp intrinsic is linked");
+                    let constructor = Slot::of(
+                        Kind::Reference,
+                        Payload::Reference(regexp_constructor),
+                    );
+                    let matcher = self.construct_value(
+                        code,
+                        constructor,
+                        &[arg0],
+                        constructor,
+                    )?;
+                    let method = self.string_protocol_method(code, matcher, "match")?;
+                    self.invoke_value(code, method, matcher, &[subject])?
                 }
             }
             NativeMethod::StringMatchAll => {
@@ -44755,10 +44818,22 @@ impl Interp {
                 "boot RegExp.prototype @@replace method",
                 XS_DONT_ENUM_FLAG,
             )],
+            Some("match") => vec![(
+                self.regexp_proto,
+                self.regexp_match_method,
+                "boot RegExp.prototype @@match method",
+                XS_DONT_ENUM_FLAG,
+            )],
             Some("matchAll") => vec![(
                 self.regexp_proto,
                 self.regexp_match_all_method,
                 "boot RegExp.prototype @@matchAll method",
+                XS_DONT_ENUM_FLAG,
+            )],
+            Some("search") => vec![(
+                self.regexp_proto,
+                self.regexp_search_method,
+                "boot RegExp.prototype @@search method",
                 XS_DONT_ENUM_FLAG,
             )],
             _ => return,
@@ -55814,7 +55889,9 @@ impl Interp {
             self.async_function_proto,
             self.regexp_proto,
             self.regexp_replace_method,
+            self.regexp_match_method,
             self.regexp_match_all_method,
+            self.regexp_search_method,
             self.math_object,
         ]);
         for (holder, _, method) in &self.proto_methods {
