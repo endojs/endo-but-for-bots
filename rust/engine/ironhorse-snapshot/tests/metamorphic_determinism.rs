@@ -263,7 +263,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for ArrayBuffer `slice` metadata, `@@species`, and
         // `@@toStringTag`, with boot-layout signature generation 16.
         // Boot-heap content only; format unchanged.
-        "7f4763cce129d34bf4a89db9eab9388dfd67f06865e86aebbcaa58538c91df25",
+        // Re-pinned for ArrayBuffer transfer methods and fixed-buffer
+        // accessors, with boot-layout signature generation 17. Boot-heap
+        // content only; format unchanged.
+        "b822f2d6c69c21e6db96f7e97b0fe10f6187b1b2b155f65486bb6d6dcbf4747a",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -449,7 +452,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned with the blob for ArrayBuffer `slice` metadata,
         // `@@species`, and `@@toStringTag`, with boot generation 16.
         // Schema and format remain unchanged.
-        "bb2ce55935b9d7621b76e5dbc6ff74775ae22aee95b5916b80a1ebbde378445b",
+        // Re-pinned with the blob for ArrayBuffer transfer methods and
+        // fixed-buffer accessors, with boot generation 17. Schema and format
+        // remain unchanged.
+        "75a40e1654433c36b66a8d4d5dffd5a425ed10df4d0b8d152c6cd445c353eb08",
         "epoch-3 seal chain"
     );
 }

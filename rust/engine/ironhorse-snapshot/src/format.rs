@@ -316,7 +316,7 @@ pub enum VersionError {
 /// `Interp::create_intrinsics` changes any boot-derived slot identity or
 /// metadata table. The engine-owned suffix prevents a host from accidentally
 /// reusing its callback signature across an incompatible boot change.
-pub const BOOT_LAYOUT_VERSION: u32 = 16;
+pub const BOOT_LAYOUT_VERSION: u32 = 17;
 
 const BOOT_LAYOUT_SIGNATURE_KEY: &str = "|ironhorse-boot=";
 
@@ -506,7 +506,7 @@ mod tests {
         let s = Signature::new("ironhorse-worker-v1");
         assert_eq!(
             s.encode(),
-            b"ironhorse-worker-v1|ironhorse-boot=16",
+            b"ironhorse-worker-v1|ironhorse-boot=17",
             "the engine-owned boot generation travels with every host signature"
         );
         assert_eq!(Signature::decode(&s.encode()).unwrap(), s);
