@@ -2601,11 +2601,16 @@ pub enum NativeMethod {
     /// `get ArrayBuffer[Symbol.species]`: the standard accessor returns its
     /// receiver.
     ArrayBufferSpeciesGetter,
+    /// The fixed-buffer-compatible `ArrayBuffer.prototype` accessors.
+    ArrayBufferDetachedGetter,
+    ArrayBufferMaxByteLengthGetter,
+    ArrayBufferResizableGetter,
     /// `ArrayBuffer.prototype.resize` — recognized-but-unimplemented (a
     /// resizable buffer is an honest named skip this stage does not model).
     ArrayBufferResize,
-    /// `ArrayBuffer.prototype.transfer` — recognized-but-unimplemented.
+    /// `ArrayBuffer.prototype.transfer` / `transferToFixedLength`.
     ArrayBufferTransfer,
+    ArrayBufferTransferToFixedLength,
     /// `ArrayBuffer.prototype.concat` (XS extension) —
     /// recognized-but-unimplemented.
     ArrayBufferConcat,
@@ -6390,13 +6395,42 @@ impl Interp {
         let slice = self.alloc_named_method(NativeMethod::ArrayBufferSlice, "slice", 2);
         self.proto_methods
             .push((self.arraybuffer_proto, "slice", slice));
+        let transfer = self.alloc_named_method(NativeMethod::ArrayBufferTransfer, "transfer", 0);
+        self.proto_methods
+            .push((self.arraybuffer_proto, "transfer", transfer));
+        let transfer_to_fixed = self.alloc_named_method(
+            NativeMethod::ArrayBufferTransferToFixedLength,
+            "transferToFixedLength",
+            0,
+        );
+        self.proto_methods.push((
+            self.arraybuffer_proto,
+            "transferToFixedLength",
+            transfer_to_fixed,
+        ));
         for (name, m) in [
             ("resize", NativeMethod::ArrayBufferResize),
-            ("transfer", NativeMethod::ArrayBufferTransfer),
             ("concat", NativeMethod::ArrayBufferConcat),
         ] {
             let mf = self.alloc_method(m);
             self.proto_methods.push((self.arraybuffer_proto, name, mf));
+        }
+        for (name, method) in [
+            ("detached", NativeMethod::ArrayBufferDetachedGetter),
+            (
+                "maxByteLength",
+                NativeMethod::ArrayBufferMaxByteLengthGetter,
+            ),
+            ("resizable", NativeMethod::ArrayBufferResizableGetter),
+        ] {
+            let getter = self.alloc_named_method(method, &format!("get {name}"), 0);
+            self.proto_accessors.push((
+                self.arraybuffer_proto,
+                ProtoAccessorKey::String(name),
+                getter,
+                None,
+                "ArrayBuffer",
+            ));
         }
         // `ArrayBuffer.isView` — a static bound as an own property of the
         // `ArrayBuffer` constructor instance (not the prototype).
@@ -10278,9 +10312,10 @@ impl Interp {
     /// the restored chunk arena). Validates every row — an unknown
     /// element kind, a flags byte outside the two brand bits, a NULL
     /// or out-of-arena backing extent, a view naming a buffer with no
-    /// row, or view geometry past its buffer's length — and returns
+    /// row, or live view geometry past its buffer's length — and returns
     /// `false` without completing on a violation (the caller fails its
-    /// decode closed); a well-formed snapshot always restores fully.
+    /// decode closed). Detached buffers retain their views' former geometry
+    /// because the observable accessors project those views as zero-length.
     pub fn restore_typed_array_family(
         &mut self,
         buffers: Vec<(u32, u32, u32, u8)>,
@@ -10325,7 +10360,7 @@ impl Interp {
                 return false;
             };
             let end = offset as u64 + ((length as u64) << ty.shift);
-            if end > buf.length as u64 {
+            if !self.detached_buffers.contains(&buffer) && end > buf.length as u64 {
                 return false;
             }
             self.typed_arrays.insert(
@@ -10343,7 +10378,9 @@ impl Interp {
             let Some(buf) = self.array_buffers.get(&buffer) else {
                 return false;
             };
-            if offset as u64 + size as u64 > buf.length as u64 {
+            if !self.detached_buffers.contains(&buffer)
+                && offset as u64 + size as u64 > buf.length as u64
+            {
                 return false;
             }
             self.data_views.insert(
@@ -32336,7 +32373,7 @@ impl Interp {
                     }
                     _ => return Err(self.catchable_type_error()),
                 };
-                self.detached_buffers.insert(buffer);
+                self.detach_array_buffer(buffer);
                 Slot::undefined()
             }
             NativeMethod::TypedArrayCopyWithin
@@ -34138,14 +34175,39 @@ impl Interp {
             NativeMethod::ArrayBufferSlice => {
                 self.array_buffer_slice(code, this, base, argc)?
             }
-            // `ArrayBuffer.prototype.resize`/`transfer`/`concat`:
-            // recognized-but-unimplemented (resizable/transfer/concat are a
-            // later increment). Honest named skips.
+            NativeMethod::ArrayBufferTransfer
+            | NativeMethod::ArrayBufferTransferToFixedLength => {
+                self.array_buffer_transfer(code, this, arg0)?
+            }
+            NativeMethod::ArrayBufferDetachedGetter
+            | NativeMethod::ArrayBufferMaxByteLengthGetter
+            | NativeMethod::ArrayBufferResizableGetter => {
+                let buffer = self
+                    .array_buffer_ref(this)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                if self.shared_buffers.contains(&buffer) {
+                    return Err(self.catchable_type_error());
+                }
+                match m {
+                    NativeMethod::ArrayBufferDetachedGetter => {
+                        Slot::boolean(self.detached_buffers.contains(&buffer))
+                    }
+                    NativeMethod::ArrayBufferMaxByteLengthGetter => {
+                        let length = if self.detached_buffers.contains(&buffer) {
+                            0
+                        } else {
+                            self.array_buffers[&buffer].length
+                        };
+                        Slot::number(length as f64)
+                    }
+                    NativeMethod::ArrayBufferResizableGetter => Slot::boolean(false),
+                    _ => unreachable!(),
+                }
+            }
+            // `ArrayBuffer.prototype.resize`/`concat`: resizable buffers and
+            // the XS concat extension remain honest named skips.
             NativeMethod::ArrayBufferResize => {
                 return Err(Halt::Unsupported("array-buffer-resize:unsupported"))
-            }
-            NativeMethod::ArrayBufferTransfer => {
-                return Err(Halt::Unsupported("array-buffer-transfer:unsupported"))
             }
             NativeMethod::ArrayBufferConcat => {
                 return Err(Halt::Unsupported("array-buffer-concat:unsupported"))
@@ -41637,6 +41699,17 @@ impl Interp {
         }
     }
 
+    /// Mark an ArrayBuffer detached and expose its zero byte length. The old
+    /// chunk becomes reclaimable when the owning instance is collected or the
+    /// chunk arena is compacted.
+    fn detach_array_buffer(&mut self, buffer: crate::value::SlotIndex) {
+        self.detached_buffers.insert(buffer);
+        self.array_buffers
+            .get_mut(&buffer)
+            .expect("detached buffer is branded")
+            .length = 0;
+    }
+
     /// `SpeciesConstructor(buffer, %ArrayBuffer%)`. Constructor and
     /// `@@species` reads use the full object MOP, and an undefined constructor
     /// or nullish species selects the realm intrinsic.
@@ -41750,6 +41823,48 @@ impl Interp {
             out[..count as usize].copy_from_slice(&bytes);
         }
         Ok(result)
+    }
+
+    /// `ArrayBufferCopyAndDetach` for the engine's fixed-length ArrayBuffer
+    /// model. Both public transfer methods are identical until resizable
+    /// buffers are introduced: allocate a realm-intrinsic fixed buffer, copy
+    /// the common prefix, zero-fill any extension, then detach the source.
+    fn array_buffer_transfer(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        new_length_arg: Slot,
+    ) -> Result<Slot, Halt> {
+        let source = self
+            .array_buffer_ref(this)
+            .ok_or_else(|| self.catchable_type_error())?;
+        if self.shared_buffers.contains(&source) {
+            return Err(self.catchable_type_error());
+        }
+        let old_length = self.array_buffers[&source].length;
+        let new_length = if new_length_arg.kind == Kind::Undefined {
+            old_length
+        } else {
+            self.to_index_arg(code, new_length_arg)?
+        };
+        // `ToIndex` above is observable and can detach the source.
+        if self.detached_buffers.contains(&source) {
+            return Err(self.catchable_type_error());
+        }
+
+        let copy_length = old_length.min(new_length);
+        let source_buffer = self.array_buffers[&source];
+        let bytes = self.chunks.payload(source_buffer.data)[..copy_length as usize].to_vec();
+        let result = self.alloc_array_buffer(new_length);
+        if copy_length > 0 {
+            let target_buffer = self.array_buffers[&result];
+            let out = self
+                .chunks
+                .slice_mut(target_buffer.data, new_length as usize);
+            out[..copy_length as usize].copy_from_slice(&bytes);
+        }
+        self.detach_array_buffer(source);
+        Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 
     /// `ValidateTypedArray(this)`: enforce the receiver brand and reject a

@@ -76,7 +76,6 @@ test/intrinsics/RegExpPrototype/intrinsic-metadata.js
 test/intrinsics/SetPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/ThrowTypeError/intrinsic-metadata.js
-test/intrinsics/TypedArray/intrinsic-metadata.js
 test/intrinsics/WeakMapPrototype/intrinsic-metadata.js
 test/intrinsics/WeakSetPrototype/intrinsic-metadata.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js

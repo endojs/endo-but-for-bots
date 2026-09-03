@@ -3599,14 +3599,15 @@ pub(crate) fn check_image_slot_bounds(
     // The typed-array family carries CROSS-table geometry, checked here
     // where all three tables are in hand (the SYMB-vs-NAME precedent):
     // every buffer's backing extent lies inside the chunk arena, and
-    // every view names a buffer ROW whose length covers the view. A
-    // view that merely named an in-bounds SLOT with no buffer row
-    // would restore, then read through a geometry no allocation backs.
-    let buffer_length = |slot: u32| -> Option<u32> {
+    // every live view names a buffer ROW whose length covers the view.
+    // Detached buffers retain the former view geometry, whose observable
+    // accessors project zero lengths. A view that merely named an in-bounds
+    // SLOT with no buffer row would restore without a backing allocation.
+    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
         buffers
             .binary_search_by_key(&slot, |b| b.owner)
             .ok()
-            .map(|i| buffers[i].length)
+            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
     };
     for b in buffers {
         owned(b.owner)?;
@@ -3626,8 +3627,9 @@ pub(crate) fn check_image_slot_bounds(
             .ok_or(SnapshotError::Corrupt(
                 "typed-arrays side table: unknown element kind",
             ))?;
-        let covered = buffer_length(t.buffer)
-            .is_some_and(|len| t.offset as u64 + ((t.length as u64) << shift) <= len as u64);
+        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
+            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
+        });
         if !covered {
             return Err(SnapshotError::Corrupt(
                 "typed-arrays side table: view geometry past its buffer",
@@ -3637,8 +3639,9 @@ pub(crate) fn check_image_slot_bounds(
     for d in data_views {
         owned(d.owner)?;
         owned(d.buffer)?;
-        let covered =
-            buffer_length(d.buffer).is_some_and(|len| d.offset as u64 + d.size as u64 <= len as u64);
+        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
+            detached || d.offset as u64 + d.size as u64 <= len as u64
+        });
         if !covered {
             return Err(SnapshotError::Corrupt(
                 "data-views side table: view geometry past its buffer",
