@@ -37,6 +37,12 @@ fn native_errors_have_the_right_realm_surface() {
         "var d = Object.getOwnPropertyDescriptor(new Error('boom', { cause: 17 }), 'cause'); d.value === 17 && d.writable && !d.enumerable && d.configurable",
         "new AggregateError([], 'boom', { cause: 23 }).cause",
         "!Object.prototype.hasOwnProperty.call(new Error('boom', Symbol('options')), 'cause')",
+        "var log=[];var message={toString:function(){log.push('m');return 'boom'}};var options={get cause(){log.push('c');return 7}};var e=new Error(message,options);e.message+':'+e.cause+':'+log.join('')",
+        "new EvalError('x',{__proto__:{cause:11}}).cause",
+        "var log=[];var options=new Proxy({cause:13},{has:function(t,k){log.push('h');return Reflect.has(t,k)},get:function(t,k,r){log.push('g');return Reflect.get(t,k,r)}});var e=new TypeError('x',options);e.cause+':'+log.join('')",
+        "var caught;try{new RangeError({toString:function(){throw 17}})}catch(e){caught=e}caught",
+        "try{new SyntaxError(Symbol('message'));false}catch(e){e instanceof TypeError}",
+        "new Error({toString:function(){return '\\ud800'}}).message.charCodeAt(0)",
         "Function.prototype.call.bind(Object.prototype.hasOwnProperty)({ x: 1 }, 'x')",
         "Object.getOwnPropertyNames({ value: 1 })[0]",
         "Object.prototype.toString.call(new TypeError)",
@@ -64,6 +70,8 @@ fn aggregate_error_consumes_general_iterables_in_specification_order() {
         "var log=[];var a=[1,2];a[Symbol.iterator]=function(){log.push('i');return [8][Symbol.iterator]()};var e=new AggregateError(a);e.errors.join(',')+':'+log.join('')",
         "var gets=0;var source={ [Symbol.iterator]:function(){var n=0;return {get next(){gets++;return function(){return n++<1?{value:6,done:false}:{done:true}}}}}};new AggregateError(source).errors[0]+':'+gets",
         "var closed=0;var source={ [Symbol.iterator]:function(){return this},next:function(){throw 9},return:function(){closed++;return {done:true}}};var caught;try{new AggregateError(source)}catch(e){caught=e}String(caught)+':'+closed",
+        "var log=[];var source={ [Symbol.iterator]:function(){log.push('i');return [1][Symbol.iterator]()}};var message={toString:function(){log.push('m');return 'x'}};var options=new Proxy({cause:2},{has:function(t,k){log.push('h');return Reflect.has(t,k)},get:function(t,k,r){log.push('g');return Reflect.get(t,k,r)}});var e=new AggregateError(source,message,options);e.cause+':'+log.join('')",
+        "new AggregateError([], '\\udfff').message.charCodeAt(0)",
         "try{new AggregateError({})}catch(e){e instanceof TypeError}",
     ] {
         assert_result_agrees(source);
