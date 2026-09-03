@@ -1669,6 +1669,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/chat@workspace:packages/chat"
   dependencies:
+    "@endo/base64": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/daemon": "workspace:^"
