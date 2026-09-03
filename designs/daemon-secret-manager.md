@@ -118,6 +118,7 @@ interface SecretBlob {
 }
 
 type SecretSummary = {
+  secretId: string;
   description: string;
   state: 'active' | 'revoked';
   generation: bigint;
@@ -194,6 +195,9 @@ It may include the intended use, but no wording in the description
 authorizes or restricts use; authority follows capability possession and
 delegation.
 
+The manager caps a stored value at 1 MiB and a description at 200 characters
+and exports both as `secretManagerLimits`.
+
 The `help()` text is static and does not interpolate the description:
 
 > This capability grants access to secret bytes.
@@ -258,9 +262,10 @@ clipboard.
 
 ## Backend Interface
 
-The manager receives one or more backend capabilities at bootstrap.
-Backend names select among capabilities the manager already holds; they do not
-grant authority.
+The manager receives exactly one backend capability at bootstrap.
+Selecting among several backends by name is deferred; the interface below is
+already flat, so a later multi-backend manager can dispatch per record without
+changing the backend contract.
 
 ```ts
 interface SecretBackend {
@@ -314,23 +319,26 @@ plaintext disclosure and ciphertext mixups, not compromise of the whole state
 directory.
 Production deployments that need key separation must inject a backend whose
 wrapping authority resides in a KMS, HSM, or equivalent isolated service.
-The XS manager currently reports this local backend as unavailable until its
-supervisor exposes an authenticated-encryption host power.
+On XS the supervisor's `sealSecret` and `openSecret` powers throw, so creating
+or releasing a secret through this backend fails closed with a fixed error
+until an authenticated-encryption host power exists there.
 
 ## Durable Representation
 
 There is no `secret-blob` formula type.
-The singleton manager is incarnated using an existing daemon service recipe and
-exposes a private naming-hub facet.
-Each durable read or administration facet uses the existing `lookup` formula.
+The singleton manager is constructed in the daemon core rather than incarnated
+from a formula, and each host reaches its own management directory facet
+through the `@secrets` special name, which resolves to that host.
+Each durable read facet uses the existing `lookup` formula, whose hub is the
+host itself.
 
 An inventory read grant is represented as:
 
 ```js
 {
   type: 'lookup',
-  hub: '<formula identifier for the private manager hub>',
-  path: ['use', '<random 256-bit grant identifier>'],
+  hub: '<formula identifier for the host>',
+  path: ['@secrets', 'use', '<random 256-bit grant identifier>'],
 }
 ```
 
@@ -343,9 +351,10 @@ authority.
 Durable, separately delegable administration is deferred; it requires its own
 unguessable selector, persisted alongside the record.
 
-The manager hub is the authority amplifier.
+The host's `@secrets` routing is the authority amplifier.
 The random path component is a Swiss number and grants no authority without the
-hub capability retained by the lookup formula.
+host capability retained by the lookup formula; delegating the lookup formula
+identifier delegates only its resolved value, never the host.
 The general formula inspector already carries capability-wallet authority; the
 secret design does not add a new inspection or backup expectation.
 
@@ -358,8 +367,8 @@ rejects with a fixed error.
 
 The formula and pet-store databases never contain secret bytes, ciphertext,
 secret hashes, byte lengths, or backend error bodies.
-The manager's mutable record store contains only lifecycle metadata and sturdy
-backend capability references.
+The manager's mutable record store contains only lifecycle metadata and opaque
+backend locators.
 
 ## Creation and Inventory Binding
 
@@ -462,7 +471,7 @@ upstream action already performed with them.
 
 The singleton manager is the mandatory mediation point because no backend
 record capability leaves it.
-It records create, read, replace, description change, revoke, and delete
+It records create, release, replace, description change, revoke, and delete
 operations.
 
 ```ts
@@ -480,14 +489,16 @@ type SecretAuditEvent = {
   generation: bigint;
   occurredAt: string;
   operationId: string;
-  invocationId?: string;
-  parentInvocationId?: string;
-  workerFormulaId?: string;
-  connectionId?: string;
   reasonCode?: string;
-  previousEventHash?: string;
 };
 ```
+
+The shipped event carries no invocation, worker, connection, or previous-event
+hash field; the narrow `AuditContext` below and tamper-evident hash chaining
+are both deferred.
+It also carries no grant identifier, by the invariant recorded below: a grant
+identifier is redeemable read authority, so the audit facet must never emit
+one.
 
 Audit events exclude secret bytes, ciphertext, hashes, lengths, description text,
 backend locators, arbitrary reason text, and exception messages.
@@ -565,6 +576,8 @@ boundary necessarily includes any process to which plaintext is delivered.
 
 - a durable operation journal and reconciliation for crashes between a backend
   mutation and its metadata commit;
+- correlation fields from a narrow `AuditContext` and tamper-evident hash
+  chaining of audit events;
 - an XS authenticated-encryption host power;
 - a production KMS/HSM backend;
 - explicit audit retention, export, and purge policy;
@@ -578,6 +591,8 @@ boundary necessarily includes any process to which plaintext is delivered.
 1. Should the initial production backend be a local envelope-encrypted store or
    only an adapter to an external secret service?
 2. What maximum secret size should the first protocol guarantee?
+   The current manager caps values at 1 MiB, but that is an implementation
+   choice, not a protocol commitment.
 3. Should every message derive a fresh grant, or should messages initially
    forward the inventory grant exactly as ordinary capability delegation?
 4. Which stable daemon invocation fields can a narrow `AuditContext` expose
