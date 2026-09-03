@@ -45,6 +45,17 @@ fn constructor_statics_reject_invalid_calls_catchably() {
 }
 
 #[test]
+fn string_builtins_expose_standard_name_and_length_metadata() {
+    for source in [
+        "String.fromCharCode.name+':'+String.fromCharCode.length+':'+String.fromCodePoint.name+':'+String.fromCodePoint.length",
+        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
+        "String.prototype[Symbol.iterator].name+':'+String.prototype[Symbol.iterator].length",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
 fn padding_and_well_formedness_are_code_unit_exact() {
     for source in [
         "'x'.padStart(5, 'ab')",
@@ -67,6 +78,31 @@ fn methods_coerce_generic_receivers_and_trim_ecmascript_whitespace() {
         "String.prototype.trim.call('\\u00A0\\uFEFFok\\u3000')",
         "String.prototype.padStart.call({ toString: function () { return 'x'; } }, 3, '0')",
         "''.repeat(2147483647).length",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn unicode_case_conversion_handles_special_contextual_and_astral_mappings() {
+    for source in [
+        "'\\u0130'.toLowerCase().split('').map(function(c){return c.charCodeAt(0).toString(16)}).join(',')",
+        "'Straße \\uFB03'.toUpperCase()",
+        "'A\\u03A3 A\\u03A3B'.toLowerCase()",
+        "String.fromCodePoint(0x10400).toLowerCase().codePointAt(0).toString(16)",
+        "String.fromCodePoint(0x10428).toUpperCase().codePointAt(0).toString(16)",
+        "'\\u212A É'.toLowerCase()",
+        "String.prototype.toUpperCase.call({toString:function(){return 'élan'}})",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn unicode_case_conversion_preserves_lone_surrogates() {
+    for source in [
+        "var s=String.fromCharCode(0xD800,65);var r=s.toLowerCase();r.charCodeAt(0)+':'+r.charCodeAt(1)",
+        "var s=String.fromCharCode(97,0xDC00);var r=s.toUpperCase();r.charCodeAt(0)+':'+r.charCodeAt(1)",
     ] {
         agrees(source);
     }

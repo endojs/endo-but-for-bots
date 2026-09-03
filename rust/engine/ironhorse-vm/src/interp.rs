@@ -7534,50 +7534,47 @@ impl Interp {
             return;
         }
         use NativeMethod::*;
-        self.string_iterator_method = self.alloc_method(StringIterator);
+        self.string_iterator_method =
+            self.alloc_named_method(StringIterator, "[Symbol.iterator]", 0);
         if let Some(&ctor) = self.intrinsics.get("String") {
-            for (name, m) in [
-                ("fromCharCode", StringFromCharCode),
-                ("fromCodePoint", StringFromCodePoint),
+            for (name, arity, m) in [
+                ("fromCharCode", 1, StringFromCharCode),
+                ("fromCodePoint", 1, StringFromCodePoint),
             ] {
-                let mf = self.alloc_method(m);
+                let mf = self.alloc_named_method(m, name, arity);
                 self.proto_methods.push((ctor, name, mf));
             }
         }
-        for (name, m) in [
-            ("charCodeAt", StringCharCodeAt),
-            ("codePointAt", StringCodePointAt),
-            ("charAt", StringCharAt),
-            ("at", StringAt),
-            ("slice", StringSlice),
-            ("substring", StringSubstring),
-            ("indexOf", StringIndexOf),
-            ("lastIndexOf", StringLastIndexOf),
-            ("includes", StringIncludes),
-            ("startsWith", StringStartsWith),
-            ("endsWith", StringEndsWith),
-            ("concat", StringConcat),
-            ("toLowerCase", StringToLowerCase),
-            ("toUpperCase", StringToUpperCase),
-            ("repeat", StringRepeat),
-            ("trim", StringTrim),
-            ("padStart", StringPadStart),
-            ("padEnd", StringPadEnd),
-            ("isWellFormed", StringIsWellFormed),
-            ("toWellFormed", StringToWellFormed),
+        for (name, arity, m) in [
+            ("charCodeAt", 1, StringCharCodeAt),
+            ("codePointAt", 1, StringCodePointAt),
+            ("charAt", 1, StringCharAt),
+            ("at", 1, StringAt),
+            ("slice", 2, StringSlice),
+            ("substring", 2, StringSubstring),
+            ("indexOf", 1, StringIndexOf),
+            ("lastIndexOf", 1, StringLastIndexOf),
+            ("includes", 1, StringIncludes),
+            ("startsWith", 1, StringStartsWith),
+            ("endsWith", 1, StringEndsWith),
+            ("concat", 1, StringConcat),
+            ("toLowerCase", 0, StringToLowerCase),
+            ("toUpperCase", 0, StringToUpperCase),
+            ("repeat", 1, StringRepeat),
+            ("trim", 0, StringTrim),
+            ("padStart", 1, StringPadStart),
+            ("padEnd", 1, StringPadEnd),
+            ("isWellFormed", 0, StringIsWellFormed),
+            ("toWellFormed", 0, StringToWellFormed),
             // The RegExp-consuming String methods (`xsString.c`
             // `fx_String_prototype_match`/`search`/`replace`/`split`), driving
             // child 8's matcher over a string-or-RegExp argument.
-            ("match", StringMatch),
-            ("search", StringSearch),
-            ("replace", StringReplace),
-            ("split", StringSplit),
+            ("match", 1, StringMatch),
+            ("search", 1, StringSearch),
+            ("replace", 2, StringReplace),
+            ("split", 2, StringSplit),
         ] {
-            let mf = if m == StringSplit {
-                self.alloc_named_method(m, name, 2)
-            } else {
-                self.alloc_method(m)
-            };
+            let mf = self.alloc_named_method(m, name, arity);
             self.proto_methods.push((p, name, mf));
         }
         // `trimStart`/`trimEnd` and their Annex-B references
@@ -36320,25 +36317,15 @@ impl Interp {
                     }
                 }
             }
-            // toLowerCase / toUpperCase: ASCII case mapping. mxMeterSome(count)
-            // over the code units + the result chunk. A non-ASCII code point
-            // self-names (full Unicode case folding is not modeled).
+            // toLowerCase / toUpperCase: Unicode Default Case Conversion over
+            // scalar values, preserving lone UTF-16 surrogates unchanged.
+            // Rust's whole-string conversion supplies the locale-insensitive
+            // SpecialCasing mappings, including contextual final sigma and
+            // one-to-many results. Meter against the input code units, then
+            // charge the actual result chunk through `new_string_units`.
             StringToLowerCase | StringToUpperCase => {
-                if content.iter().any(|&u| u >= 0x80) {
-                    return Err(Halt::Unsupported("toCase:non-ascii"));
-                }
                 let up = m == StringToUpperCase;
-                let out: Vec<u16> = content
-                    .iter()
-                    .map(|&u| {
-                        let b = u as u8;
-                        (if up {
-                            b.to_ascii_uppercase()
-                        } else {
-                            b.to_ascii_lowercase()
-                        }) as u16
-                    })
-                    .collect();
+                let out = unicode_case_convert_utf16(&content, up);
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 self.meter.tick_builtin_some(ulen as u64);
                 self.new_string_units(&out)
@@ -51938,6 +51925,38 @@ fn units_to_be16(units: &[u16]) -> Vec<u8> {
     for &u in units {
         out.extend_from_slice(&u.to_be_bytes());
     }
+    out
+}
+
+/// Apply locale-insensitive Unicode case conversion to a JavaScript UTF-16
+/// string. Valid scalar runs go through Rust's whole-string mapping so
+/// context-sensitive SpecialCasing rules see their neighbors. An unpaired
+/// surrogate is a Unicode code point in ECMAScript string iteration but not a
+/// Rust `char`; it maps to itself and acts as a boundary between scalar runs.
+fn unicode_case_convert_utf16(units: &[u16], upper: bool) -> Vec<u16> {
+    let mut out = Vec::with_capacity(units.len());
+    let mut scalar_run = String::new();
+    let flush = |scalar_run: &mut String, out: &mut Vec<u16>| {
+        if scalar_run.is_empty() {
+            return;
+        }
+        if upper {
+            out.extend(scalar_run.to_uppercase().encode_utf16());
+        } else {
+            out.extend(scalar_run.to_lowercase().encode_utf16());
+        }
+        scalar_run.clear();
+    };
+    for decoded in char::decode_utf16(units.iter().copied()) {
+        match decoded {
+            Ok(ch) => scalar_run.push(ch),
+            Err(error) => {
+                flush(&mut scalar_run, &mut out);
+                out.push(error.unpaired_surrogate());
+            }
+        }
+    }
+    flush(&mut scalar_run, &mut out);
     out
 }
 
