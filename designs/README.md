@@ -871,11 +871,60 @@ tracked separately and is not a blocker for M2's exit criterion on
 (Was **Milestone 1** before the 2026-06-03 renumbering pass. The
 gateway-package implementation stack and the MCP-bridge endpoint live
 here because they are the substrate the hosted-Gateway-service north
-star is built on.)
+star is built on. The 2026-09-03 groom pass re-worded this milestone —
+the first unfinished one, M1 and M2 being Complete — to name the
+**client-side bridge** capabilities as its now-first priority; see the
+block immediately below and [`ARCHIVE.md`](ARCHIVE.md) for the note.)
 
 **Goal:** Self-host a daemon with Docker, remote control it via local
 Familiar or hosted Chat with bearer token auth. Claw-like coding
-capabilities available to agents.
+capabilities available to agents. **First priority: close the
+client-side MCP/CapTP bridge bottleneck** (below) so getting code and
+state across the MCP-daemon boundary no longer requires an external LLM
+hand-marshaling bytes.
+
+**Client-side bridge (top priority, carved 2026-09-03).** A liaison
+session on 2026-09-02/03, building a live counter on a minion.town clip,
+hit a concrete, reproducible bottleneck: getting one artifact across the
+MCP/CapTP bridge required either hand-typing tens of thousands of base64
+characters into a tool call (which corrupted mid-copy and had to be
+discarded) or reverse-engineering the CapTP wire protocol to hand-write a
+~10 KB client narrow enough to transcribe. Both are present-day
+bottlenecks in the **same class** — *get code/state across the
+MCP-daemon boundary without an external LLM hand-marshaling bytes* — and
+both are already designed, not yet built. This milestone now names both
+halves and their directly-dependent companions as its first-to-land work:
+
+- **The capability-addressed git remote** — `git push` becomes the way to
+  get an artifact into an Endo directory (no MCP-tool-call byte marshaling
+  at all). Maintainer-mandated (@kriskowal, 2026-08-11). Design home is
+  `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR
+  [#41](https://github.com/kriscendobot/minion.town/pull/41), merged
+  2026-08-18); its § 12 named the endo-side follow-on as "named but not
+  actioned." That follow-on is exactly the git trio already in this
+  milestone (`daemon-git-capability`, `daemon-git-remotes`,
+  `daemon-git-next-steps`) plus the `daemon-agent-tools` `makeGitRemoteTool`
+  push tier (#705), and its Rust smart-HTTP backing is
+  [endor-git-bindings](endor-git-bindings.md) (home M11, revised
+  2026-08-14 after this Minion Town review — the shared `rust/endor-git`
+  contract backs Minion Town's smart-HTTP adapter). Read-side companion is
+  the landed `git-content-substrate` (minion.town #39) this reframes.
+- **The confined in-guest agent** — an agent running *inside* a guest,
+  acting with normal tools directly on the daemon side, instead of an
+  external agent marshaling everything across the bridge by value. This is
+  [endo-claude](endo-claude.md) (**moved here from M6** by this groom; see
+  the M6 pointer) — a confined `claude -p` that *is* an Endo guest's
+  inference engine, reaching only that one guest's facet as its whole tool
+  surface. Confinement core in flight as PR
+  [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open
+  draft); the child-guest provisioning half is `endo-claude-agents-capability`,
+  PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open
+  draft), which composes with #1015 and provisions Claude-backed child
+  guests without granting guests credentials.
+
+These two halves solve the two directions of the same bottleneck and lead
+this milestone; the remaining M3 rows below (gateway substrate, mount,
+docker-selfhost, the rest of agent-tools) keep their places behind them.
 
 | Design | Status | Notes |
 |--------|--------|-------|
@@ -903,6 +952,9 @@ capabilities available to agents.
 | exo-git-follow-root-advancement | Proposed | Extends `@endo/platform/fs` with tree identity, atomic method-call transactions, high-level patches, and separate lossless-change / lossy-latest root followers; `GitStage` adds tentative commit metadata and a mutable root whose explicit `commit()` advances the corresponding Git followers |
 | daemon-git-remotes | Proposed | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | Proposed | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
+| **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
+| **endo-claude** | Not Started | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
+| **endo-claude-agents-capability** | Proposed | **Client-side bridge, top priority (carved 2026-09-03).** The provisioning half of the confined in-guest agent: a portable Endo capability for provisioning Claude-backed child guests without granting guests credentials, arbitrary host access, or authority over unrelated guest namespaces (namespace-scoped recursive factory facets, per-account-family credential sources, single-use per-child leases, durable revocation, fail-closed restart). Composes with `endo-claude` (#1015). Design in flight as PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft), requested in the minion.town #64 maintainer review; separates Endo's generic daemon/factory work from Minion Town's account UX/credential custody. |
 | filesystem-watchers | Not Started | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | Not Started | Clean locator API; unblocked |
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
@@ -920,8 +972,18 @@ user must be able to present their bearer token (the id of their root
 agent) in the URL anchor, so that the Chat UI can submit this over
 WebSocket to the Daemon's Gateway, in order to establish the root or
 home profile. Agents have scheduled execution and confined outbound HTTP.
+**And (client-side bridge, first priority): an artifact crosses the
+MCP-daemon boundary without an external LLM hand-marshaling bytes — a
+capability-addressed `git push` lands it into an Endo directory
+([git-remote-capability](https://github.com/kriscendobot/minion.town/pull/41)
++ the git trio and `daemon-agent-tools` push tier), and a confined
+in-guest agent ([endo-claude](endo-claude.md) #1015 + its child-guest
+provisioning #1102) acts with normal tools directly on the daemon side
+rather than marshaling everything across by value.**
 
-**Estimated duration (1 dev):** 4-5 weeks
+**Estimated duration (1 dev):** 4-5 weeks (the two carved client-side
+bridge halves add ~1-1.5 weeks for `endo-claude` — moved here from M6 —
+plus the git-remote endo follow-on, sequenced first)
 
 ---
 
@@ -1081,9 +1143,10 @@ MCP client (Claude Desktop, etc.) with the agent's bearer token +
 the gateway's `/mcp` URL, and the MCP client successfully calls the
 agent's tools.
 
-**Estimated added effort (M6's own MCP-termination work):** ~3-3.5 weeks
-(~2 weeks for `endo-gateway-mcp` per its phase plan, plus ~1-1.5 weeks for the
-constituent [endo-claude](endo-claude.md) design added 2026-08-16, below). The wider
+**Estimated added effort (M6's own MCP-termination work):** ~2 weeks
+(~2 weeks for `endo-gateway-mcp` per its phase plan; the constituent
+[endo-claude](endo-claude.md) design and its ~1-1.5 weeks moved to M3 with the
+2026-09-03 client-side-bridge carve, below). The wider
 shortest-route cut spans ~6-9 weeks across M3's P0 remainder
 (gateway phases 10 and 11, ~2-3 weeks), M5's P3 Stripe adapter
 design + implementation (~1 week), and M5's P4 OAuth bonding + key
@@ -1091,22 +1154,27 @@ recovery designs (~2 weeks design + implementation TBD). M5's P2 AWS
 hosting is gated on the merge cadence of PRs #343 and #356, not on
 fresh design effort.
 
-**Constituent design: the inverse direction ([endo-claude](endo-claude.md), added
-2026-08-16, Not Started).** The P1 slice above wires an *external* LLM client
-(Claude Desktop, Cursor) *into* an Endo agent over the gateway's `/mcp`
-termination (P0 is gateway implementation, P2 AWS hosting, P3 Stripe, P4 OAuth).
-`@endo/claude` is the inverse: a confined `claude -p` that *is* an
-Endo guest's inference engine, reaching only that one guest's facet as its entire
-tool surface. The confinement is a **combination** of Claude Code flags (`--bare`
-alone does not close MCP auto-discovery or settings layers): `--bare` +
-`--strict-mcp-config` + `--setting-sources ""` + `--tools ""` +
-`--disable-slash-commands`, a membership-validated facet-derived
-`mcp__<server>__<tool>` allow-list, never `--resume`, run inside a required
-`@endo/claude-sandbox` OS slice. It consumes the same `@endo/agent-tools` MCP-adapter
-projection this milestone extracts (a prerequisite), so it belongs to M6's MCP-bridge
-cut even though it points the opposite way. Its own concrete minion.town-box
-deployment is a named follow-on design that belongs in `kriscendobot/minion.town`,
-mirroring the two companion designs there.
+**Constituent design: the inverse direction ([endo-claude](endo-claude.md),
+added 2026-08-16) — MOVED to M3 by the 2026-09-03 groom (pointer, not a
+deletion; its priority is raised there, lowered here).** The P1 slice above
+wires an *external* LLM client (Claude Desktop, Cursor) *into* an Endo agent
+over the gateway's `/mcp` termination (P0 is gateway implementation, P2 AWS
+hosting, P3 Stripe, P4 OAuth). `@endo/claude` is the inverse — a confined
+`claude -p` that *is* an Endo guest's inference engine, reaching only that one
+guest's facet as its whole tool surface — and it is now one of the two
+**client-side bridge** capabilities carved at the head of **M3** (with the
+capability-addressed git remote), because its true prerequisite (the
+`@endo/agent-tools` MCP-adapter projection, `endo-agent-tools`) lives in M3, and
+because a 2026-09-02/03 liaison session was fresh, concrete evidence that the
+MCP-daemon-boundary bottleneck it addresses is the first thing to close. See
+M3's "Client-side bridge" block for the full statement, the confinement-flag
+combination, PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015)
+(confinement core) and PR
+[#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (child-guest
+provisioning). Its own concrete minion.town-box deployment remains a named
+follow-on design belonging in `kriscendobot/minion.town`. M6 continues to own
+the *external*-client MCP-termination direction (the P1 slice); only the inverse
+`@endo/claude` direction moved.
 
 ---
 
