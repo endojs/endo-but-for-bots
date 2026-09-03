@@ -91,7 +91,13 @@ fn reentrant_index_reads_preserve_nested_advancement() {
 fn generic_iterator_uses_the_pinned_u32_length_profile() {
     agrees("Array.prototype.keys.call({length:4294967297}).next().done");
     agrees("var r=Array.prototype.values.call({length:4294967297,0:7}).next();r.done+':'+r.value");
+    agrees("var o={length:4294967297,0:7};delete o[0];var r=Array.prototype.values.call(o).next();r.done+':'+r.value");
     agrees("(function(){arguments.length=4294967297;return Array.prototype.keys.call(arguments).next().done})(1)");
+}
+
+#[test]
+fn wide_arguments_fallback_is_exact_before_fractional_error_accumulates() {
+    agrees_exact("var n=0;for(var i=0;i<10;i++){n+=(function(a){arguments.length=4294967297;return Array.prototype.keys.call(arguments).next().done})(1)}n");
 }
 
 #[test]
@@ -112,6 +118,10 @@ fn generic_iterator_advancement_is_computron_exact() {
         "var p=new Proxy(Object('a'),{});Array.prototype.values.call(p).next().value",
         "var p=new Proxy({length:1,0:7},{});Array.prototype.values.call(p).next().value",
         "var p=new Proxy({length:1},{});Array.prototype.keys.call(p).next().value",
+        "var inner=new Proxy({length:1},{}),outer=new Proxy(inner,{get:function(t,k,r){return Reflect.get(t,k,r)}});Array.prototype.keys.call(outer).next().value",
+        "var inner=new Proxy({length:1,0:7},{}),outer=new Proxy(inner,{get:function(t,k,r){return Reflect.get(t,k,r)}});Array.prototype.values.call(outer).next().value",
+        "var inner=new Proxy({length:1},{get:function(t,k,r){return Reflect.get(t,k,r)}}),outer=new Proxy(inner,{});Array.prototype.keys.call(outer).next().value",
+        "var inner=new Proxy({length:1,0:7},{get:function(t,k,r){return Reflect.get(t,k,r)}}),outer=new Proxy(inner,{});Array.prototype.values.call(outer).next().value",
     ] {
         agrees_exact(source);
     }
