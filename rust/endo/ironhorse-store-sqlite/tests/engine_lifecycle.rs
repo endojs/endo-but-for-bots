@@ -215,6 +215,33 @@ fn replace_all_results_survive_sqlite_sleep_cycles() {
     assert_eq!(last, "xy-b-xy:.x.y.-.b.-.x.y.:_x_y_-_b_-_x_y_");
 }
 
+#[test]
+fn string_raw_results_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "string-raw",
+        &[
+            "raw = String.raw({raw:['a','b','c']}, 1, 2); raw",
+            "units = String.raw({raw:['\\ud800']}).charCodeAt(0); units",
+            "raw + ':' + units.toString(16)",
+        ],
+    );
+    assert_eq!(last, "a1b2c:d800");
+}
+
+#[test]
+fn locale_string_results_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "locale-strings",
+        &[
+            "lower = 'Iİ'.toLocaleLowerCase('tr'); lower",
+            "upper = 'iı'.toLocaleUpperCase('tr'); upper",
+            "order = 'a'.localeCompare('Z') < 0; order",
+            "lower + ':' + upper + ':' + order",
+        ],
+    );
+    assert_eq!(last, "ıi:İI:true");
+}
+
 /// Stateful RegExp matching persists a UTF-16 `lastIndex` while its matcher
 /// resumes over XS-style CESU-8, including an astral code point that spans two
 /// code units. The final crank also covers non-ASCII regexp splitting after a

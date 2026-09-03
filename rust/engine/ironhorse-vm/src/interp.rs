@@ -2415,6 +2415,12 @@ pub enum NativeMethod {
     /// `mxMeterSome(count)` plus the result chunk.
     StringToLowerCase,
     StringToUpperCase,
+    /// Locale-aware string casing. The frozen Intl profile uses Unicode
+    /// default casing plus Turkish/Azeri dotted-I specialization.
+    StringToLocaleLowerCase,
+    StringToLocaleUpperCase,
+    /// `String.prototype.localeCompare(that[, locales[, options]])`.
+    StringLocaleCompare,
     /// `String.prototype.normalize([form])`: Unicode NFC/NFD/NFKC/NFKD
     /// normalization over scalar runs, preserving unpaired UTF-16 surrogates.
     StringNormalize,
@@ -2437,6 +2443,9 @@ pub enum NativeMethod {
     /// `String.fromCharCode` / `String.fromCodePoint` constructor statics.
     StringFromCharCode,
     StringFromCodePoint,
+    /// `String.raw(template, ...substitutions)`: concatenate the observable
+    /// `template.raw` array-like segments with the corresponding substitutions.
+    StringRaw,
     /// `String.prototype[Symbol.iterator]()`.
     StringIterator,
     /// `Number.isFinite`/`isInteger`/`isNaN`/`isSafeInteger` (`xsNumber.c`) —
@@ -7557,6 +7566,7 @@ impl Interp {
             for (name, arity, m) in [
                 ("fromCharCode", 1, StringFromCharCode),
                 ("fromCodePoint", 1, StringFromCodePoint),
+                ("raw", 1, StringRaw),
             ] {
                 let mf = self.alloc_named_method(m, name, arity);
                 self.proto_methods.push((ctor, name, mf));
@@ -7577,6 +7587,9 @@ impl Interp {
             ("concat", 1, StringConcat),
             ("toLowerCase", 0, StringToLowerCase),
             ("toUpperCase", 0, StringToUpperCase),
+            ("toLocaleLowerCase", 0, StringToLocaleLowerCase),
+            ("toLocaleUpperCase", 0, StringToLocaleUpperCase),
+            ("localeCompare", 1, StringLocaleCompare),
             ("normalize", 0, StringNormalize),
             ("repeat", 1, StringRepeat),
             ("trim", 0, StringTrim),
@@ -33581,6 +33594,9 @@ impl Interp {
             | NativeMethod::StringConcat
             | NativeMethod::StringToLowerCase
             | NativeMethod::StringToUpperCase
+            | NativeMethod::StringToLocaleLowerCase
+            | NativeMethod::StringToLocaleUpperCase
+            | NativeMethod::StringLocaleCompare
             | NativeMethod::StringNormalize
             | NativeMethod::StringRepeat
             | NativeMethod::StringTrim
@@ -33594,6 +33610,7 @@ impl Interp {
             NativeMethod::StringFromCharCode | NativeMethod::StringFromCodePoint => {
                 self.call_string_static(m, base, argc, code)?
             }
+            NativeMethod::StringRaw => self.call_string_raw(base, argc, code)?,
             NativeMethod::NumberIsFinite
             | NativeMethod::NumberIsInteger
             | NativeMethod::NumberIsNaN
@@ -36525,6 +36542,70 @@ impl Interp {
         Ok(self.new_string_units(&out))
     }
 
+    /// `String.raw(template, ...substitutions)`: convert `template` and its
+    /// live `raw` property to objects, obtain the array-like length through
+    /// `ToLength`, then interleave each observable literal segment with the
+    /// corresponding substitution. All string conversion remains in UTF-16
+    /// units so lone surrogates survive unchanged.
+    fn call_string_raw(
+        &mut self,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<Slot, Halt> {
+        if self
+            .stack
+            .get(base)
+            .is_some_and(|this| this.kind == Kind::Uninitialized)
+        {
+            return Err(self.catchable_type_error());
+        }
+        let template = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let cooked = self.array_to_object(template)?;
+        let Payload::Reference(cooked_inst) = cooked.value else {
+            unreachable!("ToObject returns an object")
+        };
+        let raw_id = self.intern_key("raw");
+        let raw = self.mop_get(code, cooked_inst, raw_id, cooked)?;
+        let raw = self.array_to_object(raw)?;
+        let Payload::Reference(raw_inst) = raw.value else {
+            unreachable!("ToObject returns an object")
+        };
+        let length = self.arraylike_length(code, raw_inst, raw)?;
+        let literal_segments = self.to_length_value(code, length)?;
+        if literal_segments == 0 {
+            return Ok(self.new_string_units(&[]));
+        }
+        const STRING_RAW_SEGMENT_CAP: u64 = 1 << 24;
+        if literal_segments > STRING_RAW_SEGMENT_CAP {
+            return Err(Halt::Unsupported("String.raw:oversized-template"));
+        }
+
+        let substitutions = argc.saturating_sub(1) as u64;
+        let mut out = Vec::new();
+        for index in 0..literal_segments {
+            let id = self.array_generic_index_id(index);
+            let segment = self.mop_get(code, raw_inst, id, raw)?;
+            out.extend_from_slice(&self.to_string_units(code, segment)?);
+            if index + 1 == literal_segments {
+                break;
+            }
+            if index < substitutions {
+                let substitution = self
+                    .stack
+                    .get(base + 5 + index as usize)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                out.extend_from_slice(&self.to_string_units(code, substitution)?);
+            }
+        }
+        Ok(self.new_string_units(&out))
+    }
+
     /// `ToIntegerOrInfinity` followed by the relative-index adjustment used by
     /// `String.prototype.slice`. `undefined` selects `default`; negative finite
     /// values count from the end, and infinities clamp to the corresponding
@@ -36892,6 +36973,44 @@ impl Interp {
                 self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
                 self.meter.tick_builtin_some(ulen as u64);
                 self.new_string_units(&out)
+            }
+            StringToLocaleLowerCase | StringToLocaleUpperCase => {
+                let locale = self.intl_resolve_locale(
+                    code,
+                    argn(0).unwrap_or_else(Slot::undefined),
+                )?;
+                let up = m == StringToLocaleUpperCase;
+                let out = unicode_locale_case_convert_utf16(&content, up, &locale);
+                self.meter.tick_raw(STRING_METERSOME_FRAME_METERING);
+                self.meter.tick_builtin_some(ulen as u64);
+                self.new_string_units(&out)
+            }
+            StringLocaleCompare => {
+                let right = self.to_string_units(
+                    code,
+                    argn(0).unwrap_or_else(Slot::undefined),
+                )?;
+                let locale = self.intl_resolve_locale(
+                    code,
+                    argn(1).unwrap_or_else(Slot::undefined),
+                )?;
+                let mut data = CollatorData {
+                    locale,
+                    usage: "sort".to_string(),
+                    sensitivity: "variant".to_string(),
+                    collation: "default".to_string(),
+                    numeric: false,
+                    case_first: "false".to_string(),
+                    ignore_punctuation: false,
+                };
+                if let Some(options) = self.intl_get_options_object(
+                    argn(2).unwrap_or_else(Slot::undefined),
+                )? {
+                    self.apply_collator_options(code, options, &mut data)?;
+                }
+                let left = String::from_utf16_lossy(&content);
+                let right = String::from_utf16_lossy(&right);
+                Slot::integer(collator_compare(&data, &left, &right))
             }
             // normalize: default to NFC, otherwise coerce `form` after the
             // receiver and accept only the four exact normalization names.
@@ -51386,9 +51505,11 @@ fn collator_compare(data: &CollatorData, left: &str, right: &str) -> i32 {
             right = right.replace(s, replacement);
         }
     }
-    let insensitive = matches!(data.sensitivity.as_str(), "base" | "accent");
-    let left_key = if insensitive { left.to_lowercase() } else { left.clone() };
-    let right_key = if insensitive { right.to_lowercase() } else { right.clone() };
+    // Unicode collation compares case-folded primary weights before applying
+    // the requested case distinction. This keeps ordinary locale ordering
+    // (`"a" < "Z"`) while canonically equivalent strings compare equal.
+    let left_key = left.to_lowercase();
+    let right_key = right.to_lowercase();
     let ordering = if data.numeric {
         numeric_string_cmp(&left_key, &right_key)
     } else {
@@ -52552,6 +52673,45 @@ fn unicode_case_convert_utf16(units: &[u16], upper: bool) -> Vec<u16> {
     }
     flush(&mut scalar_run, &mut out);
     out
+}
+
+/// Apply the locale tailoring required by the frozen Intl profile before the
+/// Unicode whole-string conversion. Turkish and Azeri specialize dotted and
+/// dotless I; every other supported or fallback locale uses default casing.
+fn unicode_locale_case_convert_utf16(
+    units: &[u16],
+    upper: bool,
+    locale: &str,
+) -> Vec<u16> {
+    let language = locale.split('-').next().unwrap_or(locale);
+    if !matches!(language, "tr" | "az") {
+        return unicode_case_convert_utf16(units, upper);
+    }
+    let mut tailored = Vec::with_capacity(units.len());
+    let mut index = 0;
+    while index < units.len() {
+        let unit = units[index];
+        if upper {
+            tailored.push(match unit {
+                0x0069 => 0x0130,
+                0x0131 => 0x0049,
+                _ => unit,
+            });
+        } else if unit == 0x0130 {
+            tailored.push(0x0069);
+        } else if unit == 0x0049 {
+            if units.get(index + 1) == Some(&0x0307) {
+                tailored.push(0x0069);
+                index += 1;
+            } else {
+                tailored.push(0x0131);
+            }
+        } else {
+            tailored.push(unit);
+        }
+        index += 1;
+    }
+    unicode_case_convert_utf16(&tailored, upper)
 }
 
 #[derive(Clone, Copy)]

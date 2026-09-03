@@ -47,9 +47,25 @@ fn constructor_statics_reject_invalid_calls_catchably() {
 #[test]
 fn string_builtins_expose_standard_name_and_length_metadata() {
     for source in [
-        "String.fromCharCode.name+':'+String.fromCharCode.length+':'+String.fromCodePoint.name+':'+String.fromCodePoint.length",
-        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','normalize','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','replaceAll','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
+        "String.fromCharCode.name+':'+String.fromCharCode.length+':'+String.fromCodePoint.name+':'+String.fromCodePoint.length+':'+String.raw.name+':'+String.raw.length",
+        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','toLocaleLowerCase','toLocaleUpperCase','localeCompare','normalize','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','replaceAll','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
         "String.prototype[Symbol.iterator].name+':'+String.prototype[Symbol.iterator].length",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn string_raw_observes_array_like_segments_and_substitutions() {
+    for source in [
+        "String.raw({raw:['a','b','c']},1,2,3)",
+        "String.raw({raw:{length:4,0:'a',1:'b',2:'c',3:'d'}},'x')",
+        "String.raw({raw:{length:'2.9',0:'a',1:'b'}},null)",
+        "String.raw({raw:{length:0,get 0(){throw 1}}})",
+        "var log=[];var template={get raw(){log.push('raw');return {get length(){log.push('length');return 2},get 0(){log.push('0');return 'a'},get 1(){log.push('1');return 'b'}}}};var sub={toString(){log.push('sub');return 'x'}};String.raw(template,sub)+':'+log.join(',')",
+        "var s=String.raw({raw:['\\ud800']});s.charCodeAt(0).toString(16)",
+        "try{String.raw({raw:{length:1,0:Symbol()}});false}catch(e){e instanceof TypeError}",
+        "try{new String.raw({raw:[]});false}catch(e){e instanceof TypeError}",
     ] {
         agrees(source);
     }
@@ -95,6 +111,33 @@ fn unicode_case_conversion_handles_special_contextual_and_astral_mappings() {
         "String.prototype.toUpperCase.call({toString:function(){return 'élan'}})",
     ] {
         agrees(source);
+    }
+}
+
+#[test]
+fn locale_string_operations_use_the_frozen_unicode_profile() {
+    for source in [
+        "'AΣ'.toLocaleLowerCase()",
+        "'Straße'.toLocaleUpperCase()",
+        "try{String.prototype.toLocaleLowerCase.call(null);false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+    // The pinned XS build applies only its default locale. IronHorse's frozen
+    // Intl profile deliberately supports Turkish tailoring, so assert that
+    // standards behavior on the IronHorse side without treating XS as oracle.
+    for (source, expected) in [
+        ("'Iİ'.toLocaleLowerCase('tr')", "ıi"),
+        ("'iı'.toLocaleUpperCase('tr')", "İI"),
+        ("'a'.localeCompare('Z') < 0", "true"),
+        ("'o\\u0308'.localeCompare('ö')", "0"),
+        ("'2'.localeCompare('10','en',{numeric:true}) < 0", "true"),
+        ("var log=[];var right={toString(){log.push('right');return 'b'}};var locale={toString(){log.push('locale');return 'en'}};'a'.localeCompare(right,locale)+':'+log.join(',')", "-1:right,locale"),
+        ("try{'a'.localeCompare('b','not_a_locale');false}catch(e){e instanceof RangeError}", "true"),
+    ] {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert_eq!(run.agreement, Agreement::BothComplete);
+        assert_eq!(run.ironhorse_result, expected);
     }
 }
 
