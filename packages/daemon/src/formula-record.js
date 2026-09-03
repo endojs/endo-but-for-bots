@@ -231,13 +231,13 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       break;
     }
     case 'invitation': {
-      properties.hostAgent = {
+      properties.invitingAgent = {
         kind: 'reference',
-        identifier: formula.hostAgent,
+        identifier: formula.invitingAgent,
       };
-      properties.hostHandle = {
+      properties.invitingHandle = {
         kind: 'reference',
-        identifier: formula.hostHandle,
+        identifier: formula.invitingHandle,
       };
       properties.guestName = { kind: 'literal', value: formula.guestName };
       break;

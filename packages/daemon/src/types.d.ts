@@ -220,6 +220,11 @@ export type GuestFormula = {
   worker: FormulaIdentifier;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
+  /**
+   * The guest's own pin directory (`@pins`). Optional for backward
+   * compatibility with guest formulas persisted before guests gained one.
+   */
+  pins?: FormulaIdentifier;
 };
 
 export type LeastAuthorityFormula = {
@@ -633,8 +638,15 @@ export type ChannelMessage = {
 
 export type InvitationFormula = {
   type: 'invitation';
-  hostAgent: FormulaIdentifier;
-  hostHandle: FormulaIdentifier;
+  /**
+   * The inviting `EndoAgent` — an `EndoHost` (via `EndoHost.invite`) or an
+   * `EndoGuest` (via `EndoGuest.invite`). Network mediation is not drawn from
+   * this agent; the daemon supplies it internally (see `makeInvitation`), so a
+   * guest inviter gains no network authority.
+   */
+  invitingAgent: FormulaIdentifier;
+  /** The inviting agent's handle, which the locator's `from` names. */
+  invitingHandle: FormulaIdentifier;
   guestName: NameOrPath;
 };
 
@@ -783,6 +795,12 @@ export interface Invitation {
     hostNameFromGuest?: string,
   ): Promise<{ syncedStoreNumber: FormulaNumber }>;
   locate(): Promise<string>;
+  /**
+   * Revoke this pending, unaccepted invitation through the object itself.
+   * Single-use: a no-op once the invitation has been accepted, and it revokes
+   * exactly this invitation, leaving any sibling invitation redeemable.
+   */
+  cancel(reason?: Error): Promise<void>;
 }
 
 export interface Topic<
@@ -1554,6 +1572,16 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+  /**
+   * Mint a single-use invitation whose locator's `from` names this guest's
+   * handle, so an acceptor binds this guest (not the top host) under its chosen
+   * pet name. Acceptance stores the acceptor's handle in this guest's pet store
+   * under `guestName`. Network mediation runs through an internal daemon broker;
+   * this call confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
+   * enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
+   * implementation.
+   */
+  invite(guestName: string | string[]): Promise<Invitation>;
 }
 
 export type FarEndoGuest = FarRef<EndoGuest>;
@@ -2460,6 +2488,7 @@ type FormulateNumberedGuestParams = {
   workerId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
+  pinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
 
@@ -2742,8 +2771,8 @@ export interface DaemonCore {
   ) => FormulateResult<GitRemote>;
 
   formulateInvitation: (
-    hostAgentId: FormulaIdentifier,
-    hostHandleId: FormulaIdentifier,
+    invitingAgentId: FormulaIdentifier,
+    invitingHandleId: FormulaIdentifier,
     guestName: NameOrPath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;

@@ -126,7 +126,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -741,6 +741,13 @@ const makeDaemonCore = async (
           ['worker', formula.worker],
           ['networks', formula.networks],
           ['planes', formula.planes],
+          // `pins` may be absent on a guest formula persisted before guests
+          // gained their own pin directory; omit the edge when it is.
+          ...(formula.pins
+            ? /** @type {Array<[string, FormulaIdentifier]>} */ ([
+                ['pins', formula.pins],
+              ])
+            : []),
         ];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
@@ -854,8 +861,8 @@ const makeDaemonCore = async (
         return [['petStore', formula.petStore]];
       case 'invitation':
         return [
-          ['hostAgent', formula.hostAgent],
-          ['hostHandle', formula.hostHandle],
+          ['invitingAgent', formula.invitingAgent],
+          ['invitingHandle', formula.invitingHandle],
         ];
       default:
         return [];
@@ -3599,6 +3606,7 @@ const makeDaemonCore = async (
         worker: workerId,
         networks: networksDirectoryId,
         planes: planesDirectoryId,
+        pins: pinsDirectoryId,
       } = formula;
 
       if (mailHubId === undefined) {
@@ -3634,6 +3642,7 @@ const makeDaemonCore = async (
         workerId,
         networksDirectoryId,
         planesDirectoryId,
+        pinsDirectoryId,
         context,
       );
       const handle = /** @type {any} */ (agent).handle();
@@ -4137,6 +4146,7 @@ const makeDaemonCore = async (
             storeValue: disallowedFn,
             submit: disallowedFn,
             sendValue: disallowedFn,
+            invite: disallowedFn,
             deliver: disallowedSyncFn,
             editMessage: disallowedFn,
             messageHistory: disallowedFn,
@@ -4194,7 +4204,7 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       makePeer(networksId, nodeId, addressesId, context),
     invitation: (
-      { hostAgent: hostAgentId, hostHandle: hostHandleId, guestName },
+      { invitingAgent: invitingAgentId, invitingHandle: invitingHandleId, guestName },
       _context, // eslint-disable-line no-underscore-dangle
       id,
     ) =>
@@ -4202,8 +4212,8 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       makeInvitation(
         id,
-        hostAgentId,
-        hostHandleId,
+        invitingAgentId,
+        invitingHandleId,
         /** @type {import('./types.js').NameOrPath} */ (guestName),
       ),
     timer: async ({ intervalMs, label: timerLabel }, context) => {
@@ -4926,14 +4936,20 @@ const makeDaemonCore = async (
   };
 
   /**
-   * @param {FormulaIdentifier} hostAgentId
-   * @param {FormulaIdentifier} hostHandleId
+   * Formulate an invitation minted by an inviting `EndoAgent`. The agent may be
+   * an `EndoHost` (via `EndoHost.invite`) or an `EndoGuest` (via
+   * `EndoGuest.invite`); the resulting invitation's locator `from` names the
+   * inviting agent's handle, and network mediation is supplied internally by the
+   * daemon (see `makeInvitation`), never drawn from the inviting agent, so a
+   * guest inviter gains no network authority.
+   * @param {FormulaIdentifier} invitingAgentId
+   * @param {FormulaIdentifier} invitingHandleId
    * @param {NameOrPath} guestName
    * @param {DeferredTasks<InvitationDeferredTaskParams>} deferredTasks
    */
   const formulateInvitation = async (
-    hostAgentId,
-    hostHandleId,
+    invitingAgentId,
+    invitingHandleId,
     guestName,
     deferredTasks,
   ) => {
@@ -4953,8 +4969,8 @@ const makeDaemonCore = async (
         /** @type {InvitationFormula} */
         const formula = {
           type: 'invitation',
-          hostAgent: hostAgentId,
-          hostHandle: hostHandleId,
+          invitingAgent: invitingAgentId,
+          invitingHandle: invitingHandleId,
           guestName,
         };
 
@@ -5552,6 +5568,12 @@ const makeDaemonCore = async (
     const planesDirectoryId = pin(
       (await formulateDirectory(agentNodeNumber)).id,
     );
+    // A guest-scoped pin directory, the guest's own `@pins`. It mirrors the
+    // host's `@pins` so the shared invite/accept path can durably retain the
+    // local guest handle it creates, but it is the guest's own directory (not
+    // the daemon's root pins), so it confers no host authority and survives a
+    // restart through the guest's normal retention graph.
+    const pinsDirectoryId = pin((await formulateDirectory(agentNodeNumber)).id);
     return harden({
       guestFormulaNumber,
       guestId,
@@ -5565,6 +5587,7 @@ const makeDaemonCore = async (
       workerId,
       networksDirectoryId,
       planesDirectoryId,
+      pinsDirectoryId,
       pinned,
     });
   };
@@ -5583,6 +5606,7 @@ const makeDaemonCore = async (
       worker: identifiers.workerId,
       networks: identifiers.networksDirectoryId,
       planes: identifiers.planesDirectoryId,
+      pins: identifiers.pinsDirectoryId,
     };
 
     return /** @type {FormulateResult<EndoGuest>} */ (
@@ -6645,13 +6669,58 @@ const makeDaemonCore = async (
   };
 
   /**
+   * The internal network authority for invitations. An invitation minted by an
+   * `EndoGuest` cannot reach the daemon's network powers itself — a guest has no
+   * `getPeerInfo`/`addPeerInfo` and its own `@nets` directory is empty. Rather
+   * than widen the guest, the daemon mediates the only two network operations
+   * minting and redeeming an invitation require — reading this daemon's own
+   * advertised peer info, and registering the accepting peer — through this
+   * narrow broker. It is resolved here, inside daemon-core code, from the root
+   * `endo` bootstrap's network-owning host; both are root formulas, so the
+   * result is identical for every inviting agent (all agents on one daemon share
+   * one node identity, one networks directory, and one known-peers store). The
+   * broker is closed over only by the daemon-incarnated invitation exo and is
+   * never returned to the inviting agent, so a guest inviter receives no
+   * `getPeerInfo`, `addPeerInfo`, host facet, peer enumeration, or outbound
+   * dialing surface — only the invitation's own `locate`/`cancel`/`accept`.
+   */
+  const endoBootstrapId = formatId({
+    number: /** @type {FormulaNumber} */ (rootEntropy),
+    node: localNodeNumber,
+  });
+  const makeInvitationNetworkBroker = async () => {
+    const endoBootstrap = /** @type {FarRef<EndoBootstrap>} */ (
+      await provide(endoBootstrapId)
+    );
+    const networkHost = /** @type {EndoHost} */ (await E(endoBootstrap).host());
+    return harden({
+      /** @type {EndoHost['getPeerInfo']} */
+      getPeerInfo: () => E(networkHost).getPeerInfo(),
+      /** @type {EndoHost['addPeerInfo']} */
+      addPeerInfo: peerInfo => E(networkHost).addPeerInfo(peerInfo),
+    });
+  };
+
+  /**
    * @param {FormulaIdentifier} id
-   * @param {FormulaIdentifier} hostAgentId
-   * @param {FormulaIdentifier} hostHandleId
+   * @param {FormulaIdentifier} invitingAgentId - the inviting `EndoAgent`; an
+   *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
+   * @param {FormulaIdentifier} invitingHandleId - the inviting agent's handle,
+   *   which the locator's `from` names, so an acceptor binds that agent.
    * @param {import('./types.js').NameOrPath} guestName
    */
-  const makeInvitation = async (id, hostAgentId, hostHandleId, guestName) => {
-    const hostAgent = /** @type {EndoHost} */ (await provide(hostAgentId));
+  const makeInvitation = async (
+    id,
+    invitingAgentId,
+    invitingHandleId,
+    guestName,
+  ) => {
+    const invitingAgent = /** @type {EndoAgent} */ (
+      await provide(invitingAgentId)
+    );
+    // Network mediation goes through the internal broker, never the inviting
+    // agent, so the same implementation serves a host or a guest inviter.
+    const networkBroker = await makeInvitationNetworkBroker();
     // The invitation persists the name (or directory path) the redeemed
     // guest should be stored under.  The durable mail-delivery name takes
     // the full path; the pin and label use the leaf pet name.
@@ -6659,9 +6728,9 @@ const makeDaemonCore = async (
     const guestLeaf = guestNamePath[guestNamePath.length - 1];
 
     const locate = async () => {
-      const { node, addresses } = await hostAgent.getPeerInfo();
+      const { node, addresses } = await networkBroker.getPeerInfo();
       const { number: hostHandleNumber, node: hostHandleNode } =
-        parseId(hostHandleId);
+        parseId(invitingHandleId);
       const { number } = parseId(id);
       // Build path with `@`-delimited URL-encoded components: the first
       // component is the invitation's formula number, and subsequent
@@ -6686,6 +6755,21 @@ const makeDaemonCore = async (
      *   pet stores; now unused but retained for protocol compatibility.
      */
     const accept = async (guestHandleLocator, _hostNameFromGuest) => {
+      // Single-use, deterministic and restart-durable: a pending invitation is
+      // retained by its `guestName` slot, which still names this invitation.
+      // Acceptance rebinds that slot to the accepted handle and `cancel()` frees
+      // it, so a slot that no longer names this invitation means it has already
+      // been consumed or cancelled.  This rejects a replay before any side
+      // effect, independent of when the collected formula's record is reaped
+      // (cancelling the controller alone does not delete the persisted record,
+      // so a re-provide would otherwise reincarnate a spent invitation).
+      const currentSlot = await E(invitingAgent).identify(...guestNamePath);
+      if (currentSlot !== id) {
+        throw makeError(
+          'Invitation has already been accepted, cancelled, or superseded',
+        );
+      }
+
       const url = new URL(guestHandleLocator);
       // Path components are `@`-delimited and URL-encoded.  The first
       // component is the handle's formula address; the rest are
@@ -6721,11 +6805,12 @@ const makeDaemonCore = async (
         node: guestDaemonNode,
         addresses,
       };
-      await hostAgent.addPeerInfo(peerInfo);
+      await networkBroker.addPeerInfo(peerInfo);
 
-      // TODO ensure that this is sufficient to cancel the previous
-      // incarnation, this invitation, such that it can no longer be redeemed,
-      // and such that overwriting the invitation also revokes the invitation.
+      // Consume the invitation once, before binding, so a replayed locator
+      // cannot redeem it a second time: cancelling this invitation's own
+      // controller revokes the pending formula.  `cancel()` below routes to the
+      // same revocation through the value already in hand.
       await withFormulaGraphLock();
       const controller = provideController(id);
       await controller.context.cancel(new Error('Invitation accepted'));
@@ -6736,8 +6821,8 @@ const makeDaemonCore = async (
       const guestTasks = makeDeferredTasks();
       guestTasks.push(async identifiers => pinTransient(identifiers.handleId));
       const { id: localGuestId } = await formulateGuest(
-        hostAgentId,
-        hostHandleId,
+        invitingAgentId,
+        invitingHandleId,
         guestTasks,
         `guest:${guestLeaf}`,
       );
@@ -6750,7 +6835,7 @@ const makeDaemonCore = async (
       );
 
       // Name the guest handle inside @pins so it persists.
-      await E(hostAgent).storeIdentifier(
+      await E(invitingAgent).storeIdentifier(
         /** @type {NamePath} */ (['@pins', `guest-${guestLeaf}`]),
         localGuestFormula.handle,
       );
@@ -6760,13 +6845,41 @@ const makeDaemonCore = async (
       // Use storeLocator so the directory properly internalizes the
       // remote formula identifier for peer resolution.
       const guestHandleLocatorStr = formatLocator(guestHandleId, 'remote');
-      await E(hostAgent).storeLocator(guestNamePath, guestHandleLocatorStr);
+      await E(invitingAgent).storeLocator(guestNamePath, guestHandleLocatorStr);
 
       // Return the remote guest's public key for retention tracking.
       return harden({ guestPublicKey: guestDaemonNode });
     };
 
-    return makeExo('Invitation', InvitationInterface, { accept, locate });
+    /**
+     * Revoke this pending, unaccepted invitation through the invitation object
+     * in hand.  The invitation formula is retained by the `guestName` slot in
+     * the inviting agent's pet store, so revocation frees that slot — but only
+     * while it still names *this* invitation, so that a sibling invitation and
+     * an already-accepted binding (which `accept` rebinds the slot to) are both
+     * left intact — and then cancels this invitation's own controller.  Once the
+     * retaining reference is gone and the controller cancelled, the formula is
+     * collected and can no longer be redeemed.  Revokes exactly this invitation;
+     * an idempotent no-op once accepted.
+     * @param {Error} [reason]
+     */
+    const cancelInvitation = async (
+      reason = makeError('Invitation cancelled'),
+    ) => {
+      const current = await E(invitingAgent).identify(...guestNamePath);
+      if (current === id) {
+        await E(invitingAgent).remove(...guestNamePath);
+      }
+      await withFormulaGraphLock();
+      const controller = provideController(id);
+      await controller.context.cancel(reason);
+    };
+
+    return makeExo('Invitation', InvitationInterface, {
+      accept,
+      locate,
+      cancel: cancelInvitation,
+    });
   };
 
   const makeContext = makeContextMaker({
@@ -6821,6 +6934,7 @@ const makeDaemonCore = async (
     formulateEval,
     formulateReadableBlob,
     formulateMarshalValue,
+    formulateInvitation,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,

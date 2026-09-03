@@ -24,6 +24,7 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -40,6 +41,7 @@ export const makeGuestMaker = ({
   formulateEval,
   formulateReadableBlob,
   formulateMarshalValue,
+  formulateInvitation,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -62,6 +64,7 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} planesDirectoryId
+   * @param {FormulaIdentifier | undefined} pinsDirectoryId
    * @param {Context} context
    */
   const makeGuest = async (
@@ -76,6 +79,7 @@ export const makeGuestMaker = ({
     mainWorkerId,
     networksDirectoryId,
     planesDirectoryId,
+    pinsDirectoryId,
     context,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
@@ -88,6 +92,9 @@ export const makeGuestMaker = ({
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(networksDirectoryId);
     context.thisDiesIfThatDies(planesDirectoryId);
+    if (pinsDirectoryId !== undefined) {
+      context.thisDiesIfThatDies(pinsDirectoryId);
+    }
 
     const baseController = await provideStoreController(petStoreId);
     const mailboxController = await provideStoreController(mailboxStoreId);
@@ -101,6 +108,12 @@ export const makeGuestMaker = ({
     }
     specialNames['@nets'] = networksDirectoryId;
     specialNames['@planes'] = planesDirectoryId;
+    // A guest's own `@pins`, present on guests formulated after guests gained a
+    // pin directory. It backs durable retention (e.g. the local guest handle the
+    // invite/accept path creates) without conferring the daemon's root pins.
+    if (pinsDirectoryId !== undefined) {
+      specialNames['@pins'] = pinsDirectoryId;
+    }
     const specialStore = makePetSitter(baseController, specialNames);
 
     const getNetworkAddresses = () =>
@@ -336,6 +349,36 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
+    /**
+     * Mint a single-use invitation owned by this guest. This shares
+     * `EndoHost.invite`'s implementation (`formulateInvitation`): the resulting
+     * invitation's locator `from` names *this guest's* handle, so an acceptor
+     * binds this guest rather than the top host. The invitation id is retained
+     * under `guestName` in this guest's own pet store so it survives a restart,
+     * and acceptance overwrites that slot with the accepted handle (consume
+     * once). Network mediation is supplied internally by the daemon inside the
+     * invitation formula, so this call hands the guest no `getPeerInfo`,
+     * `addPeerInfo`, host facet, peer enumeration, or outbound-dialing surface.
+     * @param {NameOrPath} guestName
+     */
+    const invite = async guestName => {
+      const { namePath, petName: guestPetName } = petNamePathFrom(guestName);
+      /** @type {DeferredTasks<import('./types.js').InvitationDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        namePath.length === 1
+          ? specialStore.storeIdentifier(guestPetName, identifiers.invitationId)
+          : E(directory).storeIdentifier(namePath, identifiers.invitationId),
+      );
+      const { value } = await formulateInvitation(
+        guestId,
+        handleId,
+        guestName,
+        tasks,
+      );
+      return value;
+    };
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -392,6 +435,7 @@ export const makeGuestMaker = ({
       storeValue,
       submit,
       sendValue,
+      invite,
     };
 
     return makeExo(
