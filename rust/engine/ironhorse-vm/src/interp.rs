@@ -15759,6 +15759,14 @@ impl Interp {
                                     }
                                     pc = body_start;
                                 }
+                                Err(Halt::Resume(target))
+                                    if self.call_stack.len() < return_depth =>
+                                {
+                                    return Halt::Resume(target);
+                                }
+                                Err(Halt::Resume(target)) => {
+                                    pc = target;
+                                }
                                 Err(h) => return h,
                             },
                         }
@@ -28819,8 +28827,9 @@ impl Interp {
     /// Dispatch `native.apply(thisArg, argsArray)` or a bound receiver without
     /// entering a bytecode frame — the `.apply` analog of
     /// [`Self::call_dot_call_native`]. An ordinary user function returns
-    /// `Ok(false)` for the in-place trampoline. Bound receivers additionally
-    /// accept every modeled array-like shape through `CreateListFromArrayLike`.
+    /// `Ok(false)` for the in-place trampoline. Every native, native-method,
+    /// and bound receiver accepts modeled array-like shapes through
+    /// `CreateListFromArrayLike`.
     fn call_dot_apply_native(
         &mut self,
         base: usize,
@@ -28847,10 +28856,8 @@ impl Interp {
             .copied()
             .unwrap_or_else(Slot::undefined);
         // Expand the arguments array (arg 1 of `.apply`) into the forwarded
-        // slice — the same dense-only reading as the user-receiver path. A
-        // sparse array or a non-array object is not yet forwarded: return
-        // `Ok(false)` so `enter_call_dot_apply` self-names it rather than
-        // dropping arguments silently.
+        // slice. A dense intrinsic Array retains the calibrated bulk path;
+        // every other object takes observable CreateListFromArrayLike reads.
         let arg_array = self.stack.get(base + 5).copied();
         let (forwarded, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
@@ -28860,12 +28867,8 @@ impl Interp {
                 // Reads route through the counted-accessor view (the
                 // seam's bulk-table discipline); no counts move.
                 if (0..len).any(|i| !data.items().contains_key(&i)) {
-                    if is_bound {
-                        let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
-                        (args, 0)
-                    } else {
-                        return Ok(false);
-                    }
+                    let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
+                    (args, 0)
                 } else {
                     let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                     let meter =
@@ -28873,11 +28876,10 @@ impl Interp {
                     (args, meter)
                 }
             }
-            Some((Kind::Reference, _)) | Some((Kind::Instance, _)) if is_bound => {
+            Some((Kind::Reference, _)) | Some((Kind::Instance, _)) => {
                 (self.arraylike_to_vec(code, arg_array.unwrap())?, 0)
             }
-            Some(_) if is_bound => return Err(self.catchable_type_error()),
-            _ => return Ok(false),
+            Some(_) => return Err(self.catchable_type_error()),
         };
         let forwarded_len = forwarded.len();
         self.stack.truncate(base);
@@ -28930,14 +28932,14 @@ impl Interp {
             .get(base)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        match f.value {
+        let callee = match f.value {
             Payload::Reference(r)
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => {}
+                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => r,
             _ => return Err(Halt::Unsupported("call:non-user-function-receiver")),
-        }
+        };
         let this_arg = self
             .stack
             .get(base + 4)
@@ -28967,16 +28969,21 @@ impl Interp {
         }
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + n as u64 * CALL_TRAMPOLINE_PER_ARG);
-        self.enter_call(n, ret_pc, false)
+        let body_start = self.enter_call(n, ret_pc, false)?;
+        let callee_segment = self.callee_segment(callee);
+        if callee_segment != self.active_segment {
+            let result = self.dispatch_entered_cross_segment(body_start, callee_segment)?;
+            self.push(result);
+            Ok(ret_pc)
+        } else {
+            Ok(body_start)
+        }
     }
 
-
-
-    /// `Function.prototype.apply` (no-array subset): invoke the receiver with
-    /// the rebound `this` and **no** arguments — the case where the arguments
-    /// array is absent, `undefined`, or `null`. An actual arguments array (a
-    /// reference) self-names: reading its elements is child-3 Array machinery.
-    /// Identical to `call` with zero arguments (same trampoline, same meter).
+    /// `Function.prototype.apply` trampoline for a user-function receiver:
+    /// read the nullable array-like argument list, reshape the frame, and enter
+    /// the receiver's body with the rebound `this`. A function retained from a
+    /// prior crank is synchronously driven over its defining code segment.
     fn enter_call_dot_apply(
         &mut self,
         base: usize,
@@ -28991,14 +28998,14 @@ impl Interp {
             .get(base)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        match f.value {
+        let callee = match f.value {
             Payload::Reference(r)
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => {}
+                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => r,
             _ => return Err(Halt::Unsupported("apply:non-user-function-receiver")),
-        }
+        };
         let this_arg = self
             .stack
             .get(base + 4)
@@ -29010,8 +29017,8 @@ impl Interp {
         // the no-array subset (zero args). A **dense** Array instance forwards
         // its elements as the call arguments (XS reads `length` then each
         // element). A non-array object (an array-like / `arguments`) or a
-        // sparse array (holes read through the prototype) self-names — XS's
-        // `mxGetIndex` walk through a hole is not yet modeled.
+        // sparse array uses CreateListFromArrayLike so holes read through the
+        // prototype and accessor failures propagate.
         let arg_array = self.stack.get(base + 5).copied();
         let (real_args, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
@@ -29019,16 +29026,18 @@ impl Interp {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 // Dense only: every index in `[0, length)` must be a present
-                // element (no holes), else the read walks the prototype.
+                // compact element. A hole or materialized accessor needs the
+                // observable property path.
                 if (0..len).any(|i| !data.items().contains_key(&i)) {
-                    return Err(Halt::Unsupported("apply:sparse-arguments-array"));
+                    (self.arraylike_to_vec(code, arg_array.unwrap())?, 0)
+                } else {
+                    let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
+                    // The array path's fixed setup plus the per-element read +
+                    // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
+                    let meter = APPLY_ARRAY_BASE_METERING
+                        + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                    (args, meter)
                 }
-                let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
-                // The array path's fixed setup plus the per-element read +
-                // forwarding (`mxGetID(_length)` + `mxGetIndex(i)` + copy).
-                let meter =
-                    APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
-                (args, meter)
             }
             // A non-dense-array **object** argArray (array-like / `arguments` /
             // sparse array): `CreateListFromArrayLike` (ECMA-262 7.3.18) reads
@@ -29060,7 +29069,15 @@ impl Interp {
         // already folded into [`APPLY_ARRAY_PER_ELEMENT_METERING`].
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
-        self.enter_call(n, ret_pc, false)
+        let body_start = self.enter_call(n, ret_pc, false)?;
+        let callee_segment = self.callee_segment(callee);
+        if callee_segment != self.active_segment {
+            let result = self.dispatch_entered_cross_segment(body_start, callee_segment)?;
+            self.push(result);
+            Ok(ret_pc)
+        } else {
+            Ok(body_start)
+        }
     }
 
     /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
@@ -47236,13 +47253,16 @@ impl Interp {
         i: u64,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
+        if let Some(item) = self
+            .arrays
+            .get(&inst)
+            .and_then(|array| array.items().get(&(i as u32)).copied())
+        {
+            return Ok(self.array_item_value(inst, item));
+        }
         if self.arrays.contains_key(&inst) {
-            return Ok(self
-                .arrays
-                .get(&inst)
-                .and_then(|a| a.items().get(&(i as u32)).copied())
-                .map(|s| Slot::of(s.kind, s.value))
-                .unwrap_or_else(Slot::undefined));
+            let id = self.intern_key(&i.to_string());
+            return self.mop_get(code, inst, id, receiver);
         }
         if let Some(Slot {
             kind: Kind::String,
