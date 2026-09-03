@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-15 |
-| **Updated** | 2026-02-24 |
+| **Updated** | 2026-09-03 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
@@ -53,7 +53,7 @@ priority.
 | Network | `daemon-capability-network.md` | Data exfiltration, C2 channels, SSRF | Planned |
 | Git operations | `daemon-capability-git.md` | Persistence via hooks, unauthorized pushes | Planned |
 | Environment variables | `daemon-capability-env.md` | Credential theft via env inspection | Planned |
-| Credential store | `daemon-capability-credentials.md` | Secret leakage across tenants | Planned |
+| Credential store | [`daemon-capability-credentials.md`](daemon-capability-credentials.md) | Secret leakage across tenants | Proposed |
 | User I/O | `daemon-capability-userio.md` | Clipboard harvesting, social engineering | Planned |
 | Timer / scheduling | `daemon-capability-timer.md` | Autonomous persistent scheduling | Planned |
 | Delegates / epithets | [`daemon-capability-persona.md`](daemon-capability-persona.md) | Impersonation, undisclosed AI activity, unverifiable delegation | Draft |
