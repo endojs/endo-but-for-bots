@@ -48,7 +48,7 @@ fn constructor_statics_reject_invalid_calls_catchably() {
 fn string_builtins_expose_standard_name_and_length_metadata() {
     for source in [
         "String.fromCharCode.name+':'+String.fromCharCode.length+':'+String.fromCodePoint.name+':'+String.fromCodePoint.length",
-        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','normalize','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
+        "var n=['charCodeAt','codePointAt','charAt','at','slice','substring','indexOf','lastIndexOf','includes','startsWith','endsWith','concat','toLowerCase','toUpperCase','normalize','repeat','trim','padStart','padEnd','isWellFormed','toWellFormed','match','search','replace','replaceAll','split'];n.map(function(k){return String.prototype[k].name+':'+String.prototype[k].length}).join('|')",
         "String.prototype[Symbol.iterator].name+':'+String.prototype[Symbol.iterator].length",
     ] {
         agrees(source);
@@ -388,4 +388,66 @@ fn replace_handles_regexp_functions_and_global_collection() {
     ] {
         agrees(source);
     }
+}
+
+#[test]
+fn replace_all_handles_plain_empty_and_functional_replacements() {
+    for source in [
+        "'aaab a a aac'.replaceAll('aa', 'z')",
+        "'aaaaa'.replaceAll('aa', 'x')",
+        "'abc'.replaceAll('', '-')",
+        "''.replaceAll('', 'x')",
+        "(String.fromCodePoint(0x1F600)).replaceAll('', '-').split('').map(function(c){return c.charCodeAt(0).toString(16)}).join(',')",
+        "'ababa'.replaceAll('a', \"[$&][$`][$'][$$][$1]\")",
+        "var seen=[];var r='aXa'.replaceAll('a',function(m,p,s){seen.push(m,p,s);return p});r+':'+seen.join('|')",
+        "var called=0;var f=function(){called++;return 'x'};'abc'.replaceAll('z',f)+':'+called",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn replace_all_validates_regexp_and_observes_protocol_order() {
+    for source in [
+        "'a1a2'.replaceAll(/a/g, 'x')",
+        "typeof RegExp.prototype[Symbol.replace]+':'+RegExp.prototype[Symbol.replace].name+':'+RegExp.prototype[Symbol.replace].length",
+        "/a/g[Symbol.replace]('aa', 'x')",
+        "var called=0;class RE extends RegExp {[Symbol.replace](...args){called++;return super[Symbol.replace](...args)}};var r=new RE('a','g');'aa'.replaceAll(r,'x')+':'+called+':'+(Object.getPrototypeOf(r)===RE.prototype)",
+        "try { 'aa'.replaceAll(/a/, 'x'); false } catch (e) { e instanceof TypeError }",
+        "var log=[];var recv={toString:function(){log.push('this');return 'aba'}};var search={toString:function(){log.push('search');return 'a'}};var repl={toString:function(){log.push('repl');return 'x'}};String.prototype.replaceAll.call(recv,search,repl)+':'+log.join(',')",
+        "var search={flags:'g',[Symbol.match]:true,[Symbol.replace]:function(s,r){return this===search&&s==='x'&&r===7}};String.prototype.replaceAll.call('x',search,7)",
+        "var r=/x/g;Object.defineProperty(r,Symbol.replace,{value:undefined});'x /x/g /x/g'.replaceAll(r,'z')",
+        "var marker={};var search={[Symbol.match]:true,get flags(){throw marker}};try{'x'.replaceAll(search,'y');false}catch(e){e===marker}",
+        "var marker={};var search={[Symbol.match]:false,get [Symbol.replace](){throw marker}};try{'x'.replaceAll(search,'y');false}catch(e){e===marker}",
+        "try { String.prototype.replaceAll.call(null, 'x', 'y'); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn regexp_symbol_replace_observes_generic_exec_results() {
+    for source in [
+        "var n=0;var r={flags:'g',lastIndex:9,exec:function(){n++;return n===1?{length:3,0:'b',1:'x',2:undefined,index:1,groups:{name:'N'}}:null}};RegExp.prototype[Symbol.replace].call(r,'abc','$1-$2-$<name>')+':'+r.lastIndex+':'+n",
+        "var n=0;var r=/./;r.exec=function(){return {get length(){n++;return 2},get 0(){n++;return 'a'},get index(){n++;return 0},get 1(){n++;return 7},get groups(){n++;return undefined}}};r[Symbol.replace]('ab','$1')+':'+n",
+        "var args;var r=/./;r.exec=function(){return []};r[Symbol.replace]('foo',function(){args=[].slice.call(arguments)});args.map(String).join('|')",
+        "var r=/./;r.exec=function(){return {length:1,0:'b',index:1,groups:'123'}};r[Symbol.replace]('ab','[$<length>]')",
+        "var n=0;var r=/./g;r.exec=function(){n++;return n===1?{length:1,0:0,index:1}:n===2?{length:1,0:0,index:3}:null};r[Symbol.replace]('abcde','X')+':'+n",
+        "var n=0;var r=/^|\\udf06/g;Object.defineProperty(r,'unicode',{value:true});var s=r[Symbol.replace]('\\ud834\\udf06',function(){n++;return 'X'});s.split('').map(function(c){return c.charCodeAt(0).toString(16)}).join(',')+':'+n",
+        "var marker={};var r=/./;Object.defineProperty(r,'flags',{get:function(){throw marker}});try{r[Symbol.replace]('x','');false}catch(e){e===marker}",
+        "var marker={};var r=/./;r.exec=function(){return {length:2,0:'x',index:0,get 1(){throw marker}}};try{r[Symbol.replace]('x','');false}catch(e){e===marker}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn regexp_symbol_replace_uses_current_result_access_order() {
+    // Current ECMA-262 reads result length, matched text, index, captures, and
+    // groups in that order. Pinned XS reads index before length, so this is an
+    // intentional standards-convergence assertion rather than an oracle gate.
+    let source = "var log=[];var r=/./;r.exec=function(){return {get length(){log.push('length');return 2},get 0(){log.push('match');return 'a'},get index(){log.push('index');return 0},get 1(){log.push('capture');return 7},get groups(){log.push('groups');return undefined}}};r[Symbol.replace]('ab','$1')+':'+log.join(',')";
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert_eq!(run.ironhorse_result, "7b:length,match,index,capture,groups");
 }

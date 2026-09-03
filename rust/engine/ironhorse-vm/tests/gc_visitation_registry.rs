@@ -273,6 +273,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("generator_proto", &[Req::GcRoots], "boot anchor"),
     ("async_function_proto", &[Req::GcRoots], "boot anchor"),
     ("regexp_proto", &[Req::GcRoots], "boot anchor"),
+    ("regexp_replace_method", &[Req::GcRoots], "lazy well-known boot method"),
     ("iterator_proto", &[Req::GcRoots], "boot anchor (llm Iterator global, 2026-08-28 rebase)"),
     ("iterator_wrapper_proto", &[Req::GcRoots], "boot anchor (%WrapForValidIteratorPrototype%)"),
     ("map_iterator_proto", &[Req::GcRoots], "boot anchor (llm Map/Set iterator protos)"),

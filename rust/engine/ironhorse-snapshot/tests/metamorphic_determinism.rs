@@ -252,7 +252,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // generation 9. Boot-heap content only; format unchanged.
         // Re-pinned for String.prototype.normalize and boot-layout signature
         // generation 10. Boot-heap content only; format unchanged.
-        "289a296694f6994108253361b010b2a3fea1d3745d1bf646d3aaeeac093d056a",
+        // Re-pinned for String.prototype.replaceAll, RegExp @@replace, and
+        // boot-layout signature generation 11. Boot-heap content only; format
+        // unchanged.
+        "468eaf2e36e65d178518ed8fe06657288936e50dce4d41e96929a78a9656d899",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -428,7 +431,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // signature generation 9. Schema and format remain unchanged.
         // Re-pinned with the blob for String.prototype.normalize and boot
         // generation 10. Schema and format remain unchanged.
-        "bcb240053172667cd97144b2c539104bbfe6241c4ffa3caa62ba809a8f569899",
+        // Re-pinned with the blob for String.prototype.replaceAll, RegExp
+        // @@replace, and boot generation 11. Schema and format remain
+        // unchanged.
+        "5c2b986d8e604a7066fb1518d257704eec611072974c18d45b22e3697250d6ad",
         "epoch-3 seal chain"
     );
 }
