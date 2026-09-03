@@ -1,8 +1,6 @@
 // @ts-check
 /// <ref types="ses">
 
-// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term.
-
 import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
 import { makeError } from '@endo/errors';
@@ -68,11 +66,16 @@ const assertOcapnTarget = value => {
  * as `makeOcapn`'s `locator`). The returned `makeLocatorForSession` is
  * the per-session factory for `makeOcapn`'s `makeLocatorForSession`
  * hook: it wraps the shared `get` with a miss counter scoped to one
- * authenticated peer/connection and tears that session down (via the
- * transport's generic disconnect, naming nothing) once the counter
- * crosses `missBound`. The formula lookup stays shared; only the
- * counter and the abort decision are session-scoped, so one session
- * crossing its bound cannot affect any other peer's session.
+ * authenticated peer/connection. Once the counter crosses `missBound`
+ * the session locator both (a) refuses every further presentation
+ * outright — it stops running the lookup, so no capability can be
+ * redeemed on that session again regardless of how fast the transport
+ * tears down — and (b) calls `abortSession` to sever the connection via
+ * the transport's generic disconnect, naming nothing. Enforcement lives
+ * in the locator, not in the speed of the disconnect. The formula lookup
+ * stays shared; only the counter and the abort decision are
+ * session-scoped, so one session crossing its bound cannot affect any
+ * other peer's session.
  *
  * @param {object} options
  * @param {(id: FormulaIdentifier, localNodeNumber: NodeNumber) => Promise<unknown>} options.provideLocalFormula
@@ -134,8 +137,17 @@ export const makeFormulaNonceLocator = ({
     const { abortSession } = context;
     let misses = 0;
     let aborted = false;
-    /** @param {string} secret */
+    /** @param {string | Uint8Array} secret */
     const sessionGet = async secret => {
+      // Once this session has crossed its miss bound it is being torn
+      // down; refuse every further presentation before running the
+      // lookup. `aborted` is set synchronously at the crossing, so a
+      // peer that pipelines probes past the bound — or races the
+      // transport teardown — redeems nothing more on this session. The
+      // bound is enforced here, not delegated to disconnect timing.
+      if (aborted) {
+        return undefined;
+      }
       await null;
       const value = await get(secret);
       if (value === undefined) {

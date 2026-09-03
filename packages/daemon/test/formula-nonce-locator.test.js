@@ -201,6 +201,17 @@ test('the per-session miss bound aborts one session without touching another', a
   // Further presentations keep returning the same miss; abort fires once.
   t.is(await sessionA.get('miss-4'), undefined);
   t.is(aAborts, 1, 'abort is idempotent');
+  // Even a VALID identifier presented after the bound is refused: once
+  // aborted, the session locator stops running the lookup entirely, so no
+  // capability can be redeemed on it regardless of transport-teardown
+  // timing. `provideLocalFormula` would return `guest` for `localId`, yet
+  // the aborted session yields the same `undefined` miss.
+  t.is(
+    await sessionA.get(localId),
+    undefined,
+    'a valid id is refused once the session has crossed its bound',
+  );
+  t.is(aAborts, 1, 'a post-bound presentation does not re-abort');
 
   // Peer B, a different authenticated session, is entirely unaffected:
   // it fetches its valid capability and never aborts.
