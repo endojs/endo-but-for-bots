@@ -1,20 +1,18 @@
 // @ts-check
 
+import { encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
 
 import { h, renderConfined, unmount } from './setup-preact-container.js';
 
 /** @import { SecretAdmin, SecretAuditEvent, SecretSummary } from '@endo/daemon' */
 
+// Encoded with the same module the daemon canonicalizes against in
+// `decodeSecret`, rather than a hand-rolled `btoa` over a writable global: the
+// two sides of this wire format have to agree exactly or a well-formed secret
+// is rejected as INVALID_SECRET_BYTES.
 /** @param {string} text */
-const textToBase64 = text => {
-  const bytes = new TextEncoder().encode(text);
-  let binary = '';
-  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-  }
-  return btoa(binary);
-};
+const textToBase64 = text => encodeBase64(new TextEncoder().encode(text));
 harden(textToBase64);
 
 /**
@@ -208,7 +206,11 @@ const SecretsView = ({
               { class: 'secret-summary' },
               h(
                 'code',
-                { class: 'secret-id', title: secretId },
+                // Only the prefix is rendered, and no `title` carries the
+                // whole identifier: the design calls for a stable prefix, and
+                // the full value is a durable record selector that has no
+                // business sitting in the DOM.
+                { class: 'secret-id' },
                 secretId.slice(0, 12),
               ),
               h('span', { class: 'secret-state' }, summary.state),

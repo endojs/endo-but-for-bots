@@ -3,7 +3,7 @@
 import harden from '@endo/harden';
 import { q } from '@endo/errors';
 
-/** @import { Config, Formula, FormulaNumber } from './types.js' */
+/** @import { Config, Formula, FormulaNumber, SecretAuditEvent, SecretRecord, SecretState } from './types.js' */
 
 /**
  * @typedef {object} DaemonDatabase
@@ -41,14 +41,14 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
  * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
  * @property {(storeNumber: string) => void} deleteSyncedMeta
- * @property {(secretId: string) => ({secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string} | undefined)} getSecretRecord
- * @property {(record: {secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}) => void} writeSecretRecord
- * @property {() => Array<{secretId: string, backendRef: string, description: string, state: 'active' | 'revoked' | 'unavailable', generation: bigint, createdAt: string, updatedAt: string}>} listSecretRecords
+ * @property {(secretId: string) => SecretRecord | undefined} getSecretRecord
+ * @property {(record: SecretRecord) => void} writeSecretRecord
+ * @property {() => SecretRecord[]} listSecretRecords
  * @property {(grantId: string) => string | undefined} getSecretIdForGrant
  * @property {(grantId: string, secretId: string) => void} writeSecretGrant
  * @property {(secretId: string) => void} deleteSecret
- * @property {(event: import('./types.js').SecretAuditEvent) => void} writeSecretAuditEvent
- * @property {(limit: number) => import('./types.js').SecretAuditEvent[]} listSecretAuditEvents
+ * @property {(event: SecretAuditEvent) => void} writeSecretAuditEvent
+ * @property {(limit: number) => SecretAuditEvent[]} listSecretAuditEvents
  */
 
 // Node's ObjectWrap cleanup hook can be removed during GC without a current
@@ -141,7 +141,6 @@ const SCHEMA_SQL = `
     generation TEXT NOT NULL,
     occurred_at TEXT NOT NULL,
     operation_id TEXT NOT NULL,
-    grant_id TEXT,
     reason_code TEXT
   );
 
@@ -325,11 +324,14 @@ export const makeDaemonDatabase = (config, options) => {
   const stmtDeleteSecretRecord = prepare(
     'DELETE FROM secret_record WHERE secret_id = ?',
   );
-  const stmtWriteSecretAudit = prepare(
-    'INSERT INTO secret_audit_event (event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, grant_id, reason_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  // Audit rows deliberately carry no grant identifier: a grant identifier is
+  // redeemable read authority, and the audit facet is readable by anyone
+  // holding `@secrets/audit`.
+  const stmtWriteSecretAuditEvent = prepare(
+    'INSERT INTO secret_audit_event (event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, reason_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
-  const stmtListSecretAudit = prepare(
-    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, grant_id AS grantId, reason_code AS reasonCode FROM secret_audit_event ORDER BY occurred_at DESC, event_id DESC LIMIT ?',
+  const stmtListSecretAuditEvents = prepare(
+    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event ORDER BY occurred_at DESC, event_id DESC LIMIT ?',
   );
 
   // -- Formula operations --
@@ -642,7 +644,7 @@ export const makeDaemonDatabase = (config, options) => {
   /** @param {Record<string, unknown>} row */
   const decodeSecretRecord = row => ({
     ...row,
-    state: /** @type {'active' | 'revoked' | 'unavailable'} */ (row.state),
+    state: /** @type {SecretState} */ (row.state),
     generation: BigInt(/** @type {string} */ (row.generation)),
   });
 
@@ -702,9 +704,9 @@ export const makeDaemonDatabase = (config, options) => {
     stmtDeleteSecretRecord.run(secretId);
   };
 
-  /** @param {import('./types.js').SecretAuditEvent} event */
+  /** @param {SecretAuditEvent} event */
   const writeSecretAuditEvent = event => {
-    stmtWriteSecretAudit.run(
+    stmtWriteSecretAuditEvent.run(
       event.eventId,
       event.secretId,
       event.operation,
@@ -712,23 +714,21 @@ export const makeDaemonDatabase = (config, options) => {
       String(event.generation),
       event.occurredAt,
       event.operationId,
-      event.grantId ?? null,
       event.reasonCode ?? null,
     );
   };
 
   /** @param {number} limit */
   const listSecretAuditEvents = limit =>
-    /** @type {import('./types.js').SecretAuditEvent[]} */ (
+    /** @type {SecretAuditEvent[]} */ (
       /** @type {Record<string, unknown>[]} */ (
-        stmtListSecretAudit.all(limit)
+        stmtListSecretAuditEvents.all(limit)
       ).map(row => {
         /** @type {Record<string, unknown>} */
         const event = {
           ...row,
           generation: BigInt(/** @type {string} */ (row.generation)),
         };
-        if (event.grantId === null) delete event.grantId;
         if (event.reasonCode === null) delete event.reasonCode;
         return event;
       })

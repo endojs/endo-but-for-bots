@@ -5,7 +5,11 @@ import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { makeSecretManager, secretBlobHelp } from '../src/secret-manager.js';
+import {
+  makeSecretManager,
+  secretBlobHelp,
+  secretManagerLimits,
+} from '../src/secret-manager.js';
 
 const canary = 'CANARY-secret-never-persist-or-log';
 
@@ -315,4 +319,189 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
 
   t.is(harness.records.get(record.secretId).state, 'revoked');
   t.false(harness.values.has(record.backendRef));
+});
+
+/**
+ * Build a manager over the shared harness state with an injectable backend and
+ * persistence hooks, mirroring the local rig the revocation-race test uses.
+ *
+ * @param {ReturnType<typeof makeHarness>} harness
+ * @param {object} options
+ * @param {any} options.backend
+ * @param {(record: any) => void} [options.onWriteRecord]
+ * @param {() => Promise<void>} [options.beforeRandom]
+ */
+const makeRacingManager = (
+  harness,
+  { backend, onWriteRecord = () => {}, beforeRandom = async () => {} },
+) => {
+  let serial = 3000;
+  return makeSecretManager({
+    persistence: harden({
+      getSecretRecord: id => harness.records.get(id),
+      writeSecretRecord: next => {
+        harness.records.set(next.secretId, next);
+        onWriteRecord(next);
+      },
+      listSecretRecords: () => [...harness.records.values()],
+      getSecretIdForGrant: id => harness.grants.get(id),
+      writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
+      deleteSecret: secretId => harness.records.delete(secretId),
+      writeSecretAuditEvent: event => harness.events.push(event),
+      listSecretAuditEvents: limit => harness.events.slice(-limit),
+    }),
+    backend,
+    randomHex256: async () => {
+      await beforeRandom();
+      return `${(serial += 1)}`.padStart(64, '0');
+    },
+  });
+};
+
+test('a release racing an uncommitted replacement fails closed', async t => {
+  const harness = makeHarness();
+  const seedDirectory = harness.makeDirectory(harness.makeManager());
+  await E(await E(seedDirectory).lookup('create')).createBase64(
+    'racing',
+    'Fence releases against uncommitted replacements',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const [record] = harness.records.values();
+  const [{ grantId }] = harness.bindings;
+
+  const published = makePromiseKit();
+  const finishReplace = makePromiseKit();
+  const backend = harden({
+    create: async () => record.backendRef,
+    read: async ref => new Uint8Array(harness.values.get(ref)),
+    // Publish the new bytes, then park before settling: exactly the window in
+    // which the record still names the previous generation.
+    replace: async (_operationId, ref, bytes) => {
+      harness.values.set(ref, new Uint8Array(bytes));
+      published.resolve(undefined);
+      await finishReplace.promise;
+    },
+    revoke: async (_operationId, ref) => harness.values.delete(ref),
+  });
+  const directory = harness.makeDirectory(
+    makeRacingManager(harness, { backend }),
+  );
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  const blob = await E(directory).lookup(['use', grantId]);
+
+  const replacing = E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode('replacement')),
+  );
+  await published.promise;
+  await t.throwsAsync(() => E(blob).readBase64(), {
+    message: /Secret operation failed/,
+  });
+  finishReplace.resolve(undefined);
+  await replacing;
+
+  // The release must not have been recorded as a successful read of the
+  // pre-replacement generation.
+  t.false(
+    harness.events.some(
+      event =>
+        event.operation === 'release' &&
+        event.outcome === 'succeeded' &&
+        event.generation === 1n,
+    ),
+  );
+});
+
+test('a release starting after a committed replacement still succeeds', async t => {
+  const harness = makeHarness();
+  const seedDirectory = harness.makeDirectory(harness.makeManager());
+  await E(await E(seedDirectory).lookup('create')).createBase64(
+    'committed',
+    'Do not fail releases that follow a commit',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const [record] = harness.records.values();
+  const [{ grantId }] = harness.bindings;
+
+  const backend = harden({
+    create: async () => record.backendRef,
+    read: async ref => new Uint8Array(harness.values.get(ref)),
+    replace: async (_operationId, ref, bytes) => {
+      harness.values.set(ref, new Uint8Array(bytes));
+    },
+    revoke: async (_operationId, ref) => harness.values.delete(ref),
+  });
+
+  let committed = false;
+  let parked = false;
+  const held = makePromiseKit();
+  const manager = makeRacingManager(harness, {
+    backend,
+    onWriteRecord: next => {
+      if (next.generation === 2n) committed = true;
+    },
+    // Park the replacement inside its success-audit turn, after the generation
+    // has been committed. A release issued here is provably current, so an
+    // in-flight marker cleared only when the mutation returns would reject it.
+    beforeRandom: async () => {
+      await null;
+      if (committed && !parked) {
+        parked = true;
+        await held.promise;
+      }
+    },
+  });
+  const directory = harness.makeDirectory(manager);
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  const blob = await E(directory).lookup(['use', grantId]);
+
+  const replacing = E(entry.admin).replaceBase64(
+    encodeBase64(new TextEncoder().encode('replacement')),
+  );
+  while (!parked) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  t.is(
+    new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
+    'replacement',
+  );
+  held.resolve(undefined);
+  await replacing;
+
+  t.true(
+    harness.events.some(
+      event =>
+        event.operation === 'release' &&
+        event.outcome === 'succeeded' &&
+        event.generation === 2n,
+    ),
+  );
+});
+
+test('a secret at the size limit is accepted and an oversize one is rejected without echoing it', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const { maxSecretBytes } = secretManagerLimits;
+
+  // The documented ceiling must actually be reachable. It is far above the
+  // default `M.string()` length limit, so an arg guard that length-checks the
+  // payload would reject this.
+  const atLimit = encodeBase64(new Uint8Array(maxSecretBytes).fill(0x5a));
+  t.is(
+    (await E(importer).createBase64('at-limit', 'At the size limit', atLimit))
+      .state,
+    'active',
+  );
+
+  // Oversize input must be refused by `decodeSecret`'s fixed error, never by a
+  // pattern mismatch, which would interpolate the whole secret into a message
+  // that crosses CapTP.
+  const overLimit = encodeBase64(new Uint8Array(maxSecretBytes + 1).fill(0x5a));
+  const error = await t.throwsAsync(
+    () => E(importer).createBase64('over-limit', 'Over the limit', overLimit),
+    { message: /Secret operation failed/ },
+  );
+  t.false(error.message.includes(overLimit.slice(0, 64)));
+  t.true(error.message.length < 200);
 });

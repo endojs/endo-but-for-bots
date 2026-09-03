@@ -1556,10 +1556,24 @@ export interface EndoGuest extends EndoAgent {
   sendValue: Mail['sendValue'];
 }
 
-export type SecretState = 'active' | 'revoked' | 'unavailable';
+export type SecretState = 'active' | 'revoked';
 
 export type SecretSummary = {
   secretId: string;
+  description: string;
+  state: SecretState;
+  generation: bigint;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * The durable secret metadata row. `SecretSummary` is its public projection:
+ * the same fields minus the host-private `backendRef`.
+ */
+export type SecretRecord = {
+  secretId: string;
+  backendRef: string;
   description: string;
   state: SecretState;
   generation: bigint;
@@ -1609,7 +1623,6 @@ export type SecretAuditEvent = {
   generation: bigint;
   occurredAt: string;
   operationId: string;
-  grantId?: string;
   reasonCode?: string;
 };
 
@@ -2412,35 +2425,9 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
-  getSecretRecord: (secretId: string) =>
-    | {
-        secretId: string;
-        backendRef: string;
-        description: string;
-        state: SecretState;
-        generation: bigint;
-        createdAt: string;
-        updatedAt: string;
-      }
-    | undefined;
-  writeSecretRecord: (record: {
-    secretId: string;
-    backendRef: string;
-    description: string;
-    state: SecretState;
-    generation: bigint;
-    createdAt: string;
-    updatedAt: string;
-  }) => void;
-  listSecretRecords: () => Array<{
-    secretId: string;
-    backendRef: string;
-    description: string;
-    state: SecretState;
-    generation: bigint;
-    createdAt: string;
-    updatedAt: string;
-  }>;
+  getSecretRecord: (secretId: string) => SecretRecord | undefined;
+  writeSecretRecord: (record: SecretRecord) => void;
+  listSecretRecords: () => SecretRecord[];
   getSecretIdForGrant: (grantId: string) => string | undefined;
   writeSecretGrant: (grantId: string, secretId: string) => void;
   deleteSecret: (secretId: string) => void;

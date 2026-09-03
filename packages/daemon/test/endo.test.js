@@ -1454,7 +1454,19 @@ test('mailboxes persist messages across restart', async t => {
   );
 });
 
-test.serial(
+// The encrypted secret backend seals blobs with the manager's crypto powers.
+// `makeXsCryptoPowers` stubs `sealSecret`/`openSecret` to throw ("Local
+// encrypted secret backend is unavailable on XS", see
+// src/bus-manager-rust-xs-powers.js), so an XS-hosted manager can neither
+// create nor read secret blobs, and `@secrets` is wired only into the Node
+// manager (src/manager.js). `ENDO_MANAGER_NODE=1` (yarn test:rust-node-manager)
+// puts the manager back in Node, where this works.
+const testNeedsNodeManager =
+  process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE
+    ? test.serial.skip
+    : test.serial;
+
+testNeedsNodeManager(
   'secret lookup capabilities and values survive restart',
   async t => {
     const { cancelled, config, host } = await prepareHost(t);

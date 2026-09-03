@@ -134,6 +134,17 @@ export const contentLocatorMethodGuards = harden({
 
 export const EnvelopeInterface = M.interface('EndoEnvelope', {});
 
+// A pattern mismatch reports the offending specimen verbatim, so the default
+// `M.string()` length limit of 100000 would interpolate an oversize secret
+// into an error that crosses CapTP and lands in logs. The limit is disabled
+// here so that `decodeSecret` in secret-manager.js — which is written never to
+// echo its input, and which enforces the real MAX_SECRET_BYTES bound — is the
+// sole rejecter of secret payloads. The default also sits below the base64
+// length of a maximum-size secret, so it would reject valid input.
+const SecretBase64Shape = M.string({
+  stringLengthLimit: Number.MAX_SAFE_INTEGER,
+});
+
 export const SecretBlobInterface = M.interface('SecretBlob', {
   help: M.call().returns(M.string()),
   getDescription: M.call().returns(M.promise()),
@@ -144,14 +155,16 @@ export const SecretBlobInterface = M.interface('SecretBlob', {
 
 export const SecretAdminInterface = M.interface('SecretAdmin', {
   getSummary: M.call().returns(M.promise()),
-  replaceBase64: M.call(M.string()).returns(M.promise()),
+  replaceBase64: M.call(SecretBase64Shape).returns(M.promise()),
   setDescription: M.call(M.string()).returns(M.promise()),
   revoke: M.call().returns(M.promise()),
   delete: M.call().returns(M.promise()),
 });
 
 export const SecretImporterInterface = M.interface('SecretImporter', {
-  createBase64: M.call(M.string(), M.string(), M.string()).returns(M.promise()),
+  createBase64: M.call(M.string(), M.string(), SecretBase64Shape).returns(
+    M.promise(),
+  ),
 });
 
 export const SecretCatalogInterface = M.interface('SecretCatalog', {
@@ -168,7 +181,11 @@ export const SecretManagerDirectoryInterface = M.interface(
     help: M.call().returns(M.string()),
     has: M.call(M.string()).returns(M.promise()),
     list: M.call().returns(M.promise()),
-    lookup: M.call(M.any()).returns(M.promise()),
+    // Guarded like every other directory `lookup` in this file. `M.any()`
+    // would forward a non-string path segment straight into the SQLite bind
+    // layer, surfacing a driver TypeError instead of this module's fixed
+    // error codes.
+    lookup: M.call(NameOrPathShape).returns(M.promise()),
   },
 );
 

@@ -38,9 +38,12 @@ export const makeEncryptedFileSecretBackend = ({
       storagePath,
       `.${backendRef}.${operationId}.tmp`,
     );
-    await filePowers.makePath(storagePath);
-    const writer = filePowers.makeFileWriter(temporaryPath);
+    await null;
     try {
+      // Acquisition happens inside the try so that a failure to create the
+      // directory or the writer still reaches the zeroing `finally`.
+      await filePowers.makePath(storagePath);
+      const writer = filePowers.makeFileWriter(temporaryPath);
       await writer.next(sealed);
       await writer.return(undefined);
       await filePowers.renamePath(temporaryPath, pathFor(backendRef));
@@ -81,11 +84,26 @@ export const makeEncryptedFileSecretBackend = ({
       await write(backendRef, bytes, operationId);
     },
     /**
+     * Idempotent, as `SecretBackend.revoke` requires: `SecretAdmin.delete`
+     * retries revocation so an earlier cleanup failure cannot strand backend
+     * material. Node's `removePath` already tolerates a missing file; the XS
+     * host's does not, and its error carries no portable `code`, so recheck
+     * existence rather than matching an errno. A genuine permission or IO
+     * failure on a still-present file still propagates.
+     *
      * @param {string} _operationId
      * @param {string} backendRef
      */
     revoke: async (_operationId, backendRef) => {
-      await filePowers.removePath(pathFor(backendRef));
+      const secretPath = pathFor(backendRef);
+      await null;
+      try {
+        await filePowers.removePath(secretPath);
+      } catch (error) {
+        if (await filePowers.exists(secretPath)) {
+          throw error;
+        }
+      }
     },
   });
 };
