@@ -48048,9 +48048,7 @@ impl Interp {
         // to presence: a canonical numeric index is own iff it is a valid
         // integer index; a non-index name is an ordinary expando probe (a
         // canonical-but-non-integer / negative / `-0` string is not an index —
-        // `string_to_index` rejects it — and correctly misses). An
-        // ArrayBuffer/DataView index-valued key is still the buffer cluster's
-        // residual; a non-index key names an ordinary expando slot.
+        // `string_to_index` rejects it — and correctly misses).
         if let Some(&ta) = self.typed_arrays.get(&o) {
             if let Some(idx) = index {
                 return Ok(self.ta_valid_index(ta, idx as f64).is_some());
@@ -48058,9 +48056,9 @@ impl Interp {
             return Ok(self.find_property(o, id).is_some());
         }
         if self.array_buffers.contains_key(&o) || self.data_views.contains_key(&o) {
-            if index.is_some() {
-                return Err(Halt::Unsupported("hasOwnProperty:typed-array-index"));
-            }
+            // ArrayBuffer and DataView have no integer-indexed exotic
+            // behavior. Numeric-looking keys are ordinary expandos, just like
+            // every other string key on these objects.
             return Ok(self.find_property(o, id).is_some());
         }
         // An Array's exotic own properties: the present integer indices (kept in

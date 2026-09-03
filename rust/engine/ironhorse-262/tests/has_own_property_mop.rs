@@ -63,6 +63,18 @@ fn ordinary_index_keys() {
 }
 
 #[test]
+fn binary_data_objects_treat_numeric_keys_as_ordinary_expandos() {
+    for source in [
+        "var b=new ArrayBuffer(2);b[0]=7;Object.prototype.hasOwnProperty.call(b,'0')&&b[0]===7",
+        "var d=new DataView(new ArrayBuffer(2));d[1]=8;Object.prototype.hasOwnProperty.call(d,1)&&d[1]===8",
+        "var b=new ArrayBuffer(2);Object.prototype.hasOwnProperty.call(b,'0')",
+        "var d=new DataView(new ArrayBuffer(2));Object.prototype.hasOwnProperty.call(d,0)",
+    ] {
+        assert_result_agrees(source);
+    }
+}
+
+#[test]
 fn ordinary_numeric_key_coercions() {
     assert_result_agrees("var o = {}; o[1] = 'a'; o.hasOwnProperty(1.0)");
     assert_result_agrees("var o = {}; o['12'] = 'a'; o.hasOwnProperty(12)");
