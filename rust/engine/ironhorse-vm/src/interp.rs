@@ -2735,6 +2735,13 @@ pub enum NativeMethod {
     MapIteratorNext,
     SetIteratorNext,
     IteratorFrom,
+    /// `%WrapForValidIteratorPrototype%.next()`: call the `next` method
+    /// captured by `Iterator.from` with the wrapped iterator as receiver.
+    IteratorWrapperNext,
+    /// `%WrapForValidIteratorPrototype%.return()`: look up and call the
+    /// wrapped iterator's live `return` method, or synthesize a completed
+    /// iterator result when it has none.
+    IteratorWrapperReturn,
     /// `get Iterator.prototype.constructor`: returns the realm's `%Iterator%`
     /// constructor without inspecting the receiver.
     IteratorConstructorGetter,
@@ -4401,6 +4408,7 @@ pub struct Interp {
     /// `Symbol.iterator` returning the iterator itself.
     array_iterator_proto: crate::value::SlotIndex,
     iterator_proto: crate::value::SlotIndex,
+    iterator_wrapper_proto: crate::value::SlotIndex,
     map_iterator_proto: crate::value::SlotIndex,
     set_iterator_proto: crate::value::SlotIndex,
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
@@ -4862,8 +4870,9 @@ impl IntlTables {
 /// `Iterators` row, the `ITER` atom) — [`Interp::iterators_snapshot`]'s
 /// emission and [`Interp::restore_iterators`]'s input. Kinds: 0-2 array
 /// values/keys/entries, 3 for-in enumerator, 4 string, 5-7 collection
-/// keys/values/entries. Two boundary normalizations make the row pure
-/// data: a collection cursor's `index` is the LIVE-ENTRY ORDINAL (the
+/// keys/values/entries, 8 for an `Iterator.from` generic wrapper. Two boundary
+/// normalizations make the row pure data: a collection cursor's `index` is the
+/// LIVE-ENTRY ORDINAL (the
 /// `COLL` row compacts tombstones, so the ordinal IS the physical index
 /// in the restored dense table), and `clear()`-staleness folds into
 /// `done` (the absolute clear-generation counter is unobservable; only
@@ -4877,7 +4886,8 @@ pub struct IteratorRow {
     pub iterable: u32,
     pub index: u32,
     pub done: bool,
-    /// The reused `{value, done}` result object's slot.
+    /// The reused `{value, done}` result object's slot. For kind 8, an
+    /// internal arena holder containing the cached `next` value.
     pub result: u32,
     /// For-in keys as `(id, index)` pairs (`id == 0` ⇒ an array index).
     pub enum_keys: Vec<(u16, u32)>,
@@ -5562,6 +5572,7 @@ impl Interp {
             name_id: None,
             array_iterator_proto: crate::value::SlotIndex::NULL,
             iterator_proto: crate::value::SlotIndex::NULL,
+            iterator_wrapper_proto: crate::value::SlotIndex::NULL,
             map_iterator_proto: crate::value::SlotIndex::NULL,
             set_iterator_proto: crate::value::SlotIndex::NULL,
             math_object: crate::value::SlotIndex::NULL,
@@ -5921,6 +5932,20 @@ impl Interp {
             ));
             let from = self.alloc_named_method(NativeMethod::IteratorFrom, "from", 1);
             self.proto_methods.push((iterator_ctor, "from", from));
+            // `%WrapForValidIteratorPrototype%` is shared by every generic
+            // iterator wrapper, including calls inherited through a subclass
+            // of `Iterator`. It is deliberately distinct from each built-in
+            // iterator prototype while inheriting the helper surface from
+            // `%Iterator.prototype%`.
+            self.iterator_wrapper_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+            let wrapper_next =
+                self.alloc_named_method(NativeMethod::IteratorWrapperNext, "next", 0);
+            let wrapper_return =
+                self.alloc_named_method(NativeMethod::IteratorWrapperReturn, "return", 0);
+            self.proto_methods
+                .push((self.iterator_wrapper_proto, "next", wrapper_next));
+            self.proto_methods
+                .push((self.iterator_wrapper_proto, "return", wrapper_return));
             for (op, (name, arity)) in [
                 ("map", 1u32),
                 ("filter", 1),
@@ -11773,7 +11798,7 @@ impl Interp {
     /// restored name table.
     pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
         for r in &rows {
-            if r.kind > 7 {
+            if r.kind > 8 {
                 return false;
             }
             match r.kind {
@@ -11799,6 +11824,17 @@ impl Interp {
                         id != crate::value::XS_NO_ID
                             && id as usize > self.symbol_names.len()
                     }) {
+                        return false;
+                    }
+                }
+                8 => {
+                    if r.iterable == crate::value::SlotIndex::NULL.0
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || r.index != 0
+                        || r.done
+                        || !r.enum_keys.is_empty()
+                        || !r.str_bytes.is_empty()
+                    {
                         return false;
                     }
                 }
@@ -32927,8 +32963,12 @@ impl Interp {
             // `%ArrayIteratorPrototype%.next()`.
             NativeMethod::ArrayIteratorNext => {
                 let iter = match this.value {
-                    Payload::Reference(i) if self.iterators.contains_key(&i) => i,
-                    _ => return Err(Halt::Unsupported("array-iterator-next:non-iterator")),
+                    Payload::Reference(i)
+                        if self
+                            .iterators
+                            .get(&i)
+                            .is_some_and(|state| state.kind <= 4) => i,
+                    _ => return Err(self.catchable_type_error()),
                 };
                 self.array_iterator_next(code, iter)?
             }
@@ -32950,13 +32990,13 @@ impl Interp {
                 self.collection_iterator_next(iter)
             }
             NativeMethod::IteratorFrom => {
-                let value = arg0;
-                match value.value {
-                    Payload::Reference(i)
-                        if self.iterators.contains_key(&i)
-                            || self.generators.contains_key(&i) => value,
-                    _ => return Err(Halt::Unsupported("Iterator.from:wrapper")),
-                }
+                self.iterator_from(code, arg0)?
+            }
+            NativeMethod::IteratorWrapperNext => {
+                self.iterator_wrapper_next(code, this)?
+            }
+            NativeMethod::IteratorWrapperReturn => {
+                self.iterator_wrapper_return(code, this)?
             }
             NativeMethod::IteratorConstructorGetter => {
                 let constructor = self
@@ -36472,6 +36512,137 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(iter))
     }
 
+    /// `Iterator.from(value)`: acquire `value`'s iterator record once, return
+    /// an existing `%Iterator%` instance unchanged, or wrap a generic direct
+    /// iterator in `%WrapForValidIteratorPrototype%`. The wrapper's kind-8
+    /// [`IterState`] uses `iterable` for `[[Iterated]]` and `result` for an
+    /// arena holder containing the cached (not necessarily callable) `next`
+    /// value. Keeping the holder in the arena lets the existing ITER snapshot
+    /// row and GC edge machinery carry the otherwise arbitrary [`Slot`].
+    fn iterator_from(&mut self, code: &[u8], value: Slot) -> Result<Slot, Halt> {
+        if value.kind != Kind::String && value.kind != Kind::Reference {
+            return Err(self.catchable_type_error());
+        }
+
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let iterator_method = match value.value {
+            Payload::Reference(inst) if value.kind == Kind::Reference => {
+                self.mop_get(code, inst, iterator_id, value)?
+            }
+            Payload::String(_) if value.kind == Kind::String => {
+                self.mop_get(code, self.string_proto, iterator_id, value)?
+            }
+            _ => unreachable!("Iterator.from accepted only objects and strings"),
+        };
+        let iterator = if matches!(iterator_method.kind, Kind::Undefined | Kind::Null) {
+            value
+        } else {
+            if !self.is_callable_value(iterator_method) {
+                return Err(self.catchable_type_error());
+            }
+            let iterator = self.call_any(code, iterator_method, value, &[])?;
+            if iterator.kind != Kind::Reference {
+                return Err(self.catchable_type_error());
+            }
+            iterator
+        };
+        let Payload::Reference(iterator_inst) = iterator.value else {
+            return Err(self.catchable_type_error());
+        };
+        let next_id = self.intern_key("next");
+        let next_method = self.mop_get(code, iterator_inst, next_id, iterator)?;
+
+        let iterator_ctor = self
+            .intrinsics
+            .get("Iterator")
+            .copied()
+            .ok_or(Halt::Unsupported("Iterator:missing-constructor"))?;
+        let iterator_ctor = Slot::of(Kind::Reference, Payload::Reference(iterator_ctor));
+        if self.ordinary_has_instance(code, iterator_ctor, iterator)? {
+            return Ok(iterator);
+        }
+
+        self.meter.tick_builtin();
+        self.meter.tick_slot_alloc();
+        let next_holder = self
+            .slots
+            .alloc(Slot::of(next_method.kind, next_method.value));
+        self.meter.tick_slot_alloc();
+        let wrapper = self
+            .slots
+            .alloc(Slot::instance(self.iterator_wrapper_proto));
+        self.iterators.insert(
+            wrapper,
+            IterState {
+                iterable: iterator_inst,
+                index: 0,
+                kind: 8,
+                generation: 0,
+                result: next_holder,
+                done: false,
+                enum_keys: Vec::new(),
+                str_bytes: Vec::new(),
+            },
+        );
+        Ok(Slot::of(Kind::Reference, Payload::Reference(wrapper)))
+    }
+
+    /// `%WrapForValidIteratorPrototype%.next()`. The cached method is read
+    /// from the wrapper's arena holder and called with the original iterator.
+    /// The result is returned unchanged; iterator consumers perform the
+    /// protocol's object-result validation when they advance it.
+    fn iterator_wrapper_next(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+        let Payload::Reference(wrapper) = this.value else {
+            return Err(self.catchable_type_error());
+        };
+        let Some(state) = self
+            .iterators
+            .get(&wrapper)
+            .filter(|state| state.kind == 8)
+            .cloned()
+        else {
+            return Err(self.catchable_type_error());
+        };
+        let next_method = self.slots.get(state.result);
+        let iterator = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        self.call_any(code, next_method, iterator, &[])
+    }
+
+    /// `%WrapForValidIteratorPrototype%.return()`. The underlying `return`
+    /// method is intentionally fetched on each call; unlike `next`, it is not
+    /// part of the captured iterator record. An absent method produces a fresh
+    /// ordinary `{ value: undefined, done: true }` result.
+    fn iterator_wrapper_return(&mut self, code: &[u8], this: Slot) -> Result<Slot, Halt> {
+        let Payload::Reference(wrapper) = this.value else {
+            return Err(self.catchable_type_error());
+        };
+        let Some(state) = self
+            .iterators
+            .get(&wrapper)
+            .filter(|state| state.kind == 8)
+            .cloned()
+        else {
+            return Err(self.catchable_type_error());
+        };
+        let iterator = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        let return_id = self.intern_key("return");
+        let return_method = self.mop_get(code, state.iterable, return_id, iterator)?;
+        if matches!(return_method.kind, Kind::Undefined | Kind::Null) {
+            let value_id = self.intern_key("value");
+            let done_id = self.intern_key("done");
+            let result = self.slots.alloc(Slot::instance(self.object_proto));
+            self.set_own_unmetered(result, value_id, Slot::undefined());
+            self.set_own_unmetered(result, done_id, Slot::boolean(true));
+            return Ok(Slot::of(Kind::Reference, Payload::Reference(result)));
+        }
+        if !self.is_callable_value(return_method) {
+            return Err(self.catchable_type_error());
+        }
+        self.call_any(code, return_method, iterator, &[])
+    }
+
     /// Invoke one of the eager Iterator helpers (`reduce`, `toArray`,
     /// `forEach`, `some`, `every`, or `find`) behind a native try boundary.
     /// Their shared implementation below drives the public direct-iterator
@@ -37783,7 +37954,7 @@ impl Interp {
         if self.iterators[&iter].kind == 4 {
             return self.string_iterator_next(iter);
         }
-        if self.iterators[&iter].kind >= 5 {
+        if (5..=7).contains(&self.iterators[&iter].kind) {
             return Ok(self.collection_iterator_next(iter));
         }
         let st = self.iterators[&iter].clone();
@@ -54386,6 +54557,7 @@ impl Interp {
             self.date_proto,
             self.date_to_primitive_method,
             self.iterator_proto,
+            self.iterator_wrapper_proto,
             self.map_iterator_proto,
             self.set_iterator_proto,
             self.string_proto,

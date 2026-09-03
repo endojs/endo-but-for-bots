@@ -91,6 +91,24 @@ fn disposable_stack_resources_survive_a_full_collection() {
     assert_eq!(out.result, "true");
 }
 
+#[test]
+fn iterator_from_wrapper_keeps_its_iterated_object_and_next_method_alive() {
+    // Drop the guest-visible references to both the direct iterator and its
+    // cached method. The wrapper's kind-8 iterator row is then their only
+    // owner across the collection.
+    let crank1 = "var wrapped = 0; var base = 0; var next = 0; var churn = 0; \
+                  churn = []; base = { n: 0 }; \
+                  next = function () { return { value: ++this.n }; }; \
+                  base.next = next; wrapped = Iterator.from(base); \
+                  base = 0; next = 0; 0;";
+    let crank2 = &format!(
+        "var wrapped; var churn; var t = 0; {CHURN} t = wrapped.next().value; t"
+    );
+    let out = run_two_cranks_with_gc(crank1, crank2);
+    assert!(out.completed, "crank 2: {:?}", out.halt);
+    assert_eq!(out.result, "1");
+}
+
 /// The mainline's `dates` table (Date epoch-ms records, 2026-08-28
 /// rebase) joins the same net from both directions: a LIVE Date's
 /// record survives a full collection, and a DEAD Date's record is

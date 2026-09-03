@@ -233,7 +233,8 @@ pub enum SideTable {
     DataViews,
     /// `iterators` — the built-in iterator cursors (array
     /// values/keys/entries, for-in enumerators, string iterators,
-    /// Map/Set cursors). Serialized in the `ITER` atom / small-state
+    /// Map/Set cursors, and `Iterator.from` generic wrappers). Serialized in
+    /// the `ITER` atom / small-state
     /// iterators section (store schema 13), owner-ascending, with two
     /// boundary normalizations that make the row pure data: a
     /// collection cursor travels as its LIVE-ENTRY ordinal (the `COLL`
@@ -766,7 +767,8 @@ mod tests {
             "promise_proto",
             "generator_proto", "generator_function_proto", "async_function_proto",
             "async_generator_proto", "async_generator_function_proto", "regexp_proto",
-            "iterator_proto", "map_iterator_proto", "set_iterator_proto", "date_proto",
+            "iterator_proto", "iterator_wrapper_proto", "map_iterator_proto",
+            "set_iterator_proto", "date_proto",
             "locale_proto", "collator_proto", "list_format_proto",
             "plural_rules_proto", "segmenter_proto", "segments_proto",
             "segment_iterator_proto", "date_time_format_proto", "number_format_proto",
