@@ -238,7 +238,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Boot-heap content only; format unchanged.
         // Re-pinned for Promise method metadata and the boot-minted
         // `@@species` getter. Boot-heap content only; format unchanged.
-        "3713eaa76176c70dbad1660779440313923e2c9fa546ee390257dd93c0a38baf",
+        // Re-pinned for the four `%Iterator.prototype%` accessor functions
+        // and boot-layout signature generation 5. Boot-heap content only;
+        // format unchanged.
+        "1b00cfd5aaf451b2b7a2e57954399a167e41d6934a62c429ec4bc4d649b78486",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -398,7 +401,10 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // remain unchanged.
         // Re-pinned with the blob for Promise method metadata and the
         // `@@species` getter. Schema and format remain unchanged.
-        "b8d3fe44443231cb0c0120f6d85ad20344724bcc31e91e9fd0974eab24078f28",
+        // Re-pinned with the blob for the `%Iterator.prototype%` accessors and
+        // boot-layout signature generation 5. Schema and format remain
+        // unchanged.
+        "0499b76a012f9b3a6e32dd135c80861f841e9a9eeb6a18e9d7ee7ba613ca9214",
         "epoch-3 seal chain"
     );
 }

@@ -18,6 +18,17 @@ fn agrees(source: &str) {
     );
 }
 
+fn assert_ironhorse_result(source: &str, expected: &str) {
+    let (bytecode, symbols) = ironhorse_compile::compile_atoms(source).expect("source compiles");
+    let run = ironhorse_vm::run_program_with_symbols(&bytecode, &symbols);
+    assert!(
+        run.completed,
+        "IronHorse must complete {source:?}: {:?}",
+        run.halt
+    );
+    assert_eq!(run.result, expected, "IronHorse result for {source:?}");
+}
+
 #[test]
 fn iterator_constructor_and_helpers_have_specified_metadata() {
     for source in [
@@ -37,6 +48,73 @@ fn iterator_constructor_and_helpers_have_specified_metadata() {
     ] {
         agrees(source);
     }
+}
+
+#[test]
+fn iterator_prototype_accessors_have_es2025_metadata_and_behavior() {
+    for source in [
+        "var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         [d.get.name, d.get.length, d.set.name, d.set.length, d.enumerable, \
+          d.configurable, d.get.call(null) === Iterator].join(':')",
+        "var d = Object.getOwnPropertyDescriptor(Iterator.prototype, Symbol.toStringTag); \
+         [d.get.name, d.get.length, d.set.name, d.set.length, d.enumerable, \
+          d.configurable, d.get.call(null)].join(':')",
+        "var q = Object.getPrototypeOf([][Symbol.iterator]()); \
+         delete q[Symbol.toStringTag]; Object.prototype.toString.call([][Symbol.iterator]())",
+        "var p = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())); \
+         p.constructor.name",
+        "var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         var ok = false; try { d.set.call(1, 2); } \
+         catch (e) { ok = e instanceof TypeError; } ok",
+        "var ok = false; try { Iterator.prototype.constructor = 1; } \
+         catch (e) { ok = e instanceof TypeError; } ok",
+        "var ok = false; try { Iterator.prototype[Symbol.toStringTag] = 'X'; } \
+         catch (e) { ok = e instanceof TypeError; } ok",
+        "var seen = 0; var o = Object.create(Iterator.prototype); \
+         Object.defineProperty(o, 'constructor', { set: function (v) { seen = v; } }); \
+         var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         d.set.call(o, 9); seen",
+        "var target = { constructor: 1 }; var p = new Proxy(target, {}); \
+         var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         d.set.call(p, 9); target.constructor",
+        "var p = new Proxy({}, { \
+           getOwnPropertyDescriptor: function () { return undefined; }, \
+           defineProperty: function () { return false; } \
+         }); var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         var ok = false; try { d.set.call(p, 9); } \
+         catch (e) { ok = e instanceof TypeError; } ok",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn inherited_iterator_setters_create_ordinary_data_properties() {
+    // XS 9.0 currently creates these properties with all attributes false,
+    // contrary to ES2025's CreateDataPropertyOrThrow step. Keep the direct
+    // engine regression on the standard result rather than baking that oracle
+    // bug into IronHorse.
+    assert_ironhorse_result(
+        "var o = Object.create(Iterator.prototype); o.constructor = 42; \
+         var d = Object.getOwnPropertyDescriptor(o, 'constructor'); \
+         [d.value, d.writable, d.enumerable, d.configurable].join(':')",
+        "42:true:true:true",
+    );
+    assert_ironhorse_result(
+        "var o = Object.create(Iterator.prototype); o[Symbol.toStringTag] = 'Custom'; \
+         var d = Object.getOwnPropertyDescriptor(o, Symbol.toStringTag); \
+         [Object.prototype.toString.call(o), d.writable, d.enumerable, \
+          d.configurable].join(':')",
+        "[object Custom]:true:true:true",
+    );
+    assert_ironhorse_result(
+        "var o = Object.create(Iterator.prototype); \
+         Object.defineProperty(o, 'constructor', { value: 1, writable: false }); \
+         var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         var ok = false; try { d.set.call(o, 2); } \
+         catch (e) { ok = e instanceof TypeError; } ok + ':' + o.constructor",
+        "true:1",
+    );
 }
 
 #[test]

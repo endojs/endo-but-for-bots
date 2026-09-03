@@ -158,6 +158,60 @@ fn typed_array_tag_accessor_survives_lazy_and_blob_resume() {
 }
 
 #[test]
+fn iterator_boot_accessors_survive_every_resume_path() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let first = "var child = 0; var t = 0; child = Object.create(Iterator.prototype); t = 7; t";
+    let observations = [
+        "var child; var t; \
+         var d = Object.getOwnPropertyDescriptor(Iterator.prototype, 'constructor'); \
+         var s = Object.getOwnPropertyDescriptor(Iterator.prototype, Symbol.toStringTag); \
+         t = [d.get.name, d.get.length, d.set.name, d.set.length, \
+              d.enumerable, d.configurable, s.get.name, s.get.length, \
+              s.set.name, s.set.length, s.enumerable, s.configurable].join(':'); t",
+        "var child; var t; child.constructor = 42; \
+         child[Symbol.toStringTag] = 'Saved'; \
+         t = Object.prototype.toString.call(child) + ':' + child.constructor; t",
+    ];
+    let expected = [
+        "get constructor:0:set constructor:1:false:true:get [Symbol.toStringTag]:0:set [Symbol.toStringTag]:1:false:true",
+        "[object Saved]:42",
+    ];
+
+    let mut memory = MemoryStore::new();
+    let seen = twin(first, &observations, &mut memory);
+    assert_eq!(
+        seen.iter().map(|row| row.2.as_str()).collect::<Vec<_>>(),
+        expected
+    );
+
+    let dir = TempDir::new("ih-iterator-accessor-carry");
+    let mut file = FileStore::open(dir.join("heap.ihstore")).expect("open");
+    twin(first, &observations, &mut file);
+
+    let (bytecode, names) = compile(first);
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let bytes = machine.write_snapshot(&sig()).expect("snapshot");
+    let mut blob = from_snapshot_bytes(&bytes, &sig()).expect("blob restore");
+    assert_eq!(crank(&mut blob, observations[0]).2, expected[0]);
+
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(
+        begin_store_session(machine, &sig(), &mut *store.borrow_mut())
+            .map_err(|(_, error)| error)
+            .expect("begin"),
+    );
+    let mut lazy = resume_from_store_lazy(store, &sig()).expect("lazy restore");
+    assert_eq!(crank(lazy.machine_mut(), observations[0]).2, expected[0]);
+}
+
+#[test]
 fn malformed_accessor_rows_are_refused() {
     let (bytecode, names) = compile(FIRST);
     let mut machine = Interp::new();
