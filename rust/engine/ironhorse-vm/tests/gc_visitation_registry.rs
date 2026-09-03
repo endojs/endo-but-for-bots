@@ -373,6 +373,7 @@ const REGISTRY: &[(&str, &[Req], &str)] = &[
     ("this_captures", &[Req::DocumentedOnly], "non-owning property-slot indices; each property is owned by a closure environment reachable through its rooted arrow function"),
     // --- boundary-empty transient ---
     ("pending_new_target", &[Req::DocumentedOnly], "armed by SUPER, consumed/disarmed before every boundary (W6-15); collections run only at quiescent boundaries"),
+    ("array_iterator_proxy_get_context", &[Req::DocumentedOnly], "installed only across one synchronous Proxy trap call, restored on success/throw, and rejected by is_quiescent if leaked"),
 ];
 
 #[test]

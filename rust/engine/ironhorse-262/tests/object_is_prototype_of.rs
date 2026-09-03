@@ -55,10 +55,16 @@ fn prototype_walk_observes_proxy_internal_methods() {
 
 #[test]
 fn proxy_prototype_walk_is_computron_exact() {
-    agrees_exact(
+    for source in [
         "var p={};var o=new Proxy({},{getPrototypeOf:function(){return p}});p.isPrototypeOf(o)",
-    );
-    agrees_exact(
         "var e={},o=new Proxy({},{getPrototypeOf:function(){throw e}});try{({}).isPrototypeOf(o)}catch(x){x===e}",
-    );
+        "var o=new Proxy({},{getPrototypeOf:function(){return 1}});try{Object.getPrototypeOf(o);false}catch(e){e instanceof TypeError}",
+        "var t={},p={};Object.preventExtensions(t);var o=new Proxy(t,{getPrototypeOf:function(){return p}});try{Object.getPrototypeOf(o);false}catch(e){e instanceof TypeError}",
+        "var o=new Proxy({},{getPrototypeOf:1});try{Object.getPrototypeOf(o);false}catch(e){e instanceof TypeError}",
+        "Object.getPrototypeOf(new Proxy({},{}))===Object.prototype",
+        "Object.getPrototypeOf(new Proxy(new Proxy({},{}),{}))===Object.prototype",
+        "var t={},p=Object.getPrototypeOf(t);Object.preventExtensions(t);Object.getPrototypeOf(new Proxy(t,{getPrototypeOf:function(){return p}}))===p",
+    ] {
+        agrees_exact(source);
+    }
 }
