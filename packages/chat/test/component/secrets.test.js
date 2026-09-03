@@ -70,13 +70,29 @@ test.serial(
     const cleanup = secretsComponent($parent, powers, [], async text => {
       clipboardWrites.push(text);
     });
-    t.teardown(cleanup);
+    let cleanedUp = false;
+    t.teardown(() => {
+      if (!cleanedUp) cleanup();
+    });
     await waitFor(() => $parent.querySelector('.secret-card'));
 
-    t.true($parent.textContent.includes('Release publishing'));
+    t.is(
+      $parent.querySelector('.secret-card input[name="description"]').value,
+      'Release publishing',
+    );
     t.false($parent.textContent.includes(canary));
     t.false($parent.textContent.includes('readBase64'));
     t.false('__getMethodNames__' in summary);
+    t.false(
+      $parent
+        .querySelector('.secret-summary')
+        .textContent.includes('Release publishing'),
+    );
+
+    const $createPanel = $parent.querySelector('.secret-create-panel');
+    const $danger = $parent.querySelector('.secret-danger');
+    t.false($createPanel.open);
+    t.false($danger.open);
 
     const $clearClipboard = [...$parent.querySelectorAll('button')].find(
       button => button.textContent === 'Clear clipboard',
@@ -87,6 +103,9 @@ test.serial(
     t.true($parent.textContent.includes('Clipboard overwritten'));
 
     const $create = $parent.querySelector('.secret-create-form');
+    t.true($createPanel.contains($create));
+    $createPanel.open = true;
+    $createPanel.dispatchEvent(new Event('toggle'));
     const $name = $create.elements.namedItem('name');
     const $description = $create.elements.namedItem('description');
     const $value = $create.elements.namedItem('value');
@@ -99,6 +118,18 @@ test.serial(
     t.is($replacement.autocomplete, 'off');
     t.is($value.getAttribute('data-1p-ignore'), 'true');
     t.is($replacement.getAttribute('data-lpignore'), 'true');
+    t.true($danger.contains($replacement));
+    t.is(
+      $parent.querySelector('.secret-card input[name="description"]').value,
+      'Release publishing',
+    );
+    $value.value = canary;
+    $value.dispatchEvent(new Event('input', { bubbles: true }));
+    $createPanel.open = false;
+    $createPanel.dispatchEvent(new Event('toggle'));
+    t.is($value.value, '');
+    $createPanel.open = true;
+    $createPanel.dispatchEvent(new Event('toggle'));
     $name.value = 'release';
     $name.dispatchEvent(new Event('input', { bubbles: true }));
     $description.value = 'Release publishing';
@@ -119,6 +150,16 @@ test.serial(
     ]);
     t.is($value.value, '');
     t.false($parent.textContent.includes(canary));
+
+    $danger.open = true;
+    $danger.dispatchEvent(new Event('toggle'));
+    $replacement.value = canary;
+    $replacement.dispatchEvent(new Event('input', { bubbles: true }));
+    $danger.open = false;
+    $danger.dispatchEvent(new Event('toggle'));
+    t.is($replacement.value, '');
+    $danger.open = true;
+    $danger.dispatchEvent(new Event('toggle'));
 
     const $descriptionUpdate = $parent.querySelector(
       '.secret-card input[name="description"]',
@@ -144,5 +185,110 @@ test.serial(
     $revoke.click();
     await waitFor(() => calls.some(([operation]) => operation === 'revoke'));
     t.true(calls.some(([operation]) => operation === 'revoke'));
+
+    $value.value = canary;
+    $value.dispatchEvent(new Event('input', { bubbles: true }));
+    cleanup();
+    cleanedUp = true;
+    t.is($value.value, '');
+  },
+);
+
+test.serial(
+  'secret Space serializes mutations and refreshes failed audit events',
+  async t => {
+    const document = testDocument;
+    const canary = 'CANARY-error-must-not-render';
+    const summary = harden({
+      secretId: 'secret-race-test',
+      description: 'Race test',
+      state: 'active',
+      generation: 1n,
+      createdAt: '2026-09-03T00:00:00.000Z',
+      updatedAt: '2026-09-03T00:00:00.000Z',
+    });
+    let resolveReplace;
+    const replaceGate = new Promise(resolve => {
+      resolveReplace = resolve;
+    });
+    const replaceCalls = [];
+    let auditEvents = [];
+    const admin = Far('BlockingSecretAdmin', {
+      getSummary: () => summary,
+      replaceBase64: value => {
+        replaceCalls.push(value);
+        return replaceGate;
+      },
+      setDescription: () => {
+        auditEvents = [
+          harden({
+            eventId: 'failed-event',
+            secretId: summary.secretId,
+            operation: 'set-description',
+            outcome: 'failed',
+            generation: 1n,
+            occurredAt: '2026-09-03T00:00:01.000Z',
+            operationId: 'failed-operation',
+            reasonCode: 'SET_DESCRIPTION_FAILED',
+          }),
+        ];
+        throw new Error(canary);
+      },
+      revoke: () => undefined,
+    });
+    const catalog = Far('RaceSecretCatalog', {
+      list: () => [{ secretId: summary.secretId, summary, admin }],
+    });
+    const audit = Far('RaceSecretAudit', {
+      list: () => auditEvents,
+    });
+    const powers = Far('RaceSecretPowers', {
+      lookup: path => {
+        const key = Array.isArray(path) ? path.join('/') : path;
+        if (key === '@secrets/catalog') return catalog;
+        if (key === '@secrets/audit') return audit;
+        throw new Error('unknown path');
+      },
+    });
+
+    const $parent = document.createElement('div');
+    document.body.appendChild($parent);
+    const cleanup = secretsComponent($parent, powers, []);
+    t.teardown(cleanup);
+    await waitFor(() => $parent.querySelector('.secret-card'));
+
+    const $danger = $parent.querySelector('.secret-danger');
+    $danger.open = true;
+    $danger.dispatchEvent(new Event('toggle'));
+    const $replacement = $danger.querySelector('input[name="value"]');
+    $replacement.value = 'replacement';
+    $replacement.dispatchEvent(new Event('input', { bubbles: true }));
+    const $replaceForm = $danger.querySelector('.secret-replace-form');
+    $replaceForm.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    $replaceForm.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await waitFor(() => replaceCalls.length === 1);
+    t.is(replaceCalls.length, 1);
+    t.true($parent.querySelector('.secret-revoke').disabled);
+    t.true($parent.querySelector('button[type="submit"]').disabled);
+
+    resolveReplace();
+    await waitFor(() => !$parent.querySelector('.secret-revoke').disabled);
+
+    const $description = $parent.querySelector(
+      '.secret-card input[name="description"]',
+    );
+    $description.value = 'Fail this update';
+    $description.dispatchEvent(new Event('input', { bubbles: true }));
+    $description.form.dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    );
+    await waitFor(() => $parent.textContent.includes('set-description'));
+    t.true($parent.textContent.includes('failed'));
+    t.true($parent.textContent.includes('Secret operation failed.'));
+    t.false($parent.textContent.includes(canary));
   },
 );
