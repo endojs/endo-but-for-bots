@@ -147,6 +147,50 @@ fn iterator_constructor_supports_derived_construction() {
 }
 
 #[test]
+fn iterator_from_wraps_generic_iterators_and_caches_next_once() {
+    for source in [
+        "var gets=0,calls=0;var i={get next(){gets++;return function(){calls++;return calls<3?{value:calls}:{done:true}}}};var w=Iterator.from(i);[w!==i,Object.getPrototypeOf(Object.getPrototypeOf(w))===Iterator.prototype,w.toArray().join(','),gets,calls].join(':')",
+        "var calls=0;var first=function(){return calls++?{done:true}:{value:1}};var i={next:first};var w=Iterator.from(i);i.next=function(){return {value:9}};w.toArray().join(',')+':'+calls",
+        "var inner={n:0,next:function(){return this.n<2?{value:++this.n}:{done:true}}};var iterable={[Symbol.iterator]:function(){return inner},next:function(){throw 1}};Iterator.from(iterable).toArray().join(',')",
+        "var i={next:function(){return {done:true}}};Object.setPrototypeOf(i,Iterator.prototype);Iterator.from(i)===i",
+        "class I extends Iterator{next(){return {done:true}}}var i=new I();Iterator.from(i)===i",
+        "Iterator.from('ab').toArray().join(',')",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn iterator_from_propagates_acquisition_and_wrapper_protocol_errors() {
+    for source in [
+        "var marker={};var i={get next(){throw marker}};var same=false;try{Iterator.from(i)}catch(e){same=e===marker}same",
+        "var i={[Symbol.iterator]:0,next:function(){return {done:true}}};var ok=false;try{Iterator.from(i)}catch(e){ok=e instanceof TypeError}ok",
+        "var i={[Symbol.iterator]:function(){return 1}};var ok=false;try{Iterator.from(i)}catch(e){ok=e instanceof TypeError}ok",
+        "var w=Iterator.from({});var ok=false;try{w.next()}catch(e){ok=e instanceof TypeError}ok",
+        "Iterator.from({next:function(){return 1}}).next()",
+        "var p=Object.getPrototypeOf(Iterator.from({}));var ok=false;try{p.next.call({})}catch(e){ok=e instanceof TypeError}ok",
+        "var w=Iterator.from({});var next=[].values().next;var ok=false;try{next.call(w)}catch(e){ok=e instanceof TypeError}ok",
+        "var p=Object.getPrototypeOf(Iterator.from({}));var ok=false;try{p.next.call([].values())}catch(e){ok=e instanceof TypeError}ok",
+        "var ok=false;try{Iterator.from(1)}catch(e){ok=e instanceof TypeError}ok",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn iterator_from_wrapper_return_uses_the_live_underlying_method() {
+    for source in [
+        "var log=[];var i={next:function(){return {done:true}}};var w=Iterator.from(i);i.return=function(){log.push(this===i);return {value:5,done:true}};var r=w.return();r.value+':'+r.done+':'+log.join(',')",
+        "var gets=0;var i={next:function(){return {done:true}},get return(){gets++;return function(){return {done:true}}}};var w=Iterator.from(i);w.return();w.return();gets",
+        "var w=Iterator.from({});var r=w.return();Object.hasOwn(r,'value')+':'+r.value+':'+r.done",
+        "var i={next:function(){return {done:true}},return:0};var w=Iterator.from(i);var ok=false;try{w.return()}catch(e){ok=e instanceof TypeError}ok",
+        "var p=Object.getPrototypeOf(Iterator.from({}));var ok=false;try{p.return.call({})}catch(e){ok=e instanceof TypeError}ok",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
 fn to_array_consumes_intrinsic_iterators() {
     agrees("[1, 2, 3].values().toArray().join(',')");
     agrees("new Set([1, 2]).values().toArray().join(',')");
