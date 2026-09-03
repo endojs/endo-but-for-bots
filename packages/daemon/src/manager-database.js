@@ -41,6 +41,13 @@ import { q } from '@endo/errors';
  * @property {(storeNumber: string) => {localClock: number, remoteAckedClock: number}} getSyncedMeta
  * @property {(storeNumber: string, localClock: number, remoteAckedClock: number) => void} setSyncedMeta
  * @property {(storeNumber: string) => void} deleteSyncedMeta
+ * @property {(storeNumber: string, keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null) => void} writeCollectionEntry
+ * @property {(storeNumber: string, keyRank: string) => {keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null} | undefined} getCollectionEntry
+ * @property {(storeNumber: string, keyRank: string) => boolean} hasCollectionEntry
+ * @property {(storeNumber: string, keyRank: string) => void} deleteCollectionEntry
+ * @property {(storeNumber: string) => Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>} listCollectionEntries
+ * @property {(storeNumber: string) => number} countCollectionEntries
+ * @property {(storeNumber: string) => void} deleteAllCollectionEntries
  */
 
 // Node's ObjectWrap cleanup hook can be removed during GC without a current
@@ -109,6 +116,19 @@ const SCHEMA_SQL = `
     local_clock INTEGER NOT NULL DEFAULT 0,
     remote_acked_clock INTEGER NOT NULL DEFAULT 0
   );
+
+  CREATE TABLE IF NOT EXISTS collection_store_entry (
+    store_number TEXT NOT NULL,
+    key_rank TEXT NOT NULL,
+    key_body TEXT NOT NULL,
+    key_slots TEXT NOT NULL,
+    value_body TEXT,
+    value_slots TEXT,
+    PRIMARY KEY (store_number, key_rank)
+  );
+
+  CREATE INDEX IF NOT EXISTS collection_store_entry_rank
+    ON collection_store_entry (store_number, key_rank);
 `;
 
 /**
@@ -256,6 +276,28 @@ export const makeDaemonDatabase = (config, options) => {
   );
   const stmtDeleteSyncedMeta = prepare(
     'DELETE FROM synced_store_meta WHERE store_number = ?',
+  );
+
+  const stmtWriteCollectionEntry = prepare(
+    'INSERT OR REPLACE INTO collection_store_entry (store_number, key_rank, key_body, key_slots, value_body, value_slots) VALUES (?, ?, ?, ?, ?, ?)',
+  );
+  const stmtGetCollectionEntry = prepare(
+    'SELECT key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
+  );
+  const stmtHasCollectionEntry = prepare(
+    'SELECT 1 FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
+  );
+  const stmtDeleteCollectionEntry = prepare(
+    'DELETE FROM collection_store_entry WHERE store_number = ? AND key_rank = ?',
+  );
+  const stmtListCollectionEntries = prepare(
+    'SELECT key_rank AS keyRank, key_body AS keyBody, key_slots AS keySlots, value_body AS valueBody, value_slots AS valueSlots FROM collection_store_entry WHERE store_number = ? ORDER BY key_rank',
+  );
+  const stmtCountCollectionEntries = prepare(
+    'SELECT COUNT(*) AS count FROM collection_store_entry WHERE store_number = ?',
+  );
+  const stmtDeleteAllCollectionEntries = prepare(
+    'DELETE FROM collection_store_entry WHERE store_number = ?',
   );
 
   // -- Formula operations --
@@ -565,6 +607,95 @@ export const makeDaemonDatabase = (config, options) => {
     stmtDeleteSyncedMeta.run(storeNumber);
   };
 
+  // -- Collection store operations --
+  //
+  // A durable, incrementally-mutable passable-keyed store (the daemon-native
+  // analogue of `@agoric/store`'s `MapStore`). Each entry row carries the
+  // key's canonical rank encoding (`key_rank`, the primary key within a
+  // store) plus the marshal body+slots for both key and value so remotable
+  // keys/values round-trip through the formula graph. `value_body` /
+  // `value_slots` are null for set-like collections (a later phase).
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} keyRank
+   * @param {string} keyBody
+   * @param {string} keySlots
+   * @param {string | null} valueBody
+   * @param {string | null} valueSlots
+   */
+  const writeCollectionEntry = (
+    storeNumber,
+    keyRank,
+    keyBody,
+    keySlots,
+    valueBody,
+    valueSlots,
+  ) => {
+    stmtWriteCollectionEntry.run(
+      storeNumber,
+      keyRank,
+      keyBody,
+      keySlots,
+      valueBody,
+      valueSlots,
+    );
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} keyRank
+   * @returns {{keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null} | undefined}
+   */
+  const getCollectionEntry = (storeNumber, keyRank) => {
+    return /** @type {{keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null} | undefined} */ (
+      stmtGetCollectionEntry.get(storeNumber, keyRank)
+    );
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} keyRank
+   * @returns {boolean}
+   */
+  const hasCollectionEntry = (storeNumber, keyRank) => {
+    return stmtHasCollectionEntry.get(storeNumber, keyRank) !== undefined;
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @param {string} keyRank
+   */
+  const deleteCollectionEntry = (storeNumber, keyRank) => {
+    stmtDeleteCollectionEntry.run(storeNumber, keyRank);
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @returns {Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>}
+   */
+  const listCollectionEntries = storeNumber => {
+    return /** @type {Array<{keyRank: string, keyBody: string, keySlots: string, valueBody: string | null, valueSlots: string | null}>} */ (
+      stmtListCollectionEntries.all(storeNumber)
+    );
+  };
+
+  /**
+   * @param {string} storeNumber
+   * @returns {number}
+   */
+  const countCollectionEntries = storeNumber => {
+    const row = /** @type {{count: number} | undefined} */ (
+      stmtCountCollectionEntries.get(storeNumber)
+    );
+    return row === undefined ? 0 : row.count;
+  };
+
+  /** @param {string} storeNumber */
+  const deleteAllCollectionEntries = storeNumber => {
+    stmtDeleteAllCollectionEntries.run(storeNumber);
+  };
+
   const close = () => {
     db.close();
   };
@@ -604,6 +735,13 @@ export const makeDaemonDatabase = (config, options) => {
     getSyncedMeta,
     setSyncedMeta,
     deleteSyncedMeta,
+    writeCollectionEntry,
+    getCollectionEntry,
+    hasCollectionEntry,
+    deleteCollectionEntry,
+    listCollectionEntries,
+    countCollectionEntries,
+    deleteAllCollectionEntries,
   });
 };
 harden(makeDaemonDatabase);

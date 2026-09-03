@@ -13,7 +13,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { CollectionStoreDeferredTaskParams, CollectionStoreFormula, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 
@@ -24,6 +24,7 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
+ * @param {DaemonCore['formulateCollectionStore']} args.formulateCollectionStore
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -40,6 +41,7 @@ export const makeGuestMaker = ({
   formulateEval,
   formulateReadableBlob,
   formulateMarshalValue,
+  formulateCollectionStore,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -336,6 +338,34 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
+    /**
+     * @param {string | string[]} petName
+     * @param {CollectionStoreFormula['kind']} kind
+     */
+    const makeCollectionStore = async (petName, kind) => {
+      const { namePath } = petNamePathFrom(petName);
+      /** @type {DeferredTasks<CollectionStoreDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.collectionStoreId),
+      );
+      const { id, value } = await formulateCollectionStore(
+        kind,
+        tasks,
+        pinTransient,
+      );
+      // The store survives by its bound pet name; drop the transient pin the
+      // formulate took to bridge the naming.
+      await unpinTransient(id);
+      return /** @type {any} */ (value);
+    };
+
+    /** @type {EndoGuest['makeMapStore']} */
+    const makeMapStore = petName => makeCollectionStore(petName, 'map');
+
+    /** @type {EndoGuest['makeSetStore']} */
+    const makeSetStore = petName => makeCollectionStore(petName, 'set');
+
     /** @type {EndoGuest} */
     const guest = {
       // Directory
@@ -390,6 +420,8 @@ export const makeGuestMaker = ({
       form,
       storeBlob,
       storeValue,
+      makeMapStore,
+      makeSetStore,
       submit,
       sendValue,
     };

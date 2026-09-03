@@ -281,6 +281,13 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       };
       break;
     }
+    case 'collection-store': {
+      // The store's entries live in their own SQLite table keyed by the
+      // formula number, not on the formula record; the only formula-level
+      // datum is the collection `kind` (`map` or `set`).
+      properties.kind = { kind: 'literal', value: formula.kind };
+      break;
+    }
     case 'endo':
     case 'worker':
     case 'pet-store':
