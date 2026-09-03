@@ -195,13 +195,27 @@ It must not use a text input or textarea for secret bytes.
 The UI keeps these controls in confined, controlled state and clears that state
 synchronously on submission, before awaiting the manager operation, so a
 submitted value is not left in the live DOM.
+Creation is in a disclosure panel that is closed by default.
+Replacement is inside each secret's closed danger-zone disclosure because it
+changes the value returned to every existing holder of that capability.
+Closing either disclosure synchronously clears its secret-value draft.
 Description and inventory-name controls remain ordinary text because their
 values are explicitly non-secret metadata.
+The current description appears only in its editable description field; the
+card separately shows a stable secret identifier prefix so equal descriptions
+do not make destructive actions ambiguous.
 
 Revocation is placed behind a visibly labeled danger-zone confirmation because
 it denies all delegated copies and is not an inventory rename or removal.
 Errors shown in the Space are fixed messages and never include caught exception
 text, method arguments, or backend responses.
+Mutation controls are disabled while an operation is pending, and a failed
+operation refreshes the audit view without replacing its fixed UI error.
+
+The Space owns a viewport-height vertical scroll container even though the Chat
+shell clips body overflow.
+At narrow widths, controls wrap without creating document-level horizontal
+overflow, while the audit table scrolls horizontally inside its own section.
 
 The Space provides a **Clear clipboard** action that asks the browser clipboard
 capability to write an empty string.

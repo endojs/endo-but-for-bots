@@ -37,10 +37,12 @@ harden(textToBase64);
  * @param {'cleared' | 'failed' | null} props.clipboardStatus
  * @param {{ name: string, description: string, value: string }} props.createDraft
  * @param {(field: 'name' | 'description' | 'value', value: string) => void} props.onCreateInput
+ * @param {(open: boolean) => void} props.onCreateToggle
  * @param {() => void} props.onCreate
  * @param {(secretId: string, description: string) => void} props.onDescriptionInput
  * @param {(secretId: string) => void} props.onDescription
  * @param {(secretId: string, value: string) => void} props.onReplaceInput
+ * @param {(secretId: string, open: boolean) => void} props.onDangerToggle
  * @param {(secretId: string) => void} props.onReplace
  * @param {(secretId: string) => void} props.onRevoke
  * @param {() => void} props.onClearClipboard
@@ -54,10 +56,12 @@ const SecretsView = ({
   clipboardStatus,
   createDraft,
   onCreateInput,
+  onCreateToggle,
   onCreate,
   onDescriptionInput,
   onDescription,
   onReplaceInput,
+  onDangerToggle,
   onReplace,
   onRevoke,
   onClearClipboard,
@@ -87,7 +91,11 @@ const SecretsView = ({
           { type: 'button', onClick: onClearClipboard },
           'Clear clipboard',
         ),
-        h('button', { type: 'button', onClick: onRefresh }, 'Refresh'),
+        h(
+          'button',
+          { type: 'button', disabled: loading, onClick: onRefresh },
+          'Refresh',
+        ),
       ),
     ),
     clipboardStatus === 'cleared'
@@ -106,64 +114,74 @@ const SecretsView = ({
       : null,
     error ? h('div', { class: 'secrets-error', role: 'alert' }, error) : null,
     h(
-      'form',
+      'details',
       {
-        class: 'secret-create-form',
-        autocomplete: 'off',
-        /** @param {{ preventDefault: () => void }} event */
-        onSubmit: event => {
-          event.preventDefault();
-          onCreate();
+        class: 'secret-create-panel',
+        /** @param {{ currentTarget: { open: boolean } }} event */
+        onToggle: event => {
+          onCreateToggle(event.currentTarget.open);
         },
       },
-      h('h2', null, 'Add a secret'),
+      h('summary', null, 'Add a secret'),
       h(
-        'label',
-        null,
-        'Inventory name',
-        h('input', {
-          name: 'name',
-          required: true,
+        'form',
+        {
+          class: 'secret-create-form',
           autocomplete: 'off',
-          placeholder: 'github-release',
-          value: createDraft.name,
-          /** @param {{ target: { value: string } }} event */
-          onInput: event => onCreateInput('name', event.target.value),
-        }),
+          /** @param {{ preventDefault: () => void }} event */
+          onSubmit: event => {
+            event.preventDefault();
+            onCreate();
+          },
+        },
+        h(
+          'label',
+          null,
+          'Inventory name',
+          h('input', {
+            name: 'name',
+            required: true,
+            autocomplete: 'off',
+            placeholder: 'github-release',
+            value: createDraft.name,
+            /** @param {{ target: { value: string } }} event */
+            onInput: event => onCreateInput('name', event.target.value),
+          }),
+        ),
+        h(
+          'label',
+          null,
+          'Description (not secret)',
+          h('input', {
+            name: 'description',
+            required: true,
+            maxlength: 200,
+            autocomplete: 'off',
+            value: createDraft.description,
+            /** @param {{ target: { value: string } }} event */
+            onInput: event => onCreateInput('description', event.target.value),
+          }),
+        ),
+        h(
+          'label',
+          null,
+          'Secret value (UTF-8)',
+          h('input', {
+            type: 'password',
+            name: 'value',
+            required: true,
+            autocomplete: 'off',
+            autocapitalize: 'off',
+            'data-1p-ignore': 'true',
+            'data-lpignore': 'true',
+            spellcheck: false,
+            value: createDraft.value,
+            /** @param {{ target: { value: string } }} event */
+            onInput: event => onCreateInput('value', event.target.value),
+          }),
+        ),
+        h('button', { type: 'submit', disabled: loading }, 'Store secret'),
       ),
-      h(
-        'label',
-        null,
-        'Description (not secret)',
-        h('input', {
-          name: 'description',
-          required: true,
-          maxlength: 200,
-          autocomplete: 'off',
-          value: createDraft.description,
-          /** @param {{ target: { value: string } }} event */
-          onInput: event => onCreateInput('description', event.target.value),
-        }),
-      ),
-      h(
-        'label',
-        null,
-        'Secret value (UTF-8)',
-        h('input', {
-          type: 'password',
-          name: 'value',
-          required: true,
-          autocomplete: 'off',
-          autocapitalize: 'off',
-          'data-1p-ignore': 'true',
-          'data-lpignore': 'true',
-          spellcheck: false,
-          value: createDraft.value,
-          /** @param {{ target: { value: string } }} event */
-          onInput: event => onCreateInput('value', event.target.value),
-        }),
-      ),
-      h('button', { type: 'submit', disabled: loading }, 'Store secret'),
     ),
     h(
       'section',
@@ -178,7 +196,11 @@ const SecretsView = ({
           h(
             'div',
             { class: 'secret-summary' },
-            h('strong', null, summary.description),
+            h(
+              'code',
+              { class: 'secret-id', title: secretId },
+              secretId.slice(0, 12),
+            ),
             h('span', { class: 'secret-state' }, summary.state),
             h('span', null, `generation ${summary.generation}`),
           ),
@@ -193,57 +215,77 @@ const SecretsView = ({
               },
             },
             h('input', {
+              'aria-label': 'Description (not secret)',
               name: 'description',
               value: descriptionDraft,
               maxlength: 200,
-              disabled: summary.state === 'revoked',
+              disabled: loading || summary.state === 'revoked',
               /** @param {{ target: { value: string } }} event */
               onInput: event =>
                 onDescriptionInput(secretId, event.target.value),
             }),
             h(
               'button',
-              { type: 'submit', disabled: summary.state === 'revoked' },
-              'Update description',
-            ),
-          ),
-          h(
-            'form',
-            {
-              autocomplete: 'off',
-              /** @param {{ preventDefault: () => void }} event */
-              onSubmit: event => {
-                event.preventDefault();
-                onReplace(secretId);
+              {
+                type: 'submit',
+                disabled: loading || summary.state === 'revoked',
               },
-            },
-            h('input', {
-              type: 'password',
-              name: 'value',
-              required: true,
-              autocomplete: 'off',
-              autocapitalize: 'off',
-              'data-1p-ignore': 'true',
-              'data-lpignore': 'true',
-              spellcheck: false,
-              placeholder: 'Replacement value',
-              disabled: summary.state === 'revoked',
-              value: replacementDraft,
-              /** @param {{ target: { value: string } }} event */
-              onInput: event => onReplaceInput(secretId, event.target.value),
-            }),
-            h(
-              'button',
-              { type: 'submit', disabled: summary.state === 'revoked' },
-              'Replace value',
+              'Update description',
             ),
           ),
           summary.state === 'revoked'
             ? null
             : h(
                 'details',
-                { class: 'secret-danger' },
+                {
+                  class: 'secret-danger',
+                  /** @param {{ currentTarget: { open: boolean } }} event */
+                  onToggle: event =>
+                    onDangerToggle(secretId, event.currentTarget.open),
+                },
                 h('summary', null, 'Danger zone'),
+                h(
+                  'p',
+                  null,
+                  'Replacement changes the value returned to every holder of this secret capability.',
+                ),
+                h(
+                  'form',
+                  {
+                    class: 'secret-replace-form',
+                    autocomplete: 'off',
+                    /** @param {{ preventDefault: () => void }} event */
+                    onSubmit: event => {
+                      event.preventDefault();
+                      onReplace(secretId);
+                    },
+                  },
+                  h(
+                    'label',
+                    null,
+                    'Replacement secret value (UTF-8)',
+                    h('input', {
+                      type: 'password',
+                      name: 'value',
+                      required: true,
+                      autocomplete: 'off',
+                      autocapitalize: 'off',
+                      'data-1p-ignore': 'true',
+                      'data-lpignore': 'true',
+                      spellcheck: false,
+                      disabled: loading,
+                      value: replacementDraft,
+                      /** @param {{ target: { value: string } }} event */
+                      onInput: event =>
+                        onReplaceInput(secretId, event.target.value),
+                    }),
+                  ),
+                  h(
+                    'button',
+                    { type: 'submit', disabled: loading },
+                    'Replace value',
+                  ),
+                ),
                 h(
                   'p',
                   null,
@@ -254,6 +296,7 @@ const SecretsView = ({
                   {
                     type: 'button',
                     class: 'secret-revoke',
+                    disabled: loading,
                     onClick: () => onRevoke(secretId),
                   },
                   'Confirm revocation',
@@ -269,6 +312,7 @@ const SecretsView = ({
       h(
         'table',
         null,
+        h('caption', null, 'Secret operation history'),
         h(
           'thead',
           null,
@@ -331,6 +375,7 @@ export const secretsComponent = (
   let createDraft = { name: '', description: '', value: '' };
   /** @type {Map<string, string>} */
   const descriptionDrafts = new Map();
+  const dirtyDescriptions = new Set();
   /** @type {Map<string, string>} */
   const replacementDrafts = new Map();
   let loading = true;
@@ -361,7 +406,14 @@ export const secretsComponent = (
           createDraft = { ...createDraft, [field]: value };
           render();
         },
+        onCreateToggle: open => {
+          if (!open && createDraft.value !== '') {
+            createDraft = { ...createDraft, value: '' };
+            render();
+          }
+        },
         onCreate: () => {
+          if (loading) return;
           const { name, description, value } = createDraft;
           createDraft = { name: '', description: '', value: '' };
           render();
@@ -378,21 +430,31 @@ export const secretsComponent = (
           });
         },
         onDescriptionInput: (secretId, description) => {
+          dirtyDescriptions.add(secretId);
           descriptionDrafts.set(secretId, description);
           render();
         },
         onDescription: secretId => {
+          if (loading) return;
           const description = descriptionDrafts.get(secretId);
           if (description === undefined) return;
-          void mutate(async () =>
-            E(requireAdmin(secretId)).setDescription(description),
-          );
+          void mutate(async () => {
+            await E(requireAdmin(secretId)).setDescription(description);
+            dirtyDescriptions.delete(secretId);
+          });
         },
         onReplaceInput: (secretId, value) => {
           replacementDrafts.set(secretId, value);
           render();
         },
+        onDangerToggle: (secretId, open) => {
+          if (!open && replacementDrafts.get(secretId) !== '') {
+            replacementDrafts.set(secretId, '');
+            render();
+          }
+        },
         onReplace: secretId => {
+          if (loading) return;
           const value = replacementDrafts.get(secretId);
           if (value === undefined) return;
           replacementDrafts.set(secretId, '');
@@ -402,10 +464,13 @@ export const secretsComponent = (
           );
         },
         onRevoke: secretId => {
+          if (loading) return;
           void mutate(async () => E(requireAdmin(secretId)).revoke());
         },
         onClearClipboard: () => clearClipboard(),
-        onRefresh: () => void refresh(),
+        onRefresh: () => {
+          if (!loading) void refresh();
+        },
       }),
       $mount,
     );
@@ -442,37 +507,41 @@ export const secretsComponent = (
     );
   };
 
+  const loadData = async () => {
+    const [catalog, audit] = await Promise.all([
+      E(/** @type {any} */ (powers)).lookup(['@secrets', 'catalog']),
+      E(/** @type {any} */ (powers)).lookup(['@secrets', 'audit']),
+    ]);
+    const [entries, auditEvents] = await Promise.all([
+      E(catalog).list(),
+      E(audit).list(100n),
+    ]);
+    admins.clear();
+    rows = entries.map(entry => {
+      admins.set(entry.secretId, entry.admin);
+      if (!dirtyDescriptions.has(entry.secretId)) {
+        descriptionDrafts.set(entry.secretId, entry.summary.description);
+      }
+      if (!replacementDrafts.has(entry.secretId)) {
+        replacementDrafts.set(entry.secretId, '');
+      }
+      return harden({
+        secretId: entry.secretId,
+        summary: entry.summary,
+        descriptionDraft: descriptionDrafts.get(entry.secretId) || '',
+        replacementDraft: replacementDrafts.get(entry.secretId) || '',
+      });
+    });
+    events = auditEvents;
+  };
+
   const refresh = async () => {
     loading = true;
     error = null;
     render();
     await null;
     try {
-      const [catalog, audit] = await Promise.all([
-        E(/** @type {any} */ (powers)).lookup(['@secrets', 'catalog']),
-        E(/** @type {any} */ (powers)).lookup(['@secrets', 'audit']),
-      ]);
-      const [entries, auditEvents] = await Promise.all([
-        E(catalog).list(),
-        E(audit).list(100n),
-      ]);
-      admins.clear();
-      rows = entries.map(entry => {
-        admins.set(entry.secretId, entry.admin);
-        if (!descriptionDrafts.has(entry.secretId)) {
-          descriptionDrafts.set(entry.secretId, entry.summary.description);
-        }
-        if (!replacementDrafts.has(entry.secretId)) {
-          replacementDrafts.set(entry.secretId, '');
-        }
-        return harden({
-          secretId: entry.secretId,
-          summary: entry.summary,
-          descriptionDraft: descriptionDrafts.get(entry.secretId) || '',
-          replacementDraft: replacementDrafts.get(entry.secretId) || '',
-        });
-      });
-      events = auditEvents;
+      await loadData();
     } catch {
       error = 'Secret management is unavailable.';
     } finally {
@@ -483,6 +552,7 @@ export const secretsComponent = (
 
   /** @param {() => Promise<unknown>} operation */
   const mutate = async operation => {
+    if (loading) return;
     loading = true;
     error = null;
     render();
@@ -492,6 +562,11 @@ export const secretsComponent = (
       await refresh();
     } catch {
       error = 'Secret operation failed.';
+      try {
+        await loadData();
+      } catch {
+        // Preserve the fixed operation error if refreshing also fails.
+      }
       loading = false;
       render();
     }
@@ -502,8 +577,13 @@ export const secretsComponent = (
 
   return () => {
     disposed = true;
+    for (const input of $mount.querySelectorAll('input[type="password"]')) {
+      /** @type {HTMLInputElement} */ (input).value = '';
+    }
+    createDraft = { ...createDraft, value: '' };
     admins.clear();
     descriptionDrafts.clear();
+    dirtyDescriptions.clear();
     replacementDrafts.clear();
     unmount($mount);
     $mount.remove();

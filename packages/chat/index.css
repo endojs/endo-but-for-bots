@@ -10439,23 +10439,36 @@ button.btn-spinner::after {
   }
 }
 /* Secret management Space */
+#secrets-root {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
 .secrets-space {
   box-sizing: border-box;
   height: 100%;
-  overflow: auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 24px;
+  width: 100%;
 }
 
 .secrets-header,
 .secret-summary {
-  align-items: center;
+  align-items: flex-start;
   display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   justify-content: space-between;
 }
 
 .secrets-header-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -10463,7 +10476,7 @@ button.btn-spinner::after {
   color: var(--muted-color, #555);
 }
 
-.secret-create-form,
+.secret-create-panel,
 .secret-card,
 .secret-audit {
   border: 1px solid var(--border-color, #d0d0d0);
@@ -10472,7 +10485,13 @@ button.btn-spinner::after {
   padding: 16px;
 }
 
+.secret-create-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
 .secret-create-form label,
+.secret-card label,
 .secret-card form {
   display: grid;
   gap: 6px;
@@ -10483,6 +10502,10 @@ button.btn-spinner::after {
 .secret-card input {
   box-sizing: border-box;
   width: 100%;
+}
+
+.secret-id {
+  overflow-wrap: anywhere;
 }
 
 .secret-state {
@@ -10511,7 +10534,18 @@ button.btn-spinner::after {
 
 .secret-audit table {
   border-collapse: collapse;
+  min-width: 42rem;
   width: 100%;
+}
+
+.secret-audit {
+  overflow-x: auto;
+}
+
+.secret-audit caption {
+  font-weight: 600;
+  padding-block-end: 8px;
+  text-align: left;
 }
 
 .secret-audit th,
@@ -10519,4 +10553,14 @@ button.btn-spinner::after {
   border-bottom: 1px solid var(--border-color, #d0d0d0);
   padding: 6px;
   text-align: left;
+}
+
+@media (max-width: 40rem) {
+  .secrets-space {
+    padding: 12px;
+  }
+
+  .secrets-header {
+    display: grid;
+  }
 }
