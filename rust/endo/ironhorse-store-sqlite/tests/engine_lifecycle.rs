@@ -795,6 +795,21 @@ fn regexp_string_iterators_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn regexp_match_and_search_protocols_survive_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "regexp-match-search-protocols",
+        &[
+            "var rm=RegExp.prototype[Symbol.match]; \
+             var rs=RegExp.prototype[Symbol.search]; var t=0; t",
+            "var rm;var rs;var t;var n=0; \
+             t=rm.call({flags:'g',lastIndex:4,exec:function(){n++;return n===1?{0:'x'}:null}},'x')[0]+':'+n;t",
+            "var rm;var rs;var t;t=t+':'+rs.call(/b/,'abc');t",
+        ],
+    );
+    assert_eq!(last, "x:2:1");
+}
+
+#[test]
 fn array_of_results_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "array-of-results",
