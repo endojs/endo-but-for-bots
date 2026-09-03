@@ -8396,6 +8396,27 @@ impl Interp {
                 self.done_id = Some(self.intern_key("done"));
             }
         }
+        // The four collection constructors perform AddEntriesFromIterable (or
+        // its Set counterpart) in native code. They therefore read `set` or
+        // `add` before acquiring the iterator, then drive `next` and inspect
+        // `done`/`value`, even when none of those names occurs in guest source.
+        // Reify every implicit boot-default key before the prototype-method
+        // linking pass so these operations use the ordinary observable
+        // property path and intrinsic iterator-result objects carry fields.
+        let collection_constructor_used = ["Map", "Set", "WeakMap", "WeakSet"]
+            .iter()
+            .any(|name| self.symbol_ids.contains_key(*name));
+        if collection_constructor_used {
+            for name in ["add", "set", "next", "done", "value", "return"] {
+                self.intern_key(name);
+            }
+            if self.value_id.is_none() {
+                self.value_id = Some(self.intern_key("value"));
+            }
+            if self.done_id.is_none() {
+                self.done_id = Some(self.intern_key("done"));
+            }
+        }
         // `Date.prototype.toJSON` invokes the receiver's `toISOString`
         // property even when the source never names that method directly.
         // Intern it before the prototype-method pass so a Date receiver sees
@@ -20648,9 +20669,10 @@ impl Interp {
             // `fxNewChunk(mxTableMinLength * 8)` address array — the sole
             // metering (xsMapSet.c calls no `mxMeter`), charged explicitly here
             // since the table lives in the `collections` side table. An
-            // iterable argument (the copy-constructor form) drives the iterator
-            // protocol and self-names an honest skip. `Map()` without `new`
-            // throws a TypeError (its abort metering is a later increment).
+            // iterable argument uses the full observable iterator protocol;
+            // only a provably intrinsic dense Array takes the calibrated fast
+            // path. `Map()` without `new` throws a TypeError (its abort
+            // metering is a later increment).
             Native::Map | Native::Set if has_target => {
                 let a = arg(0);
                 let (proto, kind) = match native {
@@ -20689,8 +20711,8 @@ impl Interp {
             }
             // `new WeakMap()` / `new WeakSet()` (`fxNewWeakMapInstance`): only
             // two `fxNewSlot`s (instance + weak list); there is no table or
-            // address chunk — the entries hang off the key objects. An iterable
-            // argument self-names.
+            // address chunk — the entries hang off the key objects. Iterable
+            // arguments share the Map/Set protocol implementation above.
             Native::WeakMap | Native::WeakSet if has_target => {
                 let a = arg(0);
                 let (proto, kind) = match native {
@@ -25673,16 +25695,6 @@ impl Interp {
             Some(data) if !data.revoked => self.slot_is_callable(data.target),
             _ => false,
         }
-    }
-
-    /// Whether a slot is a **user** (bytecode) function — one `run_callback` can
-    /// drive (not a native intrinsic method, bound function, or promise
-    /// resolving function). Its `FuncInfo` carries neither a `native` nor a
-    /// `method` marker and it has no bound-function record.
-    fn is_user_function_value(&self, v: Slot) -> bool {
-        matches!(v.value, Payload::Reference(r)
-            if self.functions.get(&r).is_some_and(|fi| fi.native.is_none() && fi.method.is_none())
-                && !self.bound_functions.contains_key(&r))
     }
 
     /// Whether any promise jobs are pending (the pump-loop latch query — XS's
@@ -35032,11 +35044,9 @@ impl Interp {
         }
     }
 
-    /// Populate a freshly-created collection from the intrinsic iterator of a
-    /// dense Array. This is the common Test262 constructor path. An own
-    /// `@@iterator` is left to the general iterator-protocol increment; the
-    /// constructor still observes an overridden `set`/`add`, including a
-    /// thrown completion, before consuming elements.
+    /// Populate a freshly-created collection through the calibrated dense
+    /// Array fast path when no observable iterator operation is bypassed.
+    /// Every other input routes to [`Self::populate_collection_from_iterable`].
     fn populate_collection_from_dense_array(
         &mut self,
         code: &[u8],
@@ -35045,30 +35055,33 @@ impl Interp {
     ) -> Result<(), Halt> {
         let array = match iterable.value {
             Payload::Reference(array) if self.arrays.contains_key(&array) => array,
-            _ => return Err(Halt::Unsupported("collection-constructor:general-iterable")),
+            _ => return self.populate_collection_from_iterable(code, inst, iterable),
         };
-        if let Some(iterator_id) = self.well_known_symbol_property_id("iterator") {
-            if self
-                .ordinary_get_own_descriptor(array, iterator_id)
-                .is_some()
-            {
-                return Err(Halt::Unsupported(
-                    "collection-constructor:custom-array-iterator",
-                ));
-            }
-        }
-        let data = &self.arrays[&array];
-        if (0..data.length).any(|index| !data.items().contains_key(&index)) {
-            return Err(Halt::Unsupported("collection-constructor:sparse-array"));
-        }
-        let elements: Vec<Slot> = (0..data.length).map(|index| data.items()[&index]).collect();
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
         let kind = self.collections[&inst].kind;
+        let next_id = self.intern_key("next");
+        let return_id = self.intern_key("return");
+        if !self.chain_resolves_native_data_method(
+            array,
+            iterator_id,
+            NativeMethod::ArrayValues,
+        )
+            || !self.chain_resolves_native_data_method(
+                self.array_iterator_proto,
+                next_id,
+                NativeMethod::ArrayIteratorNext,
+            )
+            || self.chain_has_descriptor(self.array_iterator_proto, return_id)
+        {
+            return self.populate_collection_from_iterable(code, inst, iterable);
+        }
         let method_name = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
             "set"
         } else {
             "add"
         };
-        let method_was_linked = self.symbol_ids.contains_key(method_name);
         let method_id = self.intern_key(method_name);
         let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
         let expected = match kind {
@@ -35092,7 +35105,6 @@ impl Interp {
         // AND no `add`/`set` descriptor exists anywhere on the receiver's chain
         // (a truly unbound intrinsic); a user who cleared `add` to `undefined`
         // leaves a descriptor, so that case still throws per specification.
-        let _ = method_was_linked;
         if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
             if let Some((&function, _)) = self
                 .functions
@@ -35109,38 +35121,56 @@ impl Interp {
             Payload::Reference(function) => self.method_of(function) == Some(expected),
             _ => false,
         };
-        if !intrinsic_adder && !self.is_user_function_value(adder) {
-            return Err(Halt::Unsupported(
-                "collection-constructor:native-custom-adder",
-            ));
+        if !intrinsic_adder {
+            return self.populate_collection_from_iterable_with_adder(
+                code,
+                inst,
+                iterable,
+                Some(adder),
+            );
         }
-
+        let (dense, entries_are_dense_pairs) = {
+            let data = &self.arrays[&array];
+            let dense = (0..data.length).all(|index| data.items().contains_key(&index));
+            let entries_are_dense_pairs = !matches!(kind, CollKind::Map | CollKind::WeakMap)
+                || data.items().values().all(|element| {
+                    matches!(element, Slot {
+                        kind: Kind::Reference,
+                        value: Payload::Reference(entry),
+                        ..
+                    }
+                        if self.arrays.get(&entry).is_some_and(|entry_data| {
+                            entry_data.length >= 2
+                                && entry_data.items().contains_key(&0)
+                                && entry_data.items().contains_key(&1)
+                        }))
+                });
+            (dense, entries_are_dense_pairs)
+        };
+        if !dense || !entries_are_dense_pairs {
+            return self.populate_collection_from_iterable_with_adder(
+                code,
+                inst,
+                iterable,
+                Some(adder),
+            );
+        }
+        // Snapshotting is safe only after the observable adder lookup proved
+        // that it resolves to the intrinsic. A custom getter or adder can
+        // mutate the iterable and must take the live iterator path above.
+        let data = &self.arrays[&array];
+        let elements: Vec<Slot> = (0..data.length).map(|index| data.items()[&index]).collect();
         for element in elements {
             let (key, value) = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
                 let entry = match element.value {
-                    Payload::Reference(entry) if self.arrays.contains_key(&entry) => entry,
-                    _ => return Err(self.catchable_type_error()),
+                    Payload::Reference(entry) => entry,
+                    _ => unreachable!("dense Map entries were checked before iteration"),
                 };
                 let entry_data = &self.arrays[&entry];
-                if entry_data.length < 2
-                    || !entry_data.items().contains_key(&0)
-                    || !entry_data.items().contains_key(&1)
-                {
-                    return Err(Halt::Unsupported("collection-constructor:sparse-map-entry"));
-                }
                 (entry_data.items()[&0], entry_data.items()[&1])
             } else {
                 (element, Slot::undefined())
             };
-            if !intrinsic_adder {
-                let args = if matches!(kind, CollKind::Map | CollKind::WeakMap) {
-                    vec![key, value]
-                } else {
-                    vec![key]
-                };
-                self.run_callback(code, adder, receiver, &args)?;
-                continue;
-            }
             let key = self.normalize_coll_key(key);
             if matches!(kind, CollKind::WeakMap | CollKind::WeakSet) && key.kind != Kind::Reference
             {
@@ -35166,6 +35196,212 @@ impl Interp {
             }
         }
         Ok(())
+    }
+
+    /// `AddEntriesFromIterable` for Map/WeakMap and the corresponding Set/
+    /// WeakSet constructor loop. The adder is read before the iterator method;
+    /// iterator advancement failures propagate directly, while every abrupt
+    /// completion after a value is yielded closes the iterator.
+    fn populate_collection_from_iterable(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        iterable: Slot,
+    ) -> Result<(), Halt> {
+        self.populate_collection_from_iterable_with_adder(code, inst, iterable, None)
+    }
+
+    fn populate_collection_from_iterable_with_adder(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        iterable: Slot,
+        adder: Option<Slot>,
+    ) -> Result<(), Halt> {
+        let saved_jumps = std::mem::take(&mut self.jumps);
+        let outcome = self.populate_collection_from_iterable_inner(code, inst, iterable, adder);
+        self.jumps = saved_jumps;
+        match outcome {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => match self.raise_js(error) {
+                Ok(target) => Err(Halt::Resume(target)),
+                Err(halt) => Err(halt),
+            },
+            Err(halt) => Err(halt),
+        }
+    }
+
+    fn populate_collection_from_iterable_inner(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        iterable: Slot,
+        prefetched_adder: Option<Slot>,
+    ) -> Result<Result<(), Slot>, Halt> {
+        let kind = self.collections[&inst].kind;
+        let is_map = matches!(kind, CollKind::Map | CollKind::WeakMap);
+        let method_name = if is_map { "set" } else { "add" };
+        let expected = match kind {
+            CollKind::Map => NativeMethod::MapSet,
+            CollKind::Set => NativeMethod::SetAdd,
+            CollKind::WeakMap => NativeMethod::WeakMapSet,
+            CollKind::WeakSet => NativeMethod::WeakSetAdd,
+        };
+        let method_id = self.intern_key(method_name);
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(inst));
+        let mut adder = match prefetched_adder {
+            Some(adder) => adder,
+            None => match self
+                .array_from_try(|this| this.ordinary_get(code, inst, method_id, receiver))?
+            {
+                Ok(adder) => adder,
+                Err(error) => return Ok(Err(error)),
+            },
+        };
+        // Sparse intrinsic installation means an implicitly used `add`/`set`
+        // can be absent from the prototype until this constructor reaches it.
+        // Recover only genuine absence; an explicit guest `undefined` remains
+        // observable and fails the callable check.
+        if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+            if let Some((&function, _)) = self
+                .functions
+                .iter()
+                .find(|(_, info)| info.method == Some(expected))
+            {
+                adder = Slot::of(Kind::Reference, Payload::Reference(function));
+            }
+        }
+        if !self.is_callable_value(adder) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+
+        let iterator_id = self
+            .well_known_symbol_property_id("iterator")
+            .expect("well-known iterator symbol");
+        let iterator_method = match iterable.value {
+            Payload::Reference(object) if iterable.kind == Kind::Reference => {
+                match self
+                    .array_from_try(|this| this.mop_get(code, object, iterator_id, iterable))?
+                {
+                    Ok(method) => method,
+                    Err(error) => return Ok(Err(error)),
+                }
+            }
+            _ => {
+                let proto = match iterable.kind {
+                    Kind::String => self.string_proto,
+                    Kind::Integer | Kind::Number => self.number_proto,
+                    Kind::Symbol => self.symbol_proto,
+                    Kind::BigInt => self.bigint_proto,
+                    Kind::Boolean => self
+                        .intrinsics
+                        .get("Boolean")
+                        .and_then(|&constructor| self.ctor_prototype.get(&constructor).copied())
+                        .unwrap_or(crate::value::SlotIndex::NULL),
+                    _ => crate::value::SlotIndex::NULL,
+                };
+                if proto.is_null() {
+                    Slot::undefined()
+                } else {
+                    match self.array_from_try(|this| {
+                        this.mop_get(code, proto, iterator_id, iterable)
+                    })? {
+                        Ok(method) => method,
+                        Err(error) => return Ok(Err(error)),
+                    }
+                }
+            }
+        };
+        if !self.is_callable_value(iterator_method) {
+            return Ok(Err(self.build_error("TypeError", 0, 0)));
+        }
+        let iterator = match self
+            .array_from_try(|this| this.call_any(code, iterator_method, iterable, &[]))?
+        {
+            Ok(iterator) => iterator,
+            Err(error) => return Ok(Err(error)),
+        };
+        let iterator_inst = match iterator.value {
+            Payload::Reference(iterator_inst) if iterator.kind == Kind::Reference => iterator_inst,
+            _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+        };
+        let next_id = self.intern_key("next");
+        let next = match self
+            .array_from_try(|this| this.mop_get(code, iterator_inst, next_id, iterator))?
+        {
+            Ok(next) if self.is_callable_value(next) => next,
+            Ok(_) => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            Err(error) => return Ok(Err(error)),
+        };
+        let done_id = self.intern_key("done");
+        let value_id = self.intern_key("value");
+
+        for _ in 0..1_000_000u64 {
+            let step = match self
+                .array_from_try(|this| this.call_any(code, next, iterator, &[]))?
+            {
+                Ok(step) => step,
+                Err(error) => return Ok(Err(error)),
+            };
+            let step_inst = match step.value {
+                Payload::Reference(step_inst) if step.kind == Kind::Reference => step_inst,
+                _ => return Ok(Err(self.build_error("TypeError", 0, 0))),
+            };
+            let done = match self
+                .array_from_try(|this| this.mop_get(code, step_inst, done_id, step))?
+            {
+                Ok(done) => done,
+                Err(error) => return Ok(Err(error)),
+            };
+            if self.truthy(&done) {
+                return Ok(Ok(()));
+            }
+            let element = match self
+                .array_from_try(|this| this.mop_get(code, step_inst, value_id, step))?
+            {
+                Ok(element) => element,
+                Err(error) => return Ok(Err(error)),
+            };
+            let args = if is_map {
+                let entry = match element.value {
+                    Payload::Reference(entry) if element.kind == Kind::Reference => entry,
+                    _ => {
+                        let error = self.build_error("TypeError", 0, 0);
+                        return Ok(Err(self.array_from_close(code, iterator, error)?));
+                    }
+                };
+                let key_id = self.intern_key("0");
+                let key = match self
+                    .array_from_try(|this| this.mop_get(code, entry, key_id, element))?
+                {
+                    Ok(key) => key,
+                    Err(error) => {
+                        return Ok(Err(self.array_from_close(code, iterator, error)?));
+                    }
+                };
+                let value_id = self.intern_key("1");
+                let value = match self
+                    .array_from_try(|this| this.mop_get(code, entry, value_id, element))?
+                {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return Ok(Err(self.array_from_close(code, iterator, error)?));
+                    }
+                };
+                vec![key, value]
+            } else {
+                vec![element]
+            };
+            match self
+                .array_from_try(|this| this.call_any(code, adder, receiver, &args))?
+            {
+                Ok(_) => {}
+                Err(error) => {
+                    return Ok(Err(self.array_from_close(code, iterator, error)?));
+                }
+            }
+        }
+        Err(Halt::StepLimit(self.n_dispatched))
     }
 
     /// Dispatch a `Math.*` static (`xsMath.c`). Reads the positional
