@@ -127,16 +127,19 @@ fn strict_assignment_and_delete_throw_catchable_type_errors() {
 }
 
 #[test]
-fn global_descriptor_environment_aliasing_is_an_honest_gap() {
-    let run = dual_run(
-        "Object.defineProperty(this, 'x', { configurable: true, value: 1 }); x",
-    )
-    .expect("the XS oracle machine must start");
-    assert_eq!(run.agreement, Agreement::OracleOnlyComplete);
-    assert!(matches!(
-        run.ironhorse_halt,
-        ironhorse_vm::Halt::Unsupported("defineProperty:global-object")
-    ));
+fn global_descriptors_are_live_environment_bindings() {
+    for source in [
+        "Object.defineProperty(this,'x',{configurable:true,value:1});x",
+        "var x=1;Object.defineProperty(this,'x',{value:2});x",
+        "var hidden=1;Object.defineProperty(this,'x',{configurable:true,get:function(){return hidden},set:function(v){hidden=v}});x=7;x+':'+hidden",
+        "var hidden=3;Object.defineProperties(this,{x:{get:function(){return hidden}},y:{value:4}});x+y",
+        "var x=1;Object.defineProperty(this,'x',{writable:false});x=2;x",
+        "'use strict';var x=1;Object.defineProperty(globalThis,'x',{writable:false});try{x=2;false}catch(e){e instanceof TypeError&&x===1}",
+        "var marker={};Object.defineProperty(this,'x',{get:function(){throw marker}});try{x;false}catch(e){e===marker}",
+        "Object.defineProperty(this,'x',{configurable:true,value:undefined});delete this.x;typeof x",
+    ] {
+        assert_result_agrees(source);
+    }
 }
 
 #[test]

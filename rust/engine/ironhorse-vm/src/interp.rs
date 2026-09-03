@@ -13704,7 +13704,28 @@ impl Interp {
                             continue;
                         }
                     }
-                    let v = self.resolve_get(name);
+                    let v = if self.id_map.contains_key(&name) {
+                        self.resolve_get(name)
+                    } else if self.global_props.contains_key(&name) {
+                        // A global object binding is an Object Environment
+                        // Record binding. Read it through the object's full
+                        // [[Get]] path so a descriptor installed with
+                        // Object.defineProperty(globalThis, ...) observes an
+                        // accessor (and its abrupt completion), rather than
+                        // exposing the accessor's backing placeholder slot.
+                        let global = Slot::of(
+                            Kind::Reference,
+                            Payload::Reference(self.global_obj),
+                        );
+                        Some(dispatch_result!(
+                            self.mop_get(code, self.global_obj, name, global),
+                            pc,
+                            self,
+                            return_depth
+                        ))
+                    } else {
+                        None
+                    };
                     match v {
                         Some(s) => self.push(s),
                         // An unresolvable reference — reading a name bound in no
@@ -13920,28 +13941,52 @@ impl Interp {
                             continue;
                         }
                     }
-                    // A frame-local var writes its scope slot; an
-                    // undeclared name resolves to the global object,
-                    // creating the property (a sloppy global) if absent —
-                    // metered as one property creation exactly where
-                    // `mxBehaviorSetProperty` allocates it.
-                    if !self.id_map.contains_key(&name) && !self.global_props.contains_key(&name) {
-                        self.materialize_global_property(name);
-                        // Creating a sloppy global through `SET_VARIABLE`
-                        // dispatches XS's setter machinery
-                        // (`mxBehaviorSetProperty` → the missing-property
-                        // define path), which meters one extra code unit
-                        // beyond the property allocation. Measured against
-                        // the pin: `y = 1` costs one create's 65536 raw more
-                        // than ironhorse's allocation model, and N fresh
-                        // globals cost exactly N of them (an overwrite costs
-                        // none). This is the `SET_VARIABLE`-create path
-                        // only; the declared-`var` hoist at
-                        // `EVAL_ENVIRONMENT` (already bit-exact) does not
-                        // carry it.
-                        self.meter.tick_code();
+                    // A frame-local var writes its scope slot. A global name
+                    // writes through the global object's full [[Set]] path so
+                    // accessor/non-writable descriptors installed reflectively
+                    // remain binding-correct. An absent name first materializes
+                    // the ordinary writable global property (a sloppy global),
+                    // at the same measured creation boundary as before.
+                    if self.id_map.contains_key(&name) {
+                        self.resolve_set(name, value);
+                    } else {
+                        if !self.global_props.contains_key(&name) {
+                            self.materialize_global_property(name);
+                            // Creating a sloppy global through `SET_VARIABLE`
+                            // dispatches XS's setter machinery
+                            // (`mxBehaviorSetProperty` → the missing-property
+                            // define path), which meters one extra code unit
+                            // beyond the property allocation. Measured against
+                            // the pin: `y = 1` costs one create's 65536 raw more
+                            // than ironhorse's allocation model, and N fresh
+                            // globals cost exactly N of them (an overwrite costs
+                            // none). This is the `SET_VARIABLE`-create path
+                            // only; the declared-`var` hoist at
+                            // `EVAL_ENVIRONMENT` (already bit-exact) does not
+                            // carry it.
+                            self.meter.tick_code();
+                        }
+                        let global = Slot::of(
+                            Kind::Reference,
+                            Payload::Reference(self.global_obj),
+                        );
+                        let accepted = dispatch_result!(
+                            self.ordinary_set(code, self.global_obj, name, value, global),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        if !accepted && self.strict {
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(
+                                self.raise_js(error),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            continue;
+                        }
                     }
-                    self.resolve_set(name, value);
                     // The property store itself is one built-in step
                     // (`mxMeterOne`, `XS_BUILTIN_METERING` = 1<<14),
                     // metered on every `SET_VARIABLE` whether the property
@@ -31924,13 +31969,6 @@ impl Interp {
                     Payload::Reference(object) if arg0.kind == Kind::Reference => object,
                     _ => return Err(Halt::Throw("TypeError: defineProperty target".into())),
                 };
-                // The global object is coupled to the environment record: a
-                // descriptor mutation can delete/recreate a binding while an
-                // already-evaluated Reference still targets that binding. The
-                // ordinary-object path does not model that aliasing yet.
-                if target == self.global_obj {
-                    return Err(Halt::Unsupported("defineProperty:global-object"));
-                }
                 if self.is_ordinary_object(target)
                     || self.arrays.contains_key(&target)
                     || self.collections.contains_key(&target)
