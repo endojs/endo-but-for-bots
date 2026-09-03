@@ -36,6 +36,17 @@ fn collection_methods_validate_their_internal_slot() {
         "var ok = false; try { WeakSet.prototype.add.call(new Set(), {}); } \
          catch (e) { ok = e instanceof TypeError; } ok",
     );
+
+    for source in [
+        "try { Map.prototype.clear.call(new WeakMap()); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.forEach.call(new WeakMap(), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.keys.call(new WeakMap()); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.clear.call(new WeakSet()); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.forEach.call(new WeakSet(), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.values.call(new WeakSet()); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
 }
 
 #[test]
