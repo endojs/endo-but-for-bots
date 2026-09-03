@@ -786,6 +786,25 @@ with `node_modules` inside it (ejected from a sub-mount that is
 itself the cached output of an earlier `npm install`, or
 re-materialized from the CAS-backed module store on demand).
 
+These two sourcing paths do **not** have the same scope. The
+`npm install` sub-mount is the general path: it is real npm output, so
+compiled binaries are present, any `postinstall` has already run, and
+phantom (undeclared-but-hoisted) imports resolve exactly as they did
+at install time. It fully covers Case 2's motivating workload (native
+modules and postinstall-built binaries). The CAS re-materialization
+path is *narrower*, and cannot cover that same workload. The module
+store's ingestion path (§ Module store: npm-to-sqlite) only fetches
+and extracts tarball files: it names no `postinstall` step, so it
+materializes no compiled binaries, and its resolver is
+declared-edges-only, so any phantom dependency a package relies on
+still fails closed (§ "Phantom-dependency compatibility"). The CAS
+variant is therefore usable only for **source-only packages with no
+native/`postinstall` step and no phantom-import reliance**. A Case 2
+leaf that needs native modules or postinstall-built state must take
+the `npm install` sub-mount path. Selecting the CAS variant for a
+native-dependent package is a configuration error, not a silent
+fallback.
+
 This is *not* the CAS-to-`node_modules` materialization that
 `## Alternatives considered` #2 rejects. That rejection is scoped
 to **Case 1**: materializing a tree only to run **XS** against it
