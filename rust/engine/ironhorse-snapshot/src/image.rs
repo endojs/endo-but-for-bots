@@ -3275,10 +3275,10 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=8 (array values/keys/entries,
+        // The engine's cursor kinds are 0..=9 (array values/keys/entries,
         // for-in, string, collection keys/values/entries, Iterator.from
-        // generic wrappers).
-        if kind > 8 {
+        // generic wrappers, and RegExp String Iterator).
+        if kind > 9 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -3310,6 +3310,17 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
         if kind == 3 && index as usize > enum_keys.len() {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: for-in cursor past its key list",
+            ));
+        }
+        if kind == 9
+            && (iterable == u32::MAX
+                || result == u32::MAX
+                || index > 3
+                || !enum_keys.is_empty()
+                || str_bytes.len() % 2 != 0)
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: invalid RegExp String Iterator",
             ));
         }
         out.push(IteratorRow {
@@ -4156,8 +4167,9 @@ pub(crate) fn check_image_slot_bounds(
     // The iterator cursors: weak owner and result slots bounded; a
     // collection cursor must name a COVERING collections row (its
     // `next()` indexes the table unconditionally) with the carried
-    // ordinal inside the compacted live list; a for-in cursor's key
-    // ids must live in the restored name table.
+    // ordinal inside the compacted live list; a RegExp String Iterator must
+    // carry valid mode bits and UTF-16; a for-in cursor's key ids must live in
+    // the restored name table.
     for r in iterators {
         owned(r.owner)?;
         owned(r.result)?;
@@ -4186,6 +4198,17 @@ pub(crate) fn check_image_slot_bounds(
         {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: malformed Iterator.from wrapper",
+            ));
+        }
+        if r.kind == 9
+            && (r.iterable == u32::MAX
+                || r.result == u32::MAX
+                || r.index > 3
+                || !r.enum_keys.is_empty()
+                || r.str_bytes.len() % 2 != 0)
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: invalid RegExp String Iterator",
             ));
         }
         if r.kind == 3
@@ -5204,7 +5227,7 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[row(5), row(3)])).is_err());
         // Unknown kind.
         let mut bad = row(1);
-        bad.kind = 9;
+        bad.kind = 10;
         assert!(decode_iterators(&encode_iterators(&[bad])).is_err());
         // A string cursor splitting a UTF-16 unit, and one past its text.
         let mut odd = row(1);
@@ -5214,6 +5237,23 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[odd.clone()])).is_err());
         odd.index = 6;
         assert!(decode_iterators(&encode_iterators(&[odd])).is_err());
+        // A RegExp String Iterator must carry a matcher, an arena anchor, an
+        // even-sized UTF-16 payload, and only its two mode bits in `index`.
+        let mut regexp = row(1);
+        regexp.kind = 9;
+        regexp.index = 4;
+        assert!(decode_iterators(&encode_iterators(&[regexp.clone()])).is_err());
+        regexp.index = 3;
+        regexp.str_bytes = vec![0];
+        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
+        let mut regexp = row(1);
+        regexp.kind = 9;
+        regexp.iterable = u32::MAX;
+        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
+        let mut regexp = row(1);
+        regexp.kind = 9;
+        regexp.enum_keys.push((1, 0));
+        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
         // A for-in cursor past its key list.
         let mut over = row(1);
         over.kind = 3;

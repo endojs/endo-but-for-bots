@@ -2717,6 +2717,14 @@ pub enum NativeMethod {
     /// `%RegExp.prototype%[Symbol.replace](string, replaceValue)`: coerce the
     /// subject and drive the shared RegExp replacement worker.
     RegExpReplace,
+    /// `%RegExp.prototype%[Symbol.matchAll](string)`: clone through the
+    /// observable species constructor and return a lazy RegExp String Iterator.
+    RegExpMatchAll,
+    /// `%RegExpStringIteratorPrototype%.next()`: drive `RegExpExec` lazily,
+    /// including global zero-length-match advancement.
+    RegExpStringIteratorNext,
+    /// `get RegExp[Symbol.species]`: the standard accessor returns its receiver.
+    RegExpSpeciesGetter,
     /// `get Error.prototype.stack` (`fx_Error_prototype_get_stack`): for an
     /// error instance, `name[: message]` plus one `\n at <fn> ()` line per
     /// construction-time frame; `undefined` for a non-error object; a
@@ -2733,6 +2741,9 @@ pub enum NativeMethod {
     /// matcher — the non-global path returns `exec`'s result; the global path
     /// collects every whole match.
     StringMatch,
+    /// `String.prototype.matchAll(regexp)`: validate global RegExps, honor an
+    /// observable `@@matchAll`, or create a global RegExp and invoke it.
+    StringMatchAll,
     /// `String.prototype.search(regexp)` (`fx_String_prototype_search`): the
     /// index of the first match, or `-1`.
     StringSearch,
@@ -3295,7 +3306,9 @@ struct FromAsyncData {
 /// **for-in enumerator** (`kind` = 3) `enum_keys` is the pre-collected list of
 /// enumerable property keys `(id, index)` to yield as strings (an `id ==
 /// XS_NO_ID` entry is an array index), and `index` cursors it. `result` is the
-/// reused `{value, done}` object `next()` mutates and returns.
+/// reused `{value, done}` object `next()` mutates and returns. Kind 9 is a
+/// RegExp String Iterator: `iterable` is its matcher, `str_bytes` its input,
+/// and the low two `index` bits carry `global`/`fullUnicode`.
 #[derive(Clone, Debug)]
 struct IterState {
     iterable: crate::value::SlotIndex,
@@ -3309,9 +3322,10 @@ struct IterState {
     /// `CollectionData::generation`). Zero for every other kind.
     generation: u32,
     enum_keys: Vec<(u16, u32)>,
-    /// For a string iterator (`kind == 4`): the UTF-16BE bytes being iterated,
-    /// with `index` a BYTE offset into them (an array/enumerator leaves this
-    /// empty and drives `index`/`enum_keys` instead).
+    /// For a string iterator (`kind == 4`) or RegExp String Iterator (`kind ==
+    /// 9`): the UTF-16BE input. Kind 4 uses `index` as a byte offset; kind 9's
+    /// matcher carries its own observable `lastIndex`, leaving `index` for its
+    /// two persisted mode bits.
     str_bytes: Vec<u8>,
 }
 
@@ -4429,6 +4443,8 @@ pub struct Interp {
     iterator_wrapper_proto: crate::value::SlotIndex,
     map_iterator_proto: crate::value::SlotIndex,
     set_iterator_proto: crate::value::SlotIndex,
+    /// `%RegExpStringIteratorPrototype%`, inheriting `%Iterator.prototype%`.
+    regexp_string_iterator_proto: crate::value::SlotIndex,
     /// The realm's `Math` namespace object (XS's `mxMathObject`) — a boot
     /// object carrying the `Math.*` functions and the numeric constants
     /// (`Math.PI`, …) as own properties, bound into the global object under
@@ -4633,6 +4649,8 @@ pub struct Interp {
     regexp_proto: crate::value::SlotIndex,
     /// Boot-minted `%RegExp.prototype%[Symbol.replace]` function identity.
     regexp_replace_method: crate::value::SlotIndex,
+    /// Boot-minted `%RegExp.prototype%[Symbol.matchAll]` function identity.
+    regexp_match_all_method: crate::value::SlotIndex,
     /// The program-local symbol id of `lastIndex` (XS's `mxID(_lastIndex)`),
     /// resolved at [`Self::link_intrinsics`], so `re.lastIndex` reads/writes
     /// the instance's own last-index property. `None` when unreferenced.
@@ -4890,7 +4908,8 @@ impl IntlTables {
 /// `Iterators` row, the `ITER` atom) — [`Interp::iterators_snapshot`]'s
 /// emission and [`Interp::restore_iterators`]'s input. Kinds: 0-2 array
 /// values/keys/entries, 3 for-in enumerator, 4 string, 5-7 collection
-/// keys/values/entries, 8 for an `Iterator.from` generic wrapper. Two boundary
+/// keys/values/entries, 8 for an `Iterator.from` generic wrapper, and 9 for a
+/// RegExp String Iterator. Two boundary
 /// normalizations make the row pure data: a collection cursor's `index` is the
 /// LIVE-ENTRY ORDINAL (the
 /// `COLL` row compacts tombstones, so the ordinal IS the physical index
@@ -4911,7 +4930,8 @@ pub struct IteratorRow {
     pub result: u32,
     /// For-in keys as `(id, index)` pairs (`id == 0` ⇒ an array index).
     pub enum_keys: Vec<(u16, u32)>,
-    /// A string iterator's UTF-16BE text; `index` is a byte offset.
+    /// A String or RegExp String Iterator's UTF-16BE input; kind 4 uses `index`
+    /// as a byte offset.
     pub str_bytes: Vec<u8>,
 }
 
@@ -5595,6 +5615,7 @@ impl Interp {
             iterator_wrapper_proto: crate::value::SlotIndex::NULL,
             map_iterator_proto: crate::value::SlotIndex::NULL,
             set_iterator_proto: crate::value::SlotIndex::NULL,
+            regexp_string_iterator_proto: crate::value::SlotIndex::NULL,
             math_object: crate::value::SlotIndex::NULL,
             string_proto: crate::value::SlotIndex::NULL,
             string_iterator_method: crate::value::SlotIndex::NULL,
@@ -5641,6 +5662,7 @@ impl Interp {
             regexps: std::collections::HashMap::new(),
             regexp_proto: crate::value::SlotIndex::NULL,
             regexp_replace_method: crate::value::SlotIndex::NULL,
+            regexp_match_all_method: crate::value::SlotIndex::NULL,
             last_index_id: None,
             regexp_getter_ids: RegExpGetterIds::default(),
             regexp_result_ids: RegExpResultIds::default(),
@@ -6164,6 +6186,21 @@ impl Interp {
             .push((self.map_iterator_proto, "next", map_next));
         self.proto_methods
             .push((self.set_iterator_proto, "next", set_next));
+        // `%RegExpStringIteratorPrototype%`: a distinct iterator prototype
+        // whose `next` lazily drives the cloned matcher captured by
+        // `RegExp.prototype[@@matchAll]`.
+        self.regexp_string_iterator_proto =
+            self.slots.alloc(Slot::instance(self.iterator_proto));
+        let regexp_string_next = self.alloc_named_method(
+            NativeMethod::RegExpStringIteratorNext,
+            "next",
+            0,
+        );
+        self.proto_methods.push((
+            self.regexp_string_iterator_proto,
+            "next",
+            regexp_string_next,
+        ));
         // `Array.isArray` — a static bound as an own property of the `Array`
         // constructor instance (not the prototype).
         if let Some(&array_ctor) = self.intrinsics.get("Array") {
@@ -6575,6 +6612,16 @@ impl Interp {
             NativeMethod::RegExpReplace,
             "[Symbol.replace]",
             2,
+        );
+        self.regexp_match_all_method = self.alloc_named_method(
+            NativeMethod::RegExpMatchAll,
+            "[Symbol.matchAll]",
+            1,
+        );
+        let _ = self.alloc_named_method(
+            NativeMethod::RegExpSpeciesGetter,
+            "get [Symbol.species]",
+            0,
         );
         for (native, methods) in [
             (
@@ -7601,6 +7648,7 @@ impl Interp {
             // `fx_String_prototype_match`/`search`/`replace`/`split`), driving
             // child 8's matcher over a string-or-RegExp argument.
             ("match", 1, StringMatch),
+            ("matchAll", 1, StringMatchAll),
             ("search", 1, StringSearch),
             ("replace", 2, StringReplace),
             ("replaceAll", 2, StringReplaceAll),
@@ -8529,7 +8577,16 @@ impl Interp {
             for (name, value) in &wks {
                 if let Some(&wid) = self.symbol_ids.get(*name) {
                     if keep(wid) && (full || self.find_property(symbol_ctor, wid).is_none()) {
-                        self.set_own_unmetered(symbol_ctor, wid, *value);
+                        // Every well-known symbol constant is immutable and
+                        // non-enumerable on `%Symbol%` (ECMA-262 20.4.2):
+                        // { writable: false, enumerable: false,
+                        // configurable: false }.
+                        self.set_own_unmetered_with_flag(
+                            symbol_ctor,
+                            wid,
+                            *value,
+                            XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+                        );
                     }
                 }
             }
@@ -8589,6 +8646,10 @@ impl Interp {
                 (self.promise_proto, "Promise"),
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
+                (
+                    self.regexp_string_iterator_proto,
+                    "RegExp String Iterator",
+                ),
                 (self.async_generator_proto, "AsyncGenerator"),
                 // The generator-family constructor prototypes each carry a
                 // `Symbol.toStringTag` string (ES2024 25.2.3.1 / 25.3.3.1 /
@@ -8630,6 +8691,23 @@ impl Interp {
             }) {
                 self.set_own_accessor_unmetered(
                     promise_ctor,
+                    species_id,
+                    Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
+                    None,
+                );
+            }
+        }
+        // `RegExp[@@species]` has the same accessor shape as Promise's but a
+        // distinct getter identity.
+        if let (Some(species_id), Some(&regexp_ctor)) = (
+            self.well_known_symbol_property_id("species"),
+            self.intrinsics.get("RegExp"),
+        ) {
+            if let Some(getter) = self.functions.iter().find_map(|(&function, info)| {
+                (info.method == Some(NativeMethod::RegExpSpeciesGetter)).then_some(function)
+            }) {
+                self.set_own_accessor_unmetered(
+                    regexp_ctor,
                     species_id,
                     Some(Slot::of(Kind::Reference, Payload::Reference(getter))),
                     None,
@@ -11823,11 +11901,12 @@ impl Interp {
     /// instance with no restored collection (its `next()` indexes the
     /// table unconditionally) or a cursor past the live-entry list, a
     /// string cursor past its text or splitting a UTF-16 unit, or a
-    /// for-in cursor past its key list or holding a key id outside the
+    /// RegExp String Iterator with invalid mode bits or malformed UTF-16, or
+    /// a for-in cursor past its key list or holding a key id outside the
     /// restored name table.
     pub fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> bool {
         for r in &rows {
-            if r.kind > 8 {
+            if r.kind > 9 {
                 return false;
             }
             match r.kind {
@@ -11863,6 +11942,16 @@ impl Interp {
                         || r.done
                         || !r.enum_keys.is_empty()
                         || !r.str_bytes.is_empty()
+                    {
+                        return false;
+                    }
+                }
+                9 => {
+                    if r.iterable == crate::value::SlotIndex::NULL.0
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || r.index > 3
+                        || !r.enum_keys.is_empty()
+                        || r.str_bytes.len() % 2 != 0
                     {
                         return false;
                     }
@@ -22931,6 +23020,48 @@ impl Interp {
         self.to_length_value(code, value)
     }
 
+    /// `SpeciesConstructor(R, %RegExp%)` for the RegExp protocol methods.
+    /// Constructor and `@@species` reads remain observable through the full
+    /// object MOP; undefined constructor and nullish species select the realm
+    /// intrinsic.
+    fn regexp_species_constructor(
+        &mut self,
+        code: &[u8],
+        regexp: Slot,
+    ) -> Result<Slot, Halt> {
+        let regexp_inst = match regexp.value {
+            Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let default_ref = *self
+            .intrinsics
+            .get("RegExp")
+            .expect("RegExp intrinsic is linked");
+        let default = Slot::of(Kind::Reference, Payload::Reference(default_ref));
+        let constructor_id = self.intern_key("constructor");
+        let constructor = self.mop_get(code, regexp_inst, constructor_id, regexp)?;
+        if constructor.kind == Kind::Undefined {
+            return Ok(default);
+        }
+        let constructor_inst = match constructor.value {
+            Payload::Reference(inst) if constructor.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let species_id = self
+            .well_known_symbol_property_id("species")
+            .expect("well-known species symbol");
+        let species = self.mop_get(code, constructor_inst, species_id, constructor)?;
+        let selected = if matches!(species.kind, Kind::Null | Kind::Undefined) {
+            default
+        } else {
+            species
+        };
+        if !self.is_constructor_value(selected) {
+            return Err(self.catchable_type_error());
+        }
+        Ok(selected)
+    }
+
     fn regexp_advance_last_index(
         &mut self,
         code: &[u8],
@@ -23278,6 +23409,177 @@ impl Interp {
         } else {
             Err(self.catchable_type_error())
         }
+    }
+
+    /// `%RegExp.prototype%[@@matchAll]`: coerce the input, clone the receiver
+    /// through `SpeciesConstructor`, transfer its observable `lastIndex`, and
+    /// create a lazy RegExp String Iterator. The iterator records `global` and
+    /// full-Unicode from the original flags string; it never probes similarly
+    /// named properties on the species result.
+    fn regexp_match_all(
+        &mut self,
+        code: &[u8],
+        regexp: Slot,
+        input: Slot,
+    ) -> Result<Slot, Halt> {
+        let regexp_inst = match regexp.value {
+            Payload::Reference(inst) if regexp.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let subject = self.to_string_slot(code, input)?;
+        let subject_units = match subject.value {
+            Payload::String(off) if subject.kind == Kind::String => self.str_units(off),
+            _ => unreachable!("ToString returns a String"),
+        };
+        let constructor = self.regexp_species_constructor(code, regexp)?;
+        let flags = self.regexp_flags_units(code, regexp_inst, regexp, false)?;
+        let flags_slot = self.new_string_units(&flags);
+        let matcher = self.construct_value(
+            code,
+            constructor,
+            &[regexp, flags_slot],
+            constructor,
+        )?;
+        let matcher_inst = match matcher.value {
+            Payload::Reference(inst) if matcher.kind == Kind::Reference => inst,
+            _ => return Err(self.catchable_type_error()),
+        };
+        let last_index = self.regexp_last_index_length(code, regexp_inst)?;
+        let last_index_id = self.regexp_last_index_id();
+        if !self.mop_set(
+            code,
+            matcher_inst,
+            last_index_id,
+            Slot::number(last_index as f64),
+            matcher,
+        )? {
+            return Err(self.catchable_type_error());
+        }
+        let global = flags.contains(&(b'g' as u16));
+        let full_unicode = flags
+            .iter()
+            .any(|unit| *unit == b'u' as u16 || *unit == b'v' as u16);
+        Ok(self.make_regexp_string_iterator(
+            matcher_inst,
+            &subject_units,
+            global,
+            full_unicode,
+        ))
+    }
+
+    /// Create a `%RegExpStringIterator%`. Kind 9 reuses the persisted iterator
+    /// row: `iterable` is the cloned matcher, `str_bytes` is the input UTF-16,
+    /// and the low two index bits are `global`/`fullUnicode`. `result` is
+    /// an internal arena anchor because this iterator creates a fresh public
+    /// iterator-result object on every `next()` call, as the specification
+    /// requires.
+    fn make_regexp_string_iterator(
+        &mut self,
+        matcher: crate::value::SlotIndex,
+        subject: &[u16],
+        global: bool,
+        full_unicode: bool,
+    ) -> Slot {
+        let value_id = self.intern_key("value");
+        let done_id = self.intern_key("done");
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+        let anchor = self.slots.alloc(Slot::instance(self.object_proto));
+        let iterator = self
+            .slots
+            .alloc(Slot::instance(self.regexp_string_iterator_proto));
+        self.iterators.insert(
+            iterator,
+            IterState {
+                iterable: matcher,
+                index: u32::from(global) | (u32::from(full_unicode) << 1),
+                kind: 9,
+                generation: 0,
+                result: anchor,
+                done: false,
+                enum_keys: Vec::new(),
+                str_bytes: units_to_be16(subject),
+            },
+        );
+        Slot::of(Kind::Reference, Payload::Reference(iterator))
+    }
+
+    /// Allocate a fresh ordinary iterator-result object.
+    fn regexp_string_iterator_result(&mut self, value: Slot, done: bool) -> Slot {
+        let value_id = self.value_id.unwrap_or_else(|| self.intern_key("value"));
+        let done_id = self.done_id.unwrap_or_else(|| self.intern_key("done"));
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        self.set_own_unmetered(result, value_id, value);
+        self.set_own_unmetered(result, done_id, Slot::boolean(done));
+        Slot::of(Kind::Reference, Payload::Reference(result))
+    }
+
+    /// `%RegExpStringIteratorPrototype%.next()`: drive the captured matcher
+    /// through abstract `RegExpExec`. A non-global iterator yields once; a
+    /// global empty match advances the matcher's `lastIndex` by one UTF-16 code
+    /// unit or one Unicode code point so iteration cannot stall.
+    fn regexp_string_iterator_next(
+        &mut self,
+        code: &[u8],
+        receiver: Slot,
+    ) -> Result<Slot, Halt> {
+        let iterator = match receiver.value {
+            Payload::Reference(inst)
+                if receiver.kind == Kind::Reference
+                    && self.iterators.get(&inst).is_some_and(|state| state.kind == 9) =>
+            {
+                inst
+            }
+            _ => return Err(self.catchable_type_error()),
+        };
+        let state = self.iterators[&iterator].clone();
+        if state.done {
+            return Ok(self.regexp_string_iterator_result(Slot::undefined(), true));
+        }
+        let subject_units = be16_to_units(&state.str_bytes);
+        let subject = self.new_string_units(&subject_units);
+        let matcher = Slot::of(Kind::Reference, Payload::Reference(state.iterable));
+        let result = self.regexp_exec_abstract(
+            code,
+            state.iterable,
+            matcher,
+            subject,
+        )?;
+        if result.kind == Kind::Null {
+            self.iterators.get_mut(&iterator).unwrap().done = true;
+            return Ok(self.regexp_string_iterator_result(Slot::undefined(), true));
+        }
+
+        let global = state.index & 1 != 0;
+        let full_unicode = state.index & 2 != 0;
+        if !global {
+            self.iterators.get_mut(&iterator).unwrap().done = true;
+        } else {
+            let Payload::Reference(result_inst) = result.value else {
+                unreachable!("RegExpExec returns an object or null")
+            };
+            let zero_id = self.array_generic_index_id(0);
+            let match_value = self.mop_get(code, result_inst, zero_id, result)?;
+            let match_string = self.to_string_units(code, match_value)?;
+            if match_string.is_empty() {
+                let last_index = self.regexp_last_index_length(code, state.iterable)?;
+                let next_index =
+                    Self::advance_string_index(&subject_units, last_index, full_unicode);
+                let last_index_id = self.regexp_last_index_id();
+                if !self.mop_set(
+                    code,
+                    state.iterable,
+                    last_index_id,
+                    Slot::number(next_index as f64),
+                    matcher,
+                )? {
+                    return Err(self.catchable_type_error());
+                }
+            }
+        }
+        Ok(self.regexp_string_iterator_result(result, false))
     }
 
     /// Encode UTF-16 code units in XS's modified CESU-8 spelling and return
@@ -24437,6 +24739,56 @@ impl Interp {
             return Ok(Slot::undefined());
         };
         self.mop_get(code, inst, id, value)
+    }
+
+    /// `String.prototype.matchAll(regexp)`: validate a RegExp argument's
+    /// observable flags before consulting `@@matchAll`; a present method is
+    /// called with the original receiver. If absent, create a global RegExp
+    /// through the realm constructor and invoke its (possibly overridden)
+    /// `@@matchAll` with the coerced string.
+    fn string_match_all(
+        &mut self,
+        code: &[u8],
+        receiver: Slot,
+        regexp: Slot,
+    ) -> Result<Slot, Halt> {
+        if matches!(receiver.kind, Kind::Undefined | Kind::Null) {
+            return Err(self.catchable_type_error());
+        }
+        if !matches!(regexp.kind, Kind::Undefined | Kind::Null) {
+            if self.string_is_regexp(code, regexp)? {
+                let Payload::Reference(inst) = regexp.value else {
+                    unreachable!("IsRegExp is false for primitive values")
+                };
+                let flags = self.regexp_flags_units(code, inst, regexp, true)?;
+                if !flags.contains(&(b'g' as u16)) {
+                    return Err(self.catchable_type_error());
+                }
+            }
+            let method = self.string_protocol_method(code, regexp, "matchAll")?;
+            if !matches!(method.kind, Kind::Undefined | Kind::Null) {
+                return self.invoke_value(code, method, regexp, &[receiver]);
+            }
+        }
+
+        let subject = self.to_string_slot(code, receiver)?;
+        let regexp_constructor = *self
+            .intrinsics
+            .get("RegExp")
+            .expect("RegExp intrinsic is linked");
+        let constructor = Slot::of(
+            Kind::Reference,
+            Payload::Reference(regexp_constructor),
+        );
+        let global = self.new_string_units(&[b'g' as u16]);
+        let matcher = self.construct_value(
+            code,
+            constructor,
+            &[regexp, global],
+            constructor,
+        )?;
+        let method = self.string_protocol_method(code, matcher, "matchAll")?;
+        self.invoke_value(code, method, matcher, &[subject])
     }
 
     /// ECMA-262 `IsRegExp(argument)`: non-objects are never RegExps; an
@@ -33536,6 +33888,9 @@ impl Interp {
                 };
                 self.collection_iterator_next(iter)
             }
+            NativeMethod::RegExpStringIteratorNext => {
+                self.regexp_string_iterator_next(code, this)?
+            }
             NativeMethod::IteratorFrom => {
                 self.iterator_from(code, arg0)?
             }
@@ -33970,7 +34325,7 @@ impl Interp {
             NativeMethod::PromiseFinally => {
                 self.promise_finally_dispatch(code, this, arg0)?
             }
-            NativeMethod::PromiseSpeciesGetter => this,
+            NativeMethod::PromiseSpeciesGetter | NativeMethod::RegExpSpeciesGetter => this,
             // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
             // the derived promise, resolve each (dense-Array) element to a
             // promise, and register a native COMBINE reaction on it; the shared
@@ -34083,6 +34438,9 @@ impl Interp {
                     return Err(self.catchable_type_error());
                 }
                 Slot::undefined()
+            }
+            NativeMethod::RegExpMatchAll => {
+                self.regexp_match_all(code, this, arg0)?
             }
             NativeMethod::RegExpReplace => {
                 let regexp = match this.value {
@@ -34206,6 +34564,9 @@ impl Interp {
                         }
                     }
                 }
+            }
+            NativeMethod::StringMatchAll => {
+                self.string_match_all(code, this, arg0)?
             }
             // `String.prototype.replace`: a custom `searchValue[Symbol.replace]`
             // runs with the original receiver before string coercion. Internal
@@ -44392,6 +44753,12 @@ impl Interp {
                 self.regexp_proto,
                 self.regexp_replace_method,
                 "boot RegExp.prototype @@replace method",
+                XS_DONT_ENUM_FLAG,
+            )],
+            Some("matchAll") => vec![(
+                self.regexp_proto,
+                self.regexp_match_all_method,
+                "boot RegExp.prototype @@matchAll method",
                 XS_DONT_ENUM_FLAG,
             )],
             _ => return,
@@ -55436,6 +55803,7 @@ impl Interp {
             self.iterator_wrapper_proto,
             self.map_iterator_proto,
             self.set_iterator_proto,
+            self.regexp_string_iterator_proto,
             self.string_proto,
             self.number_proto,
             self.symbol_proto,
@@ -55446,6 +55814,7 @@ impl Interp {
             self.async_function_proto,
             self.regexp_proto,
             self.regexp_replace_method,
+            self.regexp_match_all_method,
             self.math_object,
         ]);
         for (holder, _, method) in &self.proto_methods {
