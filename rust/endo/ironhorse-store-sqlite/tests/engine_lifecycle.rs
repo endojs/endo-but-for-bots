@@ -725,6 +725,20 @@ fn error_to_string_accessors_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn exotic_object_spread_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "exotic-object-spread",
+        &[
+            "var source=new Proxy(['a','b'],{get:function(t,k,r){return Reflect.get(t,k,r)}}); \
+             var copy;",
+            "var source;var copy;copy={...source};copy[0]+copy[1]",
+            "var copy;Object.keys(copy).join('|')+':'+copy[0]+copy[1]",
+        ],
+    );
+    assert_eq!(last, "0|1:ab");
+}
+
+#[test]
 fn general_iterable_collection_constructors_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "general-iterable-collections",

@@ -31283,69 +31283,28 @@ impl Interp {
                 if source_value.kind == Kind::Null || source_value.kind == Kind::Undefined {
                     arg0
                 } else {
-                    let source = match source_value.value {
-                        Payload::Reference(source) if source_value.kind == Kind::Reference => {
-                            source
-                        }
-                        _ => return Err(Halt::Unsupported("copy_object:primitive-source")),
+                    let from = self.array_to_object(source_value)?;
+                    let Payload::Reference(source) = from.value else {
+                        unreachable!("ToObject source")
                     };
-                    let wrapped = self.wrapper_data.get(&source).copied();
-                    if !self.is_ordinary_object(source) && wrapped.is_none() {
-                        return Err(Halt::Unsupported("copy_object:exotic-source"));
-                    }
                     let mut excluded = Vec::new();
                     for index in 2..argc {
                         let key = self.stack[base + 4 + index];
                         excluded.push(self.to_property_id(code, key)?);
                     }
-                    // A boxed String's enumerable own integer indices are
-                    // derived from its UTF-16 payload. `length` is own but
-                    // non-enumerable, so CopyDataProperties omits it. Other
-                    // primitive wrappers have no exotic enumerable keys.
-                    if let Some(Slot {
-                        kind: Kind::String,
-                        value: Payload::String(off),
-                        ..
-                    }) = wrapped
-                    {
-                        for index in 0..self.str_len(off) {
-                            // Chunk offsets and extents are u32 in the engine
-                            // image, so a resident string index fits u32.
-                            let index = index as u32;
-                            let id = self.intern_key(&index.to_string());
-                            if excluded.contains(&id) {
-                                continue;
-                            }
-                            let copied = OrdinaryDescriptor {
-                                value: Some(self.string_index_get(off, index)),
-                                writable: Some(true),
-                                enumerable: Some(true),
-                                configurable: Some(true),
-                                ..OrdinaryDescriptor::default()
-                            };
-                            if !self.ordinary_define_own_property(target, id, copied) {
-                                return Err(Halt::Throw("TypeError: copy property".into()));
-                            }
-                        }
-                    }
-                    let keys: Vec<u16> = self
-                        .own_property_slots(source)
-                        .into_iter()
-                        .map(|property| self.slots.get(property).id)
-                        .collect();
-                    for id in keys {
+                    let keys = self.mop_own_keys(code, source)?;
+                    for key in keys {
+                        let id = self.to_property_id(code, key)?;
                         if excluded.contains(&id) {
                             continue;
                         }
-                        let descriptor = match self.ordinary_get_own_descriptor(source, id) {
-                            Some(descriptor) if descriptor.enumerable == Some(true) => descriptor,
-                            _ => continue,
-                        };
-                        let value = if descriptor.is_accessor() {
-                            self.ordinary_get(code, source, id, source_value)?
-                        } else {
-                            descriptor.value.unwrap_or_else(Slot::undefined)
-                        };
+                        let enumerable = self
+                            .mop_get_own_property(code, source, id)?
+                            .is_some_and(|descriptor| descriptor.enumerable == Some(true));
+                        if !enumerable {
+                            continue;
+                        }
+                        let value = self.mop_get(code, source, id, from)?;
                         let copied = OrdinaryDescriptor {
                             value: Some(value),
                             writable: Some(true),
@@ -31353,8 +31312,8 @@ impl Interp {
                             configurable: Some(true),
                             ..OrdinaryDescriptor::default()
                         };
-                        if !self.ordinary_define_own_property(target, id, copied) {
-                            return Err(Halt::Throw("TypeError: copy property".into()));
+                        if !self.mop_define_own_property(code, target, id, copied)? {
+                            return Err(self.catchable_type_error());
                         }
                     }
                     arg0
