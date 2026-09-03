@@ -258,7 +258,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for the complete RegExp `@@match`/`@@search` protocol
         // methods and boot-layout signature generation 14. Boot-heap content
         // only; format unchanged.
-        "15b988de1408ffb55f5b3f603719c4cf118c94d7952f3917db0812185033b6dd",
+        // Re-pinned for RegExp `@@split` and boot-layout signature generation
+        // 15. Boot-heap content only; format unchanged.
+        "d2c9d19242981a87a0bd4150ec07f8eb51318ae6f474cc4693028eaac95f5ddb",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -439,7 +441,9 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // unchanged.
         // Re-pinned with the blob for RegExp `@@match`/`@@search` and boot
         // generation 14. Schema and format remain unchanged.
-        "c41cd6a5e708fa1d7265b19fc1652f122a7c71b7951c69dc3058a3a143080708",
+        // Re-pinned with the blob for RegExp `@@split` and boot generation 15.
+        // Schema and format remain unchanged.
+        "413766f4130a5cc8b17b17b19fbb63de294ee6e8eeb004d8862bcc1ab095fd92",
         "epoch-3 seal chain"
     );
 }
