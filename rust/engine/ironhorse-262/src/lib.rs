@@ -1329,15 +1329,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_function_in_call_apply_position_self_names_never_diverges() {
-        // The loaded gun (`FuncInfo::default().body_start = 0`): a bound
-        // function reshaped through `.call`/`.apply` used to dispatch at pc 0
-        // — a SILENT completion divergence (never an abort, so worse than a
-        // crash for the never-a-wrong-value invariant). Exactness is not
-        // affordable now (the correct trampoline stacks the `.call`/`.apply`
-        // re-dispatch onto the bound re-dispatch, two calibrated overheads),
-        // so each must self-name `Halt::Unsupported("bind:bound-callback")` —
-        // an honest skip, never a wrong value and never a dispatch at pc 0.
+    fn bound_function_in_call_apply_position_agrees() {
         let programs = [
             "var b=function(v){return v;}.bind(null); b.call(null)",
             "var b=function(v){return 7;}.bind(null); b.apply(null,[])",
@@ -1346,11 +1338,8 @@ mod tests {
         ];
         for p in programs {
             let r = dual_run(p).expect("oracle machine available");
-            assert!(
-                matches!(&r.ironhorse_halt, Halt::Unsupported(name) if *name == "bind:bound-callback"),
-                "{p:?}: expected an honest bind:bound-callback skip (no abort, no wrong value), got halt={:?} result_agrees={} computrons_agree={}",
-                r.ironhorse_halt, r.result_agrees, r.computrons_agree,
-            );
+            assert_eq!(r.agreement, Agreement::BothComplete, "{p:?}");
+            assert!(r.result_agrees, "{p:?}");
         }
     }
 

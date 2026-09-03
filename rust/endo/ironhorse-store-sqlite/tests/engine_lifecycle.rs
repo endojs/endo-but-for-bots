@@ -653,14 +653,15 @@ fn carried_closure_survives_reordered_and_extended_symbol_tables() {
 fn the_callability_cluster_survives_sqlite_sleep_cycles() {
     let last = carry_scenario(
         "carry-functions",
-        "f.bind(o, 0); o.k;",
+        "f.bind(o, 0); b.call; b.apply; o.k; q.length;",
         &[
-            "f = function (x) { return x + this.k; }; o = { k: 10 }; b = f.bind(o, 5); t = 7;",
-            "t = b(); o.k = 20; t",
-            "t = b(); t",
+            "f = function (x, k, v) { return x + k + v + this.k; }; \
+             o = { k: 10 }; a = f.bind(o, 5); b = a.bind({ k: 99 }, 2); t = b(3);",
+            "t = b.call({ k: 99 }, 3); o.k = 20; t",
+            "t = b.apply({ k: 99 }, { length: 1, 0: 4 }); t",
         ],
     );
-    assert_eq!(last, "25");
+    assert_eq!(last, "31");
 }
 
 #[test]

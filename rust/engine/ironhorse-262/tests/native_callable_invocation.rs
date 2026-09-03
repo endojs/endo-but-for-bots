@@ -315,3 +315,53 @@ fn apply_array_like_arg_array() {
          var ok; try { f.apply(null, o); ok = false; } catch (e) { ok = e instanceof TypeError; } ok",
     );
 }
+
+// -------------------------------------------------------------------------
+// §11  BoundFunction exotic dispatch composes through every Call site.
+// -------------------------------------------------------------------------
+
+#[test]
+fn bound_function_call_chains() {
+    // The innermost binding supplies `this`; bound arguments accumulate from
+    // the innermost function outward and precede ordinary call arguments.
+    agrees(
+        "function f(a,b,c){return this.x+':'+a+':'+b+':'+c} \
+         var b=f.bind({x:1},2).bind({x:9},3); b(4)",
+    );
+    // Chained wrappers can terminate at either a user or native callable.
+    agrees("var f=Math.max.bind(null,3).bind(null,5); f(4,9)");
+    // Binding the call/apply built-ins themselves performs their abstract
+    // redispatch rather than entering a native-method placeholder body.
+    agrees("Function.prototype.call.bind(function(a){return this.x+a})({x:2},3)");
+    agrees("Function.prototype.apply.bind(Math.max)(null,[2,7,3])");
+}
+
+#[test]
+fn bound_function_chains_work_at_abstract_call_sites() {
+    // Array iteration invokes callbacks through the abstract Call operation.
+    agrees(
+        "function f(a,b,v){return a+b+v} \
+         [3].map(f.bind(null,1).bind(null,2))[0]",
+    );
+    agrees("[3].map(Number.bind(null).bind(null))[0]");
+    // `.call`/`.apply` ignore their explicit thisArg when the receiver is
+    // bound, while preserving bound-leading then forwarded argument order.
+    agrees(
+        "function f(a,b){return this.x+a+b} \
+         f.bind({x:1},2).call({x:9},3)",
+    );
+    agrees(
+        "function f(a,b,c){return this.x+a+b+c} \
+         f.bind({x:1},2).apply({x:9},{length:2,0:3,1:4})",
+    );
+    // Abrupt completion from the ultimate target still reaches the caller's
+    // handler through both direct and callback re-entry.
+    agrees(
+        "var b=(function(){throw new RangeError('x')}).bind(null).bind(null); \
+         var ok=false;try{b.call(null)}catch(e){ok=e instanceof RangeError}ok",
+    );
+    agrees(
+        "var b=(function(){throw new RangeError('x')}).bind(null).bind(null); \
+         var ok=false;try{[1].map(b)}catch(e){ok=e instanceof RangeError}ok",
+    );
+}

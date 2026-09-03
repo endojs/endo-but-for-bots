@@ -15860,121 +15860,31 @@ impl Interp {
                                 Err(h) => return h,
                             }
                         }
-                        // The test262 property harness captures uncurried
-                        // primordials with
-                        // `Function.prototype.call.bind(nativeMethod)`.  Run
-                        // that canonical bound-call shape directly: argument
-                        // 0 becomes the native method receiver and the rest
-                        // remain its arguments.
-                        let bound_data = self.bound_functions[&bf].clone();
-                        if self.method_of(bound_data.target) == Some(NativeMethod::FunctionCall) {
-                            let target = match bound_data.this_arg.value {
-                                Payload::Reference(target) => target,
-                                _ => return Halt::Unsupported("bind:call-target"),
-                            };
-                            let target_method = match self.method_of(target) {
-                                Some(method) => method,
-                                None => return Halt::Unsupported("bind:call-target"),
-                            };
-                            let mut args = bound_data.args;
-                            args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
-                            let receiver = args.first().copied().unwrap_or_else(Slot::undefined);
-                            self.stack.truncate(base);
-                            self.push(receiver);
-                            self.push(Slot::of(Kind::Reference, Payload::Reference(target)));
-                            self.push(Slot::undefined());
-                            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                            for arg in args.iter().skip(1) {
-                                self.push(*arg);
-                            }
-                            dispatch_result!(
-                                self.call_native_method(
-                                    target_method,
-                                    base,
-                                    args.len().saturating_sub(1),
-                                    code,
-                                ),
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                            pc = ret_pc;
-                            continue;
+                        // BoundFunction.[[Call]] is ordinary abstract Call
+                        // redispatch: prepend this wrapper's arguments,
+                        // substitute its `this`, and repeat for a chain. Use
+                        // the shared dispatcher so user/native/method targets
+                        // have identical semantics at opcode and callback call
+                        // sites.
+                        let args = self.stack[base + 4..base + 4 + argc].to_vec();
+                        let this = self
+                            .stack
+                            .get(base)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined);
+                        let func = Slot::of(Kind::Reference, Payload::Reference(bf));
+                        self.stack.truncate(base);
+                        let result = dispatch_result!(
+                            self.invoke_value(code, func, this, &args),
+                            pc,
+                            self,
+                            return_depth
+                        );
+                        self.push(result);
+                        if self.check_meter() == MeterCheck::Abort {
+                            return Halt::MeterAbort;
                         }
-                        // A bound function whose target is a native callable or
-                        // prototype method (`Number.bind(null)`, `[].push.bind(a)`,
-                        // …): dispatch the native in place with the bound `this`
-                        // and the bound leading args prepended, rather than
-                        // entering a (nonexistent) bytecode body.
-                        let tgt_native = self.native_of(bound_data.target);
-                        let tgt_method = self.method_of(bound_data.target);
-                        if tgt_native.is_some() || tgt_method.is_some() {
-                            let mut args = bound_data.args.clone();
-                            args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
-                            let n = args.len();
-                            let this = bound_data.this_arg;
-                            let target_slot = Slot::of(
-                                Kind::Reference,
-                                Payload::Reference(bound_data.target),
-                            );
-                            self.stack.truncate(base);
-                            self.push(this);
-                            self.push(target_slot);
-                            self.push(Slot::undefined());
-                            self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                            for a in args {
-                                self.push(a);
-                            }
-                            self.meter.tick_raw(
-                                BIND_CALL_METERING + n as u64 * BIND_CALL_PER_ARG,
-                            );
-                            dispatch_result!(
-                                if let Some(nat) = tgt_native {
-                                    self.call_native(nat, base, n, false, code)
-                                } else {
-                                    self.call_native_method(tgt_method.unwrap(), base, n, code)
-                                },
-                                pc,
-                                self,
-                                return_depth
-                            );
-                            if self.check_meter() == MeterCheck::Abort {
-                                return Halt::MeterAbort;
-                            }
-                            pc = ret_pc;
-                            continue;
-                        }
-                        match self.enter_call_bound(bf, base, argc, ret_pc) {
-                            Ok((body_start, target)) => {
-                                if self.check_meter() == MeterCheck::Abort {
-                                    return Halt::MeterAbort;
-                                }
-                                let segment = self.callee_segment(target);
-                                if segment == self.active_segment {
-                                    pc = body_start;
-                                    continue;
-                                }
-                                match self.dispatch_entered_cross_segment(body_start, segment) {
-                                    Ok(result) => {
-                                        self.push(result);
-                                        pc = ret_pc;
-                                    }
-                                    Err(Halt::Resume(target))
-                                        if self.call_stack.len() < return_depth =>
-                                    {
-                                        return Halt::Resume(target);
-                                    }
-                                    Err(Halt::Resume(target)) => {
-                                        pc = target;
-                                    }
-                                    Err(halt) => return halt,
-                                }
-                            }
-                            Err(h) => return h,
-                        }
+                        pc = ret_pc;
                     } else if let Some((px, base)) = proxy_callee {
                         // `p(...)` / `new p(...)`: collect the frame's args and
                         // receiver, clear the frame, and run the proxy's
@@ -18751,31 +18661,15 @@ impl Interp {
             Payload::Reference(f) if self.functions.contains_key(&f) => f,
             _ => return Err(Halt::Unsupported("callback:non-user-function")),
         };
-        // A **bound** function (`f.bind(...)`) in callback position must NOT be
-        // entered directly: its `FuncInfo` has no body (`body_start = None`),
-        // so `enter_call` would self-name — and before this gate it re-executed
-        // the whole program from pc 0 (unbounded re-entrant recursion → abort
-        // for `[0].map(g.bind(null))` &c., or a divergent then-handler
-        // completion). Trampoline it exactly as the CALL-opcode path does via
-        // `enter_call_bound`: dispatch the TARGET with the bound `this` and the
-        // bound leading args prepended to the callback args, charging the
-        // calibrated bound-call metering (`BIND_CALL_METERING` + per forwarded
-        // arg) — the same native `fx_Function_prototype_bound` body XS meters
-        // per callback invocation. A bound-of-bound target stays the existing
-        // named skip (`enter_call` does not re-check the target's bound gate).
+        // A bound wrapper has no bytecode body of its own. Route it back
+        // through the shared abstract Call operation, which recursively
+        // composes all bound argument lists and supports user, native, method,
+        // and proxy targets without ever entering that bodyless wrapper.
+        if self.bound_functions.contains_key(&f) {
+            return self.invoke_value(code, func, this, args);
+        }
         let (this_eff, func_eff, args_eff): (Slot, Slot, Vec<Slot>) =
-            if let Some(data) = self.bound_functions.get(&f).cloned() {
-                if self.bound_functions.contains_key(&data.target) {
-                    return Err(Halt::Unsupported("bind:bound-callback"));
-                }
-                let mut combined = data.args.clone();
-                combined.extend_from_slice(args);
-                let total = combined.len();
-                self.meter
-                    .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
-                let target = Slot::of(Kind::Reference, Payload::Reference(data.target));
-                (data.this_arg, target, combined)
-            } else if let Some(m) = self.method_of(f) {
+            if let Some(m) = self.method_of(f) {
                 // A **native-method** callback (`a.map(nf.format)` — the
                 // NumberFormat bound-format function; or any prototype method
                 // passed by reference). `run_callback` drives only bytecode
@@ -28591,12 +28485,12 @@ impl Interp {
 
     /// `Function.prototype.bind(thisArg, ...boundArgs)`
     /// (`fx_Function_prototype_bind`): create a bound function. The receiver
-    /// (`this`, at `base`) must be a user function; `thisArg` is arg 0 and the
+    /// (`this`, at `base`) must be a modeled function; `thisArg` is arg 0 and the
     /// bound arguments are args `1..argc`. The bound function's `.length` is
     /// the target's own `.length` minus the bound-arg count (floored at 0),
     /// its `.name` is `"bound "` + the target's name; calling it invokes the
-    /// target with the bound `this` + bound args prepended (the `run`
-    /// trampoline via [`Self::enter_call_bound`]).
+    /// target with the bound `this` + bound args prepended through
+    /// [`Self::invoke_value`].
     fn make_bound_function(&mut self, base: usize, argc: usize) -> Result<Slot, Halt> {
         let this = self
             .stack
@@ -28844,9 +28738,9 @@ impl Interp {
         self.accessors.insert((inst, id), AccessorData { get, set });
     }
 
-    /// Dispatch `native.call(thisArg, ...args)` without entering a bytecode
-    /// frame. Returns `false` when the receiver is not a native constructor or
-    /// native method, allowing the ordinary user-function trampoline to run.
+    /// Dispatch `native.call(thisArg, ...args)` or a bound receiver without
+    /// entering the `.call` bytecode trampoline. Returns `false` for an
+    /// ordinary user function, allowing its in-place trampoline to run.
     fn call_dot_call_native(
         &mut self,
         base: usize,
@@ -28864,7 +28758,8 @@ impl Interp {
         };
         let native = self.native_of(target_ref);
         let method = self.method_of(target_ref);
-        if native.is_none() && method.is_none() {
+        let is_bound = self.bound_functions.contains_key(&target_ref);
+        if native.is_none() && method.is_none() && !is_bound {
             return Ok(false);
         }
         let this_arg = self
@@ -28879,6 +28774,21 @@ impl Interp {
         };
         let forwarded_len = forwarded.len();
         self.stack.truncate(base);
+        self.meter
+            .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
+        if is_bound {
+            let result = self.invoke_value(code, target, this_arg, &forwarded);
+            return match result {
+                Ok(value) => {
+                    self.push(value);
+                    Ok(true)
+                }
+                Err(halt) => {
+                    self.stack.truncate(base);
+                    Err(halt)
+                }
+            };
+        }
         self.push(this_arg);
         self.push(target);
         self.push(Slot::undefined());
@@ -28886,8 +28796,6 @@ impl Interp {
         for arg in forwarded {
             self.push(arg);
         }
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
         if let Some(native) = native {
             self.call_native(native, base, forwarded_len, false, code)?;
         } else if let Some(method) = method {
@@ -28896,14 +28804,11 @@ impl Interp {
         Ok(true)
     }
 
-    /// Dispatch `native.apply(thisArg, argsArray)` without entering a bytecode
-    /// frame — the `.apply` analog of [`Self::call_dot_call_native`]. Returns
-    /// `Ok(false)` when the receiver is not a native constructor/method (the
-    /// ordinary user-function trampoline then runs), or when the arguments
-    /// array is a shape not yet forwarded (a sparse array / array-like), so
-    /// [`Self::enter_call_dot_apply`] keeps its honest self-name. A dense Array
-    /// instance (or absent/undefined/null → no args) forwards its elements as
-    /// the call arguments, exactly as the user-receiver path does.
+    /// Dispatch `native.apply(thisArg, argsArray)` or a bound receiver without
+    /// entering a bytecode frame — the `.apply` analog of
+    /// [`Self::call_dot_call_native`]. An ordinary user function returns
+    /// `Ok(false)` for the in-place trampoline. Bound receivers additionally
+    /// accept every modeled array-like shape through `CreateListFromArrayLike`.
     fn call_dot_apply_native(
         &mut self,
         base: usize,
@@ -28920,7 +28825,8 @@ impl Interp {
         };
         let native = self.native_of(target_ref);
         let method = self.method_of(target_ref);
-        if native.is_none() && method.is_none() {
+        let is_bound = self.bound_functions.contains_key(&target_ref);
+        if native.is_none() && method.is_none() && !is_bound {
             return Ok(false);
         }
         let this_arg = self
@@ -28942,17 +28848,42 @@ impl Interp {
                 // Reads route through the counted-accessor view (the
                 // seam's bulk-table discipline); no counts move.
                 if (0..len).any(|i| !data.items().contains_key(&i)) {
-                    return Ok(false);
+                    if is_bound {
+                        let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
+                        (args, 0)
+                    } else {
+                        return Ok(false);
+                    }
+                } else {
+                    let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
+                    let meter =
+                        APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                    (args, meter)
                 }
-                let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
-                let meter =
-                    APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
-                (args, meter)
             }
+            Some((Kind::Reference, _)) | Some((Kind::Instance, _)) if is_bound => {
+                (self.arraylike_to_vec(code, arg_array.unwrap())?, 0)
+            }
+            Some(_) if is_bound => return Err(self.catchable_type_error()),
             _ => return Ok(false),
         };
         let forwarded_len = forwarded.len();
         self.stack.truncate(base);
+        self.meter
+            .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
+        if is_bound {
+            let result = self.invoke_value(code, target, this_arg, &forwarded);
+            return match result {
+                Ok(value) => {
+                    self.push(value);
+                    Ok(true)
+                }
+                Err(halt) => {
+                    self.stack.truncate(base);
+                    Err(halt)
+                }
+            };
+        }
         self.push(this_arg);
         self.push(target);
         self.push(Slot::undefined());
@@ -28960,8 +28891,6 @@ impl Interp {
         for arg in forwarded {
             self.push(arg);
         }
-        self.meter
-            .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
         if let Some(native) = native {
             self.call_native(native, base, forwarded_len, false, code)?;
         } else if let Some(method) = method {
@@ -28989,26 +28918,13 @@ impl Interp {
             .get(base)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        let fref = match f.value {
+        match f.value {
             Payload::Reference(r)
                 if self
                     .functions
                     .get(&r)
-                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) =>
-            {
-                r
-            }
+                    .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => {}
             _ => return Err(Halt::Unsupported("call:non-user-function-receiver")),
-        };
-        // A bound-function receiver (`boundF.call(thisArg, …)`) would reshape
-        // into the bound wrapper's **bodyless** frame and dispatch at pc 0 (the
-        // silent completion divergence: `.call`'s `thisArg` is ignored, the
-        // bound `this` wins). Its correct trampoline stacks the `.call`
-        // re-dispatch onto the bound re-dispatch — two calibrated overheads
-        // whose combined metering is not affordable now — so self-name rather
-        // than answer a wrong value.
-        if self.bound_functions.contains_key(&fref) {
-            return Err(Halt::Unsupported("bind:bound-callback"));
         }
         let this_arg = self
             .stack
@@ -29070,16 +28986,6 @@ impl Interp {
                     .get(&r)
                     .map_or(false, |fi| fi.native.is_none() && fi.method.is_none()) => {}
             _ => return Err(Halt::Unsupported("apply:non-user-function-receiver")),
-        }
-        // A bound-function receiver (`boundF.apply(thisArg, args)`) reshapes
-        // into the bound wrapper's **bodyless** frame and dispatches at pc 0
-        // (the silent completion divergence). The correct trampoline stacks the
-        // `.apply` re-dispatch onto the bound re-dispatch — combined metering
-        // not affordable now — so self-name rather than answer a wrong value.
-        if let Payload::Reference(r) = f.value {
-            if self.bound_functions.contains_key(&r) {
-                return Err(Halt::Unsupported("bind:bound-callback"));
-            }
         }
         let this_arg = self
             .stack
@@ -29143,57 +29049,6 @@ impl Interp {
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
         self.enter_call(n, ret_pc, false)
-    }
-
-    /// A bound function's call (`fx_Function_prototype_bound`): re-enter the
-    /// target frame with the bound `this` and the bound leading arguments
-    /// prepended to the call arguments. The stack at `base` holds the bound
-    /// call's frame `[THIS, FUNCTION(bound), RESULT, FRAME, callArgs...]`;
-    /// reshape it to the target's `[boundThis, target, RESULT, FRAME,
-    /// boundArgs..., callArgs...]` and enter. `bf` is the bound function's
-    /// instance slot (its [`BoundData`] holds the target/this/args).
-    fn enter_call_bound(
-        &mut self,
-        bf: crate::value::SlotIndex,
-        base: usize,
-        argc: usize,
-        ret_pc: usize,
-    ) -> Result<(usize, crate::value::SlotIndex), Halt> {
-        let data = self.bound_functions[&bf].clone();
-        // A bound function whose target is itself bound needs the trampoline to
-        // re-dispatch through the target's own bound handler (XS's `mxRunCount`
-        // does this naturally); ironhorse's `enter_call` does not re-check, so a
-        // bound-of-bound *call* self-names (its `.length`/`.name` still read).
-        if self.bound_functions.contains_key(&data.target) {
-            return Err(Halt::Unsupported("bind:bound-target-call"));
-        }
-        let target = Slot::of(Kind::Reference, Payload::Reference(data.target));
-        // The call arguments follow the frame (`base + 4 ..`).
-        let call_args: Vec<Slot> = if argc >= 1 {
-            self.stack[base + 4..base + 4 + argc].to_vec()
-        } else {
-            Vec::new()
-        };
-        let nbound = data.args.len();
-        let total = nbound + call_args.len();
-        self.stack.truncate(base);
-        self.stack.push(data.this_arg); // THIS (the bound `this`)
-        self.stack.push(target); // FUNCTION (the target)
-        self.stack.push(Slot::undefined()); // RESULT
-        self.stack
-            .push(Slot::of(Kind::Uninitialized, Payload::None)); // FRAME
-        for a in data.args {
-            self.stack.push(a); // bound args first
-        }
-        for a in call_args {
-            self.stack.push(a); // then the call args
-        }
-        // The bound-call re-dispatch overhead plus one step per forwarded
-        // argument (bound + call), calibrated against the pin via the raw-gap.
-        self.meter
-            .tick_raw(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG);
-        self.enter_call(total, ret_pc, false)
-            .map(|body_start| (body_start, data.target))
     }
 
     /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
