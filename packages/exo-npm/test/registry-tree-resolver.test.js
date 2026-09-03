@@ -98,15 +98,78 @@ test('resolveRegistryTree preserves eager MVS and same-vat traversal', async t =
     sha256: async bytes => `hash:${decodeUtf8(bytes)}`,
   });
   t.deepEqual(resolution.keys, ['alpha@1.2.0', 'shared@1.0.0']);
+  // The preimage is the shared injective `JSON.stringify([[key, integrity]…])`
+  // encoding (registry keys/integrity may contain `\t`/`\n`, so the former
+  // tab/newline join collided distinct closures onto one cache key).
   t.is(
     resolution.resolutionHash,
-    'hash:alpha@1.2.0\tsha512-alpha-12\nshared@1.0.0\tsha512-shared',
+    'hash:[["alpha@1.2.0","sha512-alpha-12"],["shared@1.0.0","sha512-shared"]]',
   );
   t.true(calls.includes('provide:alpha@1.2.0'));
   t.true(calls.includes('provide:shared@1.0.0'));
   // The tree adapter and resolver communicate only through direct local method
-  // calls represented by these operation counters; no bus/E() hook is present.
+  // calls — no bus/E() hook is present, so no `eventual:` marker can appear —
+  // and every op is a plain `list:`/`provide:` same-vat call, never a
+  // per-dependency bus round trip. Each selected version leaf is materialized
+  // exactly once (no per-lookup refetch), the concrete zero-round-trip bound.
   t.false(calls.some(call => call.startsWith('eventual:')));
+  t.true(
+    calls.every(
+      call => call.startsWith('list:') || call.startsWith('provide:'),
+    ),
+  );
+  t.is(calls.filter(call => call === 'provide:alpha@1.2.0').length, 1);
+  t.is(calls.filter(call => call === 'provide:shared@1.0.0').length, 1);
+});
+
+test('resolutionHash is injective across tab/newline-bearing registry keys', async t => {
+  // A single package named `a` at a version string that embeds the tab/newline
+  // the old preimage delimited on must NOT hash-collide with the two-package
+  // closure it textually imitates — a colliding content-addressed cache key
+  // would substitute one closure's trees for another's.
+  const sha256 = async bytes => `hash:${decodeUtf8(bytes)}`;
+  const single = harden({
+    a: harden({
+      '1.0.0\tI1\nb@1.0.0': harden({
+        integrity: 'I2',
+        packageJson: JSON.stringify({
+          name: 'a',
+          version: '1.0.0\tI1\nb@1.0.0',
+        }),
+      }),
+    }),
+  });
+  const singleRoot = makeFixtureRoot(single);
+  const singleResolution = await resolveRegistryTree(
+    JSON.stringify({ name: 'app', dependencies: { a: '*' } }),
+    singleRoot,
+    { sha256 },
+  );
+  const twoPackages = harden({
+    a: harden({
+      '1.0.0': harden({
+        integrity: 'I1',
+        packageJson: JSON.stringify({
+          name: 'a',
+          version: '1.0.0',
+          dependencies: { b: '1.0.0' },
+        }),
+      }),
+    }),
+    b: harden({
+      '1.0.0': harden({
+        integrity: 'I2',
+        packageJson: JSON.stringify({ name: 'b', version: '1.0.0' }),
+      }),
+    }),
+  });
+  const twoRoot = makeFixtureRoot(twoPackages);
+  const twoResolution = await resolveRegistryTree(
+    JSON.stringify({ name: 'app', dependencies: { a: '*' } }),
+    twoRoot,
+    { sha256 },
+  );
+  t.not(singleResolution.resolutionHash, twoResolution.resolutionHash);
 });
 
 test('resolveRegistryTree preserves optional and peer contracts', async t => {

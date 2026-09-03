@@ -47,11 +47,39 @@ const lookupThrough = async (node, segments) => {
 };
 harden(lookupThrough);
 
+// The Endor lane concatenates a package name straight into a fetch URL
+// (`rust/endo/src/fetch.rs` `format!("{}{}", registry, name)`) with no
+// percent-encoding, unlike the Node lane which escapes it. A guest holding
+// `@registry` can otherwise steer an authenticated request off the registry
+// origin with a name like `..`, `foo?x=1`, or `%2e%2e%2f…`. Validate every
+// name part against npm's charset at this single choke point — the leading
+// package name always flows through here — so both backends reject the same
+// spellings before the name reaches any host power.
+const npmNamePartPattern = /^[a-zA-Z0-9._-]+$/;
+/** @param {string} part */
+const assertNpmNamePart = part => {
+  const bare = part.startsWith('@') ? part.slice(1) : part;
+  if (
+    bare === '' ||
+    bare === '.' ||
+    bare === '..' ||
+    !npmNamePartPattern.test(bare)
+  ) {
+    throw RegistryPathSyntaxError(part);
+  }
+};
+harden(assertNpmNamePart);
+
 /** @param {string} segment */
 const scopedPackageSegments = segment => {
-  if (!segment.includes('/')) return [segment];
+  if (!segment.includes('/')) {
+    assertNpmNamePart(segment);
+    return [segment];
+  }
   const match = /^(@[^/]+)\/([^/]+)$/.exec(segment);
   if (match === null) throw RegistryPathSyntaxError(segment);
+  assertNpmNamePart(match[1]);
+  assertNpmNamePart(match[2]);
   return [match[1], match[2]];
 };
 harden(scopedPackageSegments);
@@ -78,34 +106,60 @@ export const comparePublishedVersions = (left, right) => {
     // A parseable version is strictly less than an unparseable one.
     return leftMatch === null ? 1 : -1;
   }
+  // Release components are registry-supplied digit runs of unbounded length, so
+  // they compare as BigInt. `Number()` subtraction loses precision past 2**53
+  // (distinct versions collapse to equal, letting registry key order pick the
+  // lower one) and overflows a several-hundred-digit component to `Infinity`,
+  // whose `Infinity - Infinity === NaN` leaves `sort` unordered.
   for (let position = 1; position <= 3; position += 1) {
-    const difference =
-      Number(leftMatch[position]) - Number(rightMatch[position]);
-    if (difference !== 0) return difference;
+    const leftComponent = BigInt(leftMatch[position]);
+    const rightComponent = BigInt(rightMatch[position]);
+    if (leftComponent !== rightComponent) {
+      return leftComponent < rightComponent ? -1 : 1;
+    }
   }
   const leftPrerelease = leftMatch[4]?.split('.');
   const rightPrerelease = rightMatch[4]?.split('.');
   if (leftPrerelease === undefined && rightPrerelease !== undefined) return 1;
   if (leftPrerelease !== undefined && rightPrerelease === undefined) return -1;
-  if (leftPrerelease === undefined || rightPrerelease === undefined) return 0;
-  const length = Math.max(leftPrerelease.length, rightPrerelease.length);
-  for (let position = 0; position < length; position += 1) {
-    const leftIdentifier = leftPrerelease[position];
-    const rightIdentifier = rightPrerelease[position];
-    if (leftIdentifier === undefined) return -1;
-    if (rightIdentifier === undefined) return 1;
-    if (leftIdentifier !== rightIdentifier) {
-      const leftIsNumber = /^\d+$/.test(leftIdentifier);
-      const rightIsNumber = /^\d+$/.test(rightIdentifier);
-      if (leftIsNumber && rightIsNumber) {
-        return BigInt(leftIdentifier) < BigInt(rightIdentifier) ? -1 : 1;
+  if (leftPrerelease !== undefined && rightPrerelease !== undefined) {
+    const length = Math.max(leftPrerelease.length, rightPrerelease.length);
+    for (let position = 0; position < length; position += 1) {
+      const leftIdentifier = leftPrerelease[position];
+      const rightIdentifier = rightPrerelease[position];
+      if (leftIdentifier === undefined) return -1;
+      if (rightIdentifier === undefined) return 1;
+      if (leftIdentifier !== rightIdentifier) {
+        const leftIsNumber = /^\d+$/.test(leftIdentifier);
+        const rightIsNumber = /^\d+$/.test(rightIdentifier);
+        if (leftIsNumber && rightIsNumber) {
+          const leftValue = BigInt(leftIdentifier);
+          const rightValue = BigInt(rightIdentifier);
+          // Equal value with distinct spelling (`alpha.01` vs `alpha.1`) is
+          // *not* decided here — returning a sign both ways would break
+          // antisymmetry. Fall through to the raw-spelling tiebreak below.
+          if (leftValue !== rightValue) {
+            return leftValue < rightValue ? -1 : 1;
+          }
+        } else if (leftIsNumber) {
+          return -1;
+        } else if (rightIsNumber) {
+          return 1;
+        } else {
+          return leftIdentifier < rightIdentifier ? -1 : 1;
+        }
       }
-      if (leftIsNumber) return -1;
-      if (rightIsNumber) return 1;
-      return leftIdentifier < rightIdentifier ? -1 : 1;
     }
   }
-  return 0;
+  // Structurally equal: semver ignores build metadata for precedence
+  // (`1.0.0+a` vs `1.0.0+b`) and numeric prerelease identifiers can tie by
+  // value across spellings. A total order still demands that two *distinct*
+  // registry keys compare distinctly, or `sort` leaves their order at the mercy
+  // of the packument's insertion order and `greatestSatisfying`'s
+  // `candidates[length - 1]` selection turns nondeterministic. Tiebreak on the
+  // raw spelling so equal-by-precedence-but-distinct keys still order stably.
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 };
 harden(comparePublishedVersions);
 
@@ -156,7 +210,15 @@ export const makeLookupTreeView = (tree, temporal = 'live') => {
       }
       return result;
     },
-    getInfo: () => harden({ temporal }),
+    // Forward the wrapped node's own identity metadata rather than stamping a
+    // fixed `temporal`: the view exists to withhold *enumeration* (`list`), not
+    // to relabel consistency or to drop a leaf's `integrity`/`sha256` info. A
+    // holder must still be able to verify the package it just resolved. Only a
+    // node that carries no `getInfo` falls back to the caller-supplied default.
+    getInfo: () =>
+      typeof (/** @type {any} */ (tree).getInfo) === 'function'
+        ? tree.getInfo()
+        : harden({ temporal }),
   });
   return view;
 };
@@ -207,27 +269,31 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
     }
     const cached = versionLeaves.get(treeRef);
     if (cached !== undefined) return cached;
-    const leaf = makeExo(`Package ${key}`, RegistrySnapshotTreeInterface, {
-      help: method =>
-        method === undefined
-          ? `Immutable package tree ${key}`
-          : `Package tree method ${method}`,
-      has: (...path) => treeRef.has(...path),
-      list: (...path) => treeRef.list(...path),
-      lookup: path => treeRef.lookup(path),
-      sha256: () => treeRef.sha256(),
-      async getInfo() {
-        const treeInfo =
-          typeof treeRef.getInfo === 'function'
-            ? await treeRef.getInfo()
-            : harden({});
-        return harden({
-          ...treeInfo,
-          temporal: 'immutable',
-          integrity,
-        });
+    const leaf = makeExo(
+      'RegistryPackageVersionTree',
+      RegistrySnapshotTreeInterface,
+      {
+        help: method =>
+          method === undefined
+            ? `Immutable package tree ${key}`
+            : `Package tree method ${method}`,
+        has: (...path) => treeRef.has(...path),
+        list: (...path) => treeRef.list(...path),
+        lookup: path => treeRef.lookup(path),
+        sha256: () => treeRef.sha256(),
+        async getInfo() {
+          const treeInfo =
+            typeof treeRef.getInfo === 'function'
+              ? await treeRef.getInfo()
+              : harden({});
+          return harden({
+            ...treeInfo,
+            temporal: 'immutable',
+            integrity,
+          });
+        },
       },
-    });
+    );
     versionLeaves.set(treeRef, leaf);
     return leaf;
   };
@@ -240,7 +306,7 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
 
     /** @type {RegistryDirectory} */
     const packageDirectory = makeExo(
-      `Package versions for ${packageName}`,
+      'RegistryPackageVersions',
       RegistryDirectoryInterface,
       {
         help: method =>
@@ -250,6 +316,13 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
         async has(...path) {
           try {
             if (path.length === 0) return true;
+            const [version, ...deeper] = path;
+            // `has` is the cheap no-throw predicate; deciding existence of a
+            // `(package, version)` pair must not materialize the leaf (download
+            // a tarball, write the CAS). The metadata version list answers it.
+            const available = await versionsFor(packageName);
+            if (!available.includes(version)) return false;
+            if (deeper.length === 0) return true;
             await lookupThrough(packageDirectory, path);
             return true;
           } catch {
@@ -289,7 +362,7 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
   /** @param {string} scope */
   const scopeHubFor = scope => {
     /** @type {RegistryHub} */
-    const scopeHub = makeExo(`npm scope ${scope}`, RegistryHubInterface, {
+    const scopeHub = makeExo('RegistryNpmScope', RegistryHubInterface, {
       help: method =>
         method === undefined
           ? `Non-enumerable npm scope ${scope}`
@@ -307,8 +380,10 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
         const segments = segmentsFromPath(path);
         if (segments.length === 0) return scopeHub;
         const [packagePart, ...remaining] = segments;
-        if (packagePart.includes('/'))
-          throw RegistryPathSyntaxError(packagePart);
+        // The package part of a scoped name reaches `listVersions` (and the
+        // Endor fetch URL) as `${scope}/${packagePart}`; validate its charset
+        // here as `scopedPackageSegments` does for the slash-joined spelling.
+        assertNpmNamePart(packagePart);
         const directory = await packageDirectoryFor(`${scope}/${packagePart}`);
         return lookupThrough(directory, remaining);
       },
@@ -318,7 +393,7 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
   };
 
   /** @type {RegistryHub} */
-  const npmHub = makeExo('npm package registry', RegistryHubInterface, {
+  const npmHub = makeExo('NpmRegistryHub', RegistryHubInterface, {
     help: method =>
       method === undefined
         ? `Non-enumerable ${label} package-name hub`
@@ -327,17 +402,44 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
       try {
         if (path.length === 0) return true;
         const normalized = path.flatMap(scopedPackageSegments);
-        if (
-          operations.hasPackage !== undefined &&
-          (normalized.length === 1 ||
-            (normalized.length === 2 && normalized[0].startsWith('@')))
-        ) {
-          const packageName =
-            normalized.length === 1
-              ? normalized[0]
-              : `${normalized[0]}/${normalized[1]}`;
-          return Boolean(await operations.hasPackage(packageName));
+        // Resolve the package name (and any trailing version/path) without
+        // materializing a version leaf: `has` is the platform-wide no-throw
+        // predicate and must not download a tarball or write to the CAS the way
+        // its `lookup` sibling does.
+        let packageName;
+        let rest;
+        if (normalized[0].startsWith('@')) {
+          if (normalized.length === 1) {
+            // A bare scope names a lookup-only hub minted on demand, so it
+            // always "exists" — matching `lookup('@scope')`, which returns a
+            // scope hub rather than throwing. Routing this through
+            // `hasPackage('@scope')` (a package literally so named) would make
+            // `has` and `lookup` disagree, and disagree per-backend since only
+            // Endor supplies `hasPackage`.
+            return true;
+          }
+          packageName = `${normalized[0]}/${normalized[1]}`;
+          rest = normalized.slice(2);
+        } else {
+          packageName = normalized[0];
+          rest = normalized.slice(1);
         }
+        if (rest.length === 0) {
+          // Bare package existence. Prefer the backend's cheap probe when it
+          // supplies one (Endor); otherwise fall back to the metadata version
+          // list, which throws — folded to false below — for an unknown name.
+          if (operations.hasPackage !== undefined) {
+            return Boolean(await operations.hasPackage(packageName));
+          }
+          await versionsFor(packageName);
+          return true;
+        }
+        const [version, ...deeper] = rest;
+        const available = await versionsFor(packageName);
+        if (!available.includes(version)) return false;
+        if (deeper.length === 0) return true;
+        // A path *inside* an already-confirmed version tree is the only case
+        // that must materialize the leaf; it is bounded to one known pair.
         await lookupThrough(npmHub, normalized);
         return true;
       } catch {
@@ -398,7 +500,7 @@ harden(makeEndorNpmRegistryTree);
 export const makePackageRegistryTree = registries => {
   const names = harden(Object.keys(registries).sort());
   /** @type {RegistryDirectory} */
-  const root = makeExo('Package registry root', RegistryDirectoryInterface, {
+  const root = makeExo('PackageRegistryRoot', RegistryDirectoryInterface, {
     help: method =>
       method === undefined
         ? 'Stable directory of configured package registries'

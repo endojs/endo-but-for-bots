@@ -411,3 +411,33 @@ export function registryErrorName(
   error: unknown,
 ): RegistryErrorName | undefined;
 export function isRegistryError(error: unknown): boolean;
+
+// This hand-written `.d.ts` is the package's sole `exports["."].types`, so it
+// *shadows* `index.js`: any runtime export it fails to declare is a TS2305 for
+// a cross-package consumer even though the import succeeds at runtime, and
+// `tsc` cannot catch the gap because no in-repo consumer imports these yet. The
+// remaining `index.js` value exports are therefore re-declared here by
+// `typeof import(...)` of their defining module, which stays exact by
+// construction and cannot drift from the implementation. New value exports
+// must be added here in the same shape.
+export const RegistryMissingPackageError: typeof import('./src/errors.js').RegistryMissingPackageError;
+export const RegistryNetworkError: typeof import('./src/errors.js').RegistryNetworkError;
+
+export const EndoRegistryInterface: typeof import('./src/type-guards.js').EndoRegistryInterface;
+export const RegistryDirectoryInterface: typeof import('./src/type-guards.js').RegistryDirectoryInterface;
+export const RegistryHubInterface: typeof import('./src/type-guards.js').RegistryHubInterface;
+export const RegistrySnapshotTreeInterface: typeof import('./src/type-guards.js').RegistrySnapshotTreeInterface;
+
+// Reachable via the `./registry-tree.js` subpath export.
+export const comparePublishedVersions: typeof import('./src/registry-tree.js').comparePublishedVersions;
+
+export const makeNpmReferenceRegistry: typeof import('./src/reference-backend.js').makeNpmReferenceRegistry;
+export const makeMemoryPackageCacheTable: typeof import('./src/reference-backend.js').makeMemoryPackageCacheTable;
+
+export const makeMvsResolveHook: typeof import('./src/mvs-resolver.js').makeMvsResolveHook;
+export const satisfiesRange: typeof import('./src/mvs-resolver.js').satisfiesRange;
+export const parseRangeMajor: typeof import('./src/mvs-resolver.js').parseRangeMajor;
+
+export const mapSnapshot: typeof import('./src/snapshot-mapper.js').mapSnapshot;
+export const buildCompartmentMap: typeof import('./src/snapshot-mapper.js').buildCompartmentMap;
+export const makeMountReadPowers: typeof import('./src/snapshot-mapper.js').makeMountReadPowers;

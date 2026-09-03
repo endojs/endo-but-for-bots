@@ -242,6 +242,25 @@ const composeKey = (name, version) => `${name}@${version}`;
 harden(composeKey);
 
 /**
+ * Injective preimage for the resolution hash, shared with
+ * `resolveRegistryTree` so both resolvers hash one closure identically.
+ *
+ * Package keys and integrity strings are registry-controlled and may contain
+ * the `\t`/`\n` a `${key}\t${integrity}` join used to delimit on, so distinct
+ * closures could collide onto one `resolutionHash` — and a colliding
+ * content-addressed cache key substitutes one closure's trees for another's.
+ * `JSON.stringify` escapes both fields and the array structure delimits them,
+ * so distinct `(keys, integrities)` map to distinct preimages.
+ *
+ * @param {readonly string[]} keys
+ * @param {Record<string, { integrity: string }>} packagesByKey
+ * @returns {string}
+ */
+export const resolutionHashPreimage = (keys, packagesByKey) =>
+  JSON.stringify(keys.map(key => [key, packagesByKey[key].integrity]));
+harden(resolutionHashPreimage);
+
+/**
  * Compute a stable content hash of the resolution by hashing the
  * canonical key list and the per-entry integrity strings together.
  *
@@ -253,10 +272,8 @@ harden(composeKey);
  * @param {Record<string, RegistryResolutionEntry>} packagesByKey
  * @param {(bytes: Uint8Array) => Promise<string>} sha256
  */
-const hashResolution = async (keys, packagesByKey, sha256) => {
-  const lines = keys.map(key => `${key}\t${packagesByKey[key].integrity}`);
-  return sha256(utf8Encoder.encode(lines.join('\n')));
-};
+const hashResolution = async (keys, packagesByKey, sha256) =>
+  sha256(utf8Encoder.encode(resolutionHashPreimage(keys, packagesByKey)));
 harden(hashResolution);
 
 /**

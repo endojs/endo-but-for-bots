@@ -16,7 +16,7 @@
  * design's Failure surface refinements section).
  */
 
-import { makeError, X } from '@endo/errors';
+import { makeError, q, X } from '@endo/errors';
 
 const TAMPERED = 'RegistryTamperedError';
 const MISSING = 'RegistryMissingPackageError';
@@ -45,8 +45,13 @@ const annotateRegistryFailure = (error, concreteName) => {
  */
 export const RegistryNotFoundError = path =>
   annotateRegistryFailure(
+    // `q(path)` keeps the offending path in the message under a default
+    // `lockdown()`, where a bare `${path}` substitution is redacted to
+    // `(a string)`. The fresh `RangeError` (rather than the `makeError` result,
+    // which is already hardened and non-extensible) is what
+    // `annotateRegistryFailure` can still stamp the classification tags onto.
     new RangeError(
-      makeError(X`Package registry has no entry at ${path}`).message,
+      makeError(X`Package registry has no entry at ${q(path)}`).message,
     ),
     'RegistryNotFoundError',
   );
@@ -60,7 +65,7 @@ export const RegistryPathSyntaxError = segment =>
   annotateRegistryFailure(
     new SyntaxError(
       makeError(
-        X`Invalid package-registry path segment ${segment}; use @scope/package or a string-array path`,
+        X`Invalid package-registry path segment ${q(segment)}; use @scope/package or a string-array path`,
       ).message,
     ),
     'RegistryPathSyntaxError',
@@ -92,13 +97,13 @@ export const RegistryTamperedError = (
 ) => {
   if (version === undefined) {
     return makeError(
-      X`Registry contents tampered: ${nameOrReason}`,
+      X`Registry contents tampered: ${q(nameOrReason)}`,
       undefined,
       { errorName: TAMPERED },
     );
   }
   return makeError(
-    X`Registry contents for ${nameOrReason}@${version} failed integrity check (expected ${expectedIntegrity}, got ${actualHash})`,
+    X`Registry contents for ${q(nameOrReason)}@${q(version)} failed integrity check (expected ${q(expectedIntegrity)}, got ${q(actualHash)})`,
     undefined,
     { errorName: TAMPERED },
   );
@@ -120,12 +125,16 @@ harden(RegistryTamperedError);
  */
 export const RegistryMissingPackageError = (nameOrReason, version) => {
   if (version === undefined) {
-    return makeError(X`Registry missing package: ${nameOrReason}`, undefined, {
-      errorName: MISSING,
-    });
+    return makeError(
+      X`Registry missing package: ${q(nameOrReason)}`,
+      undefined,
+      {
+        errorName: MISSING,
+      },
+    );
   }
   return makeError(
-    X`Registry has no package ${nameOrReason}@${version}`,
+    X`Registry has no package ${q(nameOrReason)}@${q(version)}`,
     undefined,
     {
       errorName: MISSING,
@@ -145,7 +154,7 @@ harden(RegistryMissingPackageError);
  * @returns {Error}
  */
 export const RegistryNetworkError = (reason, cause) =>
-  makeError(X`Registry network error: ${reason}`, undefined, {
+  makeError(X`Registry network error: ${q(reason)}`, undefined, {
     errorName: NETWORK,
     cause,
   });
@@ -165,15 +174,18 @@ harden(RegistryNetworkError);
  * @returns {Error}
  */
 export const RegistryOfflineError = (nameOrReason, version) => {
-  let error;
-  if (version === undefined) {
-    error = makeError(X`Registry is offline: ${nameOrReason}`);
-  } else {
-    error = makeError(
-      X`Registry is in offline mode and ${nameOrReason}@${version} is not cached`,
-    );
-  }
-  return annotateRegistryFailure(new Error(error.message), OFFLINE);
+  // `q(...)` keeps the name/version visible under a default `lockdown()`, where
+  // a bare `${nameOrReason}` substitution is redacted to `(a string)`. The
+  // message is copied into a fresh (still-extensible) `Error` so
+  // `annotateRegistryFailure` can stamp the classification tags onto it.
+  const message = (
+    version === undefined
+      ? makeError(X`Registry is offline: ${q(nameOrReason)}`)
+      : makeError(
+          X`Registry is in offline mode and ${q(nameOrReason)}@${q(version)} is not cached`,
+        )
+  ).message;
+  return annotateRegistryFailure(new Error(message), OFFLINE);
 };
 harden(RegistryOfflineError);
 

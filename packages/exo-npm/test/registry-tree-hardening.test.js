@@ -115,6 +115,175 @@ test('makeLookupTreeView withholds enumeration at every depth', async t => {
   t.false(typeof alphaView.list === 'function');
 });
 
+test('comparePublishedVersions is a total order past 2**53 and on build metadata', t => {
+  // Release components are registry-supplied and unbounded; `Number()` collapsed
+  // distinct large versions to equal and overflowed huge ones to `Infinity`
+  // (`Infinity - Infinity === NaN` leaves `sort` unordered). BigInt fixes both.
+  const bigLower = '9007199254740992.0.0';
+  const bigHigher = '9007199254740993.0.0';
+  t.true(comparePublishedVersions(bigLower, bigHigher) < 0);
+  t.true(comparePublishedVersions(bigHigher, bigLower) > 0);
+  const huge = `1.0.${'9'.repeat(400)}`;
+  const hugeMinusOne = `1.0.${'9'.repeat(399)}8`;
+  t.true(comparePublishedVersions(hugeMinusOne, huge) < 0);
+  t.true(comparePublishedVersions(huge, hugeMinusOne) > 0);
+  // Distinct keys that tie by semver precedence (build metadata, or a
+  // leading-zero numeric prerelease identifier) must still compare distinctly
+  // and antisymmetrically, or `sort` order rides the packument's key order.
+  for (const [a, b] of [
+    ['1.0.0+a', '1.0.0+b'],
+    ['1.0.0-alpha.1', '1.0.0-alpha.01'],
+  ]) {
+    t.not(comparePublishedVersions(a, b), 0);
+    t.is(
+      Math.sign(comparePublishedVersions(a, b)),
+      -Math.sign(comparePublishedVersions(b, a)),
+    );
+  }
+  // A reversed input sorts identically — the total-order invariant.
+  const inputs = [bigHigher, bigLower, '1.0.0+b', '1.0.0+a', '1.0.0'];
+  t.deepEqual(
+    [...inputs].sort(comparePublishedVersions),
+    [...inputs].reverse().sort(comparePublishedVersions),
+  );
+});
+
+test('has(name, version) does not materialize a version leaf', async t => {
+  let providePackageTreeCalls = 0;
+  const operations = harden({
+    async listVersions(name) {
+      const versions = packages[name];
+      return versions === undefined ? undefined : Object.keys(versions);
+    },
+    async providePackageTree(name, version) {
+      providePackageTreeCalls += 1;
+      const record = packages[name]?.[version];
+      if (record === undefined) throw new RangeError(`${name}@${version}`);
+      return harden({
+        treeRef: makePackageTree(name, version),
+        integrity: record.integrity,
+      });
+    },
+  });
+  const npm = makeNpmRegistryTree(operations);
+  // A known (name, version) is a metadata-only truth; an unknown version is
+  // false. Neither may drive a tarball fetch / CAS write — a guest looping
+  // `has` over a packument's version list must not consume bandwidth or disk.
+  t.true(await npm.has('alpha', '1.0.0'));
+  t.true(await npm.has('@scope/package', '1.2.3'));
+  t.false(await npm.has('alpha', '9.9.9'));
+  t.is(providePackageTreeCalls, 0);
+  // The version-directory level enforces the same bound.
+  const alphaDir = /** @type {any} */ (await npm.lookup('alpha'));
+  t.true(await alphaDir.has('2.0.0'));
+  t.false(await alphaDir.has('9.9.9'));
+  t.is(providePackageTreeCalls, 0);
+});
+
+test('has and lookup agree on a bare scope, on both backends', async t => {
+  // `lookup('@scope')` returns a scope hub unconditionally, so `has('@scope')`
+  // must be true and must not ask the backend for a package literally named
+  // `@scope` — which would make the two disagree, and disagree per-backend
+  // since only Endor supplies `hasPackage`.
+  const withoutHasPackage = makeNpmRegistryTree(makeOperations());
+  t.true(await withoutHasPackage.has('@scope'));
+  t.not(await withoutHasPackage.lookup('@scope'), undefined);
+
+  const queriedNames = [];
+  const withHasPackage = makeNpmRegistryTree(
+    harden({
+      ...makeOperations(),
+      async hasPackage(name) {
+        queriedNames.push(name);
+        return packages[name] !== undefined;
+      },
+    }),
+  );
+  t.true(await withHasPackage.has('@scope'));
+  // The backend's `hasPackage` was never consulted for the bare scope.
+  t.false(queriedNames.includes('@scope'));
+});
+
+test('the hasPackage fast path is pinned for bare and scoped packages', async t => {
+  // Deleting the `operations.hasPackage` branch must redden a test (prover):
+  // the Endor cheap-probe path answers package existence without listVersions.
+  const calls = {
+    hasPackage: /** @type {string[]} */ ([]),
+    listVersions: /** @type {string[]} */ ([]),
+  };
+  const operations = harden({
+    async hasPackage(name) {
+      calls.hasPackage.push(name);
+      return packages[name] !== undefined;
+    },
+    async listVersions(name) {
+      calls.listVersions.push(name);
+      const versions = packages[name];
+      return versions === undefined ? undefined : Object.keys(versions);
+    },
+    async providePackageTree(name, version) {
+      const record = packages[name]?.[version];
+      if (record === undefined) throw new RangeError(`${name}@${version}`);
+      return harden({
+        treeRef: makePackageTree(name, version),
+        integrity: record.integrity,
+      });
+    },
+  });
+  const npm = makeNpmRegistryTree(operations);
+  t.true(await npm.has('alpha'));
+  t.true(await npm.has('@scope/package'));
+  t.false(await npm.has('does-not-exist'));
+  // Package-existence was answered by the cheap probe, not the version list.
+  t.deepEqual(calls.hasPackage, ['alpha', '@scope/package', 'does-not-exist']);
+  t.deepEqual(calls.listVersions, []);
+});
+
+test('guest-controlled names with URL-unsafe characters are rejected', async t => {
+  // The Endor lane concatenates the name into a fetch URL unescaped; a name
+  // that is not npm-charset-clean must be rejected before it reaches any host
+  // power, on both backends. `listVersions` must never see these.
+  const seen = /** @type {string[]} */ ([]);
+  const npm = makeNpmRegistryTree(
+    harden({
+      async listVersions(name) {
+        seen.push(name);
+        return undefined;
+      },
+      async providePackageTree() {
+        throw new Error('unreached');
+      },
+    }),
+  );
+  for (const bad of ['..', 'foo?x=1', 'a/../b', '%2e%2e', 'a b', '@scope/..']) {
+    // eslint-disable-next-line no-await-in-loop
+    const error = await t.throwsAsync(() => npm.lookup(bad));
+    t.is(registryErrorName(error), 'RegistryPathSyntaxError');
+    // eslint-disable-next-line no-await-in-loop
+    t.false(await npm.has(bad));
+  }
+  t.deepEqual(seen, []);
+});
+
+test('makeLookupTreeView forwards the wrapped node integrity and consistency', async t => {
+  const npm = makeNpmRegistryTree(makeOperations());
+  const root = makePackageRegistryTree({ npm });
+  const view = makeLookupTreeView(root);
+  // The view must report the wrapped root's real consistency, not a fixed one.
+  t.deepEqual(await /** @type {any} */ (view).getInfo(), {
+    temporal: 'stable',
+  });
+  // A resolved version leaf keeps its integrity so a holder can verify it.
+  const leafView = await /** @type {any} */ (view).lookup([
+    'npm',
+    'alpha',
+    '1.0.0',
+  ]);
+  const info = await leafView.getInfo();
+  t.is(info.temporal, 'immutable');
+  t.is(info.integrity, 'sha512-a1');
+});
+
 test('makePackageRegistryTree does not leak intrinsics through inherited keys', async t => {
   const npm = makeNpmRegistryTree(makeOperations());
   const root = makePackageRegistryTree({ npm });
