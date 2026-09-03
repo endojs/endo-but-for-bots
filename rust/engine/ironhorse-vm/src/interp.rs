@@ -35861,6 +35861,14 @@ impl Interp {
                 let has_reviver = self.is_callable_value(reviver);
                 // `JSON.parse` applies ToString before tokenization.
                 let units = self.to_string_units(code, arg0)?;
+                // The tokenizer below operates on scalar UTF-8 text. Preserve
+                // correctness at its remaining representation boundary: a
+                // valid surrogate pair round-trips through that text, while a
+                // genuinely unpaired code unit cannot and must stay an honest
+                // named skip instead of being silently changed to U+FFFD.
+                if char::decode_utf16(units.iter().copied()).any(|unit| unit.is_err()) {
+                    return Err(Halt::Unsupported("JSON.parse:lone-surrogate"));
+                }
                 let input = String::from_utf16_lossy(&units).into_bytes();
                 self.meter.tick_raw(JSON_PARSE_SETUP_METERING);
                 let mut pos = 0usize;
@@ -36332,11 +36340,15 @@ impl Interp {
             b'{' => self.json_parse_object(input, pos, cost, track_source),
             b'[' => self.json_parse_array(input, pos, cost, track_source),
             b'"' => {
-                let bytes = self.json_parse_string_bytes(input, pos)?;
+                let units = self.json_parse_string_units(input, pos)?;
                 // The tokenizer's `s = fxNewChunk(the, size + 1)`: always a
                 // chunk, even for the empty string (unlike an interned literal).
-                *cost += (((bytes.len() as u64 + 1) + 7) & !7) + 16;
-                let off = self.alloc_str_text(&bytes);
+                // XS stores this temporary in CESU-8, where an astral scalar
+                // occupies two three-byte surrogate sequences rather than one
+                // four-byte UTF-8 sequence.
+                let cesu8_len = Self::regexp_subject_bytes(&units).0.len() as u64;
+                *cost += (((cesu8_len + 1) + 7) & !7) + 16;
+                let off = self.chunks.alloc(&units_to_be16(&units));
                 let value = Slot::of(Kind::String, Payload::String(off));
                 let source = if track_source {
                     JsonSource::Primitive {
@@ -36494,17 +36506,13 @@ impl Interp {
     }
 
     /// Parse a JSON string token starting at the opening quote, returning the
-    /// unescaped content bytes. Handles the JSON escapes and BMP `\u` escapes;
-    /// a surrogate `\u` escape (astral / lone surrogate — XS's CESU-8 corner) or
-    /// a malformed escape self-names.
-    fn json_parse_string_bytes(
-        &mut self,
-        input: &[u8],
-        pos: &mut usize,
-    ) -> Result<Vec<u8>, Halt> {
+    /// unescaped UTF-16 code units. JSON `\u` escapes append exactly one code
+    /// unit, so both valid surrogate pairs and lone surrogates survive in a
+    /// parsed string value. Malformed escapes throw a SyntaxError.
+    fn json_parse_string_units(&mut self, input: &[u8], pos: &mut usize) -> Result<Vec<u16>, Halt> {
         let n = input.len();
         let mut i = *pos + 1; // past opening quote
-        let mut out: Vec<u8> = Vec::new();
+        let mut out: Vec<u16> = Vec::new();
         loop {
             if i >= n {
                 return Err(self.catchable_syntax_error());
@@ -36519,14 +36527,14 @@ impl Interp {
                     return Err(self.catchable_syntax_error());
                 }
                 match input[i] {
-                    b'"' => out.push(b'"'),
-                    b'\\' => out.push(b'\\'),
-                    b'/' => out.push(b'/'),
+                    b'"' => out.push(b'"' as u16),
+                    b'\\' => out.push(b'\\' as u16),
+                    b'/' => out.push(b'/' as u16),
                     b'b' => out.push(8),
                     b'f' => out.push(12),
-                    b'n' => out.push(b'\n'),
-                    b'r' => out.push(b'\r'),
-                    b't' => out.push(b'\t'),
+                    b'n' => out.push(b'\n' as u16),
+                    b'r' => out.push(b'\r' as u16),
+                    b't' => out.push(b'\t' as u16),
                     b'u' => {
                         if i + 4 >= n {
                             return Err(self.catchable_syntax_error());
@@ -36538,16 +36546,7 @@ impl Interp {
                             Some(v) => v,
                             None => return Err(self.catchable_syntax_error()),
                         };
-                        // A surrogate half is XS's CESU-8 corner — self-name.
-                        if (0xD800..=0xDFFF).contains(&hex) {
-                            return Err(Halt::Unsupported("JSON.parse:astral"));
-                        }
-                        let ch = match char::from_u32(hex) {
-                            Some(c) => c,
-                            None => return Err(self.catchable_syntax_error()),
-                        };
-                        let mut b = [0u8; 4];
-                        out.extend_from_slice(ch.encode_utf8(&mut b).as_bytes());
+                        out.push(hex as u16);
                         i += 4;
                     }
                     _ => return Err(self.catchable_syntax_error()),
@@ -36557,23 +36556,25 @@ impl Interp {
                 // A raw control character is a JSON syntax error.
                 return Err(self.catchable_syntax_error());
             } else if c < 0x80 {
-                out.push(c);
+                out.push(c as u16);
                 i += 1;
             } else {
-                // A raw multi-byte (non-ASCII) input byte: XS re-encodes it
-                // through its CESU-8 decoder; ironhorse copies UTF-8 input verbatim
-                // for the BMP but self-names anything above the BMP.
+                // A raw multi-byte scalar is already valid UTF-8 (the parse
+                // entry gate rejected unpaired UTF-16). Decode its complete
+                // sequence into the exact one- or two-code-unit UTF-16
+                // representation.
                 let rest = &input[i..];
                 match std::str::from_utf8(rest)
                     .ok()
                     .and_then(|s| s.chars().next())
                 {
-                    Some(ch) if (ch as u32) <= 0xFFFF => {
+                    Some(ch) => {
                         let l = ch.len_utf8();
-                        out.extend_from_slice(&input[i..i + l]);
+                        let mut encoded = [0u16; 2];
+                        out.extend_from_slice(ch.encode_utf16(&mut encoded));
                         i += l;
                     }
-                    _ => return Err(Halt::Unsupported("JSON.parse:astral")),
+                    _ => return Err(self.catchable_syntax_error()),
                 }
             }
         }
@@ -36674,14 +36675,18 @@ impl Interp {
             if *pos >= input.len() || input[*pos] != b'"' {
                 return Err(self.catchable_syntax_error());
             }
-            let key_bytes = self.json_parse_string_bytes(input, pos)?;
-            let key = match String::from_utf8(key_bytes.clone()) {
+            let key_units = self.json_parse_string_units(input, pos)?;
+            let key = match String::from_utf16(&key_units) {
                 Ok(k) => k,
-                Err(_) => return Err(Halt::Unsupported("JSON.parse:astral")),
+                // The VM's intern table is still scalar-text keyed. Preserve
+                // the broader JSON value behavior but refuse a lone-surrogate
+                // object key rather than replacing it with U+FFFD.
+                Err(_) => return Err(Halt::Unsupported("JSON.parse:lone-surrogate-key")),
             };
             *cost += JSON_PARSE_OBJECT_KEY_METERING;
             // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
-            *cost += (((key_bytes.len() as u64 + 1) + 7) & !7) + 16;
+            let cesu8_len = Self::regexp_subject_bytes(&key_units).0.len() as u64;
+            *cost += (((cesu8_len + 1) + 7) & !7) + 16;
             // `fxNewName` interns the key: a novel name allocates one key slot
             // (metered directly by `intern_key`), a known name none.
             let id = self.intern_key(&key);
