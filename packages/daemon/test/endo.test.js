@@ -1708,13 +1708,16 @@ test('followNameChanges existing names carry type', async t => {
   // Store before subscribing so the value is in the "existing names" batch.
   await E(host).storeValue('first', 'one');
 
+  // Size the initial batch from the host itself rather than a literal: the
+  // special-name set grows over time, and 'one' sorts after every '@' name.
+  const existingCount = (await E(host).list()).length;
+
   const changesIterator = iterateReader(await E(host).followNameChanges());
   // Read existing values until we find our name. Special names (@self, etc)
   // are interleaved alphabetically and also carry types now.
   /** @type {Map<string, any>} */
   const existing = new Map();
-  // Pull a generous prefix; the host has a known special-name set plus 'one'.
-  for (let i = 0; i < 13; i += 1) {
+  for (let i = 0; i < existingCount; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const { value, done } = await changesIterator.next();
     if (done) break;

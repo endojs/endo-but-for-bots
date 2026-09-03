@@ -6,6 +6,7 @@
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -342,7 +343,7 @@ harden(normalizeHttpClientPolicy);
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
- * @param {ReturnType<import('./secret-manager.js').makeSecretManager>} args.secretManager
+ * @param {ReturnType<typeof makeSecretManager>} args.secretManager
  * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
  */
 export const makeHostMaker = ({
