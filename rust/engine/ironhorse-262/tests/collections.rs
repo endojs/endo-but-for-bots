@@ -50,6 +50,27 @@ fn collection_methods_validate_their_internal_slot() {
 }
 
 #[test]
+fn shared_collection_methods_retain_their_declaring_brand() {
+    for source in [
+        "try { Map.prototype.clear.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.clear.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.forEach.call(new Set([1]), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.forEach.call(new Map([[1,2]]), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.entries.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.entries.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.keys.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.keys.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.values.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.values.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "var s=new Set([1]),f=Map.prototype.clear.bind(s);try{f();false}catch(e){e instanceof TypeError&&s.size===1}",
+        "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.call(s);false}catch(e){e instanceof TypeError&&s.size===1}",
+        "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.apply(s,[]);false}catch(e){e instanceof TypeError&&s.size===1}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
 fn weak_collection_mutators_reject_primitive_keys() {
     agrees(
         "var ok = false; try { new WeakMap().set(1, 2); } \

@@ -319,6 +319,11 @@ pub const GENERATOR_RESUME_METERING: u64 = 65536;
 /// the drain shape is exact without it). Charged in `step_async`'s
 /// reject arm only when `is_start`.
 const ASYNC_START_REJECT_BOUNDARY_METERING: u64 = 1 << 16;
+/// The `mxCall` / `mxRunCount(1)` dispatch XS performs when an async-generator
+/// prototype method rejects a bad receiver through its capability's reject
+/// function. The settlement helper below models the resolving function body;
+/// this is the missing call boundary around it.
+const ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING: u64 = 3 << 16;
 
 // ---- async-function metering (design § async/await, ASYNC-AWAIT-HANDOFF.md) --
 // Like generators, the async opcodes call `mxMeter` nowhere in their bodies, so
@@ -1192,6 +1197,23 @@ pub const ARRAY_ITERATOR_NEXT_METERING: u64 = 2 << 14;
 /// The extra raw 16.16 cost a `values`/`entries` `next()` accrues reading the
 /// array element it yields (`mxGetIndex`), over a `keys` next: `2 << 14`.
 pub const ARRAY_ITERATOR_ELEMENT_READ: u64 = 2 << 14;
+/// The additional host step in XS's `fxGetArrayLimit` path for a generic
+/// array-like receiver. Arrays and TypedArrays read their resident limits
+/// directly; ordinary objects, primitive wrappers, and Proxies perform the
+/// observable `length` lookup and carry this one-computron residual.
+pub const ARRAY_ITERATOR_GENERIC_RECEIVER_METERING: u64 = 1 << 16;
+/// Additional raw residual for the String-exotic generic iterator path. The
+/// wrapper exposes synthetic UTF-16 indices and `length`, which XS accounts
+/// beyond the ordinary-object `fxGetArrayLimit` step.
+pub const ARRAY_ITERATOR_STRING_RECEIVER_METERING: u64 = 98048;
+/// Symbol and BigInt wrappers carry one additional half-computron allocation
+/// residual on the pinned generic receiver path.
+pub const ARRAY_ITERATOR_WIDE_PRIMITIVE_RECEIVER_METERING: u64 = 1 << 15;
+/// Additional raw residual for the observable Proxy `[[Get]]` operations in a
+/// generic step. Keys reads only `length`; values/entries also read the indexed
+/// value and use their separately calibrated two-trap residual.
+pub const ARRAY_ITERATOR_PROXY_KEYS_METERING: u64 = 327648;
+pub const ARRAY_ITERATOR_PROXY_VALUE_METERING: u64 = 654864;
 /// The raw 16.16 cost of `XS_CODE_FOR_OF` (`fxRunForOf` → `fxGetIterator`)
 /// beyond the `values()` iterator creation it performs: the `fxGetIterator`
 /// host frame, the `arr[Symbol.iterator]` lookup, and the zero-argument call
@@ -19276,6 +19298,8 @@ impl Interp {
     fn reject_async_generator_brand(&mut self) -> Result<Slot, Halt> {
         let (promise, _resolve, reject) = self.new_promise_capability();
         let error = self.build_error("TypeError", 0, 0);
+        self.meter
+            .tick_raw(ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING);
         self.reject_via_function(reject, error)?;
         Ok(Slot::of(Kind::Reference, Payload::Reference(promise)))
     }
@@ -28933,7 +28957,8 @@ impl Interp {
         let native = self.native_of(target_ref);
         let method = self.method_of(target_ref);
         let is_bound = self.bound_functions.contains_key(&target_ref);
-        if native.is_none() && method.is_none() && !is_bound {
+        let is_proxy = self.proxies.contains_key(&target_ref);
+        if native.is_none() && method.is_none() && !is_bound && !is_proxy {
             return Ok(false);
         }
         let this_arg = self
@@ -28950,7 +28975,7 @@ impl Interp {
         self.stack.truncate(base);
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + forwarded_len as u64 * CALL_TRAMPOLINE_PER_ARG);
-        if is_bound {
+        if is_bound || is_proxy {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
             return match result {
                 Ok(value) => {
@@ -29001,7 +29026,8 @@ impl Interp {
         let native = self.native_of(target_ref);
         let method = self.method_of(target_ref);
         let is_bound = self.bound_functions.contains_key(&target_ref);
-        if native.is_none() && method.is_none() && !is_bound {
+        let is_proxy = self.proxies.contains_key(&target_ref);
+        if native.is_none() && method.is_none() && !is_bound && !is_proxy {
             return Ok(false);
         }
         let this_arg = self
@@ -29039,7 +29065,7 @@ impl Interp {
         self.stack.truncate(base);
         self.meter
             .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
-        if is_bound {
+        if is_bound || is_proxy {
             let result = self.invoke_value(code, target, this_arg, &forwarded);
             return match result {
                 Ok(value) => {
@@ -34153,11 +34179,16 @@ impl Interp {
                     Some(i) => i,
                     None => return Err(self.catchable_type_error()),
                 };
-                // WeakMap/WeakSet have no iterator methods (never bound); a Map/
-                // Set kind maps entries→2, keys→0, values→1.
-                match self.collections[&inst].kind {
-                    CollKind::Map | CollKind::Set => {}
-                    _ => return Err(self.catchable_type_error()),
+                // The shared dispatch variants still retain their declaring
+                // prototype through the method function at `base + 1`.
+                // Require that exact brand: Map methods cannot operate on Set
+                // receivers (or vice versa), even though both use the same
+                // collection side-table representation.
+                let expected = self
+                    .collection_method_brand(base)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                if self.collections[&inst].kind != expected {
+                    return Err(self.catchable_type_error());
                 }
                 let iter_kind = match m {
                     NativeMethod::CollKeys => 5u8,
@@ -34173,9 +34204,11 @@ impl Interp {
                     Some(i) => i,
                     None => return Err(self.catchable_type_error()),
                 };
-                match self.collections[&inst].kind {
-                    CollKind::Map | CollKind::Set => {}
-                    _ => return Err(self.catchable_type_error()),
+                let expected = self
+                    .collection_method_brand(base)
+                    .ok_or_else(|| self.catchable_type_error())?;
+                if self.collections[&inst].kind != expected {
+                    return Err(self.catchable_type_error());
                 }
                 if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
                     return Err(self.catchable_type_error());
@@ -38539,6 +38572,29 @@ impl Interp {
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
 
+    /// The strong-collection brand declared by the native method function in
+    /// the active call frame. Map and Set share several [`NativeMethod`]
+    /// variants, but each boot-minted function identity occurs only on its
+    /// declaring prototype (apart from Set's intentional keys/values alias).
+    fn collection_method_brand(&self, base: usize) -> Option<CollKind> {
+        let function = match self.stack.get(base + 1)?.value {
+            Payload::Reference(function) => function,
+            _ => return None,
+        };
+        self.proto_methods.iter().find_map(|(prototype, _, method)| {
+            if *method != function {
+                return None;
+            }
+            if *prototype == self.map_proto {
+                Some(CollKind::Map)
+            } else if *prototype == self.set_proto {
+                Some(CollKind::Set)
+            } else {
+                None
+            }
+        })
+    }
+
     /// `fx_Map_prototype_forEach` / `fx_Set_prototype_forEach`: call the
     /// callback for each live entry in insertion order. Map passes
     /// `(value, key, coll)`; Set passes `(value, value, coll)`. Meters the
@@ -38558,11 +38614,13 @@ impl Interp {
             Some(i) => i,
             None => return Err(self.catchable_type_error()),
         };
-        let is_set = match self.collections[&inst].kind {
-            CollKind::Map => false,
-            CollKind::Set => true,
-            _ => return Err(self.catchable_type_error()),
-        };
+        let expected = self
+            .collection_method_brand(base)
+            .ok_or_else(|| self.catchable_type_error())?;
+        if self.collections[&inst].kind != expected {
+            return Err(self.catchable_type_error());
+        }
+        let is_set = expected == CollKind::Set;
         let callback = self
             .stack
             .get(base + 4)
@@ -39578,7 +39636,41 @@ impl Interp {
                     u64::from(typed_array.length)
                 }
             } else {
-                self.array_generic_length(code, st.iterable)?
+                self.meter
+                    .tick_raw(ARRAY_ITERATOR_GENERIC_RECEIVER_METERING);
+                if self
+                    .wrapper_data
+                    .get(&st.iterable)
+                    .is_some_and(|value| value.kind == Kind::String)
+                {
+                    self.meter
+                        .tick_raw(ARRAY_ITERATOR_STRING_RECEIVER_METERING);
+                } else if self
+                    .wrapper_data
+                    .get(&st.iterable)
+                    .is_some_and(|value| matches!(value.kind, Kind::Symbol | Kind::BigInt))
+                {
+                    self.meter
+                        .tick_raw(ARRAY_ITERATOR_WIDE_PRIMITIVE_RECEIVER_METERING);
+                } else if self.proxies.contains_key(&st.iterable) {
+                    self.meter.tick_raw(if st.kind == 1 {
+                        ARRAY_ITERATOR_PROXY_KEYS_METERING
+                    } else {
+                        ARRAY_ITERATOR_PROXY_VALUE_METERING
+                    });
+                }
+                // XS's generic Array-iterator profile uses its u32 array limit.
+                // A wider ToLength result falls back to the object's resident
+                // indexed storage; ordinary array-like objects have none, so
+                // the iterator is immediately exhausted. Keeping the limit
+                // here also makes the persisted u32 cursor representation
+                // honest rather than allowing it to wrap.
+                let length = self.array_generic_length(code, st.iterable)?;
+                if length > u64::from(u32::MAX) {
+                    0
+                } else {
+                    length
+                }
             };
             if u64::from(st.index) < length {
                 // A yielding `next()`: the base result-object mutation cost,
@@ -39587,6 +39679,13 @@ impl Interp {
                 self.meter.tick_raw(ARRAY_ITERATOR_NEXT_METERING);
                 if st.kind == 0 || st.kind == 2 {
                     self.meter.tick_raw(ARRAY_ITERATOR_ELEMENT_READ);
+                }
+                // ArrayIteratorPrototype.next commits the next index before
+                // the potentially abrupt indexed Get. If an accessor or Proxy
+                // trap throws, a retry must continue at the following index.
+                let advanced_index = st.index + 1;
+                if let Some(state) = self.iterators.get_mut(&iter) {
+                    state.index = advanced_index;
                 }
                 let direct_element = if (st.kind == 0 || st.kind == 2)
                     && self.typed_arrays.contains_key(&st.iterable)
@@ -39631,7 +39730,7 @@ impl Interp {
                         Slot::of(Kind::Reference, Payload::Reference(pair))
                     }
                 };
-                (v, false, st.index + 1)
+                (v, false, advanced_index)
             } else {
                 (Slot::undefined(), true, st.index)
             }
