@@ -3,7 +3,8 @@
 //! cursors, string iterators (UTF-16 byte cursors, surrogate pairs
 //! stepped whole), for-in enumerators (inert across cranks: the
 //! covered grammar cannot hold one), Map/Set cursors, and the generic
-//! wrappers created by `Iterator.from`. All pure data plus weak slot
+//! wrappers created by `Iterator.from`, and RegExp String Iterators. All pure
+//! data plus weak slot
 //! references; every `next()` is a native on
 //! rooted boot structure, so a resumed iterator CONTINUES its walk —
 //! the `lastIndex` discipline the segment-iterator carry set.
@@ -161,6 +162,35 @@ fn resumed_string_iterator_steps_surrogate_pairs_whole() {
             "var si; var t; var r = 0; r = si.next(); t = r.value + ':' + r.done; t",
         ],
         &["b:false", "2:false", "c:false"],
+    );
+}
+
+#[test]
+fn resumed_regexp_string_iterator_continues_matching() {
+    assert_twin(
+        "ih-iter-twin-regexp-string",
+        "var ri = 0; var t = 0; \
+         ri = 'a1b22'.matchAll(/(\\d+)/g); ri.next(); t = 7; t",
+        &[
+            "var ri; var t; var r = ri.next(); \
+             t = r.value[0] + ':' + r.value[1] + ':' + r.value.index + ':' + r.done; t",
+            "var ri; var t; var r = ri.next(); t = r.value + ':' + r.done; t",
+        ],
+        &["22:22:3:false", "undefined:true"],
+    );
+}
+
+#[test]
+fn resumed_unicode_regexp_string_iterator_keeps_empty_match_advancement() {
+    assert_twin(
+        "ih-iter-twin-regexp-unicode-empty",
+        "var ri = 0; var t = 0; \
+         ri = '\u{1F600}'.matchAll(/(?:)/gu); ri.next(); t = 7; t",
+        &[
+            "var ri; var t; var r = ri.next(); t = r.value.index + ':' + r.done; t",
+            "var ri; var t; var r = ri.next(); t = r.value + ':' + r.done; t",
+        ],
+        &["2:false", "undefined:true"],
     );
 }
 

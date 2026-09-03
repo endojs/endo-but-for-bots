@@ -9,8 +9,10 @@ fn agrees(source: &str) {
     assert_eq!(
         run.agreement,
         Agreement::BothComplete,
-        "`{source}` must complete on both engines (halt: {:?})",
+        "`{source}` must complete on both engines (halt: {:?}; oracle error: {:?}; ironhorse error: {:?})",
         run.ironhorse_halt,
+        run.oracle_error,
+        run.ironhorse_error,
     );
     assert!(
         run.result_agrees,
@@ -493,4 +495,65 @@ fn regexp_symbol_replace_uses_current_result_access_order() {
     let run = dual_run(source).expect("the XS oracle machine must start");
     assert_eq!(run.agreement, Agreement::BothComplete);
     assert_eq!(run.ironhorse_result, "7b:length,match,index,capture,groups");
+}
+
+#[test]
+fn match_all_intrinsics_expose_standard_metadata_and_descriptors() {
+    for source in [
+        "String.prototype.matchAll.name+':'+String.prototype.matchAll.length+':'+RegExp.prototype[Symbol.matchAll].name+':'+RegExp.prototype[Symbol.matchAll].length",
+        "var p=Object.getPrototypeOf('x'.matchAll(/x/g));Object.getPrototypeOf(p)===Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]()))",
+        "Object.prototype.toString.call('x'.matchAll(/x/g))",
+        "var d=Object.getOwnPropertyDescriptor(Symbol,'matchAll');typeof d.value+':'+d.writable+':'+d.enumerable+':'+d.configurable",
+        "var d=Object.getOwnPropertyDescriptor(RegExp,Symbol.species);d.get.name+':'+d.get.length+':'+d.set+':'+d.enumerable+':'+d.configurable",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn string_match_all_validates_global_and_honors_the_symbol_protocol() {
+    for source in [
+        "try{'x'.matchAll(/x/);false}catch(e){e instanceof TypeError}",
+        "var arg,recv,matcher={flags:'g',[Symbol.match]:true,[Symbol.matchAll]:function(v){recv=this;arg=v;return 17}};String.prototype.matchAll.call('abc',matcher)+':'+(recv===matcher)+':'+arg",
+        "var marker={};var matcher={[Symbol.match]:false,get [Symbol.matchAll](){throw marker}};try{'x'.matchAll(matcher);false}catch(e){e===marker}",
+        "var matcher={[Symbol.match]:false,[Symbol.matchAll]:null,toString:function(){return 'a'}};Array.from('aba'.matchAll(matcher)).map(function(m){return m.index}).join(',')",
+        "Array.from('aba'.matchAll()).length",
+        "try{String.prototype.matchAll.call(null,/x/g);false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn regexp_match_all_observes_species_flags_and_last_index() {
+    for source in [
+        "var seen;function C(r,f){seen=[r,f,this instanceof C];this.lastIndex=0;this.exec=function(){return null}}var rx=/a/g;rx.constructor={[Symbol.species]:C};var it=rx[Symbol.matchAll]('a');seen[0]===rx&&seen[1]==='g'&&seen[2]&&it.next().done",
+        "var log=[];var rx=/a/g;Object.defineProperty(rx,'flags',{get:function(){log.push('flags');return 'g'}});Object.defineProperty(rx,'lastIndex',{value:1,writable:true});function C(r,f){log.push('construct:'+f);return /a/g}rx.constructor={[Symbol.species]:C};rx[Symbol.matchAll]('ba').next();log.join(',')+':'+rx.lastIndex",
+        "var marker={};var rx=/a/g;Object.defineProperty(rx,'constructor',{get:function(){throw marker}});try{rx[Symbol.matchAll]('a');false}catch(e){e===marker}",
+        "var rx=/a/g;rx.constructor={[Symbol.species]:1};try{rx[Symbol.matchAll]('a');false}catch(e){e instanceof TypeError}",
+        "var marker={};var rx=/a/g;Object.defineProperty(rx,'flags',{get:function(){throw marker}});try{rx[Symbol.matchAll]('a');false}catch(e){e===marker}",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn regexp_string_iterator_is_lazy_global_and_unicode_correct() {
+    for source in [
+        "Array.from('a1 b22'.matchAll(/(\\d+)/g)).map(function(m){return m[0]+':'+m[1]+':'+m.index}).join('|')",
+        "Array.from((String.fromCodePoint(0x1F600)).matchAll(/(?:)/gu)).map(function(m){return m.index}).join(',')",
+        "var rx=/./g,it=rx[Symbol.matchAll]('abc'),old=RegExp.prototype.exec,calls=0,args;var before=calls;RegExp.prototype.exec=function(){args=arguments;calls++;return ['x']};var a=it.next();RegExp.prototype.exec=old;before+':'+calls+':'+args.length+':'+args[0]+':'+a.value[0]+':'+a.done",
+        "var next=Object.getPrototypeOf('a'.matchAll(/a/g)).next;try{next.call({});false}catch(e){e instanceof TypeError}",
+        "var marker={};var rx=/a/g;rx.constructor={[Symbol.species]:function(){return {lastIndex:0,exec:function(){throw marker}}}};var it=rx[Symbol.matchAll]('a');try{it.next();false}catch(e){e===marker}",
+    ] {
+        agrees(source);
+    }
+
+    // CreateIterResultObject allocates a fresh object on every call. The
+    // pinned XS oracle still reuses one result record, so lock the current
+    // specification on the IronHorse side instead of encoding that host bug.
+    let source = "var it='a'.matchAll(/a/g),a=it.next(),b=it.next(),c=it.next();(a!==b)+':'+(b!==c)+':'+b.done+':'+c.done";
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete);
+    assert_eq!(run.ironhorse_result, "true:true:true:true");
 }
