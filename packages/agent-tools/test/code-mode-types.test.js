@@ -418,7 +418,7 @@ test('HTTP stream declaration keeps the followed reader shape named', t => {
   t.false(text.includes('stream: () => unknown;'));
   t.true(text.includes('stream: () => HttpPassableBytesReader;'));
   t.true(text.includes('type HttpPassableBytesReader'));
-  t.true(text.includes('streamBase64: (synPromise: HttpERef<HttpStreamNode<'));
+  t.true(text.includes('stream: (synPromise: HttpERef<HttpStreamNode<'));
   for (const shape of [
     'type HttpStreamNode<',
     'type HttpStreamYieldNode<',

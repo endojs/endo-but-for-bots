@@ -105,7 +105,7 @@ test('LocalBlob exposes only the rich public ReadableBlob Exo surface', async t 
     'json',
     'rangeRead',
     'rangeReadText',
-    'streamBase64',
+    'stream',
     'text',
   ]);
   t.false(methods.includes('readRange'));

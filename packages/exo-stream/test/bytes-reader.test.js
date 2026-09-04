@@ -3,6 +3,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { Far } from '@endo/pass-style';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import assert from 'node:assert/strict';
 
 import { bytesReaderFromIterator } from '../bytes-reader-from-iterator.js';
@@ -134,13 +135,11 @@ test('bytes reader with buffer', async t => {
   t.is(results.length, messages.length);
 });
 
-test('bytes reader stringLengthLimit allows small messages', async t => {
-  // Small message that becomes ~4 characters of base64
+test('bytes reader byteLengthLimit allows small messages', async t => {
   const messages = [new Uint8Array([1, 2, 3])];
 
   const readerRef = bytesReaderFromIterator(messages);
-  // 10 character limit should allow small messages (base64 of 3 bytes = 4 chars)
-  const reader = await iterateBytesReader(readerRef, { stringLengthLimit: 10 });
+  const reader = await iterateBytesReader(readerRef, { byteLengthLimit: 10 });
 
   const results = [];
   for await (const message of reader) {
@@ -151,13 +150,11 @@ test('bytes reader stringLengthLimit allows small messages', async t => {
   t.deepEqual(results[0], messages[0]);
 });
 
-test('bytes reader stringLengthLimit rejects large messages', async t => {
-  // Large message that becomes ~14 characters of base64 (10 bytes * 4/3 ≈ 14)
+test('bytes reader byteLengthLimit rejects large messages', async t => {
   const messages = [new Uint8Array(10)];
 
   const readerRef = bytesReaderFromIterator(messages);
-  // 10 character limit should reject this (~14 char base64)
-  const reader = await iterateBytesReader(readerRef, { stringLengthLimit: 10 });
+  const reader = await iterateBytesReader(readerRef, { byteLengthLimit: 9 });
 
   // Should throw when trying to read the oversized message
   await t.throwsAsync(async () => reader.next(), {
@@ -165,13 +162,11 @@ test('bytes reader stringLengthLimit rejects large messages', async t => {
   });
 });
 
-test('bytes reader stringLengthLimit at exact boundary', async t => {
-  // 6 bytes of binary becomes exactly 8 characters of base64 (6 * 4/3 = 8)
+test('bytes reader byteLengthLimit at exact boundary', async t => {
   const messages = [new Uint8Array(6)];
 
   const readerRef = bytesReaderFromIterator(messages);
-  // 8 character limit should allow exactly 6 bytes of data
-  const reader = await iterateBytesReader(readerRef, { stringLengthLimit: 8 });
+  const reader = await iterateBytesReader(readerRef, { byteLengthLimit: 6 });
 
   const results = [];
   for await (const message of reader) {
@@ -181,13 +176,11 @@ test('bytes reader stringLengthLimit at exact boundary', async t => {
   t.is(results.length, 1);
 });
 
-test('bytes reader stringLengthLimit one under boundary rejects', async t => {
-  // 6 bytes of binary becomes exactly 8 characters of base64
+test('bytes reader byteLengthLimit one under boundary rejects', async t => {
   const messages = [new Uint8Array(6)];
 
   const readerRef = bytesReaderFromIterator(messages);
-  // 7 character limit should reject 6 bytes (which produces 8 chars)
-  const reader = await iterateBytesReader(readerRef, { stringLengthLimit: 7 });
+  const reader = await iterateBytesReader(readerRef, { byteLengthLimit: 5 });
 
   await t.throwsAsync(async () => reader.next(), {
     message: /must not be bigger than/,
@@ -218,7 +211,7 @@ test('bytes reader many messages', async t => {
 test('iterateBytesReader applies readReturnPattern on terminal value', async t => {
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
+      async stream(_synHead) {
         return harden({ value: 'Zg==', promise: null });
       },
       readReturnPattern() {
@@ -239,7 +232,7 @@ test('iterateBytesReader applies readReturnPattern on terminal value', async t =
 test('iterateBytesReader rejects invalid readReturnPattern on natural completion', async t => {
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
+      async stream(_synHead) {
         return harden({ value: 'not a number', promise: null });
       },
       readReturnPattern() {
@@ -266,8 +259,11 @@ test('iterateBytesReader return() drains ack chain and enforces readReturnPatter
 
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
-        return harden({ value: 'first', promise: ackPromise });
+      async stream(_synHead) {
+        return harden({
+          value: frozenBytes(new Uint8Array([1])),
+          promise: ackPromise,
+        });
       },
       readReturnPattern() {
         return undefined;
@@ -295,7 +291,7 @@ test('iterateBytesReader return() closes syn chain', async t => {
 
   const fakeReader = /** @type {PassableBytesReader<string>} */ (
     Far('FakeBytesReader', {
-      async streamBase64(synHead) {
+      async stream(synHead) {
         capturedSynHead = synHead;
         resolveStreamCalled(true);
         return harden({ value: 'Zg==', promise: null });
@@ -326,16 +322,18 @@ test('iterateBytesReader throw() closes syn chain', async t => {
   let capturedSynHead;
 
   const fakeReader = /** @type {PassableBytesReader<undefined>} */ (
-    Far('FakeBytesReader', {
-      async streamBase64(synHead) {
-        capturedSynHead = synHead;
-        resolveStreamCalled(true);
-        return harden({ value: undefined, promise: null });
-      },
-      readReturnPattern() {
-        return undefined;
-      },
-    })
+    /** @type {unknown} */ (
+      Far('FakeBytesReader', {
+        async stream(synHead) {
+          capturedSynHead = synHead;
+          resolveStreamCalled(true);
+          return harden({ value: undefined, promise: null });
+        },
+        readReturnPattern() {
+          return undefined;
+        },
+      })
+    )
   );
 
   const reader = iterateBytesReader(fakeReader);
@@ -351,19 +349,21 @@ test('iterateBytesReader throw() closes syn chain', async t => {
   t.is(synNode.value, undefined);
 });
 
-test('iterateBytesReader rejects invalid base64 and repeats the error', async t => {
+test('iterateBytesReader rejects a non-byte-array and repeats the error', async t => {
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeReader = /** @type {PassableBytesReader<undefined>} */ (
-    Far('FakeBytesReader', {
-      async streamBase64(_synHead) {
-        resolveAck(harden({ value: 'Zg==', promise: null }));
-        return harden({ value: '!', promise: ackPromise });
-      },
-      readReturnPattern() {
-        return undefined;
-      },
-    })
+    /** @type {unknown} */ (
+      Far('FakeBytesReader', {
+        async stream(_synHead) {
+          resolveAck(harden({ value: undefined, promise: null }));
+          return harden({ value: '!', promise: ackPromise });
+        },
+        readReturnPattern() {
+          return undefined;
+        },
+      })
+    )
   );
 
   const reader = iterateBytesReader(fakeReader);

@@ -2,7 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { ZipReader } from '@endo/zip/reader.js';
 import { inflate } from '@endo/zip/inflate.js';
 import { unzip } from '@endo/exo-unzip';
@@ -10,8 +10,6 @@ import { unzip } from '@endo/exo-unzip';
 import { zip } from '../index.js';
 
 const textEncoder = new TextEncoder();
-
-const encodeBase64 = bytes => btoa(String.fromCharCode(...bytes));
 
 // `zip()` emits DEFLATE entries on hosts with `CompressionStream`
 // (the project's full Node 18+ matrix and modern browsers); the
@@ -89,13 +87,13 @@ test('zip preserves a deeply nested entry', async t => {
   t.is(new TextDecoder().decode(await reread.get('a/b/c/d/e.txt')), 'deep');
 });
 
-test('zip drains a multi-chunk streamBase64 across base64 group boundaries', async t => {
+test('zip drains a multi-chunk byte-array stream', async t => {
   // The `@endo/exo-unzip` blob producer chunks at 48 KiB raw to keep
   // CapTP frames small; this test feeds it a payload large enough to
   // span multiple chunks and itself not a multiple of 3 bytes, so the
-  // accumulate-then-decode path in `drainBase64` is exercised across
-  // a boundary that would silently misalign under per-chunk decode if
-  // any non-final chunk ever included `=` padding.
+  // accumulate-then-concatenate path in `drainBytes` is exercised across
+  // a chunk boundary that would misalign if a non-final byte-array chunk
+  // were dropped or its short tail truncated.
   const { ZipWriter } = await import('@endo/zip/writer.js');
   const w = new ZipWriter();
   const total = 100_000;
@@ -131,17 +129,17 @@ test('zip discovers the kind protocol once for a mount subtree', async t => {
       // eslint-disable-next-line no-underscore-dangle
       __getMethodNames__() {
         calls.introspection += 1;
-        return ['__getMethodNames__', 'kind', 'streamBase64'];
+        return ['__getMethodNames__', 'kind', 'stream'];
       },
       kind() {
         calls.kind += 1;
         return 'file';
       },
-      streamBase64(synPromise) {
+      stream(synPromise) {
         async function* contentBytes() {
-          yield encodeBase64(content);
+          yield content;
         }
-        return makeReaderPump(contentBytes())(synPromise);
+        return bytesReaderFromIterator(contentBytes()).stream(synPromise);
       },
     });
   const file = makeFile(textEncoder.encode('content'));

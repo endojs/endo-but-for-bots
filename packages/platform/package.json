@@ -97,6 +97,7 @@
     "@endo/captp": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
     "expect-type": "^1.4.0",

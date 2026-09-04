@@ -21,6 +21,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
+import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended/in-memory.js';
 import { readOnly } from '@endo/platform/fs/extended/readonly.js';
 import { makeLayer } from '@endo/platform/fs/extended/layer.js';
@@ -46,9 +47,9 @@ import { withCachedReads } from '@endo/platform/fs/extended/cached-fs.js';
  */
 
 // Read/write in bounded chunks so a single `@endo/exo-stream`
-// frame never exceeds its base64 length guard.
+// frame never exceeds its byteArray length guard.
 const CHUNK_BYTES = 256 * 1024;
-const FRAME_LIMIT = CHUNK_BYTES * 2;
+const BYTE_FRAME_LIMIT = CHUNK_BYTES;
 
 // Files larger than this are not previewed in full.
 const MAX_PREVIEW_BYTES = 2 * 1024 * 1024;
@@ -273,7 +274,7 @@ harden(listDirectory);
 /**
  * Classify a child cap of a Mount the same way `@endo/endo-fs`'s
  * from-mount backend does: a `lookup` method means a sub-directory
- * (sub-Mount), `text`/`streamBase64` means a file. Anything else is
+ * (sub-Mount), `text`/`stream` means a file. Anything else is
  * a non-fs cap (e.g. a git workspace) which the tree-only filesystem
  * surface would silently drop — we surface it as `'unknown'` so the
  * explorer can show it greyed-out instead of hiding it.
@@ -291,7 +292,11 @@ const probeMountChildType = async cap => {
     const methods = await E(cap).__getMethodNames__();
     const names = new Set(methods);
     if (names.has('lookup')) return 'directory';
-    if (names.has('text') || names.has('streamBase64')) return 'file';
+    // `looksLikeReadableBlob` (the one exported discriminator) admits the `text`
+    // whole-value read surface plus the `getInfo`/`readReturnPattern` byte-read
+    // markers, and rejects a bare `stream` (the generic method shared with
+    // readers/writers and `HttpResponse`).
+    if (looksLikeReadableBlob(methods)) return 'file';
     if (names.has('worktree') && names.has('status') && names.has('commit')) {
       return 'git';
     }
@@ -365,7 +370,7 @@ export const readFile = async fileCap => {
       const take = Math.min(CHUNK_BYTES, limit - offset);
       const reader = await E(openPromise).read(BigInt(offset), BigInt(take));
       for await (const piece of iterateBytesReader(reader, {
-        stringLengthLimit: FRAME_LIMIT,
+        byteLengthLimit: BYTE_FRAME_LIMIT,
       })) {
         pieces.push(piece);
       }

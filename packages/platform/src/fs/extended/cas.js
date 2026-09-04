@@ -136,24 +136,23 @@ harden(makeMemoryCas);
 
 /**
  * Drain a `PassableBytesReader` into a single `Uint8Array`. The
- * per-frame `stringLengthLimit` is raised to accommodate backings
+ * per-frame `byteLengthLimit` is raised to accommodate backings
  * (notably `makeBytesReaderFromBytes`) that yield the entire
  * payload in one frame; without it, the default 100-KB cap on
- * `M.string()` would reject anything bigger.
+ * `M.byteArray()` would reject anything bigger.
  *
  * @param {any} readerRef
  * @param {bigint | number} expectedSize  total bytes; sets the per-frame
- *   base64 string limit just above the worst-case 4/3 expansion of the
- *   payload so a one-shot frame fits.
+ *   byte-array limit just above the payload so a one-shot frame fits.
  */
 const drainBytesReader = async (readerRef, expectedSize) => {
   const size =
     typeof expectedSize === 'bigint' ? Number(expectedSize) : expectedSize;
-  const stringLengthLimit = Math.max(100_000, Math.ceil((size * 4) / 3) + 1024);
+  const byteLengthLimit = Math.max(100_000, size + 1024);
   /** @type {Uint8Array[]} */
   const chunks = [];
   let total = 0;
-  const consumer = iterateBytesReader(readerRef, { stringLengthLimit });
+  const consumer = iterateBytesReader(readerRef, { byteLengthLimit });
   for await (const chunk of consumer) {
     chunks.push(chunk);
     total += chunk.length;

@@ -20,10 +20,8 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { encodeHex } from '@endo/hex';
 import { sha256 } from '@endo/sha256';
-import { mapReader } from '@endo/stream';
 // `GitBlob` exposes the whole-value read surface plus the richer `BlobRef`
 // range-I/O surface (`getInfo` / `fetch`), so a remote reader of a git tree can
 // learn a blob's content hash + size in one round-trip and read byte ranges.
@@ -2306,11 +2304,10 @@ export const makeNativeGitBackend = ({
       /**
        * @param {unknown} synPromise
        */
-      streamBase64(synPromise) {
-        const pump = makeReaderPump(
-          mapReader(streamBlobBytes(blobOid), encodeBase64),
+      stream(synPromise) {
+        return bytesReaderFromIterator(streamBlobBytes(blobOid)).stream(
+          /** @type {any} */ (synPromise),
         );
-        return pump(/** @type {any} */ (synPromise));
       },
 
       async text() {

@@ -12,9 +12,11 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
+import { blobFromBytes } from '@endo/platform/blob';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { makeMount } from '../src/mount.js';
@@ -699,7 +701,7 @@ test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', 
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
 
-  // A remotable that has neither `streamBase64` nor `list` — the
+  // A remotable that has neither `stream` nor `list` — the
   // duck-typing branch falls through to the explicit reject.
   const RandoInterface = M.interface('Rando', {
     nothing: M.call().returns(M.string()),
@@ -718,9 +720,57 @@ test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', 
         ),
       ),
     {
-      message: /ReadableBlob or ReadableTree/,
+      message: /must be a ReadableBlob/,
     },
   );
+});
+
+test('write rejects a generic PassableReader that merely advertises stream', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // A generic value `PassableReader` advertises the shared `stream` method
+  // (and `readReturnPattern`), but it is not a byte blob — it also carries the
+  // value-pattern accessor `readPattern`, which a bytes reader never does.
+  // Before the byte-stream consolidation the method was named `streamBase64`
+  // and unambiguous; now that `stream` is generic, `write()` must still reject
+  // such a source with the crisp shape error rather than draining it as bytes
+  // and dying on an opaque `M.byteArray()` mismatch.
+  const genericReader = readerFromIterator([harden({ not: 'bytes' })]);
+  await t.throwsAsync(
+    () =>
+      E(mount).write(
+        ['x'],
+        /** @type {Parameters<import('../src/types.js').EndoMount['write']>[1]} */ (
+          /** @type {unknown} */ (genericReader)
+        ),
+      ),
+    {
+      message: /must be a ReadableBlob/,
+    },
+  );
+});
+
+test('write materializes a canonical ReadableBlob source (blobFromBytes)', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // `blobFromBytes` is the repo's canonical `ReadableBlob`: its interface is
+  // exactly `{ help, stream, text, json }`, carrying neither `getInfo` nor
+  // `readReturnPattern`. The narrowed `stream && (getInfo || readReturnPattern)`
+  // predicate rejected it — `write()` threw "must be a ReadableBlob…" on a value
+  // that *is* one. `looksLikeReadableBlob` admits it via the `text` whole-value
+  // read surface, so `write()` must now materialize its bytes.
+  const bytes = new TextEncoder().encode('hello canonical blob');
+  const blob = blobFromBytes(Promise.resolve(bytes));
+  await E(mount).write(
+    ['out.txt'],
+    /** @type {Parameters<import('../src/types.js').EndoMount['write']>[1]} */ (
+      /** @type {unknown} */ (blob)
+    ),
+  );
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('out.txt'));
+  t.is(await E(file).text(), 'hello canonical blob');
 });
 
 test('write rejects a non-remotable source at the Exo guard', async t => {
@@ -745,7 +795,7 @@ test('write rejects writing a ReadableBlob to an existing directory target', asy
   fs.mkdirSync(path.join(rootPath, 'occupied'));
 
   // bytesReaderFromIterator returns a PassableBytesReader Exo whose
-  // `streamBase64(synPromise)` is the new-protocol stream method.  The
+  // `stream(synPromise)` is the new-protocol stream method.  The
   // is-a-directory check in mount.write fires before any iteration.
   const blob = bytesReaderFromIterator([new Uint8Array(0)]);
   await t.throwsAsync(() => E(mount).write(['occupied'], blob), {
@@ -774,7 +824,7 @@ test('copy of a file onto itself preserves its content (same-inode write)', asyn
 
 test('write of a live file handle onto its own backing path preserves content', async t => {
   // The direct form: write(name, lookup(name)). The looked-up handle's
-  // streamBase64 reads the same path the writer targets.
+  // stream reads the same path the writer targets.
   const rootPath = makeTempRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['b.txt'], 'still here');
@@ -1048,7 +1098,7 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (file)).__getMethodNames__();
   // The view-of-a-file is a ReadableBlob, not an EndoMountFile.
-  t.true(methods.includes('streamBase64'));
+  t.true(methods.includes('stream'));
   t.true(methods.includes('text'));
   t.false(methods.includes('writeText'), 'attenuated, not full file');
 });

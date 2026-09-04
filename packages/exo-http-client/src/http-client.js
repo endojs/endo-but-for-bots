@@ -652,8 +652,8 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
 
   /**
    * Yield the already-bounded body in fixed-size chunks so `stream()` hauls it
-   * over CapTP incrementally (base64-framed with flow control) instead of
-   * returning the whole body as one string. A fresh generator per `stream()`
+   * over CapTP incrementally (as byteArrays with flow control) instead of
+   * returning the whole body as one value. A fresh generator per `stream()`
    * call keeps each reader independent of `text()`/`json()` and of any other
    * concurrent `stream()` reader over the same response.
    */

@@ -307,7 +307,7 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
   });
 });
 
-test('revocation: a base64 file stream refuses on a revoked mount', async t => {
+test('revocation: a byte-array file stream refuses on a revoked mount', async t => {
   const rootPath = makeTemporaryRoot(t);
   const { mount, control } = makeRevocableMount({
     rootPath,
@@ -319,7 +319,7 @@ test('revocation: a base64 file stream refuses on a revoked mount', async t => {
 
   E(control).revoke();
 
-  // `streamBase64` is liveness-gated like every other file face; its read
+  // `stream` is liveness-gated like every other file face; its read
   // loop also re-checks liveness per chunk so a revoke mid-read stops
   // delivering the remaining bytes rather than draining the file.
   const reader = iterateBytesReader(/** @type {any} */ (file));

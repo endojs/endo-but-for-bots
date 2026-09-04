@@ -10,7 +10,7 @@ export type ReadableStream = AsyncIterator<Uint8Array>;
  * Exposed by platform as an Exo; directly usable locally.
  */
 export interface ReadableBlob {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   help: (method?: string) => string;
@@ -102,12 +102,25 @@ export interface ReadableTree {
 /**
  * A remotable byte source accepted by `Directory.write()`.
  *
- * The streaming protocol only needs `streamBase64`; optional reader metadata
- * such as `readReturnPattern` is not part of the materialization contract.
+ * `write()` discriminates a blob source from a writer or an `HttpResponse` by
+ * method name (`looksLikeReadableBlob`), so `stream` alone is no longer
+ * accepted — it is the generic byte-stream method shared with writers and
+ * `HttpResponse`. A source must advertise one of:
+ *  - `text`, the whole-value read surface every canonical `ReadableBlob`
+ *    exposes (`blobFromBytes`, an `@endo/exo-unzip` leaf, `makeBrowserBlob`); or
+ *  - `stream` paired with a byte-read marker — `getInfo` for a content-addressed
+ *    blob, or `readReturnPattern` for a raw `PassableBytesReader`.
  */
-export type ReadableBlobSource = {
-  streamBase64: (...args: any[]) => PromiseLike<unknown>;
-};
+export type ReadableBlobSource =
+  | { text: (...args: any[]) => PromiseLike<unknown> }
+  | {
+      stream: (...args: any[]) => PromiseLike<unknown>;
+      getInfo: (...args: any[]) => PromiseLike<unknown>;
+    }
+  | {
+      stream: (...args: any[]) => PromiseLike<unknown>;
+      readReturnPattern: (...args: any[]) => unknown;
+    };
 
 /** Portable semantic payload accepted by `Directory.write()`. */
 export type DirectoryWriteSource = ReadableBlobSource | ReadableTree;
@@ -251,7 +264,7 @@ export interface TreeWriter {
  * a mount root).
  */
 export interface File {
-  streamBase64: (synPromise: unknown) => Promise<unknown>;
+  stream: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<any>;
   writeText: (content: string) => Promise<void>;

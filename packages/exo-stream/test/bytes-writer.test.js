@@ -4,6 +4,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { Far } from '@endo/pass-style';
 import { setTimeout as delay } from 'node:timers/promises';
 
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makePipe } from '@endo/stream';
 import { bytesWriterFromIterator } from '../bytes-writer-from-iterator.js';
 import { iterateBytesWriter } from '../iterate-bytes-writer.js';
@@ -180,10 +181,10 @@ test('bytes writer fallback return when sink lacks return', async t => {
     bytesWriterFromIterator(sink)
   );
 
-  /** @type {Promise<StreamNode<string, string | undefined>>} */
+  /** @type {Promise<StreamNode<Uint8Array, string | undefined>>} */
   const synHead = Promise.resolve(harden({ value: 'done', promise: null }));
   /** @type {StreamNode<undefined, string | undefined>} */
-  const ackHead = await writerRef.streamBase64(synHead);
+  const ackHead = await writerRef.stream(synHead);
 
   t.is(ackHead.promise, null);
   t.is(ackHead.value, undefined);
@@ -206,10 +207,10 @@ test('bytes writer returns completion value from sink return', async t => {
     bytesWriterFromIterator(sink)
   );
 
-  /** @type {Promise<StreamNode<string, string>>} */
+  /** @type {Promise<StreamNode<Uint8Array, string>>} */
   const synHead = Promise.resolve(harden({ value: 'done', promise: null }));
   /** @type {StreamNode<undefined, string>} */
-  const ackHead = await writerRef.streamBase64(synHead);
+  const ackHead = await writerRef.stream(synHead);
 
   t.is(ackHead.promise, null);
   t.is(ackHead.value, 'done');
@@ -219,7 +220,7 @@ test('iterateBytesWriter pre-buffered send resolves before ack', async t => {
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -245,7 +246,7 @@ test('iterateBytesWriter pre-buffered send resolves before ack', async t => {
 
 test('iterateBytesWriter returns done when responder closes early', async t => {
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return harden({ value: 'closed', promise: null });
     },
     writeReturnPattern() {
@@ -266,7 +267,7 @@ test('iterateBytesWriter return() is idempotent', async t => {
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -292,7 +293,7 @@ test('iterateBytesWriter next() replays terminal result after return()', async t
   const { promise: ackPromise, resolve: resolveAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -317,7 +318,7 @@ test('iterateBytesWriter rejects ack errors and repeats the error', async t => {
   const { promise: ackPromise, reject: rejectAck } = makePromiseKit();
 
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return ackPromise;
     },
     writeReturnPattern() {
@@ -343,7 +344,7 @@ test('iterateBytesWriter rejects ack errors and repeats the error', async t => {
 
 test('iterateBytesWriter throw() is idempotent', async t => {
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return harden({ value: undefined, promise: null });
     },
     writeReturnPattern() {
@@ -362,7 +363,7 @@ test('iterateBytesWriter throw() is idempotent', async t => {
 
 test('iterateBytesWriter is async iterable', async t => {
   const fakeWriter = Far('FakeBytesWriter', {
-    async streamBase64(_synHead) {
+    async stream(_synHead) {
       return harden({ value: undefined, promise: null });
     },
     writeReturnPattern() {
@@ -372,4 +373,65 @@ test('iterateBytesWriter is async iterable', async t => {
 
   const writer = iterateBytesWriter(fakeWriter);
   t.is(writer[Symbol.asyncIterator](), writer);
+});
+
+// Regression: the responder-side `writePattern` guard. These drive the
+// `stream()` responder with a hand-built syn chain — bypassing
+// `iterateBytesWriter`, which would `frozenBytes()` the value on the initiator
+// side first — modeling an untrusted/buggy remote initiator that pushes a raw
+// data frame straight onto the wire. Delete the guard in
+// `bytes-writer-from-iterator.js` and both of these pass (the bad frame flows
+// through `thawedBytes` to `Uint8Array(0)` and acks a silent truncation).
+
+// A sink that records what actually reached it, so we can assert a rejected
+// frame is never delivered downstream.
+const makeRecordingSink = received => ({
+  async next(value) {
+    received.push(value);
+    return harden({ done: false, value: undefined });
+  },
+  async return(value) {
+    return harden({ done: true, value });
+  },
+  [Symbol.asyncIterator]() {
+    return this;
+  },
+});
+
+test('bytes writer responder rejects a non-byte-array data frame', async t => {
+  const received = [];
+  const writerRef = bytesWriterFromIterator(makeRecordingSink(received));
+
+  // One data frame carrying a stale base64 string (not a byte array), then a
+  // terminal node.
+  const terminal = harden({ value: undefined, promise: null });
+  const synHead = harden({
+    value: 'c3RhbGU=',
+    promise: Promise.resolve(terminal),
+  });
+
+  await t.throwsAsync(() =>
+    writerRef.stream(/** @type {any} */ (Promise.resolve(synHead))),
+  );
+  // The non-byte frame never reached the sink — no silent truncated write.
+  t.deepEqual(received, []);
+});
+
+test('bytes writer responder rejects a data frame over byteLengthLimit', async t => {
+  const received = [];
+  const writerRef = bytesWriterFromIterator(makeRecordingSink(received), {
+    byteLengthLimit: 4,
+  });
+
+  // A genuine (immutable) byte array, but larger than the per-frame limit.
+  const terminal = harden({ value: undefined, promise: null });
+  const synHead = harden({
+    value: frozenBytes(new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8])),
+    promise: Promise.resolve(terminal),
+  });
+
+  await t.throwsAsync(() =>
+    writerRef.stream(/** @type {any} */ (Promise.resolve(synHead))),
+  );
+  t.deepEqual(received, []);
 });

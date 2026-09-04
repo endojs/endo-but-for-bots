@@ -2,7 +2,7 @@
 /* eslint-disable no-await-in-loop */
 
 import { E } from '@endo/eventual-send';
-import { encodeBase64 } from '@endo/base64';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makePromiseKit } from '@endo/promise-kit';
 
 /** @import { Passable } from '@endo/pass-style' */
@@ -13,7 +13,7 @@ import { makePromiseKit } from '@endo/promise-kit';
  * Create a local bytes writer iterator that sends Uint8Array values to a remote
  * PassableBytesWriter reference (Initiator/Producer side).
  *
- * Bytes are automatically base64-encoded for transmission over CapTP.
+ * Mutable local chunks are copied into immutable byte arrays before transmission.
  * Uses the bidirectional promise chain protocol for streaming with flow control.
  * When the local iterator is closed early via `return(value)`, the final syn node
  * carries that argument value to the responder, which may replace it with its
@@ -21,10 +21,8 @@ import { makePromiseKit } from '@endo/promise-kit';
  * With buffer > 0, pre-sends data values before waiting for acks, keeping the
  * responder busy without additional round-trips.
  *
- * Calls streamBase64() on the responder, which allows future migration to direct
- * bytes transport when CapTP supports it. At that time, bytes-streamable Exos can
- * implement stream() directly, and initiators can gracefully transition to using
- * iterateWriter() instead of iterateBytesWriter().
+ * Calls the generic stream() method on the responder. The bytes-specific
+ * adapter owns the passability boundary.
  *
  * @template {Passable} [TWriteReturn=undefined]
  * @param {ERef<PassableBytesWriter<TWriteReturn>>} bytesWriterRef
@@ -38,9 +36,9 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
   const { promise: synHead, resolve: initialSynResolve } = makePromiseKit();
   let synResolve = initialSynResolve;
 
-  // Call streamBase64() - returns a promise for the acknowledge (flow-control) chain head
+  // Call stream() - returns a promise for the acknowledge (flow-control) chain head
   /** @type {Promise<StreamNode<undefined, TWriteReturn>>} */
-  let ackPromise = E(bytesWriterRef).streamBase64(synHead);
+  let ackPromise = E(bytesWriterRef).stream(synHead);
 
   /** @type {Promise<IteratorResult<undefined, TWriteReturn>> | null} */
   let terminalPromise = null;
@@ -82,9 +80,9 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
     await null;
 
     try {
-      const base64Value = encodeBase64(value);
+      const passableValue = frozenBytes(value);
       const { promise, resolve } = makePromiseKit();
-      synResolve(harden({ value: base64Value, promise }));
+      synResolve(harden({ value: passableValue, promise }));
       synResolve = resolve;
       if (preBufferRemaining > 0) {
         preBufferRemaining -= 1;

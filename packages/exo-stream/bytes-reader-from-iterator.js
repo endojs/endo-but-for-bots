@@ -1,7 +1,7 @@
 // @ts-check
 
 import { makeExo } from '@endo/exo';
-import { encodeBase64 } from '@endo/base64';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { mapReader } from '@endo/stream';
 
 import { PassableBytesReaderInterface } from './type-guards.js';
@@ -15,13 +15,11 @@ import { makeReaderPump } from './reader-pump.js';
  * (Responder/Producer side).
  *
  * This is the Producer for a bytes Reader: it wraps a local bytes iterator and
- * produces base64-encoded values for the remote Initiator/Consumer.
+ * produces immutable byte arrays for the remote Initiator/Consumer.
  *
- * Bytes are automatically base64-encoded for transmission over CapTP.
- * Uses streamBase64() method instead of stream() to allow future migration
- * to direct bytes transport when CapTP supports it. At that time, bytes-streamable
- * Exos can implement stream() directly, and initiators can gracefully transition
- * to using iterateReader() instead of iterateBytesReader().
+ * Mutable local chunks are copied into immutable byte arrays before they enter
+ * the generic stream() protocol. The bytes-specific helpers remain the
+ * canonical adapters because they own this passability boundary.
  *
  * The interface implies Uint8Array yields (no readPattern method).
  * Only readReturnPattern can be customized.
@@ -33,7 +31,7 @@ import { makeReaderPump } from './reader-pump.js';
  *   JavaScript iterator with a `return(value)` method, it forwards the argument
  *   and uses the iterator’s returned value as the terminal ack; otherwise it
  *   terminates with the original argument value.
- * - Responder sends acknowledgements (base64 strings) via the acknowledgement chain
+ * - Responder sends acknowledgements (immutable bytes) via the acknowledgement chain
  *
  * @param {SomehowAsyncIterable<Uint8Array>} bytesIterator
  * @param {MakeBytesReaderOptions} [options]
@@ -42,18 +40,17 @@ import { makeReaderPump } from './reader-pump.js';
 export const bytesReaderFromIterator = (bytesIterator, options = {}) => {
   const { buffer = 0, readReturnPattern } = options;
 
-  // Encode bytes to base64 strings
-  const base64Iterator = mapReader(
+  const frozenIterator = mapReader(
     // @ts-expect-error mapReader types aren't perfect with iterables
     bytesIterator,
-    encodeBase64,
+    frozenBytes,
   );
 
-  const pump = makeReaderPump(base64Iterator, { buffer });
+  const pump = makeReaderPump(frozenIterator, { buffer });
 
   // @ts-expect-error Exo pump types use Passable where template expects specific subtype
   return makeExo('PassableBytesReader', PassableBytesReaderInterface, {
-    streamBase64: pump,
+    stream: pump,
 
     /**
      * Returns the pattern for validating TReadReturn (return value).

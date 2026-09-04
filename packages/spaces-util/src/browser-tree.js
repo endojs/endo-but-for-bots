@@ -4,6 +4,7 @@
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { M } from '@endo/patterns';
 import { makeReaderPump } from '@endo/exo-stream/reader-pump.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
@@ -16,7 +17,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 // ReadableBlob / ReadableTree protocols (new exo-stream wire shape).
 
 const BrowserBlobInterface = M.interface('ReadableBlob', {
-  streamBase64: M.call(M.any()).returns(M.promise()),
+  stream: M.call(M.any()).returns(M.promise()),
   text: M.call().returns(M.promise()),
   json: M.call().returns(M.promise()),
 });
@@ -30,22 +31,8 @@ const BrowserTreeInterface = M.interface('ReadableTree', {
 harden(BrowserTreeInterface);
 
 /**
- * Encode a Uint8Array to a base64 string using the browser's built-in APIs.
- *
- * @param {Uint8Array} bytes
- * @returns {string}
- */
-const toBase64 = bytes => {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 1) {
-    binary += String.fromCharCode(bytes[i]);
-  }
-  return btoa(binary);
-};
-
-/**
  * Wrap a browser FileSystemFileHandle as an Exo ReadableBlob.
- * The daemon calls `streamBase64(synPromise)` over CapTP to read file
+ * The daemon calls `stream(synPromise)` over CapTP to read file
  * content using the new exo-stream wire protocol.
  *
  * @param {FileSystemFileHandle} fileHandle
@@ -54,7 +41,7 @@ const toBase64 = bytes => {
 const makeBrowserBlob = fileHandle =>
   makeExo('ReadableBlob', BrowserBlobInterface, {
     /** @param {import('@endo/eventual-send').ERef<unknown>} synPromise */
-    streamBase64(synPromise) {
+    stream(synPromise) {
       /** @type {ReadableStreamDefaultReader<Uint8Array> | undefined} */
       let reader;
       const getReader = async () => {
@@ -64,20 +51,22 @@ const makeBrowserBlob = fileHandle =>
         }
         return reader;
       };
-      /** @type {AsyncGenerator<string>} */
-      const base64Iterator = (async function* iter() {
+      /** @type {AsyncGenerator<Uint8Array>} */
+      const bytesIterator = (async function* iter() {
         try {
           for (;;) {
             const r = await getReader();
             const { value, done } = await r.read();
             if (done) return;
-            yield toBase64(value);
+            yield frozenBytes(value);
           }
         } finally {
           if (reader) reader.releaseLock();
         }
       })();
-      const pump = makeReaderPump(base64Iterator);
+      const pump = makeReaderPump(bytesIterator, {
+        readPattern: M.byteArray(),
+      });
       return pump(/** @type {any} */ (synPromise));
     },
     async text() {

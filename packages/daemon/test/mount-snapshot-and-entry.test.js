@@ -21,7 +21,7 @@ import { makeMemoryStore } from './_mount-test-helpers.js';
 /**
  * Behavior-level snapshot and entry tests for `makeMount`:
  *
- *  - Snapshot round-trips a binary (non-UTF8) file via `streamBase64`.
+ *  - Snapshot round-trips a binary (non-UTF8) file via `stream`.
  *  - Snapshot of a mount with an internal symlink follows the link
  *    into confinement; an escaping symlink is hidden rather than
  *    leaking the outside target's bytes.
@@ -69,7 +69,7 @@ const makeConfiguredMount = t => {
 
 // --- Snapshot round-tripping: binary file streaming ---
 
-test('snapshot round-trips a binary (non-UTF8) file via streamBase64', async t => {
+test('snapshot round-trips a binary (non-UTF8) file via stream', async t => {
   const { mount, rootPath } = makeConfiguredMount(t);
 
   // A payload that is not valid UTF-8: PNG signature bytes plus high
@@ -124,7 +124,7 @@ test('snapshot round-trips a binary (non-UTF8) file via streamBase64', async t =
   t.deepEqual(
     Array.from(reassembled),
     Array.from(payload),
-    'binary bytes must round-trip through snapshot streamBase64()',
+    'binary bytes must round-trip through snapshot stream()',
   );
 });
 

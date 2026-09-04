@@ -39,7 +39,7 @@ in usage, because the protocol is symmetric.
   When the initiator calls `return(value)` to close early, the final
   synchronization node carries that argument value to the responder. If the
   responder is backed by a JavaScript iterator with a `return(value)` method,
-  it forwards the argument and uses the iterator’s returned value as the final
+  it forwards the argument and uses the iterator's returned value as the final
   acknowledgement. Otherwise, it terminates with the original argument value.
 - For a **Writer**, the **Initiator** is the **Producer** and the **Responder**
   is the **Consumer**.
@@ -47,7 +47,7 @@ in usage, because the protocol is symmetric.
   The acknowledgement chain carries `undefined` (flow control only). When the
   initiator calls `return(value)` to close early, the final syn node carries that
   argument value. If the responder is backed by a JavaScript iterator with a
-  `return(value)` method, it forwards the argument and uses the iterator’s
+  `return(value)` method, it forwards the argument and uses the iterator's
   returned value as the terminal ack; otherwise it terminates with the original
   argument value.
 - We leave a void in the terminology for configurations where neither or both
@@ -81,14 +81,14 @@ mirrored in data flow direction.
 
 | Module | Function | Role |
 |--------|----------|------|
-| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (base64 encoding). |
-| `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: converts remote `PassableBytesReader` to local `AsyncIterableIterator<Uint8Array>` (base64 decoding). |
+| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: copies mutable chunks to passable byte arrays. |
+| `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: copies passable byte arrays to mutable local chunks. |
 
 ### Bytes Writer Modules
 
 | Module | Function | Role |
 |--------|----------|------|
-| `bytes-writer-from-iterator.js` | `bytesWriterFromIterator(iterator, options?)` | Responder: wraps local sink iterator as `PassableBytesWriter` Exo (base64 decoding on receive). |
+| `bytes-writer-from-iterator.js` | `bytesWriterFromIterator(iterator, options?)` | Responder: thaws passable byte arrays before writing to the local sink. |
 | `iterate-bytes-writer.js` | `iterateBytesWriter(bytesWriterRef, options?)` | Initiator: returns a local bytes writer iterator that sends `Uint8Array` via `next(value)`. |
 
 ## Protocol Flow
@@ -154,7 +154,7 @@ For a Reader, the synchronization chain carries `undefined` for flow control,
 except that when the initiator calls `return(value)` to close early, the final
 synchronization node carries that argument value to the responder. If the
 responder is backed by a JavaScript iterator with a `return(value)` method, it
-forwards the argument and uses the iterator’s returned value as the final
+forwards the argument and uses the iterator's returned value as the final
 acknowledgement. Otherwise, it terminates with the original argument value. The
 acknowledgement chain carries `TRead` (data):
 
@@ -168,7 +168,7 @@ acknowledgement chain carries `TRead` (data):
 For a Writer, the synchronization chain carries `TWrite` (data). When the
 initiator calls `return(value)` to close early, the final syn node carries that
 argument value. If the responder is backed by a JavaScript iterator with a
-`return(value)` method, it forwards the argument and uses the iterator’s
+`return(value)` method, it forwards the argument and uses the iterator's
 returned value as the terminal ack; otherwise it terminates with the original
 argument value. The acknowledgement chain carries `undefined` (flow control):
 
@@ -182,36 +182,36 @@ argument value. The acknowledgement chain carries `undefined` (flow control):
 
 1. **Responder** (`bytesReaderFromIterator`):
    - Takes `AsyncIterator<Uint8Array>`
-   - Encodes each chunk to base64
-   - Creates Exo with `streamBase64()` method
+   - Freezes each mutable chunk into a passable byte array
+   - Creates Exo with `stream()` method
 
 2. **Initiator** (`iterateBytesReader`):
    - Creates synchronize chain
-   - Calls `streamBase64(synHead)` to get acknowledge chain head
+   - Calls `stream(synHead)` to get acknowledge chain head
    - Sends synchronizes to induce production
-   - Decodes base64 to Uint8Array
+   - Thaws each passable byte array to a mutable Uint8Array
 
 3. **Transmission over CapTP**:
-   - Synchronizes flow: initiator → responder (via synchronize promise chain)
-   - Acknowledges flow: responder → initiator (via acknowledge promise chain)
+   - Synchronizes flow: initiator -> responder (via synchronize promise chain)
+   - Acknowledges flow: responder -> initiator (via acknowledge promise chain)
    - CapTP transmits resolved nodes opportunistically
 
 ### Bytes Writer Flow
 
 1. **Initiator** (`iterateBytesWriter`):
    - Returns a local bytes writer iterator
-   - Encodes each chunk to base64
-   - Sends base64 strings on the synchronize chain via `next(value)`
+   - Freezes each mutable chunk into a passable byte array
+   - Sends byte arrays on the synchronize chain via `next(value)`
 
 2. **Responder** (`bytesWriterFromIterator`):
-   - Creates Exo with `streamBase64()` method
-   - Receives base64 strings on the synchronize chain
-   - Decodes base64 to Uint8Array
-   - Pushes decoded bytes to local sink iterator
+   - Creates Exo with `stream()` method
+   - Receives passable byte arrays on the synchronize chain
+   - Thaws them to mutable Uint8Arrays
+   - Pushes mutable bytes to the local sink iterator
 
 3. **Transmission over CapTP**:
-   - Synchronizes flow: initiator → responder (base64 strings via synchronize promise chain)
-   - Acknowledges flow: responder → initiator (flow control via acknowledge promise chain)
+   - Synchronizes flow: initiator -> responder (byte arrays via synchronize promise chain)
+   - Acknowledges flow: responder -> initiator (flow control via acknowledge promise chain)
    - CapTP transmits resolved nodes opportunistically
 
 ## Why E.get() Pipelining Works
@@ -231,16 +231,26 @@ nodePromise = node.promise;                      // Get next node
 This allows the initiator to immediately start resolving synchronization nodes
 without waiting for the acknowledge chain to resolve first, avoiding datalock.
 
-## Migration Path for Bytes Streams
+## Bytes Transport Decision
 
-The `streamBase64()` method exists to support graceful migration:
+The method-surface migration is complete: every reader and writer now uses the
+single `stream()` method. The former bytes-only method was removed.
 
-1. **Current**: `streamBase64()` yields base64 strings
-2. **Future**: When CapTP supports binary, implement `stream()` yielding `Uint8Array`
-3. **Migration**:
-   - Responders implement both `stream()` and `streamBase64()`
-   - Initiators elect to migrate from `iterateBytesReader()` to `iterateReader()`,
-     and from `iterateBytesWriter()` to `iterateWriter()`.
-   - Eventually `streamBase64()` can be deprecated
+The value-representation migration is also complete. A passable `byteArray` is
+a frozen `Uint8Array` backed by an immutable `ArrayBuffer`. Producer adapters
+therefore call `frozenBytes`; consumer adapters call `thawedBytes`. Transfer can
+avoid the send-side copy only when a producer owns and relinquishes a whole
+backing buffer, which common filesystem, socket, and inflater APIs do not
+guarantee.
 
-This allows bytes-streamable Exos to evolve without breaking existing initiators.
+The four bytes-specific modules remain the one recommended way to stream bytes.
+They own the mutable/passable boundary over the generic `stream()` protocol;
+they are not a second remote protocol. The current marshal hex representation is
+larger and slower than the retired transitional base64 representation: hex uses
+two wire characters per input byte versus base64's four per three bytes, so the
+serialized CapData body is ≈1.5× larger (measured at a 64 KiB chunk: 131,105 vs
+87,386 bytes), and the copy-heavy `frozenBytes`→`thawedBytes` round-trip per
+chunk measured ≈4.5× slower on Node 22 (interpreted; 8,192 vs 1,720 ms to cross
+a 64 MiB boundary — see PR #1100 for the full benchmark table). Compact
+byteArray marshalling and ownership-aware transfer therefore remain performance
+work.

@@ -4493,7 +4493,7 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
 
 /**
  * Helper: create a blob Exo from a string.  Returns a `PassableBytesReader`
- * (an Exo with `streamBase64(synPromise)` that can be passed directly to
+ * (an Exo with `stream(synPromise)` that can be passed directly to
  * any consumer expecting an `iterateBytesReader`-compatible blob).
  * @param {string} content
  */

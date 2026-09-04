@@ -20,6 +20,7 @@ import {
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 import {
   assertPetName,
   assertPetNamePath,
@@ -1689,9 +1690,16 @@ export const makeHostMaker = ({
             kind = await E(child).kind();
           }
         }
+        // `stream` alone no longer discriminates a blob (it is the generic
+        // byte-stream method name shared with readers/writers and
+        // `HttpResponse`). `looksLikeReadableBlob` (`@endo/platform/fs/lite`) is
+        // the one exported discriminator: it admits the canonical `text`
+        // whole-value read surface plus the `getInfo`/`readReturnPattern`
+        // byte-read markers, and excludes a writer and a generic value
+        // `PassableReader`.
         const looksLikeBlob =
           kind === undefined
-            ? methodNames.includes('streamBase64')
+            ? looksLikeReadableBlob(methodNames)
             : kind === 'file';
         const looksLikeTree =
           kind === undefined
@@ -1699,7 +1707,7 @@ export const makeHostMaker = ({
             : kind === 'directory';
         if (looksLikeBlob && looksLikeTree) {
           throw makeError(
-            X`Tree entry ${q(subPath)} has both streamBase64 and list — ambiguous shape`,
+            X`Tree entry ${q(subPath)} has both stream and list — ambiguous shape`,
           );
         } else if (looksLikeBlob || looksLikeTree) {
           // eslint-disable-next-line no-await-in-loop
