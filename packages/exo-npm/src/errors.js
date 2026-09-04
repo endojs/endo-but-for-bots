@@ -5,10 +5,14 @@
  * EndoRegistry compatibility surface.
  *
  * The legacy four classes come from `designs/registry-capability.md`. The
- * tree-originated not-found, path-syntax, and offline failures additionally
- * share the `PackageRegistryError` discriminant from
- * `designs/npm-registry-as-directory-tree.md` while retaining distinct native
- * constructors and concrete names.
+ * tree-originated not-found, path-syntax, and offline failures form the
+ * `PackageRegistryError` family from `designs/npm-registry-as-directory-tree.md`
+ * — but that family is defined by the `isPackageRegistryError` /
+ * `registryErrorName` predicate, not by any own property on the error. Each
+ * factory keeps a distinct native constructor (`RangeError`/`SyntaxError`) and a
+ * concrete name recorded out-of-band via `tagError`; no error carries an own
+ * `errorName` or `registryErrorName` property (that would make it non-passable),
+ * so classification always routes through `registryErrorName(error)`.
  *
  * Eviction-driven re-fetch that succeeds is silent; an eviction-driven
  * re-fetch that fails surfaces as `RegistryNetworkError` or

@@ -51,7 +51,7 @@ harden(lookupThrough);
 // (`rust/endo/src/fetch.rs` `format!("{}{}", registry, name)`) with no
 // percent-encoding, unlike the Node lane which escapes it. A guest holding
 // `@registry` can otherwise steer an authenticated request off the registry
-// origin with a name like `..`, `foo?x=1`, or `%2e%2e%2f…`. Validate every
+// origin with a name like `..`, `foo?x=1`, or `%2e%2e%2f...`. Validate every
 // name part against npm's charset at this single choke point — the leading
 // package name always flows through here — so both backends reject the same
 // spellings before the name reaches any host power.
@@ -241,7 +241,12 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
   /** @param {string} packageName */
   const versionsFor = async packageName => {
     const versions = await operations.listVersions(packageName);
-    if (versions === undefined) {
+    // Treat both an absent metadata document and a zero-published-versions
+    // packument as not-found. The Endor lane's `has_package` is
+    // `!versions.is_empty()`, so an empty list must read as absent on both
+    // backends; otherwise `has('empty')` diverges (true on Node, false on
+    // Endor) and disagrees with `lookup('empty')`.
+    if (versions === undefined || versions.length === 0) {
       throw RegistryNotFoundError(`/npm/${packageName}`);
     }
     return harden([...versions].sort(comparePublishedVersions));
@@ -323,8 +328,13 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
             const available = await versionsFor(packageName);
             if (!available.includes(version)) return false;
             if (deeper.length === 0) return true;
-            await lookupThrough(packageDirectory, path);
-            return true;
+            // A path *inside* a version tree must materialize the leaf to
+            // decide it. The Endor lane's tree `lookup` returns `undefined`
+            // (rather than throwing) for a missing in-tree entry, so a bare
+            // no-throw is not "present": the resolved node must actually
+            // exist. Otherwise `has(v, 'nope') === true` for absent paths.
+            const node = await lookupThrough(packageDirectory, path);
+            return node !== undefined;
           } catch {
             return false;
           }
@@ -370,8 +380,20 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
       async has(...path) {
         try {
           if (path.length === 0) return true;
-          await lookupThrough(scopeHub, path);
-          return true;
+          const [packagePart, ...remaining] = path;
+          // Validate the package part's charset exactly as `lookup` does: it
+          // reaches `listVersions` (and the Endor fetch URL) as
+          // `${scope}/${packagePart}`, so a guest-chosen `..`/`foo?x=1` must
+          // be rejected on the `has` entry path too, not only on `lookup`.
+          assertNpmNamePart(packagePart);
+          // Traverse with the child's own `has`, never `lookup`: the package
+          // directory's `has` decides version existence from metadata alone,
+          // whereas `lookup` would materialize a version leaf (tarball fetch +
+          // CAS write). `has` must exercise no more authority than the child's.
+          const directory = await packageDirectoryFor(
+            `${scope}/${packagePart}`,
+          );
+          return directory.has(...remaining);
         } catch {
           return false;
         }
@@ -406,7 +428,7 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
         // are ordinary published names (spaces, `+build`, non-ASCII) that npm's
         // package-name charset does not admit; running them through
         // `scopedPackageSegments` here made `has` report absent for content
-        // `lookup` resolves, breaking the has⇒lookup agreement invariant. Only
+        // `lookup` resolves, breaking the has=>lookup agreement invariant. Only
         // an embedded slash is rejected past the head, since a slash is
         // meaningful only in the leading package name.
         const [head, ...tail] = path;
@@ -433,6 +455,13 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
             // Endor supplies `hasPackage`.
             return true;
           }
+          // The split scoped spelling `has('@scope', part)` reaches
+          // `listVersions`/`hasPackage` (and the Endor fetch URL) as
+          // `${scope}/${part}`; validate `part`'s charset here, exactly as
+          // `scopeHubFor.lookup` does, so `has` cannot bypass the choke point
+          // `lookup` enforces (a slash-joined `@scope/part` head is already
+          // validated by `scopedPackageSegments`; re-validating is harmless).
+          assertNpmNamePart(normalized[1]);
           packageName = `${normalized[0]}/${normalized[1]}`;
           rest = normalized.slice(2);
         } else {
@@ -454,9 +483,12 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
         if (!available.includes(version)) return false;
         if (deeper.length === 0) return true;
         // A path *inside* an already-confirmed version tree is the only case
-        // that must materialize the leaf; it is bounded to one known pair.
-        await lookupThrough(npmHub, normalized);
-        return true;
+        // that must materialize the leaf; it is bounded to one known pair. The
+        // Endor lane's leaf `lookup` returns `undefined` for a missing in-tree
+        // entry rather than throwing, so a bare no-throw is not "present": the
+        // resolved node must actually exist.
+        const node = await lookupThrough(npmHub, normalized);
+        return node !== undefined;
       } catch {
         // `has` is the platform-wide no-throw predicate. In particular an
         // offline unknown folds "cannot tell" into false.
@@ -469,7 +501,7 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
       // The leading segment is normalized through `scopedPackageSegments`
       // regardless of path length, so `lookup(['@scope/package', '1.2.3'])`
       // resolves the same node `has('@scope/package', '1.2.3')` normalizes —
-      // the has⇒lookup contract must not disagree on the one slash-bearing
+      // the has=>lookup contract must not disagree on the one slash-bearing
       // spelling npm tolerates. Trailing segments still reject embedded
       // slashes, which are only meaningful in the leading package name.
       const [head, ...tail] = original;
@@ -523,8 +555,17 @@ export const makePackageRegistryTree = registries => {
     async has(...path) {
       try {
         if (path.length === 0) return true;
-        await lookupThrough(root, path);
-        return true;
+        const [registryName, ...rest] = path;
+        // Traverse with the named registry's own `has`, never `lookup`: this
+        // root is the capability installed at every host's `@registry`, and a
+        // `lookup`-based traversal would let `has('npm', name, version)`
+        // materialize a version leaf (tarball fetch + CAS write) — turning the
+        // documented free predicate into unbounded guest-driven egress.
+        if (typeof registryName !== 'string' || registryName.includes('/')) {
+          return false;
+        }
+        if (!Object.hasOwn(registries, registryName)) return false;
+        return registries[registryName].has(...rest);
       } catch {
         return false;
       }

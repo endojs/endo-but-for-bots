@@ -44,7 +44,15 @@ const readTreeBytes = async (tree, modulePath) => {
   if (typeof readableTree.readBytes === 'function') {
     return readableTree.readBytes(modulePath);
   }
-  const blob = await readableTree.lookup(modulePath);
+  // A SnapshotTree `lookup` matches each argument as one *literal* path
+  // segment, not a slash-delimited path grammar (see
+  // `packages/platform/src/fs/snapshot-tree.js`), and the registry version
+  // leaf forwards the argument verbatim. A nested module path (`src/main.js`)
+  // must therefore be split into segments; a lone `index.js` was the only
+  // shape the un-split call happened to resolve.
+  const segments =
+    typeof modulePath === 'string' ? modulePath.split('/') : modulePath;
+  const blob = await readableTree.lookup(segments);
   if (blob === undefined || blob === null || typeof blob !== 'object') {
     throw Error(`mapSnapshot read: no module at ${String(modulePath)}`);
   }
