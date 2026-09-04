@@ -303,9 +303,6 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   const driverHandleName = `${driverResultName}${HANDLE_SUFFIX}`;
   const spawnerHandleName = `${spawnerResultName}${HANDLE_SUFFIX}`;
 
-  /** Names whose formula could not be cancelled, so must stay reachable. */
-  /** @type {Set<string>} */
-  const uncancelled = new Set();
   /** @param {string} capName */
   const cancelIfPresent = async capName => {
     try {
@@ -316,7 +313,6 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
       // Keep going: the rest of the tree still has to come down, and the
       // caller is told what failed at the end.
       failures.push(error);
-      uncancelled.add(capName);
     }
   };
 
@@ -334,38 +330,43 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
     await cancelIfPresent(capletName);
   }
 
-  try {
-    if (await E(hostAgent).has('@pins', driverResultName)) {
-      await E(hostAgent).remove('@pins', driverResultName);
-    }
-    for (const petName of [
-      driverResultName,
-      driverHandleName,
-      profileNameFor(driverHandleName),
-      spawnerResultName,
-      spawnerHandleName,
-      profileNameFor(spawnerHandleName),
-      name,
-      profileNameFor(name),
-    ]) {
-      // A name whose formula is still running is the only way back to it. Not
-      // every cancel failure means the formula survived, but some do — a
-      // rejection before the graph lock is taken cancels nothing — and a
-      // running spawner caplet holding `host-agent` with no name to reach it
-      // by is exactly the state this whole path exists to prevent. Leave the
-      // name and let the caller retry.
-      if (!uncancelled.has(petName) && (await E(hostAgent).has(petName))) {
-        await E(hostAgent).remove(petName);
+  // Names are dropped only once everything beneath and within this agent is
+  // actually gone.
+  //
+  // Cancelling is attempted regardless — a spawner caplet left running holds
+  // `host-agent`, the authority to mint agents — but a name is the only way
+  // back to whatever survived, so anything short of complete success leaves
+  // the whole set bound. Dropping them piecemeal produced the worst state
+  // available: an agent whose own guest and driver were destroyed, whose
+  // grandchild was still running, and which no retry could reach. Cancelling
+  // is idempotent, so a retry converges.
+  if (failures.length === 0) {
+    try {
+      if (await E(hostAgent).has('@pins', driverResultName)) {
+        await E(hostAgent).remove('@pins', driverResultName);
       }
+      for (const petName of [
+        driverResultName,
+        driverHandleName,
+        profileNameFor(driverHandleName),
+        spawnerResultName,
+        spawnerHandleName,
+        profileNameFor(spawnerHandleName),
+        name,
+        profileNameFor(name),
+      ]) {
+        if (await E(hostAgent).has(petName)) {
+          await E(hostAgent).remove(petName);
+        }
+      }
+    } catch (error) {
+      failures.push(error);
     }
-  } catch (error) {
-    // Report it alongside the cancel failures rather than in place of them.
-    failures.push(error);
   }
   if (failures.length > 0) {
     throw new AggregateError(
       failures,
-      `Releasing agent "${name}" did not complete; retry once the cause is cleared`,
+      `Releasing agent "${name}" did not complete; its names are still bound, so retry once the cause is cleared`,
     );
   }
 };
@@ -403,6 +404,15 @@ export const makeSubagentSpawner = ({
   maxDepth,
   maxSubagents = DEFAULT_MAX_SUBAGENTS,
 }) => {
+  // The parse the whole scheme rests on is "every segment matches
+  // `agentNamePattern`, joined by the infix". The child segment is checked in
+  // `spawn`; this is the only place the parent's own name — which arrives from
+  // a caplet's environment — can be held to the same rule.
+  (typeof parentName === 'string' &&
+    parentName
+      .split(SUBAGENT_INFIX)
+      .every(segment => agentNamePattern.test(segment))) ||
+    Fail`Subagent spawner parent ${q(parentName)} is not a well-formed agent name`;
   /**
    * @param {any} hostAgent
    * @returns {Promise<string[]>}

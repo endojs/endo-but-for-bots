@@ -1165,15 +1165,25 @@ export const makeStreamingAgent = async (
                 harden({ ok: false, error: `${error?.message || error}` }),
             );
             // Raced, not simply awaited: `runTurn` has early exits that return
-            // without settling the writer, and only `releaseTurn`'s
-            // shutdown-time abort rescues them. A turn controller aborted for
-            // any other reason would park this worker on `turnDone` for good.
+            // *successfully* without settling the writer, and only
+            // `releaseTurn`'s shutdown-time abort rescues them. A turn
+            // controller aborted for any other reason would park this worker
+            // on `turnDone` for good, so the second racer has to be a terminal
+            // value rather than a hand-off back to `turnDone`. On every normal
+            // path `writer.end()` runs before the turn resolves, so `turnDone`
+            // wins and this never fires.
             // eslint-disable-next-line no-await-in-loop
-            const result =
-              (await Promise.race([
-                turnDone,
-                turnP.then(outcome => outcome || turnDone),
-              ])) || harden({ ok: false, error: 'turn produced no reply' });
+            const result = await Promise.race([
+              turnDone,
+              turnP.then(
+                outcome =>
+                  outcome ||
+                  harden({
+                    ok: false,
+                    error: 'turn ended without settling its reply',
+                  }),
+              ),
+            ]);
             // A turn that finished is answered and dismissed whatever else is
             // happening: its history is committed and the model was paid for.
             // Only a turn shutdown aborted is left in the inbox, for the next
@@ -1197,19 +1207,37 @@ export const makeStreamingAgent = async (
           }
         }
       })();
+      // Raced against the stop signal on every pull: the reader pump observes a
+      // close only *between* pulls, so a session whose mailbox has gone quiet
+      // cannot be cancelled through the iterator alone. Derived once — inside
+      // the loop it would append a reaction per message to a promise that stays
+      // pending for the session's whole life.
+      const whenStopped = inboxStopped.then(() =>
+        harden({ value: undefined, done: true }),
+      );
+      /**
+       * Dismissal is bookkeeping, and `followMessages` can re-deliver a number
+       * whose message this loop already removed. Letting that throw would kill
+       * the pump — and with it delegation for the rest of the session.
+       *
+       * @param {any} messageNumber
+       */
+      const dismissQuietly = async messageNumber =>
+        E(powers)
+          .dismiss(messageNumber)
+          .catch(error => {
+            console.error(
+              `[floot] could not dismiss message #${messageNumber}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+
       // The tail below runs however this loop leaves — normally, by shutdown,
-      // or by a throw from `messages.next()` or from `dismiss`. Without it, a
-      // pump that died left the worker parked on a wake that would never come,
-      // holding every message it had already read.
+      // or by a throw. Without it, a pump that died left the worker parked on a
+      // wake that would never come, holding every message it had already read.
       try {
         for (;;) {
-          // Raced against the stop signal: the reader pump only observes a
-          // close *between* pulls, so a session whose mailbox has gone quiet
-          // cannot be cancelled through the iterator alone.
-          const next = await Promise.race([
-            messages.next(),
-            inboxStopped.then(() => harden({ value: undefined, done: true })),
-          ]);
+          const next = await Promise.race([messages.next(), whenStopped]);
           const { value: message, done } = next;
           if (done) break;
           const {
@@ -1247,7 +1275,7 @@ export const makeStreamingAgent = async (
             // and the subagent answers back: two models in an unbounded
             // exchange. The cost is that a reply's attachments are not
             // retained, which `askSubagent` says plainly.
-            await E(powers).dismiss(number);
+            await dismissQuietly(number);
             // eslint-disable-next-line no-continue
             continue;
           }
@@ -1257,7 +1285,7 @@ export const makeStreamingAgent = async (
           // `from` is always hint-free, so a daemon with network addresses
           // would fail string equality and answer its own mail.
           if (isSameFormula(fromId, selfLocator)) {
-            await E(powers).dismiss(number);
+            await dismissQuietly(number);
             // eslint-disable-next-line no-continue
             continue;
           }
@@ -1301,21 +1329,33 @@ export const makeStreamingAgent = async (
           wakeMail();
         }
       } finally {
-        // Nothing can feed `claim` once this loop is out, so an ask that kept
-        // waiting would hold the queue open for its whole timeout — five
-        // minutes by default — for a reply that can no longer arrive.
+        // Nothing can feed `claim` once this loop is out — and nothing restarts
+        // it — so an ask that kept waiting would hold the queue open for its
+        // whole timeout, five minutes by default, for a reply that can no
+        // longer arrive. The reason names the cause, because a session whose
+        // pump died of something transient goes on answering the UI while
+        // delegation is permanently gone, and an opaque error there would
+        // connect to nothing in the log.
         pumpEnded = true;
-        delegations.close(Error('Floot session mailbox closed'));
+        delegations.close(
+          Error(
+            'Floot session inbox loop ended; delegation is unavailable until the session is recreated',
+          ),
+        );
         wakeMail();
       }
       // Let queued replies finish before the loop resolves, so a shutdown that
       // awaits `inboxLoop` waits for mail this session already answered.
       await mailWorker;
     })().catch(error => {
-      inboxStarted = false;
       if (stopped) return;
+      // Deliberately not resetting `inboxStarted`: nothing calls `startInbox`
+      // twice, and a second pump would race a permanently-resolved
+      // `inboxStopped` and a closed delegation registry. The session keeps
+      // serving the UI; what it has lost is mail and delegation, which is what
+      // this says.
       console.error(
-        '[floot] inbox loop error:',
+        '[floot] inbox loop ended in error; this session no longer receives mail or delegates:',
         error instanceof Error ? error.message : String(error),
       );
     });

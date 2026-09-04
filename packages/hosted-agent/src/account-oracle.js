@@ -145,7 +145,12 @@ export const makeAccountOracle = ({
     if (typeof reported !== 'string' || reported === '') return fallback;
     const parsed = Date.parse(reported);
     if (!Number.isFinite(parsed)) return fallback;
-    if (parsed > Date.parse(fallback)) return fallback;
+    const limit = Date.parse(fallback);
+    // `!Number.isFinite(limit)`, not `parsed > limit`: an injected clock that
+    // is not an instant makes every comparison false, which would silently
+    // turn the clamp off — accepting exactly the future stamps it exists to
+    // refuse.
+    if (!Number.isFinite(limit) || parsed > limit) return fallback;
     return new Date(parsed).toISOString();
   };
 

@@ -61,8 +61,12 @@ const reservedSubagentSuffixes = harden([
  * unambiguous in both and never collides with a special name. In particular
  * they carry no dot, which is what makes `SUBAGENT_INFIX` a delimiter rather
  * than a substring anyone can forge.
+ *
+ * The length bound is generous because a root agent's name is chosen by an
+ * operator or a script, not typed: the fae smoke harness derives one from a
+ * test title and a model id and runs to about fifty characters.
  */
-export const agentNamePattern = /^[a-z][a-z0-9-]{0,31}$/;
+export const agentNamePattern = /^[a-z][a-z0-9-]{0,62}$/;
 
 /**
  * Assert the shape shared by every agent name, root or subagent.
@@ -207,8 +211,9 @@ harden(SubagentSpawnerInterface);
  * @property {(answer: { text: string, number: bigint, edgeNames: string[] }) => void} settle
  * @property {(reason: Error) => void} fail - Give up on this ask without
  *   waiting out its timer, used when the mailbox that would answer it closes.
- * @property {boolean} settled - Whether a reply has already been delivered, so
- *   the ask's `finally` can tell "answered" from "gave up".
+ * @property {boolean} settled - Whether this delegation has been resolved one
+ *   way or the other — answered, or failed by `close` — so the ask's `finally`
+ *   knows not to record its id as an abandoned one.
  */
 
 /**

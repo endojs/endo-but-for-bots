@@ -166,7 +166,8 @@ test('a subagent may not take a name the enumeration keys on', async t => {
   });
   await t.throwsAsync(spawner.spawn('has.dot'), { message: /must match/ });
   // `parent`'s subagent `x-driver` would be the host agent
-  // `parent-sub-x-driver` — the name sibling `x`'s driver caplet already holds.
+  // `parent.sub.x-driver` — the name sibling `x`'s driver caplet already
+  // holds.
   await t.throwsAsync(spawner.spawn('x-driver'), {
     message: /must not end with/,
   });
@@ -181,11 +182,11 @@ test('a subagent may not take a name the enumeration keys on', async t => {
 });
 
 test('a subagent named "driver" is not enumerated as a phantom', t => {
-  // `p`'s subagent `driver` has the *handle* `p-sub-driver`, which ends in
-  // `-driver` just as a driver caplet does. A suffix test reported it as a
-  // subagent named `''`: one that counted against the bound, could never be
-  // stopped, and whose teardown recursed into an agent that does not exist —
-  // cancelling the live subagent's handle on the way.
+  // `p`'s subagent `driver` has the *handle* `p.sub.driver` and the driver
+  // caplet `p.sub.driver-driver`. Only the second is a driver; a suffix test
+  // over a hyphenated infix reported the first as a subagent named `''` —
+  // one that counted against the bound, could never be stopped, and whose
+  // teardown cancelled the live subagent's handle on the way.
   t.deepEqual(
     subagentNamesIn(
       ['p.sub.driver', 'p.sub.driver-driver', 'p.sub.x-driver'],
@@ -238,7 +239,7 @@ test('provisioning refuses a name that would take one already in use', async t =
   t.deepEqual([...names.keys()].sort(), before, 'nothing may be unbound');
 });
 
-test('a name whose formula could not be cancelled is left reachable', async t => {
+test('a teardown that could not finish leaves the whole tree reachable', async t => {
   const { hostAgent, names } = makeFakeHost();
   await provisionFaeAgent({
     hostAgent,
@@ -262,10 +263,69 @@ test('a name whose formula could not be cancelled is left reachable', async t =>
       message: /retry once the cause is cleared/,
     },
   );
-  // Not every cancel failure means the formula survived, but some do, and the
-  // name is the only way back to a running spawner caplet holding `host-agent`.
+  // Not every cancel failure means the formula survived, but some do, and a
+  // name is the only way back to whatever did — a running spawner caplet holds
+  // `host-agent`. Dropping the names piecemeal produced the worst state
+  // available: an agent whose guest and driver were destroyed and which no
+  // retry could reach. Cancelling is idempotent, so the whole set stays bound
+  // and a retry converges.
   t.true(names.has('parent-spawner'));
-  t.false(names.has('parent-driver'));
+  t.true(names.has('parent-driver'));
+  t.true(names.has('parent'));
+
+  // Retry once the cause has cleared.
+  await releaseFaeAgent({ hostAgent, name: 'parent' });
+  t.deepEqual([...names.keys()], []);
+});
+
+test('a stubborn grandchild does not half-destroy its parent', async t => {
+  const { hostAgent, names, cancelled } = makeFakeHost();
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'p',
+    depth: 0,
+    maxDepth: 2,
+    ...provisionOptions,
+  });
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'p.sub.x',
+    depth: 1,
+    maxDepth: 2,
+    ...provisionOptions,
+  });
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'p.sub.x.sub.c',
+    depth: 2,
+    maxDepth: 2,
+    ...provisionOptions,
+  });
+  const stubborn = Far('HostAgent', {
+    ...hostAgent,
+    async cancel(name) {
+      if (name === 'p.sub.x.sub.c-driver') throw Error('graph lock');
+      return hostAgent.cancel(name);
+    },
+  });
+
+  await t.throwsAsync(
+    releaseFaeAgent({ hostAgent: stubborn, name: 'p.sub.x' }),
+    {
+      instanceOf: AggregateError,
+    },
+  );
+  // The parent's own caplets are still cancelled — a spawner left running
+  // holds `host-agent` — but nothing of the subtree is unbound, so the model's
+  // `subagents/x` edge still names something and a retry can finish the job.
+  t.true(cancelled.includes('p.sub.x-spawner'));
+  t.true(names.has('p.sub.x'));
+  t.true(names.has('p.sub.x.sub.c-driver'));
+
+  await releaseFaeAgent({ hostAgent, name: 'p.sub.x' });
+  t.false(names.has('p.sub.x'));
+  t.false(names.has('p.sub.x.sub.c-driver'));
+  t.true(names.has('p'), 'the unrelated parent is untouched');
 });
 
 test('the subagent count bound is enforced', async t => {

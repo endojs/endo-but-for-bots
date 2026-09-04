@@ -157,7 +157,8 @@ test('subagent names are restricted to a shape that is unambiguous as a pet name
     'has space',
     'has/slash',
     '@special',
-    'x'.repeat(33),
+    'has.dot',
+    'x'.repeat(64),
     42,
     undefined,
   ]) {

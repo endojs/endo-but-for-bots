@@ -56,11 +56,11 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     }
   };
 
-  // A hand-rolled iterator rather than an async generator: `return()` on a
-  // generator parked at an `await` does not complete until that await settles,
-  // so a consumer cancelling a stream that has gone quiet would hang. The
-  // daemon's reader can be closed while idle, and a stub that cannot would let
-  // a shutdown bug pass unnoticed here.
+  // A hand-rolled iterator rather than an async generator, so `return()` can
+  // settle while the source is parked. Note this stub is *more* forgiving than
+  // the real reader: `makeReaderPump` inspects the close signal only between
+  // pulls, so on a quiet mailbox a real `return()` never reaches the source at
+  // all. Nothing here may depend on a close being observed.
   const stream = () => {
     const settleWaiters = value => {
       for (const waiter of waiters.splice(0)) waiter(value);
@@ -410,4 +410,110 @@ test('a backlog larger than any bound is answered, not declined', async t => {
     'every queued message must eventually be answered',
   );
   t.is(turns, 20);
+});
+
+test('cancellation closes delegations without waiting for the reader', async t => {
+  t.timeout(15_000);
+  const mailbox = makeLiveMailbox();
+  /** @type {string[]} */
+  const toolResults = [];
+  const provider = makeScriptedProvider([
+    () =>
+      harden({
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'call-1',
+              type: 'function',
+              function: {
+                name: 'askSubagent',
+                arguments: JSON.stringify({
+                  name: 'helper',
+                  task: 'never answered',
+                  timeoutSeconds: 3600,
+                }),
+              },
+            },
+          ],
+        },
+      }),
+    messages => {
+      const toolMessage = messages.find(entry => entry.role === 'tool');
+      toolResults.push(`${toolMessage?.content ?? ''}`);
+      return harden({ message: { role: 'assistant', content: 'gave up' } });
+    },
+  ]);
+
+  /** @type {() => void} */
+  let cancel = () => {};
+  const cancelled = new Promise(resolve => {
+    cancel = () => resolve(undefined);
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    Far('Context', { whenCancelled: () => cancelled }),
+    harden({ provider }),
+    'test prompt',
+    harden({ spawner: stubSpawner, timers: inertTimers }),
+  );
+  t.teardown(() => mailbox.close());
+
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['delegate please'] });
+  // Wait until the delegation is on the wire and the turn is parked on a reply
+  // that will never come.
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.recipient === 'subagents/helper'),
+    ),
+    `mailbox saw: ${JSON.stringify(
+      mailbox.sent.map(record => record.recipient ?? `reply#${record.replyTo}`),
+    )}`,
+  );
+
+  // The mailbox stays open and silent. `messageIterator.return()` cannot reach
+  // a parked reader, so cancellation must not wait on it: the ask has to fail
+  // at once rather than hold the turn for its full hour, and the loop has to
+  // return.
+  cancel();
+  // The loop returns without draining: cancellation is prompt, and an
+  // in-flight provider call can take minutes. The turn it abandoned still
+  // unwinds, and what it sees is the ask failing at once rather than an hour
+  // from now.
+  await loop;
+  t.true(await until(() => toolResults.length === 1));
+  t.true(toolResults[0].includes('cancelled'), toolResults[0]);
+});
+
+test('a real daemon context does not stop the loop before it starts', async t => {
+  t.timeout(15_000);
+  const mailbox = makeLiveMailbox();
+  const provider = makeScriptedProvider([
+    () => harden({ message: { role: 'assistant', content: 'hello back' } }),
+  ]);
+  // `makeFarContext` hands every unconfined caplet a `whenCancelled()` that
+  // returns the cancellation promise. Returning that from an async
+  // `getCancelled` adopts it, so awaiting the result did not settle until the
+  // agent was cancelled — and the inbox loop never started. Every test passed
+  // no context at all, so nothing showed it.
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    Far('Context', { whenCancelled: () => new Promise(() => {}) }),
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['are you there?'] });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+    'the agent never answered: its loop never started',
+  );
 });
