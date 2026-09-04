@@ -85,10 +85,26 @@ fn native_apply_forwards_dense_array() {
          Math.max.apply(null,a)+':'+log.join(',')",
     );
     agrees("(function(){return Math.max.apply(null,arguments)})(2,9,4)");
+    agrees("(function(a){return (function(x){return x}).apply(null,arguments)})(1)");
+    agrees("(function(){delete arguments[1];arguments.length=1;return Math.max.apply(null,arguments)})(3,9)");
+    agrees("(function(){Object.defineProperty(arguments,'length',{get:function(){return 1}});return Math.max.apply(null,arguments)})(3,9)");
     agrees(
         "var log=[];var args=new Proxy({length:2,0:3,1:8},{get:function(t,k){log.push(k);return t[k]}}); \
          Math.max.apply(null,args)+':'+log.join(',')",
     );
+}
+
+#[test]
+fn apply_array_like_reads_are_computron_exact() {
+    for source in [
+        "Math.max.apply(null,{length:2,0:3,1:8})",
+        "Math.max.apply(null,[,8])",
+        "(function(a,b){return a+b}).apply(null,{length:2,0:3,1:8})",
+        "var f=(function(a,b){return a+b}).bind(null);f.apply(null,{length:2,0:3,1:8})",
+        "(function(){return Math.max.apply(null,arguments)})(3,8)",
+    ] {
+        agrees_exact(source);
+    }
 }
 
 #[test]
