@@ -28,6 +28,10 @@ host, a larger set including `@registry`, `@endo`, `@pins`, `@none`, `@main`,
 (`packages/daemon/src/host.js:504-524`).
 These daemon-owned special names are currently the *only* special names, and
 none can be introduced from a providing host through the provisioning call.
+This is the gap [#982](https://github.com/endojs/endo-but-for-bots/issues/982)
+records — letting the provisioning party designate a guest's special worker
+names, including an alternative `@main` — the driving requirement this design
+answers.
 
 This design adds one generic mechanism.
 It defines an `introducedSpecialNames` option on the provisioning call that maps
@@ -52,7 +56,13 @@ them, belongs to the deployment, not to this daemon feature.
 
 `introducedSpecialNames` joins `introducedNames` on the existing shared options
 bag `MakeHostOrGuestOptions` (`packages/daemon/src/types.d.ts:1444`), which both
-`provideGuest` and `provideHost` already accept:
+`provideGuest` and `provideHost` already accept. It builds directly on the
+retained-guest provisioning API landed by
+[#1042](https://github.com/endojs/endo-but-for-bots/pull/1042) (`feat(daemon):
+retain guests with introducedNames and code-mode globals`) — its
+`EndoHost.provideGuest(name, options)` seam, `introducedNames` grammar, and
+idempotent reacquisition of a retained guest — rather than introducing a parallel
+provisioning path; this design adds one new option field to that same bag:
 
 ```js
 await E(host).provideGuest(childName, {
