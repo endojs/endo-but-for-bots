@@ -66,6 +66,16 @@ need for in-transit visibility:
   observed to settle.
   This is the same never-settles idiom as `new Promise(() => {})` used as
   a token, now expressed as a dropped pass-style carrier.
+  **Phase-1 scope caveat:** `forever-pending` (and the `undeliveredRejection`
+  composite built on it) fires only once **both** the carrier and the
+  producer record holding its resolver are unreachable, so in the parent
+  design's canonical deployment (the resolver kept in a long-lived producer
+  table for the vat's whole session) a forgotten-but-still-live producer's
+  carrier is reported through **`long-pending`**, not `forever-pending`,
+  until Open Question 6 is resolved. The headline claim above is full
+  closure only for a producer-collected carrier; the in-transit workhorse
+  signal for real liveSlots usage is `long-pending`. This is elaborated in
+  the weak-reachability constraint below.
 
 A debugger needs to see all three conditions **in transit**, without
 reintroducing the per-hop noise the retention principle exists to avoid.
@@ -312,10 +322,20 @@ small per-carrier finalization record threaded through the
   `FinalizationRegistry` callback (on finalization), so the map holds no
   strong carrier edge and does not itself grow without bound past the
   count of live unsettled carriers.
-  On the degraded path with no `FinalizationRegistry`, the settle hook is
-  the only prune, so the `long-pending` walk additionally drops any entry
-  whose `ref` no longer dereferences, keeping `liveSet` bounded by live
-  unsettled carriers there too.
+  The `long-pending` walk **always** drops any entry whose `ref` no longer
+  dereferences, **regardless of whether `FinalizationRegistry` is
+  available**. This dead-`ref` guard is unconditional because GC and the
+  finalizer callback are not ordered: per the ECMAScript spec a
+  `FinalizationRegistry` callback fires at an unspecified, arbitrarily later
+  time after its target becomes unreachable (and is not guaranteed to fire
+  before process exit at all), so even on the normal path a carrier can be
+  collected (with `ref.deref()` already returning `undefined`) while its
+  `fin` callback has not yet run to prune `liveSet`. Walking without the guard
+  would synthesize a bogus `long-pending` entry (or fault) for such an
+  already-collected carrier. On the degraded path with no
+  `FinalizationRegistry` the settle hook is the only other prune, so there
+  the same guard is additionally what keeps `liveSet` bounded by live
+  unsettled carriers.
 
 - **the value-only finalization record `fin`**: for each registered
   carrier, a plain record `{ id, hadUnlistenedRejection, delivered }`
@@ -509,11 +529,13 @@ flowchart TD
     delivered rejection whose carrier is later collected. The `delivered`
     bit routes that case here instead.
 - **At inspection time**: `long-pending` is computed by walking `liveSet`,
-  keeping still-live carriers whose `createdAt` is older than the
-  threshold, ordering them **oldest `createdAt` first**, and synthesizing
-  derived entries capped at a limit `L` (so a truncation drops the
-  youngest, keeping the oldest and most suspicious). Nothing is recorded or
-  stored for this category.
+  dropping any entry whose `ref` no longer dereferences (unconditionally,
+  per the `liveSet` bullet above, since a carrier may already be collected
+  while its finalizer callback has not yet run), keeping the still-live
+  carriers whose `createdAt` is older than the threshold, ordering them
+  **oldest `createdAt` first**, and synthesizing derived entries capped at a
+  limit `L` (so a truncation drops the youngest, keeping the oldest and most
+  suspicious). Nothing is recorded or stored for this category.
 
 ### First-listener arrival plumbing
 
@@ -549,6 +571,22 @@ Per the weak-reachability constraint above, this hook must not introduce a
 strong runtime-to-carrier edge (closing over `fin` does not: `fin` holds no
 carrier reference).
 This added hook is why Phase 2 below is sized **M**, not **S**.
+
+**When the `retained` entry was already evicted before delivery.**
+`retained` has its own capacity `R` and evicts its oldest entry under
+pressure, and a retained rejection can sit unlistened for an unbounded time
+before a listener arrives, so eviction-before-delivery is a real case, not a
+corner one. When the first listener arrives for a carrier whose
+`unlistened-rejection` entry has already left `retained`, the hook still sets
+`fin.delivered = true` through its closure (so finalization-time
+classification stays sound: the carrier routes to the settled-and-delivered,
+no-entry branch, never to `undeliveredRejection`), but there is **no**
+`retained` entry to mark and move, so **no `ring` entry is produced** for
+that delivery. That delivery is therefore not individually visible in the
+snapshot; the loss is not silent, because the `retained` eviction that
+dropped it already incremented `evicted.retained`, which the snapshot
+reports. The delivery's fact survives on `fin`; only its per-entry record
+was the price of the earlier eviction.
 
 ### Inspection surface
 
@@ -732,6 +770,11 @@ Native promises are covered **opportunistically**: a native promise (or
 Native rejections that are eagerly thrown are already covered by the
 host's own unhandled-rejection tooling and are out of scope here.
 The precise extent of native-promise coverage is Open Question 3.
+This opportunistic tracking is **stated as design intent, not scheduled
+baseline**: no phase in "Phased Implementation" below builds or tests it,
+because its extent is blocked on Open Question 3. A reader should not
+mistake the described behavior for decided, phased work; it lands (and
+gains a phase) only once Open Question 3 fixes where the line falls.
 
 ## Reconciliation with the Pass-Style Promise Contract
 
@@ -795,11 +838,33 @@ transition it reads must exist first.
    reason graph), the delivered transition against the parent's retention
    tests, and that `delivered` is marked even when the producer supplied
    no `onFirstListen`.
+   Test the **promise-forwarding chain** case explicitly. It is the parent
+   design's own canonical illustration of the retention principle this
+   view observes (`a.resolver.resolve(b.promise); b.resolver.reject(...)`,
+   [pass-style-promise](pass-style-promise.md)), where `b`'s "unlistened"
+   window and its eventual `delivered` transition happen through a
+   re-listen forwarded from `a`'s consumer, not a direct `listen(b, ...)`
+   written by application code: the intermediate carrier `b` must record
+   exactly one `unlistened-rejection` entry (no double-recording) and must
+   mark `delivered` only when the forwarded listen actually reaches it, so
+   its `retained` entry does not outlive its true delivery even though the
+   chain walk spans multiple turns. This is the scenario where a naive
+   per-carrier bookkeeping scheme is most likely to misfire.
 3. **Long-pending classification (XS).**
    `liveSet` walk at inspection time with the configurable threshold and
    the `L` cap, pruned by the settle hook.
    No timer, nothing stored.
 4. **Forever-pending via FinalizationRegistry (S).**
+   **Scope of this phase's claim (explicit downgrade, pending Open Question
+   6):** in the parent design's canonical liveSlots deployment the resolver
+   is kept in a long-lived producer table, so a live producer pins its own
+   carrier and the flagship `undeliveredRejection` composite fires only once
+   the producer record is *also* collected. This phase therefore delivers
+   the composite verifiably only under a lab `gc()` harness that collects
+   both, not in a running vat with a live producer; there the in-transit
+   signal is `long-pending` (Phase 3), not `forever-pending`. The claim is
+   downgraded to that scope here rather than left implied, and full
+   still-live-producer coverage waits on Open Question 6.
    Register at `makePromise()` with the value-only `fin` record
    (`{ id, hadUnlistenedRejection, delivered }`) as `heldValue`, set
    `hadUnlistenedRejection` on a reject with no listener and `delivered` in
@@ -901,6 +966,27 @@ transition it reads must exist first.
 9. **Off by default, opt-in via env-option.**
    Reuses the parent design's `@endo/env-options` idiom for consistency
    and for a diagnosable on/off toggle.
+10. **`delivered` is written at exactly one site, though it is read from
+    two.**
+    "Delivered" is read from two structures: the value-only `fin` record
+    (read by the finalization callback, which must outlive `retained`
+    eviction and therefore cannot read the entry) and the `retained`/`ring`
+    entry's own `delivered` field (read by the snapshot). These are kept
+    separate on purpose. `fin` must stay value-only and durable so it can
+    reach the finalization callback after the carrier and its entry are
+    gone, while the entry must carry the reason projection that `fin`
+    deliberately does not hold (so a `retained` eviction can free the
+    projection). Collapsing them into one shared record would pin the reason
+    projection on the durable `fin` until GC and defeat the `retained`
+    memory bound, so the design keeps two locations and instead contains the
+    drift risk of one fact in two places with a **single write site**: the
+    first-listener hook (see "First-listener arrival plumbing") is the
+    *only* code that transitions "delivered", and it performs all three
+    coordinated mutations (`fin.delivered = true`, `entry.delivered = true`,
+    and moving the entry from `retained` into `ring`) together.
+    No other site writes `delivered`, so the two reads cannot diverge. A
+    future read-site (for example a metrics hook) must read, never write,
+    through this one transition.
 
 ## Open Questions
 
