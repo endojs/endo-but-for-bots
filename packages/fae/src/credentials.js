@@ -2,7 +2,7 @@
 
 import { decodeBase64 } from '@endo/base64/decode.js';
 import { encodeBase64 } from '@endo/base64/encode.js';
-import { Fail, q } from '@endo/errors';
+import { Fail, X, makeError, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
@@ -79,15 +79,19 @@ export const readAuthToken = async blob => {
   } catch {
     throw Error('Secret blob does not hold UTF-8 text');
   } finally {
-    // Zero the intermediate copy. The daemon does the same for its own buffers;
-    // the decoded string is immutable and cannot be zeroed, which is why the
-    // token is read per provider construction rather than held indefinitely.
+    // Zero the intermediate copy. The daemon does the same for its own
+    // buffers; the decoded string is immutable and cannot be zeroed, which is
+    // why the token is read per provider construction rather than kept beyond
+    // the life of the provider presenting it.
     bytes.fill(0);
   }
   token !== '' || Fail`Secret blob holds an empty provider token`;
   return token;
 };
 harden(readAuthToken);
+
+/** Pet names whose plaintext-fallback warning has already been printed. */
+const warnedPetNames = new Set();
 
 /**
  * Resolve the auth token a provider should use.
@@ -99,7 +103,9 @@ harden(readAuthToken);
  * plaintext in the pet store and cannot be rotated or revoked.
  *
  * Read this on every provider construction rather than caching it: a rotated
- * secret keeps the same capability, so a held token is a stale token.
+ * secret keeps the same capability, so a held token is a stale token. The
+ * token a provider is currently presenting is necessarily retained for as long
+ * as that provider lives; what must not happen is holding it past that.
  *
  * @param {object} options
  * @param {any} options.powers - The namespace that may hold the secret.
@@ -118,9 +124,15 @@ export const resolveAuthToken = async ({
   }
   const inline = config.authToken;
   if (typeof inline === 'string' && inline !== '') {
-    console.error(
-      `[credentials] no ${petName} capability; using the plaintext token in the provider config. Re-run setup to move it into @secrets.`,
-    );
+    // Once, not once per turn: this is now on the per-turn path, and a
+    // deployment that has not migrated would otherwise emit the same line for
+    // every message it ever answers.
+    if (!warnedPetNames.has(petName)) {
+      warnedPetNames.add(petName);
+      console.error(
+        `[credentials] no ${petName} capability; using the plaintext token in the provider config. Re-run setup to move it into @secrets.`,
+      );
+    }
     return inline;
   }
   return '';
@@ -145,7 +157,19 @@ harden(resolveAuthToken);
 export const hasAuthSecret = async ({ hostAgent, name }) => {
   await null;
   if (!(await E(hostAgent).has('secrets'))) return false;
-  return E(hostAgent).has('secrets', name);
+  try {
+    return await E(hostAgent).has('secrets', name);
+  } catch (error) {
+    // `secrets` is an ordinary mutable pet name and may have been bound to
+    // something that is not a directory. Say that, rather than let a caller
+    // read a generic failure as "the secret manager is unavailable here" and
+    // downgrade to a plaintext token on a daemon that does carry `@secrets`.
+    throw makeError(
+      X`Pet name ${q('secrets')} does not name a directory, so ${q(`secrets/${name}`)} cannot be resolved; rename or remove it`,
+      Error,
+      { cause: /** @type {Error} */ (error) },
+    );
+  }
 };
 harden(hasAuthSecret);
 

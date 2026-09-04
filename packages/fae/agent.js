@@ -32,6 +32,7 @@ import {
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
 import { runAgenticTurn } from './src/turn-engine.js';
 import {
+  composeSubagentSystemPrompt,
   isSameFormula,
   makeSubagentDelegations,
   makeSubagentTools,
@@ -45,14 +46,6 @@ import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
 const MAX_TOOL_ROUNDS = 32;
-
-/**
- * Inbound messages that may be waiting for a turn at once.
- *
- * Turns run on a serial chain beside the mailbox pump rather than inside it,
- * so nothing else bounds how far the queue can grow under a flood of mail.
- */
-const MAX_QUEUED_TURNS = 16;
 
 const m = makeMarshal(undefined, undefined, {
   errorTagging: 'off',
@@ -167,6 +160,9 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   for an agent this deployment allows to delegate; its absence is what
  *   withholds the subagent tools.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
+ * @param {string} [options.delegatedPrompt] - Standing instructions written by
+ *   this agent's parent, appended to the system prompt rather than replacing
+ *   it. See `composeSubagentSystemPrompt`.
  * @param {() => Promise<string>} [options.provideAuthToken] - Reads the auth
  *   token afresh for each turn, so a rotated secret reaches a running agent and
  *   a revoked one stops it. Absent when the caller injected a built provider.
@@ -177,7 +173,7 @@ export const spawnWorkerLoop = async (
   context,
   providerConfig,
   systemPrompt,
-  { spawner, timers, provideAuthToken } = {},
+  { spawner, timers, provideAuthToken, delegatedPrompt } = {},
 ) => {
   const getCancelled = async () => {
     if (!context) return null;
@@ -201,14 +197,29 @@ export const spawnWorkerLoop = async (
   });
 
   /**
+   * The provider a turn runs on, resolved once when the turn starts.
+   *
+   * Not once per round: a turn may take up to `MAX_TOOL_ROUNDS` provider calls,
+   * and reading the secret for each of them would multiply the daemon's audit
+   * trail by the model's tool use — burying the retry pattern that trail exists
+   * to show, and paying three eventual-sends per round for it. Per turn is the
+   * granularity rotation and revocation actually need.
+   * @type {any}
+   */
+  let turnProvider;
+
+  /**
    * @param {object[]} messages
    * @param {object[]} toolSchemas
    * @returns {Promise<{message: object}>}
    */
   const chat = async (messages, toolSchemas) =>
-    (await currentProvider()).chat(messages, toolSchemas);
+    turnProvider.chat(messages, toolSchemas);
 
-  const effectivePrompt = systemPrompt || guestSystemPrompt;
+  const effectivePrompt = composeSubagentSystemPrompt(
+    systemPrompt || guestSystemPrompt,
+    delegatedPrompt,
+  );
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
 
   /**
@@ -508,9 +519,29 @@ export const spawnWorkerLoop = async (
         replyTo,
       } = message;
 
+      // Read the credential before anything else, and outside the try below
+      // whose catch mails the failure to the sender. A revoked or unreadable
+      // secret is a fact about this deployment, and any peer that can mail
+      // this agent would otherwise have a free oracle on it.
+      try {
+        turnProvider = await currentProvider();
+      } catch (error) {
+        console.error(
+          '[fae] provider unavailable:',
+          error instanceof Error ? error.message : String(error),
+        );
+        await E(powers).reply(
+          number,
+          ['This agent cannot reach its language model right now.'],
+          [],
+          [],
+        );
+        return;
+      }
+
       await rootNodeIdP;
 
-      console.log(`[fae] New message #${number} from ${fromId}`);
+      console.error(`[fae] New message #${number} from ${fromId}`);
 
       // Discover tools (picks up newly adopted tools each turn)
       const { schemas: toolSchemas, toolMap } = await discoverTools(
@@ -575,7 +606,9 @@ export const spawnWorkerLoop = async (
           if (finalNode) {
             const lastMsg = finalNode.messages[finalNode.messages.length - 1];
             if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
-              console.log('[fae] No reply tool called, sending fallback reply');
+              console.error(
+                '[fae] No reply tool called, sending fallback reply',
+              );
               await E(powers).reply(number, [lastMsg.content], [], []);
             }
           }
@@ -588,37 +621,65 @@ export const spawnWorkerLoop = async (
       }
     };
 
-    // Turns run on their own serial chain rather than inside the pump below.
+    // Turns run in a worker beside the pump below, not inside it.
     //
     // `askSubagent` blocks inside a turn until `delegations.claim` observes the
     // subagent's reply, and the only thing that feeds `claim` is the pump. A
     // turn awaited inside the pump therefore waits for a message the pump can
-    // no longer read: every ask times out. Handing the turn to a serial worker
-    // keeps mail strictly ordered while leaving the pump free to run.
-    /** @type {Promise<void>} */
-    let turnChain = Promise.resolve();
-    let queuedTurns = 0;
+    // no longer read: every ask times out. The queue keeps mail strictly
+    // ordered while leaving the pump free to run.
+    //
+    // It is deliberately unbounded. What it holds is a reference to a message
+    // the daemon is holding anyway — Fae never dismisses — and it drains
+    // monotonically. Declining past a bound would be worse: the pump reads
+    // ahead of the model as fast as the stream yields, so a backlog of mail
+    // arriving during one slow turn would be refused wholesale even though the
+    // agent goes idle moments later.
+    /** @type {any[]} */
+    const pendingTurns = [];
+    /** @type {(() => void) | undefined} */
+    let wakeWorker;
+    let pumpEnded = false;
     let stopping = false;
+
+    const wake = () => {
+      const notify = wakeWorker;
+      wakeWorker = undefined;
+      if (notify) notify();
+    };
 
     /** @param {any} message */
     const enqueueTurn = message => {
-      queuedTurns += 1;
-      turnChain = turnChain.then(async () => {
+      pendingTurns.push(message);
+      wake();
+    };
+
+    const turnWorker = (async () => {
+      for (;;) {
+        if (stopping) return;
+        if (pendingTurns.length === 0) {
+          if (pumpEnded) return;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(resolve => {
+            wakeWorker = resolve;
+          });
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        const message = pendingTurns.shift();
         try {
-          if (stopping) return;
+          // eslint-disable-next-line no-await-in-loop
           await handleMessage(message);
         } catch (error) {
           // `handleMessage` already mails its own failures back to the sender;
-          // reaching here means even that failed, and the chain must survive.
+          // reaching here means even that failed, and the worker must survive.
           console.error(
             '[fae] turn failed:',
             error instanceof Error ? error.message : String(error),
           );
-        } finally {
-          queuedTurns -= 1;
         }
-      });
-    };
+      }
+    })();
 
     const messageIterator = iterateReader(E(powers).followMessages());
     while (true) {
@@ -633,6 +694,8 @@ export const spawnWorkerLoop = async (
         // Queued turns are abandoned rather than awaited: cancellation must be
         // prompt, and an in-flight provider call can take minutes.
         stopping = true;
+        delegations.close(Error('Fae agent cancelled'));
+        wake();
         try {
           await messageIterator.return?.();
         } catch {
@@ -700,37 +763,18 @@ export const spawnWorkerLoop = async (
           continue;
         }
         seenInboundNumbers.add(number);
-
-        // The queue is what used to be implicit backpressure from awaiting the
-        // turn in the pump. Bounding it keeps a flood of mail from growing an
-        // unbounded chain of pending turns; the sender is told rather than
-        // silently ignored.
-        if (queuedTurns >= MAX_QUEUED_TURNS) {
-          console.error(
-            `[fae] ${queuedTurns} turns already queued; declining message #${number}`,
-          );
-          // eslint-disable-next-line no-await-in-loop
-          await E(powers)
-            .reply(
-              number,
-              [
-                `This agent already has ${queuedTurns} messages waiting. Please resend once it has caught up.`,
-              ],
-              [],
-              [],
-            )
-            .catch(() => undefined);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-
         enqueueTurn(message);
       }
     }
 
-    // The stream ended of its own accord: let the queue drain so a reply that
-    // was about to be sent is not dropped.
-    await turnChain;
+    // The stream ended of its own accord. Nothing can feed `claim` from here,
+    // so an ask that kept waiting would hold the queue open for its whole
+    // timeout — up to an hour — answering a reply that can no longer arrive.
+    pumpEnded = true;
+    delegations.close(Error('Fae agent mailbox closed'));
+    wake();
+    // Let the queue drain so a reply that was about to be sent is not dropped.
+    await turnWorker;
   };
 
   // Start the worker loop

@@ -36,6 +36,44 @@ export const subagentAgentName = (parentName, name) =>
 harden(subagentAgentName);
 
 /**
+ * The direct subagents of `parentName` visible in a host directory listing.
+ *
+ * Matching is anchored rather than `startsWith`/`endsWith`: an agent's *handle*
+ * is `p-sub-X`, and if X is itself `driver` that handle ends in `-driver` too.
+ * A suffix test therefore reported a phantom subagent named `''` — one that
+ * counted against the bound, could never be stopped (the empty string is not a
+ * legal name), and whose teardown recursed into an agent that does not exist,
+ * cancelling a live sibling's handle on the way. Requiring a non-empty inner
+ * name before the suffix distinguishes the two.
+ *
+ * A grandchild's driver matches the prefix as well, so an inner name that
+ * carries the infix is a level too deep and belongs to a child's own listing.
+ *
+ * @param {string[]} directory
+ * @param {string} parentName
+ * @returns {string[]}
+ */
+export const subagentNamesIn = (directory, parentName) => {
+  const childPrefix = `${parentName}${SUBAGENT_INFIX}`;
+  /** @type {string[]} */
+  const names = [];
+  for (const entry of directory) {
+    if (
+      typeof entry === 'string' &&
+      entry.startsWith(childPrefix) &&
+      entry.endsWith(DRIVER_SUFFIX)
+    ) {
+      const inner = entry.slice(childPrefix.length, -DRIVER_SUFFIX.length);
+      if (inner !== '' && !inner.includes(SUBAGENT_INFIX)) {
+        names.push(inner);
+      }
+    }
+  }
+  return names.sort();
+};
+harden(subagentNamesIn);
+
+/**
  * The pet name of the guest *agent* behind a handle name. `provideGuest(name,
  * { agentName })` binds the handle at `name` and the agent it fronts at
  * `agentName`; cancelling the agent is what actually releases the guest.
@@ -64,7 +102,12 @@ const profileNameFor = handleName => `profile-for-${handleName}`;
  * @param {string} [options.authSecretLocator] - `SecretBlob` holding the
  *   provider auth token. Absent when the deployment still carries a plaintext
  *   token in the provider config.
- * @param {string} [options.systemPrompt]
+ * @param {string} [options.systemPrompt] - Replaces the standing prompt. Only
+ *   the factory passes this: it acts with the authority of whoever set the
+ *   deployment up.
+ * @param {string} [options.delegatedPrompt] - *Appended* to the standing
+ *   prompt. This is what a parent model writes for its subagent, and it must
+ *   not be able to displace the instructions the deployment gave.
  * @param {boolean} [options.pin]
  * @returns {Promise<{ name: string, profileName: string, locator: string }>}
  */
@@ -79,16 +122,42 @@ export const provisionFaeAgent = async ({
   maxDepth,
   authSecretLocator,
   systemPrompt,
+  delegatedPrompt,
   pin = false,
 }) => {
   const profileName = profileNameFor(name);
   const driverResultName = `${name}${DRIVER_SUFFIX}`;
   const driverHandleName = `${driverResultName}${HANDLE_SUFFIX}`;
   const driverProfileName = profileNameFor(driverHandleName);
+  const spawnerResultName = `${name}${SPAWNER_SUFFIX}`;
+  const spawnerHandleName = `${spawnerResultName}${HANDLE_SUFFIX}`;
+  const spawnerProfileName = profileNameFor(spawnerHandleName);
+
+  // Every name this agent will own, checked before anything is created.
+  //
+  // `provideGuest` returns whatever a name already holds, of any formula type,
+  // and skips binding its `agentName` in that case — so a collision does not
+  // fail where it happens, it fails several steps later, and the rollback then
+  // removes a name this call never bound. Checking `name-driver` alone was not
+  // enough: `createAgent('secrets')` would have unbound the user's `secrets`
+  // directory, and a subagent whose host name lands on a sibling's driver
+  // caplet would have left that caplet running with no name to cancel it by.
+  const ownedNames = harden([
+    name,
+    profileName,
+    driverResultName,
+    driverHandleName,
+    driverProfileName,
+    spawnerResultName,
+    spawnerHandleName,
+    spawnerProfileName,
+  ]);
 
   await null;
-  !(await E(hostAgent).has(driverResultName)) ||
-    Fail`Agent ${q(name)} already exists`;
+  for (const owned of ownedNames) {
+    !(await E(hostAgent).has(owned)) ||
+      Fail`Cannot create agent ${q(name)}: the name ${q(owned)} is already taken`;
+  }
 
   const build = async () => {
     await null;
@@ -101,9 +170,6 @@ export const provisionFaeAgent = async ({
     /** @type {string | undefined} */
     let spawnerLocator;
     if (depth < maxDepth) {
-      const spawnerResultName = `${name}${SPAWNER_SUFFIX}`;
-      const spawnerHandleName = `${spawnerResultName}${HANDLE_SUFFIX}`;
-      const spawnerProfileName = profileNameFor(spawnerHandleName);
       const spawnerGuest = await E(hostAgent).provideGuest(spawnerHandleName, {
         agentName: spawnerProfileName,
       });
@@ -150,7 +216,10 @@ export const provisionFaeAgent = async ({
     await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
       powersName: driverProfileName,
       resultName: driverResultName,
-      env: harden({ FAE_SYSTEM_PROMPT: systemPrompt || '' }),
+      env: harden({
+        FAE_SYSTEM_PROMPT: systemPrompt || '',
+        FAE_SUBAGENT_PROMPT: delegatedPrompt || '',
+      }),
     });
 
     if (pin) {
@@ -172,7 +241,9 @@ export const provisionFaeAgent = async ({
     // Several formulations deep by the time a late step can fail. A spawner
     // caplet created before that failure is *running* and holds `host-agent` —
     // the authority to mint more agents — with nothing left naming it, so a
-    // half-built agent must be released rather than abandoned.
+    // half-built agent must be released rather than abandoned. Safe to release
+    // wholesale because the pre-check above established that every name it
+    // touches was free before this call.
     try {
       await releaseFaeAgent({ hostAgent, name });
     } catch (rollbackError) {
@@ -202,20 +273,10 @@ harden(provisionFaeAgent);
 export const releaseFaeAgent = async ({ hostAgent, name }) => {
   const names = await E(hostAgent).list();
   const directory = Array.isArray(names) ? names : [];
-  const childPrefix = `${name}${SUBAGENT_INFIX}`;
-  const children = directory.filter(
-    entry =>
-      typeof entry === 'string' &&
-      entry.startsWith(childPrefix) &&
-      entry.endsWith(DRIVER_SUFFIX) &&
-      !entry
-        .slice(childPrefix.length, -DRIVER_SUFFIX.length)
-        .includes(SUBAGENT_INFIX),
-  );
-  for (const child of children) {
+  for (const child of subagentNamesIn(directory, name)) {
     await releaseFaeAgent({
       hostAgent,
-      name: child.slice(0, -DRIVER_SUFFIX.length),
+      name: subagentAgentName(name, child),
     });
   }
 
@@ -226,6 +287,9 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
 
   /** @type {unknown[]} */
   const failures = [];
+  /** Names whose formula could not be cancelled, so must stay reachable. */
+  /** @type {Set<string>} */
+  const uncancelled = new Set();
   /** @param {string} capName */
   const cancelIfPresent = async capName => {
     try {
@@ -233,9 +297,10 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
         await E(hostAgent).cancel(capName);
       }
     } catch (error) {
-      // Keep going: a name left bound to a live formula is worse than a
-      // partial teardown, and the caller is told what failed at the end.
+      // Keep going: the rest of the tree still has to come down, and the
+      // caller is told what failed at the end.
       failures.push(error);
+      uncancelled.add(capName);
     }
   };
 
@@ -253,27 +318,38 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
     await cancelIfPresent(capletName);
   }
 
-  if (await E(hostAgent).has('@pins', driverResultName)) {
-    await E(hostAgent).remove('@pins', driverResultName);
-  }
-  for (const petName of [
-    driverResultName,
-    driverHandleName,
-    profileNameFor(driverHandleName),
-    spawnerResultName,
-    spawnerHandleName,
-    profileNameFor(spawnerHandleName),
-    name,
-    profileNameFor(name),
-  ]) {
-    if (await E(hostAgent).has(petName)) {
-      await E(hostAgent).remove(petName);
+  try {
+    if (await E(hostAgent).has('@pins', driverResultName)) {
+      await E(hostAgent).remove('@pins', driverResultName);
     }
+    for (const petName of [
+      driverResultName,
+      driverHandleName,
+      profileNameFor(driverHandleName),
+      spawnerResultName,
+      spawnerHandleName,
+      profileNameFor(spawnerHandleName),
+      name,
+      profileNameFor(name),
+    ]) {
+      // A name whose formula is still running is the only way back to it. Not
+      // every cancel failure means the formula survived, but some do — a
+      // rejection before the graph lock is taken cancels nothing — and a
+      // running spawner caplet holding `host-agent` with no name to reach it
+      // by is exactly the state this whole path exists to prevent. Leave the
+      // name and let the caller retry.
+      if (!uncancelled.has(petName) && (await E(hostAgent).has(petName))) {
+        await E(hostAgent).remove(petName);
+      }
+    }
+  } catch (error) {
+    // Report it alongside the cancel failures rather than in place of them.
+    failures.push(error);
   }
   if (failures.length > 0) {
     throw new AggregateError(
       failures,
-      `Releasing agent "${name}" could not cancel every formula it owned`,
+      `Releasing agent "${name}" did not complete; retry once the cause is cleared`,
     );
   }
 };
@@ -311,26 +387,13 @@ export const makeSubagentSpawner = ({
   maxDepth,
   maxSubagents = DEFAULT_MAX_SUBAGENTS,
 }) => {
-  const childPrefix = `${parentName}${SUBAGENT_INFIX}`;
-
   /**
    * @param {any} hostAgent
    * @returns {Promise<string[]>}
    */
   const listNames = async hostAgent => {
     const names = await E(hostAgent).list();
-    return (Array.isArray(names) ? names : [])
-      .filter(
-        entry =>
-          typeof entry === 'string' &&
-          entry.startsWith(childPrefix) &&
-          entry.endsWith(DRIVER_SUFFIX),
-      )
-      .map(entry =>
-        entry.slice(childPrefix.length, entry.length - DRIVER_SUFFIX.length),
-      )
-      .filter(entry => !entry.includes(SUBAGENT_INFIX))
-      .sort();
+    return subagentNamesIn(Array.isArray(names) ? names : [], parentName);
   };
 
   return makeExo('SubagentSpawner', SubagentSpawnerInterface, {
@@ -363,7 +426,7 @@ export const makeSubagentSpawner = ({
         depth,
         maxDepth,
         authSecretLocator,
-        systemPrompt,
+        delegatedPrompt: systemPrompt,
         // Subagents are working memory, not infrastructure: a daemon restart
         // should not resurrect a tree of them behind the user's back.
         pin: false,

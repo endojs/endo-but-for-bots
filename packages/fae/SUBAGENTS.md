@@ -86,9 +86,8 @@ Its tool set is projected once, in `getAgent`, before the session agent — and
 therefore the delegation registry — exists, so the backend's own tool loop sees
 only the Endo tools.
 Delegation is available to provider-backed sessions and to Fae agents.
-Closing that gap belongs with exposing a hosted backend through the Floot
-factory, which `packages/codex-sandbox/MERGE-BLOCKERS.md` records as
-unreviewed.
+Closing the gap means building the session's tool set once, where the
+delegation registry lives, and handing the same set to both paths.
 
 ### Bounds
 

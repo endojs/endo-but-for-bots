@@ -100,10 +100,23 @@ export const makeAccountOracle = ({
     };
     for (const section of SECTIONS) {
       if (observedSections[section]) {
-        out[section] = normalize[section]({
-          ...observedSections[section],
-          source: 'remembered',
-        });
+        try {
+          out[section] = normalize[section]({
+            ...observedSections[section],
+            source: 'remembered',
+          });
+        } catch (error) {
+          // Per section, so one snapshot written before a normalizer was
+          // tightened does not take the other two down with it — and, because
+          // this never throws, does not stop the journal being written and
+          // superseded. A stored section nothing can read is one nothing
+          // remembers.
+          console.error(
+            `[account-oracle] ${providerId}: stored ${section} is unreadable and will be replaced: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       }
     }
     return harden(out);
@@ -118,29 +131,37 @@ export const makeAccountOracle = ({
     if (!raw || typeof raw !== 'object') return harden({});
     /** @type {any} */
     const out = {};
-    // The stamps go *after* the payload, not before it. Spread first, a source
-    // that names its own `source` decides whether the oracle presents its
-    // figures as measured — a declared profile could claim `observed`, and an
-    // observed payload could disown itself — and `providerId` would be
+    // `source` and `providerId` are stamped *after* the payload. Spread first,
+    // a source that names its own `source` decides whether the oracle presents
+    // its figures as measured — a declared profile could claim `observed`, and
+    // an observed payload could disown itself — and `providerId` would be
     // whatever the payload said rather than the credential this oracle
-    // describes. Provenance is the oracle's to state, never the source's.
+    // describes. Whose reading this is, and how much to trust it, are the
+    // oracle's to state.
+    //
+    // `observedAt` is a default, not a stamp. *When* a figure was taken is
+    // something only the source knows: a backend that caches provider quota
+    // reports the instant it actually queried, and overwriting that with the
+    // local clock would present hour-old numbers as just measured — the same
+    // error as laundering `declared` into `observed`, pointed at the timestamp
+    // instead of the label.
     if (raw.plan) {
       out.plan = normalizeAccountPlan({
+        observedAt,
         ...raw.plan,
         providerId,
-        observedAt,
         source,
       });
     }
     if (raw.rateLimits) {
       out.rateLimits = normalizeRateLimits({
-        ...raw.rateLimits,
         observedAt,
+        ...raw.rateLimits,
         source,
       });
     }
     if (raw.rateCard) {
-      out.rateCard = normalizeRateCard({ ...raw.rateCard, observedAt, source });
+      out.rateCard = normalizeRateCard({ observedAt, ...raw.rateCard, source });
     }
     return harden(out);
   };
@@ -192,20 +213,9 @@ export const makeAccountOracle = ({
         );
       }
     }
-    /** @type {any} */
-    let remembered = {};
-    if (stored) {
-      try {
-        remembered = asRemembered(stored);
-      } catch (error) {
-        storedUnreadable = true;
-        console.error(
-          `[account-oracle] ${providerId}: stored snapshot malformed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
+    // `asRemembered` swallows a malformed section rather than throwing, so a
+    // bad stored snapshot never blocks the write that would replace it.
+    const remembered = stored ? asRemembered(stored) : {};
     const next = harden({
       plan:
         observed.plan ||
@@ -239,7 +249,14 @@ export const makeAccountOracle = ({
       const previouslyObserved = observedSectionsOf(stored);
       const record = {};
       for (const section of SECTIONS) {
-        const value = observed[section] || previouslyObserved[section];
+        // A section the provider did not answer this time keeps its previous
+        // reading *and its original `observedAt`*, so it reads as `remembered`
+        // with the instant it was actually taken. That is what lets a consumer
+        // judge a figure the provider has quietly stopped publishing: it does
+        // not expire, but it visibly ages.
+        const value =
+          observed[section] ||
+          (remembered[section] ? previouslyObserved[section] : undefined);
         if (value) record[section] = value;
       }
       if (SECTIONS.some(section => observed[section])) {

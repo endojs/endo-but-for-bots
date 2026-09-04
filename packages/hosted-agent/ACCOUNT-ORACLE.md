@@ -125,17 +125,15 @@ A provider-backed session whose factory has an oracle also gets an
 `accountStatus` tool, so the model can answer "how much quota is left?" and
 "what is this costing?" in the conversation where the user asked.
 
-Its presence changes `toolSetId`, so a hosted thread pinned without it cannot
-silently resume with it.
-
 A session on a *hosted backend* does not get it.
 Such a session runs the backend's own tool loop over a tool set projected once,
 in `getAgent`, before the session agent exists — so it carries the Endo tools
 and neither `accountStatus` nor the subagent tools.
 `getAccount(refresh?)` on the session facet answers the same questions to a UI
 either way.
-Closing that gap is part of exposing a hosted backend through the Floot factory,
-which `packages/codex-sandbox/MERGE-BLOCKERS.md` records as unreviewed.
+Closing the gap means building the session's tool set once, where the
+delegation registry lives, and handing the same set to both paths; until then
+the tool cannot appear in a hosted thread's `toolSetId` at all.
 
 ### Profile file
 

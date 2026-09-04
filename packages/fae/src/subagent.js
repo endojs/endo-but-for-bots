@@ -31,10 +31,13 @@ export const HANDLE_SUFFIX = '-handle';
 /**
  * Endings a subagent name may not have.
  *
- * Every formula an agent owns is named by appending one of these to the
- * agent's own name, so a subagent named `x-driver` would take the host name
- * sibling `x`'s driver already holds: `provideGuest` would collide with a live
- * caplet, and enumeration would report a driver as if it were an agent.
+ * `-driver` and `-spawner` are appended to an agent's own name, so a subagent
+ * named `x-driver` would take the host name sibling `x`'s driver caplet
+ * already holds, and enumeration would report a driver as if it were an agent.
+ * `-handle` is appended one level further in (to a driver or spawner result
+ * name) and so collides with nothing today; it is reserved because the naming
+ * scheme is derived by concatenation, and a name that reads like part of that
+ * scheme is one collision away from being part of it.
  */
 const reservedSubagentSuffixes = harden([
   DRIVER_SUFFIX,
@@ -138,6 +141,31 @@ export const messageText = message => {
 };
 harden(messageText);
 
+/**
+ * The standing instructions a subagent runs under.
+ *
+ * The parent *model* writes `delegatedPrompt`, and the subagent gets the same
+ * tools any agent of this harness gets — so substituting it for the standing
+ * prompt would let a model acquire its own capabilities under instructions it
+ * authored, which is a way around the deployment's instructions rather than a
+ * way to delegate. It is appended instead.
+ *
+ * @param {string} basePrompt
+ * @param {string} [delegatedPrompt]
+ * @returns {string}
+ */
+export const composeSubagentSystemPrompt = (basePrompt, delegatedPrompt) => {
+  if (!delegatedPrompt) return basePrompt;
+  return [
+    basePrompt,
+    '---',
+    'You are a subagent. Your parent agent gave you these standing ' +
+      'instructions, which do not replace anything above:',
+    `${delegatedPrompt}`,
+  ].join('\n\n');
+};
+harden(composeSubagentSystemPrompt);
+
 /** The authority a parent agent needs to acquire and release subagents. */
 export const SubagentSpawnerInterface = M.interface('SubagentSpawner', {
   spawn: M.callWhen(M.string()).optional(M.record()).returns(M.record()),
@@ -157,6 +185,8 @@ harden(SubagentSpawnerInterface);
  * @property {string | undefined} outboundId - `messageId` of the delegation,
  *   learned when the daemon echoes it into this agent's own mailbox.
  * @property {(answer: { text: string, number: bigint, edgeNames: string[] }) => void} settle
+ * @property {(reason: Error) => void} fail - Give up on this ask without
+ *   waiting out its timer, used when the mailbox that would answer it closes.
  * @property {boolean} settled - Whether a reply has already been delivered, so
  *   the ask's `finally` can tell "answered" from "gave up".
  */
@@ -201,6 +231,16 @@ export const makeSubagentDelegations = ({
    * @type {Set<string>}
    */
   const abandonedOutboundIds = new Set();
+
+  /**
+   * Set once the mailbox stream that feeds `claim` has ended.
+   *
+   * Nothing can settle an ask after that, so an ask made — or still pending —
+   * afterwards must fail at once rather than hold its turn, and the queue
+   * draining behind it, open for its whole timeout.
+   * @type {Error | undefined}
+   */
+  let closedReason;
 
   /** @param {string} outboundId */
   const abandon = outboundId => {
@@ -304,6 +344,7 @@ export const makeSubagentDelegations = ({
       Fail`Subagent timeout must be a whole number of seconds between ${q(MIN_ASK_TIMEOUT_SECONDS)} and ${q(MAX_ASK_TIMEOUT_SECONDS)}`;
     !pendingByName.has(name) ||
       Fail`Subagent ${q(name)} already has a question in flight`;
+    if (closedReason !== undefined) throw closedReason;
 
     /** @type {import('@endo/promise-kit').PromiseKit<{ text: string, number: bigint, edgeNames: string[] }>} */
     const answerKit = makePromiseKit();
@@ -317,6 +358,7 @@ export const makeSubagentDelegations = ({
       text: task,
       outboundId: undefined,
       settle: answerKit.resolve,
+      fail: answerKit.reject,
       settled: false,
     };
     // Claim the slot before the first `await`. Checked-then-awaited, two
@@ -373,7 +415,25 @@ export const makeSubagentDelegations = ({
     }
   };
 
-  return harden({ claim, ask });
+  /**
+   * Give up on every pending ask, and refuse any that follows.
+   *
+   * Called when the mailbox stream that feeds `claim` ends: from then on no
+   * reply can ever be observed, so an ask that kept waiting would hold its
+   * turn — and the loop draining behind it — open for its whole timeout.
+   *
+   * @param {Error} reason
+   */
+  const close = reason => {
+    closedReason = reason;
+    for (const delegation of [...pendingByName.values()]) {
+      forget(delegation);
+      delegation.fail(reason);
+    }
+    abandonedOutboundIds.clear();
+  };
+
+  return harden({ claim, ask, close });
 };
 harden(makeSubagentDelegations);
 

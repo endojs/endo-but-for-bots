@@ -3,7 +3,6 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { formatLocator } from '@endo/daemon/locator.js';
-import { makePromiseKit } from '@endo/promise-kit';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { spawnWorkerLoop } from '../agent.js';
@@ -47,31 +46,45 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   const push = message => {
     if (closed) return;
     const waiter = waiters.shift();
-    if (waiter) waiter({ value: message, done: false });
+    if (waiter) waiter(harden({ value: message, done: false }));
     else queue.push(message);
   };
   const close = () => {
     closed = true;
-    for (const waiter of waiters.splice(0))
-      waiter({ value: undefined, done: true });
+    for (const waiter of waiters.splice(0)) {
+      waiter(harden({ value: undefined, done: true }));
+    }
   };
 
-  async function* stream() {
-    for (;;) {
-      if (queue.length > 0) {
-        yield queue.shift();
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      if (closed) return;
-      const { promise, resolve } = makePromiseKit();
-      waiters.push(resolve);
-      // eslint-disable-next-line no-await-in-loop
-      const next = await promise;
-      if (next.done) return;
-      yield next.value;
-    }
-  }
+  // A hand-rolled iterator rather than an async generator: `return()` on a
+  // generator parked at an `await` does not complete until that await settles,
+  // so a consumer cancelling a stream that has gone quiet would hang. The
+  // daemon's reader can be closed while idle, and a stub that cannot would let
+  // a shutdown bug pass unnoticed here.
+  const stream = () => {
+    const settleWaiters = value => {
+      for (const waiter of waiters.splice(0)) waiter(value);
+    };
+    return harden({
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      async next() {
+        if (queue.length > 0) {
+          return harden({ value: queue.shift(), done: false });
+        }
+        if (closed) return harden({ value: undefined, done: true });
+        return new Promise(resolve => {
+          waiters.push(resolve);
+        });
+      },
+      async return() {
+        closed = true;
+        settleWaiters(harden({ value: undefined, done: true }));
+        return harden({ value: undefined, done: true });
+      },
+    });
+  };
 
   /**
    * Deliver an inbound message from another party.
@@ -173,10 +186,31 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
 };
 
 /** Timers that never fire, so a test asserts on the answer, not the deadline. */
-const inertTimers = harden({
-  setTimeout: () => 0,
-  clearTimeout: () => {},
-});
+const inertTimers = /** @type {any} */ (
+  harden({
+    setTimeout: () => 0,
+    clearTimeout: () => undefined,
+  })
+);
+
+/**
+ * Poll a predicate on a bounded schedule. Bounded rather than raced against a
+ * rejection timer: an uncleared rejection timer keeps the AVA worker alive
+ * until it fires, which is what made this file take ten seconds to run two
+ * sub-second tests.
+ *
+ * @param {() => boolean} predicate
+ */
+const until = async predicate => {
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    if (predicate()) return true;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => {
+      setTimeout(resolve, 5);
+    });
+  }
+  return false;
+};
 
 /**
  * @param {Array<(messages: any[]) => any>} rounds
@@ -251,27 +285,19 @@ test('a turn blocked on askSubagent still observes the reply', async t => {
     'test prompt',
     harden({ spawner: stubSpawner, timers: inertTimers }),
   );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
 
   mailbox.deliver({ from: locatorFor(HOST), strings: ['please delegate'] });
 
   // The agent replies to the host message once the ask has been answered.
-  await t.notThrowsAsync(
-    Promise.race([
-      (async () => {
-        for (;;) {
-          if (mailbox.sent.some(record => record.replyTo !== undefined)) return;
-          // eslint-disable-next-line no-await-in-loop
-          await new Promise(resolve => setTimeout(resolve, 5));
-        }
-      })(),
-      new Promise((_resolve, reject) => {
-        setTimeout(
-          () =>
-            reject(Error('askSubagent never resolved: the pump is blocked')),
-          10_000,
-        );
-      }),
-    ]),
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+    'askSubagent never resolved: the pump is blocked',
   );
 
   mailbox.close();
@@ -327,16 +353,61 @@ test('a claimed subagent reply is dismissed so a restart cannot replay it', asyn
     'test prompt',
     harden({ spawner: stubSpawner, timers: inertTimers }),
   );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
 
   mailbox.deliver({ from: locatorFor(HOST), strings: ['please delegate'] });
 
-  for (let attempt = 0; attempt < 2000; attempt += 1) {
-    if (mailbox.dismissed.length > 0) break;
-    // eslint-disable-next-line no-await-in-loop
-    await new Promise(resolve => setTimeout(resolve, 5));
-  }
+  t.true(await until(() => mailbox.dismissed.length > 0));
   mailbox.close();
   await loop;
 
   t.is(mailbox.dismissed.length, 1);
+});
+
+test('a backlog larger than any bound is answered, not declined', async t => {
+  const mailbox = makeLiveMailbox();
+  let turns = 0;
+  const provider = makeScriptedProvider([
+    () => {
+      turns += 1;
+      return harden({
+        message: { role: 'assistant', content: `ack ${turns}` },
+      });
+    },
+  ]);
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await loop;
+  });
+
+  // `followMessages` drains the whole live mailbox far faster than a model
+  // answers, so a bound on the queue would refuse the tail of any backlog —
+  // a restart with unread mail, say — even though the agent goes idle moments
+  // later. Twenty is past the bound this loop used to carry.
+  for (let index = 0; index < 20; index += 1) {
+    mailbox.deliver({
+      from: locatorFor(HOST),
+      strings: [`message ${index}`],
+    });
+  }
+
+  t.true(
+    await until(
+      () =>
+        mailbox.sent.filter(record => record.replyTo !== undefined).length ===
+        20,
+    ),
+    'every queued message must eventually be answered',
+  );
+  t.is(turns, 20);
 });
