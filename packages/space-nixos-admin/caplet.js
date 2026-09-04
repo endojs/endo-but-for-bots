@@ -202,6 +202,11 @@ harden(resolveWithin);
  * The configured base itself is trusted because it is supplied by the host
  * administrator and is commonly a stable deployment symlink.
  *
+ * EVERY path operation must pair the two, removal included. `O_NOFOLLOW`
+ * protects only the final component of a read or write, and `rm` resolves
+ * every component except the last, so a lexical check alone lets a captured
+ * entry under a tracked link unlink a file outside the checkout.
+ *
  * @param {string} baseDir
  * @param {string} target
  */
@@ -216,7 +221,13 @@ const assertNoSymlinkTraversal = async (baseDir, target) => {
       // eslint-disable-next-line no-await-in-loop
       info = await lstat(cursor);
     } catch (error) {
-      if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT') {
+      // ENOENT and ENOTDIR both prove nothing resolves below this component —
+      // it is missing, or it is a non-directory that cannot have children — so
+      // there is no link left to redirect the operation. Tolerating ENOTDIR is
+      // what lets the removal paths run this check at all: they must still
+      // treat a non-directory parent as proof the target is already absent.
+      const { code } = /** @type {NodeJS.ErrnoException} */ (error);
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
         return;
       }
       throw error;
@@ -2080,11 +2091,14 @@ export const make = async (_powers, _context, options = {}) => {
             for (let index = attempted - 1; index >= 0; index -= 1) {
               const { path, text } = previous[index];
               try {
-                const target =
-                  text === null
-                    ? resolveWithin(configDir, path)
-                    : // eslint-disable-next-line no-await-in-loop
-                      await resolveConfigPath(path);
+                // Removal is confined exactly like writing: `resolveWithin`
+                // is only lexical, so without the symlink check a captured
+                // `link//name` under a tracked symlink would unlink a file
+                // OUTSIDE the checkout. `rm` resolves every component but the
+                // last, so the final-component O_NOFOLLOW trick does not
+                // apply here.
+                // eslint-disable-next-line no-await-in-loop
+                const target = await resolveConfigPath(path);
                 if (text === null) {
                   try {
                     // eslint-disable-next-line no-await-in-loop
@@ -2170,11 +2184,9 @@ export const make = async (_powers, _context, options = {}) => {
           await null;
           const paths = [];
           for (const { path, text } of previous) {
-            const target =
-              text === null
-                ? resolveWithin(configDir, path)
-                : // eslint-disable-next-line no-await-in-loop
-                  await resolveConfigPath(path);
+            // Removal is confined exactly like writing; see stageFiles.
+            // eslint-disable-next-line no-await-in-loop
+            const target = await resolveConfigPath(path);
             if (text === null) {
               try {
                 // eslint-disable-next-line no-await-in-loop
