@@ -5,7 +5,10 @@ import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
 
-import { assertGitCredentialForUrl } from './git-credential.js';
+import {
+  assertGitCredentialForUrl,
+  gitCredentialFromMaterial,
+} from './git-credential.js';
 import {
   captureGitRefPattern,
   getGitRemotePullDestination,
@@ -132,18 +135,14 @@ export const makeGitRemoteEndpoint = ({
         /** @type {object} */ (credential),
         parsed.origin,
       );
-      const material = record.getMaterial();
-      if (record.kind === 'bearer' && 'token' in material) {
-        return harden({ kind: 'bearer', material });
+      const usable = gitCredentialFromMaterial(
+        record.kind,
+        record.getMaterial(),
+      );
+      if (usable === undefined) {
+        throw new Error('Git credential material is unavailable');
       }
-      if (
-        record.kind === 'basic' &&
-        'username' in material &&
-        'password' in material
-      ) {
-        return harden({ kind: 'basic', material });
-      }
-      throw new Error('Git credential material is unavailable');
+      return usable;
     }
     return undefined;
   };
@@ -190,17 +189,19 @@ export const makeGitRemoteEndpoint = ({
     if (!requiresCredential || credentialRecord === undefined) {
       return harden({ required: false });
     }
-    const record = assertGitCredentialForUrl(
-      /** @type {object} */ (credential),
-      parsed.origin,
-      { allowRevoked: true },
-    );
+    // `credentialRecord` is the record itself, not a snapshot of it: rotation
+    // and revocation mutate the state its accessors close over, so reading it
+    // here is reading the credential as of now.
     return harden({
       required: true,
-      kind: record.kind,
-      audience: record.audience,
-      available: !Object.hasOwn(record.getMaterial(), 'unavailable'),
-      revoked: record.isRevoked(),
+      kind: credentialRecord.kind,
+      audience: credentialRecord.audience,
+      available:
+        gitCredentialFromMaterial(
+          credentialRecord.kind,
+          credentialRecord.getMaterial(),
+        ) !== undefined,
+      revoked: credentialRecord.isRevoked(),
     });
   };
 

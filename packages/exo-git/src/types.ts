@@ -235,6 +235,13 @@ export type GitRemoteCredential =
  * without spending it. `required: false` is the whole record for a remote
  * that needs no credential; the remaining fields are present only when one
  * is required. Material is never included.
+ *
+ * `available` and `revoked` move together in every state the daemon can
+ * currently reach: revocation is what drops the material, rotation is what
+ * restores it, and a credential rebuilt after a daemon restart starts out
+ * revoked as well. So `revoked: true` reads as "unusable until rotated", not
+ * as "an operator deliberately revoked this" — this record says whether the
+ * credential works, never why it does not.
  */
 export type RemoteCredentialHealth =
   | { required: false }
