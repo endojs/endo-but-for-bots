@@ -90,3 +90,29 @@ test('strings round-trip multi-byte UTF-8', t => {
   const r = makeReader(w.finish());
   t.is(r.str(), '日本語/test');
 });
+
+// Draining a pipelined connection means parsing many frames out of one
+// backlog. When the parse result was `harden`ed, each call walked the whole
+// unconsumed remainder — a Buffer view, so `harden` enumerated every byte
+// index — making the drain quadratic in the backlog: 128 pipelined 64 KiB
+// writes fell from 2.5 MiB/s to 0.29 MiB/s as the pipeline depth grew.
+// Freezing the records instead is O(1) per frame; this budget is ~2 orders of
+// magnitude under the regressed cost and ~2 over the healthy one.
+test('draining a large backlog is not quadratic in the unconsumed bytes', t => {
+  t.timeout(5000);
+  const frames = 256;
+  const payload = Buffer.alloc(65_536, 0x61);
+  let buf = Buffer.concat(
+    Array.from({ length: frames }, (_, i) => wrapMessage(120, i, payload)),
+  );
+  let seen = 0;
+  for (;;) {
+    const parsed = tryParseMessage(buf);
+    if (!parsed) break;
+    buf = parsed.rest;
+    t.is(parsed.msg.payload.length, payload.length);
+    seen += 1;
+  }
+  t.is(seen, frames);
+  t.is(buf.length, 0);
+});
