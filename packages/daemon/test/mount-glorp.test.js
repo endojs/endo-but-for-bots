@@ -139,20 +139,20 @@ test('glorp clamps maxResults above the ceiling', async t => {
   t.true([...result].length <= 4, 'clamped cap does not over-collect');
 });
 
-test('glorp dispatches to a native search.glorpFiles when present', async t => {
+test('glorp dispatches to a native search.glorp when present', async t => {
   const { root } = buildMountFixture(t);
-  // A file powers object whose `search` carries a fused `glorpFiles` should be
+  // A file powers object whose `search` carries a fused `glorp` should be
   // used in preference to the JS composition; prove the seam is live by
   // recording the call and returning a sentinel batch.
   let called = false;
   const nativeSearch = harden({
     globPaths: () => {
-      throw Error('globPaths should not be called when glorpFiles is present');
+      throw Error('globPaths should not be called when glorp is present');
     },
     grepFiles: () => {
-      throw Error('grepFiles should not be called when glorpFiles is present');
+      throw Error('grepFiles should not be called when glorp is present');
     },
-    glorpFiles: async function* glorpFiles() {
+    glorp: async function* glorp() {
       called = true;
       yield harden([
         { file: 'synthetic.js', line: 1, text: 'native fused match' },
@@ -165,7 +165,7 @@ test('glorp dispatches to a native search.glorpFiles when present', async t => {
     filePowers: { ...filePowers, search: nativeSearch },
   });
   const result = await E(mount).glorp('**/*.js', 'export');
-  t.true(called, 'the native glorpFiles seam was consulted');
+  t.true(called, 'the native glorp seam was consulted');
   t.deepEqual(
     [...result],
     [{ file: 'synthetic.js', line: 1, text: 'native fused match' }],
