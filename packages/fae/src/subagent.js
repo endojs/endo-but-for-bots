@@ -18,10 +18,20 @@ export const SUBAGENT_DIRECTORY = 'subagents';
 
 /**
  * Infix that makes a subagent's names in the factory host derivable from its
- * parent's: agent `p`'s subagent `x` is the host agent `p-sub-x`. Enumeration
- * and teardown key on it, which is why a subagent name may not contain it.
+ * parent's: agent `p`'s subagent `x` is the host agent `p.sub.x`.
+ *
+ * The delimiter is a character an agent name may not contain, which is what
+ * makes the parse unambiguous. A hyphenated infix could not be: a name is
+ * allowed to contain hyphens, so `p-sub-` and `q-sub-` could produce the same
+ * host name from different parents — root agents `p` and `p-sub` both claimed
+ * `p-sub-sub-x`, and one could enumerate, count, and *tear down* the other's
+ * subagent. Every escape of that shape needs the delimiter to appear inside a
+ * name, and none can.
+ *
+ * A dot is a legal pet name character (`isValidName` bars only `/`, `@`, NUL,
+ * and the names `.` and `..`), and `agentNamePattern` bars it from a name.
  */
-export const SUBAGENT_INFIX = '-sub-';
+export const SUBAGENT_INFIX = '.sub.';
 
 /** Suffixes appended to an agent's name for the formulas it owns. */
 export const DRIVER_SUFFIX = '-driver';
@@ -46,11 +56,30 @@ const reservedSubagentSuffixes = harden([
 ]);
 
 /**
- * Subagent names become pet names in the parent's directory and a segment of
- * the child's names in the factory host, so they are restricted to a shape
- * that is unambiguous in both and never collides with a special name.
+ * Agent names become pet names in the host directory and segments of the
+ * derived names beneath them, so they are restricted to a shape that is
+ * unambiguous in both and never collides with a special name. In particular
+ * they carry no dot, which is what makes `SUBAGENT_INFIX` a delimiter rather
+ * than a substring anyone can forge.
  */
-const subagentNamePattern = /^[a-z][a-z0-9-]{0,31}$/;
+export const agentNamePattern = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * Assert the shape shared by every agent name, root or subagent.
+ *
+ * A root agent is named by whoever set the deployment up and a subagent by a
+ * model, but both land in one flat host namespace, so both must parse the same
+ * way.
+ *
+ * @param {unknown} name
+ * @returns {string}
+ */
+export const assertAgentName = name => {
+  (typeof name === 'string' && agentNamePattern.test(name)) ||
+    Fail`Agent name ${q(name)} must match ${q(agentNamePattern.source)}`;
+  return /** @type {string} */ (name);
+};
+harden(assertAgentName);
 
 const MIN_ASK_TIMEOUT_SECONDS = 1;
 const MAX_ASK_TIMEOUT_SECONDS = 3600;
@@ -72,16 +101,7 @@ const MAX_ABANDONED_ASKS = 32;
  * @returns {string}
  */
 export const assertSubagentName = name => {
-  (typeof name === 'string' && subagentNamePattern.test(name)) ||
-    Fail`Subagent name ${q(name)} must match ${q(subagentNamePattern.source)}`;
-  const text = /** @type {string} */ (name);
-  // `p`'s subagent `a-sub-b` would take the host name `p-sub-a-sub-b`, which
-  // is also what `p-sub-a`'s spawner would mint for its own subagent `b`. Both
-  // enumerations skip a name with an interior infix rather than report it
-  // under the wrong parent, so such an agent counts against no bound and no
-  // teardown reaches it.
-  !text.includes(SUBAGENT_INFIX) ||
-    Fail`Subagent name ${q(text)} must not contain ${q(SUBAGENT_INFIX)}, which names the parent-child relation`;
+  const text = assertAgentName(name);
   for (const suffix of reservedSubagentSuffixes) {
     !text.endsWith(suffix) ||
       Fail`Subagent name ${q(text)} must not end with ${q(suffix)}, which names a formula an agent owns`;
@@ -348,6 +368,11 @@ export const makeSubagentDelegations = ({
 
     /** @type {import('@endo/promise-kit').PromiseKit<{ text: string, number: bigint, edgeNames: string[] }>} */
     const answerKit = makePromiseKit();
+    // No handler is attached until the race below, two round trips away, and
+    // `close` can reject in that window. Mark the rejection observed now: the
+    // `ask` caller still sees it, but the host does not report a bogus
+    // unhandled rejection every time a shutdown races a delegation.
+    answerKit.promise.catch(() => undefined);
     /** @type {PendingDelegation} */
     const delegation = {
       name,
@@ -381,6 +406,13 @@ export const makeSubagentDelegations = ({
       throw error;
     }
     delegation.recipient = /** @type {string} */ (recipient);
+    // Re-checked after the await: closing during `locate` must not go on to
+    // send, or the subagent bills a model turn for a reply the closed registry
+    // can never observe.
+    if (closedReason !== undefined) {
+      forget(delegation);
+      throw closedReason;
+    }
 
     /** @type {any} */
     let timer;
@@ -428,6 +460,10 @@ export const makeSubagentDelegations = ({
     closedReason = reason;
     for (const delegation of [...pendingByName.values()]) {
       forget(delegation);
+      // Mark it settled before failing it: otherwise the `ask` unwinding a
+      // microtask later takes its "gave up" path and re-adds the very id the
+      // clear below removed.
+      delegation.settled = true;
       delegation.fail(reason);
     }
     abandonedOutboundIds.clear();

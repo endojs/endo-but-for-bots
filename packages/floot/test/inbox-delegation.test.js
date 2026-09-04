@@ -438,16 +438,42 @@ test('a completed turn is answered even if shutdown starts mid-drain', async t =
   // sender gets the answer. Only a turn shutdown aborted is left in the inbox,
   // and an aborted turn commits nothing, so replaying it duplicates nothing.
   await until(() => mailbox.sent.some(record => record.replyTo !== undefined));
-  const shutdown = agent.shutdown();
-  // The daemon ends the stream as the session goes away; a reader parked on a
-  // quiet source is not cancellable until it yields, so the stub must do the
-  // same thing the daemon does rather than pretend otherwise.
-  mailbox.close();
-  await shutdown;
+  await agent.shutdown();
 
   const replies = mailbox.sent.filter(record => record.replyTo !== undefined);
   t.true(replies.length >= 1);
   for (const reply of replies) {
     t.false(`${reply.strings.join('')}`.startsWith('Error:'));
   }
+});
+
+test('a session with a quiet inbox shuts down without waiting for it', async t => {
+  // The reader pump observes a close only *between* pulls, so once it is parked
+  // in the source's `next()` on a quiet mailbox, `inboxIterator.return()` never
+  // reaches the source. Shutdown must not depend on it: this test never closes
+  // the mailbox, and its timeout is well under the agent's own 30s.
+  t.timeout(10_000);
+  const mailbox = makeLiveMailbox();
+  const provider = makeScriptedProvider([
+    () =>
+      harden({
+        message: { role: 'assistant', content: 'ok' },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { provider },
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  agent.startInbox();
+  // Let the pump reach its parked read.
+  for (let tick = 0; tick < 50; tick += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await null;
+  }
+  await agent.shutdown();
+  t.pass();
 });

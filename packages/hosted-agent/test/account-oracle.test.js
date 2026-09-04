@@ -8,6 +8,7 @@ import { makeAccountOracle } from '../src/account-oracle.js';
 
 const T0 = '2026-09-04T12:00:00.000Z';
 const T1 = '2026-09-04T13:00:00.000Z';
+const TEARLIER = '2026-09-04T11:00:00.000Z';
 
 const declaredProfile = harden({
   plan: { planId: 'max', title: 'Max', state: 'active', seats: 1n },
@@ -392,7 +393,7 @@ test('a source cannot stamp its own provenance', async t => {
           seats: 1n,
           source: 'observed',
           providerId: 'somebody-else',
-          observedAt: T1,
+          observedAt: TEARLIER,
         },
       }),
     now: () => T0,
@@ -403,7 +404,61 @@ test('a source cannot stamp its own provenance', async t => {
   // `observedAt` is the source's to report, though: only it knows when the
   // figure was taken, and a backend that caches provider quota would otherwise
   // have hour-old numbers presented as measured just now.
-  t.is(plan.observedAt, T1);
+  t.is(plan.observedAt, TEARLIER);
+});
+
+test('a stamp that would make a stale figure look fresh is refused', async t => {
+  /** @param {any} reported */
+  const planWith = reported =>
+    makeAccountOracle({
+      providerId: 'anthropic',
+      provideObserved: async () =>
+        harden({
+          plan: {
+            planId: 'max',
+            title: 'Max',
+            state: 'active',
+            seats: 1n,
+            observedAt: reported,
+          },
+        }),
+      now: () => T0,
+    });
+  // A reading cannot have been taken after the moment it was read.
+  t.is((await E(planWith(T1)).getPlan()).observedAt, T0);
+  // Nor can it have been taken at a moment that is not one.
+  t.is((await E(planWith('Dec 25 3000')).getPlan()).observedAt, T0);
+  t.is((await E(planWith('')).getPlan()).observedAt, T0);
+  // A source that reports no instant at all gets the oracle's clock.
+  t.is((await E(planWith(undefined)).getPlan()).observedAt, T0);
+  // A real past instant is honoured, canonicalized.
+  t.is(
+    (await E(planWith('2026-09-04T11:00:00Z')).getPlan()).observedAt,
+    TEARLIER,
+  );
+});
+
+test('one unusable section does not discard the reading beside it', async t => {
+  const memory = makeMemoryJournal();
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    // `seats` must be a count; the plan cannot be projected. The rate limits
+    // beside it are perfectly good, and all-or-nothing projection threw them
+    // away — and with them the only thing worth journalling, so the journal
+    // stayed empty on every refresh.
+    provideObserved: async () =>
+      harden({
+        plan: { planId: 'max', state: 'active', seats: 'lots' },
+        rateLimits: { windows: [{ windowId: 'weekly', limit: 9n, used: 1n }] },
+      }),
+    journal: memory.journal,
+    now: () => T0,
+  });
+  const limits = await E(oracle).getRateLimits();
+  t.is(limits.source, 'observed');
+  t.is(limits.windows.length, 1);
+  t.is((await E(oracle).getPlan()).source, 'unavailable');
+  t.deepEqual(Object.keys(memory.peek()).sort(), ['rateLimits']);
 });
 
 test('the oracle clock supplies observedAt only when the source does not', async t => {

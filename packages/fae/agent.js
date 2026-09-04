@@ -32,6 +32,7 @@ import {
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
 import { runAgenticTurn } from './src/turn-engine.js';
 import {
+  assertAgentName,
   composeSubagentSystemPrompt,
   isSameFormula,
   makeSubagentDelegations,
@@ -46,6 +47,24 @@ import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
 const MAX_TOOL_ROUNDS = 32;
+
+/**
+ * Errors whose text this agent wrote itself, and may therefore mail back.
+ *
+ * A turn's failure is reported to whoever sent the message, and anyone holding
+ * a mail handle can send one. A provider's own error text answers a question
+ * they should not get to ask — "is this deployment's credential still live?" —
+ * in plain English: an expired key comes back as "authentication failed",
+ * a spent quota as the provider's 429 detail. Only text this module composed
+ * travels; everything else is logged and answered generically.
+ */
+const senderVisibleErrors = new WeakSet();
+
+/** @param {Error} error */
+const senderVisible = error => {
+  senderVisibleErrors.add(error);
+  return error;
+};
 
 const m = makeMarshal(undefined, undefined, {
   errorTagging: 'off',
@@ -240,7 +259,7 @@ export const spawnWorkerLoop = async (
           return roots[0].id;
         }
         // System prompt changed — start fresh
-        console.log(
+        console.error(
           '[fae] System prompt changed, creating fresh conversation tree',
         );
       }
@@ -519,10 +538,10 @@ export const spawnWorkerLoop = async (
         replyTo,
       } = message;
 
-      // Read the credential before anything else, and outside the try below
-      // whose catch mails the failure to the sender. A revoked or unreadable
-      // secret is a fact about this deployment, and any peer that can mail
-      // this agent would otherwise have a free oracle on it.
+      // Read the credential before anything else. A revoked or unreadable
+      // secret is a fact about this deployment that no peer should be able to
+      // read off a reply, so this failure — like a provider's — is answered
+      // generically and logged in full.
       try {
         turnProvider = await currentProvider();
       } catch (error) {
@@ -591,10 +610,12 @@ export const spawnWorkerLoop = async (
         const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
         lastLeafId = outcome.leafId;
         if (!outcome.answered) {
-          throw Error(
-            outcome.exhausted
-              ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
-              : 'FAE provider returned no assistant message',
+          throw senderVisible(
+            Error(
+              outcome.exhausted
+                ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
+                : 'FAE provider returned no assistant message',
+            ),
           );
         }
 
@@ -616,8 +637,17 @@ export const spawnWorkerLoop = async (
       } catch (error) {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
-        console.error('[fae] LLM error, notifying sender:', errorMessage);
-        await E(powers).reply(number, [errorMessage], [], []);
+        console.error('[fae] turn failed:', errorMessage);
+        await E(powers).reply(
+          number,
+          [
+            error instanceof Error && senderVisibleErrors.has(error)
+              ? errorMessage
+              : 'This agent could not complete that request. The reason is in its log.',
+          ],
+          [],
+          [],
+        );
       }
     };
 
@@ -682,98 +712,110 @@ export const spawnWorkerLoop = async (
     })();
 
     const messageIterator = iterateReader(E(powers).followMessages());
-    while (true) {
-      const nextMessage = messageIterator.next();
-      const raced = cancelledSignal
-        ? await Promise.race([
-            cancelledSignal,
-            nextMessage.then(result => ({ cancelled: false, result })),
-          ])
-        : { cancelled: false, result: await nextMessage };
-      if (raced.cancelled) {
-        // Queued turns are abandoned rather than awaited: cancellation must be
-        // prompt, and an in-flight provider call can take minutes.
-        stopping = true;
-        delegations.close(Error('Fae agent cancelled'));
-        wake();
-        try {
-          await messageIterator.return?.();
-        } catch {
-          // ignore iterator return errors on cancellation
+    // The tail below runs however this loop leaves — normally, by cancellation,
+    // or by a throw from the stream or from `dismiss`. Without it, a pump that
+    // died left the worker parked on a wake that would never come, holding
+    // every message it had already read and every ask waiting out its timeout.
+    try {
+      while (true) {
+        const nextMessage = messageIterator.next();
+        const raced = cancelledSignal
+          ? await Promise.race([
+              cancelledSignal,
+              nextMessage.then(result => ({ cancelled: false, result })),
+            ])
+          : { cancelled: false, result: await nextMessage };
+        if (raced.cancelled) {
+          // Queued turns are abandoned rather than drained: cancellation must
+          // be prompt, and an in-flight provider call can take minutes.
+          stopping = true;
+          try {
+            await messageIterator.return?.();
+          } catch {
+            // ignore iterator return errors on cancellation
+          }
+          return;
         }
-        return;
-      }
-      const { value: message, done } = raced.result;
-      if (done) {
-        break;
-      }
-      const {
-        from: fromId,
-        number,
-        done: messageDone = true,
-      } = /** @type {any} */ (message);
+        const { value: message, done } = raced.result;
+        if (done) {
+          break;
+        }
+        const {
+          from: fromId,
+          number,
+          done: messageDone = true,
+        } = /** @type {any} */ (message);
 
-      // Offer every message — including this agent's own outbound mail — to
-      // the delegation registry before any other routing. It learns a
-      // delegation's identity from the echo of the send and consumes the
-      // matching reply, which the awaiting `askSubagent` call returns instead.
-      const delegated = delegations.claim(message);
-      if (delegated.claimed) {
-        console.log(`[fae] Message #${number} answers a pending subagent ask`);
-        // Record it the way a handled message is recorded, so a later edit of
-        // the reply does not arrive as if it were a fresh request.
-        seenInboundNumbers.add(number);
-        // A claimed reply must not survive into the next incarnation: with no
-        // ask pending, a replayed reply becomes an ordinary request, this agent
-        // answers the subagent, and the subagent answers back — two models in
-        // an unbounded exchange. Its attachments were offered to the model in
-        // the ask's result, which is the last moment they can be adopted.
-        void E(powers)
-          .dismiss(number)
-          .catch(error => {
+        // Offer every message — including this agent's own outbound mail — to
+        // the delegation registry before any other routing. It learns a
+        // delegation's identity from the echo of the send and consumes the
+        // matching reply, which the awaiting `askSubagent` call returns
+        // instead.
+        const delegated = delegations.claim(message);
+        if (delegated.claimed) {
+          console.error(
+            `[fae] Message #${number} answers a pending subagent ask`,
+          );
+          // Record it the way a handled message is recorded, so a later edit of
+          // the reply does not arrive as if it were a fresh request.
+          seenInboundNumbers.add(number);
+          // A claimed reply must not survive into the next incarnation: with no
+          // ask pending, a replayed reply becomes an ordinary request, this
+          // agent answers the subagent, and the subagent answers back — two
+          // models in an unbounded exchange. Its attachments were offered to
+          // the model in the ask's result, which is the last moment they can be
+          // adopted.
+          void E(powers)
+            .dismiss(number)
+            .catch(error => {
+              console.error(
+                `[fae] could not dismiss claimed reply #${number}:`,
+                error instanceof Error ? error.message : String(error),
+              );
+            });
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+
+        if (!isSameFormula(fromId, selfLocator)) {
+          // Skip partial (in-flight) submissions: wait until the sender
+          // marks the message done before spinning up an LLM turn.
+          if (messageDone === false) {
             console.error(
-              `[fae] could not dismiss claimed reply #${number}:`,
-              error instanceof Error ? error.message : String(error),
+              `[fae] Message #${number} is not yet done; deferring until settled`,
             );
-          });
-        // eslint-disable-next-line no-continue
-        continue;
-      }
+            // eslint-disable-next-line no-continue
+            continue;
+          }
 
-      if (!isSameFormula(fromId, selfLocator)) {
-        // Skip partial (in-flight) submissions: wait until the sender
-        // marks the message done before spinning up an LLM turn.
-        if (messageDone === false) {
-          console.log(
-            `[fae] Message #${number} is not yet done; deferring until settled`,
-          );
-          // eslint-disable-next-line no-continue
-          continue;
+          // Re-emission of a previously-processed number means the sender
+          // edited a settled message.  Do not start a new turn; the
+          // history is available via the messageHistory tool.
+          if (seenInboundNumbers.has(number)) {
+            console.error(
+              `[fae] Message #${number} was edited after settlement; ` +
+                `not rerunning. Use messageHistory(${number}) for the prior text.`,
+            );
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          seenInboundNumbers.add(number);
+          enqueueTurn(message);
         }
-
-        // Re-emission of a previously-processed number means the sender
-        // edited a settled message.  Do not start a new turn; the
-        // history is available via the messageHistory tool.
-        if (seenInboundNumbers.has(number)) {
-          console.log(
-            `[fae] Message #${number} was edited after settlement; ` +
-              `not rerunning. Use messageHistory(${number}) for the prior text.`,
-          );
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        seenInboundNumbers.add(number);
-        enqueueTurn(message);
       }
+    } finally {
+      // Nothing can feed `claim` once this loop is out, so an ask that kept
+      // waiting would hold the queue open for its whole timeout — up to an
+      // hour — for a reply that can no longer arrive.
+      pumpEnded = true;
+      delegations.close(
+        Error(stopping ? 'Fae agent cancelled' : 'Fae agent mailbox closed'),
+      );
+      wake();
     }
 
-    // The stream ended of its own accord. Nothing can feed `claim` from here,
-    // so an ask that kept waiting would hold the queue open for its whole
-    // timeout — up to an hour — answering a reply that can no longer arrive.
-    pumpEnded = true;
-    delegations.close(Error('Fae agent mailbox closed'));
-    wake();
-    // Let the queue drain so a reply that was about to be sent is not dropped.
+    // The stream ended of its own accord: let the queue drain so a reply that
+    // was about to be sent is not dropped.
     await turnWorker;
   };
 
@@ -830,12 +872,12 @@ export const make = async (guestPowers, _context) => {
         /** @type {{ systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number }} */ (
           options
         );
-      // Subagent names are formed by infixing their parent's name, and
-      // teardown enumerates the tree by that infix. A root agent carrying it
-      // would make one tree indistinguishable from another.
-      if (name.includes('-sub-')) {
-        throw new Error(`Agent name "${name}" must not contain "-sub-".`);
-      }
+      // Root and subagent names land in one flat host namespace and must parse
+      // the same way. In particular a root name may carry no dot, which is
+      // what keeps `SUBAGENT_INFIX` a delimiter nobody can forge — two root
+      // agents `p` and `p-sub` would otherwise both claim `p-sub-sub-x`, and
+      // either could enumerate and tear down the other's subagent.
+      assertAgentName(name);
       const maxDepth =
         maxSubagentDepth === undefined
           ? DEFAULT_MAX_SUBAGENT_DEPTH

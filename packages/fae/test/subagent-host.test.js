@@ -159,13 +159,12 @@ test('a subagent may not take a name the enumeration keys on', async t => {
     maxDepth: 1,
   });
 
-  // `parent`'s subagent `a-sub-b` would be the host agent `parent-sub-a-sub-b`,
-  // which is also what `parent-sub-a`'s own spawner would mint for `b`. Both
-  // enumerations skip an interior infix, so it would count against no bound and
-  // no teardown would reach it.
-  await t.throwsAsync(spawner.spawn('a-sub-b'), {
-    message: /must not contain/,
+  // A name carrying the infix's delimiter would make one tree's host names
+  // indistinguishable from another's.
+  await t.throwsAsync(spawner.spawn('a.sub.b'), {
+    message: /must match/,
   });
+  await t.throwsAsync(spawner.spawn('has.dot'), { message: /must match/ });
   // `parent`'s subagent `x-driver` would be the host agent
   // `parent-sub-x-driver` — the name sibling `x`'s driver caplet already holds.
   await t.throwsAsync(spawner.spawn('x-driver'), {
@@ -178,7 +177,7 @@ test('a subagent may not take a name the enumeration keys on', async t => {
     message: /must not end with/,
   });
 
-  t.is(subagentAgentName('parent', 'helper'), 'parent-sub-helper');
+  t.is(subagentAgentName('parent', 'helper'), 'parent.sub.helper');
 });
 
 test('a subagent named "driver" is not enumerated as a phantom', t => {
@@ -189,20 +188,26 @@ test('a subagent named "driver" is not enumerated as a phantom', t => {
   // cancelling the live subagent's handle on the way.
   t.deepEqual(
     subagentNamesIn(
-      ['p-sub-driver', 'p-sub-driver-driver', 'p-sub-x-driver'],
+      ['p.sub.driver', 'p.sub.driver-driver', 'p.sub.x-driver'],
       'p',
     ),
     ['driver', 'x'],
   );
   // A grandchild's driver carries the prefix too, and belongs to its own
-  // parent's listing.
-  t.deepEqual(subagentNamesIn(['p-sub-x-sub-y-driver'], 'p'), []);
-  t.deepEqual(subagentNamesIn(['p-sub-x-sub-y-driver'], 'p-sub-x'), ['y']);
+  // parent's listing. The inner segment carries the infix, and an agent name
+  // may not contain the infix's delimiter.
+  t.deepEqual(subagentNamesIn(['p.sub.x.sub.y-driver'], 'p'), []);
+  t.deepEqual(subagentNamesIn(['p.sub.x.sub.y-driver'], 'p.sub.x'), ['y']);
   // Nothing that is not a driver is a subagent.
   t.deepEqual(
-    subagentNamesIn(['p-sub-x', 'p-sub-x-spawner', 'other'], 'p'),
+    subagentNamesIn(['p.sub.x', 'p.sub.x-spawner', 'other'], 'p'),
     [],
   );
+  // The delimiter is what makes the parse unambiguous. With a hyphenated
+  // infix, root agents `p` and `p-sub` both claimed `p-sub-sub-x-driver`, and
+  // `p` could enumerate — and tear down — `p-sub`'s subagent.
+  t.deepEqual(subagentNamesIn(['p-sub.sub.x-driver'], 'p'), []);
+  t.deepEqual(subagentNamesIn(['p-sub.sub.x-driver'], 'p-sub'), ['x']);
 });
 
 test('provisioning refuses a name that would take one already in use', async t => {
