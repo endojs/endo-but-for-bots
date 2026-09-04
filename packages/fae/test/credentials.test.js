@@ -177,3 +177,18 @@ test('provideAuthSecret refuses a name the catalog does not administer', async t
     { message: /does not administer/ },
   );
 });
+
+test('a payload that is not UTF-8 text is refused rather than mangled', async t => {
+  // 0xC3 starts a two-byte sequence that never arrives.
+  const truncated = Far('SecretBlob', {
+    readBase64: async () => encodeBase64(new Uint8Array([0x73, 0x6b, 0xc3])),
+  });
+  await t.throwsAsync(readAuthToken(truncated), {
+    message: /does not hold UTF-8 text/,
+  });
+});
+
+test('a token with non-ASCII characters survives the round trip', async t => {
+  const token = 'sk-café-\u{1F511}';
+  t.is(await readAuthToken(makeBlob(encodeAuthToken(token))), token);
+});

@@ -86,8 +86,15 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
    * @param {string} options.replyTo
    * @param {string} options.text
    * @param {string[]} [options.edgeNames]
+   * @param {boolean} [options.done]
    */
-  const deliverReply = ({ from, replyTo, text, edgeNames = [] }) => {
+  const deliverReply = ({
+    from,
+    replyTo,
+    text,
+    edgeNames = [],
+    done = true,
+  }) => {
     const message = harden({
       type: 'package',
       from,
@@ -97,6 +104,7 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
       messageId: `in-${nextNumber}`,
       replyTo,
       number: nextNumber,
+      done,
     });
     nextNumber += 1n;
     stream.push(message);
@@ -428,4 +436,43 @@ test('every subagent tool advertises a well-formed schema', t => {
     t.is(schema.function.parameters.type, 'object');
     t.true(typeof tool.help() === 'string');
   }
+});
+
+test('a partial reply is left alone until the sender settles it', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagents/helper': locatorFor(CHILD) },
+  });
+  const { timers } = makeManualTimers();
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+  });
+  const answerP = delegations.ask({
+    name: 'helper',
+    task: 'think out loud',
+    timeoutSeconds: 30,
+  });
+  await mailbox.whenSent();
+  delegations.claim(mailbox.stream[0]);
+
+  // The subagent reveals its answer progressively. Settling the ask on the
+  // placeholder would hand the model "Thinking…" as the subagent's answer.
+  const partial = mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-1',
+    text: 'Thinking…',
+    done: false,
+  });
+  t.deepEqual(delegations.claim(partial), {
+    claimed: false,
+    dismissable: false,
+  });
+
+  const settled = mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-1',
+    text: 'here is the answer',
+  });
+  t.deepEqual(delegations.claim(settled), { claimed: true, dismissable: true });
+  t.is((await answerP).text, 'here is the answer');
 });

@@ -157,6 +157,11 @@ export const makeSubagentDelegations = ({
   const claim = message => {
     const unclaimed = harden({ claimed: false, dismissable: false });
     if (!message || message.type !== 'package') return unclaimed;
+    // A sender may reveal a message progressively, settling it later with
+    // `editMessage`. Claiming a partial would answer the ask with a
+    // "Thinking..." placeholder, so wait for the settled revision — which the
+    // daemon re-emits under the same number.
+    if (message.done === false) return unclaimed;
     const { from, to, replyTo, messageId, number, names } = message;
 
     // The echo of our own delegation, which teaches us its messageId.
