@@ -1,0 +1,22 @@
+[package]
+name = "endor-git"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+git2 = { version = "=0.21.0", default-features = false, features = ["vendored-libgit2", "unstable-sha256", "zlib-ng-compat"] }
+libc = "0.2"
+libgit2-sys = { version = "=0.18.8", features = ["unstable-sha256", "vendored", "zlib-ng-compat"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+
+[[bin]]
+name = "endor-git-probe"
+path = "src/bin/endor-git-probe.rs"
