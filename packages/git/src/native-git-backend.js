@@ -5,7 +5,12 @@ import { Buffer } from 'node:buffer';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import process from 'node:process';
-import { setTimeout, clearTimeout } from 'node:timers';
+import {
+  setTimeout,
+  clearTimeout,
+  setInterval,
+  clearInterval,
+} from 'node:timers';
 import fs from 'node:fs';
 import path from 'node:path';
 import { URL, fileURLToPath } from 'node:url';
@@ -1318,6 +1323,9 @@ harden(assertWorktreeDestinationConfined);
  *   git formula instantiator pulled from the mount's backing.
  * @param {{ authorName: string, authorEmail: string, committerName?: string,
  *   committerEmail?: string }} [args.identity]
+ * @param {number} [args.rootPollIntervalMs] Poll interval for the backend's
+ *   root-watcher seam. The seam can adopt native notifications later without
+ *   changing `@endo/exo-git`'s follower.
  *   Formula-owned commit-identity policy captured at construction.  When
  *   supplied, every mutating invocation attributes its author and committer
  *   to this identity; the optional `committerName` / `committerEmail` default
@@ -1325,7 +1333,14 @@ harden(assertWorktreeDestinationConfined);
  *   default `Endo <endo@invalid.local>`.  The guest never reaches this value.
  * @returns {GitBackend}
  */
-export const makeNativeGitBackend = ({ repoRoot, identity }) => {
+export const makeNativeGitBackend = ({
+  repoRoot,
+  identity,
+  rootPollIntervalMs = 250,
+}) => {
+  if (!Number.isInteger(rootPollIntervalMs) || rootPollIntervalMs <= 0) {
+    throw new Error('rootPollIntervalMs must be a positive integer');
+  }
   const identityEnvOverrides = commitIdentityEnvOverrides(identity);
   /** @type {Promise<void> | undefined} */
   let rootVerification;
@@ -1775,6 +1790,101 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
     await removeCreatedWorktree(destination);
   };
   harden(worktreeRemove);
+
+  /**
+   * Resolve HEAD to the commit and complete-tree identities exposed by the
+   * public root follower. An unborn repository has no published commit.
+   *
+   * @returns {Promise<{ commitOid: string, treeOid: string, treeAlgorithm: string } | null>}
+   */
+  const resolveRoot = async () => {
+    let commitOid;
+    try {
+      commitOid = (
+        await runGitRaw([
+          'rev-parse',
+          '--verify',
+          '--quiet',
+          '--end-of-options',
+          'HEAD^{commit}',
+        ])
+      ).trim();
+    } catch (caughtError) {
+      const error = /** @type {Error} */ (caughtError);
+      if (/exit 1/u.test(error.message)) return null;
+      throw error;
+    }
+    const treeOid = (
+      await runGitRaw([
+        'rev-parse',
+        '--verify',
+        '--end-of-options',
+        `${commitOid}^{tree}`,
+      ])
+    ).trim();
+    const objectFormat = (
+      await runGitRaw(['rev-parse', '--show-object-format'])
+    ).trim();
+    return harden({
+      commitOid,
+      treeOid,
+      treeAlgorithm: `git-${objectFormat}-tree`,
+    });
+  };
+  harden(resolveRoot);
+
+  /**
+   * Produce every fast-forward commit between two observed roots. A
+   * replacement that is not a descendant is one explicit root replacement.
+   *
+   * @param {{ commitOid: string, treeOid: string, treeAlgorithm: string } | null} previous
+   * @param {{ commitOid: string, treeOid: string, treeAlgorithm: string } | null} current
+   */
+  const rootAdvancements = async (previous, current) => {
+    if (current === null) return harden([null]);
+    if (previous !== null) {
+      try {
+        await runGitRaw([
+          'merge-base',
+          '--is-ancestor',
+          previous.commitOid,
+          current.commitOid,
+        ]);
+      } catch {
+        return harden([current]);
+      }
+    }
+    const commits = (
+      await runGitRaw([
+        'rev-list',
+        '--reverse',
+        ...(previous === null
+          ? [current.commitOid]
+          : [`${previous.commitOid}..${current.commitOid}`]),
+      ])
+    )
+      .trim()
+      .split('\n')
+      .filter(Boolean);
+    const positions = await Promise.all(
+      commits.map(async commitOid => {
+        const treeOid = (
+          await runGitRaw([
+            'rev-parse',
+            '--verify',
+            '--end-of-options',
+            `${commitOid}^{tree}`,
+          ])
+        ).trim();
+        return harden({
+          commitOid,
+          treeOid,
+          treeAlgorithm: current.treeAlgorithm,
+        });
+      }),
+    );
+    return harden(positions);
+  };
 
   /**
    * Run a sanitized git invocation with GIT_ASKPASS connected to an inherited
@@ -3488,6 +3598,49 @@ export const makeNativeGitBackend = ({ repoRoot, identity }) => {
         treeOid,
         ...(commitOid !== undefined ? { commitOid } : {}),
       });
+    },
+
+    resolveRoot,
+
+    async *followRoot({ cancelled, after }) {
+      let previous = after;
+      let stopped = false;
+      /** @type {(() => void) | undefined} */
+      let wake;
+      const timer = setInterval(() => {
+        wake?.();
+        wake = undefined;
+      }, rootPollIntervalMs);
+      cancelled.catch(() => {
+        stopped = true;
+        clearInterval(timer);
+        wake?.();
+      });
+      try {
+        while (!stopped) {
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(resolve => {
+            wake = () => resolve(undefined);
+          });
+          if (!stopped) {
+            // eslint-disable-next-line no-await-in-loop
+            const current = await resolveRoot();
+            if (previous?.commitOid !== current?.commitOid) {
+              // eslint-disable-next-line no-await-in-loop
+              const advancements = await rootAdvancements(previous, current);
+              for (const advancement of advancements) {
+                yield advancement;
+              }
+            }
+            previous = current;
+          }
+        }
+      } finally {
+        clearInterval(timer);
+        if (wake !== undefined) {
+          wake();
+        }
+      }
     },
 
     /**

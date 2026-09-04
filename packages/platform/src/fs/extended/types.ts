@@ -18,6 +18,15 @@ import type {
 export type { ERef };
 export type { PassableBytesReader, PassableBytesWriter, PassableReader };
 
+/**
+ * Portable identity for a complete immutable filesystem tree. The algorithm
+ * names both the digest and the tree encoding it covers.
+ */
+export type TreeRef = {
+  algorithm: string;
+  hash: string;
+};
+
 /** The kind of a filesystem node. */
 export type NodeKind = 'file' | 'directory';
 

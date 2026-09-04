@@ -2110,12 +2110,15 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
     "@endo/helpdown": "workspace:^"
     "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/pubsub": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@fast-check/ava": "catalog:dev"
@@ -3172,7 +3175,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/pubsub@workspace:packages/pubsub":
+"@endo/pubsub@workspace:^, @endo/pubsub@workspace:packages/pubsub":
   version: 0.0.0-use.local
   resolution: "@endo/pubsub@workspace:packages/pubsub"
   dependencies:

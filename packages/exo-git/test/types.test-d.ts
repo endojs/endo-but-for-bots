@@ -37,6 +37,8 @@ import type {
   GitRemoteOperationSuccessAuditEvent,
   GitRemotePolicyAuditEvent,
   GitRestoreOptions,
+  GitRootChange,
+  GitRootSnapshot,
   GitStashPushOptions,
   GitStatusEntry,
   GitStatusOptions,
@@ -50,6 +52,7 @@ import type {
   NormalizedRemotePolicy,
   PathEntry,
   PathEntryIssuer,
+  PassableReader,
   ReadableBlob,
   ReadableTree,
   ReadOnlyEndoGit,
@@ -258,6 +261,16 @@ expectTypeOf<
   Awaited<ReturnType<ReadOnlyEndoGit['worktree']>>
 >().toEqualTypeOf<ReadOnlyGitWorktree>();
 expectTypeOf<WritableGitWorktree>().toExtend<PathEntryIssuer>();
+
+expectTypeOf<
+  Awaited<ReturnType<ReadOnlyEndoGit['followRootChanges']>>
+>().toEqualTypeOf<PassableReader<GitRootChange, undefined>>();
+expectTypeOf<
+  Awaited<ReturnType<ReadOnlyEndoGit['followLatestRoot']>>
+>().toEqualTypeOf<PassableReader<GitRootSnapshot, undefined>>();
+expectTypeOf<
+  NonNullable<Parameters<ReadOnlyEndoGit['followRootChanges']>[0]>
+>().toEqualTypeOf<{ cancelled?: Promise<never> }>();
 
 expectTypeOf<
   Awaited<ReturnType<ReadOnlyEndoGit['worktreeList']>>
