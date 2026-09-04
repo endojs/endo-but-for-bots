@@ -21,10 +21,17 @@ rules.
 Terms of art this design leans on: **ERTP** (Electronic Rights Transfer
 Protocol) is Agoric's asset-issuance library, the primary consumer this contract
 serves; **SwingSet** is Agoric's deterministic vat runtime; a **vat** is a unit
-of that runtime with its own durable heap; **baggage** is the per-vat durable
-root store SwingSet hands a contract on each incarnation; a **vatstore key** is
-the string under which SwingSet persists a durable object. These are the host
-runtime internals the portable contract deliberately keeps out of its core.
+of that runtime with its own durable heap; an **incarnation** is one run of a vat
+between upgrades — durable state carries across incarnations, heap state does not;
+**baggage** is the per-vat durable root store SwingSet hands a contract on each
+incarnation; a **vatstore key** is the string under which SwingSet persists a
+durable object; an **exo** is an exposed (remotable) object minted from an
+interface guard and a set of methods (this repo's `@endo/exo` makes them); a
+**kind** is the reusable definition an exo instance is made from, and a *durable*
+kind must be re-defined at the start of every incarnation. SwingSet, vat,
+baggage, and vatstore key are host runtime internals the portable contract
+deliberately keeps out of its core; exo, kind, and incarnation are the vocabulary
+the contract itself uses.
 
 This design **back-ports** the portable contract as `@endo/zone`: it extracts
 the reusable shape *out of* the downstream `@agoric/zone` package (which lives in
@@ -36,7 +43,19 @@ implementation and not a replacement for SwingSet's durable storage.
 
 ## Design
 
+The work lands in four phases, referenced by number throughout this section:
+**Phase 1** the portable core and heap Zone; **Phase 2** an Agoric compatibility
+adapter (a cross-org proposal, may be declined); **Phase 3** the Endo daemon
+durable adapter; **Phase 4** ERTP adoption. Full detail is under
+[Phased Implementation](#phased-implementation) below.
+
 ### A portable allocation contract
+
+A **Zone** is a namespace-scoped allocator: it hands out exos, stores, and
+sub-zones under stable names, and remembers which names it has already used so an
+allocation happens at most once per name. It is a synchronous, **intra-worker**
+construct — every method returns its value directly, and a Zone is used only
+within the worker that holds it, never as a remote reference reached with `E()`.
 
 `@endo/zone` exports the `Zone` and store-provider types, `makeHeapZone`, the
 `makeOnce` machinery, and promise-watcher helpers. A Zone groups compatible
@@ -69,11 +88,15 @@ consumer that receives a sub-zone, so hardening is part of the contract, not an
 implementation nicety.
 
 A Zone and its sub-zones are `Passable` remotables: `isStorable(subZone)` holds,
-and a sub-zone survives the marshal boundary Phase 3's daemon host puts between
-every consumer-facing value. Passing a sub-zone therefore gives a consumer a
-separate label namespace rather than access to its parent store — the isolation
-claim below relies on this, so it is stated here rather than left to the
-implementation.
+so a sub-zone can be handed to other code **within the same worker** — the
+synchronous surface above means a sub-zone is used locally, not marshalled across
+a boundary and reached with `E()`. Handing a consumer a sub-zone therefore gives
+it a separate label namespace rather than access to its parent store — the
+isolation claim below relies on this local-handoff property, so it is stated here
+rather than left to the implementation. (This is why the daemon durable adapter of
+Phase 3 runs *in the consumer's worker* and presents a synchronous surface over a
+resolved local view of its durable stores, rather than exposing the daemon's
+marshalled store directly; see Phase 3.)
 
 `makeHeapZone(baseLabel?)` is the first concrete implementation. It uses
 `@endo/exo` and Endo-owned in-memory collection implementations with the
@@ -133,7 +156,7 @@ entries and do not collide. The state machine on a call:
 1. **Revival.** If the backing map already holds a value under the key (restart
    or upgrade), return it *and mark the key **used*** in the same step. The maker
    does not run on this path, so marking on the maker's success alone would leave
-   a revived key unmarked and let a second `makeOnce(sameKey, …)` in the revived
+   a revived key unmarked and let a second `makeOnce(sameKey, ...)` in the revived
    incarnation succeed silently — the exact duplicate this boundary exists to
    catch. Duplicate detection must hold on every path that yields a value, so the
    revival path marks the key too.
@@ -149,8 +172,8 @@ entries and do not collide. The state machine on a call:
 
 Retry after a released key is guaranteed **only for makers that allocate nothing
 in the Zone and leave no persisted effect**. A maker that itself calls
-`exoClass`/`mapStore`/`subZone` (the shape of the example at
-[the top of this section](#a-portable-allocation-contract)) has already marked
+`exoClass`/`mapStore`/`subZone` (the shape of the example under
+[A portable allocation contract](#a-portable-allocation-contract)) has already marked
 *those inner keys* **used** before it threw, and under a durable adapter it may
 have already reserved a durable kind handle in the backing store that the caught
 throw does not unwind; retrying then collides on the inner key or orphans the
@@ -171,12 +194,12 @@ incarnation boundary by constructing a **second Zone over a pre-populated backin
 map** rather than restarting anything. Revival returns the stored value as-is; it
 does **not** re-validate the value against the current maker's kind or interface
 guard, so key-space integrity (below) is the sole defense against a stale or
-mis-scoped value being cashed at a name — an adapter that needs revalidation adds
+mis-scoped value being cached under a name — an adapter that needs revalidation adds
 it, and the design says plainly that the core does not.
 
 The core package owns only category-to-key policy: classes and class kits use a
 stable kind key; singleton exos reserve both that kind key and a singleton key;
-stores and sub-zones reserve their labels. The parent→child label derivation is
+stores and sub-zones reserve their labels. The parent->child label derivation is
 **injective**: labels are drawn from a restricted alphabet that excludes the
 scope separator (or are length-prefixed), so `subZone('a').mapStore('b/c')`
 cannot alias `subZone('a/b').mapStore('c')` and no child label can reconstruct a
@@ -213,7 +236,7 @@ provider never gets the chance to persist it, so a buggy or lax adapter cannot
 satisfy the property by construction. This makes "may not be a named system of
 record" a checkable property of the store rather than a convention a reviewer
 must police. The negative test — "an adapter tries to register a `detached()`
-store as a named store or `makeOnce` result → core rejects it" — is a Phase-1
+store as a named store or `makeOnce` result -> core rejects it" — is a Phase-1
 scenario.
 
 ## Design Regrets and Constraints
@@ -271,14 +294,30 @@ heap implementation.
    Phase 2 landing upstream. See the Open Questions for the acceptance risk.
 3. **Daemon durable adapter.** Once the daemon MapStore phases provide the
    required strong and weak operations, implement its Zone adapter over the
-   formula/SQLite substrate. Test restart and collection-retention behavior
-   through the Zone surface, not by inspecting tables.
+   formula/SQLite substrate. The daemon's persistent-store surface is
+   asynchronous — `M.callWhen(...)` to a marshalled far reference
+   ([persistent stores](../packages/daemon/designs/daemon-persistent-stores.md)) —
+   while the Zone surface is synchronous, so the adapter **runs in the consumer's
+   worker** and bridges the two: it holds a resolved in-worker view of the stores
+   it has opened and writes through to the async daemon substrate, so a `mapStore`
+   read or a `makeOnce` revival answers synchronously from the local view while
+   persistence lands on the daemon. Eager revival (below) populates that view at
+   incarnation start, which is exactly when the durable-kind re-definition the
+   adapter owes SwingSet-style hosts must run. Test restart and
+   collection-retention behavior through the Zone surface, not by inspecting
+   tables. The prerequisite daemon MapStore work is **Status: Not Started** today,
+   so this phase is gated on it (see the exit criterion in Phase 4).
 4. **ERTP adoption.** Make `@endo/ertp` accept a Zone, use a heap Zone for its
-   initial kit, and add durable-kit tests against the adapters that landed.
-   Because Phase 2 may be declined (above), Phase 4's **runnable exit criterion**
-   is the two-Zone case — heap plus the daemon durable adapter — which this
-   repository can land on its own; the Agoric adapter is added to the matrix only
-   if Phase 2 lands upstream. `@endo/ertp` does not import either adapter.
+   initial kit, and add durable-kit tests against the adapters that landed. The
+   **runnable exit criterion this repository can land on its own today is
+   heap-only**: the daemon durable adapter of Phase 3 is gated on the
+   `daemon-persistent-stores` work, which is **Not Started**, so heap is the only
+   Zone reachable without a prerequisite landing first. As the daemon adapter
+   lands, the matrix widens to heap-plus-daemon; the Agoric adapter is added only
+   if Phase 2 lands upstream. An adapter may declare a Zone surface subset it does
+   not yet support, so ERTP's conformance run against it skips the unsupported
+   properties rather than blocking the whole matrix. `@endo/ertp` does not import
+   any adapter.
 
 ## Testing Considerations
 
