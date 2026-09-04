@@ -233,6 +233,19 @@ It must not change the system profile or run activation scripts.
 `switch` creates an auditable Git commit using the request's `message`, builds
 the content bound by `configFingerprint`, activates it, and checks
 installation-defined health criteria.
+
+The commit must record the SAME file set the digest covers.
+`.gitignore` is an ordinary editable file in the checkout — `resolveWithin`
+refuses only `.git` itself — so a caller can stage a file and, in the same
+batch, an ignore rule that hides it.
+A service that commits with a plain `git add -A` would then build the
+fingerprinted worktree while committing a tree that omits those files: the
+audit record would not describe what was activated, and the git-based checkout
+restore that `switch` performs on a failed health check would restore
+something that was never built.
+Stage the fingerprinted set explicitly (`git add -f` over the walked entries)
+and refuse the operation if the resulting tree does not reproduce
+`configFingerprint`.
 Health criteria should be explicit NixOS options, such as required systemd
 units or a fixed local command, rather than an Endo-specific gateway.
 Record the last generation that passed those checks.
