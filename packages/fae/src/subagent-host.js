@@ -13,6 +13,7 @@ import {
   SPAWNER_SUFFIX,
   SUBAGENT_INFIX,
   SubagentSpawnerInterface,
+  agentNamePattern,
   assertSubagentName,
 } from './subagent.js';
 
@@ -39,15 +40,16 @@ harden(subagentAgentName);
  * The direct subagents of `parentName` visible in a host directory listing.
  *
  * Matching is anchored rather than `startsWith`/`endsWith`: an agent's *handle*
- * is `p-sub-X`, and if X is itself `driver` that handle ends in `-driver` too.
+ * is `p.sub.X`, and if X is itself `driver` that handle ends in `-driver` too.
  * A suffix test therefore reported a phantom subagent named `''` — one that
  * counted against the bound, could never be stopped (the empty string is not a
  * legal name), and whose teardown recursed into an agent that does not exist,
- * cancelling a live sibling's handle on the way. Requiring a non-empty inner
- * name before the suffix distinguishes the two.
+ * cancelling a live sibling's handle on the way. Requiring an inner name that
+ * is itself a legal agent name distinguishes the two.
  *
- * A grandchild's driver matches the prefix as well, so an inner name that
- * carries the infix is a level too deep and belongs to a child's own listing.
+ * A grandchild's driver matches the prefix as well; its inner segment carries
+ * the infix, and since an agent name may not contain the infix's delimiter,
+ * `agentNamePattern` rejects it. That is the whole of the depth check.
  *
  * @param {string[]} directory
  * @param {string} parentName
@@ -64,7 +66,7 @@ export const subagentNamesIn = (directory, parentName) => {
       entry.endsWith(DRIVER_SUFFIX)
     ) {
       const inner = entry.slice(childPrefix.length, -DRIVER_SUFFIX.length);
-      if (inner !== '' && !inner.includes(SUBAGENT_INFIX)) {
+      if (agentNamePattern.test(inner)) {
         names.push(inner);
       }
     }
@@ -143,20 +145,25 @@ export const provisionFaeAgent = async ({
   // directory, and a subagent whose host name lands on a sibling's driver
   // caplet would have left that caplet running with no name to cancel it by.
   const ownedNames = harden([
-    name,
-    profileName,
-    driverResultName,
-    driverHandleName,
-    driverProfileName,
-    spawnerResultName,
-    spawnerHandleName,
-    spawnerProfileName,
+    [name],
+    [profileName],
+    [driverResultName],
+    [driverHandleName],
+    [driverProfileName],
+    [spawnerResultName],
+    [spawnerHandleName],
+    [spawnerProfileName],
+    // Release removes this whether or not this call pinned anything, so an
+    // operator's pre-existing pin by the same name would be silently dropped.
+    ['@pins', driverResultName],
   ]);
 
+  // `name` is the *host* name, which for a subagent carries the infix; the
+  // caller validates the agent-level name it derived this from.
   await null;
   for (const owned of ownedNames) {
-    !(await E(hostAgent).has(owned)) ||
-      Fail`Cannot create agent ${q(name)}: the name ${q(owned)} is already taken`;
+    !(await E(hostAgent).has(...owned)) ||
+      Fail`Cannot create agent ${q(name)}: the name ${q(owned.join('/'))} is already taken`;
   }
 
   const build = async () => {
@@ -271,13 +278,24 @@ harden(provisionFaeAgent);
  * @returns {Promise<void>}
  */
 export const releaseFaeAgent = async ({ hostAgent, name }) => {
+  /** @type {unknown[]} */
+  const failures = [];
+
   const names = await E(hostAgent).list();
   const directory = Array.isArray(names) ? names : [];
   for (const child of subagentNamesIn(directory, name)) {
-    await releaseFaeAgent({
-      hostAgent,
-      name: subagentAgentName(name, child),
-    });
+    try {
+      await releaseFaeAgent({
+        hostAgent,
+        name: subagentAgentName(name, child),
+      });
+    } catch (error) {
+      // One stubborn grandchild must not leave this agent's own driver,
+      // spawner and guest running — the spawner holds `host-agent`, and an
+      // agent whose teardown stopped at a child goes on answering mail while
+      // the error names only the child.
+      failures.push(error);
+    }
   }
 
   const driverResultName = `${name}${DRIVER_SUFFIX}`;
@@ -285,8 +303,6 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   const driverHandleName = `${driverResultName}${HANDLE_SUFFIX}`;
   const spawnerHandleName = `${spawnerResultName}${HANDLE_SUFFIX}`;
 
-  /** @type {unknown[]} */
-  const failures = [];
   /** Names whose formula could not be cancelled, so must stay reachable. */
   /** @type {Set<string>} */
   const uncancelled = new Set();

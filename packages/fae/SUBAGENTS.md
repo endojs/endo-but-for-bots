@@ -125,6 +125,28 @@ suggests asking the subagent to store the object under a pet name instead.
 
 The two harnesses reach durability differently because their topologies differ.
 
+### Names
+
+Every formula an agent owns is named by appending to the agent's own name, and
+a subagent's name is derived by infixing its parent's: agent `p`'s subagent `x`
+is the host agent `p.sub.x`, whose driver caplet is `p.sub.x-driver`.
+
+The infix delimiter is a dot because an agent name may not contain one
+(`agentNamePattern` is `^[a-z][a-z0-9-]{0,31}$`, and the rule applies to root
+agents as well as subagents).
+That is what makes the parse unambiguous rather than merely unlikely: with a
+hyphenated infix, root agents `p` and `p-sub` both derive the host name
+`p-sub-sub-x`, and either could enumerate, count against its own bound, and
+*tear down* the other's subagent.
+A subagent name may additionally not end in `-driver`, `-spawner`, or
+`-handle`, so a subagent's handle cannot be mistaken for a sibling's caplet.
+
+Provisioning checks every name an agent will own before it creates anything, so
+a collision is a refusal rather than a takeover — and so a failed provisioning
+can roll back by name without removing something it did not create.
+
+### Revival
+
 **Fae** runs each agent's loop in its own `driver` caplet, which is revived
 independently by `revivePins()`.
 A spawner minted inside the factory would not survive that, so each delegating
@@ -147,5 +169,10 @@ options, so a caller cannot declare itself somebody's subagent.
 
 A Fae subagent is deliberately **not** pinned: subagents are working memory, and
 a daemon restart should not resurrect a tree of them behind the user's back.
+The consequence, not yet addressed, is that a revived parent still holds
+`subagents/<name>` for each of them and its spawner still lists them, while
+their loops are gone: an `askSubagent` to one waits out its whole timeout, and
+the dead entries count against the live-subagent bound until the parent's model
+stops them.
 A Floot subagent session is revived with its siblings, because Floot revives
 every session it has a registry entry for; releasing the parent releases it.

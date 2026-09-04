@@ -127,42 +127,70 @@ export const makeAccountOracle = ({
    * @param {string} source
    * @param {string} observedAt
    */
+  /**
+   * When a section's figures were taken.
+   *
+   * The source's own answer wins, because only it knows: a backend that caches
+   * provider quota reports the instant it actually queried, and overwriting
+   * that with the local clock would present hour-old numbers as measured just
+   * now. But it is bounded by that clock — a reading cannot have been taken
+   * later than the moment it was read — and canonicalized, so a stamp that
+   * would make a stale figure look fresh, or that is not an instant at all,
+   * falls back rather than being replayed to a model as gospel.
+   *
+   * @param {unknown} reported
+   * @param {string} fallback
+   */
+  const observedAtFrom = (reported, fallback) => {
+    if (typeof reported !== 'string' || reported === '') return fallback;
+    const parsed = Date.parse(reported);
+    if (!Number.isFinite(parsed)) return fallback;
+    if (parsed > Date.parse(fallback)) return fallback;
+    return new Date(parsed).toISOString();
+  };
+
   const project = (raw, source, observedAt) => {
     if (!raw || typeof raw !== 'object') return harden({});
     /** @type {any} */
     const out = {};
+    /**
+     * Per section, so one unreadable figure costs its own section and not the
+     * whole reading. All-or-nothing projection meant a plan with a malformed
+     * timestamp discarded a perfectly good rate-limit reading beside it — and,
+     * because only an observed section is journalled, stopped the journal
+     * being written at all.
+     *
+     * @param {string} section
+     * @param {(candidate: any) => any} normalize
+     */
+    const take = (section, normalize) => {
+      if (!raw[section]) return;
+      try {
+        out[section] = normalize({
+          ...raw[section],
+          observedAt: observedAtFrom(raw[section].observedAt, observedAt),
+          source,
+        });
+      } catch (error) {
+        console.error(
+          `[account-oracle] ${providerId}: ${source} ${section} is unusable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    };
     // `source` and `providerId` are stamped *after* the payload. Spread first,
     // a source that names its own `source` decides whether the oracle presents
     // its figures as measured — a declared profile could claim `observed`, and
     // an observed payload could disown itself — and `providerId` would be
     // whatever the payload said rather than the credential this oracle
     // describes. Whose reading this is, and how much to trust it, are the
-    // oracle's to state.
-    //
-    // `observedAt` is a default, not a stamp. *When* a figure was taken is
-    // something only the source knows: a backend that caches provider quota
-    // reports the instant it actually queried, and overwriting that with the
-    // local clock would present hour-old numbers as just measured — the same
-    // error as laundering `declared` into `observed`, pointed at the timestamp
-    // instead of the label.
-    if (raw.plan) {
-      out.plan = normalizeAccountPlan({
-        observedAt,
-        ...raw.plan,
-        providerId,
-        source,
-      });
-    }
-    if (raw.rateLimits) {
-      out.rateLimits = normalizeRateLimits({
-        observedAt,
-        ...raw.rateLimits,
-        source,
-      });
-    }
-    if (raw.rateCard) {
-      out.rateCard = normalizeRateCard({ observedAt, ...raw.rateCard, source });
-    }
+    // oracle's to state; when it was taken is the source's, within bounds.
+    take('plan', candidate =>
+      normalizeAccountPlan({ ...candidate, providerId }),
+    );
+    take('rateLimits', normalizeRateLimits);
+    take('rateCard', normalizeRateCard);
     return harden(out);
   };
 
@@ -246,7 +274,6 @@ export const makeAccountOracle = ({
     // A journal that could not be read is not written either: with no idea
     // what is already there, a partial live read would replace it wholesale.
     if (journal && !storedUnreadable) {
-      const previouslyObserved = observedSectionsOf(stored);
       const record = {};
       for (const section of SECTIONS) {
         // A section the provider did not answer this time keeps its previous
@@ -254,9 +281,10 @@ export const makeAccountOracle = ({
         // with the instant it was actually taken. That is what lets a consumer
         // judge a figure the provider has quietly stopped publishing: it does
         // not expire, but it visibly ages.
-        const value =
-          observed[section] ||
-          (remembered[section] ? previouslyObserved[section] : undefined);
+        const carried = remembered[section]
+          ? harden({ ...remembered[section], source: 'observed' })
+          : undefined;
+        const value = observed[section] || carried;
         if (value) record[section] = value;
       }
       if (SECTIONS.some(section => observed[section])) {

@@ -1000,7 +1000,13 @@ export const makeStreamingAgent = async (
    * iterator it closes is bound later, which is why this is a function.
    */
   const stopInbox = () => {
+    // eslint-disable-next-line no-use-before-define
+    signalInboxStopped();
+    // eslint-disable-next-line no-use-before-define
+    wakeMailWorker();
+    // eslint-disable-next-line no-use-before-define
     if (inboxIterator) {
+      // eslint-disable-next-line no-use-before-define
       void Promise.resolve(inboxIterator.return()).catch(() => undefined);
     }
   };
@@ -1067,6 +1073,22 @@ export const makeStreamingAgent = async (
   let inboxStarted = false;
   let inboxIterator;
   let inboxLoop = Promise.resolve();
+  /**
+   * Settles when this agent stops, so the pump can leave without waiting for
+   * the mailbox to say something.
+   *
+   * `inboxIterator.return()` is not enough: the reader pump awaits a
+   * synchronization node only *between* pulls, so once it is parked in the
+   * source's `next()` on a quiet mailbox it never observes the close, and the
+   * cancel hangs with it. Racing the read against this is what lets a session
+   * with nothing in its inbox shut down promptly instead of timing out.
+   */
+  let signalInboxStopped = () => {};
+  const inboxStopped = new Promise(resolve => {
+    signalInboxStopped = resolve;
+  });
+  /** Wakes the mail worker; rebound when a pump starts. */
+  let wakeMailWorker = () => {};
   const startInbox = () => {
     if (inboxStarted || stopped) return;
     inboxStarted = true;
@@ -1100,13 +1122,16 @@ export const makeStreamingAgent = async (
       /** @type {Array<{ number: any, text: string, fromName: any }>} */
       const pendingMail = [];
       /** @type {(() => void) | undefined} */
-      let wakeMailWorker;
+      let parkedWorker;
       let pumpEnded = false;
       const wakeMail = () => {
-        const notify = wakeMailWorker;
-        wakeMailWorker = undefined;
+        const notify = parkedWorker;
+        parkedWorker = undefined;
         if (notify) notify();
       };
+      // Reachable from `stopInbox`, so a shutdown releases a parked worker
+      // rather than depending on the pump to notice.
+      wakeMailWorker = wakeMail;
 
       const mailWorker = (async () => {
         for (;;) {
@@ -1114,7 +1139,7 @@ export const makeStreamingAgent = async (
             if (pumpEnded || stopped) return;
             // eslint-disable-next-line no-await-in-loop
             await new Promise(resolve => {
-              wakeMailWorker = resolve;
+              parkedWorker = resolve;
             });
             // eslint-disable-next-line no-continue
             continue;
@@ -1132,12 +1157,23 @@ export const makeStreamingAgent = async (
             // is deliberately unused — but it must still be observed, or a turn
             // that rejects before reaching the writer becomes an unhandled
             // rejection in the daemon worker.
-            // eslint-disable-next-line no-void
-            void converse(text, writer, { mail: { from: fromName } }).catch(
+            const turnP = converse(text, writer, {
+              mail: { from: fromName },
+            }).then(
               () => undefined,
+              error =>
+                harden({ ok: false, error: `${error?.message || error}` }),
             );
+            // Raced, not simply awaited: `runTurn` has early exits that return
+            // without settling the writer, and only `releaseTurn`'s
+            // shutdown-time abort rescues them. A turn controller aborted for
+            // any other reason would park this worker on `turnDone` for good.
             // eslint-disable-next-line no-await-in-loop
-            const result = await turnDone;
+            const result =
+              (await Promise.race([
+                turnDone,
+                turnP.then(outcome => outcome || turnDone),
+              ])) || harden({ ok: false, error: 'turn produced no reply' });
             // A turn that finished is answered and dismissed whatever else is
             // happening: its history is committed and the model was paid for.
             // Only a turn shutdown aborted is left in the inbox, for the next
@@ -1161,103 +1197,117 @@ export const makeStreamingAgent = async (
           }
         }
       })();
-      for (;;) {
-        const { value: message, done } = await messages.next();
-        if (done) break;
-        const {
-          from: fromId,
-          number,
-          type,
-          strings,
-          names,
-          done: messageDone = true,
-        } = message;
-        if (handled.has(number)) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        // A sender may reveal a message progressively and settle it later with
-        // `editMessage`; the daemon re-emits the settled revision under the
-        // same number. Marking the partial handled would swallow that revision
-        // — including a subagent's reply, which `claim` deliberately refuses
-        // while it is still partial — and would answer a half-written message.
-        if (messageDone === false) {
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        handled.add(number);
-        // Offer every message — this session's own outbound mail included —
-        // to the delegation registry first. It learns a delegation's identity
-        // from the echo of the send and consumes the matching reply, which
-        // the awaiting `askSubagent` call returns instead of this loop
-        // turning it into a conversation (and replying to it, which with a
-        // subagent would be an unbounded exchange).
-        if (delegations.claim(message).claimed) {
-          // Dismissed like every other message this loop handles. Leaving it
-          // would mean that after a restart — when no ask is pending — the
-          // reply replays as an ordinary message, this session answers it,
-          // and the subagent answers back: two models in an unbounded
-          // exchange. The cost is that a reply's attachments are not
-          // retained, which `askSubagent` says plainly.
-          await E(powers).dismiss(number);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-        // Skip our own outbound messages echoed back into the inbox.
-        // Compare formulas, not locator strings: `locate` decorates with the
-        // transport hints currently published by `@nets` while a message's
-        // `from` is always hint-free, so a daemon with network addresses
-        // would fail string equality and answer its own mail.
-        if (isSameFormula(fromId, selfLocator)) {
-          await E(powers).dismiss(number);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-
-        let text;
-        if (type === 'package' && Array.isArray(strings)) {
-          const parts = [];
-          const namesArray = Array.isArray(names) ? names : [];
-          for (let i = 0; i < strings.length; i += 1) {
-            parts.push(strings[i]);
-            if (i < namesArray.length) parts.push(`@${namesArray[i]}`);
+      // The tail below runs however this loop leaves — normally, by shutdown,
+      // or by a throw from `messages.next()` or from `dismiss`. Without it, a
+      // pump that died left the worker parked on a wake that would never come,
+      // holding every message it had already read.
+      try {
+        for (;;) {
+          // Raced against the stop signal: the reader pump only observes a
+          // close *between* pulls, so a session whose mailbox has gone quiet
+          // cannot be cancelled through the iterator alone.
+          const next = await Promise.race([
+            messages.next(),
+            inboxStopped.then(() => harden({ value: undefined, done: true })),
+          ]);
+          const { value: message, done } = next;
+          if (done) break;
+          const {
+            from: fromId,
+            number,
+            type,
+            strings,
+            names,
+            done: messageDone = true,
+          } = message;
+          if (handled.has(number)) {
+            // eslint-disable-next-line no-continue
+            continue;
           }
-          text = parts.join('').trim();
-          // This message is dismissed once this turn ends, so any attached
-          // object must be adopted now. Tell the model the message number
-          // and edge names so it can call adopt within this same turn.
-          if (namesArray.length) {
-            const edges = namesArray.map(n => `"${n}"`).join(', ');
-            text += `\n\n(System: message #${number} attaches object(s) with edge name(s) ${edges}. To keep any of them, call the adopt tool with message number ${number} and the edge name during this turn — the message is dismissed afterward.)`;
+          // A sender may reveal a message progressively and settle it later with
+          // `editMessage`; the daemon re-emits the settled revision under the
+          // same number. Marking the partial handled would swallow that revision
+          // — including a subagent's reply, which `claim` deliberately refuses
+          // while it is still partial — and would answer a half-written message.
+          if (messageDone === false) {
+            // eslint-disable-next-line no-continue
+            continue;
           }
-        } else {
-          text = `(${type || 'unknown'} message)`;
-        }
+          handled.add(number);
+          // Offer every message — this session's own outbound mail included —
+          // to the delegation registry first. It learns a delegation's identity
+          // from the echo of the send and consumes the matching reply, which
+          // the awaiting `askSubagent` call returns instead of this loop
+          // turning it into a conversation (and replying to it, which with a
+          // subagent would be an unbounded exchange).
+          if (delegations.claim(message).claimed) {
+            // Dismissed like every other message this loop handles. Leaving it
+            // would mean that after a restart — when no ask is pending — the
+            // reply replays as an ordinary message, this session answers it,
+            // and the subagent answers back: two models in an unbounded
+            // exchange. The cost is that a reply's attachments are not
+            // retained, which `askSubagent` says plainly.
+            await E(powers).dismiss(number);
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          // Skip our own outbound messages echoed back into the inbox.
+          // Compare formulas, not locator strings: `locate` decorates with the
+          // transport hints currently published by `@nets` while a message's
+          // `from` is always hint-free, so a daemon with network addresses
+          // would fail string equality and answer its own mail.
+          if (isSameFormula(fromId, selfLocator)) {
+            await E(powers).dismiss(number);
+            // eslint-disable-next-line no-continue
+            continue;
+          }
 
-        // Resolve a friendly sender name for the history entry: the
-        // petname(s) this guest has for the sender, falling back to the
-        // locator. The reply is sent to the same sender by message number.
-        let fromName;
-        try {
-          const senderNames = await E(powers).reverseLocate(fromId);
-          fromName =
-            Array.isArray(senderNames) && senderNames.length
-              ? senderNames[0]
-              : fromId;
-        } catch {
-          fromName = fromId;
-        }
+          let text;
+          if (type === 'package' && Array.isArray(strings)) {
+            const parts = [];
+            const namesArray = Array.isArray(names) ? names : [];
+            for (let i = 0; i < strings.length; i += 1) {
+              parts.push(strings[i]);
+              if (i < namesArray.length) parts.push(`@${namesArray[i]}`);
+            }
+            text = parts.join('').trim();
+            // This message is dismissed once this turn ends, so any attached
+            // object must be adopted now. Tell the model the message number
+            // and edge names so it can call adopt within this same turn.
+            if (namesArray.length) {
+              const edges = namesArray.map(n => `"${n}"`).join(', ');
+              text += `\n\n(System: message #${number} attaches object(s) with edge name(s) ${edges}. To keep any of them, call the adopt tool with message number ${number} and the edge name during this turn — the message is dismissed afterward.)`;
+            }
+          } else {
+            text = `(${type || 'unknown'} message)`;
+          }
 
-        if (stopped || quarantineError) break;
-        pendingMail.push({ number, text, fromName });
+          // Resolve a friendly sender name for the history entry: the
+          // petname(s) this guest has for the sender, falling back to the
+          // locator. The reply is sent to the same sender by message number.
+          let fromName;
+          try {
+            const senderNames = await E(powers).reverseLocate(fromId);
+            fromName =
+              Array.isArray(senderNames) && senderNames.length
+                ? senderNames[0]
+                : fromId;
+          } catch {
+            fromName = fromId;
+          }
+
+          if (stopped || quarantineError) break;
+          pendingMail.push({ number, text, fromName });
+          wakeMail();
+        }
+      } finally {
+        // Nothing can feed `claim` once this loop is out, so an ask that kept
+        // waiting would hold the queue open for its whole timeout — five
+        // minutes by default — for a reply that can no longer arrive.
+        pumpEnded = true;
+        delegations.close(Error('Floot session mailbox closed'));
         wakeMail();
       }
-      // Nothing can feed `claim` once the stream has ended, so an ask that kept
-      // waiting would hold the queue open for its whole timeout — five minutes
-      // by default — for a reply that can no longer arrive.
-      pumpEnded = true;
-      delegations.close(Error('Floot session mailbox closed'));
-      wakeMail();
       // Let queued replies finish before the loop resolves, so a shutdown that
       // awaits `inboxLoop` waits for mail this session already answered.
       await mailWorker;
@@ -1274,9 +1324,17 @@ export const makeStreamingAgent = async (
   const shutdownAgent = async (allowBackendQuarantine = false) => {
     stopped = true;
     for (const controller of turnControllers) controller.abort();
-    const closing = [];
-    if (inboxIterator) closing.push(inboxIterator.return());
-    closing.push(turnChain, inboxLoop);
+    // Release the pump and any parked worker before awaiting either. The
+    // iterator's own `return()` cannot do it: the reader pump observes a close
+    // only between pulls, so a session whose mailbox is quiet would otherwise
+    // sit here until the shutdown timeout.
+    // `stopInbox` already asked the iterator to close and fired the stop
+    // signal the pump races against. Its `return()` is deliberately *not*
+    // awaited here: the reader pump observes a close only between pulls, so on
+    // a quiet mailbox that promise never settles and would hold this shutdown
+    // to its timeout even though the loop it guards has already left.
+    stopInbox();
+    const closing = [turnChain, inboxLoop];
     const settled = await withTimeout(
       Promise.allSettled(closing),
       'Floot session agent shutdown',
@@ -2693,18 +2751,21 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
-     * Drop the cached API providers so the next turn re-reads the auth token
-     * from the `SecretBlob`.
+     * Drop the memoized provider config and the providers built from it.
      *
-     * A provider pins the token as of the moment it was constructed, so this is
-     * what makes a rotation (`SecretAdmin.replaceBase64`) or a revocation take
-     * effect without restarting the daemon. Sessions on a hosted backend are
-     * unaffected: their credentials belong to the backend, not to Floot.
+     * A rotation (`SecretAdmin.replaceBase64`) or a revocation needs no help:
+     * a turn re-reads the secret and the provider cache is keyed on the bytes,
+     * so it reaches every open session by itself. What this is for is a change
+     * to the *config* — a different host, provider kind, or default model
+     * bound at `llm-provider` — which is read once and would otherwise need a
+     * daemon restart. Sessions on a hosted backend are unaffected either way:
+     * their credentials belong to the backend, not to Floot.
      */
     async refreshCredentials() {
       providersByModel.clear();
+      providerConfigP = undefined;
       console.error(
-        '[floot-factory] Dropped cached providers; the next turn rebuilds them.',
+        '[floot-factory] Dropped the cached provider config; the next turn re-reads it.',
       );
     },
 
@@ -2776,7 +2837,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         deleteSession:
           'deleteSession(id) — Delete a session, its backing guest, and every subagent session beneath it.',
         refreshCredentials:
-          'refreshCredentials() — Drop cached API providers so the next turn re-reads the auth secret, applying a rotation or revocation without a restart.',
+          'refreshCredentials() — Re-read the `llm-provider` config on the next turn. A rotated or revoked secret needs no call: a turn reads it afresh.',
         getAccount:
           'getAccount(refresh?) — { available, plan, rateLimits, rateCard }. Each section carries observedAt and a source of observed | declared | remembered | unavailable; counts are bigints, and null means the provider does not publish that figure.',
         getAccountOracle:

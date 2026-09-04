@@ -90,8 +90,15 @@ export const readAuthToken = async blob => {
 };
 harden(readAuthToken);
 
-/** Pet names whose plaintext-fallback warning has already been printed. */
-const warnedPetNames = new Set();
+/**
+ * Namespaces whose plaintext-fallback warning has already been printed.
+ *
+ * Keyed on the namespace, not the pet name: the name is the same module
+ * constant for every caller, so two unmigrated agents sharing a worker would
+ * print one line between them — and the line names no agent, so an operator
+ * could not tell which.
+ */
+const warnedNamespaces = new WeakSet();
 
 /**
  * Resolve the auth token a provider should use.
@@ -127,8 +134,14 @@ export const resolveAuthToken = async ({
     // Once, not once per turn: this is now on the per-turn path, and a
     // deployment that has not migrated would otherwise emit the same line for
     // every message it ever answers.
-    if (!warnedPetNames.has(petName)) {
-      warnedPetNames.add(petName);
+    if (typeof powers === 'object' && powers !== null) {
+      if (!warnedNamespaces.has(powers)) {
+        warnedNamespaces.add(powers);
+        console.error(
+          `[credentials] no ${petName} capability; using the plaintext token in the provider config. Re-run setup to move it into @secrets.`,
+        );
+      }
+    } else {
       console.error(
         `[credentials] no ${petName} capability; using the plaintext token in the provider config. Re-run setup to move it into @secrets.`,
       );
