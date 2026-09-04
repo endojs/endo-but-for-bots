@@ -1,6 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import { formatLocator, formatLocatorWithHints } from '@endo/daemon/locator.js';
 
@@ -46,12 +47,14 @@ const makeMailbox = ({ names = { subagents: 'directory' } } = {}) => {
     notifySent = () => resolve(undefined);
   });
   const powers = Far('Powers', {
-    /** @param {string | string[]} path */
-    locate: async path => {
-      const key = Array.isArray(path) ? path.join('/') : path;
-      const found = names[key];
-      if (found === undefined) return undefined;
-      return found;
+    // `locate`'s daemon guard is `M.call().rest(NamePathShape)`: the path
+    // arrives as separate name arguments, and an array would be rejected
+    // outright. The stub enforces that so a call shape the daemon refuses
+    // fails here rather than only in a live daemon.
+    locate: async (...path) => {
+      path.every(segment => typeof segment === 'string') ||
+        Fail`locate takes name segments, not ${path[0]}`;
+      return names[path.join('/')];
     },
     has: async (...path) => names[path.join('/')] !== undefined,
     makeDirectory: async () => {},

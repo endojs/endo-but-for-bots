@@ -1551,6 +1551,13 @@ export const flootComponent = (
   // Load the session list from the factory (most-recent first), seeding a
   // default session if the factory has none, then repaint the active history.
   let recoveryRefreshTimer;
+  // A session stuck in a non-ready lifecycle (a failed creation, a hosted
+  // backend that is no longer installed) never becomes ready on its own, and
+  // the factory only recovers at startup. Poll a bounded number of times with
+  // a widening delay, then stop and let the user get on with a new session
+  // rather than spinning on three CapTP round trips forever.
+  const RECOVERY_ATTEMPTS = 8;
+  let recoveryAttempt = 0;
   const loadInitialSessions = async () => {
     try {
       const [metas, presetList, modelList] = await Promise.all([
@@ -1585,19 +1592,41 @@ export const flootComponent = (
           facet: null,
           loaded: false,
         }));
-      if (!sessions.length && allMetas.length > 0) {
-        setStatus('Recovering sessions…');
-        recoveryRefreshTimer = setTimeout(() => {
-          if (!cancelled) void loadInitialSessions();
-        }, 250);
+      if (
+        !sessions.length &&
+        allMetas.length > 0 &&
+        recoveryAttempt < RECOVERY_ATTEMPTS
+      ) {
+        recoveryAttempt += 1;
+        setStatus(
+          `Recovering sessions… (${recoveryAttempt}/${RECOVERY_ATTEMPTS})`,
+        );
+        recoveryRefreshTimer = setTimeout(
+          () => {
+            // The user may have created a session and started talking while
+            // this was armed. Reloading would replace the session list and
+            // reset the active session out from under them.
+            if (!cancelled && !sessions.length) void loadInitialSessions();
+          },
+          250 * 2 ** (recoveryAttempt - 1),
+        );
         return;
       }
+      recoveryAttempt = 0;
+      const strandedCount = allMetas.length - sessions.length;
       if (!sessions.length) {
         await createSession();
       } else {
         activeSessionId = sessions[0].id;
       }
-      setStatus('Ready.');
+      // Say so rather than reporting a clean "Ready." over sessions the
+      // factory could not revive; they are still listed by the factory and an
+      // operator has to deal with them.
+      setStatus(
+        strandedCount > 0
+          ? `Ready. ${strandedCount} session(s) could not be recovered.`
+          : 'Ready.',
+      );
       openActiveHistory();
     } catch (err) {
       setStatus(`error: ${/** @type {Error} */ (err).message}`);

@@ -155,3 +155,39 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
   t.regex(report, /1200 input and 340 output tokens/);
   t.regex(report, /No list price is configured/);
 });
+
+test('a stored caplet tool is located with the path as separate name arguments', async t => {
+  const stored = Far('FaeTool', {
+    schema: () =>
+      harden({
+        type: 'function',
+        function: {
+          name: 'weather',
+          description: 'Report the weather',
+          parameters: { type: 'object', properties: {}, required: [] },
+        },
+      }),
+    execute: async () => 'sunny',
+    help: () => 'weather',
+  });
+  const powers = Far('SessionPowers', {
+    list: async directory => harden(directory === 'tools' ? ['weather'] : []),
+    lookup: async path => {
+      t.deepEqual(path, ['tools', 'weather'], 'lookup accepts a path array');
+      return stored;
+    },
+    // The daemon's guard is `M.call().rest(NamePathShape)`, so an array
+    // argument is rejected outright — unlike `lookup`. Enforce that here, or
+    // the only session shape that exercises it (one with a caplet tool) goes
+    // untested and every turn in such a session fails in production.
+    locate: async (...path) => {
+      t.deepEqual(path, ['tools', 'weather']);
+      return 'endo://node/formula?type=lookup';
+    },
+    listMessages: async () => harden([]),
+  });
+  const snapshot = await makeFlootToolRegistry(powers).snapshot();
+  t.true(snapshot.names.includes('weather'));
+  t.true(snapshot.toolSetId.includes('endo://node/formula'));
+  t.is(await snapshot.execute('weather', harden({})), 'sunny');
+});
