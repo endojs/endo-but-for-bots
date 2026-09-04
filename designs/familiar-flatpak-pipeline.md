@@ -18,7 +18,7 @@ Its [make-distributables.mjs](../packages/familiar/scripts/make-distributables.m
 produces a `.zip` on Linux.
 A user who unzips it gets a directory tree that includes an Electron
 binary, a Chromium runtime, and `chrome-sandbox`, the last of which
-must be `chmod 4755` and chowned to root for Chromium's setuid sandbox
+must be mode 4755 and owned by root for Chromium's setuid sandbox
 to engage.
 A non-developer will not perform that chmod and chown; without it
 Electron either refuses to launch or falls back to `--no-sandbox`,
@@ -27,11 +27,11 @@ the daemon's worker tree.
 
 The maintainer's resolution of
 [familiar-release.md](familiar-release.md) § G4 (2026-05-19) chose
-Flatpak as the single Linux packaging format for MVR (Minimum Viable
-Release) followups; AppImage, `.deb`, `.rpm`, and `.tar.gz` are
-deferred.
+Flatpak as the single Linux packaging format for the
+minimum-viable-release (MVR) followups; AppImage, `.deb`, `.rpm`, and
+`.tar.gz` are deferred.
 The `G<N>` codes used throughout this document (G2, G3, G4, G5, G6,
-G11, G12, G16) reference the correspondingly-numbered decision items in
+G11, G12, G16) reference the correspondingly numbered decision items in
 [familiar-release.md](familiar-release.md); each is a maintainer
 resolution the design carries a dependency on.
 Flatpak is the right pick because it ships its own setuid-capable
@@ -55,13 +55,13 @@ prompt and a silent-degradation failure mode (Chromium quietly runs
 unsandboxed).
 The Flatpak path is the platform's standard install gesture: on a
 desktop with GNOME Software or KDE Discover the `.flatpak` double-click
-installs through the GUI (see § Signing Posture for the one runtime
-prerequisite that path still needs), and even the terminal form is a
+installs through the GUI (see § Signing Posture (Deferred) for the one
+prerequisite, Flatpak itself, that path still needs), and even the terminal form is a
 single `flatpak install --bundle <file>`.
 Flatpak is preinstalled on Fedora and popular immutable distros and is
 a one-time `apt install flatpak` elsewhere; that prerequisite (and its
 absence as a failure mode) is named explicitly in the end-user install
-snippet under § Signing Posture.
+snippet under § Signing Posture (Deferred).
 `flatpak-builder` is a *build-host* tool, not an end-user requirement:
 the end user installs a prebuilt bundle and never runs the builder.
 
@@ -71,10 +71,15 @@ This is the single load-bearing statement of the packaged Familiar's
 storage model; every claim about grants, reset gestures, and smoke
 steps below derives from it.
 
-**The Flatpak Familiar is its own isolated Endo.**
-Its state, cache, CapTP socket, and ephemeral PID files all resolve to
-per-app-private locations by default, are shared with nothing on the
-host, and none of them needs a `--filesystem` grant.
+**The Flatpak Familiar is its own isolated Endo on the filesystem.**
+Its state, cache, CapTP socket (the daemon's control socket, at
+`$XDG_RUNTIME_DIR/endo/captp0.sock`), and ephemeral PID files all resolve to
+per-app-private *filesystem* locations by default, are shared with nothing on
+the host's filesystem, and none of them needs a `--filesystem` grant.
+The network is the one axis this claim excludes: `--share=network` puts the
+daemon's gateway TCP bind on the host loopback rather than a private netns, so
+that one resource is *not* app-private (§ Finish-Args, the `--share=network`
+row, and the two-instance note below own its disposition).
 This falls out of two Flatpak guarantees that hold whenever the
 manifest omits `--filesystem=home`:
 
@@ -84,7 +89,7 @@ manifest omits `--filesystem=home`:
   `$XDG_STATE_HOME` / `$XDG_CACHE_HOME` and fall back to
   `$HOME/.local/state` / `$HOME/.cache`; because `$HOME` is the per-app
   root, both the env-set and the fallback paths land under
-  `~/.var/app/<app-id>/…`, so state and cache are app-private on every
+  `~/.var/app/<app-id>/...`, so state and cache are app-private on every
   host with no grant (and deterministically so, whether or not a given
   Flatpak version sets `$XDG_STATE_HOME`).
 - Flatpak gives each app a private, writable `$XDG_RUNTIME_DIR` (a
@@ -96,17 +101,34 @@ manifest omits `--filesystem=home`:
   create directories in that private tmpfs: app-private, ephemeral, and
   needing no grant.
 
+One consequence cuts the other way and is worth stating plainly. The per-app
+`$HOME` (`~/.var/app/org.endojs.Familiar`) is shared across *instances* of the
+same app, while Flatpak's `$XDG_RUNTIME_DIR` is per-*instance*. A second
+`flatpak run` therefore does not see the first instance's CapTP socket (it lives
+in the first instance's private runtime dir) and can start a **second daemon
+over the same per-app state directory**. The `.zip` status quo cannot produce
+this (its shared host runtime dir lets the second launch find the socket). The
+MVR posture accepts a single-instance usage assumption and tracks the hardening
+(an Electron `requestSingleInstanceLock`, or an `ENDO_ADDR`/socket liveness
+check in `launcher.sh`) in § Known Gaps and TODOs below.
+
 The consequence for the manifest is decisive: adding
-`--filesystem=xdg-run/endo`, `xdg-cache/endo`, or `xdg-state/endo`
+`--filesystem=xdg-run/endo` or `xdg-cache/endo`
 would be not merely unnecessary but **harmful**, because those grants
 map the *host's* directories into the sandbox, sharing the CapTP
 socket with any host-run daemon and reintroducing the `EADDRINUSE`
 documented in
 [packages/familiar/README.md](../packages/familiar/README.md)
 § Unix Socket Leftovers.
-The manifest therefore grants none of them, and `launcher.sh` pins
-nothing: the defaults are already correct.
-The reset gesture is `flatpak uninstall org.endojs.Familiar` plus
+(`--filesystem=xdg-state/endo` is a third case: it is *inert* rather than
+harmful, because Flatpak's documented `--filesystem=` token list has no
+`xdg-state` token at all; § Finish-Args states this same disposition.)
+The manifest therefore grants none of the three `--filesystem` tokens, and
+`launcher.sh` pins no filesystem path: those defaults are already correct.
+The one pin the design *does* contemplate is network-side: an ephemeral
+`ENDO_ADDR` port so the gateway does not collide on the host's fixed
+`127.0.0.1:8920` (§ Finish-Args, `--share=network`; § Known Gaps and TODOs).
+The reset gesture is `flatpak uninstall --user org.endojs.Familiar` plus
 `rm -rf ~/.var/app/org.endojs.Familiar` (the ephemeral socket / PID
 tmpfs is discarded on exit), and the CI clean-state step is the same
 `rm -rf`.
@@ -138,7 +160,7 @@ GitHub-Release upload.
 ```mermaid
 flowchart TD
   P[step 5: package-app.mjs<br/>out/Familiar-linux-x64/] --> A
-  A[step 6a: stage Flatpak inputs<br/>scripts/build-flatpak.mjs] --> B
+  A[step 6a: stage Flatpak inputs<br/>scripts/make-flatpak.mjs] --> B
   B[step 6b: flatpak-builder<br/>--repo=repo build org.endojs.Familiar.json] --> C
   C[step 6c: flatpak build-bundle<br/>repo to .flatpak single file] --> D
   D[out/make/Familiar-&lt;version&gt;-linux-x64.flatpak]
@@ -150,7 +172,7 @@ documented in [familiar-release.md](familiar-release.md) Status Quo;
 it produces the packaged-app directory tree under
 `out/Familiar-linux-x64/`.
 Steps 6a, 6b, and 6c are all driven by a single script
-(`scripts/build-flatpak.mjs`); the diagram names the conceptual
+(`scripts/make-flatpak.mjs`); the diagram names the conceptual
 phases 6a/6b/6c for readability, and they run inside that one script
 rather than as three separate CI steps.
 The existing zip step ("step 6" in the diagram) also reads step 5's
@@ -210,8 +232,13 @@ modulo the floating `//24.08` runtime series (see § Runtime Choice).
 The freedesktop runtime is the lowest-common-denominator runtime that
 ships glibc, GTK pieces Electron expects, and the audio / video
 libraries Chromium needs.
-The 24.08 series is the current stable runtime
-([Flathub runtimes page](https://docs.flatpak.org/en/latest/available-runtimes.html)).
+As of this design's revision (2026-09-04) the `24.08` series is the current
+stable freedesktop runtime
+([Flatpak available-runtimes documentation](https://docs.flatpak.org/en/latest/available-runtimes.html)).
+freedesktop supports a series for roughly two years, so the pin can expire;
+confirming the current series and the matching `org.electronjs.Electron2.BaseApp`
+branch is a phase-2 gate (§ Phased Implementation) rather than a fact frozen at
+this design's landing date.
 Note that `//24.08` is a floating *series* branch: freedesktop
 continuously updates it upstream, so a checkout pins the series, not an
 exact commit.
@@ -246,7 +273,7 @@ that the Familiar's existing implementation already exercises:
 | Permission | Rationale |
 |---|---|
 | `--share=ipc` | Chromium under X11 uses the MIT-SHM extension to share pixmap memory with the host X server; the shared IPC namespace is required for that shared-memory path under `--socket=fallback-x11`. Without it Chromium's X11 renderer path degrades or errors. |
-| `--share=network` | The bundled `lal` agent issues outbound `fetch` requests against `https://api.anthropic.com/`, `https://api.openai.com/`, and a user-configured LLM endpoint ([familiar-release.md](familiar-release.md) § G12). This grant also removes the sandbox's loopback isolation, so the gateway's `127.0.0.1:8920` bind ([daemon-manager.js](../packages/familiar/src/daemon-manager.js)) sits on the host's loopback alongside any host Endo daemon; that is a widening the grant carries, not only the outbound LLM fetch it enables. |
+| `--share=network` | The bundled `lal` agent issues outbound `fetch` requests against `https://api.anthropic.com/`, `https://api.openai.com/`, and a user-configured LLM endpoint ([familiar-release.md](familiar-release.md) § G12). This grant also removes the sandbox's loopback isolation, so the gateway's fixed `127.0.0.1:8920` bind ([daemon-manager.js](../packages/familiar/src/daemon-manager.js)) sits on the host's loopback alongside any host Endo daemon. **Disposition of that widening:** the daemon rejects at start if the gateway cannot bind ([manager-node.js](../packages/daemon/src/manager-node.js), the start-time bind invariant), so a host `endo` daemon already on `8920`, or a second Familiar instance, makes the sandboxed app *fail to start* rather than silently cross wires. The MVR posture accepts a no-host-daemon assumption; the hardening is an ephemeral `ENDO_ADDR` port pinned in `launcher.sh` (`getGatewayAddress` already reads the daemon-written `gateway` file), tracked in § Known Gaps and TODOs. |
 | `--socket=fallback-x11` | X11 fallback when the host is on Xorg (older distros, NVIDIA-on-Wayland workarounds). |
 | `--socket=wayland` | Wayland is the default on modern distros (Fedora, recent Ubuntu, Pop!_OS). |
 | `--device=dri` | GPU acceleration for the Chromium renderer; without it Electron falls back to swrast and the chat UI's text rendering becomes janky. |
@@ -262,8 +289,6 @@ inert: they map the *host's* directories in, sharing the CapTP socket
 with a host daemon.
 Dropping them is both correct and a smaller review-gate surface.
 
-Each entry above corresponds to a runtime requirement the Familiar's
-existing implementation exercises today.
 Speculative, not-yet-wired surfaces are deliberately excluded and are
 granted in the followup PR that wires the feature they support, when the
 real requirement is known: notification sound (`--socket=pulseaudio`),
@@ -286,7 +311,7 @@ The specific exclusions:
 - No `--filesystem=home` (the daemon reads and writes only under the
   per-app sandbox root; see § Where the Familiar's Data Lives).
 - No `--device=all` (only DRI for GPU).
-- No `--persist=.` (see the § Design Decisions rationale).
+- No `--persist=.` (see § Design Decisions).
 
 ### Launcher and Metadata Files
 
@@ -335,14 +360,14 @@ The wrapper replaces the `chrome-sandbox` chmod story entirely.
 ```ini
 [Desktop Entry]
 Name=Familiar
-GenericName=Endo Familiar
+GenericName=AI Chat
 Comment=Local-first chat with the lal agent
 Exec=familiar
 Icon=org.endojs.Familiar
 Type=Application
 StartupNotify=true
 StartupWMClass=Familiar
-Categories=Network;Chat;Development;
+Categories=Network;Chat;
 Keywords=endo;lal;llm;chat;agent;
 ```
 
@@ -352,10 +377,10 @@ arg surface into Electron.
 A future PR that registers a `x-scheme-handler=` adds the matching
 `MimeType=` and the `%U` field together.
 
-`org.endojs.Familiar.metainfo.xml` (AppStream metadata, required by
-Flathub for listing; the schema is documented at
-[appstream.org](https://www.freedesktop.org/software/appstream/docs/)).
-The `<releases>` entry is **not** hand-maintained: `build-flatpak.mjs`
+`org.endojs.Familiar.metainfo.xml` is the AppStream metadata Flathub requires
+for listing; the schema is documented in the
+[AppStream documentation](https://www.freedesktop.org/software/appstream/docs/).
+The `<releases>` entry is **not** hand-maintained: `make-flatpak.mjs`
 stamps `version` and `date` from `package.json` at stage time (see
 § Build Script), so the store page never drifts from the bundle
 filename.
@@ -366,7 +391,7 @@ The checked-in file carries a placeholder the stage step overwrites:
 <component type="desktop-application">
   <id>org.endojs.Familiar</id>
   <name>Familiar</name>
-  <summary>Local-first chat with the lal agent</summary>
+  <summary>Local-first chat with your own LLM provider</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>Apache-2.0</project_license>
   <developer id="org.endojs">
@@ -388,7 +413,7 @@ The checked-in file carries a placeholder the stage step overwrites:
 </component>
 ```
 
-### Build Script: `scripts/build-flatpak.mjs`
+### Build Script: `scripts/make-flatpak.mjs`
 
 A new script under `packages/familiar/scripts/` orchestrates the
 Flatpak build.
@@ -396,7 +421,7 @@ It is invoked after `package-app.mjs` (step 5) on Linux and produces
 a single `.flatpak` file under `out/make/`.
 
 ```js
-// scripts/build-flatpak.mjs
+// scripts/make-flatpak.mjs
 /* global process */
 
 import { execSync } from 'node:child_process';
@@ -412,13 +437,38 @@ if (process.platform !== 'linux') {
   process.exit(0);
 }
 
-const arch = process.arch === 'arm64' ? 'aarch64' : 'x86_64';
-const target = process.arch === 'arm64' ? 'linux-arm64' : 'linux-x64';
+// The build target is an explicit input, not the ambient host: pass
+// --arch=<x86_64|aarch64> or set FLATPAK_ARCH; default to this host's arch.
+// This keeps "which machine am I" separate from "what am I building"; the CI
+// matrix picks the target and supplies a matching runner.
+const archArg =
+  process.argv.slice(2).find(a => a.startsWith('--arch='))?.slice('--arch='.length) ||
+  process.env.FLATPAK_ARCH ||
+  (process.arch === 'arm64' ? 'aarch64' : 'x86_64');
+if (archArg !== 'x86_64' && archArg !== 'aarch64') {
+  console.error(`Unsupported --arch=${archArg} (expected x86_64 or aarch64).`);
+  process.exit(1);
+}
+const arch = archArg;
+const target = arch === 'aarch64' ? 'linux-arm64' : 'linux-x64';
 
 const appDir = path.join(familiarDir, `out/Familiar-${target}`);
 if (!fs.existsSync(appDir)) {
   console.error(`Packaged app not found at ${appDir}.`);
   console.error('Run the package step (step:package) first.');
+  process.exit(1);
+}
+
+// flatpak-builder is a build-host-only tool (see the design body). Check for it
+// up front with the same diagnostic + remedy shape as the appDir check above,
+// rather than letting execSync fail later with a raw `sh: not found` + a stack.
+try {
+  execSync('command -v flatpak-builder', { stdio: 'ignore' });
+} catch {
+  console.error('flatpak-builder not found on PATH.');
+  console.error(
+    'Install the Flatpak toolchain first: `sudo apt install flatpak flatpak-builder` (Debian/Ubuntu) or `sudo dnf install flatpak flatpak-builder` (Fedora).',
+  );
   process.exit(1);
 }
 
@@ -464,36 +514,55 @@ const pkg = JSON.parse(
 );
 const version = pkg.version || '0.0.0';
 
-// Generate the AppStream <releases> entry from package.json so the
-// store page never drifts from the bundle filename (single source of
-// truth for the user-visible version).
+// Generate the AppStream <releases> entry from committed data so the store
+// page never drifts from the bundle filename (single source of truth for the
+// user-visible version). The release DATE is a fact about the version, not the
+// build: take it from SOURCE_DATE_EPOCH or a committed `releaseDate` in
+// package.json, never from the build host's wall clock (which would make the
+// same commit yield a different bundle every day).
 const metainfoSrc = fs.readFileSync(
   path.join(flatpakDir, 'org.endojs.Familiar.metainfo.xml'),
   'utf8',
 );
-const today = new Date().toISOString().slice(0, 10);
-const releases = `  <releases>\n    <release version="${version}" date="${today}" />\n  </releases>\n`;
-const metainfo = metainfoSrc.replace(
-  /\s*<!-- <releases> is generated from package\.json at stage time\. -->\s*/,
-  `\n${releases}`,
-);
+const epoch = process.env.SOURCE_DATE_EPOCH;
+const releaseDate = epoch
+  ? new Date(Number(epoch) * 1000).toISOString().slice(0, 10)
+  : pkg.releaseDate;
+if (!releaseDate) {
+  console.error(
+    'No release date: set SOURCE_DATE_EPOCH or a committed `releaseDate` in package.json.',
+  );
+  process.exit(1);
+}
+const releases = `  <releases>\n    <release version="${version}" date="${releaseDate}" />\n  </releases>\n`;
+const RELEASES_TOKEN =
+  /\s*<!-- <releases> is generated from package\.json at stage time\. -->\s*/;
+// A required substitution that silently no-ops (the placeholder comment was
+// reworded or removed) would ship a <releases>-less metainfo with no error;
+// fail loudly instead.
+if (!RELEASES_TOKEN.test(metainfoSrc)) {
+  console.error(
+    'metainfo <releases> placeholder not found; refusing to ship a metainfo without a stamped <releases>.',
+  );
+  process.exit(1);
+}
+const metainfo = metainfoSrc.replace(RELEASES_TOKEN, `\n${releases}`);
 fs.writeFileSync(
   path.join(stageDir, 'build/org.endojs.Familiar.metainfo.xml'),
   metainfo,
 );
 
-// 1. flatpak-builder produces the build tree and exports to a local
-//    repo. --runtime-repo embeds the Flathub remote in the exported
-//    ref so `flatpak install --bundle` can resolve the runtime / SDK /
-//    Electron base app on a Flathub-less host without a manual
-//    `flatpak remote-add`.
+// 1. flatpak-builder produces the build tree and exports it to a local
+//    ostree repo for the requested --arch.
 execSync(
   `flatpak-builder --force-clean --repo=${JSON.stringify(repoDir)} --arch=${arch} ${JSON.stringify(buildDir)} ${JSON.stringify('org.endojs.Familiar.json')}`,
   { stdio: 'inherit', cwd: stageDir },
 );
 
-// 2. flatpak build-bundle collapses the repo into a single .flatpak,
-//    carrying the runtime remote so the bundle is self-describing.
+// 2. flatpak build-bundle collapses the repo into a single .flatpak.
+//    Its --runtime-repo embeds the Flathub remote in the bundle so
+//    `flatpak install --bundle` resolves the runtime / SDK / Electron base
+//    app on a Flathub-less host without a manual `flatpak remote-add`.
 const bundlePath = path.join(
   makeDir,
   `Familiar-${version}-${target}.flatpak`,
@@ -506,16 +575,21 @@ execSync(
 console.log(`Created: out/make/${path.basename(bundlePath)}`);
 ```
 
-The script is a standalone `step:build-flatpak` npm-script that runs
+The script is a standalone `step:flatpak` npm-script that runs
 as its own CI step after the existing `make` step (see § Pipeline
 Shape and § CI Workflow Integration), branching independently off the
 step-5 packaged-app directory rather than being called from inside
 `make-distributables.mjs`; the existing zip emission in `make` is
 untouched.
+So that a developer running the top-level build never has to discover a second
+command, `build.mjs`'s step 6 invokes `step:flatpak` after the zip step on
+Linux (skipping loudly, with the toolchain-install remedy, when
+`flatpak-builder` is absent), and its `Build complete. Distributables:` listing
+then names the `.flatpak` beside the `.zip`.
 Adding the script to `package.json`:
 
 ```json
-"step:build-flatpak": "node scripts/build-flatpak.mjs",
+"step:flatpak": "node scripts/make-flatpak.mjs",
 ```
 
 ### CI Workflow Integration
@@ -547,7 +621,12 @@ The Flatpak steps then graft onto the same job after `step:make`:
   if: matrix.target-os == 'linux'
   run: |
     sudo apt-get update
-    sudo apt-get install -y flatpak flatpak-builder
+    # appstreamcli ships in `appstream`; desktop-file-validate in
+    # `desktop-file-utils`; the headless launch needs `xvfb`. Neither of the
+    # validators is guaranteed on ubuntu-latest, so name every tool the later
+    # steps invoke here.
+    sudo apt-get install -y flatpak flatpak-builder \
+      appstream desktop-file-utils xvfb
     flatpak remote-add --if-not-exists --user flathub \
       https://flathub.org/repo/flathub.flatpakrepo
     flatpak install --user --noninteractive flathub \
@@ -561,7 +640,7 @@ The Flatpak steps then graft onto the same job after `step:make`:
   # must fail the Linux `make` matrix entry. Do not add continue-on-error
   # to silence a flaky flatpak-builder run without revisiting that policy.
   if: matrix.target-os == 'linux'
-  run: yarn workspace @endo/familiar step:build-flatpak
+  run: yarn workspace @endo/familiar step:flatpak
 
 # The metadata-validation and sandbox-engagement gates named in
 # § Validation Gates and § Release-Blocking Policy run as their own
@@ -569,17 +648,34 @@ The Flatpak steps then graft onto the same job after `step:make`:
 # like the build step, blocks the make job (no continue-on-error).
 - name: Validate Flatpak metadata
   if: matrix.target-os == 'linux'
-  working-directory: packages/familiar/flatpak
+  # Validate the artifact that SHIPS (the staged, <releases>-stamped metainfo
+  # step:flatpak writes), not the checked-in placeholder; a generation
+  # bug is invisible to a gate that reads the template. desktop-file-validate
+  # reads the checked-in .desktop, which the build copies verbatim.
   run: |
-    appstreamcli validate org.endojs.Familiar.metainfo.xml
-    desktop-file-validate org.endojs.Familiar.desktop
+    appstreamcli validate \
+      packages/familiar/out/flatpak-stage/build/org.endojs.Familiar.metainfo.xml
+    desktop-file-validate \
+      packages/familiar/flatpak/org.endojs.Familiar.desktop
 
 - name: Assert sandbox engagement (headless smoke)
   if: matrix.target-os == 'linux'
+  # The gate can only pass if the app is actually RUNNING: install, launch it
+  # under xvfb, wait (bounded) for the renderer to come up, THEN assert.
+  # Without the launch, assert-sandbox.sh finds no Familiar process and fails
+  # every platform's release unconditionally.
   run: |
     flatpak install --user --noninteractive --bundle \
       packages/familiar/out/make/*.flatpak
+    xvfb-run -a flatpak run --user org.endojs.Familiar &
+    for _ in $(seq 1 30); do
+      if pgrep -f '/app/familiar/Familiar.*--type=renderer' >/dev/null; then
+        break
+      fi
+      sleep 2
+    done
     packages/familiar/flatpak/assert-sandbox.sh
+    flatpak kill org.endojs.Familiar || true
 ```
 
 The existing `Upload make output` step already uploads the whole
@@ -606,11 +702,11 @@ The signed-repo route is the right shape if the project ever hosts
 its own update repo (an "endojs Flatpak channel" parallel to a
 Flathub listing).
 
-For MVR followups, the `.flatpak` single-file bundle is the artifact,
-and it is **unsigned**.
+For the MVR-followups phase, the `.flatpak` single-file bundle is the
+artifact, and it is **unsigned**.
 An unsigned bundle carries no signature and no imported public key: what
 `flatpak install --bundle` verifies is the bundle's internal ostree
-checksums (the payload against its own manifest, i.e. that the download
+checksums (the payload against its own manifest, that is, that the download
 is not corrupt), **not** its provenance.
 Provenance verification is what signing adds, and it is deferred.
 The signing-key story therefore parallels
@@ -638,12 +734,14 @@ sudo apt install flatpak        # Debian/Ubuntu; already present on Fedora
 flatpak remote-add --if-not-exists --user flathub \
   https://flathub.org/repo/flathub.flatpakrepo
 
-# Install the bundle and launch.
+# Install the bundle and launch (substitute the actual release filename;
+# the `0.1.0` here is illustrative and tracks the package.json version).
 flatpak install --user --bundle Familiar-0.1.0-linux-x64.flatpak
 flatpak run org.endojs.Familiar
 
-# Uninstall and remove all per-app state:
-flatpak uninstall org.endojs.Familiar
+# Uninstall and remove all per-app state (--user on both, matching the install
+# scope, so neither command prompts for disambiguation):
+flatpak uninstall --user org.endojs.Familiar
 rm -rf ~/.var/app/org.endojs.Familiar
 ```
 
@@ -657,11 +755,11 @@ terminal path on a host that has never seen Flathub.
 ### Flathub Listing (Deferred)
 
 Posting to Flathub is the right channel for non-developer Linux
-users; once the manifest is settled and the icon / AppStream
-metadata pass `appstreamcli validate` and `flatpak run
-org.flatpak.Builder//stable` cleanly, the project submits to
-`flathub/flathub` per the Flathub submission guide.
-The submission process is a separate followup; for the MVR-followup
+users. Once the manifest is settled and the icon and AppStream
+metadata pass `appstreamcli validate` and Flathub's own
+`org.flatpak.Builder` linter (run via `flatpak run org.flatpak.Builder//stable`),
+the project submits to `flathub/flathub` per the Flathub submission guide.
+The submission process is a separate followup; for the MVR-followups
 phase, the `.flatpak` bundle attached to the GitHub Release is the
 delivery channel.
 
@@ -684,7 +782,7 @@ flatpak install --user --noninteractive flathub \
 # Build and package the Electron app first, then the Flatpak.
 cd packages/familiar
 yarn build:package
-yarn step:build-flatpak
+yarn step:flatpak
 
 # Install and run.
 flatpak install --user --bundle \
@@ -692,11 +790,11 @@ flatpak install --user --bundle \
 flatpak run org.endojs.Familiar
 ```
 
-The launch's smoke pass checks that the chat window opens, the user
-fills the LLM-provider form, the daemon binds its CapTP socket in the
-app-private `$XDG_RUNTIME_DIR/endo/` and writes its state under the
-app-private `$HOME/.local/state/endo/` (both per-app by default; see
-§ Where the Familiar's Data Lives), and a message exchange round-trips.
+In the launch's smoke pass the operator opens the chat window and fills the
+LLM-provider form; the pass then checks that the daemon binds its CapTP socket
+in the app-private `$XDG_RUNTIME_DIR/endo/`, writes its state under the
+app-private `$HOME/.local/state/endo/` (both per-app by default; see § Where the
+Familiar's Data Lives), and round-trips a message exchange.
 
 #### Sandbox-Engagement Assertion
 
@@ -715,37 +813,68 @@ The smoke ships an assertion script,
 
 ```sh
 #!/bin/sh
-# Assert the Familiar's Chromium renderer is actually sandboxed, not
-# running under a silent --no-sandbox fallback. Scoped strictly to the
-# Familiar's own process tree; a machine-wide bwrap match cannot fail.
+# Assert the Familiar's Chromium renderer is actually sandboxed, not running
+# under a silent --no-sandbox fallback. Scoped to the Familiar's Flatpak
+# INSTANCE (via `flatpak ps` + each process's /.flatpak-info instance-id), not
+# a process group: zypak routes Chromium's sandbox spawns through the Flatpak
+# portal, which reparents them off the app's process group, so a pgid scan
+# would miss the renderers and false-fail a correctly sandboxed build.
 set -eu
 
-familiar_pid="$(pgrep -f '/app/familiar/Familiar' | head -n1 || true)"
-[ -n "$familiar_pid" ] || { echo 'FAIL: Familiar process not found' >&2; exit 1; }
-pgid="$(ps -o pgid= -p "$familiar_pid" | tr -d ' ')"
-tree_pids="$(pgrep -g "$pgid" || true)"
+app_instance="$(flatpak ps --columns=instance,application \
+  | awk '$2 == "org.endojs.Familiar" { print $1; exit }')"
+[ -n "${app_instance:-}" ] \
+  || { echo 'FAIL: no running Familiar Flatpak instance' >&2; exit 1; }
 
-# Signal 1: no process in the Familiar's tree carries --no-sandbox,
-# the exact fallback flag this design exists to prevent.
-for pid in $tree_pids; do
-  if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q -- '--no-sandbox'; then
+# Every process of one instance exposes a readable /.flatpak-info whose
+# instance-id matches, visible in each mount namespace the instance creates
+# (including a sandboxed renderer's own re-namespaced one).
+instance_pids=''
+for d in /proc/[0-9]*; do
+  pid="${d#/proc/}"
+  info="/proc/$pid/root/.flatpak-info"
+  [ -r "$info" ] || continue
+  [ "$(sed -n 's/^instance-id=//p' "$info" 2>/dev/null)" = "$app_instance" ] \
+    || continue
+  instance_pids="$instance_pids $pid"
+done
+
+cmdline() { tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null; }
+
+# The broker is the browser process (the /app/familiar/Familiar entry with no
+# --type=); the renderer carries --type=renderer.
+broker_pid=''
+renderer_pid=''
+for pid in $instance_pids; do
+  cl="$(cmdline "$pid")"
+  case "$cl" in
+    *"/app/familiar/Familiar"*)
+      case "$cl" in
+        *"--type=renderer"*) [ -n "$renderer_pid" ] || renderer_pid="$pid" ;;
+        *"--type="*) ;;
+        *) [ -n "$broker_pid" ] || broker_pid="$pid" ;;
+      esac ;;
+  esac
+done
+[ -n "$broker_pid" ] \
+  || { echo 'FAIL: Familiar browser process not found' >&2; exit 1; }
+
+# Signal 1: no process in the instance carries --no-sandbox, the exact fallback
+# flag this design exists to prevent.
+for pid in $instance_pids; do
+  if cmdline "$pid" | grep -q -- '--no-sandbox'; then
     echo 'FAIL: a Familiar Chromium child launched with --no-sandbox' >&2
     exit 1
   fi
 done
 
-# Signal 2: the renderer runs in a user namespace distinct from the
-# broker. zypak routes Chromium's namespace sandbox through bwrap, so an
-# engaged sandbox re-namespaces each child; --no-sandbox does not.
-renderer_pid=''
-for pid in $tree_pids; do
-  if tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q -- '--type=renderer'; then
-    renderer_pid="$pid"
-    break
-  fi
-done
-[ -n "$renderer_pid" ] || { echo 'FAIL: no renderer in the Familiar tree' >&2; exit 1; }
-if [ "$(readlink "/proc/$renderer_pid/ns/user")" = "$(readlink "/proc/$familiar_pid/ns/user")" ]; then
+# Signal 2: the renderer runs in a user namespace distinct from the broker.
+# zypak routes Chromium's namespace sandbox through bwrap, so an engaged sandbox
+# re-namespaces each child; --no-sandbox does not.
+[ -n "$renderer_pid" ] \
+  || { echo 'FAIL: no renderer in the Familiar instance' >&2; exit 1; }
+if [ "$(readlink "/proc/$renderer_pid/ns/user")" \
+     = "$(readlink "/proc/$broker_pid/ns/user")" ]; then
   echo 'FAIL: renderer shares the broker user namespace (unsandboxed)' >&2
   exit 1
 fi
@@ -754,23 +883,29 @@ echo 'PASS: Familiar renderer is sandboxed (distinct userns, no --no-sandbox)'
 
 If either signal fails the smoke fails closed and the bundle does not
 promote to release-eligible.
+Because a mis-scoped check could false-*fail* on a good build as easily as it
+false-*passes* on a bad one, phase 3 (clean-host validation, § Phased
+Implementation) must confirm this script returns PASS on a real sandboxed run
+before phase 4 wires it release-blocking.
 
-### CI Smoke (Matches [familiar-release.md](familiar-release.md) § G16)
+### CI Smoke (matches familiar-release.md § G16)
 
-The G16 smoke test (build the app, launch it under a clean state
-directory, exercise the form, observe the Primer tree (the CAS-migrated
-starter file set that `familiar-release.md` names) appearing in the
-host namespace) ports to the Flatpak target with one change: the clean
-state directory step is `rm -rf ~/.var/app/org.endojs.Familiar` rather
-than `rm -rf ~/.local/state/endo/`, because all of the Familiar's state
-is app-private under `~/.var/app/<app-id>/` per § Where the Familiar's
-Data Lives.
+This smoke matches [familiar-release.md](familiar-release.md) § G16. The G16
+test builds the app, launches it under a clean state directory, exercises the
+form, and observes the Primer tree appear (the Primer tree is the CAS-migrated
+starter file set `familiar-release.md` names). It ports to the Flatpak target
+with two changes. First, the clean-state step becomes
+`rm -rf ~/.var/app/org.endojs.Familiar` rather than `rm -rf ~/.local/state/endo/`,
+because all of the Familiar's state is app-private under `~/.var/app/<app-id>/`
+per § Where the Familiar's Data Lives. Second, the Primer tree is observed inside
+that per-app root, not the host namespace, for the same reason.
 
-A Linux runner with `xvfb-run` (Electron under headless X11) can
-host the same test the macOS G16 smoke runs.
-Under the app's provider form, "steady state" for the assertion is the
-renderer process being up with the chat window loaded; the smoke waits
-for that before running `assert-sandbox.sh`.
+A Linux runner with `xvfb-run` (Electron under headless X11) can host the same
+test the macOS G16 smoke runs.
+The assertion's steady state is the renderer process being up with the chat
+window loaded; the smoke waits for that (the bounded renderer-up poll shown in
+the § CI Workflow Integration `Assert sandbox engagement` step) before running
+`assert-sandbox.sh`.
 
 ### Validation Gates the Manifest Itself Must Pass
 
@@ -805,7 +940,11 @@ gate fails, the sandbox-engagement assertion fails):
   non-zero and the `release` job (which `needs: make`) does not run. The
   reasoning is that a Linux release that ships only the zip silently
   regresses the sandbox story this design exists to fix; shipping
-  zip-only is worse than shipping nothing.
+  zip-only is worse than shipping nothing. The inference the reader needs: the
+  retained `.zip` (§ Pipeline Shape) is acceptable only *alongside* a Flatpak,
+  because the zip alone re-exposes the unsandboxed-Chromium failure this document
+  opened with. The README and release notes therefore steer a non-developer to
+  the `.flatpak` and name the `.zip` as the developer / plain-download artifact.
 
 - **Blast radius, and the third-party dependency it introduces.**
   Because `release` needs the whole `make` job, a red Linux entry blocks
@@ -903,7 +1042,7 @@ Out of scope (intentional):
 - **No `--persist=.` grant.**
   The daemon's state, cache, CapTP socket, and PID files are already
   app-private under Flatpak's per-app `$HOME`
-  (`~/.var/app/org.endojs.Familiar/…`, for state and cache) and per-app
+  (`~/.var/app/org.endojs.Familiar/...`, for state and cache) and per-app
   `$XDG_RUNTIME_DIR` (for the socket and PID files), by default and
   with no grant (§ Where the Familiar's Data Lives), so no persistence
   grant is needed.
@@ -917,29 +1056,41 @@ Out of scope (intentional):
   The CI matrix can fan out to `x86_64` (today) and `aarch64`
   (when the maintainer turns it on) by adding a matrix entry; no
   per-arch manifest fork is needed.
-  Note that `build-flatpak.mjs` derives `--arch=` from `process.arch`
-  of the runner, so an `aarch64` bundle requires a natively-arm runner
-  (or qemu/binfmt); the CI matrix supplies that runner rather than
-  cross-building on x86_64.
+  Note that `make-flatpak.mjs` takes `--arch=` as an explicit input
+  (defaulting to the runner's `process.arch`; see § Build Script), so building an
+  `aarch64` bundle still requires an arm-native runner (or qemu/binfmt): the
+  target is decoupled from the host, but the toolchain still runs where the
+  binaries do. The CI matrix supplies that runner rather than cross-building on
+  x86_64.
 
 ## Phased Implementation
 
 | Phase | Deliverable | Effort |
 |---|---|---|
 | 1 | Land this design (PR opens DRAFT for review). | This PR. |
-| 2 | Land the manifest, launcher, desktop file, metainfo xml, `assert-sandbox.sh`, and `build-flatpak.mjs` in `packages/familiar/flatpak/` and `packages/familiar/scripts/`, plus the end-user Flatpak-install section in `packages/familiar/README.md` (the unsigned-install snippet from § Signing Posture; the existing README is dev-Quick-Start-oriented with no end-user-install section today). | Day (builder dispatch). |
-| 3 | Wire the CI steps into `familiar-release.yml`'s Linux job, including the missing `Package app` step (§ CI Workflow Integration). | Day (builder dispatch). |
-| 4 | Validate the bundle on a clean Linux host (Ubuntu 24.04 or Fedora 40+). Because the `finish-args` are already reasoned against the resolver functions, phase 4 is a confirmation smoke, not a `finish-args` iteration, and it runs before phase 3 wires the release-blocking gate. | Day (manual smoke). |
+| 2 | Confirm the current freedesktop runtime series and the matching `org.electronjs.Electron2.BaseApp` branch (do not assume `24.08`; see § Runtime Choice), then land the manifest, launcher, desktop file, metainfo xml, `assert-sandbox.sh`, and `make-flatpak.mjs` in `packages/familiar/flatpak/` and `packages/familiar/scripts/`, plus the end-user Flatpak-install section in `packages/familiar/README.md` (the unsigned-install snippet from § Signing Posture (Deferred); the existing README is dev-Quick-Start-oriented with no end-user-install section today). | Day (builder dispatch). |
+| 3 | Validate the bundle on a clean Linux host (Ubuntu 24.04 or Fedora 40+): confirm the `finish-args` smoke passes and (the precondition for phase 4) that `assert-sandbox.sh` returns PASS on a real sandboxed run and does not false-fail under zypak's portal-spawn process tree. Because the `finish-args` are already reasoned against the resolver functions, this is a confirmation smoke, not a `finish-args` iteration. | Day (manual smoke). |
+| 4 | Wire the CI steps into `familiar-release.yml`'s Linux job, including the missing `Package app` step (§ CI Workflow Integration), and make the sandbox gate release-blocking, only after phase 3 has shown `assert-sandbox.sh` passes on a good build. | Day (builder dispatch). |
 | 5 | (Followup, separate issue.) Generate a signing key, sign the bundle, and submit to Flathub. | Multi-day, dominated by Flathub review latency. |
 
 Phases 2 to 4 fall under the [familiar-release.md](familiar-release.md)
-followups phase budget; phase 5 is post-MVR-followups.
+MVR-followups phase budget; phase 5 is post-MVR-followups.
 
 ## Known Gaps and TODOs
 
+- [ ] Pin an ephemeral `ENDO_ADDR` gateway port in `launcher.sh` so the
+  sandboxed daemon's `--share=network` loopback bind cannot collide with a host
+  `endo` daemon on the fixed `127.0.0.1:8920` (§ Finish-Args, `--share=network`).
+  `getGatewayAddress` already reads the daemon-written `gateway` file, so the UI
+  follows the pinned port.
+- [ ] Handle the two-instance case (§ Where the Familiar's Data Lives): a second
+  `flatpak run` starts a second daemon over the shared per-app state, because
+  `$XDG_RUNTIME_DIR` (and hence the CapTP socket) is per-instance. Add an
+  Electron `requestSingleInstanceLock`, or a socket/`ENDO_ADDR` liveness check in
+  `launcher.sh`.
 - [ ] Confirm on a real clean Linux host that Flatpak's per-app `$HOME`
   and `$XDG_RUNTIME_DIR` make the daemon's full write surface
-  app-private, i.e. that no daemon path resolves through `whereEndoData`
+  app-private, that is, that no daemon path resolves through `whereEndoData`
   / `whereEndoConfig` onto a host root.
   If the implementation-phase smoke surfaces such a path, the fix is
   preferably a `launcher.sh` env pin into the per-app root, not a host
@@ -980,10 +1131,10 @@ followups phase budget; phase 5 is post-MVR-followups.
    grant at all, because Flatpak's per-app `$HOME` and `$XDG_RUNTIME_DIR`
    make them app-private by default (§ Where the Familiar's Data Lives);
    the surviving grants are the Chromium/X11/network ones in the table.
-   The remaining open surfaces are only the *speculative-not-yet-wired*
+   The remaining open surfaces are only the *speculative, not-yet-wired*
    ones deferred to their feature followups (pulseaudio, notifications,
    libsecret); the implementation-phase smoke test will surface any
-   currently-exercised path the walk still missed, tracked as a TODO.
+   currently exercised path the walk still missed, tracked as a TODO.
 
 3. **Flathub listing as a followup or in the same followup sequence
    as the in-tree manifest?**
