@@ -99,9 +99,14 @@ unreviewed.
 | Ask timeout | 300 s, capped at 3600 s | `askSubagent`'s `timeoutSeconds` |
 | Outstanding asks per subagent | 1 | `makeSubagentDelegations` |
 
-A timed-out ask releases its timer and forgets the delegation, so a late reply
-lands in the inbox as ordinary mail rather than settling a question nobody is
-asking any more.
+A timed-out ask releases its timer and forgets the delegation, so a reply that
+arrives afterwards settles nothing.
+It is still *consumed* rather than delivered to the model: left to fall through,
+it would be ordinary inbound mail, the parent would answer its subagent, the
+subagent would answer that, and two models would bill an unbounded exchange
+nobody asked for.
+The registry remembers the last 32 abandoned asks for that purpose; past the
+bound, a very late reply does land in the inbox.
 Teardown is depth-first, so raising the depth bound does not strand a subtree.
 
 ### Attachments
