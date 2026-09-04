@@ -846,9 +846,18 @@ jobs:
       - name: Checkout OCapN Test Suite
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # https://github.com/ocapn/ocapn-test-suite/ (main branch)
-          repository: ocapn/ocapn-test-suite
-          ref: 74db78f08a40efba1e2b975d809374ff0e7acf60
+          # https://github.com/endojs/ocapn-test-suite/tree/feat/syrups-framing
+          # Length-prefixed message framing on the tcp-testing-only
+          # netlayer; matches `makeTcpNetLayer({ framing: 'syrup' })` in
+          # @endo/ocapn (the default; backed by @endo/syrup-frame).
+          # Tracks endojs/ocapn-test-suite#1.
+          # OCAPN-TEST-SUITE-PIN: when the SHA on the `ref:` line
+          # moves, also move the matching pin commentary in
+          # `packages/ocapn/test/python-test-suite/index.js`; a
+          # repo-wide grep for `OCAPN-TEST-SUITE-PIN` finds both
+          # call sites.
+          repository: endojs/ocapn-test-suite
+          ref: 89e80d70cf0689fce0b92936f22a84b02e9e1aee
           path: ocapn-test-suite
           persist-credentials: false
 

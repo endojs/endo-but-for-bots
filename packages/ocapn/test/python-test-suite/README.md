@@ -1,6 +1,11 @@
 ### python test suite
 
-For testing the Endo OCapN client against the [OCapN test suite](https://github.com/ocapn/ocapn-test-suite/tree/main).
+For testing the Endo OCapN client against the OCapN test suite.
+The CI pin in `.github/workflows/ci.yml` currently targets the
+length-prefixed framing variant on the
+[endojs fork](https://github.com/endojs/ocapn-test-suite/tree/feat/syrups-framing).
+The JS server in `index.js` opts into matching `@endo/syrup-frame`
+framing via `makeTcpNetLayer({ framing: 'syrup' })`.
 
 ### Usage
 
