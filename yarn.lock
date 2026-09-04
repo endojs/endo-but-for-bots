@@ -2495,6 +2495,18 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/google-sheets@workspace:packages/google-sheets":
+  version: 0.0.0-use.local
+  resolution: "@endo/google-sheets@workspace:packages/google-sheets"
+  dependencies:
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
 "@endo/harden-test@workspace:packages/harden-test":
   version: 0.0.0-use.local
   resolution: "@endo/harden-test@workspace:packages/harden-test"
