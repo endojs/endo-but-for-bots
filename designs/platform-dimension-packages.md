@@ -147,10 +147,13 @@ enforced absence of guards and `makeExo` — everywhere else.
 
 The table above is exhaustive for the modules it names, and a named placement
 always wins over the chain below — that is where the exceptions live, and there
-are exactly two: `shared/blob-ref.js` imports `node:crypto` yet lands in
-`@endo/exo-cas` (§ Known Wart Carried Forward), and `fs/extended/helpers.js`
-is porcelain over the exo `Filesystem` surface yet defines no guard, so it
-lands in `@endo/exo-filesystem` rather than `@endo/fs-backend`. Any
+are exactly three: `shared/blob-ref.js` imports `node:crypto` yet lands in
+`@endo/exo-cas` (§ Known Wart Carried Forward); `fs/extended/helpers.js` is
+porcelain over the exo `Filesystem` surface yet defines no guard, so it lands
+in `@endo/exo-filesystem` rather than `@endo/fs-backend`; and `mkmem.js` is an
+`endo run` script that mints an in-memory `Filesystem` cap, so it follows the
+cap it mints into `@endo/exo-filesystem` even though it imports nothing but
+`@endo/eventual-send`. Any
 `fs/extended` module *not* named above follows the rule mechanically, as an
 ordered chain (first match wins, so a module that both defines exos and imports
 Node builtins — e.g. `node-fs-backend.js` — resolves to `@endo/fs-node`, matching
