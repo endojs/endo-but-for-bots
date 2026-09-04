@@ -513,6 +513,9 @@ export const spawnWorkerLoop = async (
       const delegated = delegations.claim(message);
       if (delegated.claimed) {
         console.log(`[fae] Message #${number} answers a pending subagent ask`);
+        // Record it the way a handled message is recorded, so a later edit of
+        // the reply does not arrive as if it were a fresh request.
+        seenInboundNumbers.add(number);
         // eslint-disable-next-line no-continue
         continue;
       }

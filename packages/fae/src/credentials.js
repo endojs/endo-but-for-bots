@@ -4,8 +4,8 @@ import { decodeBase64 } from '@endo/base64/decode.js';
 import { encodeBase64 } from '@endo/base64/encode.js';
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
-import { decodeUtf8 } from '@endo/utf8/decode.js';
 import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 
 /**
  * Pet name, in an agent's own namespace, of the `SecretBlob` holding the
@@ -64,11 +64,21 @@ export const readAuthToken = async blob => {
   bytes.length > 0 || Fail`Secret blob holds no bytes`;
   bytes.length <= MAX_TOKEN_LENGTH ||
     Fail`Secret blob holds more than ${q(MAX_TOKEN_LENGTH)} bytes; it is not a provider token`;
-  const token = decodeUtf8(bytes);
-  // Zero the intermediate copy. The daemon does the same for its own buffers;
-  // the decoded string is immutable and cannot be zeroed, which is why the
-  // token is read per provider construction rather than held indefinitely.
-  bytes.fill(0);
+  /** @type {string} */
+  let token;
+  try {
+    // Strict, so malformed bytes fail here and say so, rather than decoding to
+    // replacement characters and failing much later as an authentication error
+    // nobody can trace back to the secret.
+    token = strictDecodeUtf8(bytes);
+  } catch {
+    throw Error('Secret blob does not hold UTF-8 text');
+  } finally {
+    // Zero the intermediate copy. The daemon does the same for its own buffers;
+    // the decoded string is immutable and cannot be zeroed, which is why the
+    // token is read per provider construction rather than held indefinitely.
+    bytes.fill(0);
+  }
   token !== '' || Fail`Secret blob holds an empty provider token`;
   return token;
 };
