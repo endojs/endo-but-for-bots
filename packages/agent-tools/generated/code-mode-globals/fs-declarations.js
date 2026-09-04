@@ -237,7 +237,7 @@ type MountEndoMountFile = {
     kind: () => 'file';
     list: () => Promise<never>;
     text: () => Promise<string>;
-    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<Uint8Array, undefined>>;
     json: () => Promise<unknown>;
     sha256: () => Promise<string>;
     size: () => Promise<bigint>;
@@ -311,7 +311,7 @@ type MountEndoReadable = {
     help: (method?: string) => string;
 };
 type MountReadableBlobView = {
-    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<Uint8Array, undefined>>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     getInfo: () => Promise<MountBlobInfo>;

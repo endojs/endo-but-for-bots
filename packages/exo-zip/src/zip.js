@@ -30,8 +30,7 @@ try {
  * (`@endo/platform`'s `ReadableBlobInterface`): `stream(synHead)`
  * returns a `StreamNode` chain, which `iterateBytesReader` consumes —
  * thawing each passable ack chunk to a mutable `Uint8Array` before yielding it.
- * Each chunk is decoded independently, so there is no interior-padding
- * concern; we simply concatenate the decoded byte chunks.
+ * Each chunk is already raw bytes, so we simply concatenate them.
  *
  * @param {unknown} blobRef A remotable exposing `stream`.
  * @returns {Promise<Uint8Array>}
