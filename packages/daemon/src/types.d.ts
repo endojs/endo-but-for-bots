@@ -563,6 +563,16 @@ export type MailHubFormula = {
   store: FormulaIdentifier;
 };
 
+/**
+ * Form fields as persisted in a message formula: smallcaps capdata, so the
+ * CopyTagged patterns survive the formula's JSON round-trip. Forms written
+ * before this encoding hold the raw `FormField[]` instead.
+ */
+export type StoredFormFields = {
+  body: string;
+  slots: [];
+};
+
 export type MessageFormula = {
   type: 'message';
   messageType: 'request' | 'package' | 'definition' | 'form' | 'value';
@@ -580,7 +590,7 @@ export type MessageFormula = {
   ids?: FormulaIdentifier[];
   source?: string;
   slots?: Record<string, { label: string; pattern?: unknown }>;
-  fields?: FormField[];
+  fields?: FormField[] | StoredFormFields;
   valueId?: FormulaIdentifier;
 };
 
@@ -733,8 +743,10 @@ export type FormField = {
   name: string;
   label: string;
   example?: string;
-  default?: unknown;
-  pattern?: unknown;
+  // Passable, not unknown: a field crosses CapTP and is persisted with the
+  // form's message formula, so neither of these can be an arbitrary value.
+  default?: Passable;
+  pattern?: Passable;
   secret?: boolean;
 };
 

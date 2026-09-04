@@ -5,8 +5,9 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { makePromiseKit } from '@endo/promise-kit';
-import { q } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { mustMatch, M } from '@endo/patterns';
+import { makeMarshal } from '@endo/marshal';
 import { makeChangeTopic } from './pubsub.js';
 import {
   assertFormulaNumber,
@@ -32,7 +33,7 @@ import {
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
-/** @import { DaemonCore, DeferredTasks, DefineRequest, Envelope, EnvelopedMessage, FormulaIdentifier, FormulaNumber, Form, Handle, Mail, MakeMailbox, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NameOrPath, NamePath, PetName, Provide, Request, Responder, StampedMessage, Topic, ValueMessage } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, DefineRequest, Envelope, EnvelopedMessage, FormulaIdentifier, FormulaNumber, Form, FormField, Handle, Mail, MakeMailbox, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NameOrPath, NamePath, PetName, Provide, Request, Responder, StampedMessage, StoredFormFields, Topic, ValueMessage } from './types.js' */
 
 /** @type {PetName} */
 const NEXT_MESSAGE_NUMBER_NAME = /** @type {PetName} */ ('next-number');
@@ -110,6 +111,51 @@ const assertUniqueEdgeNames = edgeNames => {
     seen.add(edgeName);
   }
 };
+
+/**
+ * Form fields carry `@endo/patterns` patterns, which are CopyTagged values
+ * whose tag lives on `Symbol.toStringTag`. Message formulas are persisted with
+ * `JSON.stringify` (`manager-database.js`), and JSON has no representation for
+ * a symbol key, so a field stored raw comes back as its payload alone:
+ * `M.boolean()` becomes the plain record `{ payload: 'boolean' }`. That is not
+ * a slack pattern, it is an unsatisfiable one — `submit` matches the answer
+ * against it, and no boolean is a record — so a boolean field was permanently
+ * unanswerable from the first restart onwards.
+ *
+ * Encode the fields as smallcaps capdata instead, the same JSON-safe
+ * representation `MarshalFormula` already uses to keep a passable in storage.
+ */
+const fieldsMarshaller = makeMarshal(undefined, undefined, {
+  serializeBodyFormat: 'smallcaps',
+});
+
+/**
+ * @param {FormField[]} fields
+ * @returns {StoredFormFields}
+ */
+const encodeFormFields = fields => {
+  const { body, slots } = fieldsMarshaller.toCapData(harden(fields));
+  // A field is a declaration — name, label, default, pattern — so it has no
+  // capabilities to reference. Refusing slots keeps it that way, rather than
+  // writing identifiers we could not resolve on the way back out.
+  slots.length === 0 ||
+    Fail`Form fields must be pure data, got ${q(slots.length)} slot(s)`;
+  return harden({ body, slots: [] });
+};
+
+/**
+ * Forms persisted before fields were encoded hold the raw array. Those keep
+ * the flattened patterns they were written with — nothing can recover a tag
+ * that was never stored — so they are passed through as they are found, and no
+ * migration is needed.
+ *
+ * @param {FormField[] | StoredFormFields} fields
+ * @returns {FormField[]}
+ */
+const decodeFormFields = fields =>
+  Array.isArray(fields)
+    ? harden(fields)
+    : /** @type {FormField[]} */ (fieldsMarshaller.fromCapData(harden(fields)));
 
 const makeEnvelope = () => makeExo('Envelope', EnvelopeInterface, {});
 
@@ -345,7 +391,7 @@ export const makeMailboxMaker = ({
           type: 'message',
           ...envelopeRecord,
           description: envelope.description,
-          fields: envelope.fields,
+          fields: encodeFormFields(envelope.fields),
         });
       }
 
@@ -564,7 +610,7 @@ export const makeMailboxMaker = ({
           from: formula.from,
           to: formula.to,
           description: formula.description,
-          fields: formula.fields,
+          fields: decodeFormFields(formula.fields),
           messageId: formula.messageId,
           ...(formula.replyTo !== undefined && { replyTo: formula.replyTo }),
           number: messageNumber,
