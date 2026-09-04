@@ -109,7 +109,9 @@ The `forever-pending` condition covers two cases that a debugger reads
 differently, so the entry names which one it is:
 
 - The carrier was finalized having **never been settled at all** (a
-  producer that forgot to resolve).
+  producer that forgot to resolve and was itself collected; while the
+  producer is still alive this shows up as `long-pending` instead; see the
+  weak-reachability constraint below).
 - The carrier was finalized after an `unlistened-rejection` whose reason
   **was never delivered to a listener**.
   This composite is the highest-signal bug the view can report: a
@@ -123,9 +125,9 @@ A carrier is *settled*, in the parent design's vocabulary, once its
 producer has called `resolve` or `reject`, whether or not any listener
 observed the outcome.
 A `forever-pending` carrier is therefore one finalized without ever
-*delivering* an observed settlement, which is why the rejected-but-never
--listened case belongs here even though that carrier was, strictly,
-settled.
+*delivering* an observed settlement, which is why the
+rejected-but-never-listened case belongs here even though that carrier
+was, strictly, settled.
 
 The design deliberately introduces **no periodic sweep and no timer**.
 Each recorded category is fed by an event that already happens (a reject
@@ -140,9 +142,17 @@ below.
 The one value the debug view holds for an `unlistened-rejection` is a
 **diagnostic projection** of the rejection reason, not the reason object
 itself.
-The projection is computed at record time and consists of plain strings:
-the reason's `message`, its `name`, and a `q()`-quoted or stack rendering
-suitable for a snapshot.
+The projection is computed at record time and consists of plain strings,
+computed through **SES's own error redaction** rather than read from the
+reason verbatim: the reason's `name`, its **redacted** message (the same
+`redactedDetails` projection SES applies on the unhandled-rejection path,
+`packages/ses/src/error/assert.js`, so unquoted detail arguments stay
+hidden and only the `q()`-quoted, explicitly-public substrings survive),
+and (only where SES itself would expose it, through the privileged
+`getStackString`, and never more broadly) a stack rendering.
+Nothing the projection reads out is wider than what SES already discloses
+for the same error; the projection never bypasses SES's redaction to read
+the reason's raw properties or `cause` chain.
 
 Holding a projection rather than the reason graph is load-bearing for
 three separate invariants, so it is stated once here and referred to
@@ -165,8 +175,12 @@ elsewhere:
   objects irreversibly.
   Freezing a record of strings freezes only the record shell.
 - **No authority leak.**
-  A projection of strings carries no handles, so Design Decision 5's "no
-  authority crosses a cap boundary" holds by construction.
+  A projection of strings carries no handles, so no authority crosses a
+  cap boundary (Design Decision 5).
+  This is an **authority** property only: whether the projected strings
+  are themselves *confidential* across compartments is a separate axis,
+  held open by Open Question 1, and is why the projection is redacted with
+  SES's own error redaction (above) rather than read verbatim.
 
 ### Weak-reachability constraint (implementation invariant)
 
@@ -190,10 +204,35 @@ on the surfaces it hooks:
 
 If any runtime-to-carrier edge outside this list is strong (for example a
 producer record that outlives the carrier and strongly references it),
-finalization fires only once that whole graph dies, and the headline case
-(producer alive, forgot to resolve) never fires.
-The parent design states that its runtime edges to a carrier are weak;
-this design depends on that and does not weaken it.
+finalization fires only once that whole graph dies, so a carrier stays
+observable-as-live for exactly as long as its producer does.
+
+This design does **not** inherit a weak producer-to-carrier edge from the
+parent, and must not claim to.
+The [pass-style-promise](pass-style-promise.md) design states no weakness
+or GC property about a carrier at all; its canonical usage does the
+opposite, keeping the `resolver` in a long-lived producer table
+(`rememberResolver(kref, resolver)`), and the resolver must reach the
+carrier's fire-once listener list to deliver a settlement.
+So a live producer that constructed a carrier and forgot to resolve it
+plausibly **pins** its own carrier, and `forever-pending` does not fire
+for that carrier while the producer is alive.
+This is a real dependency on a parent invariant the parent does not yet
+state, tracked as Open Question 6, not a property discharged here.
+
+Because of that, `forever-pending` is scoped to what GC can actually
+observe: a carrier is reported `forever-pending` only once **both it and
+the producer record holding its resolver have become unreachable**.
+The headline composite (`undeliveredRejection`) is re-ranked to match:
+its highest-signal instance is a **retained rejection on a carrier whose
+producer is also gone**: the "dropped in transit, nobody left who could
+ever deliver it" bug, which GC can prove, rather than "producer still
+alive, forgot to resolve", which it cannot.
+The still-alive "producer forgot to resolve" case is instead surfaced by
+the **`long-pending`** category (derived from `liveSet` at inspection
+time, which needs no finalization), so no signal is lost by this scoping;
+only its classification moves from `forever-pending` to `long-pending`
+until Open Question 6 is resolved.
 
 ### Structures and entry shape
 
@@ -263,19 +302,34 @@ So eviction protects the undelivered half:
   **not** subject to the recency FIFO.
   They are evicted only among themselves, and only when `retained`
   exceeds its own capacity `R`, oldest first.
-- Every such eviction increments an `evicted` counter **and** records the
-  evicted `id` in a small bounded `evictedIds` set.
-  A later `forever-pending` finalization for an evicted `id` then sets
-  `priorEntryEvicted: true` on its entry, so a lost correlation is
-  **visible** in the snapshot rather than silently absent.
+  Because `id` is monotonic and `retained` evicts oldest-first, the
+  smallest `id` still present is a **watermark**: every `id` below it has
+  aged out.
+  So each eviction advances a single `lowestRetainedId` watermark rather
+  than accumulating a second bounded set.
+  A later `forever-pending` finalization whose `id` is below
+  `lowestRetainedId` (and is not currently in `retained`) is therefore
+  **known-evicted** in `O(1)`, and its entry gets `priorEntryEvicted:
+  true`, so a lost correlation is **visible** in the snapshot rather than
+  silently absent.
+  The watermark carries no bound of its own, so, unlike a bounded
+  `evictedIds` set (which could itself overflow and restore the silence it
+  exists to remove), the "this was evicted, not absent" signal never
+  itself goes silent.
+- These two loss channels mean different things (losing a `retained`
+  entry destroys a correlation, losing a `ring` entry loses only recency),
+  so the `evicted` counter is **split per structure**, reported as
+  `{ retained, ring }`, not collapsed into one scalar.
+  A `retained` eviction increments `evicted.retained` and advances the
+  watermark; a `ring` eviction increments `evicted.ring`.
 - The recency FIFO (`ring`) holds only terminal, lower-signal events
   (a delivered rejection, a `forever-pending`).
-  Its evictions also increment `evicted`.
 
 This bounds memory honestly: it is `O(R)` retained projections plus `N`
 ring entries plus `O(live unsettled carriers)` `WeakRef`s in `liveSet`,
-not `N` overall.
-The snapshot reports `capacity`, `evicted`, and the thresholds (below) so
+plus a single-integer watermark, not `N` overall.
+The snapshot reports `capacity`, `retainedCapacity`, both `evicted`
+counters, the `lowestRetainedId` watermark, and the thresholds (below) so
 a debugger can tell an empty result apart from a saturated one.
 
 ### When entries are recorded
@@ -291,7 +345,7 @@ flowchart TD
   REG --> SET{"carrier settled?"}
   SET -->|"yes"| PRUNE["settle hook prunes id from liveSet"]
   REG --> GC{"carrier finalized before delivering a settlement?"}
-  GC -->|"yes"| FP["append forever-pending to ring;<br/>look up id in retained / evictedIds;<br/>set undeliveredRejection or priorEntryEvicted"]
+  GC -->|"yes"| FP["append forever-pending to ring;<br/>look up id in retained (or below lowestRetainedId watermark);<br/>set undeliveredRejection or priorEntryEvicted"]
 
   INSPECT["debugView() called (separate entry point)"] --> LP["walk liveSet;<br/>filter unsettled carriers older than threshold;<br/>synthesize longPending, capped at L"]
 ```
@@ -317,9 +371,10 @@ flowchart TD
   to `ring`.
   It then looks the `id` up: if `retained` still holds an undelivered
   `unlistened-rejection` for it, the entry gets `undeliveredRejection:
-  true` plus that reason projection (the headline case); if the `id` is in
-  `evictedIds`, the entry gets `priorEntryEvicted: true`; otherwise it is a
-  plain never-settled `forever-pending`.
+  true` plus that reason projection (the headline case); else if the `id`
+  is below the `lowestRetainedId` watermark, that `unlistened-rejection`
+  was evicted, so the entry gets `priorEntryEvicted: true`; otherwise it is
+  a plain never-settled `forever-pending`.
 - **At inspection time**: `long-pending` is computed by walking `liveSet`,
   keeping still-live carriers whose `createdAt` is older than the
   threshold, and synthesizing derived entries capped at a limit `L`.
@@ -367,9 +422,18 @@ It never returns the live buffer and never returns a resolver or carrier.
  *     enabled,               // false when ENDO_PROMISE_DEBUG_VIEW is off
  *     capacity,              // ring capacity N
  *     retainedCapacity,      // retained-map capacity R
- *     evicted,               // count of records dropped by either bound
+ *     longPendingLimit,      // derived-query cap L
  *     longPendingThreshold,  // the age applied to classify long-pending
- *     entries,               // recorded events, most recent last:
+ *     evicted,               // records dropped, reported per structure:
+ *                            //   { retained, ring }
+ *     lowestRetainedId,      // watermark: any id below it has aged out of
+ *                            //   retained, so a later forever-pending for
+ *                            //   such an id is known-evicted, not absent
+ *     entries,               // union of the still-undelivered records in
+ *                            //   retained (delivered: false) and the
+ *                            //   terminal events in ring, merged and
+ *                            //   sorted by recordedAt ascending (most
+ *                            //   recent last):
  *                            //   { id, category, createdAt, recordedAt,
  *                            //     label?, reason?, delivered?,
  *                            //     undeliveredRejection?,
@@ -389,15 +453,26 @@ HandledPromise.debugView = () => { /* ... */ };
 
 Recorded events and the derived query are kept in **separate fields**
 because only recorded events have a record time and an eviction policy.
+The `entries` array projects **both** recorded structures into one view:
+the still-undelivered `unlistened-rejection` records held in `retained`
+(these carry `delivered: false` and are the half the view exists to
+report) and the terminal events in `ring` (delivered rejections and
+`forever-pending` entries).
+The two are merged and sorted by `recordedAt` ascending so the most
+recent is last; a reader distinguishes the two structures by the
+`delivered` field, not by position.
 A `long-pending` member is computed now, so it carries `observedAt` (the
-inspection time) rather than `recordedAt`, and it is never spliced into
-the `entries` ring, so it can never consume ring capacity nor evict a
-retained reason.
-The snapshot's own bounds (`capacity`, `retainedCapacity`, `evicted`,
-`longPendingThreshold`) are reported alongside the entries so a debugger
-who sees no record for a promise they suspect can tell "did not happen"
-from "evicted", and one who sees no `long-pending` can tell what age was
-applied.
+inspection time) rather than `recordedAt`, and it is never merged into
+`entries`, so it can never consume ring capacity nor evict a retained
+reason.
+The snapshot's own bounds (`capacity`, `retainedCapacity`,
+`longPendingLimit`, `longPendingThreshold`) and both loss counters
+(`evicted.retained`, `evicted.ring`, plus the `lowestRetainedId`
+watermark) are reported alongside the entries so a debugger who sees no
+record for a promise they suspect can tell "did not happen" from
+"evicted", one who sees exactly `L` long-pending entries can tell "that is
+all" from "truncated", and one who sees no `long-pending` can tell what
+age was applied.
 
 The accessor is a **host-side diagnostic power**, not a passable
 capability.
@@ -518,10 +593,10 @@ The load-bearing reuses:
   resolver already tracks internally, through its own runtime-owned hook
   (see "First-listener arrival plumbing"), not the producer's optional
   `onFirstListen`.
-- **Fire-once settlement** (parent's Open Question 3 resolution): because
-  settlement is final, an entry's lifecycle is monotonic (pending to
-  settled/delivered, or pending to finalized), so the buffer never has to
-  reconcile a resettled carrier.
+- **Fire-once settlement** (parent's Resolved Decision 3, *Fire-once
+  listener lifecycle*): because settlement is final, an entry's lifecycle
+  is monotonic (pending to settled/delivered, or pending to finalized), so
+  the buffer never has to reconcile a resettled carrier.
 
 ## Dependencies
 
@@ -531,7 +606,7 @@ The load-bearing reuses:
 | [endojs/endo#1312](https://github.com/endojs/endo/issues/1312) | The `new Promise(() => {})` never-settling token idiom the `forever-pending` category makes visible once expressed as a dropped pass-style carrier. |
 | [endojs/endo#1652](https://github.com/endojs/endo/issues/1652) | Source of the `listen`/`settle` primitives whose first-listener transition the `delivered` marking rides. |
 | [endojs/endo-but-for-bots#172](https://github.com/endojs/endo-but-for-bots/issues/172) | The `Promise[Symbol.for('delegate')]` follow-up; if the debug view is exposed as a delegate-adjacent op, it should compose with that surface rather than duplicate it (Open Question 1). |
-| [packages/ses/src/error/unhandled-rejection.js](https://github.com/endojs/endo/blob/master/packages/ses/src/error/unhandled-rejection.js) | Existing in-repo tracker of the same shape (monotonic id, id-to-reason map, promise-to-id weakmap, `FinalizationRegistry`). Reuse candidate for id allocation and finalization plumbing, and gating precedent (it uses a lockdown option; this design uses an env-option, deliberately). |
+| [`packages/ses/src/error/unhandled-rejection.js`](../packages/ses/src/error/unhandled-rejection.js) | Existing in-repo tracker of the same shape (monotonic `id`, `id`-to-`reason` `Map`, promise-to-`id` `WeakMap`, `FinalizationRegistry`). Reuse candidate for id allocation and finalization plumbing, and gating precedent (it uses a lockdown option; this design uses an env-option, deliberately). |
 
 ## Phased Implementation
 
@@ -540,14 +615,15 @@ integration), because the retention path and the `listen`/first-listener
 transition it reads must exist first.
 
 1. **Buffers and env-options (S).**
-   The `ring` FIFO, the `retained` map with its bounded eviction and
-   `evictedIds` marker, the `ENDO_PROMISE_DEBUG_VIEW` gate and the four
-   bound options, the disabled-path guards, the serial id allocator
-   (shared with the existing unhandled-rejection tracker), and
+   The `ring` FIFO, the `retained` map with its bounded eviction and the
+   `lowestRetainedId` watermark it advances, the `ENDO_PROMISE_DEBUG_VIEW`
+   gate and the four bound options, the disabled-path guards, the serial id
+   allocator (shared with the existing unhandled-rejection tracker), and
    `HandledPromise.debugView()` returning the frozen snapshot.
    Unit tests for ring capacity, retained-map eviction incrementing
-   `evicted` and setting `priorEntryEvicted` on a later finalization, the
-   disabled no-op, and the `enabled` flag.
+   `evicted.retained`, advancing the watermark, and setting
+   `priorEntryEvicted` on a later finalization for a below-watermark `id`,
+   the disabled no-op, and the `enabled` flag.
 2. **Unlistened-rejection recording (M).**
    Append on `resolver.reject` with no listener into `retained`; register
    the runtime's own first-listener hook per carrier with no strong
@@ -565,8 +641,8 @@ transition it reads must exist first.
 4. **Forever-pending via FinalizationRegistry (S).**
    Register at `makePromise()` with the serial `id` as `heldValue`, append
    on finalization of a carrier that never delivered a settlement, and set
-   `undeliveredRejection` / `priorEntryEvicted` from the `retained` /
-   `evictedIds` lookup.
+   `undeliveredRejection` / `priorEntryEvicted` from the `retained` lookup
+   and the `lowestRetainedId` watermark test.
    Test the composite headline case explicitly: an `unlistened-rejection`
    entry whose carrier is GC'd before any listener arrives must, on
    finalization, produce a `forever-pending` entry with
@@ -616,8 +692,13 @@ transition it reads must exist first.
 5. **Reason projection, not reason graph.**
    The buffer holds a value-only projection of a rejection reason, which
    preserves the weak-carrier invariant, keeps `harden` from freezing
-   foreign application graphs, and leaks no authority across a cap
-   boundary.
+   foreign application graphs, and, because a projection of strings
+   carries no handle, leaks no **authority** across a cap boundary.
+   This decision settles the authority axis only.
+   The *confidentiality* of the projected strings themselves is a separate
+   axis, held open by Open Question 1, and is why the projection is
+   computed through SES's own error redaction (see "Retained-reason
+   projection") rather than read from the reason verbatim.
 6. **Producer `label` and system `id` are separate fields.**
    A producer-supplied diagnostic string (`label`) and the
    system-generated correlation identifier (`id`) never share one field or
@@ -685,6 +766,21 @@ transition it reads must exist first.
    A turn counter is deterministic and reproducible across replays;
    wall-clock is more legible to a human reading a snapshot.
    Should the buffer carry both?
+6. **Does the parent guarantee a weak (or state-mediated) producer-to-carrier
+   edge?**
+   `forever-pending` can only fire once a carrier is unreachable, but the
+   parent design keeps the `resolver` in a long-lived producer table and
+   the resolver reaches the carrier's listener list, so a live producer
+   that forgot to resolve pins its carrier (see the weak-reachability
+   constraint section).
+   Should [pass-style-promise](pass-style-promise.md) be amended to state
+   that the resolver holds its carrier weakly or through value-only state,
+   so `forever-pending` can classify a still-live-producer carrier?
+   Until it is, this design scopes `forever-pending` to carriers whose
+   producer is also collected and routes the still-live case to
+   `long-pending`.
+   This is the one parent-contract change the debug view would benefit
+   from; it does not make that change unilaterally.
 
 ## Prompt
 
