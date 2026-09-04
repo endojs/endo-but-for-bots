@@ -41,6 +41,12 @@ Nothing is written into the message text to make this work, so the subagent
 never sees a correlation token, and a message from anyone else cannot settle a
 delegation.
 
+A message still marked `done: false` is left alone: a sender may reveal an
+answer progressively and settle it later with `editMessage`, and claiming the
+placeholder would hand the model "Thinking…" as the subagent's answer.
+The daemon re-emits the settled revision under the same number, and that is what
+claims the delegation.
+
 ### Locator identity
 
 `locate()` decorates a locator with the transport hints `@nets` publishes at the
@@ -87,8 +93,20 @@ called for it and `claim` has nothing to match.
 A timed-out ask releases its timer and forgets the delegation, so a late reply
 lands in the inbox as ordinary mail rather than settling a question nobody is
 asking any more.
-
 Teardown is depth-first, so raising the depth bound does not strand a subtree.
+
+### Attachments
+
+A reply may carry capabilities, and what happens to them follows each harness's
+existing dismissal policy rather than inventing a new one.
+Fae does not auto-dismiss, so `askSubagent` reports the reply's message number
+and edge names and tells the model to `adopt` them.
+A Floot session dismisses every message it handles, and a claimed reply is no
+exception: leaving one would mean that after a restart, with no ask pending, the
+reply replays as an ordinary message, the session answers it, and the subagent
+answers back — two models in an unbounded exchange.
+So Floot's `askSubagent` says plainly that the attachments were not retained and
+suggests asking the subagent to store the object under a pet name instead.
 
 ## Durability
 

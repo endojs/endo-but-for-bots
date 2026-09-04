@@ -258,6 +258,9 @@ export const makeFlootToolRegistry = (
       powers,
       spawner,
       delegations,
+      // A Floot session dismisses every message it handles, a delegation reply
+      // included, so telling the model to adopt from one would be a lie.
+      retainsAttachments: false,
     })) {
       builtins.set(name, tool);
     }
