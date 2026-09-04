@@ -180,6 +180,17 @@ test.serial('secret blobs form submits with the secrets layout', async t => {
   t.is(submitted[0].name, 'secrets');
 });
 
+test.serial('hosted endo form submits with the management layout', async t => {
+  const { $container, submitted } = await setup();
+  $container.querySelector('[data-mode="management"]').click();
+  await waitFor(() => !!$container.querySelector('.add-space-form'));
+
+  submitForm($container);
+  await waitFor(() => submitted.length > 0);
+  t.is(submitted[0].layout, 'management');
+  t.is(submitted[0].name, 'hosted-endo');
+});
+
 test.serial('an empty handle shows a validation error', async t => {
   const { $container, submitted } = await setup();
   $container.querySelector('[data-mode="new-agent"]').click();
