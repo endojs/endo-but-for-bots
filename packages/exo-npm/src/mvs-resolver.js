@@ -48,37 +48,61 @@ const utf8Encoder = new TextEncoder();
  * Parse a semver-shaped version string into its numeric components.
  *
  * Permissive on prerelease and build-metadata tags; both are dropped
- * for comparison purposes. A non-conforming string sorts to the end
- * (Infinity components).
+ * for comparison purposes. A non-conforming string is flagged
+ * `parseable: false` and sorts after every conforming spelling.
+ *
+ * Release components are parsed as `BigInt`, not `Number`: release runs are
+ * registry-supplied digit strings of unbounded length, so `Number()` loses
+ * precision past `2**53` (distinct majors collapse to equal) and overflows a
+ * several-hundred-digit component to `Infinity`. This keeps `satisfiesRange`'s
+ * filter predicate consistent with `comparePublishedVersions`' `BigInt` sort;
+ * the two disagreeing at large values was the defect this pins.
  *
  * @param {string} version
- * @returns {{ major: number, minor: number, patch: number, raw: string }}
+ * @returns {{ parseable: boolean, major: bigint, minor: bigint, patch: bigint, raw: string }}
  */
 const parseVersion = version => {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
   if (!match) {
-    return { major: Infinity, minor: Infinity, patch: Infinity, raw: version };
+    return { parseable: false, major: 0n, minor: 0n, patch: 0n, raw: version };
   }
   return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
+    parseable: true,
+    major: BigInt(match[1]),
+    minor: BigInt(match[2]),
+    patch: BigInt(match[3]),
     raw: version,
   };
 };
 harden(parseVersion);
 
 /**
- * Compare two parsed versions in dewey-decimal order.
+ * A component equals a decimal string only when both name the same integer.
+ * A non-numeric range part never matches.
+ *
+ * @param {bigint} component
+ * @param {string} decimal
+ */
+const componentEquals = (component, decimal) =>
+  /^\d+$/.test(decimal) && component === BigInt(decimal);
+harden(componentEquals);
+
+/**
+ * Compare two parsed versions in dewey-decimal order. Non-parseable spellings
+ * segregate after every parseable one (matching `comparePublishedVersions`);
+ * two non-parseable versions compare equal here.
  *
  * @param {ReturnType<typeof parseVersion>} a
  * @param {ReturnType<typeof parseVersion>} b
  * @returns {number}
  */
 const compareVersions = (a, b) => {
-  if (a.major !== b.major) return a.major - b.major;
-  if (a.minor !== b.minor) return a.minor - b.minor;
-  return a.patch - b.patch;
+  if (a.parseable !== b.parseable) return a.parseable ? -1 : 1;
+  if (!a.parseable) return 0;
+  if (a.major !== b.major) return a.major < b.major ? -1 : 1;
+  if (a.minor !== b.minor) return a.minor < b.minor ? -1 : 1;
+  if (a.patch !== b.patch) return a.patch < b.patch ? -1 : 1;
+  return 0;
 };
 harden(compareVersions);
 
@@ -134,10 +158,10 @@ export const satisfiesRange = (candidateRaw, range) => {
   if (trimmed.startsWith('^')) {
     const base = parseVersion(trimmed.slice(1));
     if (candidate.major !== base.major) return false;
-    if (base.major > 0) {
+    if (base.major > 0n) {
       return compareVersions(candidate, base) >= 0;
     }
-    if (base.minor > 0) {
+    if (base.minor > 0n) {
       return (
         candidate.minor === base.minor && compareVersions(candidate, base) >= 0
       );
@@ -169,17 +193,19 @@ export const satisfiesRange = (candidateRaw, range) => {
   }
   // X-range: '1.2.x' or '1.x'.
   if (/[xX*]/.test(trimmed)) {
+    // A non-conforming candidate matches no numeric component of an x-range.
+    if (!candidate.parseable) return false;
     const parts = trimmed.split('.');
     const majorOk =
       parts[0] === '*' ||
       parts[0] === 'x' ||
       parts[0] === 'X' ||
-      candidate.major === Number(parts[0]);
+      componentEquals(candidate.major, parts[0]);
     if (!majorOk) return false;
     if (parts.length < 2 || /[xX*]/.test(parts[1])) return true;
-    if (candidate.minor !== Number(parts[1])) return false;
+    if (!componentEquals(candidate.minor, parts[1])) return false;
     if (parts.length < 3 || /[xX*]/.test(parts[2])) return true;
-    return candidate.patch === Number(parts[2]);
+    return componentEquals(candidate.patch, parts[2]);
   }
   // Exact.
   return compareVersions(candidate, parseVersion(trimmed)) === 0;
