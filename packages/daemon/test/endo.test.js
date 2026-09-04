@@ -6483,6 +6483,112 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   );
 });
 
+test('host-only capabilities are not reachable through an EndoGuest', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('authority-guest', {
+    agentName: 'authority-guest-agent',
+  });
+
+  const hostOnlyMethodNames = harden([
+    'accept',
+    'addPeerInfo',
+    'adoptFromLocator',
+    'cancel',
+    'diagnostics',
+    'endow',
+    'followPeerChanges',
+    'followRetentionPaths',
+    'gateway',
+    'getGitCredentialController',
+    'getGitRemoteController',
+    'getHttpClientControl',
+    'getPeerInfo',
+    'greeter',
+    'invite',
+    'listKnownPeers',
+    'listRetentionPaths',
+    'locateWithHints',
+    'makeArchive',
+    'makeChannel',
+    'makeFromTree',
+    'makeTimer',
+    'makeUnconfined',
+    'makeUnconfinedFromTree',
+    'provideBasicCredential',
+    'provideBearerCredential',
+    'provideGit',
+    'provideGitClone',
+    'provideGitRemote',
+    'provideGuest',
+    'provideHost',
+    'provideHostPath',
+    'provideHttpClient',
+    'provideMount',
+    'provideScratchMount',
+    'provideShell',
+    'provideSubMount',
+    'provideWorker',
+    'sign',
+    'stageTree',
+    'storeTree',
+  ]);
+
+  // Assert that every host-only method is unreachable through `facet`,
+  // both by name (absent from its method-name list) and by behaviour
+  // (invoking it by overstepping the type at the CapTP boundary is
+  // rejected at the receiver). The undeclared method has no property on
+  // the hardened exo, so the send fails at dispatch before any handler
+  // body runs — calling it with no arguments is therefore safe and
+  // provokes no side effect. The `no method "<name>"` message shape pins
+  // that each rejection names the intended method, so a name that is a
+  // prefix of another (e.g. makeUnconfined vs makeUnconfinedFromTree)
+  // cannot pass on a sibling's error.
+  const assertHostOnlySurfaceUnreachable = async (facet, facetLabel) => {
+    // eslint-disable-next-line no-underscore-dangle
+    const facetMethods = await E(facet).__getMethodNames__();
+    await Promise.all(
+      hostOnlyMethodNames.map(async methodName => {
+        t.false(
+          facetMethods.includes(methodName),
+          `${facetLabel} must not expose host-only ${methodName}`,
+        );
+        await t.throwsAsync(
+          () => E(/** @type {any} */ (facet))[methodName](),
+          { message: new RegExp(`no method "${methodName}"`) },
+          `${facetLabel} cannot invoke host-only ${methodName}`,
+        );
+      }),
+    );
+  };
+
+  // eslint-disable-next-line no-underscore-dangle
+  const guestMethods = await E(guest).__getMethodNames__();
+  // eslint-disable-next-line no-underscore-dangle
+  const hostMethods = await E(host).__getMethodNames__();
+  t.deepEqual(
+    hostMethods.filter(name => !guestMethods.includes(name)),
+    hostOnlyMethodNames,
+    'the complete EndoHost-only surface remains absent from EndoGuest',
+  );
+
+  // The complete host-only surface — not a curated subset — must be
+  // behaviourally unreachable through the guest, so a dispatch regression
+  // that resolved any single unlisted method (e.g. by falling through to
+  // a shared prototype) fails this test rather than slipping past.
+  await assertHostOnlySurfaceUnreachable(guest, 'EndoGuest');
+
+  // The guest's reserved @host name resolves to its parent's mail handle,
+  // not a delegated EndoHost facet. That handle must not become a second
+  // path to the host surface: the *entire* host-only set must be
+  // unreachable through it too, so a leak of any single host-only method —
+  // not just makeUnconfinedFromTree — is caught.
+  const parentHandle = await E(guest).lookup(['@host']);
+  await assertHostOnlySurfaceUnreachable(
+    parentHandle,
+    'the @host parent handle',
+  );
+});
+
 test('provideHostPath rejects a spoof that passes the MountCap shape gate', async t => {
   // Pins the layering documented in the agent host's `assertIsMountCap`:
   //
