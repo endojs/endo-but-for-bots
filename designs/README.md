@@ -229,8 +229,8 @@ and trusted physical-backing provenance as a hidden Exo facet),
 Familiar Linux distribution: `org.freedesktop.Platform//24.08`
 runtime, `org.electronjs.Electron2.BaseApp` base, narrow
 `finish-args`, single-file `.flatpak` bundle attached to GitHub
-Releases; implements `familiar-release.md` (PR
-[#231](https://github.com/endojs/endo-but-for-bots/pull/231)) G4
+Releases; implements `familiar-release.md` § G4 (PR
+[#231](https://github.com/endojs/endo-but-for-bots/pull/231))
 followup),
 [patterns-diagnostic-feedback](patterns-diagnostic-feedback.md) (added
 2026-05-19, revised 2026-05-20; opt-in

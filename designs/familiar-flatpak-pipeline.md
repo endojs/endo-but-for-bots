@@ -68,7 +68,7 @@ the end user installs a prebuilt bundle and never runs the builder.
 ### Where the Familiar's Data Lives
 
 This section argues in vocabulary that the manifest sections below define
-in full, so two definitions up front.
+in full, so here are two definitions up front.
 The **manifest** (`org.endojs.Familiar.json`, § Manifest Shape) is the
 Flatpak build's declaration of the app.
 Its **`finish-args`** list (§ Finish-Args) is the set of sandbox holes the
@@ -108,7 +108,7 @@ manifest omits `--filesystem=home`:
   per-app-instance tmpfs, not the host's `/run/user/<uid>`).
   So `whereEndoSock`'s default `$XDG_RUNTIME_DIR/endo/captp0.sock` and
   `whereEndoEphemeralState`'s `$XDG_RUNTIME_DIR/endo` (the worker PID
-  directory `daemon-manager.js` passes to the daemon,
+  directory passed to the daemon by
   [daemon-manager.js](../packages/familiar/src/daemon-manager.js)) both
   create directories in that private tmpfs: app-private, ephemeral, and
   needing no grant.
@@ -508,19 +508,31 @@ if (process.platform !== 'linux') {
   process.exit(0);
 }
 
-// The build target is an explicit input, not the ambient host: pass
-// --arch=<x86_64|aarch64> or set FLATPAK_ARCH; default to this host's arch.
-// This keeps "which machine am I" separate from "what am I building"; the CI
-// matrix picks the target and supplies a matching runner.
-const archArg =
-  process.argv.slice(2).find(a => a.startsWith('--arch='))?.slice('--arch='.length) ||
-  process.env.FLATPAK_ARCH ||
-  (process.arch === 'arm64' ? 'aarch64' : 'x86_64');
-if (archArg !== 'x86_64' && archArg !== 'aarch64') {
-  console.error(`Unsupported --arch=${archArg} (expected x86_64 or aarch64).`);
+// The build target is an explicit input, not the ambient host. Take it the
+// same way the sibling steps in this package do: positionally
+// (`node scripts/make-flatpak.mjs [target-arch]`, matching
+// prepare-package.mjs / download-node.mjs), or from the `TARGET_ARCH` env var
+// that familiar-release.yml already exports from its build matrix; default to
+// this host's arch. Accept the pipeline's own Node-style tokens `x64`/`arm64`
+// (the vocabulary every other step in the same CI job uses, including the
+// matrix's `target-arch`) as well as Flatpak's native `x86_64`/`aarch64`, and
+// map to the Flatpak token internally — rather than inventing a parallel arch
+// surface (a `--arch=` flag, a new `FLATPAK_ARCH` env, Flatpak-only tokens)
+// that the next person wiring the arm64 CI matrix entry would trip over.
+const archMap = {
+  x64: 'x86_64',
+  x86_64: 'x86_64',
+  arm64: 'aarch64',
+  aarch64: 'aarch64',
+};
+const archArg = process.argv[2] || process.env.TARGET_ARCH || process.arch;
+const arch = archMap[archArg];
+if (!arch) {
+  console.error(
+    `Unsupported target arch '${archArg}' (expected x64/x86_64 or arm64/aarch64).`,
+  );
   process.exit(1);
 }
-const arch = archArg;
 const target = arch === 'aarch64' ? 'linux-arm64' : 'linux-x64';
 
 const appDir = path.join(familiarDir, `out/Familiar-${target}`);
@@ -555,8 +567,8 @@ fs.rmSync(repoDir, { recursive: true, force: true });
 fs.mkdirSync(makeDir, { recursive: true });
 
 // Stage the manifest's source dir under a fixed `app/` name so the
-// manifest stays arch-agnostic: --arch= is the only arch-carrying
-// value, and the staged layout never names the target triple.
+// manifest stays arch-agnostic: flatpak-builder's --arch= is the only
+// arch-carrying value, and the staged layout never names the target triple.
 fs.mkdirSync(path.join(stageDir, 'build'), { recursive: true });
 fs.cpSync(appDir, path.join(stageDir, 'build/app'), { recursive: true });
 fs.cpSync(
@@ -624,7 +636,7 @@ fs.writeFileSync(
 );
 
 // 1. flatpak-builder produces the build tree and exports it to a local
-//    ostree repo for the requested --arch.
+//    OSTree repo for the requested --arch.
 execSync(
   `flatpak-builder --force-clean --repo=${JSON.stringify(repoDir)} --arch=${arch} ${JSON.stringify(buildDir)} ${JSON.stringify('org.endojs.Familiar.json')}`,
   { stdio: 'inherit', cwd: stageDir },
@@ -785,7 +797,7 @@ Flathub listing).
 For the MVR-followups phase, the `.flatpak` single-file bundle is the
 artifact, and it is **unsigned**.
 An unsigned bundle carries no signature and no imported public key: what
-`flatpak install --bundle` verifies is the bundle's internal ostree
+`flatpak install --bundle` verifies is the bundle's internal OSTree
 checksums (the payload against its own manifest, that is, that the download
 is not corrupt), **not** its provenance.
 Provenance verification is what signing adds, and it is deferred.
@@ -886,7 +898,7 @@ mode this design exists to prevent) still opens a window and exchanges a
 message, so the launch smoke alone cannot catch it.
 A machine-wide `pgrep -af 'bwrap'` cannot catch it either: every
 `flatpak run` establishes an outer `bwrap` regardless of whether
-Chromium's inner renderer sandbox engaged, and the CI job's own
+Chromium's inner renderer sandbox engages, and the CI job's own
 `flatpak install` spawns more, so that check passes unconditionally.
 The gate must instead be scoped to the Familiar's own process tree and
 must distinguish an engaged renderer sandbox from the `--no-sandbox`
@@ -1146,11 +1158,13 @@ Out of scope (intentional):
   The CI matrix can fan out to `x86_64` (today) and `aarch64`
   (when the maintainer turns it on) by adding a matrix entry; no
   per-arch manifest fork is needed.
-  Note that `make-flatpak.mjs` takes `--arch=` as an explicit input
-  (defaulting to the runner's `process.arch`; see § Build Script), so building an
-  `aarch64` bundle still requires an arm-native runner (or qemu/binfmt): the
-  target is decoupled from the host, but the toolchain still runs where the
-  binaries do.
+  Note that `make-flatpak.mjs` takes the target arch as an explicit input —
+  positionally or via `TARGET_ARCH`, in the same `x64`/`arm64` vocabulary the
+  sibling `prepare-package`/`download-node` scripts and the CI matrix already
+  use (defaulting to the runner's `process.arch`; see § Build Script) — so
+  building an `aarch64` bundle still requires an arm-native runner (or
+  qemu/binfmt): the target is decoupled from the host, but the toolchain still
+  runs where the binaries do.
   The CI matrix supplies that runner rather than cross-building on x86_64.
 
 ## Phased Implementation
@@ -1160,11 +1174,15 @@ Out of scope (intentional):
 | 1 | Land this design (PR opens DRAFT for review). | This PR. |
 | 2 | Confirm the current freedesktop runtime series and the matching `org.electronjs.Electron2.BaseApp` branch (do not assume `24.08`; see § Runtime Choice), then land the manifest, launcher, desktop file, metainfo xml, `assert-sandbox.sh`, and `make-flatpak.mjs` in `packages/familiar/flatpak/` and `packages/familiar/scripts/`, plus the end-user Flatpak-install section in `packages/familiar/README.md` (the unsigned-install snippet from § Signing Posture (Deferred); the existing README is dev-Quick-Start-oriented with no end-user-install section today). | Day (builder dispatch). |
 | 3 | Validate the bundle on a clean Linux host (Ubuntu 24.04 or Fedora 40+): confirm the `finish-args` smoke passes and (the precondition for phase 4) that `assert-sandbox.sh` returns PASS on a real sandboxed run and does not false-fail under zypak's portal-spawn process tree. Because the `finish-args` are already reasoned against the resolver functions, this is a confirmation smoke, not a `finish-args` iteration. | Day (manual smoke). |
-| 4 | Wire the CI steps into `familiar-release.yml`'s Linux job, including the missing `Package app` step (§ CI Workflow Integration), and make the sandbox gate release-blocking, only after phase 3 has shown `assert-sandbox.sh` passes on a good build. | Day (builder dispatch). |
+| 4 | Land the single-instance lock (§ Known Gaps and TODOs, first item) — a normal-quit-and-relaunch, common-path corruption defect that this design marks as blocking-for-ship, not deferrable hardening — *before* this phase makes the artifact release-eligible; then wire the CI steps into `familiar-release.yml`'s Linux job, including the missing `Package app` step (§ CI Workflow Integration), and make the sandbox gate release-blocking, only after phase 3 has shown `assert-sandbox.sh` passes on a good build. The lock is called out as a phase-4 precondition here so the ordering constraint § Known Gaps and TODOs derives in prose is not orphaned from the plan that schedules the ship; the ephemeral-`ENDO_ADDR` pin (the second TODO) must land *with or after* the lock, never before it (see the ordering note there). | Day (builder dispatch); plus the lock itself. |
 | 5 | (Followup, separate issue.) Generate a signing key, sign the bundle, and submit to Flathub. | Multi-day, dominated by Flathub review latency. |
 
 Phases 2 to 4 fall under the [familiar-release.md](familiar-release.md)
 MVR-followups phase budget; phase 5 is post-MVR-followups.
+The single-instance lock folded into phase 4 above is the design's one
+hard blocking-for-ship TODO; every other item in § Known Gaps and TODOs is
+a confirmation smoke or a post-MVR-followups decision the phase table
+deliberately does not gate the ship on.
 
 ## Known Gaps and TODOs
 
@@ -1217,6 +1235,15 @@ failure into second-daemon-over-one-state corruption.
   older glibc than the runtime ships; forward-compatibility should
   hold, but the validation step is cheap and the failure mode
   (silent crash on daemon spawn) is expensive.
+- [ ] Exercise the Wayland launch path in phase 3's clean-host smoke.
+  The CI catalog runs under `xvfb-run` (X11 only), so the
+  `--ozone-platform-hint=auto` finish-arg — load-bearing on a Wayland
+  host, the modern-distro default (§ Finish-Args) — is never exercised;
+  a regression to that hint would ship undetected on the most common
+  platform. A `WAYLAND_DISPLAY`-backed launch (a headless Wayland
+  compositor such as `weston --backend=headless`, or a real Wayland
+  session on the manual clean-host smoke) confirms the app selects the
+  Wayland socket rather than silently failing to start.
 - [ ] Add the Flatpak smoke to the G16 packaged-build smoke test
   scaffold once it exists; today this is a manual step in the
   developer's local-build flow.
@@ -1225,7 +1252,7 @@ failure into second-daemon-over-one-state corruption.
 
 1. **Now that [familiar-release.md](familiar-release.md) has landed on
    `llm`, should this design also land on `llm`?**
-   Yes: this PR bases on `llm` to keep the design discoverable in the
+   Yes: this PR is based on `llm` to keep the design discoverable in the
    roadmap branch alongside its parent.
    The implementation pass that turns the design into shipping code is a
    separate followup against `master`, per the role's "designs on `llm`,
