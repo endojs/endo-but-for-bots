@@ -2019,7 +2019,7 @@ test('a turn can be interrupted while an Endo tool call is still running', async
   const toolRunning = new Promise(resolve => {
     releaseTool = resolve;
   });
-  /** @type {() => void} */
+  /** @type {(value?: any) => void} */
   let toolStarted = () => {};
   const started = new Promise(resolve => {
     toolStarted = resolve;

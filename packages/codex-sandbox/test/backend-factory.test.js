@@ -566,7 +566,7 @@ test('an unsettled tool call blocks teardown without destroying the session', as
   const toolRunning = new Promise(resolve => {
     releaseTool = resolve;
   });
-  /** @type {() => void} */
+  /** @type {(value?: any) => void} */
   let toolStarted = () => {};
   const started = new Promise(resolve => {
     toolStarted = resolve;
@@ -664,7 +664,7 @@ test('an unsettled tool call blocks teardown without destroying the session', as
     }),
   });
   const session = await factory.create({ sessionId: 'session-1' }, toolSet);
-  await E(session.run).send('do the slow thing');
+  await E(session.run).send('do the slow thing', harden({}));
   // Pushed after the turn is bound, so the request correlates to it.
   push({
     id: 7,
