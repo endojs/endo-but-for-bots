@@ -44,14 +44,16 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ shell?: string, watchLimitMs?: number }} [options] - `shell`
- *   stands in for the lock holder's `/bin/sh`, so a test can model a holder
- *   that dies mid-transaction. `watchLimitMs` lets a test that must actually
- *   reach the cap do so in milliseconds rather than seconds.
+ * @param {{ shell?: string, watchLimitMs?: number, pollMs?: number }}
+ *   [options] - `shell` stands in for the lock holder's `/bin/sh`, so a test
+ *   can model a holder that dies mid-transaction. `watchLimitMs` lets a test
+ *   that must actually reach the cap do so in milliseconds rather than
+ *   seconds. `pollMs` lets a test measure how many poll intervals a decision
+ *   costs, which at the default 10ms is below timer noise.
  */
 const makeHarness = async (
   t,
-  { shell = '/bin/sh', watchLimitMs = 5000 } = {},
+  { shell = '/bin/sh', watchLimitMs = 5000, pollMs = 10 } = {},
 ) => {
   const dir = await mkdtemp(join(tmpdir(), 'nixos-deploy-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
@@ -96,7 +98,7 @@ const makeHarness = async (
     ENDO_NIXOS_CONFIG_DIR: configDir,
     ENDO_NIXOS_DIR: spoolDir,
     ENDO_NIXOS_LOCK_DIR: lockDir,
-    ENDO_NIXOS_POLL_MS: '10',
+    ENDO_NIXOS_POLL_MS: String(pollMs),
     // Bound abandoned watchers so a failing test cannot hold the worker
     // open for the production 24h cap.
     ENDO_NIXOS_WATCH_LIMIT_MS: String(watchLimitMs),
@@ -1331,5 +1333,125 @@ test('a watch inherits the wait deadline instead of restarting it', async t => {
   t.true(
     elapsed < watchLimitMs * 1.3,
     `gave up after ${elapsed}ms; one watch limit is ${watchLimitMs}ms`,
+  );
+});
+
+test('a stale id-less status does not abort the watch of a slow, correct applier', async t => {
+  // The id-less grace is meant to catch an applier that does not echo request
+  // ids. It was also firing on a status file that merely PREDATED the
+  // operation: the pre-upgrade leftover this protocol expects to find, which
+  // `driveOperation` correctly steps over when it is terminal. `awaitOutcome`
+  // then counted that same untouched file on every poll and, after
+  // NO_ID_GRACE_POLLS — about a minute at the production `pollMs`, on a watch
+  // documented as lasting a day — aborted with an error accusing an
+  // `endo-nixos-admin.nix` that was correct and merely slow to pick the
+  // request up. The operation stayed safe (a re-dispatch attaches), so this
+  // was a diagnosis and liveness bug, not a double-apply.
+  //
+  // Note the applier's own request slot cannot stand in for this test's
+  // discriminator: the contract expressly permits a compliant applier to
+  // leave `apply-request.json` in place while it works.
+  t.timeout(20_000);
+  const { admin, statusPath, spoolDir, processNext } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(
+    statusPath,
+    JSON.stringify({ action: 'switch', phase: 'ok' }),
+    'utf8',
+  );
+
+  const settled = admin.build('after an upgrade', 'r-12:0-0');
+  // Well past the grace (30 polls at ENDO_NIXOS_POLL_MS=10) before the
+  // applier says anything at all.
+  await delay(800);
+  await processNext();
+  t.true((await settled).ok);
+});
+
+test('an id-less status that CHANGES mid-watch is still caught by the grace', async t => {
+  // The other side of the discriminator above: a status that appears or
+  // changes after submission is evidence about the applier now running, and
+  // must still trip the grace rather than hang for the full watch limit.
+  // (The sibling test 'an id-less status appearing mid-watch...' covers the
+  // appears-from-absent case; this one covers a CHANGE from a pre-existing
+  // id-less file, which the snapshot comparison must not mistake for it.)
+  t.timeout(20_000);
+  const { admin, requestBytes, statusPath, spoolDir } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(
+    statusPath,
+    JSON.stringify({ action: 'switch', phase: 'ok' }),
+    'utf8',
+  );
+
+  const settled = admin.apply('deploy', 'r-12:1-0');
+  for (let i = 0; i < 500; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await requestBytes()) !== undefined) break;
+    // eslint-disable-next-line no-await-in-loop
+    await delay(5);
+  }
+  // A DIFFERENT id-less status: the applier is live and still not echoing.
+  await writeFile(
+    statusPath,
+    JSON.stringify({ action: 'switch', phase: 'building' }),
+    'utf8',
+  );
+  await t.throwsAsync(() => settled, {
+    message: /does not echo request ids/,
+  });
+});
+
+test('an empty-string status id counts as id-less to the watch, as it does to the submit', async t => {
+  // The two halves of the caplet used to disagree about what "echoes no
+  // request id" means: `driveOperation` tested
+  // `typeof status.id !== 'string' || status.id === ''` while `awaitOutcome`
+  // tested `status.id === undefined`. So `{ id: '' }` (and `{ id: 42 }`,
+  // `{ id: null }`) was id-less to the submit decision but a FOREIGN id to
+  // the watch, which routed it into the supersession check and then sat out
+  // the whole watch limit instead of naming the real fault. Both fail closed
+  // — this is a diagnosis bug — but the shared predicate is only load-bearing
+  // if something pins it.
+  t.timeout(20_000);
+  const { admin, requestBytes, statusPath } = await makeHarness(t);
+  const settled = admin.apply('deploy', 'r-12:2-0');
+  for (let i = 0; i < 500; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    if ((await requestBytes()) !== undefined) break;
+    // eslint-disable-next-line no-await-in-loop
+    await delay(5);
+  }
+  await writeFile(
+    statusPath,
+    JSON.stringify({ id: '', action: 'switch', phase: 'building' }),
+    'utf8',
+  );
+  await t.throwsAsync(() => settled, {
+    message: /does not echo request ids/,
+  });
+});
+
+test('a decisive read does not sleep after its final attempt', async t => {
+  // `readDecisive` runs inside a held `submit.lock`. It retried
+  // DECISIVE_READ_ATTEMPTS times and slept `pollMs` after EVERY attempt,
+  // including the last, so it held the lock a whole extra poll interval —
+  // two seconds at the production default — before throwing an answer that
+  // could not change. Three attempts should cost two intervals, not three.
+  t.timeout(20_000);
+  const pollMs = 300;
+  const { admin, statusPath, spoolDir } = await makeHarness(t, { pollMs });
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(statusPath, '{not json', 'utf8');
+
+  const started = Date.now();
+  await t.throwsAsync(() => admin.build('note', 'r-13:0-0'), {
+    message: /Refusing to decide/,
+  });
+  const elapsed = Date.now() - started;
+  // 2 intervals = 600ms; a trailing sleep would make it 3 = 900ms. The 750ms
+  // bound sits between with 150ms of margin either side.
+  t.true(
+    elapsed < pollMs * 2.5,
+    `gave up after ${elapsed}ms; ${pollMs}ms per poll interval`,
   );
 });
