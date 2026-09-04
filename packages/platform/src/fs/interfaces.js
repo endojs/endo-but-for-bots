@@ -38,6 +38,38 @@ export const readableBlobMethodGuards = harden({
   json: M.call().returns(M.promise()),
 });
 
+// Method-name duck-type for "this remote value is a readable blob whose bytes
+// should be materialized" — the accept side of the daemon's `write()` /
+// `copyInto` / `stageTree` and the extended-FS mount-child probes. Admits the
+// canonical `ReadableBlob` whole-value read surface (`text`, the marker every
+// `readableBlobMethodGuards` implementor carries — `blobFromBytes`, an
+// `@endo/exo-unzip` leaf, `makeBrowserBlob`), plus the two byte-stream-only
+// shapes that lack `text` yet are still readable blobs: a `BlobRef`-style
+// content-addressed blob (`getInfo`) and a raw `PassableBytesReader`
+// (`readReturnPattern`). A generic value `PassableReader` also advertises
+// `readReturnPattern`, so it is excluded by additionally requiring the
+// *absence* of `readPattern` — the value-pattern accessor a bytes reader never
+// carries (its yields are always `Uint8Array`). A writer
+// (`writePattern`/`writeReturnPattern`, neither `text` nor a read marker) is
+// rejected. `stream` alone no longer discriminates: it is the generic
+// byte-stream method shared with readers/writers and `HttpResponse`.
+//
+// This is the single source of truth for the discriminator (four consumers
+// spread across three packages import it); never re-inline it per consumer — a
+// divergent copy is exactly the wire-shape classification bug this consolidates
+// away.
+/**
+ * @param {string[]} methodNames
+ * @returns {boolean}
+ */
+export const looksLikeReadableBlob = methodNames =>
+  methodNames.includes('text') ||
+  (methodNames.includes('stream') &&
+    !methodNames.includes('readPattern') &&
+    (methodNames.includes('getInfo') ||
+      methodNames.includes('readReturnPattern')));
+harden(looksLikeReadableBlob);
+
 // `readableTreeMethodGuards` is the shared read-surface for content-addressed
 // directories. `SnapshotTree` adds `sha256`; `Directory` adds the write
 // surface. Exported for the same reason as `readableBlobMethodGuards`

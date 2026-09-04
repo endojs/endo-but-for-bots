@@ -34,6 +34,7 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 import { makeError, X, q } from '@endo/errors';
 
 import { toSafeNumber } from '../shared/helpers.js';
+import { looksLikeReadableBlob } from '../../interfaces.js';
 
 /**
  * @import { FsBackend, NodeKind, DirEntry, NodeStat } from '../backend-types.js'
@@ -107,16 +108,11 @@ const drainBytesReader = async fileCap => {
  */
 const kindFromMethods = methods => {
   if (methods.includes('lookup')) return 'directory';
-  // `text` is the discriminating file marker; a bare `stream` is not (it is the
-  // generic byte-stream method shared with readers/writers and `HttpResponse`),
-  // so require a read-side blob marker — `getInfo` or `readReturnPattern`, with
-  // `readPattern` absent to exclude a generic value `PassableReader`.
-  if (
-    methods.includes('text') ||
-    (methods.includes('stream') &&
-      !methods.includes('readPattern') &&
-      (methods.includes('getInfo') || methods.includes('readReturnPattern')))
-  ) {
+  // `looksLikeReadableBlob` (the one exported discriminator) admits the `text`
+  // whole-value read surface plus the `getInfo`/`readReturnPattern` byte-read
+  // markers, and rejects a bare `stream` (the generic method shared with
+  // readers/writers and `HttpResponse`).
+  if (looksLikeReadableBlob(methods)) {
     return 'file';
   }
   return undefined;
