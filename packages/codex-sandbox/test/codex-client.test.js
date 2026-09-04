@@ -2074,3 +2074,29 @@ test('a turn can be interrupted while an Endo tool call is still running', async
     'the interrupt actually reached the app-server',
   );
 });
+
+test('a thread resumed from a write-ahead marker with no turn is still unmaterialized', async t => {
+  // The process died between the write-ahead and `turn/start`, so the marker
+  // names no turn at all and the thread never received a user message.
+  const fixture = makeFixture({
+    threadId: 'thread-saved',
+    clientOptions: {
+      savedRecovery: { baseTurnId: null },
+      saveThreadState: async () => {},
+    },
+  });
+  const reader = await fixture.client.send('try again');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-saved',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.deepEqual(
+    fixture.sent.filter(message => message.method === 'thread/turns/list'),
+    [],
+  );
+  t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
+});
