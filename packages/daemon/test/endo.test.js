@@ -4329,6 +4329,151 @@ test('form multi-submission: same form submitted twice produces two value messag
   t.is(value2.replyTo, formMsg.messageId);
 });
 
+test('form field patterns survive a daemon restart', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @type {bigint} */
+  let formNumber;
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest');
+    const hostIterator = iterateReader(E(host).followMessages());
+
+    await E(guest).form(
+      '@host',
+      'Approve?',
+      harden([
+        { name: 'approved', label: 'Approved', pattern: M.boolean() },
+        { name: 'note', label: 'Note', pattern: M.string() },
+      ]),
+    );
+
+    const { value: formMsg } = await hostIterator.next();
+    t.is(formMsg.type, 'form');
+    formNumber = formMsg.number;
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+
+    // A message formula round-trips through JSON, which drops a CopyTagged's
+    // `Symbol.toStringTag`. If the pattern is persisted raw it comes back as
+    // the plain record `{ payload: 'boolean' }`, which NO value satisfies —
+    // the field becomes permanently unanswerable after a restart.
+    await E(host).submit(
+      formNumber,
+      harden({ approved: true, note: 'looks fine' }),
+    );
+    t.pass('a restored boolean field still accepts a boolean');
+  }
+});
+
+test('a restored form still enforces its patterns', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  /** @type {bigint} */
+  let formNumber;
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest');
+    const hostIterator = iterateReader(E(host).followMessages());
+
+    await E(guest).form(
+      '@host',
+      'Approve?',
+      harden([{ name: 'approved', label: 'Approved', pattern: M.boolean() }]),
+    );
+
+    const { value: formMsg } = await hostIterator.next();
+    formNumber = formMsg.number;
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    // Surviving the round-trip must not mean the pattern went slack. Pin the
+    // message: a flattened pattern also rejects a string, but with
+    // "Must be: (an object)". Only a real `M.boolean()` says this.
+    await t.throwsAsync(
+      () => E(host).submit(formNumber, harden({ approved: 'yes' })),
+      { message: /field "approved".*Must be a boolean/ },
+      'a string is still refused for a boolean field',
+    );
+  }
+});
+
+test('a form persisted before fields were encoded still loads', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const guest = await E(host).provideGuest('guest');
+    const hostIterator = iterateReader(E(host).followMessages());
+
+    await E(guest).form(
+      '@host',
+      'Approve?',
+      harden([{ name: 'approved', label: 'Approved', pattern: M.boolean() }]),
+    );
+
+    const { value: formMsg } = await hostIterator.next();
+    t.is(formMsg.type, 'form');
+  }
+
+  await stop(config);
+
+  // Rewrite the stored form the way the daemon wrote it before fields were
+  // encoded: the raw array, with the pattern already flattened by JSON.
+  {
+    const db = openTestDb(config.statePath);
+    const forms = db
+      .listFormulas()
+      .map(({ number }) => ({ number, ...db.readFormula(number) }))
+      .filter(
+        ({ formula }) =>
+          /** @type {{ messageType?: string }} */ (formula).messageType ===
+          'form',
+      );
+    // Two: the recipient's copy and the sender's self-delivered copy.
+    t.is(forms.length, 2, 'the form is stored for both sides');
+    for (const { number, node, formula } of forms) {
+      db.writeFormula(
+        number,
+        node,
+        harden({
+          ...formula,
+          fields: [
+            {
+              name: 'approved',
+              label: 'Approved',
+              pattern: { payload: 'boolean' },
+            },
+          ],
+        }),
+      );
+    }
+    db.close();
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const hostIterator = iterateReader(E(host).followMessages());
+    const { value: formMsg } = await hostIterator.next();
+
+    // Loaded rather than crashed, and kept as found. Nothing recovers a tag
+    // that was never written, so such a field stays unanswerable — but an
+    // existing mailbox must still open, which is why the raw array is read
+    // through instead of being fed to the decoder.
+    t.is(formMsg.type, 'form');
+    t.deepEqual(formMsg.fields[0].pattern, { payload: 'boolean' });
+  }
+});
+
 test('form returns void (fire-and-forget)', async t => {
   const { host } = await prepareHost(t);
 
