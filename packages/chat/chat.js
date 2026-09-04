@@ -456,8 +456,15 @@ const bodyComponent = (
 
       /** @param {string} petName */
       const navigateToConversation = petName => {
+        // `locate` is variadic over name-path SEGMENTS and rejects any segment
+        // containing "/" (`assertNames`), so a nested recipient such as
+        // `floot/controller-profile/session-…` — which send-form hands here
+        // joined — has to be split back into a path.
+        const petNamePath = /** @type {[string, ...string[]]} */ (
+          petName.split('/')
+        );
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .locate(petName)
+          .locate(...petNamePath)
           .then(locator => {
             if (!locator) return;
             onConversationChange({ petName, id: locator });
