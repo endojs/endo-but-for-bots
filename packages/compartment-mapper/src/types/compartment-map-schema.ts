@@ -289,8 +289,7 @@ export interface ExitModuleConfiguration extends BaseModuleConfiguration {
  * imports, so nothing populates this field on the map leg yet.
  */
 export type PersistedImport =
-  | string
-  | { default: string; attributes: Record<string, string> };
+  string | { default: string; attributes: Record<string, string> };
 
 /**
  * A module configuration representing a file on disk
