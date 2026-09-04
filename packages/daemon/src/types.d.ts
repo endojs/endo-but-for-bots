@@ -2409,7 +2409,9 @@ export type RegistryPowers =
     }
   | {
       adapter: 'endor';
-      offline: boolean;
+      // No `offline`: Endor's no-egress posture is enforced structurally in Rust
+      // (`rust/endo/src/inproc.rs`), so a JS flag on these powers would be
+      // set-but-never-read. See `makeEndorRegistryPowers` in bus-manager-rust-xs.js.
       registryUrl: string;
       hasPackage: (name: string) => string;
       listVersions: (name: string) => string;

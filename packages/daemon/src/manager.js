@@ -2014,61 +2014,73 @@ const makeDaemonCore = async (
   const makeEndorReadableTree = hash => {
     const cached = endorTreeByHash.get(hash);
     if (cached !== undefined) return cached;
+    // Guard this remotable with the same `ReadableTreeInterface` its Node twin
+    // (`makeReadableTree`) and sibling blob carry. It reaches guests through
+    // `@registry` (a version leaf's `lookup` hands back `makeEndorReadableTree`
+    // for a subdirectory), so a bare `Far` would present no method guards and
+    // no `__getMethodNames__`, letting a holder tell Endor from Node — the very
+    // divergence the one-shape invariant forbids.
     /** @type {any} */
-    const tree = Far('EndorRegistryTree', {
-      help: () => `Immutable Endor registry tree ${hash}`,
-      async has(...path) {
-        try {
-          if (path.length === 0) return true;
-          return (await tree.lookup(path)) !== undefined;
-        } catch {
-          return false;
-        }
-      },
-      async list(...path) {
-        if (path.length > 0) {
-          const nested = await tree.lookup(path);
-          if (nested === undefined || typeof nested.list !== 'function') {
-            throw new TypeError(
-              `Endor registry node ${path.join('/')} is not a tree`,
-            );
+    const tree = makeExo(
+      'EndorRegistryTree',
+      ReadableTreeInterface,
+      /** @type {any} */ ({
+        help: () => `Immutable Endor registry tree ${hash}`,
+        async has(...path) {
+          try {
+            if (path.length === 0) return true;
+            return (await tree.lookup(path)) !== undefined;
+          } catch {
+            return false;
           }
-          return nested.list();
-        }
-        const result = unwrapEndorTreeHost(endorRegistryPowers.listTree(hash));
-        if (!result.found) return harden([]);
-        return harden(/** @type {string[]} */ (result.value));
-      },
-      async lookup(path) {
-        const segments = typeof path === 'string' ? [path] : [...path];
-        if (segments.length === 0) return tree;
-        let current = tree;
-        for (const segment of segments) {
-          // Once a segment has resolved to a blob (which has no `sha256`),
-          // a deeper path descends *through* a file. Return not-found rather
-          // than throwing a raw method-missing `TypeError`, matching the
-          // `!result.found` branch below and `has`'s no-throw contract.
-          if (typeof current.sha256 !== 'function') return undefined;
-          const currentHash = current.sha256();
+        },
+        async list(...path) {
+          if (path.length > 0) {
+            const nested = await tree.lookup(path);
+            if (nested === undefined || typeof nested.list !== 'function') {
+              throw new TypeError(
+                `Endor registry node ${path.join('/')} is not a tree`,
+              );
+            }
+            return nested.list();
+          }
           const result = unwrapEndorTreeHost(
-            endorRegistryPowers.lookupTree(currentHash, segment),
+            endorRegistryPowers.listTree(hash),
           );
-          if (!result.found) return undefined;
-          const entry =
-            /** @type {{ kind: string, hash: string, size?: number }} */ (
-              result.value
+          if (!result.found) return harden([]);
+          return harden(/** @type {string[]} */ (result.value));
+        },
+        async lookup(path) {
+          const segments = typeof path === 'string' ? [path] : [...path];
+          if (segments.length === 0) return tree;
+          let current = tree;
+          for (const segment of segments) {
+            // Once a segment has resolved to a blob (which has no `sha256`),
+            // a deeper path descends *through* a file. Return not-found rather
+            // than throwing a raw method-missing `TypeError`, matching the
+            // `!result.found` branch below and `has`'s no-throw contract.
+            if (typeof current.sha256 !== 'function') return undefined;
+            const currentHash = current.sha256();
+            const result = unwrapEndorTreeHost(
+              endorRegistryPowers.lookupTree(currentHash, segment),
             );
-          current =
-            entry.kind === 'tree'
-              ? makeEndorReadableTree(entry.hash)
-              : makeEndorReadableBlob(entry.hash, entry.size);
-        }
-        return current;
-      },
-      sha256: () => hash,
-      getInfo: async () =>
-        harden({ algorithm: 'sha256', hash: encodeBase64(fromHex(hash)) }),
-    });
+            if (!result.found) return undefined;
+            const entry =
+              /** @type {{ kind: string, hash: string, size?: number }} */ (
+                result.value
+              );
+            current =
+              entry.kind === 'tree'
+                ? makeEndorReadableTree(entry.hash)
+                : makeEndorReadableBlob(entry.hash, entry.size);
+          }
+          return current;
+        },
+        sha256: () => hash,
+        getInfo: async () =>
+          harden({ algorithm: 'sha256', hash: encodeBase64(fromHex(hash)) }),
+      }),
+    );
     endorTreeByHash.set(hash, tree);
     return tree;
   };
