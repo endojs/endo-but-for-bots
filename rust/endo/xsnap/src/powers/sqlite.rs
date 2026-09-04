@@ -34,6 +34,14 @@ use std::sync::Mutex;
 // ---------------------------------------------------------------------------
 // Handle maps
 // ---------------------------------------------------------------------------
+//
+// `DB_MAP`/`STMT_MAP` are **process-wide**, shared by every in-process worker.
+// Now that the FFI panic guard lets the process survive a worker death
+// (`worker_io::guard_ffi`), a dying worker's open `Connection`/statement handles
+// here are never swept (leaking the WAL lock) and a poison recovered via
+// `into_inner()` can expose a torn mutation to a sibling. Per-worker scoping /
+// sweep is tracked follow-on work: see `designs/ironhorse-panic.md` § Scope,
+// "Shared power-table caveat".
 
 static NEXT_DB_HANDLE: AtomicU32 = AtomicU32::new(1);
 static DB_MAP: Mutex<Option<HashMap<u32, Connection>>> = Mutex::new(None);
