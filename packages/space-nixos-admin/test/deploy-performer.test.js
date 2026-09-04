@@ -879,6 +879,82 @@ test('a foreign pending request is slot-busy, not clobbered', async t => {
   t.true((await settled).ok);
 });
 
+test('a foreign operation in flight is slot-busy even once its request is gone', async t => {
+  // The companion of "a foreign pending request is slot-busy". PROTOCOL.md
+  // lets the service consume apply-request.json once its status echoes the
+  // id, so between that consumption and the terminal record the ONLY evidence
+  // that the machine is mid-switch is the status file. Reading the empty slot
+  // as a free one publishes a second operation on top of a switch that is
+  // still being health-checked — and if that switch fails and auto-rolls
+  // back, the queued one activates over the rollback.
+  //
+  // The in-process queue does not cover this: the switch under way is exactly
+  // what restarts the daemon, so the next operation arrives from a revived
+  // caplet whose queue is empty and whose only evidence is on disk.
+  const {
+    admin,
+    reincarnate,
+    pickUpAndConsume,
+    recordOutcome,
+    requestBytes,
+    processNext,
+  } = await makeHarness(t);
+  const first = admin.apply('the operation in flight', 'r-13:0-0');
+  const inFlight = await pickUpAndConsume();
+  t.is(await requestBytes(), undefined, 'the applier consumed the slot');
+
+  const revived = await reincarnate();
+  const second = revived.build('mine', 'r-13:0-1');
+  // Sample rather than take one late reading: a single check can pass merely
+  // by arriving before the submission it was meant to catch.
+  let published;
+  for (
+    let attempt = 0;
+    attempt < 100 && published === undefined;
+    attempt += 1
+  ) {
+    // eslint-disable-next-line no-await-in-loop
+    published = await requestBytes();
+    // eslint-disable-next-line no-await-in-loop
+    await delay(10);
+  }
+  t.is(published, undefined, 'nothing was published while the switch was live');
+
+  await recordOutcome(inFlight);
+  t.true((await first).ok);
+  const mine = await processNext();
+  t.is(mine.id, 'r-13:0-1', 'ours goes in once the slot is really free');
+  t.true((await second).ok);
+});
+
+test('a request from another host configuration says so', async t => {
+  // Reconfiguring the flake host, checkout, or lock namespace leaves a
+  // well-formed request bound to the previous marker. That is a reconfigured
+  // host, not a corrupt spool, and the operator's next move differs.
+  const { admin, requestBytes, spoolDir } = await makeHarness(t);
+  const stale = '0'.repeat(64);
+  const message = 'from the previous binding';
+  await writeFile(
+    join(spoolDir, 'apply-request.json'),
+    JSON.stringify({
+      action: 'switch',
+      message,
+      id: 'before-the-move',
+      fingerprint: fingerprintFor('switch', message, stale, stale),
+      configFingerprint: stale,
+      protocolFingerprint: stale,
+      nonce: 'n1',
+    }),
+    'utf8',
+  );
+  const before = await requestBytes();
+
+  await t.throwsAsync(() => admin.build('mine', 'r-13:1-0'), {
+    message: /another host configuration/,
+  });
+  t.is(await requestBytes(), before, 'the foreign request is left in place');
+});
+
 test('an unreadable file at a submit decision refuses, never submits', async t => {
   // "Cannot read" must not be conflated with "does not exist": converting
   // an I/O error into absence at a submit decision was the one reviewed

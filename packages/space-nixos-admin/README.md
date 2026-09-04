@@ -52,8 +52,16 @@ Run `build()` before activation.
 After explicit operator approval, `apply(message)` commits and activates it.
 `rollback()` reactivates the last generation that passed the companion
 service's health check.
+It undoes an apply that completed and left the host wrong; because the spool
+has a single request slot, it queues behind any operation still in flight and
+cannot rescue a wedged service.
+Recovering from that is a privileged-side action, which this capability
+deliberately does not hold.
 
 `build`, `apply`, and `rollback` accept idempotency keys and wait for their own
 terminal outcome.
 Reusing a key returns its recorded outcome rather than issuing the privileged
 operation again.
+They also serialize against `prebuildRev()`, which is stricter than the
+protocol requires — a prebuild uses its own spool — but keeps the host to one
+Nix operation at a time.
