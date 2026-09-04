@@ -104,6 +104,10 @@ impl Endo {
             ContentStore::open(&cas_dir)
                 .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?,
         );
+        // Wire the supervisor to the CAS so suspend / resume can
+        // retain and release the snapshot hash as an ephemeral GC
+        // root.  See supervisor::Supervisor::set_cas.
+        self.supervisor.set_cas(Arc::clone(&cas));
         let cas_for_control = Arc::clone(&cas);
         let cas_dir_for_resume = cas_dir;
         let outbox_rx = self.outbox_rx.take().expect("serve() called twice");

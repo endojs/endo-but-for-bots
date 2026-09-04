@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-04-15 |
 | **Author** | Kris Kowal (prompted) |
-| **Updated** | 2026-04-15 |
+| **Updated** | 2026-05-15 |
 | **Status** | In Progress |
 
 ## Motivation
@@ -314,7 +314,30 @@ the mismatch.
   control verb → worker streams snapshot to CAS → worker
   exits → message triggers resume → restored worker has
   correct JS state).
-- Ephemeral GC root bookkeeping for CAS-stored snapshots.
+  Pending working XS JS bundles in `rust/endo/xsnap/src/`
+  (`ses_boot.js`, `worker_bootstrap.js`,
+  `daemon_bootstrap.js`); those are produced by
+  `packages/daemon/scripts/bundle-bus-daemon-rust-xs.mjs`
+  and are not checked into the repository, so an integration
+  test that drives a real XS worker through the supervisor
+  cannot run from a fresh checkout without the bundler step.
+
+#### Done in this cycle
+
+- Ephemeral GC root bookkeeping for CAS-stored snapshots:
+  `Supervisor` now holds an optional `Arc<ContentStore>` and
+  calls `retain` on `mark_suspended` and `release` on
+  `take_suspended` / `cancel_suspended`.
+  Wired from `Endo::serve()` once the content store opens.
+  Six new unit tests in `supervisor::tests` pin the
+  invariant: snapshot survives a `gc()` pass while
+  suspended, and becomes collectable after resume or
+  cancel.
+  Four of those tests are load-bearing per
+  `skills/regression-evidence`: breaking the retain call
+  fails the retain test (and the leak-documentation test);
+  breaking the release call fails the release test and the
+  cancel test.
 
 ### Phase 3: Future enhancements
 
