@@ -34,6 +34,15 @@ Borrowed vocabulary, from the parent design and used unchanged here:
   `HandledPromise.settle`, or `E.when` to receive the settlement.
 - **Retention** is the parent's rule that a rejection with no listener
   yet is held on the producer's record until the first listener arrives.
+- **Authority** is the ocap sense: the ability to cause effects, carried
+  by object references (handles). A value that carries no handle transfers
+  no authority. This design's safety argument turns on the **authority**
+  axis (what a projected value can *do*) being separable from the
+  **confidentiality** axis (whether the value's *content* may be read
+  across a boundary), which is left to Open Question 1.
+- A **cap boundary** (capability boundary) is the edge between two
+  compartments across which only explicitly granted references pass;
+  "no authority leak" means no handle crosses it.
 
 This recap is a reader's aid only.
 The [pass-style-promise](pass-style-promise.md) design is the authority
@@ -119,8 +128,16 @@ differently, so the entry names which one it is:
   The `forever-pending` entry carries `undeliveredRejection: true` and
   the retained reason projection (below) so the reader sees the
   conclusion directly, without re-joining two records by hand.
+  This "highest-signal" value is conditional on Open Question 6: because
+  `forever-pending` fires only once **both** the carrier and the producer
+  record holding its resolver are unreachable (see the weak-reachability
+  constraint), in the parent design's canonical deployment (the resolver
+  kept in a long-lived producer table for the vat's whole session) this
+  composite rarely or never fires until Open Question 6 is resolved, and
+  the workhorse signal for a forgotten-but-live producer there is
+  `long-pending` instead.
 
-Note on the term *settled*.
+**Note on the term *settled*.**
 A carrier is *settled*, in the parent design's vocabulary, once its
 producer has called `resolve` or `reject`, whether or not any listener
 observed the outcome.
@@ -213,9 +230,9 @@ on the surfaces it hooks:
 - The live-set holds carriers only through `WeakRef` (below).
 - The `FinalizationRegistry` registration holds the carrier weakly by
   construction; its `heldValue` is a small **value-only record**
-  `{ id, hadUnlistenedRejection }` (a number and a boolean), never the
-  carrier. See "Structures and entry shape" for why this record, rather
-  than the bare `id`, is the held value.
+  `{ id, hadUnlistenedRejection, delivered }` (a number and two booleans),
+  never the carrier. See "Structures and entry shape" for why this record,
+  rather than the bare `id`, is the held value.
 - The debug view's own first-listener hook (see "First-listener arrival
   plumbing") must be registered **without** a strong runtime-to-carrier
   edge, or it would itself pin every carrier and defeat `forever-pending`.
@@ -247,9 +264,10 @@ the producer record holding its resolver have become unreachable**.
 The headline composite (`undeliveredRejection`) inherits this scope.
 Its highest-signal instance was "a retained rejection whose carrier was
 dropped"; under this scope it is "a retained rejection whose carrier
-**and producer** are both gone": the "dropped in transit, nobody left who
-could ever deliver it" bug, which GC can prove, rather than "producer
-still alive, forgot to resolve", which it cannot.
+**and producer** are both gone".
+That is the "dropped in transit, nobody left who could ever deliver it"
+bug. GC can prove that bug; it cannot prove "producer still alive, forgot
+to resolve", which is why the scope excludes it.
 No signal is lost by this scoping, but the surface that carries each case
 differs:
 
@@ -300,15 +318,23 @@ small per-carrier finalization record threaded through the
   unsettled carriers there too.
 
 - **the value-only finalization record `fin`**: for each registered
-  carrier, a plain record `{ id, hadUnlistenedRejection }` created at
-  `makePromise()` time with `hadUnlistenedRejection: false`.
+  carrier, a plain record `{ id, hadUnlistenedRejection, delivered }`
+  created at `makePromise()` time with both bits `false`.
   It is the `FinalizationRegistry`'s `heldValue`, so it survives the
   carrier's collection and is delivered to the finalization callback.
-  It is reachable by `id` through `liveSet` (as `fin`) until the carrier
-  settles, which is the window in which the reject path sets its
-  `hadUnlistenedRejection` bit; after settlement the record persists only
-  inside the registry until finalization.
-  It holds no carrier edge, so it does not defeat `forever-pending`.
+  It is reachable by `id` through `liveSet` (as `fin`) while the carrier is
+  live, and independently through the per-carrier hooks that close over it
+  (both registered at `makePromise()` time): the reject path sets its
+  `hadUnlistenedRejection` bit at reject time, and the first-listener hook
+  sets its `delivered` bit at first-listener arrival, the one later
+  transition that invalidates an earlier `hadUnlistenedRejection`. That
+  second write is what keeps the headline composite sound. Because the
+  first-listener hook closes over `fin`, the `delivered` write lands even
+  after the reject has pruned the carrier's `id` from `liveSet`; after
+  finalization the record persists only inside the registry until the
+  callback reads it.
+  Both bits are value-only, so `fin` holds no carrier edge and does not
+  defeat `forever-pending`.
 
 Each recorded entry (in `retained` or `ring`) is a plain record:
 
@@ -321,7 +347,7 @@ Each recorded entry (in `retained` or `ring`) is a plain record:
 | `label` | An optional producer-supplied diagnostic string. Absent when the producer supplied none, never back-filled with a generated value, so a reader can always tell producer text from the system `id`. |
 | `reason` | For `unlistened-rejection` (and for a `forever-pending` entry that carries `undeliveredRejection`): the retained-reason **projection**, plain strings, per "Retained-reason projection". Absent otherwise. |
 | `delivered` | For `unlistened-rejection`: `false` on record, set `true` once the first listener arrives and the reason is delivered. |
-| `undeliveredRejection` | For `forever-pending`: `true` when the finalized carrier had an unlistened rejection that was never delivered (the headline composite), read from the `fin` record's `hadUnlistenedRejection` bit at finalization. Otherwise absent. |
+| `undeliveredRejection` | For `forever-pending`: `true` when the finalized carrier had an unlistened rejection that was never delivered (the headline composite), from the `fin` record's `hadUnlistenedRejection && !delivered` at finalization. A carrier whose rejection was later delivered has `fin.delivered === true` and earns **no** `forever-pending` entry at all (it is already recorded as a delivered `unlistened-rejection` in `ring`). Otherwise absent. |
 | `priorEntryEvicted` | For `forever-pending`: `true` when `undeliveredRejection` holds but the carrier's `unlistened-rejection` entry (and its reason projection) is no longer in `retained`, so it was evicted under memory pressure. The rejection is **known** to have happened (from the `fin` bit); only its projection was lost. Otherwise absent. |
 
 The record is the **internal** shape.
@@ -337,13 +363,19 @@ It rides on the value-only finalization record `fin` (the
 finalization callback can find a carrier's earlier `unlistened-rejection`
 entry by `id` without dereferencing a `WeakRef` that no longer resolves
 once the carrier is collected.
-The `fin` record's `hadUnlistenedRejection` bit is the load-bearing part:
-it is the one piece of per-carrier history that a collected carrier's
-finalization callback can still read to tell "this carrier had a retained
-rejection whose record is now gone" (a real lost correlation) from "this
-carrier never had a retained rejection at all" (the common case).
-That single recorded bit is what makes `priorEntryEvicted` sound; see
-"Eviction policy".
+The `fin` record's two bits are the load-bearing part: together they are
+the per-carrier history a collected carrier's finalization callback can
+still read to tell three states apart: "this carrier had a retained
+rejection whose record is now gone" (`hadUnlistenedRejection && !delivered`,
+a real lost correlation), "this carrier's rejection was delivered before
+collection" (`delivered`, no loss, no entry), and "this carrier never had a
+retained rejection at all" (`!hadUnlistenedRejection`, the common case).
+`hadUnlistenedRejection` alone cannot separate the first two: it is written
+once at reject time and would still read `true` for a rejection that was
+later delivered, so without the `delivered` bit the callback would
+misreport every delivered-then-collected rejection as an undelivered loss.
+The two recorded bits are what make `undeliveredRejection` and
+`priorEntryEvicted` sound; see "Eviction policy".
 
 ### Eviction policy
 
@@ -365,17 +397,20 @@ So eviction protects the undelivered half:
   A `retained` eviction drops the entry **and its reason projection** but
   does **not** lose the fact that the rejection happened: that fact lives
   on the carrier's value-only finalization record `fin`
-  (`hadUnlistenedRejection: true`), which the reject path set and which
-  survives to the finalization callback.
+  (`hadUnlistenedRejection: true`, and `delivered: false` while it stays
+  undelivered), which the reject path set and which survives to the
+  finalization callback.
   So a later `forever-pending` finalization whose `fin` says
-  `hadUnlistenedRejection` but whose `id` is no longer in `retained` is
-  **known-evicted** in `O(1)` (a plain `retained` membership test), and its
-  entry gets `undeliveredRejection: true` plus `priorEntryEvicted: true`,
-  so a lost correlation is **visible** in the snapshot rather than silently
-  absent.
+  `hadUnlistenedRejection && !delivered` but whose `id` is no longer in
+  `retained` is **known-evicted** in `O(1)` (a plain `retained` membership
+  test), and its entry gets `undeliveredRejection: true` plus
+  `priorEntryEvicted: true`, so a lost correlation is **visible** in the
+  snapshot rather than silently absent.
   This discrimination is **sound in both directions**: it never reports a
-  loss that did not happen (the `fin` bit is set only by an actual reject
-  with no listener) and never misses one (the bit outlives the entry).
+  loss that did not happen (the `undeliveredRejection` branch requires both
+  an actual reject with no listener **and** `!delivered`, so a delivered
+  rejection whose entry left `retained` for `ring` is not mistaken for an
+  eviction) and never misses one (the bits outlive the entry).
   The recorded bit, not a watermark over the `id` space, is what makes
   this sound. A scalar "smallest id still in `retained`" watermark cannot
   do this job: ids below it also include every carrier that never had a
@@ -403,26 +438,26 @@ result apart from a saturated one.
 
 ```mermaid
 flowchart TD
-  MK["makePromise() with debug view enabled"] --> REG["assign serial id;<br/>stamp createdAt;<br/>fin = { id, hadUnlistenedRejection: false };<br/>add { WeakRef, fin } to liveSet;<br/>register FinalizationRegistry (heldValue = fin);<br/>register runtime first-listener + settle hooks"]
+  MK["makePromise() with debug view enabled"] --> REG["assign serial id;<br/>stamp createdAt;<br/>fin = { id, hadUnlistenedRejection: false, delivered: false };<br/>add { WeakRef, fin } to liveSet;<br/>register FinalizationRegistry (heldValue = fin);<br/>register runtime first-listener + settle hooks (both close over fin)"]
   REG --> RJ{"reject with no listener?"}
   RJ -->|"yes"| UR["set fin.hadUnlistenedRejection = true;<br/>put unlistened-rejection record in retained<br/>(hold reason projection, delivered = false);<br/>settle hook prunes id from liveSet"]
   RJ -->|"no (delivered settlement)"| DONE["ordinary delivery;<br/>settle hook prunes id from liveSet;<br/>no debug entry"]
   UR --> FS{"first listener arrives?"}
-  FS -->|"yes"| MARK["mark delivered = true;<br/>move entry from retained into ring"]
+  FS -->|"yes"| MARK["set fin.delivered = true;<br/>mark entry delivered = true;<br/>move entry from retained into ring"]
   REG --> GC{"carrier finalized?"}
   GC -->|"still in liveSet<br/>(never settled)"| FPN["append plain forever-pending to ring"]
-  GC -->|"not in liveSet<br/>and fin.hadUnlistenedRejection"| FPU["append forever-pending to ring;<br/>undeliveredRejection = true;<br/>attach retained projection, or<br/>priorEntryEvicted if evicted"]
-  GC -->|"not in liveSet<br/>and not fin.hadUnlistenedRejection"| NONE["settled and delivered:<br/>no entry"]
+  GC -->|"not in liveSet,<br/>fin.hadUnlistenedRejection<br/>and not fin.delivered"| FPU["append forever-pending to ring;<br/>undeliveredRejection = true;<br/>attach retained projection, or<br/>priorEntryEvicted if evicted"]
+  GC -->|"not in liveSet<br/>and (fin.delivered<br/>or not fin.hadUnlistenedRejection)"| NONE["settled and delivered:<br/>no entry"]
 
   INSPECT["debugView() called (separate entry point)"] --> LP["walk liveSet;<br/>filter unsettled carriers older than threshold;<br/>order oldest createdAt first;<br/>synthesize longPending, capped at L"]
 ```
 
 - **At `makePromise()`** (only when the flag is enabled): assign a serial
   `id`, stamp `createdAt`, build the value-only finalization record
-  `fin = { id, hadUnlistenedRejection: false }`, add `{ ref, fin }` to
-  `liveSet`, register the carrier with a `FinalizationRegistry` whose
-  `heldValue` is `fin`, and register the runtime's own first-listener and
-  settle hooks.
+  `fin = { id, hadUnlistenedRejection: false, delivered: false }`, add
+  `{ ref, fin }` to `liveSet`, register the carrier with a
+  `FinalizationRegistry` whose `heldValue` is `fin`, and register the
+  runtime's own first-listener and settle hooks, both closing over `fin`.
   No visible entry yet.
 - **At `resolver.reject(reason)` with no listener**: while the carrier is
   still in `liveSet`, set `fin.hadUnlistenedRejection = true`; the
@@ -434,8 +469,14 @@ flowchart TD
   carrier's `id` from `liveSet`, so an undelivered retained rejection is
   reported through `retained` (the `entries` array), never through
   `long-pending`.
-- **At first-listener arrival**: the entry is marked `delivered: true` and
-  moved from `retained` into `ring`.
+- **At first-listener arrival**: the first-listener hook sets
+  `fin.delivered = true` (through its closure over `fin`), marks the
+  `retained` entry `delivered: true`, and moves it from `retained` into
+  `ring`. Setting `fin.delivered` here is the write that keeps the headline
+  composite sound: it is the one later transition that supersedes the
+  `hadUnlistenedRejection` bit fixed at reject time, so a rejection that is
+  delivered before its carrier is collected can no longer be misread as an
+  undelivered loss at finalization.
   This correlation is not free; see "First-listener arrival plumbing".
 - **At settlement** (resolve or reject): the settle hook prunes the
   carrier's `id` from `liveSet` so it can no longer be classified
@@ -447,20 +488,26 @@ flowchart TD
     was **never settled**): prune `liveSet` and append a plain
     `forever-pending` entry to `ring`. This is the "producer forgot to
     resolve, and both are now gone" case (scoped by the weak-reachability
-    constraint / Open Question 6). `hadUnlistenedRejection` is necessarily
-    `false` here, since a reject would have pruned `liveSet`.
-  - **`id` not in `liveSet` and `fin.hadUnlistenedRejection`** (settled by
-    a reject with no listener, never delivered): append a `forever-pending`
-    entry with `undeliveredRejection: true` (the headline composite). If
-    `retained` still holds the `unlistened-rejection` entry, attach its
-    reason projection; else it was evicted, so also set
-    `priorEntryEvicted: true` (the projection is gone but the rejection is
-    known).
-  - **`id` not in `liveSet` and not `fin.hadUnlistenedRejection`** (settled
-    and delivered normally): append **no** entry. This is the common case,
-    and gating on the recorded bit rather than on `liveSet` membership
-    alone is what keeps `ring` from flooding with a spurious
-    `forever-pending` for every collected carrier.
+    constraint / Open Question 6). Both `fin` bits are necessarily `false`
+    here, since a reject would have pruned `liveSet`.
+  - **`id` not in `liveSet`, `fin.hadUnlistenedRejection`, and not
+    `fin.delivered`** (settled by a reject with no listener, never
+    delivered): append a `forever-pending` entry with
+    `undeliveredRejection: true` (the headline composite). If `retained`
+    still holds the `unlistened-rejection` entry, attach its reason
+    projection; else it was evicted, so also set `priorEntryEvicted: true`
+    (the projection is gone but the rejection is known).
+  - **`id` not in `liveSet` and (`fin.delivered` or not
+    `fin.hadUnlistenedRejection`)** (settled and delivered normally,
+    including a rejection that was later delivered to its first listener):
+    append **no** entry. This is the common case, and it is why the
+    `delivered` bit is required: a delivered-then-collected rejection still
+    has `fin.hadUnlistenedRejection === true`, so gating on that bit alone
+    would flood `ring` with a spurious `undeliveredRejection`
+    `forever-pending` (doubly recorded, since the same carrier already sits
+    in `ring` as a delivered `unlistened-rejection`) for every ordinary
+    delivered rejection whose carrier is later collected. The `delivered`
+    bit routes that case here instead.
 - **At inspection time**: `long-pending` is computed by walking `liveSet`,
   keeping still-live carriers whose `createdAt` is older than the
   threshold, ordering them **oldest `createdAt` first**, and synthesizing
@@ -491,8 +538,16 @@ ride on the producer's optional callback, and it composes with a
 producer-supplied `onFirstListen` rather than displacing it (the
 producer's callback still fires with its documented fire-once,
 producer-scoped contract).
+The hook closes over the carrier's `fin` record (created in the same
+`makePromise()` call), so on the first-listener transition it sets
+`fin.delivered = true` in addition to marking and moving the `retained`
+entry. Closing over the value-only `fin` (not the carrier) is what lets it
+supersede `hadUnlistenedRejection` after the reject has already pruned the
+carrier from `liveSet`, without which the finalization callback could not
+tell a delivered rejection from an undelivered one.
 Per the weak-reachability constraint above, this hook must not introduce a
-strong runtime-to-carrier edge.
+strong runtime-to-carrier edge (closing over `fin` does not: `fin` holds no
+carrier reference).
 This added hook is why Phase 2 below is sized **M**, not **S**.
 
 ### Inspection surface
@@ -613,7 +668,7 @@ default, so the "configurable" claim resolves to named variables:
 |---|---|---|
 | `ENDO_PROMISE_DEBUG_VIEW` | on/off (`disabled` \| `enabled`) | `disabled` |
 | `ENDO_PROMISE_DEBUG_VIEW_CAPACITY` | ring capacity `N` | Open Question 2 |
-| `ENDO_PROMISE_DEBUG_VIEW_RETAINED` | retained-map capacity `R` | Open Question 2 |
+| `ENDO_PROMISE_DEBUG_VIEW_RETAINED_CAPACITY` | retained-map capacity `R` | Open Question 2 |
 | `ENDO_PROMISE_DEBUG_VIEW_THRESHOLD` | long-pending age threshold (unit follows `createdAt`, Open Question 5) | Open Question 2 |
 | `ENDO_PROMISE_DEBUG_VIEW_LONG_PENDING_LIMIT` | derived-query cap `L` | Open Question 2 |
 
@@ -725,7 +780,11 @@ transition it reads must exist first.
    unhandled-rejection tracker), and `HandledPromise.debugView()` returning
    the frozen snapshot.
    Unit tests for ring capacity, retained-map eviction incrementing
-   `evicted.retained`, the disabled no-op, and the `enabled` flag.
+   `evicted.retained`, the disabled no-op, the `enabled` flag, and the
+   malformed-bound fallback specified under "Production cost and gating"
+   (`ENDO_PROMISE_DEBUG_VIEW_CAPACITY=abc` and other non-positive/NaN
+   inputs must fall back to the documented default and emit one diagnostic,
+   never store `NaN` or throw).
 2. **Unlistened-rejection recording (M).**
    Append on `resolver.reject` with no listener into `retained`; register
    the runtime's own first-listener hook per carrier with no strong
@@ -742,17 +801,28 @@ transition it reads must exist first.
    No timer, nothing stored.
 4. **Forever-pending via FinalizationRegistry (S).**
    Register at `makePromise()` with the value-only `fin` record
-   (`{ id, hadUnlistenedRejection }`) as `heldValue`, set its bit on a
-   reject with no listener, and on finalization classify by `liveSet`
+   (`{ id, hadUnlistenedRejection, delivered }`) as `heldValue`, set
+   `hadUnlistenedRejection` on a reject with no listener and `delivered` in
+   the first-listener hook, and on finalization classify by `liveSet`
    membership and `fin`: append a plain `forever-pending` for a
    never-settled carrier, set `undeliveredRejection` (plus
    `priorEntryEvicted` from a `retained` lookup) for an undelivered
-   rejection, and append nothing for a settled-and-delivered carrier.
+   rejection (`hadUnlistenedRejection && !delivered`), and append nothing
+   for a settled-and-delivered carrier (`delivered` or
+   `!hadUnlistenedRejection`).
    Test the composite headline case explicitly: an `unlistened-rejection`
    entry whose carrier is GC'd before any listener arrives must, on
    finalization, produce a `forever-pending` entry with
    `undeliveredRejection: true` and the retained reason, the highest-signal
    bug the view exists to report.
+   Test the delivered-then-finalized case explicitly (the one the
+   `delivered` bit exists to get right): an `unlistened-rejection` whose
+   first listener arrives (so `fin.delivered` is set and the entry moves
+   into `ring`) and whose carrier is only then GC'd must produce **no**
+   second `forever-pending` entry, and in particular must **not** be
+   reported `undeliveredRejection` or `priorEntryEvicted`. This is the
+   common delivered-then-collected case that `hadUnlistenedRejection` alone
+   misclassifies.
    Test the negative case (the one a scalar id-watermark test gets wrong):
    a carrier that never had an unlistened rejection, finalized after a
    `retained` eviction, must produce **no** `priorEntryEvicted` (and, if
@@ -785,13 +855,14 @@ transition it reads must exist first.
    The structures must not keep carriers alive (that would mask
    `forever-pending` and leak memory), so carriers are held via `WeakRef`
    and the weak-reachability constraint governs every edge.
-   Because a `WeakRef` cannot be dereferenced once the carrier is
-   collected, exactly when the finalization callback needs to find that
-   carrier's earlier entry, correlation across a carrier's lifetime is
-   keyed on a monotonic serial `id`, carried (with the one bit of
-   per-carrier history the callback needs, `hadUnlistenedRejection`) on a
-   value-only finalization record that is the `FinalizationRegistry`
-   `heldValue`, not on the reference.
+   A `WeakRef` cannot be dereferenced once the carrier is collected, which
+   is exactly when the finalization callback needs to find that carrier's
+   earlier entry.
+   So correlation across a carrier's lifetime is keyed on a monotonic
+   serial `id` carried on a value-only finalization record that is the
+   `FinalizationRegistry` `heldValue`, not on the reference; that record
+   also carries the two bits of per-carrier history the callback needs
+   (`hadUnlistenedRejection` and `delivered`).
 3. **Undelivered rejections are protected from eviction.**
    The buffer exists to correlate a rejection with its later finalization,
    so the recency FIFO may not evict the undelivered half.
