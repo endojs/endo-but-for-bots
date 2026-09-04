@@ -251,9 +251,10 @@ pet name it was bound to; `fae-factory-setup` resolves that name where it is
 meaningful — in the user's own inventory — and delegates the resulting
 `SecretBlob` capability to the factory, which passes it on to each agent's
 driver.
-The driver reads the token when its loop starts, so replacing the bytes
-(`SecretAdmin.replaceBase64`) rotates every agent at once and revoking the
-secret stops the next read.
+An agent reads the token afresh for every turn, so replacing the bytes
+(`SecretAdmin.replaceBase64`) rotates every running agent at once and revoking
+the secret stops the next turn rather than merely the next provisioning.
+The provider is rebuilt only when the bytes actually change.
 A deployment still carrying a plaintext `authToken` in its provider config keeps
 working, with a warning: that arrangement cannot be rotated, revoked, or
 audited.

@@ -101,10 +101,12 @@ Re-running setup without the key in the environment keeps the secret already in
 the manager, and re-running it *with* a key replaces the bytes of the existing
 record rather than minting a second one, so delegated capabilities stay valid.
 
-A provider pins the token as of the moment it was built.
+A provider pins the token as of the moment it was built, but a session resolves
+its provider per turn rather than holding one.
 Call `refreshCredentials()` on the factory after rotating or revoking the secret
-to drop the cached providers, so the next turn reads it again — no daemon
-restart required.
+to drop the cached providers: the next turn of every open session reads the
+secret again — no daemon restart required, and no need to close the sessions
+that were already running.
 
 ## Plan and rate limits
 

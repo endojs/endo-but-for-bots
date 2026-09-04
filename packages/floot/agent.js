@@ -480,6 +480,13 @@ const provisionPresetObjects = async (
  */
 
 /**
+ * @typedef {object} LateProviderConfig
+ * @property {() => Promise<any>} provideProvider - Resolved once per turn
+ *   rather than held, so dropping a cached provider (`refreshCredentials`)
+ *   reaches a session that is already open.
+ */
+
+/**
  * @typedef {object} ClaudeClientConfig
  * @property {any} claudeClient - A ClaudeClient capability
  *   (@endo/claude-sandbox): `send(prompt) -> reply reader` of raw stream-json
@@ -508,7 +515,7 @@ const provisionPresetObjects = async (
  *
  * @param {any} powers - Guest powers (petstore for conversation history)
  * @param {Promise<object> | object | undefined} _context
- * @param {ProviderConstructorConfig | InjectedProviderConfig | ClaudeClientConfig | { hostedClient: any }} providerConfig
+ * @param {ProviderConstructorConfig | InjectedProviderConfig | LateProviderConfig | ClaudeClientConfig | { hostedClient: any }} providerConfig
  * @param {string} [systemPrompt]
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
@@ -541,9 +548,10 @@ export const makeStreamingAgent = async (
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   const hostedClient = /** @type {any} */ (providerConfig).hostedClient;
+  const provideProvider = /** @type {any} */ (providerConfig).provideProvider;
   /** @type {any} */
-  const provider =
-    claudeClient || hostedClient
+  const staticProvider =
+    claudeClient || hostedClient || provideProvider
       ? null
       : /** @type {any} */ (providerConfig).provider ||
         createStreamingProvider({
@@ -551,6 +559,18 @@ export const makeStreamingAgent = async (
           LAL_MODEL: /** @type {any} */ (providerConfig).model,
           LAL_AUTH_TOKEN: /** @type {any} */ (providerConfig).authToken,
         });
+
+  /**
+   * The provider this turn runs on.
+   *
+   * Resolved per turn rather than captured at construction: a provider pins the
+   * auth token as of the moment it was built, so a session holding one would go
+   * on using a rotated — or revoked — credential until the daemon restarted.
+   * `refreshCredentials()` drops the factory's cache, and the next turn asks
+   * for it again.
+   */
+  const currentProvider = async () =>
+    provideProvider ? provideProvider() : staticProvider;
 
   const effectivePrompt = systemPrompt || defaultSystemPrompt;
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
@@ -848,6 +868,7 @@ export const makeStreamingAgent = async (
           `[floot] round ${round}: ${context.length} messages, ${tools.providerSchemas.length} tools`,
         );
         let streamed = '';
+        const provider = await currentProvider();
         const { message, usage: roundUsage } = await provider.chatStream(
           context,
           tools.providerSchemas,
@@ -1730,7 +1751,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
             claudeClient: makeSendOnlyClient(await getClaudeClient(id)),
           };
         } else {
-          agentConfig = { provider: await getProvider(entry?.model) };
+          // A thunk, not a resolved provider: `refreshCredentials()` clears
+          // the factory's cache, and a session that had captured its provider
+          // would keep using the token that provider was built with — the
+          // rotation or revocation would reach only sessions opened after it.
+          agentConfig = { provideProvider: () => getProvider(entry?.model) };
         }
         // A session may delegate only while its own depth leaves room. The
         // spawner is rebuilt on every revival rather than persisted, so the

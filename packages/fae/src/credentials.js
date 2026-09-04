@@ -34,9 +34,14 @@ const MAX_TOKEN_LENGTH = 8192;
 export const encodeAuthToken = token => {
   (typeof token === 'string' && token !== '') ||
     Fail`Provider auth token must be a non-empty string`;
-  token.length <= MAX_TOKEN_LENGTH ||
-    Fail`Provider auth token must be at most ${q(MAX_TOKEN_LENGTH)} characters`;
-  return encodeBase64(encodeUtf8(token));
+  // Bound the *bytes*, which is what `readAuthToken` bounds and what the secret
+  // manager stores. `String.length` counts UTF-16 code units, so a token of
+  // non-ASCII characters could pass here and then be rejected on every read —
+  // written once and unreadable forever.
+  const bytes = encodeUtf8(token);
+  bytes.length <= MAX_TOKEN_LENGTH ||
+    Fail`Provider auth token must encode to at most ${q(MAX_TOKEN_LENGTH)} bytes`;
+  return encodeBase64(bytes);
 };
 harden(encodeAuthToken);
 
@@ -123,6 +128,28 @@ export const resolveAuthToken = async ({
 harden(resolveAuthToken);
 
 /**
+ * Whether `secrets/<name>` names something.
+ *
+ * Asked directly, this throws on a daemon that has never held a secret: `has`
+ * on a two-segment path looks the prefix up first, and the `secrets` directory
+ * is created lazily, by the first `createBase64`. The question "is there a
+ * secret by this name" must answer *no* there, not fail — a caller that treats
+ * the failure as "the secret manager is unavailable" downgrades to a plaintext
+ * token on exactly the daemon where the manager would have worked.
+ *
+ * @param {object} options
+ * @param {any} options.hostAgent
+ * @param {string} options.name
+ * @returns {Promise<boolean>}
+ */
+export const hasAuthSecret = async ({ hostAgent, name }) => {
+  await null;
+  if (!(await E(hostAgent).has('secrets'))) return false;
+  return E(hostAgent).has('secrets', name);
+};
+harden(hasAuthSecret);
+
+/**
  * Bind a provider token to a daemon-managed secret and return a locator for the
  * `SecretBlob`, creating the record on first run and replacing its bytes on
  * every run after that.
@@ -153,7 +180,7 @@ export const provideAuthSecret = async ({
 }) => {
   const payload = encodeAuthToken(token);
   await null;
-  const existing = await E(hostAgent).has('secrets', name);
+  const existing = await hasAuthSecret({ hostAgent, name });
   let created = false;
   if (existing) {
     const catalog = await E(hostAgent).lookup(['@secrets', 'catalog']);

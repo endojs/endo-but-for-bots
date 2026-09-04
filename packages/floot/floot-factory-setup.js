@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { E } from '@endo/eventual-send';
 import {
   AUTH_SECRET_PETNAME,
+  hasAuthSecret,
   provideAuthSecret,
 } from '@endo/fae/src/credentials.js';
 import { coerceDeclaredProfile } from '@endo/hosted-agent/account.js';
@@ -177,7 +178,10 @@ export const main = async agent => {
   // A re-provision without the key in env keeps the secret already in the
   // manager: the credential lives in the daemon now, not in this shell.
   const secretName = `${dir}-auth`;
-  const hasExistingSecret = await E(agent).has('secrets', secretName);
+  const hasExistingSecret = await hasAuthSecret({
+    hostAgent: agent,
+    name: secretName,
+  });
   if (provider === 'anthropic' && !authToken && !hasExistingSecret) {
     throw new Error(
       'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',

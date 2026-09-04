@@ -6,12 +6,12 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { createProvider } from '@endo/lal/providers/index.js';
 import {
   makeConversationTree,
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
 
+import { makeRotatingProvider } from './src/provider-cache.js';
 import { discoverTools, executeTool } from './src/tools.js';
 import {
   makeListPetnamesTool,
@@ -167,6 +167,9 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   for an agent this deployment allows to delegate; its absence is what
  *   withholds the subagent tools.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
+ * @param {() => Promise<string>} [options.provideAuthToken] - Reads the auth
+ *   token afresh for each turn, so a rotated secret reaches a running agent and
+ *   a revoked one stops it. Absent when the caller injected a built provider.
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -174,7 +177,7 @@ export const spawnWorkerLoop = async (
   context,
   providerConfig,
   systemPrompt,
-  { spawner, timers } = {},
+  { spawner, timers, provideAuthToken } = {},
 ) => {
   const getCancelled = async () => {
     if (!context) return null;
@@ -189,20 +192,21 @@ export const spawnWorkerLoop = async (
     return null;
   };
 
-  const provider =
-    providerConfig.provider ||
-    createProvider({
-      LAL_HOST: providerConfig.host,
-      LAL_MODEL: providerConfig.model,
-      LAL_AUTH_TOKEN: providerConfig.authToken,
-    });
+  // Resolved per turn rather than captured when the loop starts, so a rotated
+  // secret reaches an agent that is already running and a revoked one stops
+  // its next turn. See `makeRotatingProvider`.
+  const currentProvider = makeRotatingProvider({
+    config: providerConfig,
+    ...(provideAuthToken ? { provideAuthToken } : {}),
+  });
 
   /**
    * @param {object[]} messages
    * @param {object[]} toolSchemas
    * @returns {Promise<{message: object}>}
    */
-  const chat = (messages, toolSchemas) => provider.chat(messages, toolSchemas);
+  const chat = async (messages, toolSchemas) =>
+    (await currentProvider()).chat(messages, toolSchemas);
 
   const effectivePrompt = systemPrompt || guestSystemPrompt;
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
