@@ -645,9 +645,13 @@ let shouldTerminate = false;
 let _daemonResult = null;
 
 const makeEndorRegistryPowers = endorRegistryUrl => {
+  // No `offline` field: the Endor adapter never consults one. Endor's no-egress
+  // posture is structural, enforced in Rust (`rust/endo/src/inproc.rs`), not by
+  // a JS flag — an `offline` here would be set-but-never-read (misleading dead
+  // state, not a control). The `ENDO_REGISTRY_OFFLINE` env has no effect on this
+  // lane.
   return harden({
     adapter: 'endor',
-    offline: hostGetEnv('ENDO_REGISTRY_OFFLINE') === '1',
     registryUrl: endorRegistryUrl,
     hasPackage: hostRegistryHasPackage,
     listVersions: hostRegistryListVersions,
