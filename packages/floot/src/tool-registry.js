@@ -13,6 +13,7 @@ import {
   makeSendTool,
   makeStoreTool,
 } from '@endo/fae/src/tool-makers.js';
+import { makeSubagentTools } from '@endo/fae/src/subagent.js';
 import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
 
@@ -190,9 +191,20 @@ harden(makeEndoToolSet);
  * hosted backends. A snapshot pins names, schemas, and executable capabilities
  * together so an advertised name cannot be rebound during a turn.
  *
+ * Delegation is capability-gated: the subagent tools appear in the catalog only
+ * when the factory handed this session a spawner, and their presence changes
+ * `toolSetId`, so a hosted thread pinned without them cannot silently resume
+ * with them.
+ *
  * @param {any} powers
+ * @param {object} [options]
+ * @param {any} [options.spawner] - A `SubagentSpawner` capability.
+ * @param {any} [options.delegations] - The session's delegation registry.
  */
-export const makeFlootToolRegistry = powers => {
+export const makeFlootToolRegistry = (
+  powers,
+  { spawner, delegations } = {},
+) => {
   /** @type {Map<string, any>} */
   const builtins = new Map();
   builtins.set('exec', makeExecTool(powers));
@@ -234,6 +246,15 @@ export const makeFlootToolRegistry = powers => {
   builtins.set('adopt', makeAdoptTool(powers));
   builtins.set('send', makeSendTool(powers));
   builtins.set('reply', makeReplyTool(powers));
+  if (spawner && delegations) {
+    for (const [name, tool] of makeSubagentTools({
+      powers,
+      spawner,
+      delegations,
+    })) {
+      builtins.set(name, tool);
+    }
+  }
 
   const snapshot = async () => {
     const { schemas, toolMap, storedTools } = await discoverTools(

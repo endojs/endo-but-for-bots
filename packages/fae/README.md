@@ -216,6 +216,8 @@ packages/fae/
 ├── src/
 │   ├── extract-tool-calls.js # XML tool call parser
 │   ├── fae-tool-interface.js # FaeTool M.interface guard
+│   ├── subagent.js           # Delegation registry and subagent tools
+│   ├── subagent-host.js      # Agent provisioning, teardown, and the spawner
 │   ├── tool-makers.js        # Built-in tool factory functions
 │   └── tools.js              # Tool discovery and execution
 └── tools/
@@ -230,3 +232,12 @@ packages/fae/
     ├── grep.js               # FaeTool: search file contents by regexp under root
     └── run-command.js        # FaeTool: run shell commands in root
 ```
+
+## Subagents
+
+An agent may hand a self-contained piece of work to a subagent it converses with
+over the daemon mailbox, using `spawnSubagent`, `askSubagent`, and
+`stopSubagent`.
+The capability that mints subagents is endowed per agent, so withholding it
+withholds the tools.
+See [SUBAGENTS.md](./SUBAGENTS.md).
