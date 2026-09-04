@@ -46,6 +46,14 @@ import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
 const MAX_TOOL_ROUNDS = 32;
 
+/**
+ * Inbound messages that may be waiting for a turn at once.
+ *
+ * Turns run on a serial chain beside the mailbox pump rather than inside it,
+ * so nothing else bounds how far the queue can grow under a flood of mail.
+ */
+const MAX_QUEUED_TURNS = 16;
+
 const m = makeMarshal(undefined, undefined, {
   errorTagging: 'off',
   serializeBodyFormat: 'smallcaps',
@@ -476,6 +484,138 @@ export const spawnWorkerLoop = async (
      */
     const seenInboundNumbers = new Set();
 
+    /**
+     * Run one inbound message as a turn.
+     *
+     * Called only from the serial worker below, never from the pump, so a turn
+     * that blocks inside `askSubagent` cannot stop the stream that carries its
+     * answer.
+     *
+     * @param {any} message
+     */
+    const handleMessage = async message => {
+      const {
+        from: fromId,
+        number,
+        type,
+        strings,
+        names,
+        messageId,
+        replyTo,
+      } = message;
+
+      await rootNodeIdP;
+
+      console.log(`[fae] New message #${number} from ${fromId}`);
+
+      // Discover tools (picks up newly adopted tools each turn)
+      const { schemas: toolSchemas, toolMap } = await discoverTools(
+        powers,
+        localTools,
+      );
+
+      let textContent;
+      if (type === 'package' && Array.isArray(strings)) {
+        const parts = [];
+        const namesArray = Array.isArray(names) ? names : [];
+        for (let i = 0; i < strings.length; i += 1) {
+          parts.push(strings[i]);
+          if (i < namesArray.length) {
+            parts.push(`@${namesArray[i]}`);
+          }
+        }
+        textContent = parts.join('').trim();
+      } else {
+        textContent = `(${type || 'unknown'} message)`;
+      }
+
+      // Determine the parent node for this message:
+      //  1. If replyTo matches a node in the tree, branch from there
+      //  2. Otherwise continue from the last leaf (preserves context)
+      let parentId = lastLeafId;
+      if (typeof replyTo === 'string') {
+        const existingNode = await tree.getNode(replyTo);
+        if (existingNode !== null) {
+          parentId = replyTo;
+        }
+      }
+
+      const userNode = await tree.addNode(
+        parentId,
+        [
+          {
+            role: 'user',
+            content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
+          },
+        ],
+        { messageId },
+      );
+
+      try {
+        replyTracker.sent = false;
+        const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
+        lastLeafId = outcome.leafId;
+        if (!outcome.answered) {
+          throw Error(
+            outcome.exhausted
+              ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
+              : 'FAE provider returned no assistant message',
+          );
+        }
+
+        // If the LLM produced a final response without calling the reply
+        // tool, send the content as a fallback reply so the sender
+        // (e.g. a Whylip UI) actually receives it.
+        if (!replyTracker.sent) {
+          const finalNode = await tree.getNode(lastLeafId);
+          if (finalNode) {
+            const lastMsg = finalNode.messages[finalNode.messages.length - 1];
+            if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
+              console.log('[fae] No reply tool called, sending fallback reply');
+              await E(powers).reply(number, [lastMsg.content], [], []);
+            }
+          }
+        }
+      } catch (error) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        console.error('[fae] LLM error, notifying sender:', errorMessage);
+        await E(powers).reply(number, [errorMessage], [], []);
+      }
+    };
+
+    // Turns run on their own serial chain rather than inside the pump below.
+    //
+    // `askSubagent` blocks inside a turn until `delegations.claim` observes the
+    // subagent's reply, and the only thing that feeds `claim` is the pump. A
+    // turn awaited inside the pump therefore waits for a message the pump can
+    // no longer read: every ask times out. Handing the turn to a serial worker
+    // keeps mail strictly ordered while leaving the pump free to run.
+    /** @type {Promise<void>} */
+    let turnChain = Promise.resolve();
+    let queuedTurns = 0;
+    let stopping = false;
+
+    /** @param {any} message */
+    const enqueueTurn = message => {
+      queuedTurns += 1;
+      turnChain = turnChain.then(async () => {
+        try {
+          if (stopping) return;
+          await handleMessage(message);
+        } catch (error) {
+          // `handleMessage` already mails its own failures back to the sender;
+          // reaching here means even that failed, and the chain must survive.
+          console.error(
+            '[fae] turn failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+        } finally {
+          queuedTurns -= 1;
+        }
+      });
+    };
+
     const messageIterator = iterateReader(E(powers).followMessages());
     while (true) {
       const nextMessage = messageIterator.next();
@@ -486,12 +626,15 @@ export const spawnWorkerLoop = async (
           ])
         : { cancelled: false, result: await nextMessage };
       if (raced.cancelled) {
+        // Queued turns are abandoned rather than awaited: cancellation must be
+        // prompt, and an in-flight provider call can take minutes.
+        stopping = true;
         try {
           await messageIterator.return?.();
         } catch {
           // ignore iterator return errors on cancellation
         }
-        break;
+        return;
       }
       const { value: message, done } = raced.result;
       if (done) {
@@ -500,9 +643,6 @@ export const spawnWorkerLoop = async (
       const {
         from: fromId,
         number,
-        type,
-        strings,
-        names,
         done: messageDone = true,
       } = /** @type {any} */ (message);
 
@@ -516,13 +656,24 @@ export const spawnWorkerLoop = async (
         // Record it the way a handled message is recorded, so a later edit of
         // the reply does not arrive as if it were a fresh request.
         seenInboundNumbers.add(number);
+        // A claimed reply must not survive into the next incarnation: with no
+        // ask pending, a replayed reply becomes an ordinary request, this agent
+        // answers the subagent, and the subagent answers back — two models in
+        // an unbounded exchange. Its attachments were offered to the model in
+        // the ask's result, which is the last moment they can be adopted.
+        void E(powers)
+          .dismiss(number)
+          .catch(error => {
+            console.error(
+              `[fae] could not dismiss claimed reply #${number}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
         // eslint-disable-next-line no-continue
         continue;
       }
 
       if (!isSameFormula(fromId, selfLocator)) {
-        const { messageId, replyTo } = /** @type {any} */ (message);
-
         // Skip partial (in-flight) submissions: wait until the sender
         // marks the message done before spinning up an LLM turn.
         if (messageDone === false) {
@@ -546,92 +697,36 @@ export const spawnWorkerLoop = async (
         }
         seenInboundNumbers.add(number);
 
-        await rootNodeIdP;
-
-        console.log(`[fae] New message #${number} from ${fromId}`);
-
-        // Discover tools (picks up newly adopted tools each turn)
-        const { schemas: toolSchemas, toolMap } = await discoverTools(
-          powers,
-          localTools,
-        );
-
-        let textContent;
-        if (type === 'package' && Array.isArray(strings)) {
-          const parts = [];
-          const namesArray = Array.isArray(names) ? names : [];
-          for (let i = 0; i < strings.length; i += 1) {
-            parts.push(strings[i]);
-            if (i < namesArray.length) {
-              parts.push(`@${namesArray[i]}`);
-            }
-          }
-          textContent = parts.join('').trim();
-        } else {
-          textContent = `(${type || 'unknown'} message)`;
-        }
-
-        // Determine the parent node for this message:
-        //  1. If replyTo matches a node in the tree, branch from there
-        //  2. Otherwise continue from the last leaf (preserves context)
-        let parentId = lastLeafId;
-        if (typeof replyTo === 'string') {
-          const existingNode = await tree.getNode(replyTo);
-          if (existingNode !== null) {
-            parentId = replyTo;
-          }
-        }
-
-        const userNode = await tree.addNode(
-          parentId,
-          [
-            {
-              role: 'user',
-              content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
-            },
-          ],
-          { messageId },
-        );
-
-        try {
-          replyTracker.sent = false;
-          const outcome = await runAgenticLoop(
-            toolSchemas,
-            toolMap,
-            userNode.id,
+        // The queue is what used to be implicit backpressure from awaiting the
+        // turn in the pump. Bounding it keeps a flood of mail from growing an
+        // unbounded chain of pending turns; the sender is told rather than
+        // silently ignored.
+        if (queuedTurns >= MAX_QUEUED_TURNS) {
+          console.error(
+            `[fae] ${queuedTurns} turns already queued; declining message #${number}`,
           );
-          lastLeafId = outcome.leafId;
-          if (!outcome.answered) {
-            throw Error(
-              outcome.exhausted
-                ? `FAE turn exceeded ${MAX_TOOL_ROUNDS} tool rounds`
-                : 'FAE provider returned no assistant message',
-            );
-          }
-
-          // If the LLM produced a final response without calling the reply
-          // tool, send the content as a fallback reply so the sender
-          // (e.g. a Whylip UI) actually receives it.
-          if (!replyTracker.sent) {
-            const finalNode = await tree.getNode(lastLeafId);
-            if (finalNode) {
-              const lastMsg = finalNode.messages[finalNode.messages.length - 1];
-              if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
-                console.log(
-                  '[fae] No reply tool called, sending fallback reply',
-                );
-                await E(powers).reply(number, [lastMsg.content], [], []);
-              }
-            }
-          }
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error);
-          console.error('[fae] LLM error, notifying sender:', errorMessage);
-          await E(powers).reply(number, [errorMessage], [], []);
+          // eslint-disable-next-line no-await-in-loop
+          await E(powers)
+            .reply(
+              number,
+              [
+                `This agent already has ${queuedTurns} messages waiting. Please resend once it has caught up.`,
+              ],
+              [],
+              [],
+            )
+            .catch(() => undefined);
+          // eslint-disable-next-line no-continue
+          continue;
         }
+
+        enqueueTurn(message);
       }
     }
+
+    // The stream ended of its own accord: let the queue drain so a reply that
+    // was about to be sent is not dropped.
+    await turnChain;
   };
 
   // Start the worker loop
