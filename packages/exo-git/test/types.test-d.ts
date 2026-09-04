@@ -58,6 +58,7 @@ import type {
   ReadOnlyEndoGit,
   ReadOnlyGitWorktree,
   ReadWriteEndoGit,
+  RemoteCredentialHealth,
   RemoteOperationResult,
   RemotePolicy,
   RemotePullResult,
@@ -175,6 +176,33 @@ expectTypeOf<
 expectTypeOf<
   Extract<keyof GitRemoteOperationSuccessAuditEvent, 'credential'>
 >().toEqualTypeOf<never>();
+
+// `credentialHealth()` is the deliberately weaker sibling of using the
+// credential, so its result type is the enforcement surface: it must resolve
+// to the `RemoteCredentialHealth` union and no arm of that union may name a
+// material-bearing field. `keyof` a union yields only the shared keys, so
+// distribute over the arms first — otherwise this pin would pass vacuously.
+expectTypeOf<
+  Awaited<ReturnType<GitRemote['credentialHealth']>>
+>().toEqualTypeOf<RemoteCredentialHealth>();
+type RemoteCredentialHealthArmKeys = RemoteCredentialHealth extends infer Arm
+  ? Arm extends object
+    ? keyof Arm
+    : never
+  : never;
+expectTypeOf<
+  Extract<
+    RemoteCredentialHealthArmKeys,
+    'material' | 'token' | 'password' | 'username'
+  >
+>().toEqualTypeOf<never>();
+
+// The union is discriminated on `required`, so a holder that has not checked
+// the flag cannot reach the liveness fields: the `false` arm carries nothing
+// but the flag itself.
+expectTypeOf<
+  Extract<RemoteCredentialHealth, { required: false }>
+>().toEqualTypeOf<{ required: false }>();
 
 // `pull`'s `branch` selector accepts either a resolved `GitRef` or a bare
 // string (branch name, tag, etc); narrowing it to `GitRef` only would break
