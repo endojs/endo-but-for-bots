@@ -37,9 +37,7 @@ test('blobFromBytes round-trips arbitrary multi-chunk payloads', async t => {
       const blob = blobFromBytes(Promise.resolve(sample));
       /** @type {number[]} */
       const recovered = [];
-      for await (const chunk of iterateBytesReader(
-        /** @type {any} */ (blob),
-      )) {
+      for await (const chunk of iterateBytesReader(/** @type {any} */ (blob))) {
         recovered.push(...chunk);
       }
       t.deepEqual(recovered, [...sample]);
