@@ -75,6 +75,26 @@ fn executor_own_try_still_catches() {
 }
 
 #[test]
+fn from_async_mapfn_native_type_error_rejects_not_outer_catch() {
+    // `Array.fromAsync`'s mapper is dispatched through
+    // `call_any_catching_throw` — the sibling native `mxTry` boundary the
+    // round-1 fence left behind (`run_callback_catching_throw`'s twin). A
+    // native-validation raise inside the mapper must reject the fromAsync
+    // result promise, never unwind into a guest `try` live around the
+    // `Array.fromAsync` call. The mapper runs at the promise-job drain with an
+    // already-empty handler chain, so this is a behavioral lock on the
+    // observable outcome; the fence's guarantee is that a synchronously-reached
+    // boundary cannot leak the `Resume` either.
+    assert_result_agrees(
+        "var out = 'no'; \
+         try { \
+           Array.fromAsync([0], function(){ Object.defineProperty(true, 'x', {}); }); \
+         } catch (e) { out = 'caught'; } \
+         out;",
+    );
+}
+
+#[test]
 fn thenable_then_native_type_error_does_not_escape() {
     // The thenable-adoption `then` job runs through the same native `mxTry`
     // helper; a native raise inside `then` must not unwind into an outer try.

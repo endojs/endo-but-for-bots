@@ -21155,6 +21155,36 @@ impl Interp {
                             let src = self.typed_arrays[&r];
                             (src.length, Some(src))
                         };
+                        // The front-loaded snapshot below models the spec's
+                        // `IteratorToList` (23.2.5.1), which materializes every
+                        // value BEFORE any element coercion — but the spec
+                        // selects it ONLY when `GetMethod(source, @@iterator)`
+                        // is the intact default array iterator. A guest
+                        // @@iterator override — an own property (INCLUDING
+                        // `source[Symbol.iterator] = undefined`) or a reassigned
+                        // `Array.prototype[@@iterator]` — instead selects
+                        // `InitializeTypedArrayFromArrayLike` (23.2.5.1.6),
+                        // whose step 5 INTERLEAVES `Get(source, ToString(k))`
+                        // with `Set`, so an element `valueOf` that mutates the
+                        // source mid-copy is observable, which a snapshot taken
+                        // up front cannot reproduce. The intrinsic default array
+                        // iterator is special-cased and never stored as an
+                        // ordinary property (unlike
+                        // `%Iterator/String/Map/Set.prototype%[@@iterator]`), so
+                        // any override is visible as an ordinary property on the
+                        // receiver's chain; a program that never references
+                        // `Symbol.iterator` cannot express one. Skip the
+                        // array-like interleaving path honestly rather than
+                        // snapshot the wrong semantics.
+                        if source_ta.is_none() {
+                            if let Some(iter_id) = self.well_known_symbol_property_id("iterator") {
+                                if self.instance_has(r, iter_id).0 {
+                                    return Err(Halt::Unsupported(
+                                        "native-call:TypedArray:from-array-like",
+                                    ));
+                                }
+                            }
+                        }
                         if length > (0x7FFF_FFFFu32 >> shift) {
                             return Err(Halt::Unsupported("native-call:TypedArray:bad-length"));
                         }
@@ -26682,9 +26712,27 @@ impl Interp {
     ) -> Result<Result<Slot, Slot>, Halt> {
         let sb = self.stack.len();
         let cd = self.call_stack.len();
-        let jd = self.jumps.len();
+        // FENCE the caller's live handlers for the callback's duration — the
+        // same native `mxTry` primitive `run_callback_catching_throw` uses, and
+        // the twin boundary the round-1 fence left behind. A native validation
+        // site inside the callback now raises through `raise_js`, which resolves
+        // to `Halt::Resume` the moment ANY handler is on the chain. This
+        // boundary's whole contract is to CAPTURE a callback throw as
+        // `Ok(Err(thrown))` (the fromAsync result promise rejects); unfenced, a
+        // raise here would instead consume a guest `try` live around the native
+        // call — `try { Array.fromAsync(items, mapfn); } catch {}`, the mapfn's
+        // TypeError firing the outer `catch` synchronously while the result
+        // promise is abandoned unsettled — and leak the `Resume` past the
+        // boundary. Taking the chain hands the callback a fresh handler stack
+        // (its own `try` still catches within the run); an uncaught raise finds
+        // no handler and returns `Halt::Throw`, which `from_async_try` settles.
+        // The fenced base is empty, so `from_async_unwind`'s `truncate(0)` is a
+        // no-op on it; the caller's chain is restored on every exit.
+        let fenced_jumps = std::mem::take(&mut self.jumps);
         let r = self.call_any(code, func, this, args);
-        self.from_async_try(r, sb, cd, jd)
+        let out = self.from_async_try(r, sb, cd, 0);
+        self.jumps = fenced_jumps;
+        out
     }
 
     /// `GetV(value, key)` followed by the callable check used by the `Invoke`
@@ -32003,7 +32051,9 @@ impl Interp {
                 // other primitive is inspected through its temporary wrapper.
                 // Materializing that wrapper also reproduces XS's two-slot
                 // primitive-box allocation instead of hiding it in a special
-                // primitive-only shortcut.
+                // primitive-only shortcut. A `Symbol` receiver boxes into a
+                // Symbol exotic with no own properties, so `[[GetOwnProperty]]`
+                // answers `undefined` for every key through the ordinary path.
                 let inst = match (arg0.kind, arg0.value) {
                     (Kind::Reference, Payload::Reference(o)) => o,
                     (Kind::Null | Kind::Undefined, _) => {
@@ -40602,59 +40652,84 @@ impl Interp {
     }
 
     /// `? HasProperty(O, ToString(k))`.
-    fn array_generic_has(
+    /// The interned property **id** for integer element index `k` on generic
+    /// receiver `o`, but ONLY when resolving `k` genuinely requires the
+    /// interning MOP walk: the index's name is already interned, some chain
+    /// level answers membership/elements dynamically (a proxy trap, a typed
+    /// array's elements, a wrapper's string indices), or some chain level's
+    /// `items()` map holds `k`. Returns `None` when `k` is provably absent
+    /// everywhere on the chain — no name-keyed property can exist under a
+    /// never-interned index and no items map holds it — so `HasProperty`
+    /// (`false`) and `Get` (`undefined`) are both answered WITHOUT interning.
+    ///
+    /// Both the `has` and the `get` edge MUST route through this one probe:
+    /// probing every absent index of a 1e6-length sparse array otherwise
+    /// permanently exhausts the 16-bit id space, and a `get`-only caller
+    /// (`find`/`findIndex`/`findLast`/`includes`/`at` reach `get` with no
+    /// preceding `has`) would silently re-arm that exhaustion if only the `has`
+    /// edge were index-safe.
+    fn array_generic_interned_index_id(
         &mut self,
-        code: &[u8],
         o: crate::value::SlotIndex,
         k: u64,
-    ) -> Result<bool, Halt> {
+    ) -> Option<u16> {
         let name = k.to_string();
         if let Some(&id) = self.symbol_ids.get(&name) {
-            return self.mop_has(code, o, id);
+            return Some(id);
         }
-        // The index's name was never interned, so no name-keyed property can
-        // exist under it anywhere; membership reduces to numeric element
-        // storage. Answer from the chain's items maps WITHOUT interning —
-        // probing every absent index of a 1e6-length sparse array would
-        // otherwise permanently exhaust the 16-bit id space. Only when a
-        // chain level can answer `has` dynamically (a proxy trap) or from
-        // non-items exotic storage (a typed array's elements, a wrapper's
-        // string indices) does the probe fall back to the interning MOP walk.
         let mut level = o;
         loop {
             if self.proxies.contains_key(&level)
                 || self.typed_arrays.contains_key(&level)
                 || self.wrapper_data.contains_key(&level)
             {
-                let id = self.array_generic_index_id(k);
-                return self.mop_has(code, o, id);
+                return Some(self.array_generic_index_id(k));
             }
             if k <= u32::MAX as u64 {
-                if let Some(a) = self.arrays.get(&level) {
-                    if a.items().contains_key(&(k as u32)) {
-                        let id = self.array_generic_index_id(k);
-                        return self.mop_has(code, o, id);
+                if let Some(array) = self.arrays.get(&level) {
+                    if array.items().contains_key(&(k as u32)) {
+                        return Some(self.array_generic_index_id(k));
                     }
                 }
             }
-            let proto = self.instance_prototype(level);
-            if proto.is_null() {
-                return Ok(false);
+            let prototype = self.instance_prototype(level);
+            if prototype.is_null() {
+                return None;
             }
-            level = proto;
+            level = prototype;
         }
     }
 
-    /// `? Get(O, ToString(k))` (receiver is `O`).
+    /// `? HasProperty(O, ToString(k))` over a generic receiver, index-safe via
+    /// the shared non-interning probe.
+    fn array_generic_has(
+        &mut self,
+        code: &[u8],
+        o: crate::value::SlotIndex,
+        k: u64,
+    ) -> Result<bool, Halt> {
+        match self.array_generic_interned_index_id(o, k) {
+            Some(id) => self.mop_has(code, o, id),
+            None => Ok(false),
+        }
+    }
+
+    /// `? Get(O, ToString(k))` (receiver is `O`), index-safe via the shared
+    /// non-interning probe: a provably-absent index reads `undefined` without
+    /// interning, so a `get`-only caller cannot exhaust the id space.
     fn array_generic_get(
         &mut self,
         code: &[u8],
         o: crate::value::SlotIndex,
         k: u64,
     ) -> Result<Slot, Halt> {
-        let id = self.array_generic_index_id(k);
-        let recv = Slot::of(Kind::Reference, Payload::Reference(o));
-        self.mop_get(code, o, id, recv)
+        match self.array_generic_interned_index_id(o, k) {
+            Some(id) => {
+                let recv = Slot::of(Kind::Reference, Payload::Reference(o));
+                self.mop_get(code, o, id, recv)
+            }
+            None => Ok(Slot::undefined()),
+        }
     }
 
     /// The Array Iterator indexed-Get form of [`Self::array_generic_get`],
