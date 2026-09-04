@@ -28,20 +28,44 @@ test('blobFromBytes exposes bytes through the ReadableBlob surface', async t => 
 // non-zero-`byteOffset` views into the exo-stream wire boundary for any
 // payload larger than one 48 KiB chunk. A single-chunk fixture never crosses
 // that boundary, so exercise it over generated payloads that span many chunks
-// (up to ~3× CHUNK_BYTES) and confirm the drained bytes round-trip exactly —
+// (up to ~3× CHUNK_BYTES + 1) and confirm the drained bytes round-trip exactly —
 // which would fail if a windowed slice leaked a pooled buffer's neighbouring
 // bytes or dropped the final short chunk.
+//
+// `@fast-check/ava` resolves fast-check 4.x, where `defaultSizeToMaxWhenMaxSpecified`
+// is off, so a bare `maxLength` still generates only `'small'` (~10-byte) samples
+// that never reach a second chunk. `size: 'max'` is required to actually generate
+// the multi-chunk payloads this property is about; `numRuns` is cut to ~25
+// because each run pushes a real ~150 KB payload through the syn/ack chain.
+const CHUNK_BYTES = 48 * 1024;
 test('blobFromBytes round-trips arbitrary multi-chunk payloads', async t => {
   await fc.assert(
-    fc.asyncProperty(fc.uint8Array({ maxLength: 150_000 }), async sample => {
-      const blob = blobFromBytes(Promise.resolve(sample));
-      /** @type {number[]} */
-      const recovered = [];
-      for await (const chunk of iterateBytesReader(/** @type {any} */ (blob))) {
-        recovered.push(...chunk);
-      }
-      t.deepEqual(recovered, [...sample]);
-    }),
-    { numRuns: 200 },
+    fc.asyncProperty(
+      fc.uint8Array({ maxLength: 3 * CHUNK_BYTES + 1, size: 'max' }),
+      async sample => {
+        const blob = blobFromBytes(Promise.resolve(sample));
+        /** @type {Uint8Array[]} */
+        const chunks = [];
+        let total = 0;
+        for await (const chunk of iterateBytesReader(
+          /** @type {any} */ (blob),
+        )) {
+          chunks.push(chunk);
+          total += chunk.length;
+        }
+        const recovered = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+          recovered.set(chunk, offset);
+          offset += chunk.length;
+        }
+        // An AVA assertion inside `fc.asyncProperty` returns a boolean rather
+        // than throwing, so it must be `return`ed for fast-check to see a
+        // failure and shrink; comparing the `Uint8Array`s directly (not spread
+        // into number arrays) keeps a 150 KB payload's `deepEqual` fast.
+        return t.deepEqual(recovered, sample);
+      },
+    ),
+    { numRuns: 25 },
   );
 });
