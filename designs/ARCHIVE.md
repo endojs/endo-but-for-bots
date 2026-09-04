@@ -25,20 +25,20 @@ after filing the 17 unattended documents and recording the merged
 *Layered on 2026-09-04 (created 2026-08-16, landed 2026-09-04): added
 [worker-constraint-model](worker-constraint-model.md) (Proposed) to M11 (Rust
 Daemon `endor`): an open, multi-axis worker-selection constraint schema
-(runtime, persistence, version, target os/arch — each independently optional and
+(runtime, persistence, version, target os/arch, each independently optional and
 flexible-by-default) that replaces the closed `kind: 'locked' | 'node'` union
 threaded through `manager.js`, the two `defaultWorkerKind`-reading resolution
 sites, and the four supervisor `makeWorker` backends. Today's two kinds migrate
 onto the runtime axis with zero behavior change and zero persisted-formula churn
-(the migration is stated over the caller's explicit input — the predicate
-today's `...(kind ? { kind } : undefined)` already uses — so the two seed values
+(the migration is stated over the caller's explicit input, the predicate
+today's `...(kind ? { kind } : undefined)` already uses, so the two seed values
 keep their legacy `kind` record bytes and a `constraints` field appears only for
 genuinely new axes), and the durable/orthogonal persistence (thixotrope #786 /
 #989 / #281 / #984 / #813), version-pin, and target binary-fetch categories land
 as typed `Not Started` extension points naming the exact seam each plugs into.
 All five cross-document surfaces synced per `designs/AGENTS.md` § Progress
 Tracking: the summary-table row, the M11 (Rust Daemon `endor`)
-constituent-table row (and its milestone-rollup constituent count 6→7), the
+constituent-table row (and its milestone-rollup constituent count 6->7), the
 dependency-graph node (`worker-constraint-model`, edge from
 `ocapn-orthogonal-persistence`), the per-design size/duration estimate row (M11,
 S-M / 3-4 days), and the "Recently added or revised" list. This addition is
