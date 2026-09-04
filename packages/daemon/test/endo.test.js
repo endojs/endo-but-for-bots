@@ -17,6 +17,7 @@ import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
+import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -1453,6 +1454,140 @@ test('mailboxes persist messages across restart', async t => {
   );
 });
 
+// The encrypted secret backend seals blobs with the manager's crypto powers.
+// `makeXsCryptoPowers` stubs `sealSecret`/`openSecret` to throw ("Local
+// encrypted secret backend is unavailable on XS", see
+// src/bus-manager-rust-xs-powers.js), so an XS-hosted manager can neither
+// create nor read secret blobs, and `@secrets` is wired only into the Node
+// manager (src/manager.js). `ENDO_MANAGER_NODE=1` (yarn test:rust-node-manager)
+// puts the manager back in Node, where this works.
+const testNeedsNodeManager =
+  process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE
+    ? test.serial.skip
+    : test.serial;
+
+testNeedsNodeManager(
+  'secret lookup capabilities and values survive restart',
+  async t => {
+    const { cancelled, config, host } = await prepareHost(t);
+    const canary = 'CANARY-daemon-secret-value';
+
+    t.true((await E(host).list()).includes('@secrets'));
+    t.deepEqual(await E(host).list('@secrets'), ['audit', 'catalog', 'create']);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    const summary = await E(importer).createBase64(
+      'release',
+      'Publish release artifacts',
+      encodeBase64(new TextEncoder().encode(canary)),
+    );
+    t.is(summary.state, 'active');
+    t.is(summary.description, 'Publish release artifacts');
+
+    const secretId = await E(host).identify('secrets', 'release');
+    t.truthy(secretId);
+    const formula = await E(E(host).diagnostics()).getFormula(secretId);
+    t.is(formula.type, 'lookup');
+    t.false(JSON.stringify(formula).includes(canary));
+    const blob = await E(host).lookup(['secrets', 'release']);
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
+      canary,
+    );
+
+    await restart(config);
+    const { host: hostAfter } = await makeHost(config, cancelled);
+    const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
+    t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
+      canary,
+    );
+
+    const guest = await E(hostAfter).provideGuest('secret-recipient');
+    await E(hostAfter).send(
+      'secret-recipient',
+      ['Use ', ' without reading it in the agent session.'],
+      ['credential'],
+      [['secrets', 'release']],
+    );
+    const [message] = await E(guest).listMessages();
+    await E(guest).adopt(message.number, 'credential', 'release-credential');
+    const delegated = await E(guest).lookup('release-credential');
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(delegated).readBase64())),
+      canary,
+    );
+
+    const sqlite = await fsp.readFile(
+      path.join(config.statePath, 'endo.sqlite'),
+    );
+    t.false(sqlite.includes(new TextEncoder().encode(canary)));
+    const secretFiles = await fsp.readdir(
+      path.join(config.statePath, 'secret-store-v1'),
+    );
+    const envelope = await fsp.readFile(
+      path.join(config.statePath, 'secret-store-v1', secretFiles[0]),
+    );
+    t.false(envelope.includes(new TextEncoder().encode(canary)));
+
+    const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
+    await E(hostAfter).copy(['secrets', 'release'], ['release-alias']);
+    const [entry] = await E(catalog).list();
+    t.deepEqual(entry.petNamePaths, [
+      ['release-alias'],
+      ['secrets', 'release'],
+    ]);
+    await t.throwsAsync(() => E(entry.admin).delete(), {
+      message: /Secret operation failed/,
+    });
+    await E(entry.admin).revoke();
+    await t.throwsAsync(() => E(delegated).readBase64(), {
+      message: /Secret operation failed/,
+    });
+    await t.throwsAsync(() => E(blobAfter).readBase64(), {
+      message: /Secret operation failed/,
+    });
+    await E(entry.admin).delete();
+    t.false(await E(hostAfter).has('secrets', 'release'));
+    t.false(await E(hostAfter).has('release-alias'));
+    t.deepEqual(await E(catalog).list(), []);
+    const audit = await E(hostAfter).lookup(['@secrets', 'audit']);
+    t.true(
+      (await E(audit).list()).some(
+        event => event.operation === 'delete' && event.outcome === 'succeeded',
+      ),
+    );
+  },
+);
+
+testNeedsNodeManager('only the root host manages secrets', async t => {
+  const { host } = await prepareHost(t);
+  const child = await E(host).provideHost('space-a');
+
+  t.true((await E(host).list()).includes('@secrets'));
+  t.truthy(await E(host).lookup(['@secrets', 'catalog']));
+
+  // A child host does not advertise `@secrets`, and every name-hub method
+  // rejects the path rather than resolving it: `@secrets` is absent from
+  // its special names, so `isPetName` refuses it outright.
+  t.false((await E(child).list()).includes('@secrets'));
+  await t.throwsAsync(() => E(child).has('@secrets'), {
+    message: /Invalid pet name/,
+  });
+  await t.throwsAsync(() => E(child).lookup(['@secrets', 'catalog']), {
+    message: /Invalid pet name/,
+  });
+
+  // Hygiene, not containment: the child still reaches the root host through
+  // its ambient `@endo`, so withholding the name narrows the namespace
+  // rather than the authority. See designs/daemon-secret-manager.md.
+  const rootViaChild = await E(await E(child).lookup('@endo')).host();
+  t.is(
+    await E(rootViaChild).identify('@agent'),
+    await E(host).identify('@agent'),
+  );
+});
+
 test('rehydrated requests can be resolved after restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
 
@@ -1601,13 +1736,16 @@ test('followNameChanges existing names carry type', async t => {
   // Store before subscribing so the value is in the "existing names" batch.
   await E(host).storeValue('first', 'one');
 
+  // Size the initial batch from the host itself rather than a literal: the
+  // special-name set grows over time, and 'one' sorts after every '@' name.
+  const existingNames = /** @type {string[]} */ (await E(host).list());
+
   const changesIterator = iterateReader(await E(host).followNameChanges());
   // Read existing values until we find our name. Special names (@self, etc)
   // are interleaved alphabetically and also carry types now.
   /** @type {Map<string, any>} */
   const existing = new Map();
-  // Pull a generous prefix; the host has a known special-name set plus 'one'.
-  for (let i = 0; i < 13; i += 1) {
+  for (let i = 0; i < existingNames.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const { value, done } = await changesIterator.next();
     if (done) break;

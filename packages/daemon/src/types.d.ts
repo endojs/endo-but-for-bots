@@ -1427,6 +1427,18 @@ export interface EndoMount extends PathEntryIssuer {
   help(method?: string): string;
 }
 
+/**
+ * Caretaker facet paired with a revocable mount by `makeRevocableMount`.
+ * `revoke()` flips the shared liveness record, so the paired mount and
+ * every face derived from it (sub-views, entries, opened files,
+ * `readOnly()` views, open `followNameChanges` streams) begin throwing.
+ * Mirrors the runtime `MountControlInterface` guard.
+ */
+export interface EndoMountControl {
+  revoke(): void;
+  help(method?: string): string;
+}
+
 export interface EndoWorker {}
 
 export type MakeHostOrGuestOptions = {
@@ -1542,6 +1554,87 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
+}
+
+export type SecretState = 'active' | 'revoked';
+
+export type SecretSummary = {
+  secretId: string;
+  description: string;
+  state: SecretState;
+  generation: bigint;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * The durable secret metadata row. `SecretSummary` is its public projection:
+ * the same fields minus the host-private `backendRef`.
+ */
+export type SecretRecord = {
+  secretId: string;
+  backendRef: string;
+  description: string;
+  state: SecretState;
+  generation: bigint;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export interface SecretBlob {
+  help(): string;
+  getDescription(): Promise<string>;
+  readBase64(): Promise<string>;
+}
+
+export interface SecretAdmin {
+  getSummary(): Promise<SecretSummary>;
+  replaceBase64(bytesBase64: string): Promise<void>;
+  setDescription(description: string): Promise<void>;
+  revoke(): Promise<void>;
+  delete(): Promise<void>;
+}
+
+export interface SecretImporter {
+  createBase64(
+    name: string,
+    description: string,
+    bytesBase64: string,
+  ): Promise<SecretSummary>;
+}
+
+export interface SecretCatalogEntry {
+  secretId: string;
+  summary: SecretSummary;
+  petNamePaths: string[][];
+  admin: SecretAdmin;
+}
+
+export interface SecretCatalog {
+  list(): Promise<SecretCatalogEntry[]>;
+}
+
+export type SecretAuditEvent = {
+  eventId: string;
+  secretId: string;
+  operation:
+    'create' | 'read' | 'replace' | 'set-description' | 'revoke' | 'delete';
+  outcome: 'attempted' | 'succeeded' | 'failed';
+  generation: bigint;
+  occurredAt: string;
+  operationId: string;
+  reasonCode?: string;
+};
+
+export interface SecretAuditReader {
+  list(limit?: bigint): Promise<SecretAuditEvent[]>;
+}
+
+export interface SecretManagerDirectory {
+  help(): string;
+  has(name: string): Promise<boolean>;
+  list(): Promise<string[]>;
+  lookup(path: string | string[]): Promise<unknown>;
 }
 
 export type FarEndoGuest = FarRef<EndoGuest>;
@@ -2158,6 +2251,16 @@ export type CryptoPowers = {
   randomHex256: () => Promise<string>;
   generateEd25519Keypair: () => Promise<Ed25519Keypair>;
   ed25519Sign: (privateKey: Uint8Array, message: Uint8Array) => Uint8Array;
+  sealSecret: (
+    key: Uint8Array,
+    plaintext: Uint8Array,
+    associatedData: Uint8Array,
+  ) => Uint8Array;
+  openSecret: (
+    key: Uint8Array,
+    sealed: Uint8Array,
+    associatedData: Uint8Array,
+  ) => Uint8Array;
 };
 
 export type FilePowers = {
@@ -2293,6 +2396,7 @@ export type DaemonicPersistencePowers = {
   initializePersistence: () => Promise<void>;
   provideRootNonce: () => Promise<RootNonceDescriptor>;
   provideRootKeypair: () => Promise<RootKeypairDescriptor>;
+  provideSecretStoreKey: () => Promise<Uint8Array>;
   makeContentStore: () => import('@endo/platform/fs/lite/types').SnapshotStore;
   readFormula: (
     formulaNumber: FormulaNumber,
@@ -2321,6 +2425,14 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
+  getSecretRecord: (secretId: string) => SecretRecord | undefined;
+  writeSecretRecord: (record: SecretRecord) => void;
+  listSecretRecords: () => SecretRecord[];
+  getSecretIdForGrant: (grantId: string) => string | undefined;
+  writeSecretGrant: (grantId: string, secretId: string) => void;
+  deleteSecret: (secretId: string) => void;
+  writeSecretAuditEvent: (event: SecretAuditEvent) => void;
+  listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
 };
 
 export interface DaemonWorkerFacet {}

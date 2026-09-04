@@ -22,6 +22,39 @@ after filing the 17 unattended documents and recording the merged
 
 ## Historical groom notes
 
+*Layered on 2026-09-03 (client-side-bridge carve): re-worded **M3 (Remote
+Access and Coding Capabilities)** — the first unfinished milestone, M1 and M2
+being Complete — to name the two **client-side bridge** capabilities as its
+now-first priority, from fresh concrete evidence (a 2026-09-02/03 liaison
+session building a live counter on a minion.town clip hit the MCP/CapTP-bridge
+byte-marshaling bottleneck: hand-typing tens of thousands of base64 chars, or
+reverse-engineering CapTP to hand-write a ~10 KB client). The two halves of the
+same bottleneck class — *get code/state across the MCP-daemon boundary without
+an external LLM hand-marshaling bytes* — are (1) the **capability-addressed git
+remote** (`git push` an artifact into an Endo directory; design
+`git-remote-capability.md` on `kriscendobot/minion.town` PR #41, merged; endo
+follow-on = the M3 git trio + `daemon-agent-tools` `makeGitRemoteTool` push tier,
+Rust backing `endor-git-bindings` in M11) and (2) the **confined in-guest
+agent** ([endo-claude](endo-claude.md), confinement core PR #1015 + child-guest
+provisioning `endo-claude-agents-capability` PR #1102). Chose to **re-word M3
+rather than splice a new milestone ahead of it**: M3 already owns the
+git-remote follow-on substrate (git trio, agent-tools, mount, platform-fs) and
+`endo-agent-tools` — the very prerequisite `endo-claude` depends on — so a new
+milestone would either break the ledger's dependency invariant (each
+milestone's deps live in earlier milestones, per PR #400) or force a disruptive
+M3–M11 renumber; re-wording keeps the invariant intact. **[endo-claude](endo-claude.md)
+moved M6 → M3** (a pointer left in M6, priority raised in M3, lowered in M6 —
+never removed); its ~1-1.5 weeks moved with it (M6 added-effort ~3-3.5 → ~2
+weeks). M6 keeps the inverse (external-client MCP-termination) direction. Added
+four M3 table rows (git-remote-capability cross-repo companion, endo-claude,
+endo-claude-agents-capability) and an M3 exit-criterion clause. No milestone
+renumbering; every other milestone keeps its number and defers behind the
+carved M3 head. Current-totals block unchanged: this pass adds no new repo
+design *file* to the Summary table — `endo-claude.md` was already counted (2026-08-16
+totals note), `endo-claude-agents-capability` is PR #1102 not yet on `llm`, and
+`git-remote-capability` lives in `kriscendobot/minion.town`; the three appear
+only as M3 milestone-table rows (cross-repo / in-flight companions).*
+
 *Layered on 2026-07-30: added [cbor-encode-decode](cbor-encode-decode.md) to M4 (Networking): a packaging refactor that splits `@endo/cbor` into `@endo/cbor/encode` and `@endo/cbor/decode` subpath exports over an internal `internals.js` for the shared `canonicalInfo`/`CANONICAL_NAN`/bounds, so decoding consumers retain no encoding machinery and encoding consumers retain no decoding machinery; the root `.` re-export is preserved; follow-up to kriskowal's approving review of #885; summary table, M4 row, and per-design estimate synced.*
 
 *Layered on 2026-08-24 (rolling index refresh): indexed six design files that had

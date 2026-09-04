@@ -51,6 +51,8 @@ import { assertMailboxStoreName, makeMailboxMaker } from './mail.js';
 import { makeGuestMaker } from './guest.js';
 import { makeChannelMaker } from './channel.js';
 import { makeHostMaker } from './host.js';
+import { makeEncryptedFileSecretBackend } from './secret-backend.js';
+import { makeSecretManager } from './secret-manager.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
@@ -496,6 +498,21 @@ const makeDaemonCore = async (
   const { gitClone, makeNativeGitBackend, makeHostSpawner } =
     provideHostToolPowers(hostTools);
   const contentStore = persistencePowers.makeContentStore();
+  const secretStoreKey = await persistencePowers.provideSecretStoreKey();
+  const secretBackend = makeEncryptedFileSecretBackend({
+    storagePath: filePowers.joinPath(
+      persistencePowers.statePath,
+      'secret-store-v1',
+    ),
+    filePowers,
+    cryptoPowers,
+    key: secretStoreKey,
+  });
+  const secretManager = makeSecretManager({
+    persistence: persistencePowers,
+    backend: secretBackend,
+    randomHex256,
+  });
   /** @type {WeakMap<object, ERef<WorkerDaemonFacet>>} */
   const workerDaemonFacets = new WeakMap();
   /** @type {Map<string, (reason?: Error) => Promise<void>>} */
@@ -7237,6 +7254,16 @@ const makeDaemonCore = async (
     getIdForRef,
     writeRemoteAgentKey: persistencePowers.writeRemoteAgentKey,
     traceAggregator,
+    secretManager,
+    formulateSecretLookup: (hubId, path, bind) =>
+      withFormulaGraphLock(async () => {
+        const { id } = await formulateNumberedLookup(
+          /** @type {FormulaNumber} */ (await randomHex256()),
+          hubId,
+          path,
+        );
+        await bind(id);
+      }),
   });
 
   /**
