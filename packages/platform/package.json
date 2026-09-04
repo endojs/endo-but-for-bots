@@ -32,6 +32,10 @@
       "types": "./src/fs/types-index.d.ts"
     },
     "./fs/node": "./src/fs-node/index.js",
+    "./fs/node/local-tree": "./src/fs-node/local-tree.js",
+    "./fs/node/local-blob": "./src/fs-node/local-blob.js",
+    "./fs/node/tree-writer": "./src/fs-node/tree-writer.js",
+    "./fs/node/watch-directory": "./src/fs-node/watch-directory.js",
     "./fs/search": "./src/fs/search.js",
     "./fs/search.types": {
       "types": "./src/fs/search-types-index.d.ts"

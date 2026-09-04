@@ -648,6 +648,41 @@ test('XS statPath converts a fractional mtime (ms) to bigint nanoseconds without
   t.is(stat.atime, stat.mtime);
 });
 
+test('XS watchDirectory degrades to an immediately-closed stream without crashing', async t => {
+  // The Rust/XS supervisor has no fs.watch equivalent reachable through
+  // the cap-std sandbox (establishing an OS watch requires an ambient
+  // path — inotify_add_watch / notify's `Watcher::watch(&Path)` — which
+  // the capability model withholds; see the PR thread on
+  // bus-daemon-rust-xs-powers.js). So `watchDirectory` there is a
+  // documented graceful-degradation stub: it returns a well-formed async
+  // iterable that ends immediately rather than throwing. This is the
+  // contract `EndoMount.followNameChanges` leans on under XS — it yields
+  // its readDirectory-derived snapshot and then ends cleanly because the
+  // diff stream is empty. If a future refactor makes the XS stub throw or
+  // return a non-iterable, followNameChanges would crash under XS and
+  // this test fails first.
+  const xsPowers = makeXsFilePowers();
+  // The stub ignores the options bag (`cancelled`, `debounceMs`); a
+  // never-settling `cancelled` stands in for "the consumer has not
+  // cancelled".
+  const events = xsPowers.watchDirectory('/some/dir', {
+    cancelled: new Promise(() => {}),
+  });
+  const iterator = /** @type {AsyncIterator<any>} */ (
+    events[Symbol.asyncIterator]()
+  );
+  const first = await iterator.next();
+  t.true(first.done, 'the diff stream is closed on the first pull');
+  t.is(first.value, undefined);
+  // Idempotent close: a second pull and an explicit return() are both
+  // safe no-ops (the async-iterator return() cancellation idiom), never
+  // a throw.
+  const second = await iterator.next();
+  t.true(second.done);
+  const returned = await /** @type {any} */ (iterator).return();
+  t.true(returned.done);
+});
+
 // Suppress unused-import warnings for the platform interfaces; their
 // presence in this file documents the conformance target.
 void PlatformDirectoryInterface;

@@ -2301,25 +2301,35 @@ export type FilePowers = {
   exists: (path: string) => Promise<boolean>;
   /**
    * Watch a directory for entry-name changes (children added or
-   * removed).  The returned `events` stream yields one record per
-   * coalesced filesystem event; the `kind` field is a hint that the
-   * consumer reconciles against its own snapshot set to decide
-   * whether the entry was genuinely added, removed, or unchanged.
-   * `cancel()` closes the OS-level watcher handle and terminates
-   * `events`.  `cancel()` is idempotent.
+   * removed).  The returned stream yields one record per coalesced
+   * filesystem event; the `kind` field is a hint that the consumer
+   * reconciles against its own snapshot set to decide whether the
+   * entry was genuinely added, removed, or unchanged.
+   *
+   * Cancellation follows the accept-a-`cancelled`-promise idiom: the
+   * `cancelled` token is a field of the `options` bag, and settling it
+   * closes the OS-level watcher handle and terminates the stream.  It
+   * defaults to a forever-pending promise when omitted.  The returned
+   * async iterator is *also* cancellable the usual way — through its
+   * `return()` — and both surfaces resolve to the same idempotent close.
    *
    * On platforms or filesystems where `fs.watch` is unavailable, the
-   * implementation logs to `console.error` and returns an `events`
-   * stream that terminates immediately so callers see end-of-stream
-   * rather than hang.
+   * implementation logs to `console.error` and returns a stream that
+   * terminates immediately so callers see end-of-stream rather than
+   * hang.
+   *
+   * `options` also carries advisory tuning hints (e.g. `debounceMs`, the
+   * per-filename debounce/coalesce window).  Each tuning field is a hint
+   * an implementation may honor or ignore: the node-fs adapter honors
+   * `debounceMs`; the XS fallback ignores it.
    */
-  watchDirectory: (path: string) => {
-    events: AsyncIterable<{
-      kind: 'add' | 'remove' | 'replace';
-      name: string;
-    }>;
-    cancel: () => void;
-  };
+  watchDirectory: (
+    path: string,
+    options?: { cancelled?: Promise<void>; debounceMs?: number },
+  ) => AsyncIterable<{
+    kind: 'add' | 'remove' | 'replace';
+    name: string;
+  }>;
 };
 
 export type AssertValidNameFn = (name: string) => void;

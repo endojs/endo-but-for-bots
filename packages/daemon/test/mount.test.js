@@ -11,12 +11,14 @@ import fs from 'fs';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
+import { makePromiseKit } from '@endo/promise-kit';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
+import { makeXsFilePowers } from '../src/bus-manager-rust-xs-powers.js';
 import { makeMount } from '../src/mount.js';
 import { makeMemoryStore } from './_mount-test-helpers.js';
 
@@ -261,6 +263,247 @@ test('followNameChanges yields existing entries as the initial snapshot', async 
   );
   await changes.return();
 });
+
+test('followNameChanges yields its snapshot then ends cleanly on a non-watching (XS) platform', async t => {
+  // Under the Rust/XS supervisor, `filePowers.watchDirectory` is a
+  // graceful-degradation stub — there is no fs.watch equivalent
+  // reachable through the cap-std sandbox, so it returns an
+  // immediately-closed diff stream. Simulate that platform by composing
+  // the real Node file powers with the XS stub's `watchDirectory`:
+  // directory reads still work, but there is no live watcher. The
+  // contract followNameChanges must honor on such a platform is to yield
+  // the existing entries as its snapshot and then END — never hang
+  // awaiting a watcher that will not fire, and never crash.
+  const rootPath = makeTempRoot(t);
+  const xsPowers = makeXsFilePowers();
+  const degradedPowers = harden({
+    ...filePowers,
+    watchDirectory: xsPowers.watchDirectory,
+  });
+  const mount = makeMount({
+    rootPath,
+    readOnly: false,
+    filePowers: degradedPowers,
+  });
+  await E(mount).writeText(['beta.txt'], 'b');
+  await E(mount).writeText(['alpha.txt'], 'a');
+  const changes = iterateReader(await E(mount).followNameChanges());
+  const first = /** @type {any} */ ((await changes.next()).value);
+  const second = /** @type {any} */ ((await changes.next()).value);
+  t.deepEqual(
+    [first.add, second.add],
+    ['alpha.txt', 'beta.txt'],
+    'snapshot reports both existing entries even without a live watcher',
+  );
+  // The diff stream is empty under the stub, so the iterator terminates
+  // after the snapshot rather than blocking on watchDirectory.
+  const third = await changes.next();
+  t.true(
+    third.done,
+    'the stream ends after the snapshot on a non-watching platform',
+  );
+});
+
+/**
+ * Pull one more change record from an already-snapshotted
+ * followNameChanges iterator, but never block forever: if the live
+ * watcher does not deliver within `timeoutMs`, or the stream has
+ * ended, resolve to `undefined`.  A live-watcher regression then
+ * surfaces as a bounded failure rather than a hung test.
+ *
+ * @param {AsyncIterator<any>} iterator
+ * @param {number} timeoutMs
+ */
+const raceNextChange = async (iterator, timeoutMs) => {
+  await null;
+  const sentinel = {};
+  const timeout = new Promise(resolve =>
+    setTimeout(() => resolve(sentinel), timeoutMs),
+  );
+  const result = await Promise.race([iterator.next(), timeout]);
+  if (result === sentinel || result.done) {
+    return undefined;
+  }
+  return result.value;
+};
+
+test('followNameChanges observes a name written by a separate instance through the platform watcher', async t => {
+  // "Separate instances communicating through the platform's
+  // notification system": two independent `EndoMount` instances over
+  // the SAME real directory.  The watcher mount holds none of the
+  // writer mount's in-process state, so the only channel by which it
+  // can learn of the writer's change is the operating system's
+  // filesystem notification (node `fs.watch`, which backs
+  // `@endo/platform`'s `makeWatchDirectory`).  This exercises the
+  // live-delivery path the watchDirectory primitive exists to provide
+  // — distinct from the initial-snapshot path the sibling test above
+  // covers, which never fires the watcher at all.
+  const rootPath = makeTempRoot(t);
+  const writerMount = makeMount({ rootPath, readOnly: false, filePowers });
+  const watcherMount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // One pre-existing entry, written before the watcher starts, so it
+  // arrives only in the snapshot.
+  await E(writerMount).writeText(['alpha.txt'], 'a');
+
+  const changes = iterateReader(await E(watcherMount).followNameChanges());
+  const snapshot = /** @type {any} */ ((await changes.next()).value);
+  t.is(snapshot.add, 'alpha.txt', 'snapshot reports the pre-existing entry');
+
+  // Let the OS watcher settle past the primitive's debounce window
+  // before the separate instance mutates the directory, mirroring the
+  // platform-level watch-directory tests' startup race guard.
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // A SEPARATE instance mutates the shared directory.  The watcher
+  // mount has no in-process knowledge of this write; it can only be
+  // delivered through `fs.watch`.
+  await E(writerMount).writeText(['beta.txt'], 'b');
+
+  const live = await raceNextChange(changes, 5000);
+  t.is(
+    /** @type {any} */ (live)?.add,
+    'beta.txt',
+    "the live watcher delivered the separate instance's new name",
+  );
+  await changes.return();
+});
+
+test('followNameChanges is torn down when the mount formula is cancelled', async t => {
+  // A mount formula can be cancelled while a `followNameChanges`
+  // subscription is live.  The mount threads its formula's
+  // `context.cancelled` into every watcher it opens, so cancelling the
+  // formula must close the OS watcher and end the stream — even though
+  // the consumer never drops the iterator itself.
+  //
+  // Drive it deterministically with a controllable `watchDirectory`
+  // stub: it delivers no live events, but settling the `cancelled`
+  // promise it receives ends its stream.  Because the mount folds the
+  // formula-level `cancelled` into that promise, rejecting the formula
+  // cancellation (a context's `cancelled` rejects) must close the stub.
+  const rootPath = makeTempRoot(t);
+  /** @type {import('../src/types.js').FilePowers['watchDirectory']} */
+  const stubWatchDirectory = (_dirPath, { cancelled } = {}) => {
+    let done = false;
+    /** @type {Array<(result: IteratorResult<any>) => void>} */
+    const waiters = [];
+    const settle = () => {
+      done = true;
+      for (const waiter of waiters.splice(0)) {
+        waiter(harden({ value: undefined, done: true }));
+      }
+    };
+    // Both a fulfilled and a rejected `cancelled` end the stream.
+    Promise.resolve(cancelled).then(settle, settle);
+    return harden({
+      [Symbol.asyncIterator]() {
+        return harden({
+          /** @returns {Promise<IteratorResult<any>>} */
+          next: () =>
+            done
+              ? Promise.resolve(harden({ value: undefined, done: true }))
+              : new Promise(resolve => {
+                  waiters.push(resolve);
+                }),
+          /** @returns {Promise<IteratorResult<any>>} */
+          return: async () => {
+            settle();
+            return harden({ value: undefined, done: true });
+          },
+        });
+      },
+    });
+  };
+  const powers = harden({ ...filePowers, watchDirectory: stubWatchDirectory });
+
+  // A mount-formula cancellation signal that rejects, mirroring
+  // `context.cancelled` from the daemon's context maker.
+  const { promise: cancelled, reject: cancelFormula } = /** @type {any} */ (
+    makePromiseKit()
+  );
+  cancelled.catch(() => {});
+  const mount = makeMount({
+    rootPath,
+    readOnly: false,
+    filePowers: powers,
+    cancelled,
+  });
+  await E(mount).writeText(['alpha.txt'], 'a');
+
+  const changes = iterateReader(await E(mount).followNameChanges());
+  const snapshot = /** @type {any} */ ((await changes.next()).value);
+  t.is(snapshot.add, 'alpha.txt', 'snapshot reports the pre-existing entry');
+
+  // The stream is now blocked on the (stubbed) live watcher, which will
+  // never deliver on its own.  Cancel the mount formula; the folded
+  // cancellation must close the watcher and end the stream.
+  cancelFormula(harden(new Error('mount cancelled')));
+
+  const sentinel = {};
+  const timeout = new Promise(resolve =>
+    setTimeout(() => resolve(sentinel), 5000),
+  );
+  const result = await Promise.race([changes.next(), timeout]);
+  t.not(result, sentinel, 'the stream terminated rather than hanging');
+  t.true(
+    /** @type {any} */ (result).done,
+    'followNameChanges ended after the mount formula was cancelled',
+  );
+});
+
+test.failing(
+  'followNameChanges does not observe a separate instance under the XS cap-std watcher stub',
+  async t => {
+    // The same separate-instances scenario, but the watcher mount runs
+    // on the Rust/XS supervisor's file powers.  cap-std withholds the
+    // ambient path an OS watch requires (`inotify_add_watch` /
+    // `notify`'s `Watcher::watch(&Path)`), so `watchDirectory` there is
+    // a graceful-degradation stub that ends its diff stream
+    // immediately.  A change made by a separate instance therefore
+    // never reaches the watcher: only the initial snapshot survives.
+    //
+    // This is a KNOWN limitation of the incomplete cap-std watch, so
+    // the test is pinned `.failing`: its body asserts the DESIRED
+    // (live-delivery) behavior, ava records the expected failure, and
+    // the day cap-std grows a real watch this test flips to passing and
+    // forces the `.failing` marker's removal — the standing signal that
+    // the XS gap has closed.
+    const rootPath = makeTempRoot(t);
+    const xsPowers = makeXsFilePowers();
+    const degradedPowers = harden({
+      ...filePowers,
+      watchDirectory: xsPowers.watchDirectory,
+    });
+    const writerMount = makeMount({ rootPath, readOnly: false, filePowers });
+    const watcherMount = makeMount({
+      rootPath,
+      readOnly: false,
+      filePowers: degradedPowers,
+    });
+
+    await E(writerMount).writeText(['alpha.txt'], 'a');
+
+    const changes = iterateReader(await E(watcherMount).followNameChanges());
+    // The snapshot still works: it is a `readDirectory`, not a watch.
+    const snapshot = /** @type {any} */ ((await changes.next()).value);
+    t.is(snapshot.add, 'alpha.txt', 'snapshot survives without a live watcher');
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    await E(writerMount).writeText(['beta.txt'], 'b');
+
+    // Under a live watcher this would be `beta.txt`; under the cap-std
+    // stub the diff stream has already ended, so it is `undefined`.
+    // The assertion is written for the desired behavior so `.failing`
+    // captures the cap-std gap.
+    const live = await raceNextChange(changes, 1500);
+    t.is(
+      /** @type {any} */ (live)?.add,
+      'beta.txt',
+      'the (incomplete) cap-std watcher did not deliver the separate write',
+    );
+    await changes.return();
+  },
+);
 
 test('maybeLookup accepts a MountEntry path argument', async t => {
   const rootPath = makeTempRoot(t);
