@@ -11,8 +11,9 @@ deep-equal extensionless siblings, a dependency-free CI script emits a
 check annotation and step summary listing the removable keys; a second
 surface on the changesets Version Packages PR compares `package.json`
 versions so the reminder also fires at the last gate before tags;
-exits 0 on findings by construction, needs no write permissions, and
-self-quiets once a major actually removes the keys; follow-up to
+the check exits 0 on findings by construction, needs no write
+permissions, and self-quiets once a major actually removes the keys;
+follow-up to
 exports-extensionless-migration, inert until its pass 1 lands),
 [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md)
 (added 2026-07-08, revised 2026-07-09; distilled git-rebase-session
@@ -611,7 +612,9 @@ is dissolved so turbo's `^build` form prints no cycle warning. The CI
 posture is hardened against npm lifecycle scripts. The Chat bundle has
 a build-and-load smoke gate. None of these are user-visible features
 on their own; together they remove substrate noise that otherwise
-accompanies every M3 capability commit.
+accompanies every M3 capability commit. (The 2026-07-10 reopening below
+adds one release-hygiene row tracked under this bucket by convenience,
+not against this stated criterion, which stays met; see Status.)
 
 **Status:** The original six rows reached **Complete** on `llm` as of
 2026-06-15, and that exit criterion remains met. The remaining
@@ -619,9 +622,9 @@ upstream-ferry effort (PR #235 mirroring the cuts to master) is
 tracked separately and is not a blocker for it. **Reopened 2026-07-10**
 with one additive row, `release-automation-major-bump-exports-trigger`
 (Not Started): a release-automation reminder is exactly this bucket's
-kind of substrate hygiene, and it rides the in-flight
-`exports-extensionless-migration` design (PR #663), which reopens M2
-with its own row on merge.
+kind of substrate hygiene. It rides the in-flight
+`exports-extensionless-migration` design (PR #663); that design will
+add its own separate M2 row when it merges.
 
 ---
 
@@ -1350,7 +1353,7 @@ date of this pass.
 | Milestone | Items remaining | Effort Estimate | Plus Review Queue (current rate) |
 |-----------|-----------------|-----------------|----------------------------------|
 | M1: AI Agent Experience (was M0) | 0 | **Complete** | — |
-| M2: Project Hygiene (was M½) | 1 (`release-automation-major-bump-exports-trigger`; reopened 2026-07-10 — original six rows Complete; the in-flight `exports-extensionless-migration` design PR #663 adds its own M2 row on merge) | ~1-2 days | — |
+| M2: Project Hygiene (was M½) | 1 (`release-automation-major-bump-exports-trigger`; reopened 2026-07-10, original six rows Complete; the in-flight `exports-extensionless-migration` design PR #663 adds its own M2 row on merge) | ~1-2 days | — |
 | M3: Remote Access & Tools (was M1) | 18 (`gateway-package`, `daemon-docker-selfhost`, `daemon-agent-tools`, `endo-agent-tools`, `agentry-agent-builder`, `agentry-git-verb-gaps`, `agentry-git-eval-scenarios`, `daemon-mount`, `daemon-worker-import-from-mount`, `registry-capability`, `mvs-resolver`, `snapshot-mapper`, `filesystem-watchers`, `daemon-locator-terminology`, `daemon-rename-to-manager`, `daemon-xs-worker-snapshot`, `endoclaw-timer`, `endoclaw-network-fetch`) | 9-13 weeks | 11-15 weeks |
 | M4: Networking (was M2) | 6 (`ocapn-network-transport-separation`, `ocapn-tcp-for-test-extraction`, `ocapn-tcp-syrups-framing`, `cbors`, `ocapn-noise-cryptographic-review`, `daemon-agent-network-identity`) | 4-5 weeks | 5-7 weeks |
 | M5: Public Hosting & Billing (was M7) | 4 in-flight on PR #356 stack (`gateway-package` counted under M3; `gateway-packaging-ci`, `gateway-aws-deployment`, `gateway-aws-attuned` counted here) + 3 design gaps (`gateway-oauth-bonding`, `gateway-key-recovery`, `gateway-stripe-adapter`) | 4-6 weeks design + impl | merge cadence of PRs #343 and #356 |
