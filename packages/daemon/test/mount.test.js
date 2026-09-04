@@ -12,6 +12,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
@@ -715,6 +716,32 @@ test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', 
         ['x'],
         /** @type {Parameters<import('../src/types.js').EndoMount['write']>[1]} */ (
           /** @type {unknown} */ (rando)
+        ),
+      ),
+    {
+      message: /ReadableBlob or ReadableTree/,
+    },
+  );
+});
+
+test('write rejects a generic PassableReader that merely advertises stream', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // A generic value `PassableReader` advertises the shared `stream` method
+  // (and `readReturnPattern`), but it is not a byte blob — it also carries the
+  // value-pattern accessor `readPattern`, which a bytes reader never does.
+  // Before the byte-stream consolidation the method was named `streamBase64`
+  // and unambiguous; now that `stream` is generic, `write()` must still reject
+  // such a source with the crisp shape error rather than draining it as bytes
+  // and dying on an opaque `M.byteArray()` mismatch.
+  const genericReader = readerFromIterator([harden({ not: 'bytes' })]);
+  await t.throwsAsync(
+    () =>
+      E(mount).write(
+        ['x'],
+        /** @type {Parameters<import('../src/types.js').EndoMount['write']>[1]} */ (
+          /** @type {unknown} */ (genericReader)
         ),
       ),
     {

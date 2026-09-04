@@ -238,7 +238,7 @@ type MountEndoMountFile = {
     kind: () => 'file';
     list: () => Promise<never>;
     text: () => Promise<string>;
-    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<Uint8Array, undefined>>;
     json: () => Promise<unknown>;
     getInfo: () => Promise<MountBlobInfo>;
     fetch: (offset: bigint, length: bigint) => Promise<MountPassableBytesReader>;
@@ -306,7 +306,7 @@ type MountPassableBytesReader<TReadReturn = undefined> = {
     readReturnPattern: () => unknown | undefined;
 };
 type MountReadableBlobView = {
-    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<string, undefined>>;
+    stream: (synPromise: MountERef<MountStreamNode<unknown, unknown>>) => Promise<MountStreamNode<Uint8Array, undefined>>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     getInfo: () => Promise<MountBlobInfo>;

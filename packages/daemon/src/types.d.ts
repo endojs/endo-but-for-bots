@@ -1229,7 +1229,7 @@ export type RequestFn = (
 export interface EndoReadable {
   stream(
     synPromise: ERef<StreamNode<Passable, Passable>>,
-  ): Promise<StreamNode<string, undefined>>;
+  ): Promise<StreamNode<Uint8Array, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
@@ -1282,7 +1282,7 @@ export type BlobInfo = {
 export interface ReadableBlobView {
   stream(
     synPromise: ERef<StreamNode<Passable, Passable>>,
-  ): Promise<StreamNode<string, undefined>>;
+  ): Promise<StreamNode<Uint8Array, undefined>>;
   text(): Promise<string>;
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
@@ -1332,7 +1332,7 @@ export interface EndoMountFile {
   text(): Promise<string>;
   stream(
     synPromise: ERef<StreamNode<Passable, Passable>>,
-  ): Promise<StreamNode<string, undefined>>;
+  ): Promise<StreamNode<Uint8Array, undefined>>;
   json(): Promise<unknown>;
   getInfo(): Promise<BlobInfo>;
   fetch(offset: bigint, length: bigint): Promise<PassableBytesReader>;

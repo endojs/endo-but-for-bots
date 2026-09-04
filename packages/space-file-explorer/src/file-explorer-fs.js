@@ -291,7 +291,18 @@ const probeMountChildType = async cap => {
     const methods = await E(cap).__getMethodNames__();
     const names = new Set(methods);
     if (names.has('lookup')) return 'directory';
-    if (names.has('text') || names.has('stream')) return 'file';
+    // `text` is the discriminating file marker; a bare `stream` is not (it is
+    // the generic byte-stream method shared with readers/writers and
+    // `HttpResponse`), so pair it with a read-side blob marker — `getInfo` or
+    // `readReturnPattern`, with `readPattern` absent to exclude a generic value
+    // `PassableReader`.
+    if (
+      names.has('text') ||
+      (names.has('stream') &&
+        !names.has('readPattern') &&
+        (names.has('getInfo') || names.has('readReturnPattern')))
+    )
+      return 'file';
     if (names.has('worktree') && names.has('status') && names.has('commit')) {
       return 'git';
     }
