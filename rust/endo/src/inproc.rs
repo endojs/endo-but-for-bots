@@ -250,11 +250,22 @@ pub fn spawn_inproc_xs_peer(
         let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
             || run(transport),
         )) {
-            Ok(r) => r,
-            Err(_) => Err(xsnap::XsnapError::Panicked {
-                message: format!("{label_for_thread}: run entry panicked"),
-                location: None,
-            }),
+            Ok(run_result) => run_result,
+            Err(payload) => {
+                // Recover the caught panic's message rather than discarding
+                // it: `XsnapError::Panicked` documents that it carries the
+                // message, so a causeless synthetic string would falsify the
+                // variant's own contract. Location stays `None` — this net
+                // catches panics that never crossed the FFI capture hook.
+                let message = format!(
+                    "{label_for_thread}: run entry panicked: {}",
+                    xsnap::worker_io::panic_payload_message(payload.as_ref()),
+                );
+                Err(xsnap::XsnapError::Panicked {
+                    message,
+                    location: None,
+                })
+            }
         };
         if let Err(e) = result {
             eprintln!("inproc: {label_for_thread} exited with error: {e}");
