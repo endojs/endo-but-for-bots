@@ -20,6 +20,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 /// Global handle map for incremental SHA256 hashers.
+///
+/// **Process-wide**, shared by every in-process worker. Now that the FFI panic
+/// guard lets the process survive a worker death (`worker_io::guard_ffi`), a
+/// dying worker's in-progress hasher state here is never swept and a poison
+/// recovered via `into_inner()` can expose a torn mutation to a sibling.
+/// Per-worker scoping / sweep is tracked follow-on work: see
+/// `designs/ironhorse-panic.md` § Scope, "Shared power-table caveat".
 static NEXT_HASHER_HANDLE: AtomicU32 = AtomicU32::new(1);
 static HASHER_MAP: Mutex<Option<HashMap<u32, Sha256>>> = Mutex::new(None);
 
