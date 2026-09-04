@@ -414,12 +414,12 @@ The contract, in descending order of what we can guarantee today:
   validation and misbehave later (the Agoric/agoric-sdk#3905 interleaving
   attack), so this weaker signal must not be presented as the faithful
   contract.
-- Resolved in round 1 by the name split: callers that need a string call
-  `inspect`, callers that want the rich browser tree call
-  `inspectToConsoleArgs`/`log`, so the assertion path simply calls `inspect` and
-  never needs to force an opt-out. What remains open is narrower: should the
-  browser `inspect` string be plain portable-core text, or a DOM/`%c`-styled
-  string that carries some of the tree's structure into a flat sink?
+- Should the browser entry's `inspect` return plain portable-core text, or a
+  DOM/`%c`-styled string that carries some of the tree's structure into a flat
+  sink? (The broader round-1 version of this question, whether the browser
+  default should be arrays or a string, is settled by the name split: callers
+  that need a string call `inspect`, callers that want the rich tree call
+  `inspectToConsoleArgs`/`log`, and the assertion path just calls `inspect`.)
 - Does XS want a true no-op console sink, or should `@endo/inspect` on XS feed
   strings into whatever XS diagnostic channel exists (for example `print`
   under `xst`, `trace` under the Moddable runtime)? Relatedly, should Endo
