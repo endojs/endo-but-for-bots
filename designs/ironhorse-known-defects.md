@@ -156,6 +156,53 @@ Several apparent divergences reported while reviewing the C1 fix evaporated
 under that check, so any count of oracle divergences taken from a batch run
 should be treated as an upper bound.
 
+## Decisions a maintainer may want to revisit
+
+Three of the choices above were judgement calls made while fixing the
+crash-class defects, not conclusions forced by the evidence.
+None of them needs action now; they are collected here so they are decided
+deliberately rather than inherited by default.
+
+**Diverging from the pin deliberately.**
+`folding_backreferences_beyond_the_pinned_oracle` asserts that IronHorse is
+right and the pinned XS is wrong for two folded backreferences, which moves this
+corner off strict oracle agreement.
+The evidence is in "Divergences the C1 fix introduces" above.
+Whether the project wants named standards-beyond-the-oracle exceptions at all,
+or would rather match the pin and carry the bug, is a doctrine question rather
+than a code one.
+
+**Keeping XS's byte arithmetic in the backward step.**
+The lookbehind capture-reference step still mishandles the folding length
+asymmetry, exactly as XS does.
+Faithfulness was chosen because the principled rewrite regressed non-folding
+surrogate cases and because no known program reaches the assertion through that
+step.
+If a reproducer turns up, that trade is worth reopening.
+
+**Treating the 1,000,000-element caps as load-bearing.**
+They are left in place because the meter cannot bound a native-only iteration
+today.
+Adding meter check points inside those loops is the real fix and was
+deliberately not attempted as part of a crash-fix change.
+
+## The catalog is a floor, not a ceiling
+
+Everything here came from reviewing this branch's diff and its own review log.
+That is not the same as auditing the engine's whole surface, and the difference
+showed up almost immediately: an external review of the branch found a
+`String.prototype.lastIndexOf` defect that appears nowhere in the 208 logged
+findings.
+
+Any position that coerces to NaN must search the whole string (ECMA-262
+22.1.3.9 step 6), but only a missing or `undefined` argument was special-cased,
+so `"abcabc".lastIndexOf("a", NaN)` answered 0 where the pinned XS answers 3.
+`..., "zzz")` and `..., {})` had the same cause.
+It is fixed, with coverage in `ironhorse-262/tests/review_fixes.rs`.
+
+The lesson for anyone reading the counts below: they bound what *this* review
+found, not what exists.
+
 ## Open findings
 
 111 of the 208 logged findings were still open or partial at `fa3ecfcfd`, 83 of
