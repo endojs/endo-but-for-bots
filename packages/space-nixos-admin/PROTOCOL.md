@@ -175,12 +175,16 @@ The capability cannot close this from its side; the service's ordering is what
 makes the guarantee.
 
 A status naming a *different* ID is already handled without help: while its
-`phase` is nonterminal the capability treats the slot as busy even with no
-request file present, so a consumed request does not let an unrelated operation
-stack onto one that is still being health-checked.
-That is why `phase` must reach `ok` or `error` on every operation, including
-those that fail early — a status left nonterminal forever blocks later
-submissions until they time out.
+`phase` is nonterminal and that ID has no recorded outcome, the capability
+treats the slot as busy even with no request file present, so a consumed
+request does not let an unrelated operation stack onto one that is still being
+health-checked.
+Either piece of terminal evidence releases it, so a service that dies between
+writing the outcome and mirroring it into the status does not wedge the spool,
+and neither does an operator who prunes `outcomes/`.
+Drive `phase` to `ok` or `error` on every operation all the same, including
+those that fail early: a nonterminal status with no outcome is indistinguishable
+from work still in progress, and later submissions wait it out.
 
 On completion, atomically write
 `outcomes/<sanitizeId(id)>.json` with at least `id`, `action`, `fingerprint`,

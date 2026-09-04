@@ -228,18 +228,21 @@ const assertNoSymlinkTraversal = async (baseDir, target) => {
 };
 
 /**
- * Canonicalize a configured directory that may not exist yet. The lock
- * directory in particular lives on a tmpfs a reboot clears and the privileged
- * service reprovisions, so the daemon can legitimately start before it is
- * there; a bare `realpath` would then reject `make` and leave even the
- * read-only diagnostics (`status`, `getVitals`) unreachable until something
- * re-instantiated the caplet.
+ * Canonicalize the lock directory, which may not exist yet. It lives on a
+ * tmpfs a reboot clears and the privileged service reprovisions, so the daemon
+ * can legitimately start before it is there; a bare `realpath` would then
+ * reject `make` and leave even the read-only diagnostics (`status`,
+ * `getVitals`) unreachable until something re-instantiated the caplet.
  *
  * Resolving the deepest existing ancestor and re-joining the missing tail
  * yields what `realpath` will return once the directory appears, so two
- * incarnations straddling its creation still compute the SAME lock path. A
- * path that is genuinely wrong is rejected loudly by the protocol-marker check
- * at the first submission instead of silently at startup.
+ * incarnations straddling its creation still compute the SAME lock path.
+ *
+ * This tolerates an ABSENT directory, not a WRONG one. A misconfigured
+ * `ENDO_NIXOS_LOCK_DIR` is caught by the protocol marker's `lockDir` binding
+ * at the first submission, but the checkout verbs do not consult that marker,
+ * so between provisioning and that first submission they can hold a lock the
+ * privileged service does not share.
  *
  * @param {string} path
  * @returns {Promise<string>}
@@ -502,7 +505,12 @@ export const make = async (_powers, _context, options = {}) => {
   const lockDir =
     readEnv('ENDO_NIXOS_LOCK_DIR') || '/run/lock/endo-nixos-admin';
   const configured = Boolean(configDir && nixosDir);
-  const canonicalConfigDir = configDir ? await canonicalize(configDir) : '';
+  // The checkout is a hard precondition an administrator provisions once, and
+  // it commonly IS a deployment symlink, so it stays strict: a lexical
+  // fallback for a dangling one would name a different `configLockPath` than
+  // the incarnation that resolves it, and the two would not exclude each
+  // other over the same checkout.
+  const canonicalConfigDir = configDir ? await realpath(configDir) : '';
   const canonicalLockDir = await canonicalize(lockDir);
   const machineHostname = hostname();
   // Most flakes name the local nixosConfiguration after the machine. Hosts
@@ -1183,10 +1191,15 @@ export const make = async (_powers, _context, options = {}) => {
       // moment that process died, so the transaction just completed was NOT
       // exclusive and another process may have made the same decision under
       // it. A submit decision is root-equivalent, so refuse to acknowledge it.
+      // The job's own writes are NOT undone, so this reports a submission that
+      // may already be on the spool: re-dispatching the same key attaches to
+      // it, while retrying under a fresh key would queue a second operation.
       throw new Error(
         `Lock holder for ${q(lockPath)} exited (${signal || `status ${code}`}) ` +
           'before the transaction released it; the kernel freed the lock ' +
-          'early, so this transaction was not exclusive.',
+          'early, so this transaction was not exclusive. Any work it had ' +
+          'already published stands — re-dispatch the same idempotency key ' +
+          'to attach to it rather than retrying under a new one.',
       );
     }
     return outcome.value;
@@ -1583,9 +1596,6 @@ export const make = async (_powers, _context, options = {}) => {
           // the gap as free stacks a second operation onto a switch that is
           // still being health-checked — and if that switch fails and
           // auto-rolls back, the queued one activates over the rollback.
-          // Only a TERMINAL foreign status frees the slot: requiring an
-          // outcome file here instead would wedge every later submission if
-          // an operator ever pruned `outcomes/`.
           if (
             status !== undefined &&
             typeof status.id === 'string' &&
@@ -1594,7 +1604,18 @@ export const make = async (_powers, _context, options = {}) => {
             status.phase !== 'ok' &&
             status.phase !== 'error'
           ) {
-            return { kind: 'wait' };
+            // EITHER piece of terminal evidence frees the slot. The outcome
+            // and the terminal status are two separate publications, so an
+            // applier that died between them leaves a permanently nonterminal
+            // status; without this the next submission — and every one after
+            // it — would wait out the whole watch limit. Consulting the
+            // outcome only as a RELEASE keeps a pruned `outcomes/` from
+            // wedging the spool the other way.
+            const foreign = await readDecisive(outcomePathFor(status.id));
+            if (foreign === undefined) {
+              return { kind: 'wait' };
+            }
+            assertOutcomeRecord(foreign, status.id, protocolFingerprint);
           }
           const configFingerprint =
             action === 'rollback'
