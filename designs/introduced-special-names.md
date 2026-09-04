@@ -53,7 +53,7 @@ can be introduced from a providing host through the provisioning call.
 
 This is the gap
 [#982](https://github.com/endojs/endo-but-for-bots/issues/982) records: letting
-the provisioning party designate a guest's indelible special worker names.
+the provisioning party designate a guest's indelible special names.
 That issue names an "alternative `@main`" as one motivating case.
 This design addresses the general requirement (provisioning-party-designated
 indelible names) but deliberately does *not* let a caller bind the bare name
@@ -62,7 +62,7 @@ reserved prefix that is statically disjoint from the daemon's own names, and
 `@main` is daemon-owned.
 A literal alternative `@main` (rebinding a name the daemon already owns) would
 need its own daemon carve-out and is out of scope here; #982 is therefore
-*partially* addressed, with the general mechanism landed and the specific
+*partially* addressed, with the general mechanism specified here and the specific
 `@main`-override left as separate work.
 
 This design adds one generic mechanism.
@@ -181,8 +181,19 @@ because `specials` keys are unvalidated.
 Phase 1 therefore adds an assertion that no daemon-owned special name and no
 `specials` key carries the reserved prefix, so a deployment cannot register
 `@intro-scoped-cap` as a platform special and win by merge order.
-That assertion is what makes invariant 2's "statically disjoint in every future
-release" true rather than a human promise.
+That assertion is what makes the forward-compatibility guarantee of § Security
+invariants (invariant 2, below) true rather than a human promise: that introduced
+names stay statically disjoint from the daemon-owned and embedder-supplied sets in
+every future release.
+
+No in-tree caller passes a non-empty `specials` bag today (`manager.js:7578`
+defaults it to `{}`), and the eventual downstream deployment named here (Minion
+Town) supplies no `@intro-`-prefixed platform special, so the newly reserved prefix
+collides with no known or planned embedder set. An out-of-tree embedder that
+happens to already use an `@intro-`-prefixed `specials` key is the deliberate
+scope of the assertion: it fails that daemon's construction loudly at startup
+rather than silently letting a platform special and an introduced name contend by
+merge order.
 
 ## Resolution, validation, and rejection
 
@@ -198,8 +209,8 @@ when:
 - two entries map to the same destination name (duplicate destination); or
 - a *source name does not resolve* in the providing host's pet store.
 
-The daemon-owned-collision case that a flat reserved namespace would need is
-subsumed by the sub-namespace rule above.
+The daemon-owned-collision check that a flat (non-reserved) validation list would
+need is subsumed by the sub-namespace rule above.
 A destination outside the reserved prefix is malformed and rejected, and one
 inside it can never name a daemon-owned special name (given the Phase 1 assertion
 that keeps the prefix off the daemon-owned and embedder-supplied sets).
@@ -339,28 +350,41 @@ await E(agent).storeIdentifier(otherId, '@intro-scoped-cap'); // rejects: cannot
 An introduced special name is indelible for the *lifetime of the agent* and is not
 independently revocable by this mechanism.
 The resolved identifier is rooted by the agent's formula (the reachability edge of
-§ Persistence and reincarnation).
-Provisioning also registers the introduced identifier as a `thisDiesIfThatDies`
-dependency: `context.thisDiesIfThatDies(dep)`
-(`packages/daemon/src/context.js:115-118`) makes the *agent* die if `dep` dies
-(the term names a daemon lifetime edge whereby one formula's destruction cancels a
-dependent).
-The direction matters and cuts the wrong way if misread: destroying the introduced
-capability cancels the *whole recipient agent*, so the providing host retains an
-agent-wide kill switch through any introduced name.
-The only intended way to withdraw the endowment through the daemon is to destroy
-the agent; removing the introduced identifier from an existing formula is *not* a
-supported operation, because the formula is written once at provisioning and
-reincarnation always re-supplies every persisted introduced binding.
+§ Persistence and reincarnation), so the capability is not collected while the
+agent formula names it.
 
-A deployment that needs a *revocable* endowment does not remove the introduced
-name.
-It introduces a *caretaker or attenuating forwarder* as the capability behind the
-introduced name and revokes through that forwarder, exactly as with any other
-durable grant.
-Because of the `thisDiesIfThatDies` edge above, the forwarder must be *neutered*
-(made to stop forwarding), never *destroyed*: destroying it would cancel the whole
-agent.
+This mechanism adds *no lifetime coupling of its own* between the introduced
+capability and the recipient agent.
+In particular it deliberately does **not** register a `thisDiesIfThatDies`
+dependency (`context.thisDiesIfThatDies(dep)`,
+`packages/daemon/src/context.js:115-118`, the daemon lifetime edge whereby one
+formula's destruction cancels a dependent).
+Wiring every introduced name to that edge would make destroying the introduced
+capability cancel the *whole recipient agent*: an agent-wide kill switch through
+any introduced name.
+That is rejected here because it is *itself* a revocation policy, and the most
+destructive one, contradicting this feature's deliberately policy-neutral stance
+(it guarantees only that the *name* is indelible; see Design decision 6).
+The consequence compounds under multiplicity: because a single agent can hold
+several independently-motivated introduced names (§ Persistence and reincarnation),
+a mandatory edge would give it *N* unrelated whole-agent kill switches sharing one
+blast radius, so an unrelated capability's ordinary lifecycle (rotation, expiry,
+GC of a sibling grant) could take the agent down.
+Instead, if the providing host later destroys the capability an introduced name
+points at, the name stays bound but resolves to a now-dangling identifier, exactly
+as the daemon already tolerates any other dangling capability.
+Removing the introduced identifier from an existing formula is still *not* a
+supported operation (the formula is written once at provisioning and reincarnation
+always re-supplies every persisted introduced binding), so the recipient cannot
+drop the name and the host cannot rewrite it away; only *what the name resolves to*
+is a revocation surface, and it belongs to the deployment.
+
+A deployment that needs a *revocable* endowment therefore introduces a *caretaker
+or attenuating forwarder* as the capability behind the introduced name and revokes
+through that forwarder, exactly as with any other durable grant.
+Because this mechanism couples no lifetimes, the forwarder can be *neutered* (made
+to stop forwarding) or *destroyed* as the deployment sees fit, with no whole-agent
+blast radius either way.
 The introduced name stays bound and resolvable; what it forwards to becomes inert.
 Providing that caretaker is the deployment's responsibility, not this daemon
 feature's.
@@ -389,6 +413,11 @@ revocation policy to the capability the name points at.
 6. Persisted introduced identifiers are enumerated in the daemon's reachability and
    formula-record tables, so an introduced capability is neither collected while
    named nor invisible to the inspector.
+7. This mechanism adds no `thisDiesIfThatDies` or other agent-lifetime coupling to
+   the introduced capability: destroying the capability an introduced name points
+   at leaves the name bound but dangling, and never cancels the recipient agent.
+   Revocation of *what the name resolves to* is the deployment's responsibility,
+   through a caretaker or forwarder behind the name (§ Revocation).
 
 ## Phased implementation and tests
 
@@ -400,6 +429,11 @@ revocation policy to the capability the name points at.
    Test malformed destinations (outside the reserved sub-namespace), duplicate
    destinations, and, distinctly, an *unresolvable source name that rejects* the
    call rather than skipping.
+   Test the reservation assertion directly, too: constructing a daemon whose
+   `specials` bag carries an `@intro-`-prefixed key is rejected at construction.
+   This assertion is the enforcement mechanism Security invariant 2's
+   forward-compatibility guarantee rides on, so it earns its own test rather than
+   riding on the destination-validation tests.
 2. **Provisioning and formula.**
    Resolve source names once, persist the resulting identifiers in the agent
    formula, and bind them as special (indelible) names in the new agent.
@@ -461,6 +495,18 @@ Phase 1 therefore also:
    instant it runs; a reserved prefix makes collision-freedom structural and
    forward-compatible without reincarnation-time re-validation of an indelible
    binding.
+6. **Add no automatic agent-lifetime coupling to the introduced capability.**
+   Keeping the capability alive is handled by the formula reachability edge alone
+   (§ Persistence and reincarnation); the mechanism deliberately does *not* also
+   register a `thisDiesIfThatDies` edge that would kill the whole recipient agent
+   when the source capability dies.
+   A mandatory whole-agent kill switch is itself a revocation policy (the most
+   destructive one), and would both contradict the feature's policy-neutral stance
+   (the *name* is indelible; what it points at, and its lifetime, are the
+   deployment's to choose via a caretaker or forwarder) and, under the multiplicity
+   the design supports, hand one agent several unrelated whole-agent kill switches.
+   An introduced name whose source is later destroyed dangles like any other
+   dangling identifier rather than taking the agent down with it (§ Revocation).
 
 ## Prompt
 
