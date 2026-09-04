@@ -291,6 +291,7 @@ export const makeSubagentTools = ({ powers, spawner, delegations }) => {
   const tools = new Map();
 
   const spawnTool = harden({
+    /** @returns {ToolSchema} */
     schema: () =>
       harden({
         type: 'function',
@@ -343,6 +344,7 @@ export const makeSubagentTools = ({ powers, spawner, delegations }) => {
   });
 
   const askTool = harden({
+    /** @returns {ToolSchema} */
     schema: () =>
       harden({
         type: 'function',
@@ -403,6 +405,7 @@ export const makeSubagentTools = ({ powers, spawner, delegations }) => {
   });
 
   const stopTool = harden({
+    /** @returns {ToolSchema} */
     schema: () =>
       harden({
         type: 'function',
