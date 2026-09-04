@@ -120,8 +120,8 @@ the one deliberate exception: `inspectToConsoleArgs`/`log` on browser bypass the
 shared core and hand the live value to the host console, which is why that path
 is faithful-by-delegation (see "How far each environment can go").
 
-The options bag (`depth`, `breakLength`, `colors`, `as`) is shared across all
-three exports and all three conditions; a condition that cannot honor a field
+The options bag (`depth`, `breakLength`, `colors`) is shared across all three
+exports and all three conditions; a condition that cannot honor a field
 (colors on browser/xs) ignores rather than rejects it, so a call authored once
 type-checks and behaves predictably under every target.
 
@@ -300,7 +300,7 @@ The contract, in descending order of what we can guarantee today:
 | Environment | Proxy brand check | Faithfulness achievable today |
 |---|---|---|
 | node | Yes: `util.types.isProxy`, a public native internal-slot check | Near-faithful: quarantine proxies before delegating to `util.inspect`; residual exposure is Node's own inspect internals |
-| browser | None in userland; the devtools console has engine access and already renders proxies safely itself | Faithful *by delegation* for the rich path: the pass-through design hands the live value to the host console and never reads it in our code; getters render unevaluated until the developer clicks. The `{ as: 'string' }` path falls back to the portable core and inherits its limits |
+| browser | None in userland; the devtools console has engine access and already renders proxies safely itself | Faithful *by delegation* for the rich path: the pass-through design hands the live value to the host console and never reads it in our code; getters render unevaluated until the developer clicks. `inspect` (the string export) falls back to the portable core and inherits its limits |
 | xs | None today. Endo co-maintains the XS lockdown integration (`packages/ses/src-xs`), so a native predicate could be requested from Moddable as future work | Best-effort via the portable core |
 | default (pure SES userland) | None; this is the gap | Best-effort only, per steps 1, 3, and 4 |
 
@@ -331,8 +331,9 @@ The contract, in descending order of what we can guarantee today:
    defaults and TTY-driven `colors`, quarantining proxies via
    `util.types.isProxy` before delegation. Test both TTY (ANSI present) and
    non-TTY (bare) rendering, and proxy disclosure.
-3. **Browser entry.** `inspect-browser.js` returning console-argument arrays;
-   `{ as: 'string' }` falls back to the portable core.
+3. **Browser entry.** `inspect-browser.js` supplying the live-value console
+   arguments behind `inspectToConsoleArgs`/`log`; its `inspect` is the portable
+   core.
 4. **SES seam + shim.** Add the `setInspector` hook to console taming and
    assertion quoting; ship `@endo/inspect/shim.js` per-target; wire an
    optional SES base build that includes it. Guard behind the condition so the
@@ -413,10 +414,12 @@ The contract, in descending order of what we can guarantee today:
   validation and misbehave later (the Agoric/agoric-sdk#3905 interleaving
   attack), so this weaker signal must not be presented as the faithful
   contract.
-- Should the browser entry default to console-argument arrays or to a
-  DOM/`%c`-styled string? The rich tree argues for arrays, but some callers
-  (assertion messages) need a string; is the `{ as: 'string' }` opt-out
-  sufficient, or should the assertion path force it?
+- Resolved in round 1 by the name split: callers that need a string call
+  `inspect`, callers that want the rich browser tree call
+  `inspectToConsoleArgs`/`log`, so the assertion path simply calls `inspect` and
+  never needs to force an opt-out. What remains open is narrower: should the
+  browser `inspect` string be plain portable-core text, or a DOM/`%c`-styled
+  string that carries some of the tree's structure into a flat sink?
 - Does XS want a true no-op console sink, or should `@endo/inspect` on XS feed
   strings into whatever XS diagnostic channel exists (for example `print`
   under `xst`, `trace` under the Moddable runtime)? Relatedly, should Endo
