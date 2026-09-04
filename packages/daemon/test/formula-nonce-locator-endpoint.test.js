@@ -53,7 +53,7 @@ const makeClient = async ({
   locator,
   makeLocatorForSession,
 }) => {
-  const ref = {};
+  const netlayerHolder = {};
   const client = await makeOcapn({
     codec,
     debugLabel: designator,
@@ -66,11 +66,11 @@ const makeClient = async ({
         logger,
         specifiedDesignator: designator,
       }).then(netlayer => {
-        ref.netlayer = netlayer;
+        netlayerHolder.netlayer = netlayer;
         return netlayer;
       }),
   });
-  return { client, location: ref.netlayer.location };
+  return { client, location: netlayerHolder.netlayer.location };
 };
 
 for (const [codecName, codec] of codecs) {

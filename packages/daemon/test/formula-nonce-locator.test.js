@@ -232,16 +232,16 @@ test('a pipelined burst cannot clear the gate before the misses settle', async t
   // sending the next — must not clear the pre-lookup guard `missBound`
   // times before the first miss increments the counter. Every prior unit
   // and wire test awaits each `get` before the next, so nothing here
-  // pipelines; this test fires `missBound + K` presentations at once.
+  // pipelines; this test fires `missBound + overshoot` presentations at once.
   //
   // On the unserialized body (each `get` independently reading the counter
-  // with no in-flight term) all K clear the guard and the bound never
+  // with no in-flight term) all overshoot clear the guard and the bound never
   // bites: the session aborts more than once and a valid id after the
   // burst still resolves. On the in-flight-counted body it aborts exactly
   // once and the session latches closed.
   const guest = makeGuest();
   const missBound = 3;
-  const K = 3;
+  const overshoot = 3;
   const locator = makeFormulaNonceLocator({
     provideLocalFormula: async id =>
       id === localId ? guest : t.fail('unexpected id'),
@@ -259,7 +259,7 @@ test('a pipelined burst cannot clear the gate before the misses settle', async t
   // Fire missBound + K miss presentations synchronously, without awaiting
   // between them — the pipelined burst.
   const bursts = [];
-  for (let i = 0; i < missBound + K; i += 1) {
+  for (let i = 0; i < missBound + overshoot; i += 1) {
     bursts.push(session.get(`miss-${i}`));
   }
   const outcomes = await Promise.all(bursts);
@@ -335,4 +335,57 @@ test('hits do not count toward the miss bound', async t => {
   t.is(await session.get(localId), guest);
   t.is(await session.get(localId), guest);
   t.is(aborts, 0, 'a single miss amid hits never crosses the bound');
+});
+
+test('the miss logger receives the error class only, never the caught message', async t => {
+  // The non-oracularity argument rests on the miss logger seeing only
+  // `error.name`, never `error.message`. A live identifier that misses
+  // transiently can carry the presented bearer nonce in its message; a
+  // future swap to `error.message` would silently write that secret to
+  // the daemon log. Assert the logged arguments carry the class name and
+  // never the secret.
+  const secret = localId;
+  const loggedArguments = [];
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async id => {
+      // Reject with the presented secret embedded in the message — the
+      // worst case the docstring guards against.
+      throw new TypeError(`incarnation failed for ${id}`);
+    },
+    localNodeNumber: localNode,
+    logger: {
+      error: (...args) => {
+        loggedArguments.push(args);
+      },
+    },
+  });
+
+  t.is(await locator.get(secret), undefined, 'the presentation still misses');
+  t.is(loggedArguments.length, 1, 'the miss was logged exactly once');
+  const [args] = loggedArguments;
+  t.true(args.includes('TypeError'), 'the error class name is logged');
+  for (const arg of args) {
+    t.false(
+      typeof arg === 'string' && arg.includes(secret),
+      'no logged argument echoes the presented secret',
+    );
+  }
+});
+
+test('a NaN, non-positive, or non-integer missBound throws at construction', async t => {
+  // The fail-closed guard: `misses >= NaN` and `misses >= -1` are never
+  // true, so a nonsensical bound would silently disable the session bound
+  // rather than tighten it. Every such bound must throw at construction.
+  for (const missBound of [NaN, -1, 0, 1.5, Infinity]) {
+    t.throws(
+      () =>
+        makeFormulaNonceLocator({
+          provideLocalFormula: async () => t.fail('provide should not run'),
+          localNodeNumber: localNode,
+          missBound,
+        }),
+      { message: /missBound must be a positive integer/ },
+      `missBound ${String(missBound)} is rejected`,
+    );
+  }
 });
