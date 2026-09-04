@@ -90,7 +90,7 @@ export const NumberPrefixCodecWithSelectorAsSymbol = {
     } else if (typeof value === 'symbol') {
       const selectorString = getSyrupSelectorName(value);
       syrupWriter.writeSelectorFromString(selectorString);
-    } else if (value instanceof ArrayBuffer) {
+    } else if (value instanceof Uint8Array) {
       syrupWriter.writeBytestring(value);
     } else if (typeof value === 'bigint') {
       syrupWriter.writeInteger(value);
@@ -131,7 +131,7 @@ export const AnyCodec = makeTypeHintUnionCodec(
       } else if (value instanceof Set) {
         // eslint-disable-next-line no-use-before-define
         return SetCodec;
-      } else if (value instanceof ArrayBuffer) {
+      } else if (value instanceof Uint8Array) {
         return BytestringCodec;
       } else if (typeof value === 'object' && value !== null) {
         if (value[Symbol.toStringTag] === 'Record') {

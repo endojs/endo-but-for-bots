@@ -52,7 +52,7 @@
     "lint:eslint": "eslint .",
     "lint:workspaces": "prettier --check .github packages && yarn workspaces foreach --all run lint",
     "lint:workspaces:eslint": "yarn workspaces foreach --all run lint:eslint",
-    "lint:fix": "yarn lint:eslint -- --fix",
+    "lint:fix": "yarn lint:eslint --fix",
     "lint:workspaces:fix": "yarn workspaces foreach --all run lint-fix",
     "lint:prettier": "prettier --check .github packages",
     "lint:sh": "scripts/shellcheck.sh",

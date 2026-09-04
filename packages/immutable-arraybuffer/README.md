@@ -4,6 +4,27 @@ This `@endo/immutable-arraybuffer` package provides a shim for a proposed new Ja
 A shim modifies the existing JavaScript primordials as needed to most closely emulate the feature as proposed.
 Importing `@endo/immutable-arraybuffer/shim.js` will cause these changes.
 
+The package's main entry point additionally exports two byte utilities
+that pair with the shim:
+
+```js
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
+
+// Wrap a Uint8Array's contents in a hardened frozen Uint8Array backed by
+// an immutable ArrayBuffer (a `'byteArray'` passable). Honors the view's
+// byteOffset/byteLength.
+const passable = frozenBytes(new Uint8Array([1, 2, 3]));
+
+// Copy such a value (or any view / ArrayBufferLike) back out into a fresh
+// mutable Uint8Array so APIs like TextDecoder.decode can consume it.
+const mutable = thawedBytes(passable);
+```
+
+Importing the main entry installs the shim as a side effect, since
+`frozenBytes` depends on it. The bare shim install remains available as
+the separate `@endo/immutable-arraybuffer/shim.js` export for callers
+that want only the platform changes.
+
 Below, we use the term "buffer" to refer informally to an instance of an `ArrayBuffer`, whether immutable or not.
 
 ## Background
@@ -61,8 +82,10 @@ Importing `@endo/immutable-arraybuffer/shim.js` installs the proposed methods (`
 For genuine ArrayBuffers, the replacements delegate to the captured genuine methods and behave identically to before.
 For emulated immutable buffers, the methods either return the appropriate immutable behaviour (for `slice`) or throw the appropriate "cannot mutate" `TypeError` (for the mutators).
 
-The shim's install policy is detect-then-skip: if `'sliceToImmutable' in ArrayBuffer.prototype` is already true when the shim loads (a native implementation, or a previously loaded shim), the shim does nothing and the prior installation wins.
-The Immutable ArrayBuffer proposal has reached stage 3; at that threshold an earlier installation is presumed authoritative.
+The shim's install policy is first-evaluation-wins.
+The first evaluation in a realm installs the emulation when native `sliceToImmutable` is absent.
+Later evaluations, including an "eval twin" loaded from another physical copy of the package, see the installed method and defer to the winner.
+Public byte helpers call the winning `ArrayBuffer.prototype.sliceToImmutable` instead of a package-copy-local implementation, so every emulated buffer and view belongs to the winning installation.
 
 ## Caveats
 
@@ -73,7 +96,7 @@ Without either, the shim still shims `ArrayBuffer.prototype.sliceToImmutable` bu
 - The shim's emulated immutable buffers are not real `ArrayBuffer` exotic objects.
 If they were, the shim would not be able to protect them from being written.
 Even though they implement the full proposed `ArrayBuffer` API, they cannot be plug-compatible as direct exotic-object arguments to all native APIs.
-The freezable `TypedArray` emulation (see below) extends the shim to cover the most common consumer path (`new T(iab)`), but `DataView` construction from an emulated immutable buffer is not yet covered.
+The freezable `TypedArray` and `DataView` emulations (see below) cover construction of every standard ArrayBuffer view on an emulated immutable buffer.
 - Unlike genuine `ArrayBuffer` or `SharedArrayBuffer` exotic objects, the shim's emulated immutable buffers cannot be cloned or transfered between JS threads.
 - This is a plain *JavaScript* shim, not by itself a *Hardened JavaScript* polyfill/shim.
 Thus, the objects and function it creates are not hardened by this shim itself.
@@ -118,6 +141,30 @@ const view = new Uint8Array(mutableAb);
 view.fill(1); // succeeds: genuine writable view
 ```
 
+## The Freezable DataView Emulation
+
+Constructing a `DataView` on an emulated immutable buffer uses the same wrapper pattern.
+The constructor delegates byte-offset and byte-length conversion and range checks to the native `DataView` constructor.
+The wrapper inherits directly from `DataView.prototype`, retains the `[object DataView]` brand, and exposes the immutable buffer through `.buffer`.
+All `get*` methods delegate to the hidden genuine view, while every `set*` method throws `TypeError`.
+`Object.freeze` and `harden` can therefore freeze the wrapper without changing its readable contents.
+
+```js
+const source = new ArrayBuffer(4);
+new DataView(source).setUint32(0, 0x12345678);
+const immutable = source.sliceToImmutable();
+const view = new DataView(immutable);
+
+view.getUint32(0); // 0x12345678
+view.setUint8(0, 0); // throws TypeError
+Object.freeze(view); // succeeds
+Object.prototype.toString.call(view); // '[object DataView]'
+```
+
+Construction on a genuine mutable buffer still produces a genuine writable `DataView`, including after the view object itself is frozen.
+`ArrayBuffer.isView` reports `false` for an emulated DataView wrapper and `true` for a genuine DataView.
+That is the same implementation distinction used for emulated and genuine TypedArrays, not a DataView-versus-TypedArray distinction.
+
 ### Indexed assignment on emulated freezable views
 
 The emulated wrapper is a plain ordinary object, not a native integer-indexed exotic.
@@ -128,6 +175,79 @@ On a non-frozen wrapper the own property shadows the prototype's read delegate; 
 On a frozen wrapper the assignment throws `TypeError` in strict mode (ES module code is always strict), and the buffer is unchanged.
 
 This is a known constraint of the TC39 proposal: there is no way to intercept integer-indexed assignments on a plain object via the prototype chain.
+
+### Distinguishing genuine and emulated views
+
+An emulated view wrapper is **not** an `ArrayBuffer` view.
+
+```js
+import '@endo/immutable-arraybuffer/shim.js';
+
+const iab = new ArrayBuffer(4).sliceToImmutable();
+const emulated = new Uint8Array(iab);
+const genuine = new Uint8Array(4);
+
+ArrayBuffer.isView(emulated); // false  (the committed fidelity loss)
+ArrayBuffer.isView(genuine);  // true
+```
+
+An emulated wrapper is a plain ordinary object (`Object.create(Uint8Array.prototype)`) with no `[[ViewedArrayBuffer]]` / `[[TypedArrayName]]` internal slots, so `ArrayBuffer.isView` reports `false` for it.
+A genuine `Uint8Array` — whether backed by a mutable buffer or, on a native stage-3 engine, by a genuine immutable buffer — reports `true` and is integer-indexable in place.
+This is the observable distinction consumers use. There is no separate shim
+brand contract.
+
+Current clients use it as follows:
+
+- `@endo/pass-style` combines `ArrayBuffer.isView` with the prototype, backing-buffer, whole-span, and own-index checks required for a byteArray. The emulated shape has no own integer-indexed properties; the genuine shape has exactly `length` matching indexed properties.
+- The `thawedBytes` utility (exported from this package) and `@endo/bytes`' readers use a genuine view in place and copy a non-view emulated `Uint8Array` wrapper first.
+
+The shim **must not** be "improved" in any way that would make an emulated wrapper report `ArrayBuffer.isView === true` (it cannot, short of making the wrapper a genuine exotic) or that would otherwise blur this distinction — for example by materializing own integer-indexed data properties on the wrapper (which would push it out of the zero-own-index emulated shape `@endo/pass-style` requires).
+`test/shim-typedarray.test.js` pins `ArrayBuffer.isView(wrapper) === false` (and `true` for a genuine view) as the committed regression, and the client packages mirror it with their own tests, so it is both the shim's responsibility not to break clients and each client's responsibility not to be silently broken.
+
+The `immutable` accessor on the view's `.buffer` is **not** this distinguisher.
+It distinguishes an **immutable** buffer from a **mutable** one; it does *not* distinguish a **genuine** immutable view from an **emulated** one.
+Both an emulated wrapper and a (future-native) genuine view backed by an immutable buffer report `.buffer.immutable === true`, so the accessor cannot tell them apart — it answers a question about the *buffer's* mutability, not about the *view's* provenance.
+`ArrayBuffer.isView` separates their implementations.
+
+### Integer-indexed reads on emulated freezable views (an incidental consequence)
+
+Symmetric to the assignment constraint above, an integer-indexed *read* on an emulated freezable wrapper does **not** reach the underlying byte.
+On a fresh wrapper `view[i]` evaluates to `undefined`, never the byte stored in the immutable buffer.
+The bytes are readable only through the integer-indexed *protocol* — `view.at(i)`, `Uint8Array.prototype.at.call(view, i)`, `for..of`, spread — which the shim redirects to the wrapper's hidden genuine `TypedArray`.
+A direct `view[i]` reads an ordinary property off a plain object: the wrapper carries no own indexed properties, its `[[Prototype]]` is `Uint8Array.prototype`, and (per the same TC39-proposal constraint) the shim installs no integer-indexed read accessor on `%TypedArray%.prototype` that could intercept `view[i]`.
+
+This `view[i] === undefined` behavior is a real but **incidental** consequence of the wrapper being a plain object — the same plain-object nature that makes `ArrayBuffer.isView` report `false`.
+It is not a separate discriminator and clients do not sniff `view[i]` to tell an emulated wrapper from a genuine view; they use `ArrayBuffer.isView`.
+Clients simply route *around* the incidental behavior — `@endo/bytes` copies a non-view wrapper before indexing, so it never observes `view[i]` on one — rather than depending on it as a brand.
+The shim should nonetheless keep the wrapper an ordinary plain object with no own integer-indexed slots, because that is what keeps it a non-view with zero own indexed properties (the emulated shape `@endo/pass-style` requires); `test/shim-typedarray.test.js` records `view[i] === undefined` as a companion observation to the committed `isView` pin.
+
+### `[Symbol.toStringTag]` on emulated views (repaired by a getter wrapper)
+
+The shim replaces the genuine `%TypedArrayPrototype%[Symbol.toStringTag]` getter with a wrapper around it, so an emulated freezable wrapper reports the same string tag as a genuine view.
+
+The genuine `%TypedArrayPrototype%[Symbol.toStringTag]` getter is `this`-sensitive: it reads the receiver's `[[TypedArrayName]]` internal slot.
+An emulated wrapper is a plain ordinary object (`Object.create(Uint8Array.prototype)`) with no such slot, so the *unmodified* getter would return `undefined` for it and `Object.prototype.toString.call(view)` would read `'[object Object]'`.
+The shim's replacement getter closes that gap: on an emulated wrapper it amplifies to the hidden genuine `TypedArray` and reads *its* internal-slot tag; on a genuine `TypedArray` it falls through to the captured genuine getter; on any other receiver it returns `undefined`, exactly as the genuine getter does.
+
+```js
+import '@endo/immutable-arraybuffer/shim.js';
+
+const iab = new ArrayBuffer(4).sliceToImmutable();
+const emulated = new Uint8Array(iab);
+const genuine = new Uint8Array(4);
+
+Object.prototype.toString.call(emulated); // '[object Uint8Array]'  (repaired)
+Object.prototype.toString.call(genuine);  // '[object Uint8Array]'
+```
+
+This is a **getter-wrapper** fix, not a `[Symbol.toStringTag]` **data property** on the wrapper.
+A data property would patch only the `Object.prototype.toString` lookup path while leaving the genuine `this`-sensitive getter still reporting `undefined` on a wrapper; the getter wrapper makes the getter and `Object.prototype.toString` agree.
+The wrapper therefore still carries **no** own `[Symbol.toStringTag]` — the tag comes from the prototype getter.
+
+Consequently `[Symbol.toStringTag]` is not an emulated-vs-genuine distinguisher; consumers use `ArrayBuffer.isView` when they need that distinction.
+One downstream consequence worth naming: a brand check that captures *this* (shim-installed) getter as an internal-slot probe — as `@endo/harden`'s `isTypedArray` does — will now classify an emulated wrapper as a `TypedArray` *if it captures the getter after the shim installs*.
+That reroutes such a wrapper through `harden`'s `freezeTypedArray` branch rather than the ordinary `Object.freeze` branch, which is benign: the wrapper carries no own integer-indexed properties, so `freezeTypedArray` reduces to `preventExtensions` plus a no-op over an empty own-key set, and `harden(wrapper)` succeeds either way.
+`test/shim-typedarray-tostringtag.test.js` pins the repaired `'[object Uint8Array]'` reading and the getter-wrapper (not data-property) shape.
 
 ## Function expressions versus declarations
 
@@ -217,12 +337,12 @@ React Native on Hermes and pre-Node-17 server environments are the practical cas
 
 ## Purposeful Violation
 
-This package sets `[Symbol.toStringTag]` to `'ImmutableArrayBuffer'` on each emulated immutable buffer (as an own property of the instance, not on the shared `ArrayBuffer.prototype`).
+This package sets `[Symbol.toStringTag]` to `'emulated immutable ArrayBuffer'` on each emulated immutable buffer (as an own property of the instance, not on the shared `ArrayBuffer.prototype`).
 The rationale: Node's [concordance](https://github.com/concordancejs/concordance/blob/791d2a89b40eb13f2c889ac270dd8be190cf8073/lib/describe.js#L36) (used by ava for diagnostic output) sniffs the result of `Object.prototype.toString.call(value)` to decide whether it can do `Buffer.from(value)` on the object.
 `Buffer.from` only works on genuine `ArrayBuffer` exotic objects; passing an emulated immutable buffer to it throws a `TypeError` that concordance does not handle gracefully.
-The own-property `[Symbol.toStringTag] = 'ImmutableArrayBuffer'` slot keeps concordance from routing the value through `Buffer.from` and lets it fall through to the unrenderable-value path.
+The own-property `[Symbol.toStringTag] = 'emulated immutable ArrayBuffer'` slot keeps concordance from routing the value through `Buffer.from` and lets it fall through to the unrenderable-value path.
 
 The drop-the-pseudo-prototype redesign removed the intermediate prototype that earlier versions hung this slot on; the slot is now installed per-instance via `defineProperty` in `makeImmutableArrayBufferInternal`.
 Genuine ArrayBuffers continue to inherit `'ArrayBuffer'` from the prototype: `Object.prototype.toString.call(new ArrayBuffer(0))` reads as `'[object ArrayBuffer]'`.
-Only emulated immutable buffers carry the `'ImmutableArrayBuffer'` slot: `Object.prototype.toString.call(new ArrayBuffer(0).sliceToImmutable())` reads as `'[object ImmutableArrayBuffer]'`.
+Only emulated immutable buffers carry the `'emulated immutable ArrayBuffer'` slot: `Object.prototype.toString.call(new ArrayBuffer(0).sliceToImmutable())` reads as `'[object emulated immutable ArrayBuffer]'`.
 Callers that need to distinguish emulated immutable buffers from genuine ones programmatically should prefer the `immutable` accessor on `ArrayBuffer.prototype` (installed by the shim), which is the canonical brand check.

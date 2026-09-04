@@ -1,23 +1,15 @@
 // @ts-check
 
-import harden from '@endo/harden';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 
 /**
- * Copies the contents of an immutable `ArrayBuffer` into a fresh
- * mutable `Uint8Array`.
+ * Copies the contents of a narrowed byteArray into a fresh mutable
+ * `Uint8Array`.
  *
- * Immutable `ArrayBuffer` instances (proposal-immutable-arraybuffer)
- * cannot back a `Uint8Array` view directly, and APIs such as
- * `TextDecoder.decode` reject them.  This helper produces a working
- * `Uint8Array` copy that callers can pass to those APIs.
+ * This compatibility name delegates to `thawedBytes`, preserving the
+ * existing `@endo/bytes/from-immutable.js` entry point for master consumers.
  *
- * Accepts any `ArrayBufferLike` so callers do not need to narrow the
- * argument before invoking.
- *
- * @param {ArrayBufferLike} buffer
+ * @param {Uint8Array} buffer
  * @returns {Uint8Array}
  */
-export const bytesFromImmutable = buffer => {
-  return new Uint8Array(buffer.slice(0));
-};
-harden(bytesFromImmutable);
+export const bytesFromImmutable = thawedBytes;

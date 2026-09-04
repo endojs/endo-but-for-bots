@@ -1,30 +1,19 @@
 // @ts-check
 
-import '@endo/immutable-arraybuffer/shim.js';
-import harden from '@endo/harden';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 /**
- * Wraps a `Uint8Array` view's contents in an immutable `ArrayBuffer`.
+ * Wraps a `Uint8Array` view's contents in a hardened frozen `Uint8Array`
+ * backed by an immutable `ArrayBuffer`.
  *
- * Calls the `sliceToImmutable` method installed by
- * `@endo/immutable-arraybuffer/shim.js` on `ArrayBuffer.prototype`.
- * Importing this module triggers the shim install, so the caller does not
- * need to arrange for it separately. The resulting buffer carries the
- * `'byteArray'` passStyle and is safe to share across vat boundaries. The
- * result is hardened so it is passable.
+ * This compatibility name now delegates to `frozenBytes`, preserving the
+ * existing `@endo/bytes/to-immutable.js` entry point while returning the
+ * narrowed `byteArray` passable shape.
  *
  * Honors the view's `byteOffset` and `byteLength`, so passing a
  * `subarray` copies only that window.
  *
  * @param {Uint8Array} view
- * @returns {ArrayBuffer} A hardened immutable `ArrayBuffer`.
+ * @returns {Uint8Array}
  */
-export const bytesToImmutable = view => {
-  const buffer = /** @type {ArrayBuffer} */ (view.buffer);
-  const immutable = buffer.sliceToImmutable(
-    view.byteOffset,
-    view.byteOffset + view.byteLength,
-  );
-  return harden(immutable);
-};
-harden(bytesToImmutable);
+export const bytesToImmutable = frozenBytes;

@@ -37,6 +37,7 @@
     "test": "ses-ava"
   },
   "dependencies": {
+    "@endo/bytes": "workspace:^",
     "@endo/harden": "workspace:^"
   },
   "devDependencies": {

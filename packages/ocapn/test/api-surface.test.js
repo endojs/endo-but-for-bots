@@ -7,6 +7,7 @@
 
 import test from '@endo/ses-ava/test.js';
 import ts from 'typescript';
+import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -339,6 +340,68 @@ function extractMembersFromJSDocTypedef(typedefTag, checker) {
 }
 
 /**
+ * Extract members from a TypeScript type alias declaration.
+ *
+ * @param {ts.TypeAliasDeclaration} declaration
+ * @param {ts.TypeChecker} checker
+ * @returns {TypeMember[]}
+ */
+function extractMembersFromTypeAlias(declaration, checker) {
+  if (!ts.isTypeLiteralNode(declaration.type)) {
+    return [];
+  }
+  const type = checker.getTypeAtLocation(declaration);
+
+  return type.getProperties().map(property => {
+    const propertyType = checker.getTypeOfSymbolAtLocation(
+      property,
+      property.valueDeclaration || declaration,
+    );
+    const signatures = propertyType.getCallSignatures();
+    const referencedTypes = [];
+
+    if (signatures.length > 0) {
+      for (const signature of signatures) {
+        const typeParameterNames = new Set();
+        for (const typeParameter of signature.getTypeParameters() || []) {
+          const symbol = typeParameter.getSymbol();
+          if (symbol) {
+            typeParameterNames.add(symbol.getName());
+          }
+        }
+
+        referencedTypes.push(
+          ...extractTypeReferences(
+            checker.getReturnTypeOfSignature(signature),
+            checker,
+            new Set(),
+            typeParameterNames,
+          ),
+        );
+        for (const parameter of signature.getParameters()) {
+          referencedTypes.push(
+            ...extractTypeReferences(
+              checker.getTypeOfSymbolAtLocation(parameter, declaration),
+              checker,
+              new Set(),
+              typeParameterNames,
+            ),
+          );
+        }
+      }
+    } else {
+      referencedTypes.push(...extractTypeReferences(propertyType, checker));
+    }
+
+    return {
+      name: property.getName(),
+      referencedTypes: [...new Set(referencedTypes)],
+      isMethod: signatures.length > 0,
+    };
+  });
+}
+
+/**
  * Collect all type definitions using TypeScript compiler.
  * Scans all source files in src/ that are part of the TypeScript program.
  * @returns {Map<string, TypeDef>}
@@ -346,6 +409,7 @@ function extractMembersFromJSDocTypedef(typedefTag, checker) {
 function collectTypeDefinitions() {
   const program = createProgram();
   const checker = program.getTypeChecker();
+  const sourceRoot = join(packageRoot, 'src');
 
   /** @type {Map<string, TypeDef>} */
   const allTypes = new Map();
@@ -353,6 +417,10 @@ function collectTypeDefinitions() {
   // Get all source files from the program that are in our src/ directory
   for (const sourceFile of program.getSourceFiles()) {
     const filePath = sourceFile.fileName;
+    if (filePath !== sourceRoot && !filePath.startsWith(`${sourceRoot}/`)) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
 
     // Get relative path for storage
     const relativePath = filePath.slice(packageRoot.length + 1);
@@ -370,6 +438,22 @@ function collectTypeDefinitions() {
                 continue;
               }
               const members = extractMembersFromJSDocTypedef(decl, checker);
+              allTypes.set(typeName, {
+                name: typeName,
+                file: relativePath,
+                members,
+              });
+            } else if (ts.isTypeAliasDeclaration(decl)) {
+              const typeName = decl.name.text;
+              const members = extractMembersFromTypeAlias(decl, checker);
+              const existing = allTypes.get(typeName);
+              if (
+                existing &&
+                (existing.members.length > 0 || members.length === 0)
+              ) {
+                // eslint-disable-next-line no-continue
+                continue;
+              }
               allTypes.set(typeName, {
                 name: typeName,
                 file: relativePath,
@@ -495,7 +579,7 @@ function formatTypeForSnapshot(typeDef) {
     for (const prop of properties) {
       const refs =
         prop.referencedTypes.length > 0
-          ? ` → [${prop.referencedTypes.sort().join(', ')}]`
+          ? ` -> [${prop.referencedTypes.sort().join(', ')}]`
           : '';
       const skipped = prop.name.startsWith('_') ? ' (skipped)' : '';
       lines.push(`    - ${prop.name}${refs}${skipped}`);
@@ -507,7 +591,7 @@ function formatTypeForSnapshot(typeDef) {
     for (const method of methods) {
       const refs =
         method.referencedTypes.length > 0
-          ? ` → [${method.referencedTypes.sort().join(', ')}]`
+          ? ` -> [${method.referencedTypes.sort().join(', ')}]`
           : '';
       const skipped = method.name.startsWith('_') ? ' (skipped)' : '';
       lines.push(`    - ${method.name}${refs}${skipped}`);
@@ -560,7 +644,26 @@ function generateApiSnapshot() {
 
 test('public API surface snapshot', t => {
   const snapshot = generateApiSnapshot();
-  t.snapshot(snapshot);
+  // AVA's binary snapshot reader assumes its decoded byte string is a genuine
+  // ArrayBuffer view. Under the immutable-arraybuffer emulation it is instead
+  // an emulated frozen byteArray, so compare with the readable fixture.
+  const expectedReport = readFileSync(
+    join(thisDirname, 'snapshots', 'api-surface.test.js.md'),
+    'utf8',
+  );
+  const actualReport = `# Snapshot report for \`test/api-surface.test.js\`
+
+The actual snapshot is saved in \`api-surface.test.js.snap\`.
+
+Generated by [AVA](https://avajs.dev).
+
+## public API surface snapshot
+
+> Snapshot 1
+
+    \`${snapshot.replaceAll('\n', '␊\n    ')}\`
+`;
+  t.is(actualReport, expectedReport);
 });
 
 test('no internal types leak through public API', t => {

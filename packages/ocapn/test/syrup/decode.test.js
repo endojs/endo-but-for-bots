@@ -4,7 +4,7 @@ import test from '@endo/ses-ava/test.js';
 
 import { decodeSyrup } from '../../src/syrup/js-representation.js';
 import { table } from './_table.js';
-import { throws } from '../_util.js';
+import { normalizeByteArrays, throws } from '../_util.js';
 
 const textEncoder = new TextEncoder();
 
@@ -19,7 +19,7 @@ test('affirmative decode cases', t => {
     t.notThrows(() => {
       actual = decodeSyrup(bytes);
     }, desc);
-    t.deepEqual(actual, value, desc);
+    t.deepEqual(normalizeByteArrays(actual), normalizeByteArrays(value), desc);
   }
 });
 

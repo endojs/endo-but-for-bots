@@ -74,6 +74,35 @@ export const maybeDecode = bytes => {
   }
 };
 
+/**
+ * Normalize immutable byte arrays for AVA's structural comparator, which
+ * otherwise assumes every Uint8Array has a directly readable `.buffer`.
+ * @param {any} value
+ * @returns {any}
+ */
+export const normalizeByteArrays = value => {
+  if (value instanceof Uint8Array) {
+    return [...value];
+  }
+  if (Array.isArray(value)) {
+    return value.map(normalizeByteArrays);
+  }
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    (Object.getPrototypeOf(value) === Object.prototype ||
+      Object.getPrototypeOf(value) === null)
+  ) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        normalizeByteArrays(item),
+      ]),
+    );
+  }
+  return value;
+};
+
 const logErrorCauseChain = (t, error, testName) => {
   const causes = [];
   let current = error;

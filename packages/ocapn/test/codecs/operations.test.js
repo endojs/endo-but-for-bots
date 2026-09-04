@@ -22,7 +22,7 @@ import { makeSyrupWriter } from '../../src/syrup/encode.js';
 
 /**
  * @param {string} hex
- * @returns {ArrayBuffer}
+ * @returns {Uint8Array}
  */
 const hexToImmutableBuffer = hex => bytesToImmutable(decodeHex(hex));
 

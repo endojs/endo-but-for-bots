@@ -1,3 +1,4 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 /**
@@ -153,7 +154,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual(details.swissNum, encodeSwissnum('123'));
+      t.deepEqual([...details.swissNum], [...encodeSwissnum('123')]);
     },
   },
   {
@@ -172,7 +173,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual(details.swissNum, encodeSwissnum('123'));
+      t.deepEqual([...details.swissNum], [...encodeSwissnum('123')]);
     },
   },
   // Tagged objects containing references
@@ -227,7 +228,7 @@ const table = [
         throw Error('SturdyRef has no details');
       }
       t.deepEqual(details.location, exporterLocation);
-      t.deepEqual(details.swissNum, encodeSwissnum('456'));
+      t.deepEqual([...details.swissNum], [...encodeSwissnum('456')]);
     },
   },
 ];

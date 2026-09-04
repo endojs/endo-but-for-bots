@@ -84,14 +84,21 @@ const writeSelectorFromString = (bufferWriter, value) => {
 
 /**
  * @param {import('./buffer-writer.js').BufferWriter} bufferWriter
- * @param {ArrayBufferLike} value
+ * @param {Uint8Array} value
  */
 const writeBytestring = (bufferWriter, value) => {
-  // Convert ArrayBuffer to Uint8Array for internal operations
-  // Immutable ArrayBuffers need to be sliced first
-  const mutableBuffer = value.slice();
-  const bytes = new Uint8Array(mutableBuffer);
-  writeStringlike(bufferWriter, bytes, ':');
+  // A genuine view can be copied from its whole-buffer window directly. The
+  // immutable-arraybuffer emulation reports `ArrayBuffer.isView` as false, but
+  // its `slice()` method likewise returns a fresh mutable byte buffer.
+  if (ArrayBuffer.isView(value)) {
+    const bytes = new Uint8Array(
+      value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
+    );
+    writeStringlike(bufferWriter, bytes, ':');
+    return;
+  }
+  const mutableBuffer = /** @type {Uint8Array} */ (value).slice();
+  writeStringlike(bufferWriter, new Uint8Array(mutableBuffer), ':');
 };
 
 /**
@@ -165,7 +172,7 @@ export class SyrupWriter {
   }
 
   /**
-   * @param {ArrayBufferLike} value
+   * @param {Uint8Array} value
    */
   writeBytestring(value) {
     writeBytestring(this.#bufferWriter, value);

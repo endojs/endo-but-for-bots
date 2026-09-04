@@ -25,6 +25,7 @@
 
 const {
   Array,
+  ArrayBuffer,
   JSON,
   Number,
   Object,
@@ -265,7 +266,13 @@ assert(getTypedArrayToStringTag);
 
 // Exported for tests.
 /**
- * Duplicates packages/marshal/src/helpers/passStyle-helpers.js to avoid a dependency.
+ * Duplicates packages/pass-style/src/passStyle-helpers.js to avoid a dependency.
+ *
+ * A pure, unspoofable brand check for a genuine TypedArray, via the
+ * `%TypedArray%` `[Symbol.toStringTag]` getter — which reads an internal slot
+ * that no ordinary object can forge. It answers only "is this a TypedArray?"
+ * and makes no freeze decision; whether a given TypedArray needs `harden`'s
+ * special freeze path is decided by `isMutableTypedArray` below.
  *
  * @param {unknown} object
  */
@@ -273,6 +280,53 @@ const isTypedArray = object => {
   // The object must pass a brand check or toStringTag will return undefined.
   const tag = apply(getTypedArrayToStringTag, object, []);
   return tag !== undefined;
+};
+
+// Capture the `%TypedArray%` `buffer` getter early so a TypedArray's backing
+// buffer can be read without consulting a possibly-poisoned prototype chain.
+const typedArrayBuffer = getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  'buffer',
+);
+assert(typedArrayBuffer);
+const getTypedArrayBuffer = typedArrayBuffer.get;
+assert(getTypedArrayBuffer);
+
+// Capture the `ArrayBuffer.prototype.immutable` getter early, when the engine
+// (or an already-installed shim) provides one. Where it is absent, no
+// immutable ArrayBuffer can exist, so every TypedArray's buffer is mutable.
+const arrayBufferImmutable =
+  ArrayBuffer === undefined
+    ? undefined
+    : getOwnPropertyDescriptor(ArrayBuffer.prototype, 'immutable');
+const getArrayBufferImmutable =
+  arrayBufferImmutable === undefined ? undefined : arrayBufferImmutable.get;
+
+/**
+ * Decides whether `harden` must take the `freezeTypedArray` carve-out rather
+ * than an ordinary `Object.freeze` for `object`.
+ *
+ * A genuine TypedArray backed by a mutable ArrayBuffer is the only shape whose
+ * permanently-writable indexed elements make `Object.freeze` throw and so
+ * needs the carve-out. A TypedArray over an immutable ArrayBuffer has
+ * non-writable elements and freezes normally, as does a `DataView` — which is
+ * why the brand check is `isTypedArray` (via the `%TypedArray%`
+ * `[Symbol.toStringTag]` getter) and NOT the DataView-inclusive
+ * `ArrayBuffer.isView`. (`byteArray.js` commits to `isView` for a different
+ * question — emulated-vs-native shape on an already-known `Uint8Array` — where
+ * DataViews are already excluded.)
+ *
+ * @param {unknown} object
+ */
+const isMutableTypedArray = object => {
+  if (!isTypedArray(object)) {
+    return false;
+  }
+  if (getArrayBufferImmutable === undefined) {
+    return true;
+  }
+  const buffer = apply(getTypedArrayBuffer, object, []);
+  return apply(getArrayBufferImmutable, buffer, []) !== true;
 };
 
 /**
@@ -374,7 +428,7 @@ export const makeHardener = ({ traversePrototypes = false } = {}) => {
         // therefore this is a valid candidate.
         // Throws if this fails (strict mode).
         // Also throws if the object is an ArrayBuffer or any TypedArray.
-        if (isTypedArray(obj)) {
+        if (isMutableTypedArray(obj)) {
           freezeTypedArray(obj);
         } else {
           freeze(obj);

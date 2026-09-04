@@ -445,6 +445,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/base64@workspace:packages/base64"
   dependencies:
+    "@endo/bytes": "workspace:^"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
     c8: "catalog:dev"
@@ -940,6 +941,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/hex@workspace:packages/hex"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/chacha12": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
@@ -960,6 +962,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/immutable-arraybuffer@workspace:packages/immutable-arraybuffer"
   dependencies:
+    "@endo/harden": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
@@ -1035,11 +1038,14 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/marshal@workspace:packages/marshal"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/common": "workspace:^"
     "@endo/env-options": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/nat": "workspace:^"
@@ -1194,6 +1200,7 @@ __metadata:
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
@@ -1382,7 +1389,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/test262-runner@workspace:packages/test262-runner"
   dependencies:
+    "@endo/bytes": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/hex": "workspace:^"
+    "@endo/immutable-arraybuffer": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     eslint: "catalog:dev"
     ses: "workspace:^"
     test262-harness: "npm:^10.0.0"
