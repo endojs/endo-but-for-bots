@@ -392,6 +392,43 @@ where
 // serving. The poison is a **thread-local**, which is exactly what confines the
 // death to one worker: each in-process XS machine runs on its own dedicated
 // `std::thread`, so poisoning one thread cannot touch another.
+//
+// **Scope of the confinement — read this before assuming full isolation.** The
+// thread-local poison confines the *unwind* and the *pending-death marker*, not
+// every piece of state a dying worker touched. Several `host_*` callbacks
+// operate on **process-wide** `static Mutex<..>` handle tables shared by every
+// in-process worker (`powers/fs.rs` `FILE_MAP`/`DIR_MAP`, `powers/sqlite.rs`
+// `DB_MAP`/`STMT_MAP`, `powers/crypto.rs` `HASHER_MAP`). Before this guard
+// existed, a panic while one of those locks was held aborted the whole process,
+// so a poisoned/torn table was never observed by a live sibling. Now the process
+// survives, and those accessors recover a poisoned lock unconditionally
+// (`.lock().unwrap_or_else(|e| e.into_inner())`), so a panic mid-mutation leaves
+// a half-completed logical operation visible to the *next* worker to take that
+// lock, and the dying worker's still-open native handles (fds, `cap_std::fs::Dir`,
+// `rusqlite::Connection`, hasher state) are **never swept** on worker death —
+// `Supervisor::unregister` clears only routing bookkeeping, not these maps — so
+// they leak for the daemon's lifetime. Per-worker scoping (or a per-worker sweep
+// at teardown) of those tables is deliberate **follow-on** work, not something
+// this guard delivers; see `designs/ironhorse-panic.md` § Scope: "The already-live
+// FFI abort hazard" (shared power-table caveat). Callers must not read the
+// thread-local confinement as isolation of shared handle-table state.
+
+// The entire FFI panic guard rests on `std::panic::catch_unwind` actually
+// catching. Under `panic = "abort"` `catch_unwind` is a documented no-op: the
+// panic aborts the process immediately, restoring exactly the "one worker kills
+// the whole daemon" hazard this guard exists to close — with no compiler error
+// and no test regression (the tests run under the default profile). A later,
+// unrelated `[profile.release] panic = "abort"` (a common binary-size
+// optimization) would silently defeat every guard here fleet-wide. Assert the
+// required strategy at compile time so that mistake is a build failure, not a
+// silent regression (design `designs/ironhorse-panic.md` § Scope: "The
+// already-live FFI abort hazard").
+#[cfg(not(panic = "unwind"))]
+compile_error!(
+    "xsnap's FFI panic guard requires `panic = \"unwind\"`: under `panic = \
+     \"abort\"` catch_unwind is a no-op and a panicking worker aborts the whole \
+     daemon. Do not set `panic = \"abort\"` for any profile that builds this crate."
+);
 
 /// A caught Rust panic from an `extern "C"` callback, recorded as this
 /// worker's pending death. Mirrors the prospective Ironhorse
@@ -1302,6 +1339,22 @@ mod tests {
         // The capture hook recovers the panic!'s source position.
         let location = p.location.expect("a location was captured");
         assert!(location.contains("worker_io.rs"), "location was {location:?}");
+        assert!(!ffi_panicked(), "take clears the marker");
+    }
+
+    #[test]
+    fn ffi_guard_recovers_a_formatted_string_panic_payload() {
+        // Every other panic test uses a bare string literal, whose payload is
+        // `&'static str`; a `panic!` with format arguments boxes a `String`
+        // instead, exercising `panic_payload_message`'s distinct `String`
+        // downcast arm (which the `&str`-only tests leave dead).
+        assert!(take_ffi_panic().is_none(), "start clean");
+        guard_ffi(|| panic!("boom: {}", "formatted"));
+        let p = take_ffi_panic().expect("a formatted-string panic is recorded");
+        assert_eq!(
+            p.message, "boom: formatted",
+            "the String payload must round-trip verbatim, not the fallback"
+        );
         assert!(!ffi_panicked(), "take clears the marker");
     }
 

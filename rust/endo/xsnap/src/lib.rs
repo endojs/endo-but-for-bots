@@ -994,14 +994,23 @@ pub enum XsnapError {
     Io(String),
     Archive(String),
     Bootstrap(String),
-    /// A Rust panic in an `extern "C"` worker callback was caught at the
-    /// FFI boundary and converted into this worker's death, instead of
-    /// aborting the whole daemon process (design `designs/ironhorse-panic.md`
-    /// § Scope: "The already-live FFI abort hazard"). Carries the caught
-    /// panic's message and optional `file:line:col`. The daemon seam maps
-    /// this to `ExecutionOutcome::Panicked` alongside a prospective
-    /// Ironhorse `Halt::Panic(PanicKind::EngineFault)`; here on the live
-    /// C-XS path there is no `Halt` to carry, so the worker-death value is
+    /// A Rust panic was caught and converted into this worker's death instead
+    /// of aborting the whole daemon process (design
+    /// `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort
+    /// hazard"). **Two construction sites share this variant**, so it does *not*
+    /// by itself mean the panic crossed the FFI boundary — read the `message`
+    /// for the site:
+    /// - the per-callback FFI guard (`worker_io::guard_ffi`), which catches a
+    ///   panic *before* it unwinds past an `extern "C"` frame, and records a
+    ///   `file:line:col` `location` via the capture hook; and
+    /// - the machine-thread run-entry net (`inproc.rs`), which catches a panic
+    ///   in pure-Rust crank code that *never crossed an `extern "C"` frame*, and
+    ///   leaves `location` `None`.
+    ///
+    /// Carries the caught panic's message and optional `file:line:col`. The
+    /// daemon seam maps this to `ExecutionOutcome::Panicked` alongside a
+    /// prospective Ironhorse `Halt::Panic(PanicKind::EngineFault)`; here on the
+    /// live C-XS path there is no `Halt` to carry, so the worker-death value is
     /// this error.
     Panicked {
         message: String,
@@ -1016,11 +1025,15 @@ impl std::fmt::Display for XsnapError {
             XsnapError::Io(s) => write!(f, "io: {s}"),
             XsnapError::Archive(s) => write!(f, "archive: {s}"),
             XsnapError::Bootstrap(s) => write!(f, "bootstrap: {s}"),
+            // No "(FFI-guarded)" qualifier: this variant also carries a panic
+            // caught by the non-FFI machine-thread run-entry net (`inproc.rs`),
+            // which never crossed an `extern "C"` frame. The `message` names the
+            // site; the `Display` must not assert an FFI catch for either one.
             XsnapError::Panicked { message, location } => match location {
                 Some(location) => {
-                    write!(f, "worker panicked (FFI-guarded) at {location}: {message}")
+                    write!(f, "worker panicked at {location}: {message}")
                 }
-                None => write!(f, "worker panicked (FFI-guarded): {message}"),
+                None => write!(f, "worker panicked: {message}"),
             },
         }
     }
@@ -1795,6 +1808,27 @@ pub fn run_xs_program(
     // `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort
     // hazard"). Observed at a pure-Rust frame below and converted into
     // `XsnapError::Panicked`, so only this one worker dies.
+    //
+    // The poison-drain contract, stated once for all five checkpoints below:
+    // `worker_io::ffi_panicked()` must be observed *before* every
+    // side-effecting call this run can reach on a poisoned worker, so a
+    // mid-mutation dead worker never commits an effect (a `suspend` snapshot,
+    // a `debug` reply) before its death is seen. In evaluation order the
+    // checkpoints are:
+    //   1. bootstrap-drain (below): before the loop's first blocking `recv`,
+    //      so a death during bootstrap eval is reported, not hung on.
+    //   2. pre-recv (loop top): before the blocking `recv_raw_envelope`.
+    //   3. mid-pump-before-drain: after `run_promise_jobs`, before dispatching
+    //      any envelope this pump iteration.
+    //   4. mid-pump-before-dispatch: inside the drain, before each subsequent
+    //      `handle_envelope`.
+    //   5. post-crank (loop bottom): after the pump, before the meter report.
+    // Each check is `if ffi_panicked() { take; [break 'outer;] }`; the only
+    // variation is that checkpoint 1 falls through (no loop yet). Placement of
+    // each check *before* its guarded effect is the load-bearing invariant;
+    // driving a panic to fire at each specific site needs a Machine-level
+    // panic-injection harness (tracked follow-on; the `guard_ffi` unit suite
+    // pins the poison/short-circuit mechanics these checkpoints consume).
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
 
     // A guarded `extern "C"` callback can panic during *bootstrap eval*
@@ -4848,5 +4882,38 @@ mod tests {
         data.push(0x01);
 
         assert_eq!(decode_meter_config(&data), None);
+    }
+
+    #[test]
+    fn mem_read_rejects_an_overflowing_length() {
+        // `mem_read` switched `s.pos + size` to `checked_add` so a corrupted or
+        // adversarial snapshot `size` cannot wrap `usize` past the bounds check
+        // and index out of range. With `pos` at the top of the address space,
+        // any nonzero `size` overflows and must fail closed with the stream
+        // error code `1`, never write `ptr`, and never panic.
+        //
+        // Clear any poison a prior test on this reused harness thread may have
+        // left, so the guarded body actually runs rather than short-circuiting.
+        let _ = crate::worker_io::take_ffi_panic();
+        let data = [1u8, 2, 3, 4];
+        let mut s = MemReadStream {
+            data: &data,
+            pos: usize::MAX,
+        };
+        let mut dst = [0u8; 1];
+        let rc = unsafe {
+            mem_read(
+                &mut s as *mut _ as *mut c_void,
+                dst.as_mut_ptr() as *mut c_void,
+                1,
+            )
+        };
+        assert_eq!(rc, 1, "an overflowing pos+size must fail closed, not wrap");
+        assert_eq!(dst, [0u8; 1], "a failed read must not write the destination");
+        assert_eq!(s.pos, usize::MAX, "pos must be unchanged on a failed read");
+        assert!(
+            !crate::worker_io::ffi_panicked(),
+            "a bounds failure is a clean error return, not a panic",
+        );
     }
 }
