@@ -85,6 +85,30 @@ fn a_sparse_source_within_bounds_reads_its_holes_as_undefined() {
 }
 
 #[test]
+fn the_array_snapshot_precedes_element_coercion() {
+    // The snapshot exists so `IteratorToList` materializes every source value
+    // BEFORE any element coercion runs (test262
+    // `iterated-array-changed-by-tonumber`): a `valueOf` that mutates the
+    // source mid-copy must not change later reads. The fix snapshots the
+    // source's PRESENT items (a clone of the sparse map) rather than a dense
+    // `0..length` `Vec<Slot>`, keeping the snapshot proportional to stored
+    // elements — but the observable immunity locked here is unchanged. Read of
+    // index 1 must be the pre-mutation `2`, not the `99` the coercion of index
+    // 0 wrote back into the source.
+    completes_with(
+        "var a = [ { valueOf: function(){ a[1] = 99; return 1; } }, 2 ]; \
+         new Uint8Array(a)[1]",
+        "2",
+    );
+    // And index 0 still takes the coerced value the `valueOf` returned.
+    completes_with(
+        "var a = [ { valueOf: function(){ a[1] = 99; return 7; } }, 2 ]; \
+         new Uint8Array(a)[0]",
+        "7",
+    );
+}
+
+#[test]
 fn a_dense_array_and_a_source_view_still_copy() {
     // The restructuring rewrote both source arms; keep each one covered
     // here so a regression names itself without the oracle.
