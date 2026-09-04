@@ -116,9 +116,20 @@ protocol generation from satisfying the current operation.
 
 For `build` and `switch`, `configFingerprint` binds the request to the exact
 checkout contents seen at publication time.
-Walk entries in JavaScript string-code-unit order, omit any entry named `.git`
-at every depth rather than only at the checkout root, and reject symlinks and
-special files.
+Walk the tree in pre-order: within one directory, visit entries in JavaScript
+string-code-unit order by entry NAME, and hash everything beneath a directory
+immediately after that directory's own entry, before the directory's next
+sibling.
+Omit any entry named `.git` at every depth rather than only at the checkout
+root, and reject symlinks and special files.
+
+Pre-order is not the same as sorting whole relative paths, and the difference
+is reachable in an ordinary flake checkout: for a directory `a/` beside a file
+`a.nix`, this walk emits `a`, `a/z`, `a.nix`, because it orders the two
+siblings by the names `a` and `a.nix`, while a global path sort emits `a`,
+`a.nix`, `a/z`, because `.` (U+002E) sorts before `/` (U+002F).
+The two readings yield different digests, and a service that picks the wrong
+one rejects every apply.
 The capability refuses to write through such a path for the same reason, so no
 content it can edit is outside the digest.
 For each directory and regular file, hash its type (`d` or `f`), relative UTF-8
@@ -129,8 +140,9 @@ For a regular file, immediately append
 Including directories and mode bits prevents an empty directory or executable
 bit from changing the Nix input without changing the digest.
 
-The known-answer tree below gives independent implementations a compatibility
-check (the checkout root itself is not an entry):
+The known-answer trees below give independent implementations a compatibility
+check (the checkout root itself is not an entry).
+The first pins the encoding:
 
 ```text
 a.nix       regular file, mode 0644, content "abc\n"
@@ -139,6 +151,23 @@ empty/      directory, mode 0755
 
 Its digest is
 `fcedad18db84adbaf8935ae34ce543e024d36160a79125aaac195e25c5336dd2`.
+
+The first vector alone does not pin the walk, because a directory with no
+children hashes the same either way.
+The second vector does, and an implementation that agrees on the first but not
+the second has sorted whole paths instead of walking in pre-order:
+
+```text
+a/          directory, mode 0755
+a/z         regular file, mode 0644, content "Z\n"
+a.nix       regular file, mode 0644, content "N\n"
+```
+
+Its digest is
+`3f59551861a24694d5db058011466041f8d26bbc57092be96079c576ae2cdc1d`.
+A global path sort of that same tree yields
+`a2782dc546b206b1a40ad66a85723d4b06502fc1886c78db21514bba705c5235`, which is
+the wrong answer.
 For `rollback`, this field is `null`.
 The service must reproduce the digest in a race-free staging area, build only
 that content, and reject a mismatch; it must never sweep later checkout edits
