@@ -120,7 +120,7 @@ along the seam endo-fs-backend-seam already built, the consolidated
 CAS surface as `@endo/cas` + `@endo/cas-node` + `@endo/exo-cas`, and
 `@endo/proc-node` standing alone (Node-bound, so it carries the
 `-node` suffix); the endo/exo boundary rule is "guards
-and exo makers live only in the exo package", mirroring
+and exo makers live only in the exo package," mirroring
 http-confine / exo-http-client; `@endo/platform` becomes a
 deprecated umbrella of one-line re-export shims per the
 inter-package-plain-re-exports staging, removed at next major; runs
@@ -527,6 +527,10 @@ from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
 
+The 2026-09-04 rebase adds
+[platform-dimension-packages](platform-dimension-packages.md) (Not Started)
+to M3, increasing Not Started by one and the design count by one.
+
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
@@ -719,6 +723,7 @@ flowchart TD
     subgraph Capability System
         dsand[endo-posix-sandbox<br/><i>IN PROGRESS</i>]
         pfs[platform-fs<br/><i>COMPLETE</i>]
+        pdimpkg[platform-dimension-packages]
         dfs[daemon-capability-filesystem<br/><i>REFERENCE</i>]
         dmount[daemon-mount<br/><i>IN PROGRESS</i>]
         dmcap[daemon-mount-capabilities]
@@ -746,6 +751,7 @@ flowchart TD
         dsqli[daemon-endor-sqlite-iterate-streaming<br/><i>PROPOSED</i>]
         egitcas[endor-git-bindings<br/><i>PROPOSED</i>]
         errun[endor-run-expanded<br/><i>IN PROGRESS</i>]
+        pfs --> pdimpkg
         pfs --> dfs
         pfs --> dmount
         dmount --> dmcap
@@ -1643,7 +1649,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | agentry-git-eval-scenarios | S-M | 2-3 days for `conflict-rebase`; stack-surgery fixture/scorer now, live row waits on verb-gaps | 3 | Canonical git code-mode eval set for `@endo/agentry`: `stage-and-commit`, `conflict-rebase` with current `Git` and workspace caps, and `stack-surgery` as the dense scenario whose live activation waits on cherry-pick, amend, reword, autosquash, and conflict-side selection. |
 | exo-git-follow-root-advancement | M-L | 1-1.5 weeks | 3 | `@endo/platform/fs` tree identity, snapshots, atomic mutators, change/latest followers, high-level patching, and conformance across in-memory/native/composed adapters; `GitStage` tentative metadata, mutable roots, explicit commit, stale-base checks, matching Git followers, declarations, attenuation, and recovery |
 | ~~platform-fs~~ | S-M | — | 3 | ✅ Complete; `@endo/platform` package landed on `llm` (commit `e0dda06fb`); PR #122 carried review-cycle fixups |
-| platform-dimension-packages | L | 1-2 weeks | 3 | Split `@endo/platform` into nine focused endo/exo packages plus a deprecated re-export umbrella; mostly-mechanical moves along the endo-fs-backend-seam layers, run as a serial five-child orchestration (proc, fs trio, cas trio, extended pair, consumer repoint sweep) with repo-wide build/lint/test green per child |
+| platform-dimension-packages | L | 1-2 weeks | 3 | Split `@endo/platform` into nine focused endo/exo packages plus a deprecated re-export umbrella; mostly mechanical moves along the endo-fs-backend-seam layers, run as a serial five-child orchestration (proc, fs trio, cas trio, extended pair, consumer repoint sweep) with repo-wide build/lint/test green per child |
 | daemon-capability-filesystem | L | — | 3 | Reference sketch; narrower mount slice ships via daemon-mount |
 | ~~daemon-content-store-gc~~ | S | — | 3 | ✅ Complete (PR #99, ~2 days actual vs 1 day estimate) |
 | daemon-mount | M-L | 1.5 weeks | 3 | Mount exo, symlink confinement; Phase 4 in PR #135 forwarded under bot |
