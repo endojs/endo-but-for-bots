@@ -127,3 +127,17 @@ fn object_keys_excludes_symbol_keys() {
     assert_result_agrees("var s = Symbol(); var o = {}; o[s] = 3; Object.keys(o).length");
     assert_result_agrees("var s = Symbol(); var o = { a: 1 }; o[s] = 3; Object.keys(o)[0]");
 }
+
+#[test]
+fn get_own_property_descriptor_on_a_symbol_receiver_is_undefined() {
+    // `Object.getOwnPropertyDescriptor(sym, k)` ToObject-wraps the symbol in a
+    // Symbol exotic with NO own properties, so `[[GetOwnProperty]]` is
+    // `undefined` for every key. A `Symbol` is `Kind::Symbol` +
+    // `Payload::Reference(descriptor)`, so an unguarded `Payload::Reference`
+    // arm would instead narrow the symbol to its internal descriptor slot and
+    // probe THAT — a latent divergence this locks against. (`String(...)`
+    // renders the `undefined` result so the dual-run compares a primitive.)
+    assert_result_agrees("String(Object.getOwnPropertyDescriptor(Symbol('a'), 'x'))");
+    assert_result_agrees("var s=Symbol('a'); typeof Object.getOwnPropertyDescriptor(s, 'description')");
+    assert_result_agrees("Object.getOwnPropertyDescriptor(Symbol.iterator, 'toString') === undefined");
+}
