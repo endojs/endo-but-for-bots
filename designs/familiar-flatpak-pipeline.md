@@ -67,6 +67,16 @@ the end user installs a prebuilt bundle and never runs the builder.
 
 ### Where the Familiar's Data Lives
 
+This section argues in vocabulary the manifest sections below define in
+full, so two definitions up front: the **manifest**
+(`org.endojs.Familiar.json`, § Manifest Shape) is the Flatpak build's
+declaration of the app, and its **`finish-args`** list (§ Finish-Args) is
+the set of sandbox holes the app is *granted* at runtime — each entry a
+**grant**, and a `--filesystem=<token>` grant in particular maps a host
+directory into the otherwise-private sandbox. The claim of this section is
+that the Familiar's data needs *no* `--filesystem` grant; the sections
+below justify each grant it *does* take.
+
 This is the single load-bearing statement of the packaged Familiar's
 storage model; every claim about grants, reset gestures, and smoke
 steps below derives from it.
@@ -107,10 +117,27 @@ same app, while Flatpak's `$XDG_RUNTIME_DIR` is per-*instance*. A second
 `flatpak run` therefore does not see the first instance's CapTP socket (it lives
 in the first instance's private runtime dir) and can start a **second daemon
 over the same per-app state directory**. The `.zip` status quo cannot produce
-this (its shared host runtime dir lets the second launch find the socket). The
-MVR posture accepts a single-instance usage assumption and tracks the hardening
-(an Electron `requestSingleInstanceLock`, or an `ENDO_ADDR`/socket liveness
-check in `launcher.sh`) in § Known Gaps and TODOs below.
+this (its shared host runtime dir lets the second launch find the socket).
+
+**This is a normal quit-and-relaunch hazard, not a deliberate-double-launch
+edge case, because the daemon deliberately outlives the window.**
+`daemon-manager.js` spawns the daemon `detached: true` and `unref()`s it
+([daemon-manager.js](../packages/familiar/src/daemon-manager.js)), and
+`electron-main.js`'s quit path is explicit that "Daemon continues running after
+quit; nothing to clean up"
+([electron-main.js](../packages/familiar/electron-main.js)). Under Flatpak a
+running member process keeps the app *instance* alive, so closing the window
+does **not** tear the instance down: the detached daemon survives, and its
+per-instance `$XDG_RUNTIME_DIR` (socket and PID files) survives with it — the
+ephemeral tmpfs is *not* reclaimed at window-close on the ordinary path. A
+relaunch then spawns a *new* instance with a *new* runtime dir that cannot see
+the surviving daemon's socket, and starts the second daemon over the shared
+per-app state. So ordinary quit-then-reopen, not a deliberate double `flatpak
+run`, is what triggers the two-daemon collision. The MVR posture accepts a
+single-instance usage assumption for the interim, but the hardening (an Electron
+`requestSingleInstanceLock`, or an `ENDO_ADDR`/socket liveness check in
+`launcher.sh`) is therefore a normal-path defect to close, not an edge-case
+nicety; it is tracked in § Known Gaps and TODOs below.
 
 The consequence for the manifest is decisive: adding
 `--filesystem=xdg-run/endo` or `xdg-cache/endo`
@@ -129,9 +156,13 @@ The one pin the design *does* contemplate is network-side: an ephemeral
 `ENDO_ADDR` port so the gateway does not collide on the host's fixed
 `127.0.0.1:8920` (§ Finish-Args, `--share=network`; § Known Gaps and TODOs).
 The reset gesture is `flatpak uninstall --user org.endojs.Familiar` plus
-`rm -rf ~/.var/app/org.endojs.Familiar` (the ephemeral socket / PID
-tmpfs is discarded on exit), and the CI clean-state step is the same
-`rm -rf`.
+`rm -rf ~/.var/app/org.endojs.Familiar`; the CI clean-state step is the same
+`rm -rf`. (The per-instance socket / PID tmpfs is reclaimed only when the
+instance ends, i.e. when the detached daemon exits — not at window-close, since
+the daemon deliberately survives quit, per the two-instance note above. The
+`rm -rf` targets the persistent per-app `$HOME`, which is what a reset must
+clear; the ephemeral runtime dir is torn down with the last surviving daemon and
+needs no separate wipe.)
 
 ## Status Quo
 
@@ -274,8 +305,8 @@ that the Familiar's existing implementation already exercises:
 |---|---|
 | `--share=ipc` | Chromium under X11 uses the MIT-SHM extension to share pixmap memory with the host X server; the shared IPC namespace is required for that shared-memory path under `--socket=fallback-x11`. Without it Chromium's X11 renderer path degrades or errors. |
 | `--share=network` | The bundled `lal` agent issues outbound `fetch` requests against `https://api.anthropic.com/`, `https://api.openai.com/`, and a user-configured LLM endpoint ([familiar-release.md](familiar-release.md) § G12). This grant also removes the sandbox's loopback isolation, so the gateway's fixed `127.0.0.1:8920` bind ([daemon-manager.js](../packages/familiar/src/daemon-manager.js)) sits on the host's loopback alongside any host Endo daemon. **Disposition of that widening:** the daemon rejects at start if the gateway cannot bind ([manager-node.js](../packages/daemon/src/manager-node.js), the start-time bind invariant), so a host `endo` daemon already on `8920`, or a second Familiar instance, makes the sandboxed app *fail to start* rather than silently cross wires. The MVR posture accepts a no-host-daemon assumption; the hardening is an ephemeral `ENDO_ADDR` port pinned in `launcher.sh` (`getGatewayAddress` already reads the daemon-written `gateway` file), tracked in § Known Gaps and TODOs. |
-| `--socket=fallback-x11` | X11 fallback when the host is on Xorg (older distros, NVIDIA-on-Wayland workarounds). |
-| `--socket=wayland` | Wayland is the default on modern distros (Fedora, recent Ubuntu, Pop!_OS). |
+| `--socket=fallback-x11` | X11 fallback when the host is on Xorg (older distros, NVIDIA-on-Wayland workarounds). `fallback-x11` withholds the X socket precisely when Wayland is granted and available, so this row is inert on a Wayland host unless the app actually selects Wayland (next row). |
+| `--socket=wayland` | Wayland is the default on modern distros (Fedora, recent Ubuntu, Pop!_OS). This grant is *only* effective because `launcher.sh` passes `--ozone-platform-hint=auto` (§ Launcher and Metadata Files): Electron 43 still defaults to X11 unless given that ozone hint, and with `fallback-x11` withholding the X socket on a Wayland host, the grant without the hint would leave the app with a Wayland socket it never selects and no X socket. The hint makes the app select Wayland when present and fall back to XWayland otherwise. |
 | `--device=dri` | GPU acceleration for the Chromium renderer; without it Electron falls back to swrast and the chat UI's text rendering becomes janky. |
 
 The Endo state, cache, CapTP socket, and PID paths need **no**
@@ -339,9 +370,19 @@ packages/familiar/flatpak/
 # Lives"). Pinning ENDO_SOCK or the XDG roots would only risk
 # diverging from those already-correct defaults.
 #
+# --ozone-platform-hint=auto is required, not cosmetic: the manifest
+# grants --socket=wayland alongside --socket=fallback-x11, and
+# fallback-x11 withholds the X socket exactly when Wayland is granted
+# and available. Electron still defaults to X11 unless given an ozone
+# hint, so without this flag the app on a Wayland host (Fedora, recent
+# Ubuntu) gets a Wayland socket it never selects and no X socket, and
+# fails to start on the design's stated default platform. `auto`
+# selects Wayland when present and falls back to X11/XWayland
+# otherwise, matching the two granted sockets.
+#
 # zypak intercepts Chromium's namespace-sandbox calls and routes them
 # through Flatpak's bwrap, which is the host's setuid binary.
-exec zypak-wrapper /app/familiar/Familiar "$@"
+exec zypak-wrapper /app/familiar/Familiar --ozone-platform-hint=auto "$@"
 ```
 
 The launcher's `/app/familiar/Familiar` binary name depends on the
@@ -1083,11 +1124,14 @@ MVR-followups phase budget; phase 5 is post-MVR-followups.
   `endo` daemon on the fixed `127.0.0.1:8920` (§ Finish-Args, `--share=network`).
   `getGatewayAddress` already reads the daemon-written `gateway` file, so the UI
   follows the pinned port.
-- [ ] Handle the two-instance case (§ Where the Familiar's Data Lives): a second
-  `flatpak run` starts a second daemon over the shared per-app state, because
-  `$XDG_RUNTIME_DIR` (and hence the CapTP socket) is per-instance. Add an
-  Electron `requestSingleInstanceLock`, or a socket/`ENDO_ADDR` liveness check in
-  `launcher.sh`.
+- [ ] Handle the two-instance case (§ Where the Familiar's Data Lives). This is a
+  **normal quit-and-relaunch defect**, not a deliberate-double-launch edge case:
+  the daemon is spawned `detached`/`unref()` and outlives quit, so an ordinary
+  reopen makes a new instance whose per-instance `$XDG_RUNTIME_DIR` cannot see
+  the surviving daemon's CapTP socket, starting a second daemon over the shared
+  per-app state. Add an Electron `requestSingleInstanceLock`, or a
+  socket/`ENDO_ADDR` liveness check in `launcher.sh`. Should land with (or ahead
+  of) the shipping Flatpak, since the trigger is the common usage path.
 - [ ] Confirm on a real clean Linux host that Flatpak's per-app `$HOME`
   and `$XDG_RUNTIME_DIR` make the daemon's full write surface
   app-private, that is, that no daemon path resolves through `whereEndoData`
