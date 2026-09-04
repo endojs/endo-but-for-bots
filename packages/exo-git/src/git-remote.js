@@ -180,8 +180,9 @@ export const makeGitRemoteEndpoint = ({
   /**
    * Report whether the credential this endpoint would push with is usable,
    * WITHOUT using it. A credential holds its material in process memory, so a
-   * daemon restart leaves the record revoked and the next push is the first
-   * thing that says so (forge issue #21). A holder can now ask first.
+   * daemon restart leaves the record revoked with its material unavailable,
+   * and the next push was the first thing that said so. A holder can now ask
+   * first.
    *
    * @returns {RemoteCredentialHealth}
    */

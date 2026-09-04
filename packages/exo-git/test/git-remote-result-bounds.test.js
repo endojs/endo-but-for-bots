@@ -10,7 +10,7 @@
  * `../src/interfaces.js`.
  *
  * @import { GitBackend } from '../src/git.js'
- * @import { GitRef, RemotePolicy } from '../src/types.js'
+ * @import { GitRef, GitRemote, RemotePolicy } from '../src/types.js'
  */
 
 import test from '@endo/ses-ava/prepare-endo.js';
@@ -523,39 +523,49 @@ test('audit log normalizes non-string rejection values before truncating', async
 
 // #region guard structurally rejects an unbounded result (defense in depth)
 
-test('GitRemoteInterface rejects a fetch result whose text exceeds the guard ceiling', async t => {
-  const exo = makeExo('GitRemote', GitRemoteInterface, {
+/**
+ * A `GitRemote` exo whose methods are all stubs except the ones a test
+ * supplies, so the guard — not the implementation — is what the test
+ * exercises. Every method `GitRemoteInterface` advertises must be present or
+ * `makeExo` rejects the behavior, so building the full set here keeps adding
+ * a method to the interface from rippling through each test below.
+ *
+ * The override values are deliberately untyped: several tests below return
+ * records the `GitRemote` type forbids, precisely to prove the runtime guard
+ * rejects them independently of the compiler. Only the method *names* are
+ * checked, so a typo still fails to compile rather than silently stubbing.
+ *
+ * @param {Partial<Record<keyof GitRemote, (...args: any[]) => any>>} overrides
+ * @returns {GitRemote}
+ */
+const makeStubGitRemote = overrides => {
+  const notNeeded = async () => {
+    throw new Error('not needed');
+  };
+  return makeExo('GitRemote', GitRemoteInterface, {
     help: () => '',
-    inspect: async () => {
-      throw new Error('not needed');
-    },
-    credentialHealth: async () => {
-      throw new Error('not needed');
-    },
+    inspect: notNeeded,
+    credentialHealth: notNeeded,
+    fetch: notNeeded,
+    pull: notNeeded,
+    push: notNeeded,
+    ...overrides,
+  });
+};
+
+test('GitRemoteInterface rejects a fetch result whose text exceeds the guard ceiling', async t => {
+  const exo = makeStubGitRemote({
     fetch: async () =>
       harden({
         updatedRefs: harden([]),
         text: 'x'.repeat(DEFAULT_REMOTE_TEXT_LIMIT + 1),
       }),
-    pull: async () => {
-      throw new Error('not needed');
-    },
-    push: async () => {
-      throw new Error('not needed');
-    },
   });
   await t.throwsAsync(E(exo).fetch());
 });
 
 test('GitRemoteInterface rejects a fetch result whose updatedRefs exceeds the guard ceiling', async t => {
-  const exo = makeExo('GitRemote', GitRemoteInterface, {
-    help: () => '',
-    inspect: async () => {
-      throw new Error('not needed');
-    },
-    credentialHealth: async () => {
-      throw new Error('not needed');
-    },
+  const exo = makeStubGitRemote({
     fetch: async () =>
       harden({
         updatedRefs: harden(
@@ -570,25 +580,12 @@ test('GitRemoteInterface rejects a fetch result whose updatedRefs exceeds the gu
         ),
         text: 'ok',
       }),
-    pull: async () => {
-      throw new Error('not needed');
-    },
-    push: async () => {
-      throw new Error('not needed');
-    },
   });
   await t.throwsAsync(E(exo).fetch());
 });
 
 test('GitRemoteInterface accepts a fetch result exactly at the guard ceiling', async t => {
-  const exo = makeExo('GitRemote', GitRemoteInterface, {
-    help: () => '',
-    inspect: async () => {
-      throw new Error('not needed');
-    },
-    credentialHealth: async () => {
-      throw new Error('not needed');
-    },
+  const exo = makeStubGitRemote({
     fetch: async () =>
       harden({
         updatedRefs: harden(
@@ -601,16 +598,75 @@ test('GitRemoteInterface accepts a fetch result exactly at the guard ceiling', a
         ),
         text: 'x'.repeat(DEFAULT_REMOTE_TEXT_LIMIT),
       }),
-    pull: async () => {
-      throw new Error('not needed');
-    },
-    push: async () => {
-      throw new Error('not needed');
-    },
   });
   const result = await E(exo).fetch();
   t.is(result.updatedRefs.length, DEFAULT_REMOTE_UPDATED_REFS_LIMIT);
   t.is(result.text.length, DEFAULT_REMOTE_TEXT_LIMIT);
+});
+
+// `RemoteCredentialHealthShape` is a two-armed union, not one record with
+// optional fields: the arms are what keep `kind`/`audience` unreachable
+// without `required: true`, and the empty rest pattern of each arm is what
+// keeps credential material from riding along.
+test('GitRemoteInterface rejects credential health that mixes the two arms', async t => {
+  const exo = makeStubGitRemote({
+    credentialHealth: async () =>
+      harden({
+        required: false,
+        kind: 'bearer',
+        audience: 'https://github.com',
+        available: true,
+        revoked: false,
+      }),
+  });
+  await t.throwsAsync(E(exo).credentialHealth());
+});
+
+test('GitRemoteInterface rejects credential health that omits liveness when required', async t => {
+  const exo = makeStubGitRemote({
+    credentialHealth: async () => harden({ required: true }),
+  });
+  await t.throwsAsync(E(exo).credentialHealth());
+});
+
+test('GitRemoteInterface rejects credential health carrying material', async t => {
+  const exo = makeStubGitRemote({
+    credentialHealth: async () =>
+      harden({
+        required: true,
+        kind: 'bearer',
+        audience: 'https://github.com',
+        available: true,
+        revoked: false,
+        material: harden({ token: 'test-token' }),
+      }),
+  });
+  await t.throwsAsync(E(exo).credentialHealth());
+});
+
+test('GitRemoteInterface accepts each credential health arm exactly', async t => {
+  const absent = makeStubGitRemote({
+    credentialHealth: async () => harden({ required: false }),
+  });
+  t.deepEqual(await E(absent).credentialHealth(), { required: false });
+
+  const present = makeStubGitRemote({
+    credentialHealth: async () =>
+      harden({
+        required: true,
+        kind: 'bearer',
+        audience: 'https://github.com',
+        available: true,
+        revoked: false,
+      }),
+  });
+  t.deepEqual(await E(present).credentialHealth(), {
+    required: true,
+    kind: 'bearer',
+    audience: 'https://github.com',
+    available: true,
+    revoked: false,
+  });
 });
 
 // #endregion

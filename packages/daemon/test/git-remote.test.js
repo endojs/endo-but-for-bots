@@ -426,24 +426,51 @@ test('GitRemote reports credential health before a push fails on it', async t =>
     },
   });
 
-  t.like(await E(remote).credentialHealth(), {
+  const live = await E(remote).credentialHealth();
+  t.deepEqual(live, {
     required: true,
+    kind: 'bearer',
+    audience: 'https://github.com',
     available: true,
     revoked: false,
   });
+  // The leak check has to run while there is material to leak: after the
+  // revoke below the token is gone from the record either way.
+  t.false(JSON.stringify(live).includes('test-token'));
 
   // A daemon restart leaves the record revoked with its material gone.
   // Before this method, the next push was the first thing that said so.
   revokeGitCredential(credential);
-  t.like(await E(remote).credentialHealth(), {
+  t.deepEqual(await E(remote).credentialHealth(), {
     required: true,
+    kind: 'bearer',
+    audience: 'https://github.com',
     available: false,
     revoked: true,
   });
+});
 
-  t.false(
-    JSON.stringify(await E(remote).credentialHealth()).includes('test-token'),
-  );
+test('GitRemote credential health is `required: false` and nothing else for a credential-free remote', async t => {
+  const backend = harden({ ...makeNotYetImplementedBackend() });
+  const git = makeGit({ mount: makeFakeGitMount(), backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    policy: {
+      url: 'file:///tmp/repo.git',
+      allowedDirections: ['fetch'],
+      fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+      pushRefspecs: [],
+      allowLocalFileTransport: true,
+    },
+  });
+
+  // The `required: false` arm is the whole record: a remote that needs no
+  // credential has no liveness to report, and the guard's rest pattern is the
+  // empty record, so a stray `kind`/`audience` here would not reach a caller.
+  t.deepEqual(await E(remote).credentialHealth(), { required: false });
 });
 
 test('GitRemote passes HTTPS credential material to backend transport only', async t => {
