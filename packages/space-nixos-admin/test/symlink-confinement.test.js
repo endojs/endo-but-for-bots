@@ -122,3 +122,43 @@ test('a non-directory parent still reads as an absent target, not an error', asy
   const result = await admin.revertFiles([{ path: 'plain/below', text: null }]);
   t.deepEqual(result.paths, ['plain/below']);
 });
+
+test('a stray symlink in the checkout is removable, and only the link goes', async t => {
+  // `fingerprintConfig` refuses to fingerprint a checkout containing a
+  // symlink, so one stray `result` link from a manual `nix build` — or a link
+  // carried by the config repo — blocks every `build` and `apply`. Refusing
+  // the FINAL component on removal too left no in-band way out: the capability
+  // was bricked until someone fixed it as root, outside Endo. `rm` deletes a
+  // final-component link rather than following it, whether it points at a file
+  // or a directory, so allowing exactly that is safe and restores the hatch.
+  const { admin, configDir, outside } = await makeCheckoutWithEscapeLink(t);
+
+  const result = await admin.revertFiles([{ path: 'escape', text: null }]);
+  t.deepEqual(result.paths, ['escape']);
+  await t.throwsAsync(
+    () => access(join(configDir, 'escape')),
+    { code: 'ENOENT' },
+    'the link itself is gone',
+  );
+  await t.notThrowsAsync(
+    () => access(outside),
+    'the directory it pointed at survives',
+  );
+  await t.notThrowsAsync(
+    () => access(join(outside, 'secret')),
+    'and so does everything under it',
+  );
+});
+
+test('relaxing the final component does not relax the parents', async t => {
+  // The hatch is exactly one component wide. A link used as a PARENT is still
+  // refused on removal, which is the confinement property the sibling tests
+  // above pin down.
+  const { admin, outside } = await makeCheckoutWithEscapeLink(t);
+
+  await t.throwsAsync(
+    () => admin.revertFiles([{ path: 'escape/secret', text: null }]),
+    { message: /Refusing to follow config symlink/ },
+  );
+  await t.notThrowsAsync(() => access(join(outside, 'secret')));
+});
