@@ -137,7 +137,7 @@ export type GitMountToolCapability = Pick<ReadOnlyEndoGit, 'status'>;
  */
 export type GitRemoteToolCapability = Pick<
   GitRemote,
-  'inspect' | 'fetch' | 'pull' | 'push'
+  'inspect' | 'credentialHealth' | 'fetch' | 'pull' | 'push'
 >;
 
 export interface ToolSpec {
