@@ -527,6 +527,10 @@ export const makeRequestSignal = ({ timeoutMs, cancellation }) => {
       () => controller.abort(),
     );
   }
+  // Object.freeze, not freeze: the shallow freeze is load-bearing. Deep
+  // hardening reaches the host AbortSignal, and `controller.abort()` then
+  // throws `Cannot assign to read only property 'Symbol(kAborted)'`. Same
+  // hazard that snapshotResponse avoids for the transport response.
   return Object.freeze({
     signal: controller.signal,
     dispose: () => {
