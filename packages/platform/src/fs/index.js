@@ -1,6 +1,7 @@
 // @ts-check
 
 export {
+  looksLikeReadableBlob,
   readableBlobMethodGuards,
   readableTreeMethodGuards,
   readableNameHubMethodGuards,

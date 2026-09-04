@@ -21,6 +21,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
+import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 import { makeInMemoryFilesystem } from '@endo/platform/fs/extended/in-memory.js';
 import { readOnly } from '@endo/platform/fs/extended/readonly.js';
 import { makeLayer } from '@endo/platform/fs/extended/layer.js';
@@ -291,18 +292,11 @@ const probeMountChildType = async cap => {
     const methods = await E(cap).__getMethodNames__();
     const names = new Set(methods);
     if (names.has('lookup')) return 'directory';
-    // `text` is the discriminating file marker; a bare `stream` is not (it is
-    // the generic byte-stream method shared with readers/writers and
-    // `HttpResponse`), so pair it with a read-side blob marker — `getInfo` or
-    // `readReturnPattern`, with `readPattern` absent to exclude a generic value
-    // `PassableReader`.
-    if (
-      names.has('text') ||
-      (names.has('stream') &&
-        !names.has('readPattern') &&
-        (names.has('getInfo') || names.has('readReturnPattern')))
-    )
-      return 'file';
+    // `looksLikeReadableBlob` (the one exported discriminator) admits the `text`
+    // whole-value read surface plus the `getInfo`/`readReturnPattern` byte-read
+    // markers, and rejects a bare `stream` (the generic method shared with
+    // readers/writers and `HttpResponse`).
+    if (looksLikeReadableBlob(methods)) return 'file';
     if (names.has('worktree') && names.has('status') && names.has('commit')) {
       return 'git';
     }
