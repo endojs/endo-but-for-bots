@@ -1392,6 +1392,7 @@ __metadata:
     "@endo/bytes": "workspace:^"
     "@endo/compartment-mapper": "workspace:^"
     "@endo/eventual-send": "workspace:^"
+    "@endo/hex": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/pass-style": "workspace:^"
     eslint: "catalog:dev"
