@@ -19,6 +19,7 @@ import {
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
+import { looksLikeReadableBlob } from '@endo/platform/fs/lite';
 import {
   assertPetName,
   assertPetNamePath,
@@ -1592,17 +1593,14 @@ export const makeHostMaker = ({
         }
         // `stream` alone no longer discriminates a blob (it is the generic
         // byte-stream method name shared with readers/writers and
-        // `HttpResponse`); a genuine file child also carries the `getInfo`
-        // content-address surface — or `readReturnPattern` for a raw
-        // `PassableBytesReader` — which those non-blob stream-bearers lack. A
-        // generic value `PassableReader` shares `readReturnPattern`, so it is
-        // excluded by requiring `readPattern` to be absent.
+        // `HttpResponse`). `looksLikeReadableBlob` (`@endo/platform/fs/lite`) is
+        // the one exported discriminator: it admits the canonical `text`
+        // whole-value read surface plus the `getInfo`/`readReturnPattern`
+        // byte-read markers, and excludes a writer and a generic value
+        // `PassableReader`.
         const looksLikeBlob =
           kind === undefined
-            ? methodNames.includes('stream') &&
-              !methodNames.includes('readPattern') &&
-              (methodNames.includes('getInfo') ||
-                methodNames.includes('readReturnPattern'))
+            ? looksLikeReadableBlob(methodNames)
             : kind === 'file';
         const looksLikeTree =
           kind === undefined

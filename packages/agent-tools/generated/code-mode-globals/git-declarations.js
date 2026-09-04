@@ -150,7 +150,13 @@ type GitQid<K = GitNodeKind> = {
     version: bigint;
 };
 type GitReadableBlobSource = {
+    text: (...args: any[]) => PromiseLike<unknown>;
+} | {
     stream: (...args: any[]) => PromiseLike<unknown>;
+    getInfo: (...args: any[]) => PromiseLike<unknown>;
+} | {
+    stream: (...args: any[]) => PromiseLike<unknown>;
+    readReturnPattern: (...args: any[]) => unknown;
 };
 type GitLiteReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
