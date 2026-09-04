@@ -5603,6 +5603,145 @@ testNeedsNodeWorker(
   },
 );
 
+// --- Gateway retention-set authorization (security) ---
+//
+// `followRetentionSet(node)` reveals the formula numbers a node's formulas
+// carry.  `provide` is safe only while local formula numbers stay secret, so a
+// caller must never be able to enumerate the local node's formula index, and
+// an authenticated peer must be confined to its own node's set.  These tests
+// drive the daemon's own greeter/gateway over the local socket — the same
+// objects an inbound OCapN peer reaches via `hello` — so they exercise the
+// real authorization path without standing up a second daemon.
+
+/**
+ * Connect to a running daemon and take its raw local bootstrap (the `Endo`
+ * object), which exposes `nodeId`, `greeter`, and `gateway` — the surface a
+ * peer connection is built from.
+ *
+ * @param {ReturnType<makeConfig>} config
+ * @param {Promise<void>} cancelled
+ */
+const makeBootstrap = async (config, cancelled) => {
+  const { getBootstrap, closed } = await makeEndoClient(
+    'client',
+    config.sockPath,
+    cancelled,
+  );
+  closed.catch(() => {});
+  return getBootstrap();
+};
+
+// A stand-in for the far side of an inbound peer connection.  `hello` accepts
+// it into the remote-control state machine and follows its retention set in
+// the background; a no-op that rejects is enough — the background follow is
+// caught, and the test cares only about the gateway `hello` returns.
+const makeFakeRemoteGateway = () =>
+  Far('FakeRemoteGateway', {
+    followRetentionSet: async () => {
+      throw new Error('fake remote gateway has no retention set');
+    },
+    provide: async () => {
+      throw new Error('fake remote gateway provides nothing');
+    },
+  });
+
+test.serial(
+  'gateway from hello binds followRetentionSet to the authenticated peer',
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    const bootstrap = await makeBootstrap(config, cancelled);
+
+    const localNode = await E(bootstrap).nodeId();
+    const greeter = await E(bootstrap).greeter();
+
+    const peerNode = '1'.repeat(64);
+    const otherNode = '2'.repeat(64);
+    t.not(peerNode, localNode, 'peer node differs from local node');
+
+    // Reproduce an inbound peer handshake: the peer authenticates as
+    // `peerNode` and receives the gateway `hello` returns.
+    const peerGateway = await E(greeter).hello(
+      peerNode,
+      makeFakeRemoteGateway(),
+      Far('Canceller', () => {}),
+      new Promise(() => {}),
+    );
+
+    // The authenticated peer may follow its own node's retention set.
+    const ownReader = await E(peerGateway).followRetentionSet(peerNode);
+    t.truthy(ownReader, 'peer can follow its own retention set');
+
+    // It may not enumerate the local node's formula index...
+    await t.throwsAsync(
+      E(peerGateway).followRetentionSet(localNode),
+      undefined,
+      'peer cannot follow the local node retention set',
+    );
+
+    // ...nor any node other than the one it authenticated as.
+    await t.throwsAsync(
+      E(peerGateway).followRetentionSet(otherNode),
+      undefined,
+      'peer cannot follow a third node retention set',
+    );
+  },
+);
+
+test.serial(
+  'shared gateway refuses to enumerate the local node formula index',
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    const bootstrap = await makeBootstrap(config, cancelled);
+
+    const localNode = await E(bootstrap).nodeId();
+    const gateway = await E(bootstrap).gateway();
+
+    // The local formula index is never externally enumerable, even directly
+    // through the shared gateway (the object presented on outbound and
+    // loopback connections, which does not flow through `hello`).
+    await t.throwsAsync(
+      E(gateway).followRetentionSet(localNode),
+      undefined,
+      'shared gateway will not enumerate the local node index',
+    );
+
+    // A remote peer's own retention set is still answerable — the fix does not
+    // break legitimate peer-to-peer retention following.
+    const remoteReader = await E(gateway).followRetentionSet('3'.repeat(64));
+    t.truthy(remoteReader, 'shared gateway still answers for a remote node');
+  },
+);
+
+testNeedsNodeWorker(
+  'authenticated peer gateway still provides local values (interop)',
+  async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    const bootstrap = await makeBootstrap(config, cancelled);
+    const host = E(bootstrap).host();
+
+    // Publish a value and learn its full formula id, the way a legitimate peer
+    // would from an invitation locator.
+    await E(host).evaluate('@main', '"interop-value"', [], [], ['val']);
+    const valId = idFromLocator(await E(host).locate('val'));
+
+    const greeter = await E(bootstrap).greeter();
+    const peerGateway = await E(greeter).hello(
+      '4'.repeat(64),
+      makeFakeRemoteGateway(),
+      Far('Canceller', () => {}),
+      new Promise(() => {}),
+    );
+
+    // Positive control: `provide` through the peer-bound gateway still returns
+    // the value, so binding `followRetentionSet` did not disturb OCapN interop.
+    t.is(
+      await E(peerGateway).provide(valId),
+      'interop-value',
+      'peer can still provide a local value it holds the id for',
+    );
+  },
+);
+
 test('retention table supports write, list, replace, delete', async t => {
   await prepareHost(t);
   const db = openTestDb(t.context[0].config.statePath);
