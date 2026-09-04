@@ -188,9 +188,12 @@ const makeSessionManager = () => {
  * @param {MakeLocatorForSession} [options.makeLocatorForSession] - Optional
  *   per-session locator factory. When provided, each established
  *   session builds its own `NonceLocator` for *incoming*
- *   `bootstrap.fetch` calls by invoking this factory with the
- *   authenticated remote designator and a `abortSession` callback,
- *   instead of sharing the single `locator`. This is the seam an
+ *   `bootstrap.fetch` calls by invoking this factory with the remote
+ *   designator (the peer's *claimed* designator — transport-authenticated
+ *   only when the netlayer supplies `verifyPeerLocation`, otherwise
+ *   self-asserted; durable per-peer accounting should prefer the verified
+ *   public key) and an `abortSession` callback, instead of sharing the
+ *   single `locator`. This is the seam an
  *   embedder uses to scope miss counters and rate limits to one
  *   authenticated peer/connection: a session that abuses `fetch` can be
  *   bounded or torn down without affecting any other peer's session.
