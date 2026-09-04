@@ -30267,8 +30267,7 @@ impl Interp {
         let (forwarded, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
             Some((Kind::Reference, Payload::Reference(arr)))
-                if self.arrays.contains_key(&arr)
-                    && !self.arguments_objects.contains(&arr) =>
+                if self.arrays.contains_key(&arr) && !self.arguments_objects.contains(&arr) =>
             {
                 let data = &self.arrays[&arr];
                 let len = data.length;
@@ -30440,8 +30439,7 @@ impl Interp {
         let (real_args, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
             Some((Kind::Reference, Payload::Reference(arr)))
-                if self.arrays.contains_key(&arr)
-                    && !self.arguments_objects.contains(&arr) =>
+                if self.arrays.contains_key(&arr) && !self.arguments_objects.contains(&arr) =>
             {
                 let data = &self.arrays[&arr];
                 let len = data.length;
@@ -36441,8 +36439,7 @@ impl Interp {
     /// array schedule. Ordinary objects and arguments objects have already
     /// paid part of that schedule through their property MOP paths.
     fn apply_arraylike_metering(&self, value: Slot, len: usize) -> u64 {
-        let full = APPLY_ARRAY_BASE_METERING
-            + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+        let full = APPLY_ARRAY_BASE_METERING + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
         let Payload::Reference(inst) = value.value else {
             return full;
         };
