@@ -35,9 +35,13 @@
 //     `outcomes/<sanitized id>.json` when done (the caplet verifies the
 //     embedded id, since sanitized file names can collide for exotic
 //     caller-minted keys);
-//   - SHOULD leave `apply-request.json` in place until the next submission
-//     overwrites it (if it consumes the file instead, the status echo covers
-//     the gap — the caplet checks status before ever submitting);
+//   - MUST NOT leave a window in which neither `apply-request.json` nor
+//     `apply-status.json` names the id: it may consume the request only once
+//     the id-echoing status is durably published, or — simplest — leave the
+//     request in place until the next submission overwrites it. A gap there
+//     is the one remaining path to a double-apply: the caplet reads status
+//     before ever submitting, but the applier does not take the submit lock,
+//     so a sample inside such a window would look like a free slot;
 //   - on upgrade to this contract, SHOULD clear or rewrite pre-contract spool
 //     files (a status file without an `id` field makes the caplet refuse to
 //     submit rather than risk an uncorrelatable root-equivalent action).
@@ -89,7 +93,7 @@ import {
   totalmem,
   uptime,
 } from 'node:os';
-import { join, resolve, relative, dirname, sep } from 'node:path';
+import { basename, join, resolve, relative, dirname, sep } from 'node:path';
 
 // The config reads this file with `lib.fileContents`, so a revision bump is a
 // one-line diff and setting it is a whole-file write of a validated hash rather
@@ -159,11 +163,16 @@ const NixosAdminInterface = M.interface('NixosAdmin', {
 
 /**
  * Resolve `relPath` beneath `baseDir`, rejecting absolute paths, `..` escapes,
- * and anything under the repo's `.git` directory. Exported for unit testing;
- * this is the single choke point that confines every file operation to the
- * NixOS config checkout (lexical confinement: symlinks inside the checkout
- * are not chased — stageFiles cannot create them, and the checkout is owned
- * by the applier's own mirror).
+ * and anything under a `.git` directory at any depth. Exported for unit
+ * testing; this is the single choke point that confines every file operation
+ * to the NixOS config checkout (lexical confinement: symlinks inside the
+ * checkout are not chased — stageFiles cannot create them, and the checkout is
+ * owned by the applier's own mirror).
+ *
+ * The `.git` rule matches `walkFiles` and `fingerprintConfig`, which skip that
+ * name at every depth. Rejecting only the top-level one would leave a nested
+ * `sub/.git/…` writable yet outside both the listing and the config
+ * fingerprint that binds a request to the exact content the service may build.
  *
  * @param {string} baseDir - absolute config-checkout directory
  * @param {string} relPath - caller-supplied path, relative to baseDir
@@ -179,7 +188,7 @@ export const resolveWithin = (baseDir, relPath) => {
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
     throw new Error(`Path escapes the config directory: ${relPath}`);
   }
-  if (rel === '.git' || rel.startsWith(`.git${sep}`)) {
+  if (rel.split(sep).includes('.git')) {
     throw new Error(`The .git directory is not editable: ${relPath}`);
   }
   return target;
@@ -216,6 +225,40 @@ const assertNoSymlinkTraversal = async (baseDir, target) => {
       throw new Error(`Refusing to follow config symlink: ${q(cursor)}`);
     }
   }
+};
+
+/**
+ * Canonicalize a configured directory that may not exist yet. The lock
+ * directory in particular lives on a tmpfs a reboot clears and the privileged
+ * service reprovisions, so the daemon can legitimately start before it is
+ * there; a bare `realpath` would then reject `make` and leave even the
+ * read-only diagnostics (`status`, `getVitals`) unreachable until something
+ * re-instantiated the caplet.
+ *
+ * Resolving the deepest existing ancestor and re-joining the missing tail
+ * yields what `realpath` will return once the directory appears, so two
+ * incarnations straddling its creation still compute the SAME lock path. A
+ * path that is genuinely wrong is rejected loudly by the protocol-marker check
+ * at the first submission instead of silently at startup.
+ *
+ * @param {string} path
+ * @returns {Promise<string>}
+ */
+const canonicalize = async path => {
+  await null;
+  const absolute = resolve(path);
+  try {
+    return await realpath(absolute);
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT') {
+      throw error;
+    }
+  }
+  const parent = dirname(absolute);
+  if (parent === absolute) {
+    return absolute;
+  }
+  return join(await canonicalize(parent), basename(absolute));
 };
 
 /**
@@ -459,10 +502,8 @@ export const make = async (_powers, _context, options = {}) => {
   const lockDir =
     readEnv('ENDO_NIXOS_LOCK_DIR') || '/run/lock/endo-nixos-admin';
   const configured = Boolean(configDir && nixosDir);
-  const canonicalConfigDir = configDir ? await realpath(configDir) : '';
-  const canonicalLockDir = configured
-    ? await realpath(lockDir)
-    : resolve(lockDir);
+  const canonicalConfigDir = configDir ? await canonicalize(configDir) : '';
+  const canonicalLockDir = await canonicalize(lockDir);
   const machineHostname = hostname();
   // Most flakes name the local nixosConfiguration after the machine. Hosts
   // whose flake output uses another name can still override it explicitly.
@@ -1051,6 +1092,16 @@ export const make = async (_powers, _context, options = {}) => {
     child.stderr.on('data', chunk => {
       stderr += chunk;
     });
+    // A lock holder reaped mid-transaction (the OOM killer during a long
+    // fingerprint walk, an operator's kill) leaves a broken pipe. Without a
+    // listener the release write below raises EPIPE as an unhandled stream
+    // error, which is an uncaught exception that takes the whole daemon down
+    // instead of surfacing as an ordinary lock failure. The close status is
+    // what actually reports the loss, so these listeners only swallow.
+    child.stdin.on('error', () => {});
+    child.stdout.on('error', () => {});
+    child.stderr.on('error', () => {});
+    /** @type {Promise<{ code: number | null, signal: string | null }>} */
     const closed = new Promise(resolveClosed => {
       child.once('close', (code, signal) => {
         resolveClosed({ code, signal });
@@ -1093,12 +1144,33 @@ export const make = async (_powers, _context, options = {}) => {
       await closed;
       throw error;
     }
+    // The lock must be released, and the holder's exit inspected, before either
+    // result is reported — so the job's settlement is held here rather than
+    // propagated through a `finally`.
+    /** @type {{ ok: true, value: T } | { ok: false, error: unknown }} */
+    let outcome;
     try {
-      return await job();
-    } finally {
-      child.stdin.end('\n');
-      await closed;
+      outcome = { ok: true, value: await job() };
+    } catch (jobError) {
+      outcome = { ok: false, error: jobError };
     }
+    child.stdin.end('\n');
+    const { code, signal } = await closed;
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    if (code !== 0 || signal !== null) {
+      // The holder released the lock on its own — the kernel dropped it the
+      // moment that process died, so the transaction just completed was NOT
+      // exclusive and another process may have made the same decision under
+      // it. A submit decision is root-equivalent, so refuse to acknowledge it.
+      throw new Error(
+        `Lock holder for ${q(lockPath)} exited (${signal || `status ${code}`}) ` +
+          'before the transaction released it; the kernel freed the lock ' +
+          'early, so this transaction was not exclusive.',
+      );
+    }
+    return outcome.value;
   };
 
   /**
