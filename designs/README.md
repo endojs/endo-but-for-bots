@@ -603,7 +603,7 @@ flowchart TD
         eagentry --> ageval
         eat --> ageval
         eat --> eclaude
-        eclaude --> isn
+        isn --> eclaude
     end
 
     subgraph Familiar
@@ -945,12 +945,12 @@ halves and their directly-dependent companions as its first-to-land work:
   inference engine, reaching only that one guest's facet as its whole tool
   surface. Confinement core in flight as PR
   [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open
-  draft). The generic daemon seam the `endo-claude` child-guest provisioning
-  path needs, indelibly endowing a provisioned guest with special names, is
-  [introduced-special-names](introduced-special-names.md), PR
+  draft). The `endo-claude` child-guest provisioning path needs a generic daemon seam,
+  supplied by [introduced-special-names](introduced-special-names.md), PR
   [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft),
   narrowed at maintainer request from a broader Claude-agent provisioning
-  proposal; the full Claude-backed child-guest factory over that seam is deferred
+  proposal. That seam indelibly endows a provisioned guest with special names.
+  The full Claude-backed child-guest factory over the seam is deferred
   to a deployment such as Minion Town.
 
 These two halves solve the two directions of the same bottleneck and lead
