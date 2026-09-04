@@ -15,7 +15,7 @@
 // without re-provisioning anything, every read is audited, and the pet-store
 // value the factory reads carries no credential at all.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { E } from '@endo/eventual-send';
@@ -23,8 +23,107 @@ import {
   AUTH_SECRET_PETNAME,
   provideAuthSecret,
 } from '@endo/fae/src/credentials.js';
+import { coerceDeclaredProfile } from '@endo/hosted-agent/account.js';
 
 const flootFactorySpecifier = new URL('agent.js', import.meta.url).href;
+const accountOracleSpecifier = new URL('account-oracle.js', import.meta.url)
+  .href;
+
+/**
+ * Provision the account oracle: a durable formula that answers what plan this
+ * deployment is on and how much quota is left, without holding the credential.
+ *
+ * The declared profile is an ordinary stored value, so an operator corrects the
+ * answer by re-running setup with an edited file — no capability changes hands.
+ * The oracle formula keeps its identity across that, and across a restart.
+ *
+ * @param {import('@endo/eventual-send').ERef<object>} agent
+ * @param {object} options
+ * @param {string} options.dir
+ * @param {string} options.provider
+ * @param {any} options.factoryHost
+ */
+const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
+  const profilePath = process.env.FLOOT_ACCOUNT_PROFILE || '';
+  const handleName = `${dir}-account-oracle-handle`;
+  const powersName = `profile-for-${handleName}`;
+  const oraclePath = [dir, 'account-oracle'];
+  const powersPath = [dir, 'account-oracle-powers'];
+  const profileNamePath = [dir, 'account-profile'];
+
+  const existing = await E(agent).has(...oraclePath);
+  if (!profilePath && !existing) {
+    // Nothing declared and no oracle yet: skip it rather than stand up one that
+    // can only answer "unavailable".
+    console.log(
+      'Floot: no FLOOT_ACCOUNT_PROFILE; skipping the account oracle (getAccount() will report it is unavailable).',
+    );
+    return;
+  }
+
+  if (profilePath) {
+    if (!existsSync(profilePath)) {
+      throw new Error(
+        `FLOOT_ACCOUNT_PROFILE "${profilePath}" does not exist on disk.`,
+      );
+    }
+    // Parsed and range-checked here, where a bad file is a setup error the
+    // operator sees, rather than inside a caplet where it would surface as a
+    // failed answer much later.
+    const declared = coerceDeclaredProfile(
+      JSON.parse(readFileSync(profilePath, 'utf8')),
+    );
+    if (await E(agent).has(...profileNamePath)) {
+      await E(agent).remove(...profileNamePath);
+    }
+    await E(agent).storeValue(declared, profileNamePath);
+  }
+
+  if (existing) {
+    // Keep the oracle's identity: its journal of past observations lives in its
+    // own pet store, and a caller may already hold the capability. Re-storing
+    // the profile above minted a *new* value formula, so re-point the oracle's
+    // namespace at it — otherwise a refresh would read the formula that
+    // `remove` just dropped.
+    if (profilePath) {
+      const oraclePowers = await E(agent).lookup(powersPath);
+      await E(oraclePowers).storeLocator(
+        'account-profile',
+        await E(agent).locate(...profileNamePath),
+      );
+    }
+    await E(factoryHost).storeLocator(
+      'account-oracle',
+      await E(agent).locate(...oraclePath),
+    );
+    console.log(
+      `Floot account oracle at "${dir}/account-oracle" reused${
+        profilePath ? ' with the updated profile' : ''
+      }.`,
+    );
+    return;
+  }
+
+  const oracleGuest = await E(agent).provideGuest(handleName, {
+    agentName: powersName,
+  });
+  await E(oracleGuest).storeLocator(
+    'account-profile',
+    await E(agent).locate(...profileNamePath),
+  );
+  await E(agent).makeUnconfined('@main', accountOracleSpecifier, {
+    powersName,
+    resultName: oraclePath,
+    env: harden({ ACCOUNT_PROVIDER_ID: provider }),
+  });
+  await E(agent).move([handleName], [dir, 'account-oracle-handle']);
+  await E(agent).move([powersName], powersPath);
+  await E(factoryHost).storeLocator(
+    'account-oracle',
+    await E(agent).locate(...oraclePath),
+  );
+  console.log(`Floot account oracle created at "${dir}/account-oracle".`);
+};
 
 // Absolute host path to the Endo codebase, mounted read-only into full-control
 // sessions. Default: the repo root, two directories up from this script
@@ -146,7 +245,11 @@ export const main = async agent => {
     await E(factoryHost).remove(AUTH_SECRET_PETNAME);
   }
 
-  // 4. Launch the factory caplet straight into floot/controller.
+  // 4. The account oracle, if this deployment declared a profile. Provisioned
+  // before the factory so the very first session already has `accountStatus`.
+  await provideAccountOracle(agent, { dir, provider, factoryHost });
+
+  // 5. Launch the factory caplet straight into floot/controller.
   await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
     powersName: agentName,
     resultName: controllerPath,
@@ -156,17 +259,17 @@ export const main = async agent => {
     }),
   });
 
-  // 5. Tuck the factory host + its profile under floot/ so the top level stays
-  // clean. (The factory already resolved its powers in step 4; renaming the
+  // 6. Tuck the factory host + its profile under floot/ so the top level stays
+  // clean. (The factory already resolved its powers in step 5; renaming the
   // pet-names afterward is cosmetic — formulas reference by identity.)
   await E(agent).move([guestName], [dir, 'controller-handle']);
   await E(agent).move([agentName], [dir, 'controller-profile']);
 
-  // 6. Single pin: the factory revives all its sessions on daemon restart.
+  // 7. Single pin: the factory revives all its sessions on daemon restart.
   await E(agent).copy(controllerPath, ['@pins', `${dir}-controller`]);
   console.log(`Floot factory created at "${dir}/controller" and pinned.`);
 
-  // 7. Seed a default session if this is a fresh factory.
+  // 8. Seed a default session if this is a fresh factory.
   const factory = await E(agent).lookup(controllerPath);
   const sessions = await E(factory).listSessions();
   if (sessions.length === 0) {

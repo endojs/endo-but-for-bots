@@ -146,6 +146,8 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
   refreshCredentials: M.callWhen().returns(M.undefined()),
+  getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
+  getAccountOracle: M.callWhen().returns(M.remotable()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -158,6 +160,7 @@ const FlootSessionInterface = M.interface('FlootSession', {
   converse: M.call(M.any()).returns(M.remotable()),
   getHistory: M.callWhen().returns(M.any()),
   getUsage: M.callWhen().returns(M.any()),
+  getAccount: M.callWhen().optional(M.boolean()).returns(M.record()),
   help: M.call().returns(M.string()),
 });
 
@@ -502,6 +505,11 @@ const provisionPresetObjects = async (
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
  *   session at the delegation bound, which withholds the subagent tools.
+ * @param {any} [options.accountOracle] - A read-only `HostedAccount`. Absent
+ *   when the deployment has provisioned no oracle, which withholds
+ *   `accountStatus`.
+ * @param {string} [options.modelId] - The model this session runs, used to
+ *   price its usage.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @returns {Promise<{
  *   converse: (
@@ -521,7 +529,7 @@ export const makeStreamingAgent = async (
   _context,
   providerConfig,
   systemPrompt,
-  { spawner, timers } = {},
+  { spawner, accountOracle, modelId, timers } = {},
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   const hostedClient = /** @type {any} */ (providerConfig).hostedClient;
@@ -604,10 +612,18 @@ export const makeStreamingAgent = async (
   const delegations = makeSubagentDelegations(
     harden({ powers, ...(timers ? { timers } : {}) }),
   );
-  const toolRegistry = makeFlootToolRegistry(
-    powers,
-    harden(spawner ? { spawner, delegations } : {}),
-  );
+  const toolRegistry = makeFlootToolRegistry(powers, {
+    ...(spawner ? { spawner, delegations } : {}),
+    ...(accountOracle
+      ? {
+          accountOracle,
+          // The oracle prices what this session actually spent, so the tool
+          // reads the same totals the UI shows rather than a second tally.
+          getUsage: () => getUsage(),
+          getModelId: () => modelId || '',
+        }
+      : {}),
+  });
 
   // One session = one guest = one linear conversation. The guest's petstore
   // holds a conversation-tree root and a linear branch beneath it. We cache the
@@ -1365,6 +1381,27 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return hostedBackendsP;
   };
 
+  // The account oracle is an operator-endowed, read-only capability: it answers
+  // what plan this deployment is on and how much quota is left, and it cannot
+  // reach the credential it describes. Absent by default — a deployment that
+  // has provisioned none simply has no `accountStatus` tool and a factory whose
+  // `getAccount()` reports that nothing is available.
+  const accountOracleName = env?.FLOOT_ACCOUNT_ORACLE || 'account-oracle';
+  /** @type {Promise<any> | undefined} */
+  let accountOracleP;
+  const getAccountOracle = () => {
+    if (!accountOracleP) {
+      accountOracleP = (async () => {
+        if (!(await E(powers).has(accountOracleName))) return undefined;
+        return E(powers).lookup(accountOracleName);
+      })().catch(error => {
+        accountOracleP = undefined;
+        throw error;
+      });
+    }
+    return accountOracleP;
+  };
+
   /** @type {Map<string, any>} */
   const backendAdmins = new Map();
   const terminatedBackends = new Set();
@@ -1560,16 +1597,25 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // spawner is rebuilt on every revival rather than persisted, so the
         // durable record of the tree is the session registry alone.
         const sessionDepth = Number(entry?.subagentDepth) || 0;
+        const oracle = await getAccountOracle();
         const agent = await makeStreamingAgent(
           sessionGuest,
           undefined,
           agentConfig,
           sessionPrompt,
-          harden(
-            sessionDepth < maxSubagentDepth
+          harden({
+            ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
-              : {},
-          ),
+              : {}),
+            ...(oracle
+              ? {
+                  accountOracle: oracle,
+                  modelId: entry?.backendId
+                    ? hostedModelId(entry.backendId, entry.modelId || '')
+                    : entry?.model || '',
+                }
+              : {}),
+          }),
         );
         // Each session is addressable by mail: start following its inbox.
         agent.startInbox();
@@ -1667,8 +1713,58 @@ export const make = (hostPowers, _context, { env } = {}) => {
           const agent = await getAgent(id);
           return agent.getUsage();
         },
+        /**
+         * This session's share of the account: the deployment-wide plan and
+         * rate limits, plus what this conversation has spent at the current
+         * list price. Reported per session because that is the granularity a
+         * user asks about ("what is this chat costing?").
+         *
+         * @param {boolean} [refresh]
+         */
+        async getAccount(refresh) {
+          const entry = await assertSessionReady(id);
+          const oracle = await getAccountOracle();
+          if (!oracle) {
+            return harden({
+              available: false,
+              reason: `No account oracle is bound to "${accountOracleName}".`,
+            });
+          }
+          if (refresh) await E(oracle).refresh();
+          const agent = await getAgent(id);
+          const [plan, rateLimits, rateCard, usage] = await Promise.all([
+            E(oracle).getPlan(),
+            E(oracle).getRateLimits(),
+            E(oracle).getRateCard(),
+            agent.getUsage(),
+          ]);
+          const modelId = entry.backendId
+            ? hostedModelId(entry.backendId, entry.modelId || '')
+            : entry.model || '';
+          const cost = modelId
+            ? await E(oracle).estimateCost(
+                harden({
+                  modelId,
+                  inputTokens: BigInt(
+                    Math.max(0, Math.trunc(usage.inputTokens || 0)),
+                  ),
+                  outputTokens: BigInt(
+                    Math.max(0, Math.trunc(usage.outputTokens || 0)),
+                  ),
+                }),
+              )
+            : undefined;
+          return harden({
+            available: true,
+            plan,
+            rateLimits,
+            rateCard,
+            usage,
+            ...(cost ? { cost } : {}),
+          });
+        },
         help() {
-          return 'Floot session: converse(input) returns a streaming reply reader; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: converse(input) returns a streaming reply reader; getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, turns }; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);
@@ -2340,12 +2436,56 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
+     * The subscription plan, rate limits, and price list behind this
+     * deployment's credential, as capability-free data.
+     *
+     * Every section carries `observedAt` and a `source` of observed, declared,
+     * remembered, or unavailable, so a caller can tell a measurement from an
+     * assertion. Counts are bigints — a published quota is a natural number
+     * whose range is the provider's to choose.
+     *
+     * @param {boolean} [refresh] - Re-read the provider before answering.
+     */
+    async getAccount(refresh) {
+      const oracle = await getAccountOracle();
+      if (!oracle) {
+        return harden({
+          available: false,
+          reason: `No account oracle is bound to "${accountOracleName}". Provision one to report plan and rate limits.`,
+        });
+      }
+      if (refresh) await E(oracle).refresh();
+      const [plan, rateLimits, rateCard] = await Promise.all([
+        E(oracle).getPlan(),
+        E(oracle).getRateLimits(),
+        E(oracle).getRateCard(),
+      ]);
+      return harden({ available: true, plan, rateLimits, rateCard });
+    },
+
+    /**
+     * The oracle itself, for a caller that wants to hold it — a monitor, or an
+     * agent that should be able to check its own quota. It is read-only and has
+     * no path to the credential, which is why handing it out is safe where
+     * handing out the factory would not be.
+     */
+    async getAccountOracle() {
+      const oracle = await getAccountOracle();
+      if (!oracle) {
+        throw Error(
+          `No account oracle is bound to "${accountOracleName}" in this factory.`,
+        );
+      }
+      return oracle;
+    },
+
+    /**
      * @param {string} [methodName]
      * @returns {string}
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(). Session facets expose converse(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(); getAccount(refresh?); getAccountOracle(). Session facets expose converse(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -2364,6 +2504,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
           'deleteSession(id) — Delete a session, its backing guest, and every subagent session beneath it.',
         refreshCredentials:
           'refreshCredentials() — Drop cached API providers so the next turn re-reads the auth secret, applying a rotation or revocation without a restart.',
+        getAccount:
+          'getAccount(refresh?) — { available, plan, rateLimits, rateCard }. Each section carries observedAt and a source of observed | declared | remembered | unavailable; counts are bigints, and null means the provider does not publish that figure.',
+        getAccountOracle:
+          'getAccountOracle() — The read-only HostedAccount capability itself, for a holder that should be able to check plan and quota without reaching the credential.',
       };
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },
