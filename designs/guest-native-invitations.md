@@ -89,8 +89,9 @@ guest.accept(invitationLocator: string, correspondentName: string | string[]):
 - Both names are private to each side.
   They may differ, and renaming one does not touch either agent's formula
   identifier.
-- `invite` returns the `Invitation` exo; the caller calls `E(invitation).locate()`
-  to get the transmissible locator string, exactly as with `host.invite`.
+- `invite` returns the `Invitation` exo (the daemon-side object a caller reaches by
+  reference); the caller calls `E(invitation).locate()` to get the transmissible
+  locator string, exactly as with `host.invite`.
 
 The two methods are agent-generic: `invite`/`accept` become part of a shared
 agent vocabulary that both `EndoHost` and `EndoGuest` satisfy (via the shared
@@ -108,15 +109,29 @@ The affordance that answers this cold is `locate(correspondentName)`, already on
 The returned locator carries `?type=invitation` while pending, so a caller reads the `type` field directly and treats any non-`invitation` type as joined, whatever its subscription history.
 The joined type is not a single constant: same-daemon redemption yields `?type=handle`, but a cross-daemon invitee's bound handle is a remote id, so `getTypeForId` stamps `?type=remote` (`packages/daemon/src/locator.js:187-193`; `getTypeForId` in `packages/daemon/src/manager.js` returns `remote` for any non-local id).
 A consumer therefore checks `type !== 'invitation'` to mean "joined", never `type === 'handle'`, which would miss every cross-daemon invitee.
-This affordance is preferred over `followNameChanges`, which yields `{ add: name, value: { number, node } }` (`packages/daemon/src/pet-store.js:132-145`), a bare identifier with no kind, and only discriminates for a consumer subscribed *across* the transition, so a UI that attaches after a restart sees one `add` and cannot tell pending from joined.
+`locate` is a **pull** affordance: it answers the kind on demand but supplies no wake-up, so a consumer that only reads `locate` must poll to notice the pending-to-joined transition.
+`followNameChanges` is its **push** complement: it yields `{ add: name, value: { number, node } }` (`packages/daemon/src/pet-store.js:132-145`), a bare identifier with no kind, so it supplies the *edge* (the wake-up) but not the *kind*, and it only discriminates for a consumer subscribed *across* the transition, so a UI that attaches after a restart sees one `add` and cannot tell pending from joined on its own.
+The two are therefore complementary, not exclusive: the named consumer's eventing story is to subscribe with `followNameChanges` for the wake-up and read `locate(correspondentName)` on each edge to recover the kind.
+A consumer that accepts polling as the cost may use `locate` alone.
 A guest cannot introspect a formula's kind (`getFormulaForId` is host-only, `packages/daemon/src/host.js:2204-2214`), so `locate`'s `type` is the guest-facet answer the named consumer (minion.town's onboarding UI) uses to answer "has my invitee joined?"
 
-The only reliable **revocation** verb is overwrite: re-`invite` under the same
+The reliable **revocation** verb is overwrite: re-`invite` under the same
 `correspondentName`, whose deferred task cancels the prior pending invitation (section 5).
-`remove` and `rename` are *not* revocation verbs.
-With formula collection off (the shipped default, section 5) `remove` deletes only the pet-store row while the persisted `invitation` formula remains reincarnatable via `provideController`, and `rename` merely *moves* the binding (`packages/daemon/src/pet-store.js:182-207`) so the invitation stays live under the new name while redemption still binds at the path captured at mint (`makeInvitation` fixes `guestName` at mint, `packages/daemon/src/manager.js:6653-6659`).
+`remove` and `rename` do *not* revoke, and this increment must not let them *look*
+like they do: with formula collection off (the shipped default, section 5) `remove`
+would delete only the pet-store row while the persisted `invitation` formula stays
+reincarnatable via `provideController`, and `rename` would merely *move* the binding
+(`packages/daemon/src/pet-store.js:182-207`) so the invitation stays live under the
+new name while redemption still binds at the path captured at mint (`makeInvitation`
+fixes `guestName` at mint, `packages/daemon/src/manager.js:6653-6659`).
+So that neither verb ships as a silent false revocation affordance, this increment
+makes `remove` and `rename` **reject** when the entry they touch resolves to a
+pending `invitation` formula, telling the caller to re-`invite` (revoke) or `accept`
+(redeem) first.
 The invitation's identity is therefore its **formula id**, not the mutable pet name.
-Section 5 states what each verb actually does, and the Open Questions section records the residual on cancelling a pending invitation out from under a stale name.
+Section 5 states what each verb does; turning `remove`/`rename` into genuine
+revocation verbs (cancel plus a recorded `revoked` disposition) rather than merely
+refusing is the residual scoped in the Open Questions section.
 
 **Failure surface.**
 Sections 5 and 7 ask callers to distinguish outcomes, so the outcome must be
@@ -133,25 +148,42 @@ across the boundary (the `makeTaggedError` precedent documents exactly this,
 marshalling intact**, so the terminal states are returned as data, not thrown.
 
 `accept` therefore resolves to a hardened record `{ status }` whose `status` names
-one of the terminal states, and it **rejects only** for the two locally-decided
-exceptional conditions the acceptor's own daemon raises before it ever reaches the
-inviter. Returned (the caller branches on `result.status`):
+one of the terminal states, and it **rejects only** for the two *exceptional*
+conditions no `status` value can meaningfully carry: an inviter daemon that cannot
+be dialed and a locator that does not parse.
+The discriminating axis is **exceptional-versus-terminal**, not where the outcome
+was decided.
+An earlier draft framed the split as locally-decided-rejects versus
+remotely-decided-returns, but that axis does not hold: `name-in-use` and the
+acceptor-side half of `peer-conflict` are both decided locally, on the acceptor's
+own daemon, and are still *returned*, because they are ordinary terminal outcomes a
+consumer branches on rather than exceptions.
+Each terminal outcome also states whether the one-time invitation was **consumed**,
+which is the bit the named consumer branches on to decide "retry under a free name"
+versus "this link is dead".
+Returned (the caller branches on `result.status`):
 
-- `joined`: this call won the consume commit and completed the reciprocal bind;
-- `already-joined`: the committed entry is already bound to *this* agent's own
-  handle id — the idempotent re-drive case section 7 requires (a re-driven
-  `accept` finishes or re-confirms its own prior bind rather than reporting a
-  stranger's use), and the one outcome that used to be the self-contradictory
-  "reject-but-also-finish-the-bind" state;
-- `already-consumed`: the committed entry is bound to a *different* handle id
-  ("this invite link was already used");
-- `peer-conflict`: the insert-only peer registration refused because the locator
-  names an already-known node with differing addresses, or would rebind a
-  differing agent key (section 3);
-- `name-in-use`: the acceptor-side bind found `correspondentName` already bound to
-  a live peer, so the insert-only acceptor bind refused rather than clobbering an
-  existing relationship (skeptic's fourth finding; the acceptor bind is insert-only
-  like every other write in this design, section 2 step 5).
+- `joined` (invitation **consumed** by this call): this call won the consume commit
+  and completed the reciprocal bind;
+- `already-joined` (invitation **consumed** earlier by *this* agent): the committed
+  entry is already bound to this agent's own handle id, the idempotent re-drive case
+  section 7 requires (a re-driven `accept` finishes or re-confirms its own prior bind
+  rather than reporting a stranger's use), and the one outcome that used to be the
+  self-contradictory "reject-but-also-finish-the-bind" state.
+  A **handle** is an agent's `@self`, its transmissible identity, defined in full in
+  section 2;
+- `already-consumed` (invitation **consumed** earlier by a *different* agent): the
+  committed entry is bound to a different handle id ("this invite link was already
+  used");
+- `peer-conflict` (invitation **not consumed**): the insert-only peer registration
+  refused because the locator names an already-known node with differing addresses,
+  or would rebind a differing agent key (section 3), and the refusal happens before
+  the consume commit, so the invitation stays redeemable;
+- `name-in-use` (invitation **not consumed**): the pre-check of `correspondentName`
+  on the acceptor's own store found it already bound to a live peer, so `accept`
+  refused *before* reaching the inviter-side commit (section 2 step 3), leaving the
+  invitation redeemable under a free name rather than burning it on a purely local,
+  pre-checkable name collision.
 
 Rejected (locally raised in the acceptor's daemon, where `err.name` is the carrier
 the same-daemon caller reads, and which, per the `makeTaggedError` precedent,
@@ -178,7 +210,7 @@ explicit tagged terminal value for an entry that never reached redemption, which
 that question scopes.
 Both facets route `accept` through the single daemon-core `acceptInvitation` helper
 (section 9), so **the helper returns this record (and raises the two exceptional
-rejects) for both facets**: the contract does not fork by facet even though
+rejects) for both facets**: the contract does not fork by facet, because
 `accept` is declared once on the shared `EndoAgent` base (section 9).
 This replaces today's bare host-facet errors (`packages/daemon/src/host.js:2045`);
 the residual host-convergence work (whether the host path also drops the minted
@@ -250,21 +282,28 @@ Concretely, for inviter guest `I` and invitee guest `J`:
    distinct from the daemon node.
    The `<hints>` are the **inviting agent's** advertised network addresses,
    discussed next.
-3. `J.accept(locator, 'my-neighbor')` parses the locator, obtains a remote
-   presence of the invitation (`provide(invitationId, 'invitation')`), builds
-   `J`'s own handle locator (from `J.handleId`, `J`'s agent node, and `J`'s
-   advertised network addresses), and calls `E(invitation).accept(J.handleLocator)`.
+3. `J.accept(locator, 'my-neighbor')` parses the locator, then **pre-checks that
+   `my-neighbor` is free** in `J`'s own directory before spending the invitation.
+   Because `my-neighbor` is a purely local, pre-checkable fact, a name collision
+   must not consume the one-time invitation: if it already resolves to a live peer,
+   `accept` resolves `{ status: 'name-in-use' }` here, before any remote call, and
+   the invitation stays redeemable under a free name (section 1).
+   Only if the name is free does `J` obtain a remote presence of the invitation
+   (`provide(invitationId, 'invitation')`), build `J`'s own handle locator (from
+   `J.handleId`, `J`'s agent node, and `J`'s advertised network addresses), and call
+   `E(invitation).accept(J.handleLocator)`.
 4. The inviter-side `Invitation.accept` (in `I`'s daemon) binds `J`'s remote
    handle under `new-neighbor` in `I`'s directory via
    `E(I.agent).storeLocator(correspondentNamePath, jRemoteHandleLocator)`, replacing the
    pending-invitation entry.
    It does **not** call `formulateGuest`.
 5. Back in `J`, `accept` binds `I`'s remote handle under `my-neighbor` in `J`'s
-   directory. This bind is **insert-only**, like every other write in this design:
-   if `my-neighbor` already resolves to a live peer it refuses rather than
-   clobbering `J`'s existing relationship, and `accept` resolves `{ status:
-   'name-in-use' }` (section 1). A caller that means to replace an existing
-   correspondent chooses a free name or removes the old binding first.
+   directory. This bind stays **insert-only**, like every other write in this design:
+   the step-3 pre-check is what protects the one-time invitation, and this final bind
+   re-checks under the same insert-only rule to close the narrow window between the
+   pre-check and the bind (a concurrent local bind of `my-neighbor`), refusing rather
+   than clobbering `J`'s existing relationship. A caller that means to replace an
+   existing correspondent chooses a free name or removes the old binding first.
 
 After this, `I`'s `new-neighbor` and `J`'s `my-neighbor` are ordinary mailable
 pet names.
@@ -345,8 +384,27 @@ whether the bound agent is a host or a guest.
 
 **Security argument for letting a guest cause peer registration at all.**
 The registration is reachable only from inside the invitation method bodies (a lexical boundary, not a capability property).
-It fires on the caller-supplied locator string *before* `provide(invitationId, 'invitation')` validates the invitation, so the argument cannot lean on invitation liveness.
-(A live invitation would otherwise have let the acceptor prove the inviter meant to reach it; without that, the write must be independently safe.)
+The two sides register at different points, and that ordering is load-bearing:
+
+- **Acceptor side**, the registration fires on the caller-supplied locator string
+  *before* `provide(invitationId, 'invitation')` validates the invitation, so its
+  argument cannot lean on invitation liveness (a live invitation would otherwise have
+  let the acceptor prove the inviter meant to reach it; without that, the write must
+  be independently safe).
+- **Inviter side**, the *mutating* registration of the acceptor's handle (the known-
+  peers write) runs **only after the winning compare-and-set** (section 5), never
+  before. Nothing in the commit needs it first: `storeLocator` internalizes the
+  acceptor's handle locator without dialing, so the peer write is deferred to the
+  winner. The insert-only *conflict determination* is read-only (it grows nothing), so
+  it may run before the CAS, which is what lets `peer-conflict` be reported as a
+  **non-consuming** terminal outcome without attempting the commit (section 1); only
+  the write that actually grows known-peers is deferred behind the CAS. This closes a
+  vector the earlier ordering left open, where the inviter-side write fired before the
+  CAS validated, so a holder of a *spent* locator could re-drive `accept` and drive
+  attacker-chosen known-peers growth on every losing attempt. Behind the CAS, only the
+  single consuming `accept` writes, and a spent locator's re-accept loses the CAS and
+  writes nothing.
+
 Because the writes on the two sides of the exchange are driven by *different* suppliers, the safety argument is stated **separately per direction**, naming who supplies the written values:
 
 - **Acceptor side** (guest `J` redeems `I`'s locator): the written node key and
@@ -357,12 +415,14 @@ Because the writes on the two sides of the exchange are driven by *different* su
 - **Inviter side** (`I`'s daemon runs `Invitation.accept` on `J`-supplied node and
   addresses, `packages/daemon/src/manager.js:6704-6724`): here the *acceptor*
   chooses which node `I`'s daemon registers and which addresses it will dial, so
-  the locator-holder argument does **not** transfer. This direction is safe only
-  because the injected capability is insert-only: an attacker holding a leaked
-  locator can cause `I`'s daemon to learn a *new* peer of the attacker's choosing
-  but cannot **rewrite** an existing known-peers entry or rebind an existing agent
-  key that `I`'s host relies on. Bounding purely additive attacker-chosen growth of
-  `I`'s known-peers set is Open Question 6.
+  the locator-holder argument does **not** transfer. This direction is safe first
+  because the registration runs only behind the winning CAS (above), so a spent
+  locator drives no growth at all, and second because the injected capability is
+  insert-only: even the one winning registration can cause `I`'s daemon to learn a
+  *new* peer of the acceptor's choosing but cannot **rewrite** an existing
+  known-peers entry or rebind an existing agent key that `I`'s host relies on.
+  Bounding the additive growth from *distinct* valid invitations `I` itself minted
+  is the residual in Open Question 6.
 
 Two daemon-global writes are newly reachable from this attenuated facet, and each
 needs its own overwrite analysis, not one shared caveat:
@@ -380,9 +440,11 @@ needs its own overwrite analysis, not one shared caveat:
   re-register through the host; converging the host facet is deferred to the host
   convergence question.
 - `writeRemoteAgentKey` is `INSERT OR REPLACE` and daemon-global
-  (`packages/daemon/src/manager-database.js`), driven by the acceptor-supplied `fromNode`/
-  `handleNode` on the inviter side and the inviter-supplied values on the acceptor
-  side, so it too can rebind an existing agent key's daemon routing.
+  (`packages/daemon/src/manager-database.js`), driven on the inviter side by the
+  acceptor-supplied `handleNode` (which rides the acceptor's handle locator, section
+  2 step 3), and on the acceptor side by the inviter-supplied `fromNode` (which rides
+  the invitation locator, section 2 step 2), so it too can rebind an existing agent
+  key's daemon routing.
   The same insert-only capability refuses to rebind a differing entry, on **both**
   the inviter and acceptor sides of the exchange.
 
@@ -478,18 +540,44 @@ const won = leafHub.storeLocatorIfMatches(
 );
 if (!won) return classifyLostCas(leafHub, leafName, acceptorHandleId); // see section 1
 
-// 3. Best-effort in-memory liveness, OUTSIDE any formula-graph enqueue. This is
-//    cleanup, not the commit: it may run before or after step 2 without affecting
-//    correctness, because a reincarnated controller cannot re-win the CAS above.
+// 3. Replay the store-controller bookkeeping the synchronous CAS bypassed, for the
+//    WINNER only. `storeIdentifier` (store-controller.js:49-64) normally runs, under
+//    `withFormulaGraphLock`, `onPetStoreWrite(storeId, id)` for a LOCAL new id and
+//    `removeEdgeIfUnreferenced(previousId)` for the OVERWRITTEN id. The new id here
+//    is the acceptor's REMOTE handle locator (non-local: `isLocalId` false), so no
+//    new edge is recorded, matching store-controller's own `isLocalId` guard. But
+//    the overwritten id IS the local `invitation` formula, so its edge must be
+//    released or the consumed invitation is retained forever (the retention/
+//    collection assertions section 8 keeps green would regress). This runs AFTER the
+//    synchronous CAS and awaits, exactly as store-controller does, which calls
+//    removeEdgeIfUnreferenced directly (it acquires the formula-graph lock itself).
+await removeEdgeIfUnreferenced(invitationId);
+
+// 4. Register the acceptor's handle as an inviter-side peer (section 3): the
+//    read-only conflict determination ran BEFORE the CAS (a peer-conflict returns
+//    non-consuming, never reaching here), but the mutating known-peers write runs
+//    behind the winning CAS so a spent locator drives no growth. Then best-effort
+//    in-memory liveness, OUTSIDE any formula-graph enqueue. Cancellation is cleanup,
+//    not the commit: a reincarnated controller cannot re-win the CAS above.
+await registerAcceptorPeer(acceptorHandleLocator); // insert-only write, section 3
 const controller = provideController(invitationId);
 await controller.context.cancel(harden(Error('Invitation accepted')));
 ```
 
 `storeLocatorIfMatches` is a **new** synchronous `NameHub`/pet-store capability, not an existing method and not a public agent guard.
 It must be added as a synchronous compare-and-set on the pet store (`packages/daemon/src/pet-store.js`), where the read of the row and its conditional replacement share one synchronous run-to-completion body, exactly as the pet store's existing `write`/`remove`/`rename` bodies are async-declared but synchronous over the synchronous sqlite.
-The path form is handled by resolving the leaf hub *first* — one `await lookup(prefixPath)` to reach the sub-directory's own hub (step 1 above; the identity hub for a bare name) — and then invoking the **synchronous** compare-and-set on that already-resolved local hub. The inviter's directory tree is local to the inviter's daemon (the CAS runs inside `Invitation.accept` there), so the leaf hub is always a local, synchronous pet store even for a nested path.
+The path form is handled by resolving the leaf hub *first* (one `await lookup(prefixPath)` to reach the sub-directory's own hub, step 1 above, or the identity hub for a bare name) and then invoking the **synchronous** compare-and-set on that already-resolved local hub. The inviter's directory tree is local to the inviter's daemon (the CAS runs inside `Invitation.accept` there), so the leaf hub is always a local, synchronous pet store even for a nested path.
 What must **not** happen is composing the commit out of the directory layer's `storeIdentifier` (`packages/daemon/src/directory.js:493-501`), which does `await lookup(prefixPath)` and then a *second* `await E(hub).storeIdentifier(...)`: that second await is a separate turn (and, for a remote hub, a network round trip), so a compare built as read-then-`E(hub).storeIdentifier` would span turns and lose exactly the race section 6 exists to close. Resolving the address in step 1 is fine; the compare-and-set itself must be one synchronous hub call, not two awaited directory calls.
 It is injected into the invitation method body as a daemon-core capability that resolves and operates on the inviter's own directory tree (sections 3 and 9), so it adds **no** third public guard to `GuestInterface`, and `storeLocator`'s shared `nameHubMethodGuards` are untouched (section 3's "exactly two public guards" holds).
+
+**The bypassed store-controller layer, and how each of its invariants is preserved.**
+The pet-store CAS deliberately sits one layer *below* `store-controller.js`, which is where an ordinary overwrite's GC bookkeeping lives (`storeIdentifier`, `packages/daemon/src/store-controller.js:49-64`, running `onPetStoreWrite` under `withFormulaGraphLock` and `removeEdgeIfUnreferenced(previousId)` for the overwritten id).
+The design flees that layer because its bookkeeping *awaits*, which would split the compare from the set across a turn and lose the race section 6 exists to close; but fleeing the layer does not excuse dropping its invariants.
+Each is preserved explicitly, after the synchronous CAS, in step 3 of the sketch above:
+
+- **New-id edge registration** (`onPetStoreWrite` for a local new id): the new value is the acceptor's *remote* handle locator, a non-local id, so store-controller's own `isLocalId` guard would record no edge; the CAS matches that by design, recording none.
+- **Overwritten-id edge release** (`removeEdgeIfUnreferenced(previousId)`): the overwritten id is the local `invitation` formula, so its edge *must* be released or the consumed invitation is retained forever and the `_multiplayer-suite.js` retention/collection assertions regress. Step 3 calls `removeEdgeIfUnreferenced(invitationId)` for the winner, after the CAS commits, exactly as store-controller invokes it (directly; it acquires the formula-graph lock internally).
+- **Serialization discipline preserved**: the release awaits and runs *outside* the synchronous CAS body, so it never reintroduces the split-turn race or the self-deadlock section 5's cold-cache analysis describes; and unlike `provideController`, `removeEdgeIfUnreferenced` does not re-enter the invitation controller, so it cannot deadlock on the token the CAS already released.
 
 **Why the commit must not run inside `formulaGraphJobs.enqueue`.** `formulaGraphJobs`
 is a strict one-token serial queue (`packages/daemon/src/serial-jobs.js`). A *raw*
@@ -592,8 +680,8 @@ pet store, and to run controller cancellation afterward, unqueued.
   intermediate to revive.
 - **Mid-accept crash**: `accept` performs a remote call (`E(invitation).accept`,
   which runs the inviter-side commit) and then a local bind; the two are not one
-  transaction across daemons. There is exactly **one** commit point — the
-  inviter-side pet-store compare-and-set (section 5) — and the acceptor-side bind
+  transaction across daemons. There is exactly **one** commit point, the
+  inviter-side pet-store compare-and-set (section 5), and the acceptor-side bind
   is a plain, idempotent, single-writer local write, not a second commit. That is
   what makes `accept` safe to re-drive: a re-driven `accept` that runs after the
   inviter committed-and-bound but before the acceptor's local bind completed calls
@@ -604,9 +692,9 @@ pet store, and to run controller cancellation afterward, unqueued.
   re-drive is an ordinary success path: `accept` then (re-)performs the idempotent
   acceptor-side local bind and resolves `{ status: 'already-joined' }`, repairing
   the half-finished relationship rather than double-consuming, wedging, or throwing
-  forever (this resolves the earlier §1/§7 contradiction between "rejects" and
-  "returns and finishes the bind" — it returns, and the returned record is what
-  makes finishing the bind reachable). The precise cross-daemon re-drive ordering
+  forever (this resolves the earlier contradiction between sections 1 and 7, between
+  "rejects" and "returns and finishes the bind": it returns, and the returned record
+  is what makes finishing the bind reachable). The precise cross-daemon re-drive ordering
   of the two binds is Open Question 3.
 
 ### 8. Test plan
@@ -648,26 +736,40 @@ migrate the assertion to the new binding while preserving its GC/retention inten
   `accept` of a redeemed locator resolves `{ status: 'already-consumed' }`; an
   `invite` overwrite cancels the pending invitation; and the pet-store entry is asserted to
   resolve to the bound handle (not merely to be absent) after redemption.
+- **Concurrency of consume-once** (the race section 6 exists to close, which every
+  *sequential* assertion above passes even for a naive `identifyLocal` +
+  `await storeIdentifier` composition that splits the compare from the set): fire two
+  **concurrent top-level** `accept`s of one locator (distinct acceptor handles) and
+  assert **exactly one** resolves `{ status: 'joined' }` and the other
+  `{ status: 'already-consumed' }`, never two `joined`. Written to fail if the
+  compare-and-set is split across a turn.
+- **Overwritten-id collection** (section 5's bypassed-layer analysis): with
+  `gcEnabled: true`, assert the consumed `invitation` formula's edge is released and
+  the formula collects after redemption (`formulaExistsInDb`), proving the CAS's
+  step-3 `removeEdgeIfUnreferenced` replays the store-controller bookkeeping the raw
+  CAS bypassed rather than retaining the invitation forever.
 - Pending-state observability: a consumer reading `locate(correspondentName)` sees
   `?type=invitation` while pending and a non-`invitation` type after the invitee
   joins (`?type=handle` same-daemon and `?type=remote` cross-daemon, section 1),
   asserted with the `type !== 'invitation'` check rather than `type === 'handle'`
   (which would miss the cross-daemon case), and from a subscription attached *after*
   the transition to prove it does not depend on observing the change live.
-- `remove` / `rename` on a **pending** entry (the claim section 5 corrects): assert
-  what actually happens (with `gcEnabled: false`, a removed invitation's persisted
-  formula is still reincarnatable, and a renamed pending invitation stays live under
-  the new name), so the builder's chosen genuine-revocation mechanism (cancel +
-  `revoked` disposition) is what the test pins, not the false "the reference is
-  dropped" behavior.
+- `remove` / `rename` on a **pending** entry: assert this increment's shipped
+  behavior, that both **reject** when the entry resolves to a pending `invitation`
+  formula (section 1), so neither ships as a silent false revocation affordance. The
+  test also documents *why* they reject by pinning the underlying facts (with
+  `gcEnabled: false`, a removed invitation's persisted formula would otherwise be
+  reincarnatable, and a renamed pending invitation would stay live under the new
+  name). Turning these into genuine-revocation verbs (cancel plus a `revoked`
+  disposition) is deferred (Open Question 5); the reject is the shipped guard.
 - Attenuation: a guest cannot register an arbitrary peer through any public
   method; and the section-3 overwrite refusal, where redeeming a locator that
   names an already-known node with differing addresses is rejected rather than
   silently rewriting the daemon-global entry (on both the `addPeerInfo` and
   `writeRemoteAgentKey` writes).
 - Failure taxonomy, split by carrier (section 1): assert the two exceptional
-  conditions **reject** — `accept` of a malformed locator with `malformed-locator`,
-  `accept` against an undialable inviter daemon with `unreachable` — while the
+  conditions **reject** (`accept` of a malformed locator with `malformed-locator`,
+  and `accept` against an undialable inviter daemon with `unreachable`), while the
   terminal states **resolve** a hardened `{ status }` record. Assert `accept` of a
   locator a *different* agent already redeemed resolves `{ status:
   'already-consumed' }`, and a re-driven `accept` of a locator *this* agent already
@@ -714,12 +816,14 @@ gates.
 - `packages/daemon/src/manager.js` (new daemon-core helper): add a single
   `acceptInvitation(agentId, handleId, locator, correspondentNamePath)` that carries
   the **acceptor-side** sequence and runs on the acceptor's daemon: parse (reject
-  `malformed-locator`) -> register peer via the insert-only capability -> record
-  agent-key routing -> resolve the invitation (reject `unreachable` on dial
-  failure) -> `E(invitation).accept(handleLocator)`. The **single commit point is
+  `malformed-locator`) -> **pre-check `correspondentNamePath` is free (return
+  `name-in-use` here, before spending the invitation, section 2 step 3)** -> register
+  peer via the insert-only capability -> record agent-key routing -> resolve the
+  invitation (reject `unreachable` on dial failure) ->
+  `E(invitation).accept(handleLocator)`. The **single commit point is
   the inviter-side compare-and-set inside `Invitation.accept`** (section 5), which
   runs on the *inviter's* daemon and returns a passable discriminated record
-  (`{ outcome, inviterHandleLocator }`) back across CapTP — not a thrown tag, which
+  (`{ outcome, inviterHandleLocator }`) back across CapTP, not a thrown tag, which
   would not survive the boundary (section 1). `acceptInvitation` then performs the
   **plain insert-only acceptor-side local bind** of the inviter's handle under
   `correspondentNamePath` (this is a single-writer local write, *not* a second
@@ -743,6 +847,12 @@ gates.
   own directory tree, and **not** through `nameHubMethodGuards` (it is not a public
   agent method). This is the single load-bearing new primitive the consume-once
   commit rests on (sections 5 and 6).
+- `remove` / `rename` guard: make both **reject** when the entry they touch resolves
+  to a pending `invitation` formula (sections 1 and 5), so neither ships as a silent
+  false revocation affordance. The check is local to the resolving hub (the same
+  `identifyLocal` the CAS reads); it refuses with a message directing the caller to
+  re-`invite` (revoke) or `accept` (redeem). Genuine `revoked`-disposition revocation
+  is deferred (Open Question 5); the reject is what this increment ships.
 - `packages/daemon/src/guest.js` (`makeGuestMaker` / `makeGuest`): add the `invite`
   and `accept` method bodies. `accept` is one call into the injected
   `acceptInvitation` helper. `invite` uses the injected `formulateInvitation` and
@@ -757,9 +867,12 @@ gates.
   those injections are added here.)
 - `packages/daemon/src/manager.js` (`makeInvitation`, and the `makeGuestMaker(...)`
   instantiation): drop the `EndoHost` cast in `locate`/`accept`; compute peer info
-  and register peers via the insert-only daemon-core capability; for a **guest**
-  inviter, bind the acceptor's own remote handle under the inviter's
-  `correspondentName` instead of `formulateGuest` + `@pins` pin.
+  and register peers via the insert-only daemon-core capability, ordering the
+  inviter-side peer registration **behind the winning compare-and-set** (section 3),
+  so a spent locator drives no registration; for a **guest** inviter, bind the
+  acceptor's own remote handle under the inviter's `correspondentName` instead of
+  `formulateGuest` + `@pins` pin, and after the winning CAS replay the store-controller
+  edge-release bookkeeping for the overwritten `invitation` id (section 5).
   The bind-vs-mint policy rides the **persisted invitation formula** as a field
   recorded at mint time, not a runtime test on the inviter's kind, so an invitation
   pending across a later convergence rollout keeps the meaning it was minted with
@@ -782,11 +895,18 @@ gates.
   `correspondentName`; regenerate `help-text-data.js`. Update `EndoGuest`'s help
   overview, which currently omits that a guest can onboard peers.
 - `packages/cli`: rename the `invite <guest-name>` / `accept <guest-name>`
-  positionals to the `correspondentName` spelling. No CLI *dispatch* change is
-  needed: `withEndoAgent` already routes on the shared `EndoAgent`
+  positionals to the `correspondentName` spelling. Routing needs no change:
+  `withEndoAgent` already routes on the shared `EndoAgent`
   (`packages/cli/src/context.js`), so once guests gain the methods,
   `endo invite <name> --as <guest>` and `endo accept <name> --as <guest>` start
-  working as a shipped affordance.
+  working as a shipped affordance. But converting the terminal states from a *throw*
+  to a *returned* `{ status }` record (section 1) breaks an in-repo consumer of the
+  old contract: `packages/cli/src/commands/accept.js:20` discards the result, so a
+  re-used or dead link that used to exit nonzero (a thrown error) would now exit **0
+  silently**. That command must be swept in this change to read the returned
+  `status`, print it, and exit nonzero on the failure statuses (`already-consumed`,
+  `peer-conflict`, `name-in-use`) while exiting 0 on `joined`/`already-joined`. Any
+  other in-repo caller that relied on `accept` throwing is swept the same way.
 
 ## Dependencies
 
@@ -826,17 +946,17 @@ gates.
    This is the unresolved half of the current `makeInvitation.accept` TODO; the
    builder must verify with a restart test.
 5. How should `remove` and `rename` on a **pending** invitation be made to genuinely
-   revoke it? Section 5 establishes they do *not* today (the persisted formula
-   reincarnates after `remove`; `rename` leaves it live under the new name while
-   redemption binds at the mint-captured path). The likely mechanism is to have those
-   verbs cancel the invitation controller and record a `revoked` disposition
-   (section 1) when the entry they touch resolves to a pending invitation, but that
-   is scoped work whose exact shape, and whether it belongs in this increment, is
+   *revoke* it? This increment ships the safe half: both verbs **reject** on a pending
+   entry (sections 1, 5, 9) so neither is a silent false revocation affordance. What
+   remains open is the genuine-revoke mechanism, having those verbs cancel the
+   invitation controller and record a `revoked` disposition (section 1) rather than
+   merely refuse, whose exact shape, and whether it belongs in this increment, is
    open.
 6. Should peer registration triggered by a guest `accept` be rate-limited or bounded
-   per guest, given a guest can now grow the daemon's known-peers set (to nodes it
-   holds valid invitations for) and can create invitation formulas via
-   `formulateInvitation`?
+   per guest? Ordering the inviter-side registration **behind the winning CAS**
+   (section 3) closes the spent-locator vector, so a leaked, already-consumed locator
+   drives no growth. What remains is the additive growth a guest can still cause via
+   *distinct* valid invitations it holds or mints (`formulateInvitation`).
    Likely out of scope for the first increment; name a follow-up if deferred.
 
 ## Prompt
