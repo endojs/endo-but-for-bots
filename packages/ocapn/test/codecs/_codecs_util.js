@@ -12,7 +12,7 @@
  */
 
 import harden from '@endo/harden';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex } from '@endo/hex';
 import { Far } from '@endo/marshal';
 import { HandledPromise } from '@endo/eventual-send';
@@ -31,6 +31,7 @@ import { makeSyrupWriter } from '../../src/syrup/encode.js';
 import { makeCborReader } from '../../src/cbor/decode.js';
 import { makeCborWriter } from '../../src/cbor/encode.js';
 import { cborToDiagnostic } from '../../src/cbor/diagnostic/index.js';
+import { equals } from '../../src/cbor/diagnostic/util.js';
 import { maybeDecode, notThrowsWithErrorUnwrapping } from '../_util.js';
 import { makeCryptography } from '../../src/cryptography.js';
 import { syrupCodec } from '../../src/syrup/index.js';
@@ -120,10 +121,10 @@ export const gifterLocation = harden({
   hints: { host: '127.0.0.1', port: '54824' },
 });
 
-export const exampleSigParamBytes = bytesToImmutable(
+export const exampleSigParamBytes = frozenBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i),
 );
-export const examplePubKeyQBytes = bytesToImmutable(
+export const examplePubKeyQBytes = frozenBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i * 2),
 );
 
@@ -147,19 +148,19 @@ export const receiverKeyForExporter = makeOcapnKeyPairFromPrivateKey(
 );
 
 export const exampleExporterSessionId = /** @type {SessionId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 7))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 7))
 );
 export const exampleGifterSideId = /** @type {PublicKeyId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 8))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 8))
 );
-export const exampleGiftId = bytesToImmutable(
+export const exampleGiftId = frozenBytes(
   Uint8Array.from({ length: 32 }, (_, i) => i * 9),
 );
 export const exampleReceiverSessionId = /** @type {SessionId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 10))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 10))
 );
 export const exampleReceiverSideId = /** @type {PublicKeyId} */ (
-  bytesToImmutable(Uint8Array.from({ length: 32 }, (_, i) => i * 11))
+  frozenBytes(Uint8Array.from({ length: 32 }, (_, i) => i * 11))
 );
 
 /**
@@ -422,9 +423,8 @@ export const testBidirectionally = (
       `value check: ${testDescriptor}`,
     );
   } else {
-    t.deepEqual(
-      readValueResult,
-      expectedValue,
+    t.true(
+      equals(readValueResult, expectedValue),
       `value check: ${testDescriptor}`,
     );
   }

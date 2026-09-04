@@ -1,5 +1,4 @@
 /// <reference types="ses"/>
-/* eslint-disable no-use-before-define */
 
 import type { Rejector } from '@endo/errors/rejector.js';
 import type { RemotableBrand } from '@endo/eventual-send';
@@ -251,6 +250,11 @@ export type AllLimits = {
 
 export type Limits = Partial<AllLimits>;
 
+/** Validate record values as Patterns without contextually widening them. */
+type PatternRecord<R extends CopyRecord<any>> = {
+  [K in keyof R]: R[K] extends Pattern ? R[K] : never;
+};
+
 /**
  * It is either a PassStyle other than 'tagged', or, if the underlying
  * PassStyle is 'tagged', then the `getTag` value for tags that are
@@ -278,13 +282,13 @@ export type PatternMatchers = {
   /**
    * Matches against the intersection of all sub-Patterns.
    */
-  and: <P extends Pattern[]>(...subPatts: P) => MatcherOf<'and', P>;
+  and: <const P extends Pattern[]>(...subPatts: P) => MatcherOf<'and', P>;
 
   /**
    * Matches against the union of all sub-Patterns
    * (requiring a successful match against at least one).
    */
-  or: <P extends Pattern[]>(...subPatts: P) => MatcherOf<'or', P>;
+  or: <const P extends Pattern[]>(...subPatts: P) => MatcherOf<'or', P>;
 
   /**
    * Matches against the negation of the sub-Pattern.
@@ -328,7 +332,10 @@ export type PatternMatchers = {
    * `M.string()`. If `payloadPatt` is omitted, it defaults to
    * `M.any()`.
    */
-  tagged: <TP extends Pattern = Pattern, PP extends Pattern = Pattern>(
+  tagged: <
+    TP extends Pattern = MatcherOf<'string', string>,
+    PP extends Pattern = MatcherOf<'any'>,
+  >(
     tagPatt?: TP,
     payloadPatt?: PP,
   ) => MatcherOf<'tagged', [TP, PP]>;
@@ -491,7 +498,7 @@ export type PatternMatchers = {
    * Matches any CopyArray whose elements are all matched by `subPatt`
    * if defined, subject to limits.
    */
-  arrayOf: <P extends Pattern = Pattern>(
+  arrayOf: <P extends Pattern = any>(
     subPatt?: P,
     limits?: Limits,
   ) => MatcherOf<'arrayOf', P>;
@@ -501,7 +508,7 @@ export type PatternMatchers = {
    * if defined and values are all matched by `valuePatt` if defined,
    * subject to limits.
    */
-  recordOf: <KP extends Pattern = Pattern, VP extends Pattern = Pattern>(
+  recordOf: <KP extends Pattern = any, VP extends Pattern = any>(
     keyPatt?: KP,
     valuePatt?: VP,
     limits?: Limits,
@@ -511,7 +518,7 @@ export type PatternMatchers = {
    * Matches any CopySet whose elements are all matched by `keyPatt`
    * if defined, subject to limits.
    */
-  setOf: <KP extends Pattern = Pattern>(
+  setOf: <KP extends Pattern = any>(
     keyPatt?: KP,
     limits?: Limits,
   ) => MatcherOf<'setOf', KP>;
@@ -523,7 +530,7 @@ export type PatternMatchers = {
    * `countPatt` is expected to rarely be useful,
    * but is provided to minimize surprise.
    */
-  bagOf: <KP extends Pattern = Pattern>(
+  bagOf: <KP extends Pattern = any>(
     keyPatt?: KP,
     countPatt?: Pattern,
     limits?: Limits,
@@ -544,7 +551,7 @@ export type PatternMatchers = {
    * and values are all matched by `valuePatt` if defined,
    * subject to limits.
    */
-  mapOf: <KP extends Pattern = Pattern, VP extends Pattern = Pattern>(
+  mapOf: <KP extends Pattern = any, VP extends Pattern = any>(
     keyPatt?: KP,
     valuePatt?: VP,
     limits?: Limits,
@@ -563,9 +570,9 @@ export type PatternMatchers = {
    * are collected and matched against `rest`.
    */
   splitArray: <
-    Req extends Pattern[] = Pattern[], // widest: any patterns (not [] — that would mean "no required")
-    Opt extends Pattern[] = [], // narrowest: no optional elements when omitted
-    Rest extends Pattern = never, // narrowest: no rest matching when omitted
+    const Req extends Pattern[] = Pattern[], // widest: any patterns (not [] — that would mean "no required")
+    const Opt extends Pattern[] = [], // narrowest: no optional elements when omitted
+    const Rest extends Pattern = never, // narrowest: no rest matching when omitted
   >(
     required: [...Req],
     optional?: [...Opt],
@@ -587,12 +594,12 @@ export type PatternMatchers = {
    * but may omit properties that appear on `optional`.
    */
   splitRecord: <
-    Req extends CopyRecord<Pattern> = CopyRecord<Pattern>,
-    Opt extends CopyRecord<Pattern> = {},
-    Rest extends Pattern = never,
+    const Req extends CopyRecord<any> = CopyRecord<Pattern>,
+    const Opt extends CopyRecord<any> = {},
+    const Rest extends Pattern = never,
   >(
-    required: Req,
-    optional?: Opt,
+    required: Req & PatternRecord<Req>,
+    optional?: Opt & PatternRecord<Opt>,
     rest?: Rest,
   ) => MatcherOf<'splitRecord', [Req, Opt, Rest]>;
 
@@ -919,9 +926,27 @@ export type MethodGuardReturns<
   OptArgs extends ArgGuard[] = ArgGuard[],
   RestGuard extends SyncValueGuard = SyncValueGuard,
 > = {
-  returns: <RG extends SyncValueGuard = MatcherOf<'kind', 'undefined'>>(
-    returnGuard?: RG,
-  ) => MethodGuard<CK, Args, OptArgs, RG, RestGuard>;
+  returns: {
+    (): MethodGuard<
+      CK,
+      Args,
+      OptArgs,
+      MatcherOf<'kind', 'undefined'>,
+      RestGuard
+    >;
+    (
+      returnGuard: undefined,
+    ): MethodGuard<
+      CK,
+      Args,
+      OptArgs,
+      MatcherOf<'kind', 'undefined'>,
+      RestGuard
+    >;
+    <RG extends SyncValueGuard>(
+      returnGuard: RG,
+    ): MethodGuard<CK, Args, OptArgs, RG, RestGuard>;
+  };
 };
 
 /**

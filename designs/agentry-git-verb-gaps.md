@@ -3,8 +3,20 @@
 | | |
 |---|---|
 | **Created** | 2026-07-08 |
+| **Updated** | 2026-08-05 |
 | **Author** | 0xpatrickdev (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Status
+
+All five verbs now span the exo, guard, backend, generated code-mode, and JSON
+surfaces.
+The cumulative Git facets make the authority choice explicit: reader omits
+mutation, writer adds ordinary changes and conflict checkout, and rewriter adds
+amend, reword, cherry-pick, and rebase.
+The default `makeGitTool` catalog selects writer, while the deprecated
+`makeGitHistoryTool` remains the narrow four-tool compatibility inventory
+backed by the canonical rewriter definitions.
 
 ## What is the Problem Being Solved?
 
@@ -27,15 +39,14 @@ acceptance contract for these verbs.
 
 | Workflow need | EndoGit shape | Code-mode shape | JSON tool slice |
 |---|---|---|---|
-| Commit amend | extend `commit(message, options?)` with `{ amend?: true }` | generated from the `EndoGit` type | include as the existing `commit` tool's optional `options.amend` |
+| Commit amend | extend `commit(message, options?)` with `{ amend?: true }` | generated from the `EndoGit` type | expose through explicit `makeGitHistoryTool` |
 | Cherry-pick | `cherryPick(ref, options?)` | generated from the `EndoGit` type | include with string or structured ref plus JSON options |
-| Reword commit | `reword(ref, message)` | generated from the `EndoGit` type | include with string or structured ref plus message |
+| Reword commit | `reword(ref, message)` | generated from the `EndoGit` type | expose through explicit `makeGitHistoryTool` using a JSON-safe ref |
 | Rebase autosquash | extend `rebase(input)` with `{ autosquash?: boolean }` for `mode: 'start'` | generated from the `EndoGit` type | include the `mode: 'start'` autosquash case |
 | Conflict-side selection | `checkoutConflict(entries, side)` with `side: 'ours' \| 'theirs'` | generated from the `EndoGit` type | include as `paths: string[]`, resolved to entries by the tool |
 
 Out of scope: broad `reset`, interactive todo editing, path checkout from an
-arbitrary commit, remote force-with-lease representation, and JSON exposure for
-the non-start `rebase` control calls.
+arbitrary commit, and remote force-with-lease representation.
 
 ## EndoGit API
 
@@ -137,29 +148,39 @@ autosquash.
 
 ## Code-Mode and JSON Surfaces
 
+> **New JSON tool-wrapper work remains parked — see #731.** The already
+> in-flight local Git slice described here is complete, including conflict
+> checkout and rebase recovery. The `EndoGit` verb substrate and generated
+> code-mode surface remain the primary consumer path.
+
 Code mode receives all five additions automatically by regenerating
-`packages/agentry/src/execute/git-types.js` from the canonical `EndoGit` type.
+`packages/agent-tools/generated/code-mode-globals/git-declarations.js` from
+the canonical `EndoGit` type.
 This is the first consumer because stack-surgery eval scenarios can hold
 `EndoMountEntry` values from `status()` and can sequence `rebase` control calls.
 
-The JSON tool slice should also include the first-cut mutators whose wire
-arguments are plain JSON:
+The explicit elevated JSON history-tool slice includes the first-cut mutators
+whose wire arguments are plain JSON:
 
-- `commit(message, options?)` grows the optional `options.amend` flag on the
-  existing `commit` tool.
+- `commit(message, options?)` exposes the optional `options.amend` flag through
+  `makeGitHistoryTool`, not the default `makeGitTool` inventory.
 - `cherryPick(ref, options?)` and `reword(ref, message)` use the same
   JSON-safe ref convention as `show`, `merge`, `createBranch({ startPoint })`,
   and other ref-bearing git tools.
-- `rebase({ mode: 'start', upstream, autosquash: true })` is exposed as the
-  structured autosquash start operation. The control-only modes (`continue`,
-  `abort`, `skip`) remain code-mode-first because they are usually part of a
-  multi-step local loop that benefits from typed state and explicit branching.
+- `rebase` exposes closed shapes for `start`, `continue`, `abort`, and `skip`.
+  `start` requires `upstream` and alone accepts `autosquash`. If `start` or
+  `continue` stops for conflicts, the tool directs the caller to inspect
+  status, resolve and stage the conflicts, then continue, skip the stopped
+  commit, or abort.
 - `checkoutConflict` is exposed to JSON as
   `checkoutConflict({ paths: string[], side })`. This follows the landed
   path-string tool pattern: the tool accepts mount-relative path strings,
   resolves them through the granted worktree mount, and calls the capability
   method with authenticated `EndoMountEntry` values. The capability method
-  itself remains entry-based, not string-based.
+  itself remains entry-based, not string-based. `ours` selects index stage 2
+  and `theirs` selects stage 3; during rebase, Git's intuitive branch roles are
+  inverted because `ours` is the upstream plus replayed commits and `theirs`
+  is the commit being replayed.
 
 The JSON slice still excludes methods that return live capabilities or require
 stored caprefs in their result flow. Those need the petname/result-persistence
@@ -206,7 +227,6 @@ unless it carries Git's full footgun honestly.
 | Interactive todo editing | Explicitly not planned. | It would expose arbitrary sequencing (`edit`, `drop`, `exec`, reorder) and recreate the shell/editor surface this capability layer avoids. |
 | Path checkout from an arbitrary commit | Deferred. | The existing historical read surface plus named `restore` cover current eval needs; a future design can add a structured operation if an eval needs exact path checkout semantics. |
 | Remote force-with-lease representation | Deferred to `GitRemote`, not local `Git`. | Push policy belongs on the bounded remote capability so endpoint, refspec, and force-push checks stay together. |
-| JSON tools for `rebase` control modes | Deferred until capref/result persistence and loop ergonomics are settled. | `continue`, `abort`, and `skip` are usually follow-up steps in a conflict-resolution loop, while autosquash start is a single JSON-safe operation. |
 
 ## Authority Analysis
 
@@ -227,9 +247,9 @@ worktree the caller could already mutate through `add`, `restore`, `commit`,
   without giving it arbitrary path strings.
 
 The remaining operational hazard is destructive history rewrite, not authority
-escape. That hazard is inherent in giving a writable local `Git` cap and is
-bounded by grant choice: a host can give `git.readOnly()` to agents that may
-inspect history but must not rewrite it.
+escape. That hazard is bounded by the explicit facet grant: a writer can
+resolve conflicts but cannot amend, reword, cherry-pick, or rebase, and a
+reader can inspect history without any mutation authority.
 
 ## Dependencies
 

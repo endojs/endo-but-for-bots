@@ -3,7 +3,7 @@
 
 import harden from '@endo/harden';
 
-/** @import { ContentStore } from '@endo/platform/fs/lite/types.js' */
+/** @import { ContentStore, ContentStoreBlob } from '@endo/platform/fs/lite/types.js' */
 /** @import { ContentStoreOptions } from '../types.js' */
 
 /**
@@ -15,8 +15,8 @@ import harden from '@endo/harden';
  * `packages/daemon/src/daemon.js`.
  *
  * This store stands on `@endo/platform` for both halves of its model:
- * the CAS interface it produces (`ContentStore`, whose `fetch()`
- * returns a platform `ReadableBlob`) and the injected dependencies it
+ * the CAS interface it produces (`ContentStore`, whose `fetch()` returns a
+ * host-side `ContentStoreBlob` backing value) and the injected dependencies it
  * consumes (`ContentStoreFilePowers` for the filesystem seam,
  * `ContentStoreCryptoPowers` for content addressing), all defined in
  * `@endo/platform/fs/lite/types`.
@@ -64,10 +64,8 @@ export const makeContentStore = (storageDirectoryPath, options) => {
       // Stream to temporary file and calculate hash.
       await filePowers.makePath(storageDirectoryPath);
       const fileWriter = filePowers.makeFileWriter(temporaryStoragePath);
-      // eslint-disable-next-line no-await-in-loop
       for await (const chunk of readable) {
         digester.update(chunk);
-        // eslint-disable-next-line no-await-in-loop
         await fileWriter.next(chunk);
       }
       await fileWriter.return(undefined);
@@ -98,7 +96,15 @@ export const makeContentStore = (storageDirectoryPath, options) => {
       // requested `[offset, offset + length)` window leaves disk.
       const readRange = (offset, length) =>
         filePowers.readFileRange(storagePath, offset, length);
-      return harden({ makeFileReader, text, json, size, readRange });
+      /** @satisfies {ContentStoreBlob} */
+      const contentStoreBlob = harden({
+        makeFileReader,
+        text,
+        json,
+        size,
+        readRange,
+      });
+      return contentStoreBlob;
     },
     /**
      * @param {string} sha256

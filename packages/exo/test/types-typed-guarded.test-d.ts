@@ -1,6 +1,4 @@
-/* eslint-disable no-lone-blocks, no-empty-function */
-// eslint-disable-next-line import/no-extraneous-dependencies
-import { expectAssignable, expectType } from 'tsd';
+import { expectTypeOf } from 'expect-type';
 import type { Passable } from '@endo/pass-style';
 import { M } from '@endo/patterns';
 import { defineExoClass } from '../index.js';
@@ -35,11 +33,12 @@ const CounterI = M.interface('Counter', {
     },
   );
   const counter = makeCounter(0n);
-  expectAssignable<Passable>(counter);
+  expectTypeOf(counter).toExtend<Passable>();
 
-  // The exo's `incr` has the impl's param name `step`
-  expectType<(step: bigint) => bigint>(counter.incr);
-  expectType<() => bigint>(counter.read);
+  // The exo's `incr` preserves the impl's parameter name and defaulted
+  // optionality.
+  expectTypeOf(counter.incr).toEqualTypeOf<(step?: bigint) => bigint>();
+  expectTypeOf(counter.read).toEqualTypeOf<() => bigint>();
 }
 
 // GuardedMethods utility type: extracts guard types with impl param names
@@ -65,8 +64,10 @@ const CounterI = M.interface('Counter', {
 
   // The guard declares `incr` with .optional(M.nat()), so the param is optional.
   // The impl's param name `step` is preserved.
-  expectType<(step?: bigint) => bigint>(null as unknown as CM['incr']);
-  expectType<() => bigint>(null as unknown as CM['read']);
+  expectTypeOf(null as unknown as CM['incr']).toEqualTypeOf<
+    (step?: bigint) => bigint
+  >();
+  expectTypeOf(null as unknown as CM['read']).toEqualTypeOf<() => bigint>();
 }
 
 // Limitation:

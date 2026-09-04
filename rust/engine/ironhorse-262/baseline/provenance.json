@@ -1,0 +1,12 @@
+{
+  "runner": "ironhorse-xst",
+  "test262_sha": "be13516fb6441b950ba8a3df97eb34062c186972",
+  "test262_ref": "tc39/test262@be13516fb644",
+  "endo_sha": "14f26d0a6989f5bb93cd1c1ca731dc7e1bc383d6",
+  "oracle": "moddable submodule @ 23b4d6b0a65f (XS 8.3.1)",
+  "command": "full-run.sh --jobs 16 --oracle on (whole test/ tree; 3 non-terminating cases externally bounded and recorded as ironhorse-failure)",
+  "config": "oracle=on flat-per-directory-batches jobs=16 subtree=<all>; 1727/1730 batches auto-completed in ~90s, 3 hanging cases (await-using/const/using -invalid-assignment-next-expression-for) killed after >11min and re-run excluding the hang",
+  "started_at": "2026-08-08T04:23:15Z",
+  "finished_at": "2026-08-08T04:39:45Z",
+  "host": "endolin-garden2-5bcdff64"
+}

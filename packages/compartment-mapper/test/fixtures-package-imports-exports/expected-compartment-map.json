@@ -1,0 +1,56 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        },
+        "patterns-lib": {
+          "link": "patterns-lib"
+        },
+        "patterns-lib/features/alpha.js": {
+          "link": "patterns-lib"
+        },
+        "patterns-lib/features/beta/exact": {
+          "link": "patterns-lib"
+        },
+        "patterns-lib/features/beta/gamma.js": {
+          "link": "patterns-lib"
+        },
+        "patterns-lib/utils/private/thing.js": {
+          "link": "patterns-lib"
+        }
+      }
+    },
+    "patterns-lib": {
+      "modules": {
+        "#internal/helper.js": {
+          "link": "patterns-lib"
+        },
+        "./src/features/alpha.js": {
+          "language": "js"
+        },
+        "./src/features/beta/exact-target.js": {
+          "language": "js"
+        },
+        "./src/features/beta/gamma.js": {
+          "language": "js"
+        },
+        "./src/internal/helper.js": {
+          "language": "js"
+        },
+        "./src/main.js": {
+          "language": "js"
+        },
+        "./src/private/thing.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/main.js",
+  "entryCompartment": "app",
+  "entryModule": "./main.js",
+  "fixture": "fixtures-package-imports-exports",
+  "oracle": "node"
+}

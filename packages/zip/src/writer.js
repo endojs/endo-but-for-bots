@@ -1,6 +1,6 @@
 // @ts-check
 
-import { crc32 } from './crc32.js';
+import { crc32 } from '@endo/crc32';
 import { BufferWriter } from './buffer-writer.js';
 import { writeZip as writeZipFormat } from './format-writer.js';
 import { STORE, DEFLATE } from './compression.js';
@@ -21,6 +21,7 @@ export class ZipWriter {
   constructor(options = {}) {
     const { deflate = undefined, deflateNow = undefined } = options;
 
+    /** @type {ArchivedFile['compressionMethod']} */
     let compressionMethod = STORE;
     /** @type {CompressFn | undefined} */
     let compressor = store;

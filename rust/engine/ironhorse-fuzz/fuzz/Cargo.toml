@@ -1,0 +1,79 @@
+# cargo-fuzz manifest for the ironhorse-fuzz targets (design § Fuzzability).
+# Run locally with `cargo fuzz run <target>` from this directory (the sibling
+# rust-toolchain.toml pins the nightly, so no `+nightly-…` is needed); not part of
+# the engine workspace build (kept out via the parent's default-members). The
+# comparison and generation logic lives in the ironhorse-fuzz lib, which the
+# engine workspace builds and unit-tests without a libFuzzer toolchain.
+#
+# NOTE: fuzzing no longer runs in pull-request CI — a garden background service
+# drives these targets continuously over a persistent corpus and files each finding
+# as a standing repair PR. These targets remain fully runnable locally.
+[package]
+name = "ironhorse-fuzz-targets"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ironhorse-fuzz = { path = ".." }
+
+[[bin]]
+name = "differential_source"
+path = "fuzz_targets/differential_source.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "bytecode_decoder"
+path = "fuzz_targets/bytecode_decoder.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "differential_stage2b"
+path = "fuzz_targets/differential_stage2b.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "differential_regexp"
+path = "fuzz_targets/differential_regexp.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "differential_regexp_surface"
+path = "fuzz_targets/differential_regexp_surface.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "parser"
+path = "fuzz_targets/parser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "differential_compile"
+path = "fuzz_targets/differential_compile.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "snapshot_roundtrip"
+path = "fuzz_targets/snapshot_roundtrip.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "snapshot_decoder"
+path = "fuzz_targets/snapshot_decoder.rs"
+test = false
+doc = false
+
+[workspace]
+# Own workspace: cargo-fuzz builds this tree in isolation.

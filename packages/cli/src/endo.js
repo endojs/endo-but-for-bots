@@ -1,6 +1,5 @@
 // @ts-nocheck
-/* global process */
-/* eslint-disable no-await-in-loop, no-bitwise, no-throw-literal */
+/* eslint-disable no-bitwise, no-throw-literal */
 
 // Establish a perimeter:
 import '@endo/init';
@@ -13,6 +12,10 @@ import { prompt } from './prompt.js';
 
 import { isTerminalError } from './doe-normaal.js';
 import installGroupedHelp from './grouped-help.js';
+import {
+  collectDeniedSegment,
+  resolveDeniedSegments,
+} from './denied-segments.js';
 
 const packageDescriptorPath = url.fileURLToPath(
   new URL('../package.json', import.meta.url),
@@ -27,6 +30,16 @@ const commonOptions = {
   requiredName: [
     '-n,--name <name>',
     'Assigns a name to the result for future reference (required)',
+  ],
+  deny: [
+    '--deny <segment>',
+    'Restrict a path segment such as .ssh (repeatable); the given ' +
+      'segments replace the default restricted set',
+    collectDeniedSegment,
+  ],
+  allow: [
+    '--allow',
+    'Allow all path segments (disable path-segment denial entirely)',
   ],
 };
 
@@ -86,14 +99,14 @@ export const main = async rawArgs => {
       parseEnvOption,
       {},
     )
-    .action(async (filePath, args, cmd) => {
+    .action(async (filePath, args, options) => {
       const {
         as: agentNames,
         archive: archiveName,
         UNCONFINED: importPath,
         powers: powersName = '@none',
         env = {},
-      } = cmd.opts();
+      } = options;
       const { run } = await import('./commands/run.js');
       return run({
         filePath,
@@ -125,7 +138,7 @@ export const main = async rawArgs => {
       parseEnvOption,
       {},
     )
-    .action(async (filePath, cmd) => {
+    .action(async (filePath, options) => {
       const {
         UNCONFINED: importPath,
         name: resultName,
@@ -134,7 +147,7 @@ export const main = async rawArgs => {
         as: agentNames,
         powers: powersName = '@none',
         env = {},
-      } = cmd.opts();
+      } = options;
       const { makeCommand } = await import('./commands/make.js');
       return makeCommand({
         filePath,
@@ -153,8 +166,8 @@ export const main = async rawArgs => {
     .option(...commonOptions.as)
     .option('-f,--follow', 'Follow the inbox for messages as they arrive')
     .description('read messages')
-    .action(async cmd => {
-      const { as: agentNames, follow } = cmd.opts();
+    .action(async options => {
+      const { as: agentNames, follow } = options;
       const { inbox } = await import('./commands/inbox.js');
       return inbox({ follow, agentNames });
     });
@@ -168,12 +181,12 @@ export const main = async rawArgs => {
     )
     .option(...commonOptions.as)
     .option(...commonOptions.name)
-    .action(async (description, cmd) => {
+    .action(async (description, options) => {
       const {
         name: resultName,
         as: agentNames,
         to: toName = '@host',
-      } = cmd.opts();
+      } = options;
       const { request } = await import('./commands/request.js');
       return request({ toName, description, resultName, agentNames });
     });
@@ -182,8 +195,8 @@ export const main = async rawArgs => {
     .command('resolve <request-number> <resolution-name>')
     .description('grant a request')
     .option(...commonOptions.as)
-    .action(async (requestNumberText, resolutionName, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (requestNumberText, resolutionName, options) => {
+      const { as: agentNames } = options;
       const { resolveCommand } = await import('./commands/resolve.js');
       return resolveCommand({
         requestNumberText,
@@ -196,8 +209,8 @@ export const main = async rawArgs => {
     .command('reject <request-number> [message]')
     .description('deny a request')
     .option(...commonOptions.as)
-    .action(async (requestNumberText, message, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (requestNumberText, message, options) => {
+      const { as: agentNames } = options;
       const { rejectCommand } = await import('./commands/reject.js');
       return rejectCommand({
         requestNumberText,
@@ -221,8 +234,8 @@ export const main = async rawArgs => {
       },
       [],
     )
-    .action(async (source, cmd) => {
-      const { as: agentNames, slot: slotArgs } = cmd.opts();
+    .action(async (source, options) => {
+      const { as: agentNames, slot: slotArgs } = options;
       const { defineCommand } = await import('./commands/define.js');
       return defineCommand({ source, slotArgs, agentNames });
     });
@@ -242,13 +255,13 @@ export const main = async rawArgs => {
     )
     .option('-w,--worker <name>', 'Worker to use for evaluation')
     .option(...commonOptions.name)
-    .action(async (messageNumberText, cmd) => {
+    .action(async (messageNumberText, options) => {
       const {
         as: agentNames,
         bind: bindArgs,
         worker: workerName,
         name: resultName,
-      } = cmd.opts();
+      } = options;
       const { endowCommand } = await import('./commands/endow.js');
       return endowCommand({
         messageNumberText,
@@ -272,8 +285,8 @@ export const main = async rawArgs => {
       },
       [],
     )
-    .action(async (toName, description, cmd) => {
-      const { as: agentNames, field: fieldArgs } = cmd.opts();
+    .action(async (toName, description, options) => {
+      const { as: agentNames, field: fieldArgs } = options;
       const { formCommand } = await import('./commands/form.js');
       return formCommand({
         toName,
@@ -296,8 +309,8 @@ export const main = async rawArgs => {
       },
       [],
     )
-    .action(async (messageNumberText, cmd) => {
-      const { as: agentNames, field: fieldArgs } = cmd.opts();
+    .action(async (messageNumberText, options) => {
+      const { as: agentNames, field: fieldArgs } = options;
       const { submitCommand } = await import('./commands/submit.js');
       return submitCommand({
         messageNumberText,
@@ -310,8 +323,8 @@ export const main = async rawArgs => {
     .command('send <agent> <message-with-embedded-references>')
     .description('send a message with @named-values @for-you:from-me')
     .option(...commonOptions.as)
-    .action(async (agentName, message, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (agentName, message, options) => {
+      const { as: agentNames } = options;
       const { send } = await import('./commands/send.js');
       return send({ message, agentName, agentNames });
     });
@@ -320,8 +333,8 @@ export const main = async rawArgs => {
     .command('reply <message-number> <message-with-embedded-references>')
     .description('reply to a message with @named-values @for-you:from-me')
     .option(...commonOptions.as)
-    .action(async (messageNumberText, message, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (messageNumberText, message, options) => {
+      const { as: agentNames } = options;
       const { reply } = await import('./commands/reply.js');
       return reply({ messageNumberText, message, agentNames });
     });
@@ -330,8 +343,8 @@ export const main = async rawArgs => {
     .command('send-value <message-number> <pet-name>')
     .description('reply to a message with a retained value from the pet store')
     .option(...commonOptions.as)
-    .action(async (messageNumberText, petName, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (messageNumberText, petName, options) => {
+      const { as: agentNames } = options;
       const { sendValueCommand } = await import('./commands/send-value.js');
       return sendValueCommand({ messageNumberText, petName, agentNames });
     });
@@ -341,8 +354,8 @@ export const main = async rawArgs => {
     .option(...commonOptions.name)
     .option(...commonOptions.as)
     .description('adopt a @value from a message')
-    .action(async (messageNumberText, edgeName, cmd) => {
-      const { name = edgeName, as: agentNames } = cmd.opts();
+    .action(async (messageNumberText, edgeName, options) => {
+      const { name = edgeName, as: agentNames } = options;
       const { adoptCommand } = await import('./commands/adopt.js');
       return adoptCommand({
         messageNumberText,
@@ -356,8 +369,8 @@ export const main = async rawArgs => {
     .command('dismiss <message-number>')
     .description('delete a message')
     .option(...commonOptions.as)
-    .action(async (messageNumberText, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (messageNumberText, options) => {
+      const { as: agentNames } = options;
       const { dismissCommand } = await import('./commands/dismiss.js');
       return dismissCommand({
         messageNumberText,
@@ -370,8 +383,8 @@ export const main = async rawArgs => {
     .alias('dismiss-all')
     .description('dismiss all messages')
     .option(...commonOptions.as)
-    .action(async cmd => {
-      const { as: agentNames } = cmd.opts();
+    .action(async options => {
+      const { as: agentNames } = options;
       const { clearCommand } = await import('./commands/clear.js');
       return clearCommand({
         agentNames,
@@ -393,8 +406,8 @@ export const main = async rawArgs => {
       '-t,--type <formulaType>',
       'Show only names whose formula type matches (e.g. handle, eval, readable-blob)',
     )
-    .action(async (directory, cmd) => {
-      const { follow, json, verbose, grouped, type } = cmd.opts();
+    .action(async (directory, options) => {
+      const { follow, json, verbose, grouped, type } = options;
       const { list } = await import('./commands/list.js');
       return list({ directory, follow, json, verbose, grouped, type });
     });
@@ -404,8 +417,8 @@ export const main = async rawArgs => {
     .alias('rm')
     .description('forget a named value')
     .option(...commonOptions.as)
-    .action(async (petNamePaths, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (petNamePaths, options) => {
+      const { as: agentNames } = options;
       const { remove } = await import('./commands/remove.js');
       return remove({ petNamePaths, agentNames });
     });
@@ -415,8 +428,8 @@ export const main = async rawArgs => {
     .alias('mv')
     .description('change the name for a value')
     .option(...commonOptions.as)
-    .action(async (fromPath, toPath, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (fromPath, toPath, options) => {
+      const { as: agentNames } = options;
       const { move } = await import('./commands/move.js');
       return move({ fromPath, toPath, agentNames });
     });
@@ -426,8 +439,8 @@ export const main = async rawArgs => {
     .alias('cp')
     .option(...commonOptions.as)
     .description('makes a duplicate of a given value with a new name')
-    .action(async (sourcePath, targetPath, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (sourcePath, targetPath, options) => {
+      const { as: agentNames } = options;
       const { copy } = await import('./commands/copy.js');
       return copy({ agentNames, sourcePath, targetPath });
     });
@@ -436,8 +449,8 @@ export const main = async rawArgs => {
     .command('show <name>')
     .description('prints the named value')
     .option(...commonOptions.as)
-    .action(async (name, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (name, options) => {
+      const { as: agentNames } = options;
       const { show } = await import('./commands/show.js');
       return show({ name, agentNames });
     });
@@ -446,8 +459,8 @@ export const main = async rawArgs => {
     .command('locate <name>')
     .description('prints the locator for a named value')
     .option(...commonOptions.as)
-    .action(async (name, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (name, options) => {
+      const { as: agentNames } = options;
       const { locate } = await import('./commands/locate.js');
       return locate({ name, agentNames });
     });
@@ -462,8 +475,8 @@ export const main = async rawArgs => {
       'interpret the argument as a formula identifier rather than a pet name path',
     )
     .option('--json', 'emit the raw FormulaRecord as JSON for scripting')
-    .action(async (nameOrIdentifier, cmd) => {
-      const { identifier: asIdentifier, json: asJson } = cmd.opts();
+    .action(async (nameOrIdentifier, options) => {
+      const { identifier: asIdentifier, json: asJson } = options;
       const { inspect } = await import('./commands/inspect.js');
       return inspect({
         nameOrIdentifier,
@@ -483,8 +496,8 @@ export const main = async rawArgs => {
       'interpret <name-or-locator> as an endo:// locator rather than a pet name',
     )
     .option('--json', 'emit raw RetentionPath[] as JSON instead of prose')
-    .action(async (name, cmd) => {
-      const { as: agentNames, locator = false, json = false } = cmd.opts();
+    .action(async (name, options) => {
+      const { as: agentNames, locator = false, json = false } = options;
       const { paths } = await import('./commands/paths.js');
       return paths({ name, agentNames, locator, json });
     });
@@ -503,8 +516,8 @@ export const main = async rawArgs => {
     )
     .option('--stats', 'print aggregator stats only')
     .option('--json', 'emit JSON instead of formatted text')
-    .action(async (errorId, cmd) => {
-      const opts = cmd.opts();
+    .action(async (errorId, options) => {
+      const opts = options;
       const { trace } = await import('./commands/trace.js');
       return trace({
         errorId,
@@ -520,8 +533,8 @@ export const main = async rawArgs => {
     .command('follow <name>')
     .option(...commonOptions.as)
     .description('subscribe to a stream of values')
-    .action(async (name, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (name, options) => {
+      const { as: agentNames } = options;
       const { followCommand } = await import('./commands/follow.js');
       return followCommand({ name, agentNames });
     });
@@ -530,8 +543,8 @@ export const main = async rawArgs => {
     .command('cat <name>')
     .description('dumps a blob')
     .option(...commonOptions.as)
-    .action(async (name, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (name, options) => {
+      const { as: agentNames } = options;
       const { cat } = await import('./commands/cat.js');
       return cat({ name, agentNames });
     });
@@ -548,7 +561,7 @@ export const main = async rawArgs => {
     .option('--json <json>', 'store JSON')
     .option('--json-stdin', 'store STDIN JSON')
     .option('--bigint <bigint>', 'store a bigint')
-    .action(async cmd => {
+    .action(async options => {
       const {
         name,
         as: agentNames,
@@ -559,7 +572,7 @@ export const main = async rawArgs => {
         json: storeJson,
         jsonStdin: storeJsonStdin,
         bigint: storeBigInt,
-      } = cmd.opts();
+      } = options;
       const { store } = await import('./commands/store.js');
       return store({
         storePath,
@@ -580,8 +593,8 @@ export const main = async rawArgs => {
     .description('checks in a local directory as a readable tree')
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
-    .action(async (sourcePath, cmd) => {
-      const { name, as: agentNames } = cmd.opts();
+    .action(async (sourcePath, options) => {
+      const { name, as: agentNames } = options;
       if (!name) {
         throw new Error('--name is required for checkin');
       }
@@ -594,8 +607,8 @@ export const main = async rawArgs => {
     .alias('co')
     .description('checks out a readable tree to a local directory')
     .option(...commonOptions.as)
-    .action(async (treeName, destPath, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (treeName, destPath, options) => {
+      const { as: agentNames } = options;
       const { checkout } = await import('./commands/checkout.js');
       return checkout({ treeName, destPath, agentNames });
     });
@@ -606,13 +619,21 @@ export const main = async rawArgs => {
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
     .option('--read-only', 'mount as read-only')
-    .action(async (sourcePath, cmd) => {
-      const { name, as: agentNames, readOnly } = cmd.opts();
+    .option(...commonOptions.deny)
+    .option(...commonOptions.allow)
+    .action(async (sourcePath, options) => {
+      const { name, as: agentNames, readOnly, deny, allow } = options;
       if (!name) {
         throw new Error('--name is required for mount');
       }
       const { mount: mountCmd } = await import('./commands/mount.js');
-      return mountCmd({ sourcePath, name, agentNames, readOnly });
+      return mountCmd({
+        sourcePath,
+        name,
+        agentNames,
+        readOnly,
+        deniedSegments: resolveDeniedSegments(deny, allow),
+      });
     });
 
   program
@@ -624,13 +645,20 @@ export const main = async rawArgs => {
     .option(...commonOptions.as)
     .option(...commonOptions.requiredName)
     .option('--read-only', 'mount as read-only')
-    .action(async cmd => {
-      const { name, as: agentNames, readOnly } = cmd.opts();
+    .option(...commonOptions.deny)
+    .option(...commonOptions.allow)
+    .action(async options => {
+      const { name, as: agentNames, readOnly, deny, allow } = options;
       if (!name) {
         throw new Error('--name is required for mktmp');
       }
       const { mktmp } = await import('./commands/mktmp.js');
-      return mktmp({ name, agentNames, readOnly });
+      return mktmp({
+        name,
+        agentNames,
+        readOnly,
+        deniedSegments: resolveDeniedSegments(deny, allow),
+      });
     });
 
   program
@@ -642,12 +670,12 @@ export const main = async rawArgs => {
       'Reuse an existing worker rather than create a new one',
     )
     .option(...commonOptions.name)
-    .action(async (source, names, cmd) => {
+    .action(async (source, names, options) => {
       const {
         name: resultName,
         worker: workerName = '@main',
         as: agentNames,
-      } = cmd.opts();
+      } = options;
       const { evalCommand } = await import('./commands/eval.js');
       return evalCommand({
         source,
@@ -662,8 +690,8 @@ export const main = async rawArgs => {
     .command('spawn [names...]')
     .description('creates a worker')
     .option(...commonOptions.as)
-    .action(async (petNamePaths, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (petNamePaths, options) => {
+      const { as: agentNames } = options;
       const { spawn } = await import('./commands/spawn.js');
       return spawn({ petNamePaths, agentNames });
     });
@@ -681,12 +709,12 @@ export const main = async rawArgs => {
       parseOptionAsMapping,
       {},
     )
-    .action(async (applicationPath, cmd) => {
+    .action(async (applicationPath, options) => {
       const {
         name: archiveName,
         as: agentNames,
         commonDep: commonDependencies,
-      } = cmd.opts();
+      } = options;
       const { archiveCommand } = await import('./commands/archive.js');
       return archiveCommand({
         applicationPath,
@@ -708,8 +736,8 @@ export const main = async rawArgs => {
       {},
     )
     .description('makes a separate mailbox and storage for you')
-    .action(async (handleName, agentName, cmd) => {
-      const { as: agentNames, introduce: introducedNames } = cmd.opts();
+    .action(async (handleName, agentName, options) => {
+      const { as: agentNames, introduce: introducedNames } = options;
       const { mkhost } = await import('./commands/mkhost.js');
       return mkhost({ handleName, agentName, agentNames, introducedNames });
     });
@@ -724,8 +752,8 @@ export const main = async rawArgs => {
       {},
     )
     .description('makes a mailbox and storage for a guest (peer or program)')
-    .action(async (handleName, agentName, cmd) => {
-      const { as: agentNames, introduce: introducedNames } = cmd.opts();
+    .action(async (handleName, agentName, options) => {
+      const { as: agentNames, introduce: introducedNames } = options;
       const { mkguest } = await import('./commands/mkguest.js');
       return mkguest({ agentName, handleName, agentNames, introducedNames });
     });
@@ -734,8 +762,8 @@ export const main = async rawArgs => {
     .command('mkdir <path>')
     .option(...commonOptions.as)
     .description('makes a directory (pet store, name hub)')
-    .action(async (directoryPath, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (directoryPath, options) => {
+      const { as: agentNames } = options;
       const { mkdir } = await import('./commands/mkdir.js');
       return mkdir({ agentNames, directoryPath });
     });
@@ -743,8 +771,8 @@ export const main = async rawArgs => {
   program
     .command('invite <guest-name>')
     .option(...commonOptions.as)
-    .action(async (guestName, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (guestName, options) => {
+      const { as: agentNames } = options;
       const { invite } = await import('./commands/invite.js');
       return invite({ agentNames, guestName });
     });
@@ -752,8 +780,8 @@ export const main = async rawArgs => {
   program
     .command('accept <guest-name>')
     .option(...commonOptions.as)
-    .action(async (guestName, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (guestName, options) => {
+      const { as: agentNames } = options;
       const { accept } = await import('./commands/accept.js');
       return accept({ agentNames, guestName });
     });
@@ -762,8 +790,8 @@ export const main = async rawArgs => {
     .command('cancel <name> [reason]')
     .option(...commonOptions.as)
     .description('cancel a value and its deps, recovering resources')
-    .action(async (name, reason, cmd) => {
-      const { as: agentNames } = cmd.opts();
+    .action(async (name, reason, options) => {
+      const { as: agentNames } = options;
       const { cancelCommand } = await import('./commands/cancel.js');
       return cancelCommand({ name, agentNames, reason });
     });
@@ -775,8 +803,8 @@ export const main = async rawArgs => {
       'prints paths for state, logs, caches, socket, pids\n' +
         'specify just one part, or none to get them all',
     )
-    .action(async cmd => {
-      const { json: asJSON = false } = cmd.opts();
+    .action(async options => {
+      const { json: asJSON = false } = options;
       const { cachePath, ephemeralStatePath, logPath, sockPath, statePath } =
         await import('./config.js');
       const stuff = {
@@ -839,8 +867,8 @@ export const main = async rawArgs => {
     .command('status')
     .description('query and print status of the endo daemon')
     .option('-v, --verbose [level]', 'verbosity levle o status interrogation')
-    .action(async cmd => {
-      const opts = cmd.opts();
+    .action(async options => {
+      const opts = options;
       const verbose = Number(opts.verbose);
       const { status } = await import('@endo/daemon');
       await status(undefined, {
@@ -852,8 +880,8 @@ export const main = async rawArgs => {
     .command('start')
     .description('start the endo daemon as a background service')
     .option('--dry-run', 'log what would be don, rather than doing it')
-    .action(async cmd => {
-      const { dryRun } = cmd.opts();
+    .action(async options => {
+      const { dryRun } = options;
       const { start } = await import('@endo/daemon');
       await start(undefined, {
         dryRun,
@@ -867,8 +895,8 @@ export const main = async rawArgs => {
       '--feral-errors',
       'disable SES error taming (readable error traces)',
     )
-    .action(async cmd => {
-      const { feralErrors } = cmd.opts();
+    .action(async options => {
+      const { feralErrors } = options;
       if (feralErrors) {
         process.env.LOCKDOWN_ERROR_TAMING = 'unsafe';
       }
@@ -891,8 +919,8 @@ export const main = async rawArgs => {
       '--feral-errors',
       'disable SES error taming (readable error traces)',
     )
-    .action(async cmd => {
-      const { feralErrors } = cmd.opts();
+    .action(async options => {
+      const { feralErrors } = options;
       const { restart } = await import('@endo/daemon');
       await restart(undefined, { feralErrors });
     });
@@ -909,8 +937,8 @@ export const main = async rawArgs => {
     .command('purge')
     .option('-f, --force', 'skip the confirmation prompt')
     .description('erases persistent state and stops if running')
-    .action(async cmd => {
-      const { force } = cmd.opts();
+    .action(async options => {
+      const { force } = options;
       await null;
       const doPurge =
         force ||
@@ -934,8 +962,8 @@ export const main = async rawArgs => {
       'milliseconds between daemon restart checks',
     )
     .description('writes out the daemon log, optionally following updates')
-    .action(async cmd => {
-      const { follow, ping, all } = cmd.opts();
+    .action(async options => {
+      const { follow, ping, all } = options;
       const { log: logCommand } = await import('./commands/log.js');
       await logCommand({ follow, ping, all });
     });

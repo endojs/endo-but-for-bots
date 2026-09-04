@@ -1,13 +1,20 @@
 // @ts-check
 
 export { makeTool } from './tool.js';
-export { makeGitTool } from './git-tool.js';
-export { makeGitMountTools } from './git-mount-tool.js';
+export { makeGitHistoryTool, makeGitTool } from './json-tools/git.js';
+export { makeGitMountTools } from './json-tools/git-mount.js';
+export { makeGitRemoteTool } from './json-tools/git-remote.js';
 export {
   makeMountReadTool,
   makeMountListTool,
   makeMountStatTool,
   makeMountEditTool,
   makeMountFsTools,
-} from './mount-fs.js';
-export { makeShellTool } from './shell-tool.js';
+} from './json-tools/fs.js';
+export { makeShellTool } from './json-tools/shell.js';
+export { makeHttpTool } from './json-tools/http.js';
+export {
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionHistoryTools,
+} from './workspace.js';

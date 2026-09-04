@@ -244,7 +244,7 @@ extern "C" {
 
     // Promise jobs
     pub fn fxRunPromiseJobs(the: *mut XsMachine);
-    pub fn fxHasPendingJobs() -> std::os::raw::c_int;
+    pub fn fxMachineHasPendingJobs(the: *mut XsMachine) -> std::os::raw::c_int;
 
     // Run loop (drains promises + timers until idle)
     pub fn fxRunLoop(the: *mut XsMachine);
@@ -268,10 +268,11 @@ extern "C" {
     /// Returns 0 on success, or the XS abort status on abort.
     pub fn fxRunPromiseJobsMetered(the: *mut XsMachine) -> c_int;
 
-    // Lockdown host functions (registered during machine creation
-    // when mxLockdown is defined).  Must be in the snapshot
-    // callback table.
+    // Lockdown host functions (compiled in when mxLockdown is
+    // defined; a runner that installs them as globals must include
+    // them in the snapshot callback table).
     pub fn fx_harden(the: *mut XsMachine);
+    pub fn fx_lockdown(the: *mut XsMachine);
 
     // Snapshots
     pub fn fxWriteSnapshot(

@@ -56,11 +56,16 @@ export const encodeFrame = (type, payload = new Uint8Array(0)) => {
 };
 
 /**
- * @param {Uint8Array | ArrayBuffer} data
+ * Decode a wire frame. Callers normalize whatever the transport hands them
+ * (a raw `ArrayBuffer` from a WebSocket binary message, a Node `Buffer`) into
+ * a `Uint8Array` at the transport edge — see the `ws.on('message', …)` handlers
+ * in `relay.js` and the daemon's `ws-relay.js` — so this decoder is typed
+ * `Uint8Array` only, with no buffer-vs-view disjunction.
+ *
+ * @param {Uint8Array} bytes
  * @returns {{ type: number, payload: Uint8Array }}
  */
-export const decodeFrame = data => {
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+export const decodeFrame = bytes => {
   if (bytes.length < 1) {
     throw new Error('Empty frame');
   }

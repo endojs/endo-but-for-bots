@@ -715,8 +715,49 @@ fn handle_resume(
     handle: Handle,
     suspended: supervisor::SuspendedWorker,
     _cas_dir: &std::path::Path,
-    pending_msg: Message,
+    mut pending_msg: Message,
 ) {
+    // A store-backed Ironhorse worker cannot take the XS resume path:
+    // its durable state is the heap database (`heap_store`), not a
+    // CAS blob, and its `sha256` is empty — following the XS path
+    // would hand the machine an empty snapshot path. Routed Ironhorse
+    // resume needs the worker envelope's deliver-payload side (the
+    // host-function surface — ironhorse-engine.md § Endor integration,
+    // the host-powers row — and the SES boot bundle, roadmap stage 4;
+    // the heap half is fully landed and a resume
+    // COULD reopen the machine, but a machine that must refuse every
+    // delivery would hold resources to serve nothing), so fail
+    // loudly, answer a waiting sender with a named error, and leave
+    // the worker suspended intact (review finding).
+    if suspended.heap_store.is_some() {
+        eprintln!(
+            "endor: worker {handle} is store-backed ({}); routed resume needs the \
+             Ironhorse worker envelope (not built yet) — message dropped, worker \
+             stays suspended",
+            suspended
+                .heap_store
+                .as_deref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default()
+        );
+        // Every construction site passes `response_tx: None` today,
+        // so this arm is armed for the first sender that awaits a
+        // reply — without it that sender would hang on a silently
+        // dropped oneshot (wave-3 finding).
+        if let Some(tx) = pending_msg.response_tx.take() {
+            let _ = tx.send(Envelope {
+                handle,
+                verb: "error".to_string(),
+                payload: b"store-backed worker: routed resume needs the Ironhorse \
+                           worker envelope (not built yet); the worker stays suspended"
+                    .to_vec(),
+                nonce: pending_msg.envelope.nonce,
+            });
+        }
+        drop(pending_msg);
+        sup.put_suspended(handle, suspended);
+        return;
+    }
     let cas_file_path = suspended.cas_dir.join(&suspended.sha256);
     let info = suspended.info;
 

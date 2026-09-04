@@ -38,7 +38,6 @@
  */
 
 // @ts-check
-/* eslint-disable no-underscore-dangle */
 
 import {
   Map,
@@ -151,6 +150,11 @@ export const CompartmentPrototype = {
   get name() {
     return /** @type {CompartmentFields} */ (weakmapGet(privateFields, this))
       .name;
+  },
+
+  get __noNamespaceBox__() {
+    return /** @type {CompartmentFields} */ (weakmapGet(privateFields, this))
+      .noNamespaceBox;
   },
 
   evaluate(source, options = {}) {

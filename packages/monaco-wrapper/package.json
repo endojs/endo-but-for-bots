@@ -31,17 +31,9 @@
   },
   "dependencies": {
     "@endo/harden": "workspace:^",
-    "monaco-editor": "^0.55.1"
+    "monaco-editor": "^0.56.0"
   },
   "devDependencies": {
     "eslint": "catalog:dev"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "env": {
-      "browser": true
-    }
   }
 }

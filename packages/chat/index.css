@@ -82,6 +82,7 @@
   /* Layout */
   --sidebar-width: 280px;
   --gutter-width: 64px;
+  --header-height: 44px;
 }
 
 * {
@@ -106,10 +107,125 @@ body {
   padding: 0;
 }
 
-/* Spaces Gutter */
-#spaces-gutter {
+/* App header — the one bar every space shares.
+
+   It spans the whole window above the gutter, the sidebar, and the main pane,
+   so the Familiar mark sits in a fixed spot no matter which space is open (and
+   no matter how many spaces the gutter has grown). Everything below it is
+   offset by --header-height. */
+#app-header {
   position: absolute;
   top: 0;
+  left: 0;
+  right: 0;
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 10px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 70;
+}
+
+/* Toggles the spaces gutter. Sits leftmost, over the column it controls, and
+   is the reason the gutter can be reached from a space that fills the page:
+   hiding it is a preference rather than something a space does to you. */
+.app-header-gutter-toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.app-header-gutter-toggle:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.app-header-gutter-toggle.showing {
+  color: var(--text-primary);
+}
+
+/* Three bars from one box and its shadows, so the icon needs no font, no
+   image, and no glyph the renderer would have to pass through. */
+.app-header-gutter-icon {
+  width: 15px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+  box-shadow:
+    0 -5px 0 currentColor,
+    0 5px 0 currentColor;
+}
+
+/* The logo doubles as the "go home" control, so it is a real button rather
+   than a decorated div: keyboard focus and Enter/Space come for free. */
+.app-header-home {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 2px 2px;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.app-header-home:hover {
+  background: var(--bg-hover);
+}
+
+/* The mark rides in as a CSS background rather than an <img src>: the
+   sanitizing renderer scheme-checks every src, while a stylesheet url() is a
+   build-time asset reference that never becomes a prop at all. */
+.app-header-logo {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  background-image: url('./familiar.svg');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.app-header-wordmark {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Everything below the header. The space that is open owns this box and only
+   this box — navigation empties the space root, never the body, so the header
+   outlives every space change. Positioning it here is also what lets the panes
+   inside stay at `top: 0`: they resolve against the space root rather than the
+   window. */
+#space-root {
+  position: absolute;
+  top: var(--header-height);
+  left: var(--gutter-width);
+  right: 0;
+  bottom: 0;
+}
+
+/* Spaces Gutter. A sibling of the space root, not a child of it: the space that
+   is open must not be able to replace the bar that navigates between spaces. */
+#spaces-gutter {
+  position: absolute;
+  top: var(--header-height);
   left: 0;
   bottom: 0;
   width: var(--gutter-width);
@@ -118,6 +234,18 @@ body {
   display: flex;
   flex-direction: column;
   z-index: 60;
+}
+
+/* Hiding the bar is one variable: the space root beside it reserves its room
+   from `--gutter-width`, so zeroing that here reclaims the width for whichever
+   space is open. The element leaves the layout as well, since a zero-width
+   column would still draw its right border as a stray line. */
+body.gutter-hidden {
+  --gutter-width: 0px;
+}
+
+body.gutter-hidden #spaces-gutter {
+  display: none;
 }
 
 .spaces-gutter-inner {
@@ -303,6 +431,11 @@ body {
   background: var(--bg-hover);
 }
 
+.context-menu-item.checked {
+  color: var(--accent, var(--text-primary));
+  font-weight: 600;
+}
+
 .context-menu-item.context-menu-delete {
   color: var(--danger);
 }
@@ -317,11 +450,11 @@ body {
   text-align: center;
 }
 
-/* Sidebar - Inventory (shifted for gutter) */
+/* Sidebar - Inventory */
 #pets {
   position: absolute;
   top: 0;
-  left: var(--gutter-width);
+  left: 0;
   bottom: 0;
   width: var(--sidebar-width);
   background: var(--bg-sidebar);
@@ -331,12 +464,12 @@ body {
   flex-direction: column;
 }
 
-/* Resize handle (shifted for gutter) */
+/* Resize handle */
 #resize-handle {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   width: 6px;
   margin-left: -3px;
   cursor: col-resize;
@@ -751,24 +884,24 @@ body.resizing * {
   cursor: not-allowed;
 }
 
-/* Main content - Messages (shifted for gutter) */
+/* Main content - Messages */
 #messages {
   position: absolute;
   top: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   bottom: 60px;
   padding: 20px 24px;
-  padding-top: calc(100dvh - 160px);
+  padding-top: calc(100dvh - 160px - var(--header-height));
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--bg-primary);
 }
 
-/* Chat input bar (shifted for gutter) */
+/* Chat input bar */
 #chat-bar {
   position: absolute;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   bottom: 0;
   height: auto;
@@ -2129,52 +2262,6 @@ body.resizing * {
   color: var(--text-primary);
 }
 
-#command-error {
-  display: none;
-  position: absolute;
-  left: 0;
-  bottom: 100%;
-  margin-bottom: 6px;
-  padding: 6px 10px;
-  background: var(--danger-hover);
-  color: #ffffff;
-  font-size: 12px;
-  border-radius: var(--radius-md);
-  white-space: nowrap;
-  z-index: 10;
-  box-shadow: var(--shadow-md);
-}
-
-#command-error:not(:empty) {
-  display: block;
-}
-
-#command-error::after {
-  content: '';
-  position: absolute;
-  left: 16px;
-  top: 100%;
-  border: 6px solid transparent;
-  border-top-color: var(--danger-hover);
-}
-
-/* When the bubble carries a resolved daemon trace (the /js evaluate path), it
-   hosts a multi-line detail — message, collapsible stack trace, worker chip —
-   whose text colors (var(--danger), var(--text-secondary)) assume a light
-   surface. Swap the solid-red compact toast for a light danger panel so that
-   detail is legible and can wrap, instead of red-on-red. */
-#command-error:has(.command-error-detail) {
-  max-width: min(92vw, 520px);
-  white-space: normal;
-  background: var(--danger-bg);
-  color: var(--danger);
-  border: 1px solid var(--danger-border);
-}
-
-#command-error:has(.command-error-detail)::after {
-  border-top-color: var(--danger-border);
-}
-
 #chat-bar.command-mode #chat-send-button {
   display: none;
 }
@@ -2187,6 +2274,13 @@ body.resizing * {
 .inline-eval-container {
   flex: 1;
   min-width: 0;
+  /* Be a flex container (not a block) so the expression input's text baseline
+   * propagates up to the command row. As a block box wrapping the flex input it
+   * would synthesize its baseline from its own bottom edge, dropping the
+   * "Evaluate JavaScript" label to the bottom of the input instead of aligning
+   * it with the input text and the Evaluate button. */
+  display: flex;
+  align-items: baseline;
 }
 
 .inline-eval-wrapper {
@@ -2201,6 +2295,15 @@ body.resizing * {
   align-items: baseline;
   gap: 12px;
   flex-shrink: 0;
+}
+
+/* When there are no endowments the container is empty. As the wrapper's first
+ * flex item it would otherwise synthesize the wrapper's baseline from its own
+ * (empty) box, dropping the expression input's text baseline out of line with
+ * the command label and submit button. Collapse it so the input's baseline is
+ * the one that aligns across the command row. */
+.inline-eval-endowments:empty {
+  display: none;
 }
 
 .inline-eval-endowment-group {
@@ -2632,6 +2735,131 @@ body.resizing * {
 
 .timestamp-copy:hover {
   opacity: 1;
+}
+
+/* Pending commands region.
+ *
+ * Lives INSIDE the scrollable transcript (#messages), after the scroll anchor,
+ * so its cards are flow content at the bottom of the transcript: they LEAD the
+ * messages (push them up) instead of overlaying them, and scroll with the
+ * transcript, matching the design's "anchored to the bottom of the transcript,
+ * above the command bar" layout (designs/chat-pending-commands.md § Visual
+ * design). The region collapses to zero height when empty so the transcript
+ * runs flush to the command bar.
+ */
+.pending-commands-region {
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px 12px;
+}
+
+.pending-commands-region.has-pending {
+  display: flex;
+  /* A top rule separates the cards from the messages above them. */
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+  margin-top: 4px;
+}
+
+.pending-command-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  /* Same shape and stroke as an ordinary message bubble (cf. `.message`): the
+   * large corner radius, a 1px border, and the received-bubble surface, so a
+   * pending/error card reads as a message in the transcript rather than a
+   * distinct chrome element. State variants recolor the stroke/text below. */
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--bubble-border, var(--border-light));
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  transition:
+    box-shadow var(--transition-fast),
+    opacity 0.3s;
+}
+
+.pending-command-card.pending {
+  color: var(--text-muted);
+}
+
+/* The keyboard-navigation cursor ("hover"). Reuses the transcript's focused-
+ * message accent outline (cf. .focus-active .message-envelope.focused .message)
+ * so a hovered card reads the same in the region as a focused message does in
+ * the transcript. Escape dismisses the card the cursor rests on. */
+.pending-command-card.cursor {
+  box-shadow: 0 0 0 2px var(--accent-primary);
+}
+
+.pending-command-card.success {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* The ephemeral error card. It replaces the pending card on failure of ANY
+ * command and carries the rich error UX — message, daemon stack trace, and a
+ * clickable worker chip — that used to be the eval-only inline command-error
+ * bubble (reusing the shared .command-error-* element styles). Clicking the card
+ * dismisses it; the stack and worker chip stop propagation so they stay usable.
+ */
+.pending-command-card.error {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  background: var(--danger-bg);
+  color: var(--danger);
+  border: 1px solid var(--danger-border);
+  cursor: pointer;
+}
+
+.pending-command-card.error .pending-command-label {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.pending-command-error {
+  cursor: auto;
+}
+
+.pending-command-card.fade-out {
+  opacity: 0;
+}
+
+.pending-command-label {
+  font-family: var(--font-mono);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-command-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid transparent;
+  border-top-color: var(--text-muted);
+  border-radius: 50%;
+  animation: pending-spin 0.8s linear infinite;
+}
+
+.pending-command-card.success .pending-command-spinner {
+  display: none;
+}
+
+@keyframes pending-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.pending-command-status {
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dismiss-button {
@@ -3704,7 +3932,7 @@ button.btn-spinner::after {
 .value-actions {
   display: flex;
   gap: 12px;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
   margin-top: 16px;
   padding-top: 16px;
@@ -3714,15 +3942,28 @@ button.btn-spinner::after {
 #value-actions-container {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: baseline;
   flex: 1;
+}
+
+/* The confined ValueActions root. Without an explicit display it is a block box
+ * that breaks the baseline chain (and stacks Copy below the name form); make it
+ * a baseline flex row so 'Save as', the name input, Save, Copy, and Close all
+ * share one baseline across the actions row. */
+.value-actions-inner {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .value-name-form {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: baseline;
   flex: 1;
+  min-width: 0;
 }
 
 .value-name-form label {
@@ -5648,7 +5889,7 @@ button.btn-spinner::after {
   display: none;
   position: absolute;
   top: 0;
-  left: calc(var(--gutter-width) + var(--sidebar-width));
+  left: var(--sidebar-width);
   right: 0;
   z-index: 10;
   align-items: center;
@@ -9353,8 +9594,7 @@ button.btn-spinner::after {
 .fx-root {
   display: flex;
   flex-direction: column;
-  height: 100vh;
-  height: 100dvh;
+  height: 100%;
   width: 100%;
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -10328,5 +10568,209 @@ button.btn-spinner::after {
   .value-card.flipped .value-card-face-front {
     opacity: 0;
     transition: opacity 100ms ease-in-out;
+  }
+}
+/* Secret management Space */
+#secrets-root {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.secrets-space {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 24px;
+  width: 100%;
+}
+
+.secrets-header,
+.secret-summary {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.secrets-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.secrets-clipboard-status {
+  color: var(--muted-color, #555);
+}
+
+.secret-create-panel,
+.secret-card,
+.secret-audit {
+  border: 1px solid var(--border-color, #d0d0d0);
+  border-radius: 8px;
+  margin-block: 16px;
+  padding: 16px;
+}
+
+.secret-create-panel > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.secret-create-form label,
+.secret-card label,
+.secret-card form {
+  display: grid;
+  gap: 6px;
+  margin-block: 10px;
+}
+
+.secret-create-form input,
+.secret-card input {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* File ingress sits beside the typed value: one row that wraps on narrow
+   screens, matching the Space's other controls. */
+.secret-file-ingress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block: 10px;
+}
+
+.secret-file-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+.secret-file-empty {
+  opacity: 0.75;
+}
+
+.secret-id {
+  overflow-wrap: anywhere;
+}
+
+.secret-pet-names {
+  margin-block: 12px;
+}
+
+.secret-pet-names > span:first-child {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-block-end: 4px;
+}
+
+.secret-pet-names ul {
+  margin: 0;
+  padding-inline-start: 20px;
+}
+
+.secret-pet-names code {
+  overflow-wrap: anywhere;
+}
+
+.secret-path-missing {
+  color: var(--muted-color, #555);
+  font-style: italic;
+}
+
+.secret-state {
+  border-radius: 999px;
+  padding: 2px 8px;
+  text-transform: uppercase;
+}
+
+.secret-revoked {
+  border-style: dashed;
+}
+
+.secret-danger {
+  border-left: 3px solid var(--error-color, #b00020);
+  margin-block-start: 12px;
+  padding-inline-start: 12px;
+}
+
+.secret-danger summary {
+  cursor: pointer;
+}
+
+.secret-danger-sections {
+  display: grid;
+  gap: 16px;
+  margin-block-start: 12px;
+}
+
+.secret-danger-section {
+  border: 1px solid var(--border-color, #d0d0d0);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.secret-danger-section h3 {
+  margin-block: 0 8px;
+}
+
+.secret-danger-section p {
+  margin-block: 8px 12px;
+}
+
+.secret-revoke-section,
+.secret-delete-section {
+  border-color: var(--error-color, #b00020);
+}
+
+.secret-delete-section {
+  margin-block-start: 12px;
+}
+
+.secrets-error {
+  color: var(--error-color, #b00020);
+}
+
+.secret-audit table {
+  border-collapse: collapse;
+  min-width: 42rem;
+  width: 100%;
+}
+
+.secret-audit {
+  overflow-x: auto;
+}
+
+.secret-audit caption {
+  font-weight: 600;
+  padding-block-end: 8px;
+  text-align: left;
+}
+
+.secret-audit th,
+.secret-audit td {
+  border-bottom: 1px solid var(--border-color, #d0d0d0);
+  padding: 6px;
+  text-align: left;
+}
+
+@media (max-width: 40rem) {
+  .secrets-space {
+    padding: 12px;
+  }
+
+  .secrets-header {
+    display: grid;
   }
 }

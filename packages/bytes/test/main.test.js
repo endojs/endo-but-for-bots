@@ -1,13 +1,25 @@
-import test from '@endo/ses-ava/test.js';
-import { passStyleOf } from '@endo/pass-style';
+import test from 'ava';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
 
 import { bytesEqual } from '../src/equals.js';
-import { bytesFromText } from '../src/from-string.js';
-import { bytesToText } from '../src/to-string.js';
+import { compareBytes } from '../src/compare.js';
+import { constantTimeBytesEqual } from '../src/constant-time-equals.js';
 import { concatBytes } from '../src/concat.js';
 import { concatImmutables } from '../src/concat-immutables.js';
-import { bytesToImmutable } from '../src/to-immutable.js';
-import { bytesFromImmutable } from '../src/from-immutable.js';
+
+// Under a native immutable ArrayBuffer implementation (e.g. current XS), the
+// `@endo/immutable-arraybuffer` shim steps aside (stage-3 detect-then-skip), so
+// `frozenBytes(...)` yields a GENUINE view: `ArrayBuffer.isView === true` and
+// integer-indexable in place. The two emulated-wrapper fidelity assertions
+// below (isView false; direct integer-indexed read `undefined`) describe the
+// shim path specifically, so they are gated to run under the shim and skip
+// under native — rather than baking in the (now obsolete) assumption that no
+// engine ships native support. See endojs/endo-but-for-bots#475 (erights
+// review). The `compareBytes`/`bytesEqual` byte-value assertions elsewhere in
+// this file hold on both paths and stay unguarded.
+const emulatedOnlyTest = ArrayBuffer.isView(frozenBytes(new Uint8Array([0])))
+  ? test.skip
+  : test;
 
 test('concatBytes: empty input yields empty Uint8Array', t => {
   const result = concatBytes([]);
@@ -105,147 +117,226 @@ test('bytesEqual: differs at first byte', t => {
   t.false(bytesEqual(a, b));
 });
 
-test('bytesFromText / bytesToText: empty string round-trip', t => {
-  const bytes = bytesFromText('');
-  t.is(bytes.length, 0);
-  t.is(bytesToText(bytes), '');
+test('constantTimeBytesEqual compares byte arrays', t => {
+  t.true(
+    constantTimeBytesEqual(
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array([1, 2, 3]),
+    ),
+  );
+  t.false(
+    constantTimeBytesEqual(
+      new Uint8Array([1, 2, 3]),
+      new Uint8Array([1, 2, 4]),
+    ),
+  );
+  t.false(constantTimeBytesEqual(new Uint8Array([1]), new Uint8Array([1, 0])));
 });
 
-test('bytesFromText / bytesToText: ASCII round-trip', t => {
-  const original = 'Hello, world!';
-  const bytes = bytesFromText(original);
-  t.is(bytes.length, original.length);
-  t.is(bytesToText(bytes), original);
+test('constantTimeBytesEqual compares emulated byteArray wrappers', t => {
+  const left = frozenBytes(new Uint8Array([1, 2, 3]));
+  const equal = frozenBytes(new Uint8Array([1, 2, 3]));
+  const different = frozenBytes(new Uint8Array([1, 2, 4]));
+  t.true(constantTimeBytesEqual(left, equal));
+  t.false(constantTimeBytesEqual(left, different));
 });
 
-test('bytesFromText: BMP multi-byte UTF-8', t => {
-  // U+00E9 (eacute) encodes to two bytes; U+4E2D (Chinese 'middle')
-  // encodes to three bytes.
-  const bytes = bytesFromText('é中');
-  t.deepEqual([...bytes], [0xc3, 0xa9, 0xe4, 0xb8, 0xad]);
-  t.is(bytesToText(bytes), 'é中');
-});
-
-test('bytesFromText: non-BMP UTF-8 (surrogate pair)', t => {
-  // U+1F600 (grinning face) requires a surrogate pair in UTF-16
-  // and encodes to four bytes in UTF-8.
-  const bytes = bytesFromText('\u{1F600}');
-  t.deepEqual([...bytes], [0xf0, 0x9f, 0x98, 0x80]);
-  t.is(bytesToText(bytes), '\u{1F600}');
-});
-
-test('bytesFromText and concatBytes compose: round-trip', t => {
-  const parts = ['Hello, ', 'world', '!'];
-  const chunks = parts.map(s => bytesFromText(s));
-  const combined = concatBytes(chunks);
-  t.is(bytesToText(combined), 'Hello, world!');
-});
-
-test('bytesEqual on bytesFromText output: same input compares equal', t => {
-  t.true(bytesEqual(bytesFromText('abc'), bytesFromText('abc')));
-  t.false(bytesEqual(bytesFromText('abc'), bytesFromText('abd')));
-});
-
-test('bytesToImmutable: returns ArrayBuffer with byteArray passStyle', t => {
+test('frozenBytes: returns immutable Uint8Array', t => {
   const view = new Uint8Array([1, 2, 3, 4, 5]);
-  const immutable = bytesToImmutable(view);
-  t.true(immutable instanceof ArrayBuffer);
+  const immutable = frozenBytes(view);
+  t.true(immutable instanceof Uint8Array);
   t.is(immutable.byteLength, 5);
-  // @ts-expect-error passStyleOf typing infers the wrong type for ArrayBuffer.
-  t.is(passStyleOf(immutable), 'byteArray');
+  // The backing buffer is an immutable ArrayBuffer.
+  t.true(immutable.buffer instanceof ArrayBuffer);
+  t.true(/** @type {any} */ (immutable.buffer).immutable);
 });
 
-test('bytesToImmutable: empty input', t => {
-  const immutable = bytesToImmutable(new Uint8Array(0));
+test('frozenBytes: empty input', t => {
+  const immutable = frozenBytes(new Uint8Array(0));
   t.is(immutable.byteLength, 0);
 });
 
-test('bytesToImmutable: honors subarray byteOffset and byteLength', t => {
+test('frozenBytes: honors subarray byteOffset and byteLength', t => {
   const full = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
   const window = full.subarray(2, 6); // [2, 3, 4, 5]
-  const immutable = bytesToImmutable(window);
+  const immutable = frozenBytes(window);
   t.is(immutable.byteLength, 4);
-  t.deepEqual([...bytesFromImmutable(immutable)], [2, 3, 4, 5]);
+  t.deepEqual([...thawedBytes(immutable)], [2, 3, 4, 5]);
 });
 
-test('bytesFromImmutable: copies bytes into a fresh Uint8Array', t => {
+test('thawedBytes: copies bytes into a fresh Uint8Array', t => {
   const source = new Uint8Array([0, 1, 2, 0xff, 0x80, 0x00, 42, 100]);
-  const immutable = bytesToImmutable(source);
-  const result = bytesFromImmutable(immutable);
+  const immutable = frozenBytes(source);
+  const result = thawedBytes(immutable);
   t.true(result instanceof Uint8Array);
   t.is(result.length, source.length);
   t.deepEqual([...result], [...source]);
 });
 
-test('bytesFromImmutable: empty input', t => {
-  const immutable = bytesToImmutable(new Uint8Array(0));
-  const result = bytesFromImmutable(immutable);
+test('thawedBytes: empty input', t => {
+  const immutable = frozenBytes(new Uint8Array(0));
+  const result = thawedBytes(immutable);
   t.true(result instanceof Uint8Array);
   t.is(result.length, 0);
 });
 
-test('bytesToImmutable + bytesToText composition: UTF-8 round-trip', t => {
-  const original = 'Hello, 你好 \u{1F600}';
-  const immutable = bytesToImmutable(bytesFromText(original));
-  t.is(bytesToText(bytesFromImmutable(immutable)), original);
+test('frozenBytes + concatBytes composition: assemble from chunks', t => {
+  const parts = [
+    new Uint8Array([1, 2]),
+    new Uint8Array([3]),
+    new Uint8Array([4, 5]),
+  ];
+  const combined = frozenBytes(concatBytes(parts));
+  t.deepEqual([...thawedBytes(combined)], [1, 2, 3, 4, 5]);
 });
 
-test('bytesToImmutable + concatBytes composition: assemble from chunks', t => {
-  const parts = ['<', 'test-record', '>'].map(s => bytesFromText(s));
-  const combined = bytesToImmutable(concatBytes(parts));
-  t.is(bytesToText(bytesFromImmutable(combined)), '<test-record>');
-});
-
-test('bytesToText: { fatal: true } accepts valid UTF-8', t => {
-  const bytes = bytesFromText('Hello, 你好 \u{1F600}');
-  t.is(bytesToText(bytes, { fatal: true }), 'Hello, 你好 \u{1F600}');
-});
-
-test('bytesToText: { fatal: true } throws on invalid UTF-8', t => {
-  // 0xC3 begins a two-byte sequence; 0x28 is not a valid continuation byte.
-  const invalid = new Uint8Array([0xc3, 0x28]);
-  t.throws(() => bytesToText(invalid, { fatal: true }), {
-    instanceOf: TypeError,
-  });
-});
-
-test('bytesToText: default mode substitutes U+FFFD on invalid UTF-8', t => {
-  const invalid = new Uint8Array([0xc3, 0x28]);
-  // The default lenient decoder must not throw and emits U+FFFD for the
-  // malformed lead byte.
-  const result = bytesToText(invalid);
-  t.true(result.includes('�'));
-});
-
-test('bytesToText: { fatal: false } also accepts valid UTF-8', t => {
-  const bytes = bytesFromText('plain ASCII');
-  t.is(bytesToText(bytes, { fatal: false }), 'plain ASCII');
-});
-
-test('concatImmutables: empty input yields empty immutable buffer', t => {
+test('concatImmutables: empty input yields empty immutable Uint8Array', t => {
   const result = concatImmutables([]);
-  t.true(result instanceof ArrayBuffer);
+  t.true(result instanceof Uint8Array);
   t.is(result.byteLength, 0);
-  // @ts-expect-error passStyleOf typing infers the wrong type for ArrayBuffer.
-  t.is(passStyleOf(result), 'byteArray');
 });
 
 test('concatImmutables: concatenates multiple immutable buffers byte-for-byte', t => {
   const parts = [
-    bytesToImmutable(new Uint8Array([1, 2, 3])),
-    bytesToImmutable(new Uint8Array([])),
-    bytesToImmutable(new Uint8Array([4])),
-    bytesToImmutable(new Uint8Array([5, 6, 7, 8])),
+    frozenBytes(new Uint8Array([1, 2, 3])),
+    frozenBytes(new Uint8Array([])),
+    frozenBytes(new Uint8Array([4])),
+    frozenBytes(new Uint8Array([5, 6, 7, 8])),
   ];
   const result = concatImmutables(parts);
   t.is(result.byteLength, 8);
-  t.deepEqual([...bytesFromImmutable(result)], [1, 2, 3, 4, 5, 6, 7, 8]);
-  // @ts-expect-error passStyleOf typing infers the wrong type for ArrayBuffer.
-  t.is(passStyleOf(result), 'byteArray');
+  t.deepEqual([...thawedBytes(result)], [1, 2, 3, 4, 5, 6, 7, 8]);
 });
 
 test('concatImmutables: result is hardened', t => {
-  const parts = [bytesToImmutable(new Uint8Array([42]))];
+  const parts = [frozenBytes(new Uint8Array([42]))];
   const result = concatImmutables(parts);
   t.true(Object.isFrozen(result));
+});
+
+// The emulated-vs-genuine distinguisher this package depends on:
+// `ArrayBuffer.isView`.
+//
+// An emulated freezable `Uint8Array` produced by `@endo/immutable-arraybuffer`
+// is a plain ordinary object, so `ArrayBuffer.isView(wrapper) === false`,
+// whereas a genuine `Uint8Array` reports `true`. This is the single committed
+// emulated-vs-genuine fidelity loss (see that package's README "The one
+// committed fidelity loss: an emulated wrapper is not `ArrayBuffer.isView`"),
+// and `compareBytes` gates its copy decision on it: it indexes a genuine view
+// in place and copies a non-view (emulated) wrapper into a genuine mutable
+// `Uint8Array` first. These tests catch a silent breakage on this (client)
+// side: if `compareBytes` ever indexed a non-view wrapper directly it would
+// read `undefined` for every position and report all inputs as equal.
+//
+// `wrapper[i] === undefined` is a real but incidental consequence of the
+// wrapper's plain-object shape (the same nature that makes `isView` false),
+// not the committed distinguisher; the second test records it as a companion
+// observation. The shim-side mirror of the committed contract is pinned in
+// `@endo/immutable-arraybuffer`'s `test/shim-typedarray.test.js`.
+emulatedOnlyTest(
+  'emulated byteArray wrapper is not ArrayBuffer.isView; a genuine Uint8Array is',
+  t => {
+    const wrapper = frozenBytes(new Uint8Array([1, 2, 3]));
+    // The committed distinguisher `compareBytes` leans on.
+    t.false(ArrayBuffer.isView(wrapper));
+    t.true(ArrayBuffer.isView(new Uint8Array([1, 2, 3])));
+  },
+);
+
+emulatedOnlyTest(
+  'emulated byteArray wrapper: direct integer-indexed read is undefined (incidental)',
+  t => {
+    const wrapper = frozenBytes(new Uint8Array([1, 2, 3]));
+    // Not the byte: the wrapper carries no integer-indexed own properties and
+    // the shim installs no read-through getter. The static type says `number`
+    // (the narrowed `Uint8Array`), but the emulated wrapper answers `undefined`
+    // at runtime; cast through `unknown` so the assertion type-checks.
+    t.is(/** @type {unknown} */ (wrapper[0]), undefined);
+    t.is(/** @type {unknown} */ (wrapper[2]), undefined);
+  },
+);
+
+test('compareBytes: orders emulated byteArray wrappers by their real bytes', t => {
+  const a = frozenBytes(new Uint8Array([1, 2, 3]));
+  const b = frozenBytes(new Uint8Array([1, 2, 4]));
+  const aAgain = frozenBytes(new Uint8Array([1, 2, 3]));
+
+  // A negative/positive/zero triple that is only reachable if `compareBytes`
+  // reads the real bytes. Were it to index the wrapper directly (reading
+  // `undefined` everywhere) every comparison would collapse to 0.
+  t.true(compareBytes(a, b) < 0);
+  t.true(compareBytes(b, a) > 0);
+  t.is(compareBytes(a, aAgain), 0);
+
+  // Prefix: shorter sorts before longer.
+  const abcd = frozenBytes(new Uint8Array([1, 2, 3, 4]));
+  t.true(compareBytes(a, abcd) < 0);
+});
+
+test('compareBytes: emulated wrapper against a genuine mutable Uint8Array', t => {
+  const emulated = frozenBytes(new Uint8Array([1, 2, 3]));
+  const genuine = new Uint8Array([1, 2, 4]);
+  t.true(compareBytes(emulated, genuine) < 0);
+  t.true(compareBytes(genuine, emulated) > 0);
+});
+
+// The same emulated-vs-genuine hazard for `bytesEqual`. Were it to index a
+// non-view wrapper directly it would read `undefined` at every position, so
+// two distinct equal-length wrappers would collapse to `undefined !==
+// undefined` (false) and compare *equal*, while an emulated-vs-genuine pair
+// would compare *unequal*. These tests only pass if `bytesEqual` reads the
+// real bytes (thawing the wrapper first).
+
+test('bytesEqual: distinct emulated byteArray wrappers with different bytes are unequal', t => {
+  const a = frozenBytes(new Uint8Array([1, 2, 3]));
+  const b = frozenBytes(new Uint8Array([1, 2, 4]));
+  t.false(bytesEqual(a, b));
+});
+
+test('bytesEqual: distinct emulated byteArray wrappers with equal bytes are equal', t => {
+  const a = frozenBytes(new Uint8Array([1, 2, 3]));
+  const aAgain = frozenBytes(new Uint8Array([1, 2, 3]));
+  t.true(bytesEqual(a, aAgain));
+});
+
+test('bytesEqual: emulated wrapper against an equal genuine mutable Uint8Array', t => {
+  const emulated = frozenBytes(new Uint8Array([1, 2, 3]));
+  const genuine = new Uint8Array([1, 2, 3]);
+  t.true(bytesEqual(emulated, genuine));
+  t.true(bytesEqual(genuine, emulated));
+});
+
+test('bytesEqual: emulated wrapper against an unequal genuine mutable Uint8Array', t => {
+  const emulated = frozenBytes(new Uint8Array([1, 2, 3]));
+  const genuine = new Uint8Array([1, 2, 4]);
+  t.false(bytesEqual(emulated, genuine));
+  t.false(bytesEqual(genuine, emulated));
+});
+
+test('bytesEqual: emulated wrappers of different lengths are unequal', t => {
+  const a = frozenBytes(new Uint8Array([1, 2, 3]));
+  const abcd = frozenBytes(new Uint8Array([1, 2, 3, 4]));
+  t.false(bytesEqual(a, abcd));
+});
+
+// The same emulated-vs-genuine hazard for `concatBytes`. A non-view wrapper
+// handed to `Uint8Array.prototype.set` as a source would be read through
+// `set`'s native fast path, which sees the wrapper's plain-object shape and
+// copies zeros — silently dropping the real bytes. `concatBytes` therefore
+// relies on the identical `isView` gate as `compareBytes`/`bytesEqual`,
+// thawing a non-view wrapper before assembly. These tests only pass if the
+// real bytes survive the concat.
+
+test('concatBytes: assembles emulated byteArray wrappers by their real bytes', t => {
+  const a = frozenBytes(new Uint8Array([1, 2, 3]));
+  const b = frozenBytes(new Uint8Array([4, 5]));
+  const result = concatBytes([a, b]);
+  t.deepEqual([...result], [1, 2, 3, 4, 5]);
+});
+
+test('concatBytes: mixes emulated wrappers with genuine mutable chunks', t => {
+  const emulated = frozenBytes(new Uint8Array([1, 2, 3]));
+  const genuine = new Uint8Array([4, 5, 6]);
+  t.deepEqual([...concatBytes([emulated, genuine])], [1, 2, 3, 4, 5, 6]);
+  t.deepEqual([...concatBytes([genuine, emulated])], [4, 5, 6, 1, 2, 3]);
 });

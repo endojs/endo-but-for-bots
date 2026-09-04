@@ -6,7 +6,7 @@ import { arrayPush, arrayForEach } from './commons.js';
 /** @import {GenericErrorConstructor} from '../types.js' */
 
 /**
- * Exports {@code permits}, a recursively defined
+ * Exports `permits`, a recursively defined
  * JSON record enumerating all intrinsics and their properties
  * according to ECMA specs.
  *
@@ -102,6 +102,27 @@ export const universalPropertyNames = {
   JSON: 'JSON',
   Reflect: 'Reflect',
 
+  // WHATWG Encoding Standard
+  // https://encoding.spec.whatwg.org/
+  // TextEncoder and TextDecoder are pure transformations between string and
+  // Uint8Array with no static side channels and no exposed iterator
+  // prototype. They are permitted universally; on hosts that do not provide
+  // them (XS), the sampling pass tolerates the absence.
+  TextEncoder: 'TextEncoder',
+  TextDecoder: 'TextDecoder',
+
+  // WHATWG URL Standard
+  // https://url.spec.whatwg.org/
+  // `URLSearchParams` is a pure, powerless data structure with no static
+  // side channels. It is permitted universally; its hidden iterator
+  // prototype is tamed separately (see `%URLSearchParamsIteratorPrototype%`).
+  // `URL` is *not* universal: it carries the createObjectURL` /
+  // `revokeObjectURL` authority, so it takes the `Date`-style split across
+  // `initialGlobalPropertyNames` (`%InitialURL%`) and `sharedGlobalPropertyNames`
+  // (`%SharedURL%`). On hosts that do not provide either (XS), the sampling
+  // pass tolerates the absence.
+  URLSearchParams: 'URLSearchParams',
+
   // *** Annex B
 
   escape: 'escape',
@@ -131,6 +152,15 @@ export const initialGlobalPropertyNames = {
   Date: '%InitialDate%',
   Error: '%InitialError%',
   RegExp: '%InitialRegExp%',
+
+  // WHATWG URL Standard
+  // https://url.spec.whatwg.org/
+  // The start compartment keeps the host's full `URL`, including the ambient
+  // `createObjectURL` / `revokeObjectURL` blob-registry methods, which a host
+  // application may legitimately need. Shared compartments receive the tamed
+  // `%SharedURL%` instead. `lockdown({ urlBlobTaming: 'remove' })` collapses
+  // the split by binding `%InitialURL%` to `%SharedURL%` as well.
+  URL: '%InitialURL%',
 
   // Omit `Symbol`, because we want the original to appear on the
   // start compartment without passing through the permits mechanism, since
@@ -183,6 +213,13 @@ export const sharedGlobalPropertyNames = {
   Error: '%SharedError%',
   RegExp: '%SharedRegExp%',
   Symbol: '%SharedSymbol%',
+
+  // WHATWG URL Standard
+  // https://url.spec.whatwg.org/
+  // The tamed `URL`: same prototype as `%InitialURL%` (so `instanceof URL` holds
+  // across the boundary), but `createObjectURL` / `revokeObjectURL` are
+  // omitted.
+  URL: '%SharedURL%',
 
   // *** Other Properties of the Global Object
 
@@ -259,20 +296,20 @@ export { NativeErrors };
  *     are also considered blacklisted and are removed.
  * <li>A string value equal to a primitive ("number", "string", etc),
  *     in which case the property is permitted if its value property
- *     is typeof the given type. For example, {@code "Infinity"} leads to
- *     "number" and property values that fail {@code typeof "number"}.
+ *     is typeof the given type. For example, `Infinity` leads to
+ *     "number" and property values that fail `typeof "number"`.
  *     are removed.
  * <li>A string value equal to an intinsic name ("ObjectPrototype",
  *     "Array", etc), in which case the property permitted if its
  *     value property is equal to the value of the corresponfing
- *     intrinsics. For example, {@code Map.prototype} leads to
+ *     intrinsics. For example, `Map.prototype` leads to
  *     "MapPrototype" and the property is removed if its value is
  *     not equal to %MapPrototype%
  * <li>Another record, in which case this property is simply
  *     permitted and that next record represents the disposition of
- *     the object which is its value. For example, {@code "Object"}
- *     leads to another record explaining what properties {@code
- *     "Object"} may have and how each such property should be treated.
+ *     the object which is its value. For example, `Object`
+ *     leads to another record explaining what properties
+ *     `Object` may have and how each such property should be treated.
  *
  * <p>Notes:
  * <li>"[[Proto]]" is used to refer to the "[[Prototype]]" internal
@@ -871,6 +908,97 @@ export const permitted = {
     toTemporalInstant: fn,
   },
 
+  // WHATWG URL Standard
+  // https://url.spec.whatwg.org/
+
+  // `%InitialURL%` is the powered start-compartment binding. It keeps the
+  // ambient blob-registry statics; on hosts that lack them (or under
+  // `urlBlobTaming: 'remove'`, where `%InitialURL%` is bound to `%SharedURL%`)
+  // they are simply absent, which the whitelist pass tolerates.
+  '%InitialURL%': {
+    // Properties of the URL Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    parse: fn,
+    canParse: fn,
+    // Ambient blob-registry authority the start compartment may keep.
+    createObjectURL: fn,
+    revokeObjectURL: fn,
+    prototype: '%URLPrototype%',
+  },
+
+  // `%SharedURL%` is the tamed binding installed on every compartment created
+  // after lockdown. It omits `createObjectURL` and `revokeObjectURL` so a
+  // shared compartment cannot mint or revoke blob URLs.
+  '%SharedURL%': {
+    // Properties of the URL Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    parse: fn,
+    canParse: fn,
+    prototype: '%URLPrototype%',
+  },
+
+  '%URLPrototype%': {
+    // `constructor` points at the tamed `%SharedURL%` so no compartment
+    // reaches the powered `%InitialURL%` via `URL.prototype.constructor`, mirroring
+    // how `%DatePrototype%.constructor` points at `%SharedDate%`.
+    constructor: '%SharedURL%',
+    hash: accessor,
+    host: accessor,
+    hostname: accessor,
+    href: accessor,
+    // `origin` and `searchParams` are read-only in the WHATWG standard.
+    origin: getter,
+    password: accessor,
+    pathname: accessor,
+    port: accessor,
+    protocol: accessor,
+    search: accessor,
+    searchParams: getter,
+    username: accessor,
+    toJSON: fn,
+    toString: fn,
+    '@@toStringTag': 'string',
+  },
+
+  URLSearchParams: {
+    // Properties of the URLSearchParams Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%URLSearchParamsPrototype%',
+  },
+
+  '%URLSearchParamsPrototype%': {
+    constructor: 'URLSearchParams',
+    append: fn,
+    delete: fn,
+    get: fn,
+    getAll: fn,
+    has: fn,
+    set: fn,
+    sort: fn,
+    size: getter,
+    toString: fn,
+    // Each returns an instance of `%URLSearchParamsIteratorPrototype%`, tamed
+    // below.
+    entries: fn,
+    forEach: fn,
+    keys: fn,
+    values: fn,
+    '@@iterator': fn,
+    '@@toStringTag': 'string',
+  },
+
+  // The URLSearchParams iterator prototype has no name on the global; it is
+  // reachable only by walking an instance (see `get-anonymous-intrinsics.js`,
+  // which samples it). Taming it here keeps a compartment holding a single
+  // `URLSearchParams` from mutating every other compartment's iteration.
+  '%URLSearchParamsIteratorPrototype%': {
+    '[[Proto]]': '%IteratorPrototype%',
+    next: fn,
+    // `return` is absent on some hosts (e.g. Node); permitted when present.
+    return: fn,
+    '@@toStringTag': 'string',
+  },
+
   // Text Processing
 
   String: {
@@ -1372,30 +1500,6 @@ export const permitted = {
     '@@toStringTag': 'string',
     // See https://github.com/Moddable-OpenSource/moddable/issues/523
     concat: false,
-    // See https://github.com/tc39/proposal-resizablearraybuffer
-    transfer: fn,
-    resize: fn,
-    resizable: getter,
-    maxByteLength: getter,
-    // https://github.com/tc39/proposal-arraybuffer-transfer
-    transferToFixedLength: fn,
-    detached: getter,
-    // https://github.com/endojs/endo/pull/2309#issuecomment-2155513240
-    // to be proposed
-    transferToImmutable: fn,
-    sliceToImmutable: fn,
-    immutable: getter,
-  },
-
-  // If this exists, it is purely an artifact of how we currently shim
-  // `transferToImmutable`. As natively implemented, there would be no
-  // such extra prototype.
-  '%ImmutableArrayBufferPrototype%': {
-    '[[Proto]]': '%ArrayBufferPrototype%',
-    byteLength: getter,
-    slice: fn,
-    // See https://github.com/endojs/endo/tree/master/packages/immutable-arraybuffer#purposeful-violation
-    '@@toStringTag': 'string',
     // See https://github.com/tc39/proposal-resizablearraybuffer
     transfer: fn,
     resize: fn,
@@ -2083,6 +2187,44 @@ export const permitted = {
     '@@toStringTag': 'string',
   },
 
+  // WHATWG Encoding Standard
+  // https://encoding.spec.whatwg.org/
+
+  TextEncoder: {
+    // Properties of the TextEncoder Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%TextEncoderPrototype%',
+  },
+
+  '%TextEncoderPrototype%': {
+    constructor: 'TextEncoder',
+    encode: fn,
+    encodeInto: fn,
+    encoding: getter,
+    '@@toStringTag': 'string',
+
+    // Non-standard property used by Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
+  },
+
+  TextDecoder: {
+    // Properties of the TextDecoder Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%TextDecoderPrototype%',
+  },
+
+  '%TextDecoderPrototype%': {
+    constructor: 'TextDecoder',
+    decode: fn,
+    encoding: getter,
+    fatal: getter,
+    ignoreBOM: getter,
+    '@@toStringTag': 'string',
+
+    // Non-standard property used by Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': false,
+  },
+
   // Appendix B
 
   // Annex B: Additional Properties of the Global Object
@@ -2113,6 +2255,7 @@ export const permitted = {
     load: asyncFn,
     importNow: fn,
     module: fn,
+    __noNamespaceBox__: getter,
     '@@toStringTag': 'string',
   },
 

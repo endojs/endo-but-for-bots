@@ -2,7 +2,6 @@
 /* eslint-disable no-underscore-dangle -- __shouldTerminate is
    deliberately scoped to globalThis with a dunder name to avoid
    collision with app-level exports. */
-/* global globalThis */
 
 /**
  * Shared primitives used by both XS bus bootstraps
@@ -11,12 +10,6 @@
  * Intentionally tiny: only the bits that were duplicated verbatim in
  * both bootstraps.  The actual wire plumbing lives in bus-xs-core.js.
  */
-
-export const textEncoder = new TextEncoder();
-harden(textEncoder);
-
-export const textDecoder = new TextDecoder();
-harden(textDecoder);
 
 /**
  * No-op rejection handler.  XS console.error may crash when formatting

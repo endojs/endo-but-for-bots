@@ -41,6 +41,8 @@ import { encodeBase64, decodeBase64 } from '@endo/base64';
 
 import { compose } from './compose.js';
 
+/** @import { DirectoryEntry } from './types.js' */
+
 const Pass = M.any();
 
 const WHITEOUT_PREFIX = '__whiteout__';
@@ -107,7 +109,8 @@ const enumerateLayerOps = async function* (layerFs) {
     const cursor = await E(dir).list();
     const stream = await E(cursor).stream();
     for await (const entry of iterateReader(stream)) {
-      const name = /** @type {string} */ (entry.name);
+      const typedEntry = /** @type {DirectoryEntry} */ (entry);
+      const name = typedEntry.name;
       const childPath = [...path, name];
       if (name === OPAQUE_NAME) {
         yield harden({ kind: 'opaque-dir', path });
@@ -120,13 +123,13 @@ const enumerateLayerOps = async function* (layerFs) {
         });
         continue;
       }
-      if (entry.qid.type === 'directory') {
+      if (typedEntry.qid.type === 'directory') {
         yield harden({ kind: 'create-dir', path: childPath });
         const child = await E(dir).lookup(name);
         queue.push({ dir: child, path: childPath });
         continue;
       }
-      if (entry.qid.type === 'file') {
+      if (typedEntry.qid.type === 'file') {
         yield harden({ kind: 'create-file', path: childPath });
         const file = await E(dir).lookup(name);
         const attrs = await E(file).getAttrs();
@@ -394,7 +397,7 @@ export const makeLayer = (layerFs, backingFs) => {
       if (method === undefined) {
         return 'Layer (DESIGN.md §8.5).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

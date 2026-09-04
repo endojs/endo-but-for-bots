@@ -1,6 +1,8 @@
 // @ts-check
 /// <reference types="ses"/>
 
+/** @import { WritableGitWorktree } from '@endo/exo-git' */
+
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import fs from 'node:fs';
@@ -23,6 +25,7 @@ import {
   makeBearerCredential,
   makeGit,
   makeGitCloner,
+  makeGitOperations,
   makeGitRemote,
   makeGitRemoteEndpoint,
   makeNotYetImplementedBackend,
@@ -31,7 +34,7 @@ import {
 } from '@endo/exo-git';
 
 import { start, stop, purge, makeEndoClient } from '../index.js';
-import { makeFilePowers } from '../src/daemon-node-powers.js';
+import { makeFilePowers } from '../src/manager-node-powers.js';
 import { lineageOf, makeMount } from '../src/mount.js';
 
 const execFileAsync = nodePromisify(execFile);
@@ -40,6 +43,49 @@ const exampleCredential = () =>
     audience: 'https://github.com',
     token: 'test-token',
   });
+
+/**
+ * The remote tests exercise policy and transport paths that never touch the
+ * worktree.
+ * Keep their fake mount structurally honest enough for the writable
+ * Git construction contract without weakening it to an opaque object.
+ *
+ * @returns {WritableGitWorktree}
+ */
+const makeFakeGitMount = () => {
+  const entry = Far('FakeEntry', {
+    segments: () => [],
+    displayPath: () => '',
+    child: () => entry,
+    help: () => '',
+  });
+  const readOnlyMount = Far('FakeReadOnlyMount', {
+    has: async () => false,
+    list: async () => [],
+    lookup: async () => undefined,
+    sha256: () => '',
+    getInfo: async () => ({
+      algorithm: 'sha256',
+      hash: '',
+      size: 0n,
+    }),
+  });
+  const mount = Far('FakeMount', {
+    has: async () => false,
+    list: async () => [],
+    lookup: async () => undefined,
+    write: async () => undefined,
+    remove: async () => undefined,
+    move: async () => undefined,
+    copy: async () => undefined,
+    makeDirectory: async () => mount,
+    readOnly: () => readOnlyMount,
+    snapshot: async () => readOnlyMount,
+    entry: () => entry,
+  });
+  return /** @type {WritableGitWorktree} */ (mount);
+};
+harden(makeFakeGitMount);
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -105,7 +151,8 @@ const provisionGitContext = async t => {
   const backend = makeNativeGitBackend({ repoRoot: root });
   await backend.assertRepositoryRoot();
   const git = makeGit({ mount, backend, lineageOf });
-  return { git, mount, root };
+  const operations = makeGitOperations({ backend, git });
+  return { git, operations, mount, root };
 };
 
 /**
@@ -125,9 +172,10 @@ const provisionBareRemote = async (t, sourceRepo) => {
 };
 
 test('makeGitRemote produces a paired (remote, controller) facet', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -144,9 +192,10 @@ test('makeGitRemote produces a paired (remote, controller) facet', async t => {
 });
 
 test('GitRemote.inspect returns the current policy snapshot', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -172,7 +221,7 @@ test('GitRemote.inspect returns the current policy snapshot', async t => {
 });
 
 test('GitRemote validates endpoint and refspec policy at construction', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const basePolicy = harden({
     url: 'https://github.com/example/repo.git',
     allowedDirections: /** @type {Array<'fetch' | 'push'>} */ (['fetch']),
@@ -184,6 +233,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: { ...basePolicy, url: 'http://github.com/example/repo.git' },
@@ -194,6 +244,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -207,6 +258,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -220,6 +272,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: { ...basePolicy, fetchRefspecs: ['main:origin/main'] },
@@ -230,6 +283,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -243,6 +297,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -257,6 +312,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -271,6 +327,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -285,6 +342,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -299,7 +357,7 @@ test('GitRemote validates endpoint and refspec policy at construction', async t 
 });
 
 test('GitRemote requires matching credential authority for HTTPS', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const policy = harden({
     url: 'https://github.com/example/repo.git',
     allowedDirections: /** @type {Array<'fetch' | 'push'>} */ (['fetch']),
@@ -311,6 +369,7 @@ test('GitRemote requires matching credential authority for HTTPS', async t => {
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         policy,
       }),
@@ -321,6 +380,7 @@ test('GitRemote requires matching credential authority for HTTPS', async t => {
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         credential: makeBearerCredential({
           audience: 'https://gitlab.com',
@@ -334,6 +394,7 @@ test('GitRemote requires matching credential authority for HTTPS', async t => {
   const credential = exampleCredential();
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential,
     policy,
@@ -357,12 +418,18 @@ test('GitRemote passes HTTPS credential material to backend transport only', asy
       return harden({ updatedRefs: harden([]), text: 'ok' });
     },
   });
-  const git = makeGit({ mount: Far('FakeMount', {}), backend, lineageOf });
+  const git = makeGit({
+    mount: makeFakeGitMount(),
+    backend,
+    lineageOf,
+  });
+  const operations = makeGitOperations({ backend, git });
   const credential = exampleCredential();
   const credentialController = getGitCredentialController(credential);
   t.truthy(credentialController);
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential,
     policy: {
@@ -418,12 +485,18 @@ test('GitCredentialController rotates material used by existing remotes', async 
       return harden({ updatedRefs: harden([]), text: 'ok' });
     },
   });
-  const git = makeGit({ mount: Far('FakeMount', {}), backend, lineageOf });
+  const git = makeGit({
+    mount: makeFakeGitMount(),
+    backend,
+    lineageOf,
+  });
+  const operations = makeGitOperations({ backend, git });
   const credential = exampleCredential();
   const controller = getGitCredentialController(credential);
   t.truthy(controller);
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential,
     policy: {
@@ -480,9 +553,15 @@ test('GitRemoteController.revoke during in-flight fetch prevents stale success',
       return fetchResult;
     },
   });
-  const git = makeGit({ mount: Far('FakeMount', {}), backend, lineageOf });
+  const git = makeGit({
+    mount: makeFakeGitMount(),
+    backend,
+    lineageOf,
+  });
+  const operations = makeGitOperations({ backend, git });
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -538,12 +617,18 @@ test('GitCredentialController.rotate during in-flight fetch prevents stale succe
       return harden({ updatedRefs: harden([]), text: 'ok' });
     },
   });
-  const git = makeGit({ mount: Far('FakeMount', {}), backend, lineageOf });
+  const git = makeGit({
+    mount: makeFakeGitMount(),
+    backend,
+    lineageOf,
+  });
+  const operations = makeGitOperations({ backend, git });
   const credential = exampleCredential();
   const credentialController = getGitCredentialController(credential);
   t.truthy(credentialController);
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential,
     policy: {
@@ -686,9 +771,15 @@ test('GitRemoteController.revoke during in-flight pull aborts before local integ
       return 'merged';
     },
   });
-  const git = makeGit({ mount: Far('FakeMount', {}), backend, lineageOf });
+  const git = makeGit({
+    mount: makeFakeGitMount(),
+    backend,
+    lineageOf,
+  });
+  const operations = makeGitOperations({ backend, git });
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -730,6 +821,7 @@ test('GitRemote push round-trips to an independent fetcher over file://', async 
 
   const { remote: producerRemote } = makeGitRemote({
     git: producer.git,
+    operations: producer.operations,
     name: 'origin',
     policy: {
       url: remoteUrl,
@@ -755,9 +847,12 @@ test('GitRemote push round-trips to an independent fetcher over file://', async 
   });
   const pushedRefs = [...pushResult.updatedRefs];
   t.is(pushedRefs.length, 1);
-  const pushedOid = pushedRefs[0].local.oid;
+  const [pushedRef] = pushedRefs;
+  assert(pushedRef && pushedRef.local, 'push should report a local ref');
+  const pushedOid = pushedRef.local.oid;
+  assert(pushedOid, 'pushed ref should report an oid');
   t.regex(pushedOid, /^[0-9a-f]{40}$/u);
-  t.like(pushedRefs[0], {
+  t.like(pushedRef, {
     remote: 'refs/heads/agent/feature',
     result: 'created',
   });
@@ -767,6 +862,7 @@ test('GitRemote push round-trips to an independent fetcher over file://', async 
   const consumer = await provisionGitContext(t);
   const { remote: consumerRemote } = makeGitRemote({
     git: consumer.git,
+    operations: consumer.operations,
     name: 'origin',
     policy: {
       url: remoteUrl,
@@ -860,7 +956,7 @@ test.serial(
     });
 
     t.is((await E(git).currentBranch()).name, 'main');
-    t.deepEqual(await E(git).status(), []);
+    t.deepEqual(await E(git).status(), { entries: [], truncated: false });
     t.like(await E(remote).inspect(), {
       allowedDirections: ['fetch', 'push'],
       fetchRefspecs: ['+refs/heads/*:refs/remotes/origin/*'],
@@ -887,6 +983,52 @@ test.serial(
       'main:clone.txt',
     ]);
     t.is(stdout, 'clone wrote back\n');
+  },
+);
+
+test.serial(
+  'EndoHost.provideGitClone attributes a formula-owned identity to clone commits',
+  async t => {
+    const { root } = await provisionGitContext(t);
+    const remoteRoot = await provisionBareRemote(t, root);
+    const remoteUrl = pathToFileURL(remoteRoot).href;
+    const { host } = await provisionHostContext(t);
+
+    const destMount = await E(host).provideScratchMount(
+      'clone-identity-destination',
+    );
+    const { git, remote } = await E(host).provideGitClone({
+      destMount,
+      endpoint: { url: remoteUrl, allowLocalFileTransport: true },
+      identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+    });
+
+    await E(destMount).writeText(['identity.txt'], 'clone identity\n');
+    const entry = await E(destMount).entry(['identity.txt']);
+    await E(git).add([entry]);
+    const commit = await E(git).commit('clone identity subject');
+    await E(remote).push({
+      source: 'refs/heads/main',
+      destination: 'refs/heads/main',
+    });
+
+    // Read the pushed commit back from the bare remote so the assertion does
+    // not depend on the host-private destination worktree path.
+    const { stdout } = await execFileAsync('git', [
+      '--git-dir',
+      remoteRoot,
+      'show',
+      '-s',
+      '--format=%an%x00%ae%x00%cn%x00%ce',
+      commit.oid,
+    ]);
+    t.is(
+      stdout.replace(/\n$/u, ''),
+      ['Ada Agent', 'ada@example.test', 'Ada Agent', 'ada@example.test'].join(
+        '\0',
+      ),
+      'the clone identity attributes both author and committer',
+    );
   },
 );
 
@@ -921,10 +1063,11 @@ test.serial(
 );
 
 test('GitRemote enforces allowedDirections at the call boundary', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   // Fetch-only policy: push must be refused before transport is reached.
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -954,12 +1097,14 @@ test('GitRemote enforces tag and prune policy at the call boundary', async t => 
     ...makeNotYetImplementedBackend(),
     remoteFetch: async input => {
       fetchCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -995,12 +1140,14 @@ test('GitRemote wildcard push policy binds source and destination names', async 
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
   const { remote } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -1029,6 +1176,344 @@ test('GitRemote wildcard push policy binds source and destination names', async 
   });
 });
 
+test('GitRemote.push forwards a destination-scoped force-with-lease', async t => {
+  const { mount } = await provisionGitContext(t);
+  /** @type {unknown[]} */
+  const pushCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remotePush: async input => {
+      pushCalls.push(input);
+      return harden({ updatedRefs: [], text: 'ok' });
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential: exampleCredential(),
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['push'],
+      fetchRefspecs: [],
+      pushRefspecs: ['refs/heads/safe/*:refs/heads/safe/*'],
+      allowForcePush: true,
+    },
+  });
+
+  const expectedOid = '0123456789abcdef0123456789abcdef01234567';
+  await E(remote).push({
+    source: 'refs/heads/safe/topic',
+    forceWithLease: expectedOid,
+  });
+
+  t.like(
+    /** @type {{ refspecs?: string[], forceWithLease?: unknown }} */ (
+      pushCalls[0]
+    ),
+    {
+      refspecs: ['refs/heads/safe/topic:refs/heads/safe/topic'],
+      forceWithLease: {
+        ref: 'refs/heads/safe/topic',
+        expectedOid,
+      },
+    },
+  );
+
+  await t.throwsAsync(E(remote).push({ forceWithLease: expectedOid }), {
+    message: /forceWithLease require an explicit source/,
+  });
+  await t.throwsAsync(
+    E(remote).push({
+      source: 'refs/heads/safe/topic',
+      force: true,
+      forceWithLease: expectedOid,
+    }),
+    { message: /mutually exclusive/ },
+  );
+});
+
+test('GitRemote.push scopes the lease to the destination, not the source', async t => {
+  const { mount } = await provisionGitContext(t);
+  /** @type {unknown[]} */
+  const pushCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remotePush: async input => {
+      pushCalls.push(input);
+      return harden({ updatedRefs: [], text: 'ok' });
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential: exampleCredential(),
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['push'],
+      fetchRefspecs: [],
+      // A mirroring policy, so source and destination are DIFFERENT names and
+      // the lease's binding is observable. With source === destination (as the
+      // sibling test has it) a regression to `ref: source` would pass.
+      pushRefspecs: ['refs/heads/safe/*:refs/heads/mirror/*'],
+      allowForcePush: true,
+    },
+  });
+
+  const expectedOid = '0123456789abcdef0123456789abcdef01234567';
+  await E(remote).push({
+    source: 'refs/heads/safe/topic',
+    destination: 'refs/heads/mirror/topic',
+    forceWithLease: expectedOid,
+  });
+
+  t.like(
+    /** @type {{ refspecs?: string[], forceWithLease?: unknown }} */ (
+      pushCalls[0]
+    ),
+    {
+      refspecs: ['refs/heads/safe/topic:refs/heads/mirror/topic'],
+      forceWithLease: { ref: 'refs/heads/mirror/topic', expectedOid },
+    },
+  );
+
+  // Git matches a `--force-with-lease` refname with `refname_match` (DWIM, no
+  // globbing) and does not warn when an entry matches nothing, so a wildcard
+  // destination would bind the lease to nothing and silently degrade the push
+  // to an unguarded one.
+  await t.throwsAsync(
+    E(remote).push({
+      source: 'refs/heads/safe/*',
+      destination: 'refs/heads/mirror/*',
+      forceWithLease: expectedOid,
+    }),
+    { message: /forceWithLease requires a concrete destination ref/ },
+  );
+  t.is(pushCalls.length, 1);
+});
+
+test('GitRemote.push of the policy refspecs never carries a lease', async t => {
+  const { mount } = await provisionGitContext(t);
+  /** @type {unknown[]} */
+  const pushCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remotePush: async input => {
+      pushCalls.push(input);
+      return harden({ updatedRefs: [], text: 'ok' });
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential: exampleCredential(),
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['push'],
+      fetchRefspecs: [],
+      pushRefspecs: ['refs/heads/safe/*:refs/heads/safe/*'],
+      allowForcePush: true,
+    },
+  });
+
+  // The no-source/no-destination branch pushes the policy's own refspecs. Pin
+  // that it emits no lease even under a force-permitting policy, and that
+  // `force` is dropped rather than smuggled onto a policy refspec.
+  await E(remote).push();
+  await E(remote).push({ force: true });
+  for (const call of pushCalls) {
+    t.like(
+      /** @type {{ refspecs?: string[], forceWithLease?: unknown, setUpstream?: unknown }} */ (
+        call
+      ),
+      {
+        refspecs: ['refs/heads/safe/*:refs/heads/safe/*'],
+        forceWithLease: undefined,
+        setUpstream: false,
+      },
+    );
+  }
+  t.is(pushCalls.length, 2);
+});
+
+test('GitRemote.push reads its authority flags coerce-free', async t => {
+  const { mount } = await provisionGitContext(t);
+  /** @type {unknown[]} */
+  const pushCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remotePush: async input => {
+      pushCalls.push(input);
+      return harden({ updatedRefs: [], text: 'ok' });
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential: exampleCredential(),
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['push'],
+      fetchRefspecs: [],
+      pushRefspecs: ['refs/heads/safe/*:refs/heads/safe/*'],
+      allowForcePush: true,
+    },
+  });
+
+  // The guard on this options record is `M.recordOf(M.string(), M.any())`, so
+  // nothing upstream constrains the value and an LLM now sits directly on it.
+  // The string 'false' is the common wrong spelling, and truthiness would turn
+  // it into a real force push. Fail closed, exactly as `requirePolicyBoolean`
+  // does for the policy-side flags.
+  await Promise.all(
+    ['false', 'true', 0, 1, {}].map(wrong =>
+      t.throwsAsync(
+        E(remote).push(
+          /** @type {any} */ ({
+            source: 'refs/heads/safe/topic',
+            force: wrong,
+          }),
+        ),
+        { message: /GitRemote\.push force must be a boolean/ },
+      ),
+    ),
+  );
+  await t.throwsAsync(
+    E(remote).push(
+      /** @type {any} */ ({
+        source: 'refs/heads/safe/topic',
+        setUpstream: 'yes',
+      }),
+    ),
+    { message: /GitRemote\.push setUpstream must be a boolean/ },
+  );
+  t.is(pushCalls.length, 0);
+
+  // Real booleans still work, and `force: false` does not prefix the refspec.
+  await E(remote).push({ source: 'refs/heads/safe/topic', force: false });
+  t.like(/** @type {{ refspecs?: string[] }} */ (pushCalls[0]), {
+    refspecs: ['refs/heads/safe/topic:refs/heads/safe/topic'],
+  });
+});
+
+test('GitRemote.push pins the force-with-lease OID domain', async t => {
+  const { mount } = await provisionGitContext(t);
+  /** @type {unknown[]} */
+  const pushCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remotePush: async input => {
+      pushCalls.push(input);
+      return harden({ updatedRefs: [], text: 'ok' });
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential: exampleCredential(),
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['push'],
+      fetchRefspecs: [],
+      pushRefspecs: ['refs/heads/safe/*:refs/heads/safe/*'],
+      allowForcePush: true,
+    },
+  });
+  const push = forceWithLease =>
+    E(remote).push({ source: 'refs/heads/safe/topic', forceWithLease });
+  const oid = '0123456789abcdef0123456789abcdef01234567';
+
+  // The length boundary either side, plus the non-string and empty cases.
+  await Promise.all(
+    [oid.slice(0, 39), `${oid}0`, '', null, 42, {}, [oid]].map(rejected =>
+      t.throwsAsync(push(rejected), {
+        message: /40-character hexadecimal object ID/,
+      }),
+    ),
+  );
+
+  // Git reads a null-OID lease as "expect this ref NOT to exist" — create-only
+  // rather than guard-an-update, inverting what the option publishes. An agent
+  // deriving a lease from an unresolvable ref emits exactly this value.
+  await t.throwsAsync(push('0'.repeat(40)), {
+    message: /must not be the null object ID/,
+  });
+  t.is(pushCalls.length, 0);
+
+  // The accept side of the domain: the exo's `/iu` regex and the tool schema's
+  // `[0-9a-fA-F]` class both admit uppercase, and they must stay in agreement.
+  await push(oid.toUpperCase());
+  t.is(pushCalls.length, 1);
+});
+
+test('GitRemote.push force-with-lease is gated by allowForcePush', async t => {
+  const { mount } = await provisionGitContext(t);
+  /** @type {unknown[]} */
+  const pushCalls = [];
+  const backend = harden({
+    ...makeNotYetImplementedBackend(),
+    remotePush: async input => {
+      pushCalls.push(input);
+      return harden({ updatedRefs: [], text: 'ok' });
+    },
+  });
+  const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
+  const { remote } = makeGitRemote({
+    git,
+    operations,
+    name: 'origin',
+    credential: exampleCredential(),
+    policy: {
+      url: 'https://github.com/example/repo.git',
+      allowedDirections: ['push'],
+      fetchRefspecs: [],
+      pushRefspecs: ['refs/heads/safe/*:refs/heads/safe/*'],
+      allowForcePush: false,
+    },
+  });
+
+  // A lease refspec deliberately carries no `+` (the `+` would defeat the
+  // lease), so `assertPushRefspecAllowed`'s `parsed.force` gate can never
+  // fire for a lease push. The explicit `allowForcePush` check is therefore
+  // the ONLY policy gate standing between a lease push and a force-update;
+  // pin it, or a policy that forbids force push silently permits one.
+  const expectedOid = '0123456789abcdef0123456789abcdef01234567';
+  await t.throwsAsync(
+    E(remote).push({
+      source: 'refs/heads/safe/topic',
+      forceWithLease: expectedOid,
+    }),
+    { message: /forceWithLease requires allowForcePush/ },
+  );
+  t.is(pushCalls.length, 0);
+
+  // A non-OID lease is rejected before the policy gate, so a malformed value
+  // can never reach the backend as an unbounded `--force-with-lease`.
+  await t.throwsAsync(
+    E(remote).push({
+      source: 'refs/heads/safe/topic',
+      forceWithLease: 'not-an-object-id',
+    }),
+    { message: /40-character hexadecimal object ID/ },
+  );
+  t.is(pushCalls.length, 0);
+});
+
 test('GitRemote.push revalidates concrete tag overrides against allowTags', async t => {
   // P2-3: a broad tag-disabled policy refspec (refs/heads/*:refs/*)
   // wildcard-matches a concrete override pushing a branch to a tag
@@ -1042,12 +1527,14 @@ test('GitRemote.push revalidates concrete tag overrides against allowTags', asyn
     ...makeNotYetImplementedBackend(),
     remotePush: async input => {
       pushCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -1094,12 +1581,14 @@ test('GitRemote.pull rejects an integration branch outside fetch policy', async 
     ...makeNotYetImplementedBackend(),
     remoteFetch: async input => {
       fetchCalls.push(input);
-      return harden({ updatedRefs: [] });
+      return harden({ updatedRefs: [], text: 'ok' });
     },
   });
   const git = makeGit({ mount, backend, lineageOf });
+  const operations = makeGitOperations({ backend, git });
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -1143,7 +1632,7 @@ test('makeGitRemote rejects non-boolean allow flags at construction', async t =>
   // P2-2: allow* flags are policy authority gates.  A non-boolean must
   // be rejected, not truthiness-coerced — allowLocalFileTransport:
   // 'false' is a string and would otherwise enable file: transport.
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const basePolicy = harden({
     url: 'https://github.com/example/repo.git',
     allowedDirections: /** @type {Array<'fetch' | 'push'>} */ (['fetch']),
@@ -1164,6 +1653,7 @@ test('makeGitRemote rejects non-boolean allow flags at construction', async t =>
       () =>
         makeGitRemote({
           git,
+          operations,
           name: 'origin',
           credential: exampleCredential(),
           policy: /** @type {any} */ ({ ...basePolicy, [flag]: 'false' }),
@@ -1176,6 +1666,7 @@ test('makeGitRemote rejects non-boolean allow flags at construction', async t =>
       () =>
         makeGitRemote({
           git,
+          operations,
           name: 'origin',
           credential: exampleCredential(),
           policy: /** @type {any} */ ({ ...basePolicy, [flag]: 1 }),
@@ -1188,6 +1679,7 @@ test('makeGitRemote rejects non-boolean allow flags at construction', async t =>
   t.notThrows(() =>
     makeGitRemote({
       git,
+      operations,
       name: 'origin',
       credential: exampleCredential(),
       policy: { ...basePolicy, allowTags: true, allowDelete: false },
@@ -1196,12 +1688,13 @@ test('makeGitRemote rejects non-boolean allow flags at construction', async t =>
 });
 
 test('makeGitRemote rejects a read-only Git cap', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const readOnlyGit = await E(git).readOnly();
   t.throws(
     () =>
       makeGitRemote({
         git: readOnlyGit,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -1216,21 +1709,27 @@ test('makeGitRemote rejects a read-only Git cap', async t => {
 });
 
 test('makeGitRemote rejects a spoofed Git cap not minted by the daemon', async t => {
-  // A spoof exo shaped like Git is not in the daemon's
-  // `gitReadOnly` / `gitBackends` WeakMaps, so `getGitBackend`
-  // returns undefined and the constructor refuses.  This pins the
-  // host-side check-before-trust gate that keeps `makeGitRemote`
-  // from composing against a guest-fabricated Git.
+  // A spoof exo shaped like Git is not a `reader` / `writer` / `rewriter`
+  // facet of the real Git exo class kit, so `isGitReadOnly` returns
+  // `undefined` (neither confirms nor denies read-only). Passing
+  // `operations: undefined` alone would only exercise the
+  // operations-shape check below, not the `git` identity check itself, so
+  // this pairs the spoofed `git` with a well-formed `operations` from a
+  // real backend (as a composing caller that trusted `git` without
+  // checking it might do) to pin that the `git` identity check rejects
+  // the spoof on its own, independent of `operations`.
   const spoofGit = Far('SpoofGit', {
     /** @returns {Promise<unknown>} */
     async readOnly() {
       return spoofGit;
     },
   });
+  const { operations } = await provisionGitContext(t);
   t.throws(
     () =>
       makeGitRemote({
         git: spoofGit,
+        operations,
         name: 'origin',
         credential: exampleCredential(),
         policy: {
@@ -1244,10 +1743,102 @@ test('makeGitRemote rejects a spoofed Git cap not minted by the daemon', async t
   );
 });
 
-test('GitRemoteController mutates policy, snapshot reflects the change', async t => {
+test('makeGitRemote rejects a spoofed Git cap even with operations undefined', async t => {
+  // Pins the operations-shape check independently of the `git` identity
+  // check above: a spoofed `git` paired with no `operations` at all must
+  // still be rejected (for either reason — both checks reject this
+  // input).
+  const spoofGit = Far('SpoofGit', {
+    /** @returns {Promise<unknown>} */
+    async readOnly() {
+      return spoofGit;
+    },
+  });
+  t.throws(
+    () =>
+      makeGitRemote({
+        git: spoofGit,
+        // Deliberately malformed: pins the runtime rejection of a Git cap
+        // with no paired `GitOperations`.
+        operations: /** @type {any} */ (undefined),
+        name: 'origin',
+        credential: exampleCredential(),
+        policy: {
+          url: 'https://github.com/example/repo.git',
+          allowedDirections: ['fetch'],
+          fetchRefspecs: [],
+          pushRefspecs: [],
+        },
+      }),
+    { message: /GitRemote requires a daemon-minted Git cap/ },
+  );
+});
+
+test('makeGitRemote rejects a genuine Git cap paired with another instance’s operations', async t => {
+  // Both `git` and `operations` are individually genuine, daemon-minted
+  // values, just minted for two different repos. Neither the read-only
+  // check nor the operations-shape check catches this: it is the
+  // `gitPairingTokenFor` pairing-token check that must reject the
+  // mismatched pair.
   const { git } = await provisionGitContext(t);
+  const { operations: foreignOperations } = await provisionGitContext(t);
+  t.throws(
+    () =>
+      makeGitRemote({
+        git,
+        operations: foreignOperations,
+        name: 'origin',
+        credential: exampleCredential(),
+        policy: {
+          url: 'https://github.com/example/repo.git',
+          allowedDirections: ['fetch'],
+          fetchRefspecs: [],
+          pushRefspecs: [],
+        },
+      }),
+    { message: /GitRemote requires operations minted for this git cap/ },
+  );
+});
+
+test('makeGitRemote rejects operations: null with the operations-shape error', async t => {
+  // `operations === null` must fail the operations-shape check with the
+  // same diagnostic as `undefined`, not throw a raw TypeError from reading
+  // `.backend` off `null` (`typeof null === 'object'`, so the shape check
+  // must special-case `null` explicitly).
+  const { git } = await provisionGitContext(t);
+  t.throws(
+    () =>
+      makeGitRemote({
+        git,
+        operations: /** @type {any} */ (null),
+        name: 'origin',
+        credential: exampleCredential(),
+        policy: {
+          url: 'https://github.com/example/repo.git',
+          allowedDirections: ['fetch'],
+          fetchRefspecs: [],
+          pushRefspecs: [],
+        },
+      }),
+    { message: /GitRemote requires a daemon-minted Git cap/ },
+  );
+});
+
+test('makeGitOperations rejects a null backend', t => {
+  t.throws(
+    () =>
+      makeGitOperations({
+        backend: /** @type {any} */ (null),
+      }),
+    { message: /makeGitOperations requires a backend/ },
+  );
+});
+
+test('GitRemoteController mutates policy, snapshot reflects the change', async t => {
+  const { git, operations } = await provisionGitContext(t);
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -1287,9 +1878,10 @@ test('GitRemoteController mutates policy, snapshot reflects the change', async t
 });
 
 test('GitRemoteController.revoke makes all remote ops refuse', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {
@@ -1316,11 +1908,12 @@ test('GitRemoteController.revoke makes all remote ops refuse', async t => {
 });
 
 test('makeGitRemote rejects an empty url or empty name', async t => {
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   t.throws(
     () =>
       makeGitRemote({
         git,
+        operations,
         name: '',
         policy: {
           url: 'https://x',
@@ -1335,6 +1928,7 @@ test('makeGitRemote rejects an empty url or empty name', async t => {
     () =>
       makeGitRemote({
         git,
+        operations,
         name: 'origin',
         policy: {
           url: '',
@@ -1365,9 +1959,10 @@ test('GitRemoteController policy setters update the snapshot for refspecs and fl
   // setAllowedBranches / setAllowedDirections are exercised in the
   // "mutates policy" test above; setAllowTags / setAllowDelete in the
   // tag-and-prune test.
-  const { git } = await provisionGitContext(t);
+  const { git, operations } = await provisionGitContext(t);
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     credential: exampleCredential(),
     policy: {

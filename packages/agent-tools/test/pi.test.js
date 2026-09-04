@@ -7,7 +7,7 @@ import '@endo/init/debug.js';
 import test from 'ava';
 
 import { makeTool } from '../src/tool.js';
-import { toPiAgentTool } from '../src/pi.js';
+import { toPiAgentTool } from '../src/adapters/pi.js';
 
 /**
  * @param {unknown} result
@@ -59,4 +59,42 @@ test('the renderToolResult hook controls the rendered text', async t => {
   // The raw value is retained as structured details for non-text consumers.
   t.deepEqual(result.details, { value: 42 });
   t.deepEqual(seen, [{ value: 42 }]);
+});
+
+test('renderCall and renderResult pass through opaquely when supplied', t => {
+  const renderCall = () => 'call-component';
+  const renderResult = () => 'result-component';
+  const withRenderers = toPiAgentTool(toolReturning('ok'), {
+    renderCall,
+    renderResult,
+  });
+  t.is(withRenderers.renderCall, renderCall);
+  t.is(withRenderers.renderResult, renderResult);
+
+  const withoutRenderers = toPiAgentTool(toolReturning('ok'));
+  t.false('renderCall' in withoutRenderers);
+  t.false('renderResult' in withoutRenderers);
+});
+
+test('toPiAgentTool forwards pi AbortSignal as invocation context', async t => {
+  /** @type {AbortSignal | undefined} */
+  let received;
+  const tool = makeTool({
+    name: 'signal',
+    description: 'Observe invocation context.',
+    parameters: harden({
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    }),
+    execute: async (_args, context) => {
+      received = context?.signal;
+      return 'ok';
+    },
+  });
+  const agentTool = toPiAgentTool(tool);
+  const controller = new AbortController();
+  await agentTool.execute('id-4', {}, controller.signal);
+  t.is(received, controller.signal);
 });

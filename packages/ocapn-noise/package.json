@@ -71,9 +71,8 @@
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
     "ses": "workspace:^",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev",
-    "ws": "^8.13.0"
+    "ws": "^8.21.3"
   },
   "files": [
     "./*.d.ts",
@@ -89,23 +88,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "rules": {
-      "import/no-unresolved": [
-        "error",
-        {
-          "ignore": [
-            "^@endo/ocapn/",
-            "^@endo/ocapn-noise/",
-            "^@endo/ses-ava/"
-          ]
-        }
-      ]
-    }
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",

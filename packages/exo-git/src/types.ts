@@ -1,12 +1,74 @@
 // Public type surface for `@endo/exo-git`.
-// Daemon-owned mount/readable surface types are represented as `unknown`
-// here to keep `@endo/exo-git` free of a circular dependency on the daemon
-// package.
+
+import type { PassableReader } from '@endo/exo-stream';
+import type { ERef } from '@endo/eventual-send';
+import type { RemotableObject } from '@endo/pass-style';
+
+export type { PassableReader };
+
+export type Directory = import('@endo/platform/fs/lite/types').Directory;
+export type File = import('@endo/platform/fs/lite/types').File;
+export type Filesystem = import('@endo/platform/fs/extended').Filesystem;
+export type RemotableFilesystem = Filesystem & RemotableObject;
+export type TreeRef = import('@endo/platform/fs/extended').TreeRef;
+export type PathEntry = import('@endo/platform/fs/lite/types').PathEntry;
+export type PathEntryIssuer =
+  import('@endo/platform/fs/lite/types').PathEntryIssuer;
+export type ReadableBlob =
+  import('@endo/platform/fs/lite/types').ReadableBlobRange;
+export type ReadableTree = import('@endo/platform/fs/lite/types').ReadableTree;
+
+/** A Git tree capability with the standard capability-help surface. */
+export type GitTree = ReadableTree & {
+  help: (method?: string) => string;
+};
+
+export type WritableGitWorktree = Directory & PathEntryIssuer;
+export type ReadOnlyGitWorktree = ReadableTree;
+/** @deprecated Use `WritableGitWorktree` or `ReadOnlyGitWorktree`. */
+export type GitWorktree = WritableGitWorktree | ReadOnlyGitWorktree;
+
+/** A path within a Git capability's worktree authority. */
+export type GitPathDesignator = PathEntry | string;
 
 export type GitRef = {
   name: string;
   kind: 'branch' | 'tag' | 'commit' | 'detached';
   oid?: string;
+};
+
+export type GitRefUpdateResult =
+  | 'created'
+  | 'updated'
+  | 'up-to-date'
+  | 'fast-forward'
+  | 'forced'
+  | 'pruned'
+  | 'rejected';
+
+export type RemoteRefUpdate = {
+  local?: GitRef;
+  remote: string;
+  result: GitRefUpdateResult;
+};
+
+export type RemoteOperationResult = {
+  updatedRefs: RemoteRefUpdate[];
+  text: string;
+  /**
+   * Present only when the remote's `updatedRefs` exceeded the configured
+   * cardinality bound; the value is the count of entries dropped to fit
+   * under it. The count accumulates across layers: a backend that already
+   * bounded its own result contributes the count it reports, plus whatever
+   * the exo layer drops on top. See `result-bounds.js`.
+   */
+  droppedUpdatedRefsCount?: number;
+};
+
+export type RemotePullResult = {
+  fetch: RemoteOperationResult;
+  integration: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
+  head: GitRef;
 };
 
 export type GitCommit = {
@@ -15,6 +77,31 @@ export type GitCommit = {
   author?: string;
   committedAt?: number;
 };
+
+export type FollowRootOptions = {
+  cancelled?: Promise<never>;
+};
+
+export type GitCommitPosition = {
+  commitOid: string;
+  tree: TreeRef;
+  root: RemotableFilesystem;
+};
+
+export type GitRootSnapshot = {
+  type: 'snapshot';
+  revision: bigint;
+  position: GitCommitPosition | null;
+};
+
+export type GitRootTransition = {
+  type: 'transition';
+  fromRevision: bigint;
+  toRevision: bigint;
+  position: GitCommitPosition;
+};
+
+export type GitRootChange = GitRootSnapshot | GitRootTransition;
 
 export type GitIndexStatus =
   | 'clean'
@@ -26,27 +113,55 @@ export type GitIndexStatus =
   | 'conflicted';
 
 export type GitWorktreeStatus =
-  | 'clean'
-  | 'modified'
-  | 'deleted'
-  | 'untracked'
-  | 'ignored'
-  | 'conflicted';
+  'clean' | 'modified' | 'deleted' | 'untracked' | 'ignored' | 'conflicted';
+
+export type GitWorktreeEntry = {
+  /** Mount-relative path with `.` naming the current Git mount root. */
+  path: string;
+  head?: string;
+  branch?: string;
+  bare: boolean;
+  detached: boolean;
+  locked: boolean;
+  prunable: boolean;
+};
+
+export type GitWorktreeAddOptions = {
+  ref?: GitRef | string;
+  newBranch?: string;
+};
 
 export type GitStatusEntry = {
-  entry: unknown;
   path: string;
   index: GitIndexStatus;
   worktree: GitWorktreeStatus;
-  node?: unknown;
   renamedFrom?: string;
+};
+
+export type GitStatusOptions = {
+  /** Include all untracked files, collapse them to directories, or omit them. */
+  untracked?: 'all' | 'normal' | 'no';
+  maxCount?: number;
+};
+
+export type GitStatusResult = {
+  entries: GitStatusEntry[];
+  truncated: boolean;
+};
+
+export type GitTrackingStatus = {
+  branch?: string;
+  upstream?: string;
+  ahead: number;
+  behind: number;
+  detached: boolean;
 };
 
 export type GitDiffOptions = {
   cached?: boolean;
   base?: GitRef | string;
   head?: GitRef | string;
-  entries?: unknown[];
+  entries?: PathEntry[];
   paths?: string[];
 };
 
@@ -59,6 +174,21 @@ export type GitLogOptions = {
 
 export type GitRestoreOptions = {
   staged?: boolean;
+};
+
+export type GitConflictSide = 'ours' | 'theirs';
+
+export type GitCommitOptions = {
+  amend?: boolean;
+};
+
+/** Commit options available without history-rewrite authority. */
+export type GitReadWriteCommitOptions = Omit<GitCommitOptions, 'amend'> & {
+  amend?: false;
+};
+
+export type GitCherryPickOptions = {
+  noCommit?: boolean;
 };
 
 export type GitCreateBranchOptions = {
@@ -75,19 +205,30 @@ export type GitMergeOptions = {
   noFastForward?: boolean;
 };
 
-export type GitRebaseInput = {
-  mode?: 'start' | 'continue' | 'abort' | 'skip';
-  upstream?: string;
-};
+export type GitRebaseInput =
+  | {
+      mode: 'start';
+      upstream: string;
+      autosquash?: boolean;
+    }
+  | {
+      mode: 'continue' | 'abort' | 'skip';
+      upstream?: never;
+      autosquash?: never;
+    };
 
 export type GitStashPushOptions = {
   message?: string;
-  entries?: unknown[];
+  entries?: PathEntry[];
   paths?: string[];
   includeUntracked?: boolean;
 };
 
 export type GitDirection = 'fetch' | 'push';
+
+export type GitRemoteCredential =
+  | { kind: 'bearer'; material: { token: string } }
+  | { kind: 'basic'; material: { username: string; password: string } };
 
 /**
  * The reusable "authority to talk to this remote" half of a
@@ -104,7 +245,7 @@ export type GitRemoteEndpoint = {
   protocol: string;
   requiresCredential: boolean;
   allowLocalFileTransport: boolean;
-  ensureCredentialUsable: () => { kind: string; material: unknown } | undefined;
+  ensureCredentialUsable: () => GitRemoteCredential | undefined;
   captureCredentialVersion: () => number | undefined;
   assertCredentialUnchanged: (
     operation: string,
@@ -113,7 +254,7 @@ export type GitRemoteEndpoint = {
   watchChange: (onChange: () => void) => (() => void) | undefined;
 };
 
-export type GitRemotePolicy = {
+export type RemotePolicy = {
   /**
    * Host-controlled remote endpoint URL.
    * Guests cannot mutate this field at call time; only
@@ -124,6 +265,12 @@ export type GitRemotePolicy = {
   allowedDirections: GitDirection[];
   fetchRefspecs: string[];
   pushRefspecs: string[];
+  /**
+   * Fully qualified source ref of the one concrete fetch mapping used by an
+   * unqualified `GitRemote.pull()`.
+   * When omitted, pull uses the first declared concrete fetch refspec.
+   */
+  defaultPullRef?: string;
   allowedBranches?: string[];
   allowForcePush?: boolean;
   allowTags?: boolean;
@@ -131,13 +278,21 @@ export type GitRemotePolicy = {
   allowLocalFileTransport?: boolean;
 };
 
+export type NormalizedRemotePolicy = RemotePolicy &
+  Required<
+    Pick<
+      RemotePolicy,
+      'allowForcePush' | 'allowTags' | 'allowDelete' | 'allowLocalFileTransport'
+    >
+  >;
+
 export type GitRemoteAuditEventBase = {
   sequence: number;
 };
 
 export type GitRemotePolicyAuditEvent = GitRemoteAuditEventBase & {
   type: 'create' | 'revoke' | 'policy';
-  policy: GitRemotePolicy & { name: string };
+  policy: NormalizedRemotePolicy & { name: string };
   revoked: boolean;
   method?: string;
 };
@@ -145,9 +300,10 @@ export type GitRemotePolicyAuditEvent = GitRemoteAuditEventBase & {
 export type GitRemoteOperationSuccessAuditEvent = GitRemoteAuditEventBase & {
   type: 'fetch' | 'pull' | 'push';
   outcome: 'ok';
-  updatedRefs?: unknown;
+  updatedRefs?: RemoteRefUpdate[];
+  droppedUpdatedRefsCount?: number;
   integration?: 'up-to-date' | 'fast-forward' | 'merge' | 'rebase';
-  head?: unknown;
+  head?: GitRef;
 };
 
 export type GitRemoteOperationFailureAuditEvent = GitRemoteAuditEventBase & {
@@ -166,28 +322,49 @@ export type GitRemoteAuditEvent =
   | GitRemoteOperationSuccessAuditEvent
   | GitRemoteOperationFailureAuditEvent;
 
-export type GitRemoteSnapshot = GitRemotePolicy & { name: string };
+export type RemoteSnapshot = NormalizedRemotePolicy & { name: string };
 
 export type GitRemote = {
-  inspect: () => Promise<GitRemoteSnapshot>;
-  fetch: (options?: { prune?: boolean; tags?: boolean }) => Promise<any>;
+  help: (method?: string) => string;
+  inspect: () => Promise<RemoteSnapshot>;
+  fetch: (options?: {
+    prune?: boolean;
+    tags?: boolean;
+  }) => Promise<RemoteOperationResult>;
   pull: (options?: {
-    branch?: unknown;
+    branch?: GitRef | string;
     strategy?: 'merge' | 'rebase' | 'ff-only';
     prune?: boolean;
     tags?: boolean;
-  }) => Promise<any>;
+  }) => Promise<RemotePullResult>;
   push: (options?: {
+    /**
+     * Ignored. `pushRefspecsFromOptions` never reads this field: a caller that
+     * supplies it silently gets the policy's own `pushRefspecs`. Retained only
+     * because it is part of the shipped shape; use `source` / `destination`.
+     */
     refspecs?: string[];
     source?: string;
     destination?: string;
     force?: boolean;
+    /**
+     * Force-update only if the destination still names this commit. This is
+     * the capability form of git's `--force-with-lease=<destination>:<oid>`.
+     * Every precondition the implementation enforces: requires
+     * `allowForcePush`; requires an explicit `source`; the resolved
+     * destination must be a concrete ref, not a wildcard; the value must be 40
+     * hexadecimal digits and must not be the null object ID (which git reads
+     * as "this ref must not exist"); and it is mutually exclusive with
+     * `force`.
+     */
+    forceWithLease?: string;
     setUpstream?: boolean;
-  }) => Promise<any>;
+  }) => Promise<RemoteOperationResult>;
 };
 
 export type GitRemoteController = {
-  inspect: () => Promise<GitRemoteSnapshot & { revoked: boolean }>;
+  help: (method?: string) => string;
+  inspect: () => Promise<RemoteSnapshot & { revoked: boolean }>;
   audit: () => Promise<any>;
   setAllowedDirections: (directions: GitDirection[]) => Promise<void>;
   setFetchRefspecs: (refspecs: string[]) => Promise<void>;
@@ -204,38 +381,62 @@ export type GitRemoteKit = {
   controller: GitRemoteController;
 };
 
-// Daemon-only surface types referenced by git's JSDoc. Aliased to
-// `unknown` here so `@endo/exo-git` stays free of a circular
-// dependency on `@endo/daemon`; the full-fidelity definitions live in
-// `@endo/daemon/src/types.d.ts` and downstream consumers see them
-// through that file.
-export type EndoMount = unknown;
-export type EndoMountEntry = unknown;
-export type EndoMountFile = unknown;
-export type ReadableTreeView = unknown;
-
-/**
- * Public `EndoGit` capability surface. The factory lives in this
- * package (`./git.js#makeGit`); this type mirrors the runtime
- * `GitInterface` guard in `./interfaces.js` so the factory's
- * `@returns {EndoGit}` annotation carries useful fidelity inside the
- * package.
- */
-export type EndoGit = {
-  worktree: () => Promise<EndoMount | ReadableTreeView>;
-  status: () => Promise<GitStatusEntry[]>;
+/** The read-only capability surface returned by `readOnly()`. */
+export type ReadOnlyEndoGit = {
+  help: (method?: string) => string;
+  worktree: () => Promise<ReadOnlyGitWorktree>;
+  status: (options?: GitStatusOptions) => Promise<GitStatusResult>;
+  trackingStatus: () => Promise<GitTrackingStatus>;
+  worktreeList: () => Promise<GitWorktreeEntry[]>;
   diff: (options?: GitDiffOptions) => Promise<string>;
   log: (options?: GitLogOptions) => Promise<GitCommit[]>;
   show: (ref: GitRef | string) => Promise<string>;
   revParse: (ref: GitRef | string) => Promise<GitRef>;
-  add: (entries: EndoMountEntry[]) => Promise<void>;
-  restore: (
-    entries: EndoMountEntry[],
-    options?: GitRestoreOptions,
-  ) => Promise<void>;
-  commit: (message: string) => Promise<GitCommit>;
   currentBranch: () => Promise<GitRef | undefined>;
   branches: () => Promise<GitRef[]>;
+  stashList: () => Promise<string[]>;
+  stashShow: (index?: number) => Promise<string>;
+  /** @see filesystemAt, the preferred historical-read method; `tree(ref)` is its `ReadableTree` projection. */
+  tree: (ref: GitRef | string) => Promise<GitTree>;
+  filesystemAt: (ref: GitRef | string) => Promise<Filesystem>;
+  followRootChanges: (
+    options?: FollowRootOptions,
+  ) => ERef<PassableReader<GitRootChange, undefined>>;
+  followLatestRoot: (
+    options?: FollowRootOptions,
+  ) => ERef<PassableReader<GitRootSnapshot, undefined>>;
+  readOnly: () => ReadOnlyEndoGit;
+  /**
+   * Downscope to a pre-existing sibling facet of the same Git instance.
+   * Repeated calls with the same `name` return the identical facet
+   * reference. The vocabulary is closed and strictly non-escalating: the
+   * read-only posture can only select itself — `ReadWriteEndoGit` and
+   * `HistoryRewriteEndoGit` widen the accepted names (and result) as they
+   * add authority.
+   */
+  scope: (name: 'reader') => ReadOnlyEndoGit;
+};
+
+/** The ordinary read-write capability surface. */
+export type ReadWriteEndoGit = ReadOnlyEndoGit & {
+  worktree: () => Promise<WritableGitWorktree>;
+  add: (designators: GitPathDesignator[]) => Promise<void>;
+  restore: (
+    designators: GitPathDesignator[],
+    options?: GitRestoreOptions,
+  ) => Promise<void>;
+  worktreeAdd: (
+    entry: PathEntry,
+    options?: GitWorktreeAddOptions,
+  ) => Promise<ReadWriteEndoGit>;
+  checkoutConflict: (
+    designators: GitPathDesignator[],
+    side: GitConflictSide,
+  ) => Promise<void>;
+  commit: (
+    message: string,
+    options?: GitReadWriteCommitOptions,
+  ) => Promise<GitCommit>;
   createBranch: (
     name: string,
     options?: GitCreateBranchOptions,
@@ -249,14 +450,74 @@ export type EndoGit = {
   detach: (ref: GitRef | string) => Promise<void>;
   switch: (ref: GitRef | string) => Promise<void>;
   merge: (ref: GitRef | string, options?: GitMergeOptions) => Promise<string>;
-  rebase: (input: GitRebaseInput) => Promise<string>;
   stashPush: (options?: GitStashPushOptions) => Promise<string>;
-  stashList: () => Promise<string[]>;
-  stashShow: (index?: number) => Promise<string>;
   stashApply: (index?: number) => Promise<void>;
   stashPop: (index?: number) => Promise<void>;
   stashDrop: (index?: number) => Promise<void>;
-  tree: (ref: GitRef | string) => Promise<ReadableTreeView>;
-  filesystemAt: (ref: GitRef | string) => Promise<unknown>;
-  readOnly: () => EndoGit;
+  readOnly: () => ReadOnlyEndoGit;
+  scope: (name: 'reader' | 'writer') => ReadOnlyEndoGit | ReadWriteEndoGit;
+};
+
+/** The elevated read-write surface that may rewrite existing history. */
+export type HistoryRewriteEndoGit = ReadWriteEndoGit & {
+  worktreeAdd: (
+    entry: PathEntry,
+    options?: GitWorktreeAddOptions,
+  ) => Promise<HistoryRewriteEndoGit>;
+  scope: (name: 'reader' | 'writer' | 'rewriter') => EndoGit;
+  commit: (message: string, options?: GitCommitOptions) => Promise<GitCommit>;
+  reword: (ref: GitRef | string, message: string) => Promise<GitCommit>;
+  cherryPick: (
+    ref: GitRef | string,
+    options?: GitCherryPickOptions,
+  ) => Promise<string>;
+  rebase: (input: GitRebaseInput) => Promise<string>;
+};
+
+/**
+ * Compatibility name for a Git capability whose authority posture is not
+ * known statically.
+ */
+export type EndoGit =
+  ReadOnlyEndoGit | ReadWriteEndoGit | HistoryRewriteEndoGit;
+
+/** `makeGit` options requesting the read-only facet. */
+export type GitMakeReadOnlyOptions = {
+  readOnly: true;
+  allowHistoryRewrite?: boolean;
+};
+
+/** `makeGit` options requesting the history-rewrite facet. */
+export type GitMakeHistoryRewriteOptions = {
+  readOnly?: false;
+  allowHistoryRewrite: true;
+};
+
+/** `makeGit` options requesting the ordinary read-write facet. */
+export type GitMakeReadWriteOptions = {
+  readOnly?: false;
+  allowHistoryRewrite?: false;
+};
+
+/** `makeGit` options requesting either write-authority facet. */
+export type GitMakeReadWriteOrHistoryRewriteOptions = {
+  readOnly?: false;
+  allowHistoryRewrite: boolean;
+};
+
+/** `makeGit` options whose requested facet is not known statically. */
+export type GitMakeOptions = {
+  /**
+   * True when this Git cap is attenuated or was derived from a read-only
+   * mount.
+   * Mutation methods are absent from the returned facet; the backend is
+   * never asked to touch the worktree.
+   */
+  readOnly?: boolean;
+  /**
+   * True when this Git cap may amend, reword, cherry-pick, or rebase
+   * existing commits.
+   * Defaults to false.
+   */
+  allowHistoryRewrite?: boolean;
 };

@@ -1,0 +1,26 @@
+{
+  "compartments": {
+    "alpha": {
+      "modules": {}
+    },
+    "beta": {
+      "modules": {}
+    },
+    "optional-deps": {
+      "modules": {
+        "alpha": {
+          "link": "alpha"
+        },
+        "beta": {
+          "link": "beta"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/optional-esm/index.js",
+  "entryCompartment": "optional-deps",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-optional",
+  "oracle": "node",
+  "projection": "dependency-classification"
+}

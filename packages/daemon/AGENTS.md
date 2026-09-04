@@ -83,6 +83,9 @@ Methods: `has`, `list`, `lookup`, `entry`, `stat`, `readText`,
 `makeFile`, `readOnly`, `snapshot`, `help`.
 Path arguments accept `string | string[]` (a single name or
 an array of path segments).
+A slash inside a string is not a separator —
+`readText('src/foo.js')` is rejected; pass `['src', 'foo.js']`, or mint a
+token with `entry('src/foo.js')`, the one mount method that splits on `/`.
 
 ### ScratchMount
 
@@ -90,6 +93,18 @@ Daemon-managed scratch directory via
 `provideScratchMount(petName)`.
 Same interface as Mount but the filesystem path is managed by the
 daemon rather than supplied by the user.
+
+### SubMount
+
+A persistent `mount` formula rooted at a subdirectory of an existing
+mount, minted by `provideSubMount(mountName, subpath, newName, opts)`.
+Same Mount interface; the child gets its own confinement root (a
+sub-mount at `/project/src` cannot reach `/project/.env` via `..`) and
+records its parent in the formula, so it is cancelled together with the
+parent. Read-only attenuation is monotonic: a sub-mount of a read-only
+parent is read-only regardless of `opts.readOnly`. Sub-mount creation is
+a host method (not a `Mount` exo method) so the child is named atomically
+with formulation, avoiding a GC race.
 
 ## Gateway
 

@@ -40,7 +40,7 @@ jobs:
         # this repository, so credential persistence is intentional here.
         # This workflow runs only on `push: master`, never on PR-triggered
         # untrusted code, and uploads no artifacts that could leak `.git/`.
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.RELEASE_TOKEN }}
 
@@ -48,7 +48,7 @@ jobs:
       - run: corepack enable
 
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .node-version
           cache: yarn
@@ -62,11 +62,19 @@ jobs:
           git config user.name "github-actions[bot]"
 
       - name: Process Changesets
-        env:
-          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
         # This action will create/update Changesets' Release PR *or* create a
         # GitHub Release and tags if its Release PR was just merged
-        uses: changesets/action@63a615b9cd06ba9a3e6d13796c7fbcb080a60a0b # v1.8.0
+        uses: changesets/action@8488615a623b1b9c987934bb89eae8af6a946ac1 # v2.1.1
         with:
-          publish: yarn changeset tag
-          createGithubReleases: true
+          # v2 renamed these inputs to kebab-case (`publish` ->
+          # `publish-script`, `createGithubReleases` -> `create-github-releases`)
+          # and no longer reads the custom token from the `GITHUB_TOKEN` env var:
+          # it must be passed via the `github-token` input, otherwise the action
+          # pushes as the default `github.token` identity instead of RELEASE_TOKEN.
+          publish-script: yarn changeset tag
+          create-github-releases: true
+          github-token: ${{ secrets.RELEASE_TOKEN }}
+          # v2's push default flipped from git-CLI to the GitHub API; keep the v1
+          # git-CLI push so tags and the release PR continue to push via the
+          # persisted RELEASE_TOKEN credentials, preserving prior behavior.
+          push-with-git-cli: true

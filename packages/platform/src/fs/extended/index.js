@@ -4,6 +4,7 @@ export { makeInMemoryFilesystem } from './in-memory.js';
 export { makeNodeFilesystem } from './node-fs.js';
 export { readOnly } from './readonly.js';
 export { mountAsFilesystem } from './from-mount.js';
+export { isFilesystemReadOnly, isFilesystemReadWrite } from './posture.js';
 export {
   emptyFilesystem,
   chroot,
@@ -28,6 +29,16 @@ export { makeFromMountBackend } from './backends/from-mount-backend.js';
 
 // Public porcelain helpers (free functions over the typed cap surface).
 export { walk, collectBytes, collectStream } from './helpers.js';
+
+// Streaming tree clone (designs/endo-app-sharing.md, Pillar 3c): ship a whole
+// tree as one ordered frame stream and recreate it under a destination
+// Directory.
+export {
+  cloneTree,
+  streamTree,
+  writeTreeStream,
+  CloneFrameShape,
+} from './clone.js';
 
 // PosixFs interface sketch — POSIX-shaped attrs / real OS locks /
 // native disk xattrs live in a future companion cap. Only the

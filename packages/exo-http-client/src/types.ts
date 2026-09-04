@@ -1,8 +1,5 @@
 export type PolicyMode =
-  | 'strict'
-  | 'tofu-auto'
-  | 'tofu-prompt'
-  | 'tofu-attenuator';
+  'strict' | 'tofu-auto' | 'tofu-prompt' | 'tofu-attenuator';
 
 export type BindingState = 'Pinned-Allow' | 'Pinned-Deny' | 'Revoked';
 
@@ -45,6 +42,22 @@ export type NormalizedDecision = {
   decision: 'allow' | 'deny';
   decidedBy?: string;
   note?: string;
+};
+
+// The hardened, persistable snapshot handed to a `makeHttpClientAndControl`
+// `onPolicyChange` callback after any durable mutation. `policy.allowedOrigins`
+// is the STATIC allowlist (not the effective set), so reconstitution with
+// `allowedOrigins: snapshot.policy.allowedOrigins` and
+// `initialBindings: snapshot.bindings` reproduces an identical pair.
+export type PolicySnapshot = {
+  policy: {
+    allowedOrigins: string[];
+    maxRequestsPerMinute: number;
+    maxResponseBytes: number;
+    policyMode: PolicyMode;
+    revoked: boolean;
+  };
+  bindings: Binding[];
 };
 
 export type PolicyAuthority = {
@@ -99,6 +112,7 @@ export type HttpResponse = {
   maxResponseBytes: () => number;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
+  stream: () => import('@endo/exo-stream').PassableBytesReader;
   help: () => string;
 };
 

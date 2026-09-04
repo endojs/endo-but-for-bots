@@ -24,12 +24,15 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { XattrsInterface } from '../type-guards.js';
 
+/** @import { Xattrs } from '../types.js' */
+
 /**
  * @param {object} opts
  * @param {Map<string, Map<string, Uint8Array>>} opts.xattrTable
  * @param {(path: string[], event: { kind: string, name?: string }) => void} opts.fireLocal
  * @param {(path: string[]) => string} opts.lockKeyOf
  * @param {string[]} opts.path  the path this xattrs cap is bound to
+ * @returns {Xattrs}
  */
 export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
   const key = lockKeyOf(path);
@@ -64,7 +67,7 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
       };
       return bytesReaderFromIterator(gen());
     },
-    async set(name, _opts) {
+    async set(name) {
       assertUserNamespace(name);
       const m = ensureMap();
       /** @type {Uint8Array[]} */
@@ -117,7 +120,7 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
       if (method === undefined) {
         return 'Xattrs: vat-local user.* metadata (sidecar storage).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

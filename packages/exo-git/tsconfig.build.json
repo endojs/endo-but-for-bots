@@ -3,9 +3,5 @@
     "./tsconfig.json",
     "../../tsconfig-build-options.json"
   ],
-  "exclude": [
-    "test/",
-    "types-index.d.ts",
-    "types-index.js"
-  ]
+  "exclude": ["test/"]
 }

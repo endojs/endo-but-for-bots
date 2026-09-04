@@ -1,0 +1,14 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {}
+    }
+  },
+  "dev": false,
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-no-trans-dev-deps",
+  "oracle": "node",
+  "projection": "dependency-classification"
+}

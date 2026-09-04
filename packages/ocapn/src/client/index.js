@@ -191,6 +191,10 @@ const makeSessionManager = () => {
  * @param {string} [options.captpVersion] - For testing: override the CapTP version sent in handshakes
  * @param {boolean} [options.enableImportCollection] - If true, imports are tracked with WeakRefs and GC'd when unreachable. Default: true.
  * @param {boolean} [options.debugMode] - **EXPERIMENTAL**: If true, exposes `_debug` object on Ocapn instances with internal APIs for testing. Default: false.
+ * @param {import('./types.js').SessionHooks} [options.sessionHooks] - Optional
+ *   observation hooks for durable-session embedders: e.g. `onExport`
+ *   fires whenever a session assigns a local export slot. Netlayers
+ *   that do not provide durability are unaffected.
  * @param {Logger} [options.logger] - If provided, overrides the default console-based logger. When omitted, defaults to a console-based logger labelled with `debugLabel`; `info` is suppressed unless `verbose` is true.
  * @returns {Promise<Client>}
  */
@@ -204,6 +208,7 @@ export const makeOcapn = async ({
   captpVersion = '1.0',
   enableImportCollection = true,
   debugMode = false,
+  sessionHooks = undefined,
   logger: providedLogger,
 }) => {
   if (!codec) {
@@ -220,10 +225,19 @@ export const makeOcapn = async ({
 
   /**
    * @param {OcapnLocation} myLocation
-   * @returns {SelfIdentity}
+   * @param {Uint8Array} [privateKeyBytes] resume with a persisted
+   *   session key instead of minting a fresh one
+   * @returns {{ selfIdentity: SelfIdentity, privateKeyBytes: Uint8Array }}
    */
-  const makeSelfIdentity = myLocation => {
-    const keyPair = cryptography.makeOcapnKeyPair();
+  const makeSelfIdentity = (myLocation, privateKeyBytes = undefined) => {
+    const { keyPair, privateKeyBytes: keyBytes } =
+      privateKeyBytes === undefined
+        ? cryptography.makeOcapnKeyPairWithPrivateBytes()
+        : {
+            keyPair:
+              cryptography.makeOcapnKeyPairFromPrivateKey(privateKeyBytes),
+            privateKeyBytes,
+          };
     // tcp-testing-only does not have a Noise transcript hash to bind
     // against; sign with an empty channel-binding value.  The np
     // netlayer mints its own per-session SelfIdentity that binds to
@@ -234,9 +248,12 @@ export const makeOcapn = async ({
       new ArrayBuffer(0),
     );
     return {
-      keyPair,
-      location: myLocation,
-      locationSignature: myLocationSig,
+      selfIdentity: {
+        keyPair,
+        location: myLocation,
+        locationSignature: myLocationSig,
+      },
+      privateKeyBytes: keyBytes,
     };
   };
 
@@ -265,6 +282,18 @@ export const makeOcapn = async ({
   const sessionManager = makeSessionManager();
 
   /**
+   * In-flight session establishments, keyed by destination locationId.
+   * A network whose `connect`/`provideSession` is asynchronous registers
+   * its pending session only after an `await`, so two synchronous callers
+   * in the same turn would both miss `getActiveSession`/`getPendingSession`
+   * and each start a redundant establishment. This map collapses
+   * concurrent callers onto one establishment promise for the window
+   * before a pending session is registered.
+   * @type {Map<LocationId, Promise<InternalSession>>}
+   */
+  const establishingSessions = new Map();
+
+  /**
    * The resolved network. Assigned exactly once, after any factory is
    * called with `netlayerHandlers` and the logger. All closures below
    * reference this `let` binding; no method on the returned `Client`
@@ -273,19 +302,41 @@ export const makeOcapn = async ({
    */
   let network;
 
+  /**
+   * The location each connection presents as its own, recorded eagerly so
+   * the session keypair can be minted lazily (see
+   * `getSelfIdentityForConnection`).
+   * @type {WeakMap<Connection, OcapnLocation>}
+   */
+  const connectionLocationMap = new WeakMap();
   /** @type {WeakMap<Connection, SelfIdentity>} */
   const connectionSelfIdentityMap = new WeakMap();
 
   /**
-   * Get the self identity for a connection.
+   * Get the self identity for a connection, minting it on first use.
+   *
+   * Deferring the keypair until the identity is actually needed (our
+   * first outbound hello, or our reply to a *validated* inbound hello)
+   * means an unauthenticated inbound connection that never sends a valid
+   * `op:start-session` never costs us an Ed25519 keypair — bounding the
+   * work a flood of junk inbound connections can pin.
+   *
    * @param {Connection} connection
    * @returns {SelfIdentity}
    */
   const getSelfIdentityForConnection = connection => {
-    const selfIdentity = connectionSelfIdentityMap.get(connection);
-    if (!selfIdentity) {
+    const existing = connectionSelfIdentityMap.get(connection);
+    if (existing) {
+      return existing;
+    }
+    const location = connectionLocationMap.get(connection);
+    if (!location) {
       throw Error('Connection not found in self identity map');
     }
+    // `makeSelfIdentity` also returns the raw private key bytes (for the
+    // durable-session resume path); we only need the identity here.
+    const { selfIdentity } = makeSelfIdentity(location);
+    connectionSelfIdentityMap.set(connection, selfIdentity);
     return selfIdentity;
   };
 
@@ -360,6 +411,8 @@ export const makeOcapn = async ({
     // network has already framed/decrypted.
     const runPump = async () => {
       await null;
+      /** @type {Error | undefined} */
+      let pumpError;
       try {
         for (;;) {
           // eslint-disable-next-line no-await-in-loop
@@ -378,12 +431,30 @@ export const makeOcapn = async ({
             } catch (_e) {
               // ignore secondary failures during teardown
             }
+            pumpError = /** @type {Error} */ (err);
             break;
           }
         }
+      } catch (err) {
+        pumpError = /** @type {Error} */ (err);
       } finally {
         if (!isDestroyed) {
           isDestroyed = true;
+          // Tear down the OCapN client first so every pending
+          // `op:deliver` answer rejects with a disconnect error,
+          // not just sits forever on the answer table; then drop
+          // the session from the session manager so subsequent
+          // `provideSession` calls open a new one instead of
+          // resurrecting this dead one. The legacy NetLayer path
+          // does the same dance in `handleConnectionClose`; the
+          // OcapnNetwork path needs to mirror it because the
+          // network's session lifecycle (transport shutdown, EOF
+          // on the reader, peer crash, …) all funnel through this
+          // `runPump` finally rather than through
+          // `handleConnectionClose`.
+          internalSession.ocapn.abort(
+            pumpError ?? Error('OCapN session ended'),
+          );
           sessionManager.endSession(internalSession);
         }
       }
@@ -400,17 +471,21 @@ export const makeOcapn = async ({
     }
 
     // Networks that manage their own full session lifecycle (connect,
-    // authenticate, encrypt) short-circuit the handshake machinery.
+    // authenticate, encrypt) short-circuit the handshake machinery. A
+    // routing network that fronts several transports may return
+    // undefined for locations that use the handshake path instead.
     const asNetwork = /** @type {OcapnNetwork} */ (network);
     if (asNetwork.provideSession) {
       const networkSession = await asNetwork.provideSession(location);
-      const session = makeInternalSessionFromNetwork(networkSession, network);
-      sessionManager.resolveSession(
-        destinationLocationId,
-        session.connection,
-        session,
-      );
-      return Promise.resolve(session);
+      if (networkSession !== undefined) {
+        const session = makeInternalSessionFromNetwork(networkSession, network);
+        sessionManager.resolveSession(
+          destinationLocationId,
+          session.connection,
+          session,
+        );
+        return Promise.resolve(session);
+      }
     }
 
     const asNetlayer = /** @type {NetLayer} */ (network);
@@ -425,6 +500,17 @@ export const makeOcapn = async ({
     const connectResult = asNetlayer.connect(location);
     const connection =
       connectResult instanceof Promise ? await connectResult : connectResult;
+    // If `connect` was asynchronous, an inbound handshake (a crossed
+    // hello) may have established an active session for this location
+    // while we were dialing. Adopt it and discard the redundant outbound
+    // connection rather than sending a second hello, which the peer would
+    // reject as an unexpected `op:start-session` on an active session and
+    // which would abort the session it just established.
+    const racedSession = sessionManager.getActiveSession(destinationLocationId);
+    if (racedSession) {
+      connection.end();
+      return racedSession;
+    }
     const selfIdentity = getSelfIdentityForConnection(connection);
     // Networks that customize their handshake (e.g. a Noise-based
     // network) own the send path; otherwise fall back to
@@ -481,11 +567,28 @@ export const makeOcapn = async ({
       logger.info(`provideInternalSession returning existing pending session`);
       return pendingSession;
     }
+    // Dedupe an establishment already in flight but not yet far enough to
+    // have registered a pending session (the window across an async
+    // `connect`). Without this, concurrent callers each dial and each send
+    // a hello; the peer aborts the session on the second, unexpected
+    // `op:start-session`.
+    const inFlight = establishingSessions.get(locationId);
+    if (inFlight) {
+      logger.info(`provideInternalSession returning in-flight establishment`);
+      return inFlight;
+    }
     // Connect and establish a new session.
     logger.info(
       `provideInternalSession connecting and establishing new session`,
     );
     const newSessionPromise = establishSession(location);
+    establishingSessions.set(locationId, newSessionPromise);
+    const forget = () => {
+      if (establishingSessions.get(locationId) === newSessionPromise) {
+        establishingSessions.delete(locationId);
+      }
+    };
+    newSessionPromise.then(forget, forget);
     return newSessionPromise;
   };
 
@@ -514,6 +617,34 @@ export const makeOcapn = async ({
       debugLabel,
       enableImportCollection,
       debugMode,
+      sessionHooks
+        ? {
+            onExport:
+              sessionHooks.onExport &&
+              ((slot, value) =>
+                /** @type {NonNullable<import('./types.js').SessionHooks['onExport']>} */ (
+                  sessionHooks.onExport
+                )(connection, slot, value)),
+            onImport:
+              sessionHooks.onImport &&
+              ((slot, value) =>
+                /** @type {NonNullable<import('./types.js').SessionHooks['onImport']>} */ (
+                  sessionHooks.onImport
+                )(connection, slot, value)),
+            onPendingResolver:
+              sessionHooks.onPendingResolver &&
+              ((resolverSlot, target) =>
+                /** @type {NonNullable<import('./types.js').SessionHooks['onPendingResolver']>} */ (
+                  sessionHooks.onPendingResolver
+                )(connection, resolverSlot, target)),
+            onResolverSettled:
+              sessionHooks.onResolverSettled &&
+              (resolverSlot =>
+                /** @type {NonNullable<import('./types.js').SessionHooks['onResolverSettled']>} */ (
+                  sessionHooks.onResolverSettled
+                )(connection, resolverSlot)),
+          }
+        : undefined,
     );
   };
 
@@ -604,7 +735,6 @@ export const makeOcapn = async ({
    */
   const makeConnection = (netlayer, isOutgoing, socket) => {
     let isDestroyed = false;
-    const selfIdentity = makeSelfIdentity(netlayer.location);
 
     /** @type {Connection} */
     const connection = harden({
@@ -623,10 +753,73 @@ export const makeOcapn = async ({
       },
     });
 
-    // Store self identity for this connection
-    connectionSelfIdentityMap.set(connection, selfIdentity);
+    // Record the location this connection will present as its own; the
+    // keypair is minted lazily on first `getSelfIdentityForConnection`.
+    connectionLocationMap.set(connection, netlayer.location);
 
     return connection;
+  };
+
+  /**
+   * Resume a previously established session on a fresh connection
+   * without an op:start-session handshake: the durable netlayer has
+   * already authenticated the resumption (its resume token), and the
+   * embedder supplies the session's durable identity — including,
+   * when persisted, the session's own private key, so the resumed
+   * session keeps the same keys and cross-restart handoff signatures
+   * keep verifying.
+   *
+   * @param {Connection} connection
+   * @param {import('./types.js').SessionResumption} resumption
+   * @returns {import('./types.js').ResumedSession}
+   */
+  const resumeSession = (connection, resumption) => {
+    const { sessionId, peerLocation, peerLocationSignature } = resumption;
+    const peerPublicKey = cryptography.makeOcapnPublicKey(
+      resumption.peerPublicKeyBytes,
+    );
+    let selfIdentity;
+    if (resumption.selfPrivateKeyBytes !== undefined) {
+      // Resume with the persisted session key: the resumed session
+      // keeps the same self identity, so handoff signatures made
+      // before the restart keep verifying after it.
+      const remade = makeSelfIdentity(
+        /** @type {NetLayer} */ (network).location,
+        resumption.selfPrivateKeyBytes,
+      );
+      selfIdentity = remade.selfIdentity;
+      connectionSelfIdentityMap.set(connection, selfIdentity);
+    } else {
+      selfIdentity = getSelfIdentityForConnection(connection);
+    }
+    const ocapn = prepareOcapn(
+      connection,
+      /** @type {import('./types.js').SessionId} */ (sessionId),
+      peerLocation,
+    );
+    const session = makeSession({
+      id: /** @type {import('./types.js').SessionId} */ (sessionId),
+      selfIdentity,
+      peerLocation,
+      peerPublicKey,
+      peerLocationSig: peerLocationSignature,
+      ocapn,
+      connection,
+    });
+    sessionManager.resolveSession(
+      locationToLocationId(peerLocation),
+      connection,
+      session,
+    );
+    return harden({
+      restoreExport: (position, value) => ocapn.restoreExport(position, value),
+      restorePendingResolver: record => ocapn.restorePendingResolver(record),
+      // Delegated by reference rather than wrapped: a wrapper arrow
+      // would have to pick one of `provideImport`'s two call
+      // signatures, collapsing the caller's choice of interface.
+      provideImport: ocapn.provideImport,
+      advanceAnswerPosition: minimum => ocapn.advanceAnswerPosition(minimum),
+    });
   };
 
   /** @type {NetlayerHandlers} */
@@ -634,6 +827,7 @@ export const makeOcapn = async ({
     makeConnection,
     handleMessageData,
     handleConnectionClose,
+    resumeSession,
   });
 
   // Resolve the network: either use the object directly, or invoke the

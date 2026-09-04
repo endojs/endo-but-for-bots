@@ -10,7 +10,8 @@
  * consumers (9p-server's `Treaddir` reads `{ name, qid }`) work
  * unchanged against any wrapBackend-built `Filesystem`.
  *
- * @import { FsBackend, DirEntry } from '../backend-types.js'
+ * @import { FsBackend, DirEntry, NodeKind } from '../backend-types.js'
+ * @import { Cursor, DirectoryEntry, Qid } from '../types.js'
  */
 
 import { makeExo } from '@endo/exo';
@@ -25,8 +26,13 @@ import { synthQid } from './qid.js';
  * @param {object} opts
  * @param {FsBackend} opts.backend
  * @param {string[]} opts.dirPath
+ * @param {<K extends NodeKind>(path: string[], kind: K) => Qid<K>} [opts.qidOf]
+ *   optional QID synthesizer (defaults to the path-hash `synthQid`).
+ *   wrap-backend passes its content-address-aware `qidOf` so a listing
+ *   entry's `qid` matches the one a later `lookup(name).getQid()` would
+ *   return (e.g. a git OID rather than a path hash).
  */
-export const makeCursorExo = ({ backend, dirPath }) => {
+export const makeCursorExo = ({ backend, dirPath, qidOf = synthQid }) => {
   /** @type {AsyncIterator<DirEntry> | null} */
   let iter = null;
   let exhausted = false;
@@ -40,21 +46,30 @@ export const makeCursorExo = ({ backend, dirPath }) => {
   };
 
   // Augment each backend entry with a synthesized `qid` for legacy
-  // consumers. Both `entry.kind` and `entry.qid.type` carry the
-  // same information.
-  const augment = entry =>
-    harden({
-      name: entry.name,
-      kind: entry.kind,
-      qid: synthQid([...dirPath, entry.name], entry.kind),
-    });
+  // consumers. `DirectoryEntry` correlates `kind` and `qid.type`, so
+  // build each arm with its literal kind rather than the backend
+  // entry's unnarrowed one.
+  /**
+   * @param {DirEntry} entry
+   * @returns {DirectoryEntry}
+   */
+  const augment = entry => {
+    const path = [...dirPath, entry.name];
+    return entry.kind === 'directory'
+      ? harden({
+          name: entry.name,
+          kind: 'directory',
+          qid: qidOf(path, 'directory'),
+        })
+      : harden({ name: entry.name, kind: 'file', qid: qidOf(path, 'file') });
+  };
 
   return makeExo('Cursor', CursorInterface, {
     async read(limit) {
       if (exhausted) return harden({ entries: [], atEnd: true });
       const max = limit === undefined ? Infinity : toSafeNumber(limit, 'limit');
       const it = ensureIter();
-      /** @type {DirEntry[]} */
+      /** @type {DirectoryEntry[]} */
       const entries = [];
       let atEnd = false;
       while (entries.length < max) {
@@ -92,7 +107,7 @@ export const makeCursorExo = ({ backend, dirPath }) => {
     async toArray() {
       if (exhausted) return harden([]);
       const it = ensureIter();
-      /** @type {DirEntry[]} */
+      /** @type {DirectoryEntry[]} */
       const out = [];
       for (;;) {
         const step = await it.next();
@@ -138,7 +153,7 @@ export const makeCursorExo = ({ backend, dirPath }) => {
       if (method === undefined) {
         return 'Cursor: paged directory listing — read(limit) | stream() | toArray() | skip(n) | rewind().';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

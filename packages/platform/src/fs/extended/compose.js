@@ -53,6 +53,9 @@ import {
   movePathToPath,
   toSegments,
 } from './shared/helpers.js';
+import { filesystemPostureOf, makeFilesystem } from './posture.js';
+
+/** @import { Qid } from './types.js' */
 
 /**
  * Opaque tag stamped onto every Filesystem this module hands out.
@@ -66,6 +69,41 @@ import {
 const tagSets = new WeakMap();
 
 const fresh = () => Symbol('endo-fs:tag');
+
+/**
+ * Filesystems whose `readWrite` posture is an aggregate: at least one
+ * participant is writable and at least one is not, so writable authority holds
+ * for the whole view but not for every subtree of it. `chroot` consults this
+ * to avoid handing a narrowed view a posture the narrowed view may not have.
+ *
+ * @type {WeakSet<object>}
+ */
+const aggregateWritableFilesystems = new WeakSet();
+
+/**
+ * @param {object} methods
+ * @param {object[]} participants
+ */
+const makeCombinedFilesystem = (methods, participants) => {
+  const postures = participants.map(filesystemPostureOf);
+  if (postures.some(posture => posture === undefined)) {
+    return makeExo('Filesystem', FilesystemInterface, methods);
+  }
+  if (postures.every(posture => posture === 'readOnly')) {
+    return makeFilesystem(methods, 'readOnly');
+  }
+  const fs = makeFilesystem(methods, 'readWrite');
+  if (
+    !postures.every(posture => posture === 'readWrite') ||
+    participants.some(participant =>
+      aggregateWritableFilesystems.has(participant),
+    )
+  ) {
+    aggregateWritableFilesystems.add(fs);
+  }
+  return fs;
+};
+harden(makeCombinedFilesystem);
 
 // Resolve trailing path segments by chaining one-segment `lookup`s.
 // Used by the composed Directory exos to implement the catalog's
@@ -317,6 +355,7 @@ export const emptyFilesystem = () => {
     ctime: 0n,
     btime: null,
   });
+  /** @type {Qid<'directory'>} */
   const rootQid = harden({
     type: 'directory',
     pathId: 0n,
@@ -462,30 +501,33 @@ export const emptyFilesystem = () => {
 
   const emptyBrands = harden([mintBrand()]);
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
-    async root() {
-      return root();
+  const fs = makeFilesystem(
+    {
+      async root() {
+        return root();
+      },
+      async named(viewName) {
+        throw makeError(
+          X`ENOTSUP: emptyFilesystem has a single root, not ${q(viewName)}`,
+        );
+      },
+      async brands() {
+        return emptyBrands;
+      },
+      async statfs() {
+        return harden({
+          totalBytes: 0n,
+          freeBytes: 0n,
+          availableBytes: 0n,
+        });
+      },
+      help: method =>
+        method === undefined
+          ? 'emptyFilesystem (DESIGN.md §8.6).'
+          : `No documentation for method "${method}".`,
     },
-    async named(viewName) {
-      throw makeError(
-        X`ENOTSUP: emptyFilesystem has a single root, not ${q(viewName)}`,
-      );
-    },
-    async brands() {
-      return emptyBrands;
-    },
-    async statfs() {
-      return harden({
-        totalBytes: 0n,
-        freeBytes: 0n,
-        availableBytes: 0n,
-      });
-    },
-    help: method =>
-      method === undefined
-        ? 'emptyFilesystem (DESIGN.md §8.6).'
-        : `No documentation for method "${method}".`,
-  });
+    'readOnly',
+  );
   registerTags(fs, new Set([tag]));
   return fs;
 };
@@ -518,7 +560,7 @@ export const chroot = (fs, subPath) => {
   }
 
   const tag = fresh();
-  const inner = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       let cur = await E(fs).root();
       for (const seg of subPath) {
@@ -545,7 +587,21 @@ export const chroot = (fs, subPath) => {
       method === undefined
         ? `Filesystem (chrooted to /${subPath.join('/')}).`
         : `No documentation for method "${method}".`,
-  });
+  };
+  // Narrowing never adds authority, so a read-only view stays read-only. A
+  // writable view only stays writable when its writability is uniform: when
+  // `fs` is a bind or namespace that is writable because *some* participant
+  // is, `subPath` may select a subtree where every mutation rejects, and
+  // copying the aggregate posture would advertise writes the guest lacks.
+  const posture = filesystemPostureOf(fs);
+  const narrowed =
+    posture === 'readWrite' && aggregateWritableFilesystems.has(fs)
+      ? undefined
+      : posture;
+  const inner =
+    narrowed === undefined
+      ? makeExo('Filesystem', FilesystemInterface, methods)
+      : makeFilesystem(methods, narrowed);
   registerTags(inner, new Set([tag, ...tagsOf(fs)]));
   return inner;
 };
@@ -730,7 +786,7 @@ export const bind = (host, mountPath, guest) => {
   // `await brandsP` inside the methods below.
   brandsP.catch(() => {});
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       await brandsP;
       const r = await E(host).root();
@@ -751,7 +807,8 @@ export const bind = (host, mountPath, guest) => {
       method === undefined
         ? `Filesystem (bind: guest grafted at /${mountPath.join('/')}).`
         : `No documentation for method "${method}".`,
-  });
+  };
+  const fs = makeCombinedFilesystem(methods, [host, guest]);
   registerTags(fs, new Set([tag, ...tagsOf(host), ...tagsOf(guest)]));
   return fs;
 };
@@ -786,6 +843,7 @@ export const namespace = mounts => {
     }
   }
 
+  /** @type {Qid<'directory'>} */
   const rootQid = harden({
     type: 'directory',
     pathId: 0n,
@@ -853,7 +911,7 @@ export const namespace = mounts => {
             try {
               const root = await E(mount).root();
               const qid = await E(root).getQid();
-              yield harden({ name, qid });
+              yield harden({ name, kind: 'directory', qid });
             } catch {
               // mount fetch failed; skip silently.
             }
@@ -979,7 +1037,7 @@ export const namespace = mounts => {
             try {
               const root = await E(mount).root();
               const qid = await E(root).getQid();
-              yield harden({ name, qid });
+              yield harden({ name, kind: 'directory', qid });
             } catch {
               // mount fetch failed; skip silently.
             }
@@ -1053,7 +1111,7 @@ export const namespace = mounts => {
   const brandsP = computeBrands('namespace', participants);
   brandsP.catch(() => {});
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       await brandsP;
       return makeNamespaceRoot();
@@ -1075,7 +1133,8 @@ export const namespace = mounts => {
       method === undefined
         ? `Filesystem (namespace with mounts: ${names.join(', ')}).`
         : `No documentation for method "${method}".`,
-  });
+  };
+  const fs = makeCombinedFilesystem(methods, participants);
 
   const allTags = new Set([tag]);
   for (const m of participants) {
@@ -1890,7 +1949,7 @@ export const compose = (layer, backing, _opts = {}) => {
   const brandsP = computeBrands('compose', [layer, backing]);
   brandsP.catch(() => {});
 
-  const fs = makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       await brandsP;
       const layerRoot = await E(layer).root();
@@ -1914,7 +1973,18 @@ export const compose = (layer, backing, _opts = {}) => {
       method === undefined
         ? 'Filesystem (compose: layer over backing, CoW union).'
         : `No documentation for method "${method}".`,
-  });
+  };
+  // Every write lands in `layer`, so the union's posture is the layer's. An
+  // aggregate-writable layer keeps that qualification here too, so a later
+  // `chroot` of this union does not inherit writability it cannot honor.
+  const posture = filesystemPostureOf(layer);
+  const fs =
+    posture === undefined
+      ? makeExo('Filesystem', FilesystemInterface, methods)
+      : makeFilesystem(methods, posture);
+  if (posture === 'readWrite' && aggregateWritableFilesystems.has(layer)) {
+    aggregateWritableFilesystems.add(fs);
+  }
   registerTags(fs, new Set([tag, ...tagsOf(layer), ...tagsOf(backing)]));
   return fs;
 };

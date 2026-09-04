@@ -33,7 +33,7 @@ Each option is explained in its own section below.
 |----------------------------------|------------------|----------------------------------------|-------|
 | `regExpTaming`                   | `'safe'`         | `'unsafe'`                             | `RegExp.prototype.compile` ([details](#regexptaming-options)) |
 | `localeTaming`                   | `'safe'`         | `'unsafe'`                             | `toLocaleString`           ([details](#localetaming-options)) |
-| `consoleTaming`                  | `'safe'`         | `'unsafe'`                             | deep stacks                ([details](#consoletaming-options)) |
+| `consoleTaming`                  | `'safe'`         | `'unsafe'`                             | deep stacks and custom methods ([details](#consoletaming-options)) |
 | `errorTaming`                    | `'safe'`         | `'unsafe'` `'unsafe-debug'`            | `errorInstance.stack`      ([details](#errortaming-options)) |
 | `errorTrapping`                  | `'platform'`     | `'exit'` `'abort'` `'report'` `'none'` | handling of uncaught exceptions ([details](#errortrapping-options)) |
 | `reporting`                      | `'platform'`     | `'console'` `'none'`                   | where to report warnings ([details](#reporting-options))
@@ -44,6 +44,7 @@ Each option is explained in its own section below.
 | `overrideDebug`                  | `[]`             | array of property names                | detect override mistake    ([details](#overridedebug-options)) |
 | `domainTaming`                   | `'safe'`         | `'unsafe'`                             | Node.js `domain` module    ([details](#domaintaming-options)) |
 | `legacyRegeneratorRuntimeTaming` | `'safe'`         | `'unsafe-ignore'`                      | regenerator-runtime ([details](#legacyregeneratorruntimetaming-options)) |
+| `urlBlobTaming`                 | `'retain'` | `'remove'`                        | `URL.createObjectURL` and `URL.revokeObjectURL` ([details](#urlblobtaming-options)) |
 | `__hardenTaming__`               | `'safe'`         | `'unsafe'`                             | Making `harden` no-op for performance in trusted environments ([details](#__hardentaming__-options)) |
 
 In the absence of any of these options in lockdown arguments, lockdown will
@@ -65,6 +66,7 @@ for threading environment variables into a JavaScript program.
 | `overrideDebug`                  | `LOCKDOWN_OVERRIDE_DEBUG`                    | comma separated names |
 | `domainTaming`                   | `LOCKDOWN_DOMAIN_TAMING`                     |                       |
 | `legacyRegeneratorRuntimeTaming` | `LOCKDOWN_LEGACY_REGENERATOR_RUNTIME_TAMING` |                       |
+| `urlBlobTaming`                 | `LOCKDOWN_URL_BLOB_TAMING`                  |                       |
 | `__hardenTaming__`               | `LOCKDOWN_HARDEN_TAMING`                     |                       |
 
 The options `mathTaming` and `dateTaming` are deprecated.
@@ -80,6 +82,49 @@ new Compartment({
     random: harden(makeRandom(seed)),
   }),
 })
+```
+
+## `urlBlobTaming` Options
+
+`URL` and `URLSearchParams` are available as lockdown intrinsics when the host
+provides them.
+`URLSearchParams` is a powerless data structure, so the same frozen constructor
+and prototype are shared by the start compartment and every compartment created
+after lockdown.
+
+`URL` can carry ambient authority through its `createObjectURL` and
+`revokeObjectURL` blob-registry methods.
+By default, `urlBlobTaming: 'retain'` retains that authority only
+on the start compartment's host `URL`.
+Compartments created after lockdown receive a tamed `URL` without those methods.
+The two constructors share a frozen `URL.prototype`, so URL instances remain
+compatible across the boundary.
+In particular, `URL.prototype.constructor` is the tamed constructor, so a
+shared compartment cannot recover the start compartment's blob methods through
+an instance.
+
+```js
+lockdown(); // urlBlobTaming defaults to 'retain'
+// or
+lockdown({ urlBlobTaming: 'retain' });
+// Keep blob-registry authority only on the start compartment's URL.
+// vs
+lockdown({ urlBlobTaming: 'remove' });
+// Remove the blob-registry methods everywhere.
+```
+
+With `urlBlobTaming: 'remove'`, the start compartment and every shared
+compartment receive the same tamed `URL` binding without either blob method.
+Use this setting when the embedding does not need blob URLs.
+Code that needs a blob-registry method in a compartment should obtain it from
+the host before lockdown and endow it explicitly.
+
+If `lockdown` does not receive a `urlBlobTaming` option, it will respect
+`process.env.LOCKDOWN_URL_BLOB_TAMING`.
+
+```console
+LOCKDOWN_URL_BLOB_TAMING=retain
+LOCKDOWN_URL_BLOB_TAMING=remove
 ```
 
 ## `regExpTaming` Options
@@ -179,10 +224,15 @@ is negligible.
 **Background**: Most JavaScript environments provide a `console` object on the
 global object with interesting information hiding properties. JavaScript code
 can use the `console` to send information to the console's logging output, but
-cannot see that output. The `console` is a *write-only device*. The logging
-output is normally placed where a human programmer, who is in a controlling
-position over that computation, can see the output. This output is, accordingly,
-formatted mostly for human consumption; typically for diagnosing problems.
+cannot see that output. The `console` is notionally a *write-only device*,
+although its concrete implementation often goes beyond that to include invoking
+formatting methods on its arguments (which in the case of Node.js also provides
+object arguments that can form a [covert communications channel
+](https://papers.agoric.com/taxonomy-of-security-issues/#overt-side-and-covert-channels)).
+The logging output is normally placed where a human programmer, who is in a
+controlling position over that computation, can see the output. This output is,
+accordingly, formatted mostly for human consumption; typically for diagnosing
+problems.
 
 Given these constraints, it is both safe and helpful for the `console` to reveal
 to the human programmer information that it would not reveal to the objects it
@@ -191,7 +241,7 @@ to the programmer much more information than would be revealed by the normal
 `console`. To do so, by default during `lockdown` SES virtualizes the builtin
 `console`, by replacing it with a wrapper. The wrapper is a virtual `console`
 that implements the standard `console` API mostly by forwarding to the original
-wrapped `console`.
+wrapped `console` while suppressing its custom method invocations.
 In addition, the virtual `console` has a special relationship with
 error objects and with the SES `assert` package, so that errors can report yet
 more diagnostic information that should remain hidden from other objects. See
@@ -1218,3 +1268,92 @@ The "`__`" in the option name indicates that this option is temporary. XS now
 has a fast native `harden`, but SwingSet currently runs on node/v8, which does
 not. If node/v8 ever implements a fast native `harden`, we hope to deprecate
 and eventually remove this option.
+
+# Limitations
+
+Compartments isolate the *authority* and *intrinsics* available to guest code,
+but every compartment in a realm shares the same JavaScript *agent*.
+In engine terms, that is a single thread of execution and a single heap.
+The following limitations are intrinsic to running JavaScript in one agent and
+are not threats a `Compartment` can mitigate.
+A host that needs to defend against them must impose a coarser boundary,
+as a separate worker or process around the
+suspect code.
+
+## Availability
+
+A compartment cannot protect availability for code running in sibling
+compartments or in the start compartment.
+Because all compartments share the agent's single thread, a guest that enters
+an infinite loop (such as `for (;;) {}`), a runaway recursion, or any other
+non-terminating synchronous computation denies synchronous progress to every
+other compartment until the engine itself intervenes (for example, by hitting
+an engine-imposed call-stack limit or by the host terminating the worker or
+process).
+
+This applies even to ostensibly cooperative code.
+A guest method invoked synchronously by host code can refuse to return.
+This includes calls through a property accessor, a proxy trap, a `then`
+callback resolved synchronously, or any other synchronous call.
+Host code that wishes to remain available in the face of an unresponsive guest
+must arrange to interact with guest objects across an asynchronous boundary
+(for example, by using promises and a watchdog timer in a separate agent), or
+must run the guest in a separate worker or process where the host can
+terminate it.
+
+## Memory exhaustion
+
+A compartment cannot protect the integrity of its exports against an
+out-of-memory (OOM) attack mounted by another compartment in the same agent.
+The ECMAScript specification does not require an engine to abort the agent on
+OOM; see the TC39
+[OOM-fails-fast proposal](https://github.com/tc39/proposal-oom-fails-fast)
+for the current state of efforts to standardize that behavior.
+In its absence, a malicious compartment can intentionally allocate stack
+frames or heap objects until the engine raises a `RangeError` or other
+allocation failure at an arbitrary point in unrelated code.
+
+The failure can surface inside an unrelated synchronous call, including a
+call into an object exported from another compartment.
+The victim object may then be left in a partially updated state.
+The result is an *integrity* compromise (broken invariants on otherwise
+trusted objects) on top of the *availability* compromise (the agent or
+process may exit).
+Hosts that need to defend exported objects against this class of attack
+should run untrusted guests in a separate agent (such as a worker or
+subprocess) with its own heap, and treat any synchronous call into a guest as
+potentially failure-inducing.
+
+## Timing side-channels
+
+A compartment cannot prevent a guest from measuring durations.
+The default `Compartment` deliberately excludes every standard timer:
+`Date` is not in the global scope, `performance.now` is unavailable, and
+neither `setTimeout`, `setImmediate`, nor any other host scheduling
+primitive is exposed.
+Removing the obvious clocks is necessary but not sufficient.
+
+A guest with the ability to make asynchronous calls to any other agent
+(another worker, another process, a network peer, or even a host-supplied
+promise that resolves on a host-driven schedule) can recover wall-clock
+duration from the round-trip.
+Two consecutive round-trips to the same correspondent yield a coarse
+interval, and many such samples yield a usable timer at the resolution of
+the round-trip jitter.
+Any asynchronous boundary that the guest can drive at will is therefore a
+potential timing source, regardless of whether the host intended it as one.
+
+Confined code that needs to defeat timing side-channels requires a careful
+audit of every async boundary the guest can reach, not just an enumeration
+of timer-like APIs in the global scope.
+The mitigations available to a host include running the suspect guest in a
+separate worker or process so that the timing channel does not leak into
+the host's own heap, throttling the rate at which the guest can send
+outbound messages, and padding the timing of guest-visible message delivery
+so that the round-trip distribution conveys less information about
+host-internal events.
+
+For a fuller threat catalog of side-channels and other JavaScript-confinement
+risks, see Agoric's
+[Taxonomy of Security Issues](https://papers.agoric.com/taxonomy-of-security-issues/),
+which surveys the broader space this section samples.

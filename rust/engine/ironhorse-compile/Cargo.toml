@@ -1,0 +1,23 @@
+[package]
+name = "ironhorse-compile"
+description = "Oracle-locked transliteration of the XS compiler (lexer -> parser -> scoper -> coder). Stage 5 of the XS->Rust port; replaces the oracle compiler behind a byte-identical-bytecode bar."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ironhorse_compile"
+path = "src/lib.rs"
+
+[dependencies]
+# Compile-time regexp-literal validation. XS's lexer runs `fxCompileRegExp`
+# on every regexp literal (`fxGetNextRegExp`), so a syntactically invalid
+# pattern is a parse-time SyntaxError; ironhorse mirrors that by validating the
+# literal through the same ported parser.
+ironhorse-regexp = { path = "../ironhorse-regexp" }
+
+[dev-dependencies]
+# The conformance oracle (XS at the pin), used only by the whole-corpus
+# parse-smoke integration test to certify accept/reject agreement.
+xs-oracle = { path = "../xs-oracle" }

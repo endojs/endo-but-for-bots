@@ -1,5 +1,7 @@
-import type { StreamFn } from '@earendil-works/pi-agent-core';
+import type { AgentEvent, StreamFn } from '@earendil-works/pi-agent-core';
 import type { Model, Usage } from '@earendil-works/pi-ai';
+import type { CodeModePower } from '@endo/agent-tools/code-mode/types.js';
+import type { GetApiKey, ThinkingLevel } from '../harness/types.js';
 
 /**
  * Read the UTF-8 content of an `@endo/platform/fs`-style File capability. The
@@ -29,29 +31,27 @@ export interface OutcomeReport {
 }
 
 /**
- * The end-state a stage-and-commit scenario is scored against.
- */
-export interface GitCommitTarget {
-  /** Repository-relative path the scenario commits. */
-  path: string;
-  /** The exact UTF-8 content the committed file must carry at HEAD. */
-  content: string;
-  /** The exact commit message HEAD must carry. */
-  message: string;
-}
-
-/**
  * A git code-mode eval scenario: a self-contained, model-agnostic description
  * of one task plus its outcome assertion. The same scenario is driven by a
  * scripted faux model (the no-LLM assertion-path test) and by a live model (a
  * credentialed run), so it holds no model and no provisioning — only the
  * prompt, the target end-state, and the cap-based assertion.
  */
-export interface GitScenario {
+export interface GitScenario<Expected = unknown> {
   name: string;
   /** The user turn handed to the code-mode agent. */
   prompt: string;
-  expected: GitCommitTarget;
+  expected: Expected;
+  /**
+   * Repo-relative path to the module holding this scenario's reference
+   * solution.
+   * It contains the `evaluate` source a competent agent should converge on.
+   * This lets a downstream reporter link a scenario's transcript to the
+   * solution it is scored against.
+   */
+  referenceSourcePath: string;
+  /** Named export in `referenceSourcePath` holding the reference solution. */
+  referenceSourceExport: string;
   assertOutcome: (args: {
     git: unknown;
     workspace: unknown;
@@ -97,27 +97,29 @@ export interface RunMetrics {
   wallTimeMs: number;
 }
 
-export interface RunGitScenarioOptions {
+export interface RunGitScenarioOptions<Expected = unknown> {
   /** The model under eval (faux or live). */
   model: Model<string>;
   /**
    * A live writable `@endo/platform/fs` Filesystem over the scenario repository.
    */
-  workspace: unknown;
+  workspace: CodeModePower;
   /**
    * A live read/write `@endo/exo-git` Git capability over the same repository.
    */
-  git: unknown;
-  scenario: GitScenario;
+  git: CodeModePower;
+  scenario: GitScenario<Expected>;
   /**
    * Read a committed File's content as UTF-8; passed through to the scenario's
    * outcome assertion.
    */
   readText: ReadText;
   /** Resolve the model's API key. Omit for a faux/local model. */
-  getApiKey?: import('../harness/credentials.js').GetApiKey;
-  thinkingLevel?: import('../harness/model.js').ThinkingLevel;
+  getApiKey?: GetApiKey;
+  thinkingLevel?: ThinkingLevel;
   streamFn?: StreamFn;
+  /** Optional listener for sanitized or otherwise caller-owned event capture. */
+  onEvent?: (event: AgentEvent) => void | Promise<void>;
 }
 
 export interface RunGitScenarioResult {

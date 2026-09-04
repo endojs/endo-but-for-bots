@@ -1,7 +1,7 @@
 //! Peer engine descriptors.
 //!
-//! The `Engine` enum generalizes the "how do we run this peer?"
-//! decision so `handle_control_message` can dispatch `spawn`
+//! The Engine enum generalizes the "how do we run this peer?"
+//! decision so handle_control_message can dispatch spawn
 //! requests across transports without the JS side having to know.
 
 use crate::types::Message;
@@ -11,7 +11,7 @@ pub enum Engine {
     /// Child-process peer with fds 3/4 framing.
     /// Used for both "separate" (XS worker) and "node" platforms.
     Separate { platform: String, command: String, args: Vec<String> },
-    /// In-process XS machine on a dedicated `std::thread` with a
+    /// In-process XS machine on a dedicated std::thread with a
     /// channel transport.
     Shared {
         bootstrap: &'static str,
@@ -20,13 +20,8 @@ pub enum Engine {
     },
 }
 
-/// Choose an engine for a given `spawn` control message.
-///
-/// Dispatches based on the `platform` field from the spawn payload:
-/// - `"separate"` or `""` → `Engine::Separate` (child process XS worker)
-/// - `"shared"` → `Engine::Shared` (in-process XS worker)
-/// - `"node"` → `Engine::Separate` (child process Node.js worker)
-/// - unknown → `Err`
+/// Choose an engine for a given spawn control message.
+/// Dispatches based on the platform field from the spawn payload:
 pub fn engine_for_spawn_request(
     platform: &str,
     command: &str,
@@ -46,8 +41,6 @@ pub fn engine_for_spawn_request(
         }),
         "node" => {
             if command.is_empty() {
-                // The JS side must resolve the Node.js binary and send
-                // it as command/args. If missing, error out.
                 Err("node platform requires a command".to_string())
             } else {
                 Ok(Engine::Separate {

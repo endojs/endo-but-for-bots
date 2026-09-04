@@ -378,7 +378,7 @@ where
 /// # Safety
 /// Caller must ensure `the` is a valid XS machine pointer and
 /// `index` is within the argument count.
-pub(crate) unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
+pub unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
     let slot = (*the).frame.sub(1 + index);
     let ptr = fxToString(the, slot);
     xs_string_to_utf8(ptr)
@@ -391,7 +391,7 @@ pub(crate) unsafe fn arg_str(the: *mut XsMachine, index: usize) -> String {
 ///
 /// # Safety
 /// Caller must ensure `the` is a valid XS machine pointer.
-pub(crate) unsafe fn set_result_string(the: *mut XsMachine, s: &str) {
+pub unsafe fn set_result_string(the: *mut XsMachine, s: &str) {
     let cesu = crate::cesu8::encode(s);
     let c_str = std::ffi::CString::new(cesu).unwrap_or_default();
     fxString(the, &mut (*the).scratch, c_str.as_ptr());
@@ -504,6 +504,55 @@ pub unsafe fn read_typed_array_bytes(the: *mut XsMachine, slot: *mut XsSlot) -> 
     Some(buf)
 }
 
+/// Read the `byteLength` of a TypedArray (e.g. Uint8Array) argument
+/// slot without copying its contents.
+pub unsafe fn typed_array_byte_length(the: *mut XsMachine, slot: *mut XsSlot) -> usize {
+    fx_push(the, *slot);
+    let byte_length_id = fxID(the, c"byteLength".as_ptr());
+    fxGetID(the, byte_length_id);
+    let byte_length = fxToInteger(the, (*the).stack) as usize;
+    fx_pop(the);
+    byte_length
+}
+
+/// Write `data` into a TypedArray (e.g. Uint8Array) argument slot,
+/// in place, mirroring `read_typed_array_bytes`. Writes exactly the
+/// view's `byteLength` bytes at its `byteOffset` and returns the
+/// number written; a `data` shorter than the view, or an empty view,
+/// writes nothing and returns 0.
+pub unsafe fn write_typed_array_bytes(
+    the: *mut XsMachine,
+    slot: *mut XsSlot,
+    data: &[u8],
+) -> usize {
+    let byte_length = typed_array_byte_length(the, slot);
+    if byte_length == 0 || data.len() < byte_length {
+        return 0;
+    }
+
+    fx_push(the, *slot);
+    let byte_offset_id = fxID(the, c"byteOffset".as_ptr());
+    fxGetID(the, byte_offset_id);
+    let byte_offset = fxToInteger(the, (*the).stack) as i32;
+    fx_pop(the);
+
+    fx_push(the, *slot);
+    let buffer_id = fxID(the, c"buffer".as_ptr());
+    fxGetID(the, buffer_id);
+    let buffer_slot = (*the).stack;
+
+    fxSetArrayBufferData(
+        the,
+        buffer_slot,
+        byte_offset,
+        data.as_ptr() as *mut std::os::raw::c_void,
+        byte_length as i32,
+    );
+    fx_pop(the);
+
+    byte_length
+}
+
 /// `importArchive(uint8Array) -> boolean`
 pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
     let slot = (*the).frame.sub(1);
@@ -534,6 +583,17 @@ pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
     let msg = arg_str(the, 0);
     eprintln!("endor: [trace] {}", msg);
+}
+
+/// `stdoutLine(msg: string) -> undefined`
+///
+/// Writes a line to the process's real stdout. Endowed to the
+/// standalone archive runner as the sink for `console.log` so a
+/// program's own output is separable from the runner's stderr
+/// diagnostics.
+pub unsafe extern "C" fn host_stdout_line(the: *mut XsMachine) {
+    let msg = arg_str(the, 0);
+    println!("{}", msg);
 }
 
 /// `getPendingEnvelope() -> ArrayBuffer | undefined`
@@ -642,6 +702,126 @@ pub unsafe extern "C" fn host_encode_utf8(the: *mut XsMachine) {
     *(*the).frame.add(1) = (*the).scratch;
 }
 
+/// Serialize a parsed URL as the JSON record the JS `URL` veneer
+/// caches: every WHATWG getter surface in its final shape (protocol
+/// with the trailing ':', search with the leading '?', port `''`
+/// when default), via the `url` crate's `quirks` module — the
+/// spec-faithful getter/setter surface rust-url maintains for
+/// implementing the URL class.
+fn url_record_json(url: &url::Url) -> String {
+    serde_json::json!({
+        "href": url::quirks::href(url),
+        "origin": url::quirks::origin(url),
+        "protocol": url::quirks::protocol(url),
+        "username": url::quirks::username(url),
+        "password": url::quirks::password(url),
+        "host": url::quirks::host(url),
+        "hostname": url::quirks::hostname(url),
+        "port": url::quirks::port(url),
+        "pathname": url::quirks::pathname(url),
+        "search": url::quirks::search(url),
+        "hash": url::quirks::hash(url),
+    })
+    .to_string()
+}
+
+fn url_error_json(message: &str) -> String {
+    serde_json::json!({ "error": message }).to_string()
+}
+
+/// `hostUrlParse(href, base) -> string`
+///
+/// Parse `href` (against `base` when non-empty — the empty string is
+/// the no-base sentinel) and return a JSON url record, or
+/// `{"error": ...}` when the input does not parse.
+pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
+    let href = arg_str(the, 0);
+    let base = arg_str(the, 1);
+    let parsed = if base.is_empty() {
+        url::Url::parse(&href)
+    } else {
+        url::Url::parse(&base).and_then(|b| b.join(&href))
+    };
+    let json = match parsed {
+        Ok(u) => url_record_json(&u),
+        Err(e) => url_error_json(&e.to_string()),
+    };
+    set_result_string(the, &json);
+}
+
+/// `hostUrlSet(href, field, value) -> string`
+///
+/// Apply one WHATWG URL setter to `href` and return the updated JSON
+/// url record, or `{"error": ...}` when the setter rejects the value
+/// (the JS side ignores that, per the spec's setter semantics, except
+/// for `href` which throws).
+pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
+    let href = arg_str(the, 0);
+    let field = arg_str(the, 1);
+    let value = arg_str(the, 2);
+    let json = match url::Url::parse(&href) {
+        Ok(mut u) => {
+            let ok = match field.as_str() {
+                "href" => url::quirks::set_href(&mut u, &value).is_ok(),
+                "protocol" => url::quirks::set_protocol(&mut u, &value).is_ok(),
+                "username" => url::quirks::set_username(&mut u, &value).is_ok(),
+                "password" => url::quirks::set_password(&mut u, &value).is_ok(),
+                "host" => url::quirks::set_host(&mut u, &value).is_ok(),
+                "hostname" => url::quirks::set_hostname(&mut u, &value).is_ok(),
+                "port" => url::quirks::set_port(&mut u, &value).is_ok(),
+                "pathname" => {
+                    url::quirks::set_pathname(&mut u, &value);
+                    true
+                }
+                "search" => {
+                    url::quirks::set_search(&mut u, &value);
+                    true
+                }
+                "hash" => {
+                    url::quirks::set_hash(&mut u, &value);
+                    true
+                }
+                _ => false,
+            };
+            if ok {
+                url_record_json(&u)
+            } else {
+                url_error_json(&format!("cannot set {field}"))
+            }
+        }
+        Err(e) => url_error_json(&e.to_string()),
+    };
+    set_result_string(the, &json);
+}
+
+/// `hostFormUrlDecode(query) -> string`
+///
+/// Parse an application/x-www-form-urlencoded string into a JSON
+/// array of `[name, value]` pairs.
+pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
+    let input = arg_str(the, 0);
+    let pairs: Vec<(String, String)> = url::form_urlencoded::parse(input.as_bytes())
+        .into_owned()
+        .collect();
+    let json = serde_json::to_string(&pairs).unwrap_or_else(|_| "[]".to_string());
+    set_result_string(the, &json);
+}
+
+/// `hostFormUrlEncode(pairsJson) -> string`
+///
+/// Serialize a JSON array of `[name, value]` pairs as an
+/// application/x-www-form-urlencoded string.
+pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
+    let input = arg_str(the, 0);
+    let pairs: Vec<(String, String)> = serde_json::from_str(&input).unwrap_or_default();
+    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+    for (name, value) in &pairs {
+        serializer.append_pair(name, value);
+    }
+    let encoded = serializer.finish();
+    set_result_string(the, &encoded);
+}
+
 /// `debugPoll() -> undefined`
 ///
 /// Run the XS debugger command loop once, flushing any pending
@@ -672,6 +852,11 @@ pub const WORKER_IO_CALLBACKS: &[crate::ffi::XsCallback] = &[
     host_base64_decode,
     host_base64_encode,
     host_debug_poll,
+    host_stdout_line,
+    host_url_parse,
+    host_url_set,
+    host_form_urlencoded_decode,
+    host_form_urlencoded_encode,
 ];
 
 /// Register worker I/O host functions on the machine.
@@ -689,6 +874,11 @@ pub unsafe fn register(machine: &crate::Machine) {
     machine.define_function("hostBase64Decode", host_base64_decode, 1);
     machine.define_function("hostBase64Encode", host_base64_encode, 1);
     machine.define_function("debugPoll", host_debug_poll, 0);
+    machine.define_function("stdoutLine", host_stdout_line, 1);
+    machine.define_function("hostUrlParse", host_url_parse, 2);
+    machine.define_function("hostUrlSet", host_url_set, 3);
+    machine.define_function("hostFormUrlDecode", host_form_urlencoded_decode, 1);
+    machine.define_function("hostFormUrlEncode", host_form_urlencoded_encode, 1);
 }
 
 #[cfg(test)]

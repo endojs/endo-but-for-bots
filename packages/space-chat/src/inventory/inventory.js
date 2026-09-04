@@ -353,12 +353,13 @@ const InventoryItem = ({
     }
     try {
       const target =
-        /** @type {ERef<{ __getMethodNames__: () => string[], list?: () => string[], followNameChanges?: () => AsyncIterator<{ add?: string, remove?: string }> }>} */ (
+        /** @type {ERef<{ __getMethodNames__: () => string[], kind?: () => Promise<'directory' | 'file'>, list?: () => string[], followNameChanges?: () => AsyncIterator<{ add?: string, remove?: string }> }>} */ (
           targetOrError.value
         );
       // Detect capabilities via __getMethodNames__ to avoid CapTP noise.
       // eslint-disable-next-line no-underscore-dangle
       const methods = await E(target).__getMethodNames__();
+      const targetRef = /** @type {any} */ (target);
 
       /** @type {ERef<EndoHost> | undefined} */
       let nested;
@@ -405,7 +406,14 @@ const InventoryItem = ({
             followNameChanges: () => changesIterator,
           })
         );
-      } else if (methods.includes('list')) {
+      } else if (
+        methods.includes('kind')
+          ? // The explicit call is necessary here: a daemon file intentionally
+            // exposes a diagnostic list() stub, so method names alone cannot
+            // distinguish it from a directory.
+            (await E(targetRef).kind()) === 'directory'
+          : methods.includes('list')
+      ) {
         // Static tree (ReadableTree, etc.): populate from list().
         const names = await E(target).list();
         nested = makeStaticTreePowers(target, names);

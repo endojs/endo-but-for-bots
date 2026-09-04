@@ -9,7 +9,7 @@ import { randomUint53 } from './uint.js';
 // so the same seed produces the same float across runs and engines.
 const POW2_M53 = 1.110_223_024_625_156_5e-16; // = 2 ** -53
 
-/** @import { RandomSource } from '../types.d.ts' */
+/** @import { RandomSource } from '../random-source.types.js' */
 
 /**
  * Returns a float in `[0, 1)`.

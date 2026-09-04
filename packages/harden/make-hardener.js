@@ -21,10 +21,9 @@
 
 // @ts-check
 
-/* global globalThis */
-
 const {
   Array,
+  ArrayBuffer,
   JSON,
   Number,
   Object,
@@ -105,7 +104,7 @@ const { bind } = functionPrototype;
  *
  * @type {<F extends (this: any, ...args: any[]) => any>(fn: F) => ((thisArg: ThisParameterType<F>, ...args: Parameters<F>) => ReturnType<F>)}
  */
-const uncurryThis = bind.bind(bind.call); // eslint-disable-line @endo/no-polymorphic-call
+const uncurryThis = bind.bind(bind.call);
 
 // See https://github.com/endojs/endo/issues/2930
 if (!('hasOwn' in Object)) {
@@ -265,7 +264,19 @@ assert(getTypedArrayToStringTag);
 
 // Exported for tests.
 /**
- * Duplicates packages/marshal/src/helpers/passStyle-helpers.js to avoid a dependency.
+ * Duplicates packages/pass-style/src/passStyle-helpers.js to avoid a dependency.
+ *
+ * Deliberately a genuine TypedArray brand check via the `%TypedArray%`
+ * `[Symbol.toStringTag]` getter, NOT `ArrayBuffer.isView`. Both are
+ * unspoofable internal-slot checks, but `isView` is also true for a
+ * `DataView`, whereas only a TypedArray is an integer-indexed exotic whose
+ * permanently-writable indexed elements make `Object.freeze` throw. That
+ * freeze-throw is the sole reason `harden` special-cases here (see
+ * `freezeTypedArray`); a `DataView` freezes normally and must take the
+ * ordinary `freeze` path, so the DataView-inclusive `isView` would be the
+ * wrong, less-precise test. (`byteArray.js` commits to `isView` for a
+ * different question — emulated-vs-native shape on an already-known
+ * `Uint8Array` — where DataViews are already excluded.)
  *
  * @param {unknown} object
  */
@@ -273,6 +284,45 @@ const isTypedArray = object => {
   // The object must pass a brand check or toStringTag will return undefined.
   const tag = apply(getTypedArrayToStringTag, object, []);
   return tag !== undefined;
+};
+
+// Capture the `%TypedArray%` `buffer` getter early so a TypedArray's backing
+// buffer can be read without consulting a possibly-poisoned prototype chain.
+const typedArrayBuffer = getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  'buffer',
+);
+assert(typedArrayBuffer);
+const getTypedArrayBuffer = typedArrayBuffer.get;
+assert(getTypedArrayBuffer);
+
+// Capture the `ArrayBuffer.prototype.immutable` getter early, when the engine
+// (or an already-installed shim) provides one. Where it is absent, no
+// immutable ArrayBuffer can exist, so every TypedArray's buffer is mutable.
+const arrayBufferImmutable =
+  ArrayBuffer === undefined
+    ? undefined
+    : getOwnPropertyDescriptor(ArrayBuffer.prototype, 'immutable');
+const getArrayBufferImmutable =
+  arrayBufferImmutable === undefined ? undefined : arrayBufferImmutable.get;
+
+/**
+ * A genuine TypedArray backed by a mutable ArrayBuffer is the only shape whose
+ * permanently-writable indexed elements make `Object.freeze` throw and so
+ * needs the `freezeTypedArray` carve-out. A TypedArray over an immutable
+ * ArrayBuffer has non-writable elements and freezes normally.
+ *
+ * @param {unknown} object
+ */
+const isMutableTypedArray = object => {
+  if (!isTypedArray(object)) {
+    return false;
+  }
+  if (getArrayBufferImmutable === undefined) {
+    return true;
+  }
+  const buffer = apply(getTypedArrayBuffer, object, []);
+  return apply(getArrayBufferImmutable, buffer, []) !== true;
 };
 
 /**
@@ -374,7 +424,7 @@ export const makeHardener = ({ traversePrototypes = false } = {}) => {
         // therefore this is a valid candidate.
         // Throws if this fails (strict mode).
         // Also throws if the object is an ArrayBuffer or any TypedArray.
-        if (isTypedArray(obj)) {
+        if (isMutableTypedArray(obj)) {
           freezeTypedArray(obj);
         } else {
           freeze(obj);

@@ -14,7 +14,20 @@
 //!
 //!   endor worker  [-e xs]       # supervised worker child
 //!   endor run     [-e xs] <archive.zip>
-//!                               # standalone archive runner
+//!                               # standalone archive runner (ZIP file)
+//!   endor run     [-e xs] <entry.js>
+//!                               # standalone runner for a single
+//!                               # entry-point source. By default the
+//!                               # entry's dependencies resolve from
+//!                               # the endor registry cache, no
+//!                               # `node_modules` consulted
+//!                               # (`endor-npm-registry-proxy`).
+//!   endor run     --node-modules <entry.js>
+//!                               # legacy resolution: walk static
+//!                               # `import` specifiers through a
+//!                               # sibling `node_modules` tree into a
+//!                               # multi-compartment archive
+//!                               # (`endor-run-expanded` Phase 5).
 //!
 //! The manager is hosted in-process by `endor daemon` on a
 //! dedicated `std::thread`; there is no separate `manager`
@@ -31,6 +44,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use endo::error::EndoError;
+use endo::run_input::{classify_run_input, RunInput};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
@@ -66,6 +80,8 @@ fn main() -> ExitCode {
         }
         "worker" => match engine {
             "xs" => xsnap_result_to_exit(unsafe { xsnap::run_xs_worker() }),
+            #[cfg(feature = "ironhorse-engine")]
+            "ironhorse" => ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_worker()),
             other => unknown_engine(other),
         },
         "run" => {
@@ -78,16 +94,62 @@ fn main() -> ExitCode {
                         // Run from CAS root hash.
                         result_to_exit("endor", cmd_run_from_cas(&hash))
                     } else if let Some(ref p) = path {
-                        if no_cas {
-                            xsnap_result_to_exit(xsnap::run_xs_archive(p))
-                        } else {
-                            result_to_exit("endor", cmd_run_with_cas(p))
+                        match classify_run_input(p) {
+                            RunInput::ZipArchive => {
+                                if no_cas {
+                                    xsnap_result_to_exit(xsnap::run_xs_archive(p))
+                                } else {
+                                    result_to_exit("endor", cmd_run_with_cas(p))
+                                }
+                            }
+                            RunInput::EntryPoint => match entry_resolution(rest) {
+                                EntryResolution::Registry => {
+                                    // Default: resolve the entry package's
+                                    // dependencies from the endor registry
+                                    // cache, without consulting a node_modules
+                                    // tree (designs/endor-npm-registry-proxy.md).
+                                    result_to_exit("endor", cmd_run_entry(rest, p))
+                                }
+                                EntryResolution::NodeModules => {
+                                    // `--node-modules`: PR #282 Phase 5 of
+                                    // designs/endor-run-expanded.md — walk a
+                                    // sibling node_modules tree for the entry's
+                                    // static imports into a multi-compartment
+                                    // archive (legacy Node-style resolution).
+                                    if no_cas {
+                                        eprintln!(
+                                            "endor run: --no-cas is incompatible with an \
+                                             entry-point input; entry-point runs always use \
+                                             the CAS"
+                                        );
+                                        ExitCode::from(2)
+                                    } else {
+                                        result_to_exit("endor", cmd_run_entry_node_modules(p))
+                                    }
+                                }
+                            },
+                            RunInput::Missing => {
+                                eprintln!("endor run: input not found: {}", p.display());
+                                ExitCode::from(1)
+                            }
                         }
                     } else {
-                        eprintln!("usage: endor run [-e xs] [--cas <hash>] [--no-cas] <archive.zip>");
+                        eprintln!(
+                            "usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | entry.js>"
+                        );
                         ExitCode::from(2)
                     }
                 }
+                #[cfg(feature = "ironhorse-engine")]
+                "ironhorse" => match path {
+                    Some(ref p) => {
+                        ironhorse_result_to_exit(endo::ironhorse_engine::engine::run_script(p))
+                    }
+                    None => {
+                        eprintln!("usage: endor run -e ironhorse <script.js>");
+                        ExitCode::from(2)
+                    }
+                },
                 other => unknown_engine(other),
             }
         }
@@ -95,6 +157,8 @@ fn main() -> ExitCode {
         "stop" => result_to_exit("endor", cmd_stop()),
         "ping" => result_to_exit("endor", cmd_ping()),
         "gc" => result_to_exit("endor", cmd_gc()),
+        "npm-resolve" => result_to_exit("endor", cmd_npm_resolve(rest)),
+        "registry" => result_to_exit("endor", cmd_registry(rest)),
         "-h" | "--help" => {
             print_help();
             ExitCode::SUCCESS
@@ -125,9 +189,20 @@ fn print_help() {
     eprintln!("Child-facing commands (XS engine by default):");
     eprintln!("  worker  [-e xs]                Run a supervised worker child");
     eprintln!("  run     [-e xs] <archive.zip>  Run a compartment-map archive");
+    eprintln!("  run     <entry.js>             Run an entry module, npm deps via CAS");
+    eprintln!("  run     -e ironhorse <script.js>");
+    eprintln!("                                 Run a script on the Rust engine");
     eprintln!();
     eprintln!("Maintenance:");
     eprintln!("  gc                             Garbage-collect the CAS");
+    eprintln!();
+    eprintln!("NPM registry proxy:");
+    eprintln!("  npm-resolve [--registry <url>] [--offline] <name[@range]>...");
+    eprintln!("                                 Resolve and fetch an npm dependency");
+    eprintln!("                                 graph into the CAS");
+    eprintln!("  registry <list|meta|refresh|verify>");
+    eprintln!("                                 Inspect and maintain the registry");
+    eprintln!("                                 table (the proxy's cache index)");
 }
 
 fn print_subcommand_help(sub: &str) {
@@ -145,7 +220,9 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("Environment:");
             eprintln!("  ENDO_WORKER_THREADS   Tokio worker thread count (default: 4)");
             eprintln!("  ENDO_MANAGER_NODE     If set, use Node.js manager child");
-            eprintln!("  ENDO_DAEMON_PATH      Path to Node.js daemon script (with ENDO_MANAGER_NODE)");
+            eprintln!(
+                "  ENDO_DAEMON_PATH      Path to Node.js daemon script (with ENDO_MANAGER_NODE)"
+            );
             eprintln!("  ENDO_DEFAULT_PLATFORM Default worker platform: separate, shared, node");
             eprintln!("  ENDO_TRACE            Enable trace logging");
         }
@@ -189,15 +266,60 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
         }
         "run" => {
-            eprintln!("Usage: endor run [-e xs] <archive.zip>");
+            eprintln!(
+                "Usage: endor run [-e xs] [--cas <hash>] [--no-cas] [--registry <url>] [--offline] [--node-modules] <archive.zip | entry.js>"
+            );
             eprintln!();
-            eprintln!("Run a compartment-map archive standalone.");
+            eprintln!("Run a compartment-map archive, or an entry module, standalone.");
             eprintln!();
-            eprintln!("Executes the given .zip archive in an XS machine without a");
-            eprintln!("running daemon. Useful for testing and one-off execution.");
+            eprintln!("<path> is one of:");
+            eprintln!("  archive.zip   A compartment-map ZIP file (Phase 2).");
+            eprintln!("  entry.js      A single source file. With no static");
+            eprintln!("                imports, synthesises a one-compartment");
+            eprintln!("                archive (Phase 4). With one or more");
+            eprintln!("                `import`/`export ... from` specifiers,");
+            eprintln!("                walks the dependency graph (relative paths");
+            eprintln!("                within the entry directory, bare specifiers");
+            eprintln!("                resolved via sibling `node_modules`) into a");
+            eprintln!("                multi-compartment archive (Phase 5).");
+            eprintln!("                Recognised extensions: .js, .mjs, .cjs, .json.");
+            eprintln!();
+            eprintln!("A .js/.mjs/.cjs entry module instead resolves the entry");
+            eprintln!("package's npm dependencies (Go-like minimal version");
+            eprintln!("selection), fetches them content-addressed into the CAS,");
+            eprintln!("assembles the compartment map binding them — no npm CLI,");
+            eprintln!("no node_modules, no lockfile — and executes it in an XS");
+            eprintln!("machine. A fully cached graph runs without network access.");
+            eprintln!();
+            eprintln!("Both forms ingest the contents into the CAS and execute the");
+            eprintln!("loaded archive in an XS machine, printing the root hash to");
+            eprintln!("stderr so a later run can re-use it via --cas <hash>.");
+            eprintln!();
+            eprintln!("The registry is configured npm-style: ~/.npmrc, then the");
+            eprintln!("entry package's .npmrc, then NPM_CONFIG_REGISTRY, then");
+            eprintln!("--registry. Supported .npmrc keys: registry,");
+            eprintln!("@scope:registry, //host/path/:_authToken,");
+            eprintln!("//host/path/:username + :_password (base64), legacy");
+            eprintln!("//host/path/:_auth, their top-level forms (default");
+            eprintln!("registry only), with ${{VAR}} expansion in values.");
             eprintln!();
             eprintln!("Options:");
             eprintln!("  -e, --engine <engine>  Engine to use (default: xs)");
+            eprintln!("  --cas <hash>           Run from a previously ingested CAS root hash.");
+            eprintln!("  --no-cas               Skip CAS ingestion; legacy in-memory path.");
+            eprintln!("                         ZIP inputs only. Entry-point inputs always");
+            eprintln!("                         use the CAS (the synthesised compartment-map");
+            eprintln!("                         needs a content-addressed home); passing");
+            eprintln!("                         --no-cas with an entry-point input exits with");
+            eprintln!("                         code 2 and prints a diagnostic.");
+            eprintln!(
+                "  --registry <url>       Registry base URL for registry-backed entry-module runs"
+            );
+            eprintln!("  --offline              Refuse network access for registry-backed entry-module runs");
+            eprintln!("  --node-modules         Resolve an entry module's static imports by");
+            eprintln!("                         walking a sibling node_modules tree (legacy");
+            eprintln!("                         Node-style resolution) instead of the default");
+            eprintln!("                         endor registry cache. Entry points only.");
         }
         "gc" => {
             eprintln!("Usage: endor gc");
@@ -207,6 +329,62 @@ fn print_subcommand_help(sub: &str) {
             eprintln!("Removes CAS entries that have zero retained references and");
             eprintln!("are not transitively referenced by any live tree root.");
             eprintln!("Safe to run while the daemon is stopped.");
+        }
+        "npm-resolve" => {
+            eprintln!("Usage: endor npm-resolve [--registry <url>] [--offline] <name[@range]>...");
+            eprintln!();
+            eprintln!("Resolve an npm dependency graph and fetch it into the CAS.");
+            eprintln!();
+            eprintln!("Each spec is a package name with an optional semver range");
+            eprintln!("(default '*'), e.g. is-odd@^3.0.0 or @scope/pkg@~1.2.0.");
+            eprintln!("Transitive dependencies are resolved with Go-like minimal");
+            eprintln!("version selection, downloaded from the registry, verified,");
+            eprintln!("stored content-addressed in the CAS, and recorded in the");
+            eprintln!("registry table. Already-cached packages are never re-fetched,");
+            eprintln!("so a fully cached graph resolves without network access.");
+            eprintln!();
+            eprintln!("Prints one line per resolved package:");
+            eprintln!("  <name> <version> <tree-hash>");
+            eprintln!();
+            eprintln!("The registry is configured npm-style: ~/.npmrc, then the");
+            eprintln!("current directory's .npmrc, then NPM_CONFIG_REGISTRY, then");
+            eprintln!("--registry.");
+            eprintln!();
+            eprintln!("Options:");
+            eprintln!("  --registry <url>  Registry base URL");
+            eprintln!("                    (default: https://registry.npmjs.org/)");
+            eprintln!("  --offline         Refuse network access: only cached");
+            eprintln!("                    packages resolve");
+        }
+        "registry" => {
+            eprintln!(
+                "Usage: endor registry <list [name] | meta [name] | refresh <name>... | verify>"
+            );
+            eprintln!();
+            eprintln!("Inspect and maintain the registry table, the SQLite index that");
+            eprintln!("makes the CAS a cache of the npm registry.");
+            eprintln!();
+            eprintln!("Subcommands:");
+            eprintln!("  list [name]       Print cached package versions, one");
+            eprintln!("                    '<name> <version> <tree-hash>' per line");
+            eprintln!("                    (all packages, or one package's versions)");
+            eprintln!("  meta              Print cached version-listing rows, one");
+            eprintln!("                    '<name> <fetched-at-unix>' per line");
+            eprintln!("  meta <name>       Print the raw cached registry JSON for");
+            eprintln!("                    one package");
+            eprintln!("  refresh <name>... Invalidate the cached version listing so");
+            eprintln!("                    the next resolution re-fetches it and can");
+            eprintln!("                    observe newly published versions. Package");
+            eprintln!("                    contents in the CAS are immutable and are");
+            eprintln!("                    never invalidated.");
+            eprintln!("  verify            Walk every cached package's CAS tree and");
+            eprintln!("                    report entries whose blobs are missing;");
+            eprintln!("                    exits non-zero if any package is");
+            eprintln!("                    incomplete");
+            eprintln!();
+            eprintln!("The version-listing cache is write-once by design (the");
+            eprintln!("registry-table-as-lock-file behaviour); 'refresh' is the");
+            eprintln!("deliberate way to opt a package into seeing newer versions.");
         }
         "help" => {
             eprintln!("Usage: endor help [command]");
@@ -236,6 +414,22 @@ fn xsnap_result_to_exit(result: Result<(), xsnap::XsnapError>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("endor: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+/// Exit mapping for the Ironhorse engine. A halt — including an
+/// unlanded-opcode gap — is a non-zero exit that names itself, so the
+/// engine never reports success for a program it could not run.
+#[cfg(feature = "ironhorse-engine")]
+fn ironhorse_result_to_exit(
+    result: Result<(), endo::ironhorse_engine::engine::MachineError>,
+) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("endor[ironhorse]: {e}");
             ExitCode::from(1)
         }
     }
@@ -275,13 +469,16 @@ fn parse_positional_path(args: &[String]) -> Option<PathBuf> {
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
-        if a == "-e" || a == "--engine" || a == "--cas" || a == "--cas-dir" {
+        if a == "-e" || a == "--engine" || a == "--cas" || a == "--cas-dir" || a == "--registry" {
             // skip the flag value as well
             i += 2;
             continue;
         }
-        if a.starts_with("--engine=") || a.starts_with("-e=")
-            || a.starts_with("--cas=") || a.starts_with("--cas-dir=")
+        if a.starts_with("--engine=")
+            || a.starts_with("-e=")
+            || a.starts_with("--cas=")
+            || a.starts_with("--cas-dir=")
+            || a.starts_with("--registry=")
         {
             i += 1;
             continue;
@@ -378,6 +575,106 @@ fn cmd_ping() -> Result<(), EndoError> {
     Ok(())
 }
 
+/// Which resolver `endor run <entry.js>` uses for an entry-point
+/// input. The archive-versus-entry-point discrimination is
+/// `classify_run_input`'s job; this only picks *how* an entry
+/// point's dependencies are resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EntryResolution {
+    /// Default: resolve non-workspace dependencies from the endor
+    /// registry cache, without consulting a node_modules tree
+    /// (`designs/endor-npm-registry-proxy.md`).
+    Registry,
+    /// `--node-modules`: PR #282 Phase 5's legacy Node-style walker
+    /// over a sibling `node_modules` tree
+    /// (`designs/endor-run-expanded.md`).
+    NodeModules,
+}
+
+/// Picks the entry-point resolver from the `run` argument list. The
+/// registry path is the default; `--node-modules` opts into the
+/// legacy node_modules walker. Kept as a pure function so the
+/// dispatch decision is unit-testable independently of `main`.
+fn entry_resolution(args: &[String]) -> EntryResolution {
+    if args.iter().any(|a| a == "--node-modules") {
+        EntryResolution::NodeModules
+    } else {
+        EntryResolution::Registry
+    }
+}
+
+/// `endor run <entry.js>`: Phase 4 of
+/// `designs/endor-npm-registry-proxy.md`, end to end. Resolves the
+/// entry package's transitive npm dependencies (Go-like MVS),
+/// fetches them content-addressed into the CAS (the registry table
+/// as cache/lock file), ingests the entry package, stores the
+/// compartment map binding them — then loads that map back out of
+/// the CAS and executes it in an XS machine. State lives beside the
+/// daemon's, as for `endor npm-resolve`.
+fn cmd_run_entry(args: &[String], entry_path: &std::path::Path) -> Result<(), EndoError> {
+    let offline = args.iter().any(|a| a == "--offline");
+
+    // npm-style configuration: ~/.npmrc, then the entry package's
+    // .npmrc, then NPM_CONFIG_REGISTRY, then the --registry flag.
+    let (package_root, _) = endo::assemble::find_package_root(entry_path)
+        .map_err(|e| EndoError::Config(format!("{e}")))?;
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut config = endo::npmrc::NpmConfig::load(Some(&package_root), home.as_deref());
+    if let Some(url) = parse_flag_value(args, "--registry") {
+        config.set_default_registry(url);
+    }
+
+    let paths = endo::paths::resolve_paths()?;
+    std::fs::create_dir_all(&paths.state_path)
+        .map_err(|e| EndoError::Config(format!("state dir: {e}")))?;
+    let cas = endo::cas::ContentStore::open(&paths.state_path.join("store-sha256"))
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+    let registry_table = endo::registry::RegistryTable::open(&paths.state_path.join("registry.db"))
+        .map_err(|e| EndoError::Config(format!("registry table open: {e}")))?;
+
+    let http: Box<dyn endo::fetch::HttpClient> = if offline {
+        Box::new(endo::fetch::OfflineClient)
+    } else {
+        Box::new(endo::fetch::UreqClient::with_config(config.clone()))
+    };
+    let http_ref: &dyn endo::fetch::HttpClient = http.as_ref();
+    let assembled = endo::assemble::assemble_entry_with_config(
+        &http_ref,
+        &cas,
+        &registry_table,
+        &config,
+        entry_path,
+    )
+    .map_err(|e| EndoError::Config(format!("{e}")))?;
+
+    eprintln!(
+        "endor[run]: assembled {} ({} packages)",
+        assembled.package_name,
+        assembled.resolution.len()
+    );
+    for package in assembled.resolution.packages() {
+        eprintln!(
+            "endor[run]:   {}@{} {}",
+            package.name, package.version, package.tree_hash
+        );
+    }
+    for skipped in &assembled.skipped_optional {
+        eprintln!(
+            "endor[run]:   skipped optional {}: {}",
+            skipped.name, skipped.reason
+        );
+    }
+    eprintln!("endor[run]: entry tree {}", assembled.entry_tree_hash);
+    eprintln!(
+        "endor[run]: compartment map {}",
+        assembled.compartment_map_hash
+    );
+
+    let archive = endo::execute::load_assembled_archive(&cas, &assembled.compartment_map_hash)
+        .map_err(|e| EndoError::Config(format!("{e}")))?;
+    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
 fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     // Create a temporary CAS for standalone runs.
     let cas_dir = std::env::temp_dir().join("endor-cas");
@@ -399,6 +696,42 @@ fn cmd_run_with_cas(archive_path: &std::path::Path) -> Result<(), EndoError> {
     Ok(())
 }
 
+fn cmd_run_entry_node_modules(entry_path: &std::path::Path) -> Result<(), EndoError> {
+    // Phase 4 / Phase 5 entry-point form dispatch.
+    //
+    // Phase 4 handles the no-dependencies case via
+    // `ingest_entry_point` (synthetic one-compartment archive).
+    // Phase 5 (`endo::entry_walk::ingest_entry_point_with_deps`)
+    // handles entries with one or more statically discoverable dependency
+    // specifiers
+    // by walking the dependency graph and emitting a
+    // multi-compartment archive.
+    //
+    // The dispatch reads the entry source once and routes to the
+    // walker when a static import, literal dynamic import, direct require,
+    // or literal require.resolve target is present; entries with
+    // no imports stay on the (faster, simpler, more battle-tested)
+    // Phase 4 path so the regression surface for import-free runs
+    // is unchanged.
+    let cas_dir = std::env::temp_dir().join("endor-cas");
+    let cas = endo::cas::ContentStore::open(&cas_dir)
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+
+    // Match `cmd_run_with_cas`'s wrapping: the inner error from
+    // `ingest_entry_point` already names the offending path
+    // (`unsupported entry-point extension: /tmp/foo.txt`, `not a
+    // regular file: /tmp/bar`), so the outer prefix only names
+    // the operation.
+    let ingested = endo::entry_walk::ingest_entry_point_for_run(&cas, entry_path)
+        .map_err(|e| EndoError::Config(format!("CAS ingest: {e}")))?;
+
+    eprintln!("endor[run]: archive root {}", ingested.root_hash);
+
+    xsnap::run_xs_archive_loaded(&ingested.archive)
+        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    Ok(())
+}
+
 fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let cas_dir = std::env::temp_dir().join("endor-cas");
     let cas = endo::cas::ContentStore::open(&cas_dir)
@@ -407,8 +740,7 @@ fn cmd_run_from_cas(root_hash: &str) -> Result<(), EndoError> {
     let archive = endo::cas_archive::load_archive_from_cas(&cas, root_hash)
         .map_err(|e| EndoError::Config(format!("CAS load: {e}")))?;
 
-    xsnap::run_xs_archive_loaded(&archive)
-        .map_err(|e| EndoError::Config(format!("run: {e}")))?;
+    xsnap::run_xs_archive_loaded(&archive).map_err(|e| EndoError::Config(format!("run: {e}")))?;
     Ok(())
 }
 
@@ -427,4 +759,266 @@ fn cmd_gc() -> Result<(), EndoError> {
         report.freed_count, report.freed_bytes
     );
     Ok(())
+}
+
+fn cmd_npm_resolve(args: &[String]) -> Result<(), EndoError> {
+    let mut offline = false;
+
+    // Positional specs: every argument that is not a flag or a flag
+    // value.
+    let mut roots: Vec<(String, String)> = Vec::new();
+    let mut skip_next = false;
+    for a in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if a == "--registry" || a == "-e" || a == "--engine" {
+            skip_next = true;
+            continue;
+        }
+        if a == "--offline" {
+            offline = true;
+            continue;
+        }
+        if a.starts_with("--") {
+            return Err(EndoError::Config(format!("unknown flag: {a}")));
+        }
+        roots.push(parse_package_spec(a));
+    }
+    if roots.is_empty() {
+        return Err(EndoError::Config(
+            "usage: endor npm-resolve [--registry <url>] [--offline] <name[@range]>...".to_string(),
+        ));
+    }
+
+    // npm-style configuration: ~/.npmrc, then the current
+    // directory's .npmrc, then NPM_CONFIG_REGISTRY, then --registry.
+    let cwd = std::env::current_dir().ok();
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    let mut config = endo::npmrc::NpmConfig::load(cwd.as_deref(), home.as_deref());
+    if let Some(url) = parse_flag_value(args, "--registry") {
+        config.set_default_registry(url);
+    }
+
+    let paths = endo::paths::resolve_paths()?;
+    std::fs::create_dir_all(&paths.state_path)
+        .map_err(|e| EndoError::Config(format!("state dir: {e}")))?;
+    let cas = endo::cas::ContentStore::open(&paths.state_path.join("store-sha256"))
+        .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+    let registry_table = endo::registry::RegistryTable::open(&paths.state_path.join("registry.db"))
+        .map_err(|e| EndoError::Config(format!("registry table open: {e}")))?;
+
+    let http: Box<dyn endo::fetch::HttpClient> = if offline {
+        Box::new(endo::fetch::OfflineClient)
+    } else {
+        Box::new(endo::fetch::UreqClient::with_config(config.clone()))
+    };
+    let http_ref: &dyn endo::fetch::HttpClient = http.as_ref();
+    let outcome = endo::npm_resolve::resolve_transitive_outcome(
+        &http_ref,
+        &cas,
+        &registry_table,
+        &config,
+        &endo::npm_resolve::DepEdges::required_only(&roots),
+    )
+    .map_err(|e| EndoError::Config(format!("npm-resolve: {e}")))?;
+
+    for p in &outcome.packages {
+        println!("{} {} {}", p.name, p.version, p.tree_hash);
+    }
+    for skipped in &outcome.skipped_optional {
+        eprintln!(
+            "endor npm-resolve: skipped optional {}: {}",
+            skipped.name, skipped.reason
+        );
+    }
+    eprintln!(
+        "endor npm-resolve: {} packages resolved",
+        outcome.packages.len()
+    );
+    Ok(())
+}
+
+fn open_registry_table(
+    paths: &endo::paths::EndoPaths,
+) -> Result<endo::registry::RegistryTable, EndoError> {
+    std::fs::create_dir_all(&paths.state_path)
+        .map_err(|e| EndoError::Config(format!("state dir: {e}")))?;
+    endo::registry::RegistryTable::open(&paths.state_path.join("registry.db"))
+        .map_err(|e| EndoError::Config(format!("registry table open: {e}")))
+}
+
+fn cmd_registry(args: &[String]) -> Result<(), EndoError> {
+    let usage = "usage: endor registry <list [name] | meta [name] | refresh <name>... | verify>";
+    let paths = endo::paths::resolve_paths()?;
+    match args.first().map(|s| s.as_str()) {
+        Some("list") => {
+            let table = open_registry_table(&paths)?;
+            let entries = match args.get(1) {
+                Some(name) => table.list_versions(name),
+                None => table.list_packages(),
+            }
+            .map_err(|e| EndoError::Config(format!("registry list: {e}")))?;
+            for p in &entries {
+                println!("{} {} {} {}", p.name, p.version, p.hash, p.registry);
+            }
+            eprintln!("endor registry: {} package(s) cached", entries.len());
+            Ok(())
+        }
+        Some("meta") => {
+            let table = open_registry_table(&paths)?;
+            match args.get(1) {
+                Some(name) => {
+                    let docs = table
+                        .get_meta_all(name)
+                        .map_err(|e| EndoError::Config(format!("registry meta: {e}")))?;
+                    if docs.is_empty() {
+                        return Err(EndoError::Config(format!("no cached metadata for {name}")));
+                    }
+                    // The origin is part of the key, so a package may
+                    // be cached from more than one registry; label each
+                    // document when so, and print the JSON alone in the
+                    // common single-registry case.
+                    for (registry, json) in &docs {
+                        if docs.len() > 1 {
+                            eprintln!("# {registry}");
+                        }
+                        println!("{json}");
+                    }
+                    Ok(())
+                }
+                None => {
+                    let metas = table
+                        .list_meta()
+                        .map_err(|e| EndoError::Config(format!("registry meta: {e}")))?;
+                    for m in &metas {
+                        println!("{} {}", m.name, m.fetched_at);
+                    }
+                    eprintln!("endor registry: {} metadata row(s) cached", metas.len());
+                    Ok(())
+                }
+            }
+        }
+        Some("refresh") => {
+            let names = &args[1..];
+            if names.is_empty() {
+                return Err(EndoError::Config(
+                    "usage: endor registry refresh <name>...".to_string(),
+                ));
+            }
+            let table = open_registry_table(&paths)?;
+            for name in names {
+                let existed = table
+                    .delete_meta(name)
+                    .map_err(|e| EndoError::Config(format!("registry refresh: {e}")))?;
+                if existed {
+                    eprintln!("endor registry: invalidated version listing for {name}");
+                } else {
+                    eprintln!("endor registry: no cached metadata for {name}");
+                }
+            }
+            Ok(())
+        }
+        Some("verify") => {
+            let table = open_registry_table(&paths)?;
+            let cas = endo::cas::ContentStore::open(&paths.state_path.join("store-sha256"))
+                .map_err(|e| EndoError::Config(format!("CAS open: {e}")))?;
+            let entries = table
+                .list_packages()
+                .map_err(|e| EndoError::Config(format!("registry verify: {e}")))?;
+            let mut incomplete = 0u64;
+            for p in &entries {
+                if let Err(detail) = verify_cas_tree(&cas, &p.hash) {
+                    incomplete += 1;
+                    println!("MISSING {} {} {} {}", p.name, p.version, p.hash, detail);
+                }
+            }
+            eprintln!(
+                "endor registry: {} package(s) verified, {} incomplete",
+                entries.len(),
+                incomplete
+            );
+            if incomplete > 0 {
+                return Err(EndoError::Config(format!(
+                    "{incomplete} package tree(s) incomplete in the CAS"
+                )));
+            }
+            Ok(())
+        }
+        _ => Err(EndoError::Config(usage.to_string())),
+    }
+}
+
+/// Walk a CAS tree recursively; report the first unreadable tree or
+/// missing blob as a short human-readable detail.
+fn verify_cas_tree(cas: &endo::cas::ContentStore, hash: &str) -> Result<(), String> {
+    let tree = cas
+        .read_tree(hash)
+        .map_err(|e| format!("tree {hash}: {e}"))?;
+    for (name, entry) in &tree.entries {
+        if entry.entry_type == "tree" {
+            verify_cas_tree(cas, &entry.hash).map_err(|detail| format!("{name}: {detail}"))?;
+        } else if !cas.has(&entry.hash) {
+            return Err(format!("blob {} ({name}) missing", entry.hash));
+        }
+    }
+    Ok(())
+}
+
+/// Split a `name[@range]` spec, keeping the `@` of a scoped name
+/// (`@scope/pkg@^1.0.0` → (`@scope/pkg`, `^1.0.0`)). A bare name
+/// resolves as `*`.
+fn parse_package_spec(spec: &str) -> (String, String) {
+    match spec[1..].rfind('@') {
+        Some(i) => (spec[..i + 1].to_string(), spec[i + 2..].to_string()),
+        None => (spec.to_string(), "*".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{entry_resolution, EntryResolution};
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    // The load-bearing dispatch invariant for the flag-gated
+    // reconciliation: `llm`'s registry entry-point path and PR #282's
+    // node_modules walker both claim `endor run <entry.js>`, and CI
+    // does not compile this crate — so the resolver choice is pinned
+    // here rather than left to a silent auto-merge.
+    #[test]
+    fn default_entry_uses_the_registry_path() {
+        assert_eq!(
+            entry_resolution(&args(&["app.js"])),
+            EntryResolution::Registry
+        );
+    }
+
+    #[test]
+    fn registry_stays_default_with_unrelated_flags() {
+        assert_eq!(
+            entry_resolution(&args(&["--registry", "https://example.test", "app.js"])),
+            EntryResolution::Registry
+        );
+        assert_eq!(
+            entry_resolution(&args(&["--offline", "app.js"])),
+            EntryResolution::Registry
+        );
+    }
+
+    #[test]
+    fn node_modules_flag_selects_the_walker() {
+        assert_eq!(
+            entry_resolution(&args(&["--node-modules", "app.js"])),
+            EntryResolution::NodeModules
+        );
+        // Order-independent: the flag may follow the positional.
+        assert_eq!(
+            entry_resolution(&args(&["app.js", "--node-modules"])),
+            EntryResolution::NodeModules
+        );
+    }
 }

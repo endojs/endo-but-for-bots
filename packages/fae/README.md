@@ -148,8 +148,8 @@ Create example tools (greet, math, timestamp) in the host's inventory:
 yarn setup-tools
 ```
 
-Create filesystem tools (read-file, write-file, edit-file, list-dir,
-run-command). The root directory defaults to `process.cwd()`:
+Create filesystem tools (read-file, write-file, edit, list-dir, glob,
+grep, run-command). The root directory defaults to `process.cwd()`:
 
 ```bash
 yarn setup-fs-tools
@@ -224,7 +224,9 @@ packages/fae/
     ├── timestamp.js          # Example: current time
     ├── read-file.js          # FaeTool: read files under root
     ├── write-file.js         # FaeTool: write files under root
-    ├── edit-file.js          # FaeTool: edit files under root
+    ├── edit.js               # FaeTool: edit files by exact-text replacement
     ├── list-dir.js           # FaeTool: list directory under root
+    ├── glob.js               # FaeTool: find paths by glob pattern under root
+    ├── grep.js               # FaeTool: search file contents by regexp under root
     └── run-command.js        # FaeTool: run shell commands in root
 ```

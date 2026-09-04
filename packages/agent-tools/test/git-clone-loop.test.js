@@ -63,6 +63,7 @@ test('host-clone -> edit (incl. new path) -> add -> commit -> push -> re-fetch r
   const host = await hostCloneStandIn(t, remoteRoot);
   const { remote } = makeGitRemote({
     git: host.git,
+    operations: host.operations,
     name: 'origin',
     policy: {
       url: remoteUrl,
@@ -97,9 +98,12 @@ test('host-clone -> edit (incl. new path) -> add -> commit -> push -> re-fetch r
   });
   const pushedRefs = [...pushResult.updatedRefs];
   t.is(pushedRefs.length, 1);
-  const pushedOid = pushedRefs[0].local.oid;
+  const [pushedRef] = pushedRefs;
+  assert(pushedRef && pushedRef.local, 'push should report a local ref');
+  const pushedOid = pushedRef.local.oid;
+  assert(pushedOid, 'pushed ref should report an oid');
   t.regex(pushedOid, /^[0-9a-f]{40}$/u);
-  t.like(pushedRefs[0], {
+  t.like(pushedRef, {
     remote: 'refs/heads/agent/loop',
     result: 'created',
   });

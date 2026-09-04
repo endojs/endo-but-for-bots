@@ -1,5 +1,4 @@
 // @ts-check
-/* global globalThis */
 
 import harden from '@endo/harden';
 
@@ -28,6 +27,9 @@ import { resolveErrorTrace } from './error-trace.js';
  * @property {unknown} [value] - Result value (for show, list, etc.)
  * @property {string} [message] - User-friendly message
  * @property {Error} [error] - Error if failed
+ * @property {import('./error-trace.js').ErrorTraceDetail} [trace] - Resolved
+ *   daemon-side trace detail (stack + authoritative worker id) for a failed
+ *   command, so the pending-command error card can render the rich error UX.
  */
 
 /**
@@ -341,7 +343,7 @@ export const createCommandExecutor = ({
             const trace = await resolveErrorTrace(powers, err);
             console.error(`[Chat] /${commandName} failed:`, err);
             showError(err, trace);
-            return { success: false, error: err };
+            return { success: false, error: err, trace };
           }
 
           if (resultName) {
@@ -649,7 +651,7 @@ export const createCommandExecutor = ({
               () =>
                 reject(
                   new Error(
-                    `Accept timed out after 60s. Ensure both nodes have networking enabled (/network or /network-iroh).`,
+                    `Accept timed out after 60s. Ensure both nodes have networking enabled (/network, /network-iroh, or /network-ocapn).`,
                   ),
                 ),
               60_000,
@@ -731,6 +733,45 @@ export const createCommandExecutor = ({
           return {
             success: true,
             message: `TCP network started on ${effectiveHostPort}`,
+          };
+        }
+
+        case 'network-ocapn': {
+          const effectiveModulePath =
+            String(params.modulePath || '') ||
+            // @ts-ignore Vite injects this at build time
+            (import.meta.env?.OCAPN_PATH ?? '');
+          const effectiveHost = String(params.host || '') || '127.0.0.1';
+          const effectivePort = String(params.port || '') || '0';
+          const effectiveHostPort = `${effectiveHost}:${effectivePort}`;
+
+          if (!effectiveModulePath) {
+            return {
+              success: false,
+              message:
+                'Module path required. Provide the file:// URL to networks/ocapn.js',
+            };
+          }
+
+          // Store the listen address before installing so the
+          // transport binds where the user asked. Port `0` lets the
+          // OS pick an ephemeral port; the transport persists the
+          // resolved `host:port` back to `ocapn-listen-addr` so it
+          // stays stable across restarts.
+          await E(powers).storeValue(effectiveHostPort, 'ocapn-listen-addr');
+          console.log(
+            `[Chat] /network-ocapn: loading module ${effectiveModulePath}`,
+          );
+          await E(powers).makeUnconfined('@main', effectiveModulePath, {
+            powersName: '@agent',
+            resultName: 'network-service-ocapn',
+          });
+          console.log(`[Chat] /network-ocapn: moving to @nets/ocapn`);
+          await E(powers).move(['network-service-ocapn'], ['@nets', 'ocapn']);
+          console.log(`[Chat] /network-ocapn: OCapN-Noise network ready`);
+          return {
+            success: true,
+            message: `OCapN-Noise network started on ${effectiveHostPort}`,
           };
         }
 
@@ -892,9 +933,15 @@ export const createCommandExecutor = ({
       }
     } catch (error) {
       const err = /** @type {Error} */ (error);
+      // Resolve the daemon-side trace for ANY failing command (not just /js), so
+      // its ephemeral error card can render the same rich error UX — message,
+      // stack trace, and clickable worker chip — whenever the daemon recorded a
+      // trace. Best-effort: `resolveErrorTrace` degrades to the bare message
+      // when no trace is available.
+      const trace = await resolveErrorTrace(powers, err);
       console.error(`[Chat] /${commandName} failed:`, err);
-      showError(err);
-      return { success: false, error: err };
+      showError(err, trace);
+      return { success: false, error: err, trace };
     }
   };
 

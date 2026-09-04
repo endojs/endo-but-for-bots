@@ -1,8 +1,9 @@
 // @ts-check
 
-/* global Buffer, process, setTimeout, clearTimeout */
+/* global clearTimeout, process, setTimeout */
 
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeLandlockProbe } from '../landlock.js';
 import {
@@ -15,6 +16,11 @@ import {
   makeCgroup2Probe,
   resolveLimits,
 } from '../limits.js';
+import {
+  killProcessGroup,
+  readableToAsyncIterable,
+  spawnAndCollect,
+} from './child-process.js';
 import {
   CANONICAL_BIN_PATHS,
   DEFAULT_PATH,
@@ -38,7 +44,63 @@ import {
  * resolved mount table.
  */
 
-const DEFAULT_KILL_GRACE_MS = 5000;
+/**
+ * Deadline applied to lifecycle-critical bwrap control commands. A
+ * stalled probe must not be able to wedge backend selection, and
+ * therefore `make()`, indefinitely.
+ */
+const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
+
+/**
+ * Grace allowed, after the SIGKILL sweep in `teardown`, for each
+ * straggler's stdio to reach `'close'`.
+ *
+ * A slice child leaves `slice.live` on `'close'`, not on `'exit'`.  That
+ * asymmetry is deliberate — a descendant that escaped the process group
+ * still holding an inherited pipe keeps the parent's stdio open, and the
+ * driver wants to know about it — but it also means such a straggler
+ * never leaves the set, so an unbounded wait here would hang `teardown`,
+ * and with it the factory's `dispose()`.
+ *
+ * The value mirrors `KILL_GRACE_MS` in `../factory.js`: that is the
+ * grace the supervisor allows a signalled process, and it is also the
+ * budget it races `driver.teardown()` against on its own cleanup path.
+ * A longer bound would be invisible there — the supervisor gives up
+ * first — while making `dispose()`, which does not race, hang longer.  A
+ * shorter one would report an escape for a process group that is merely
+ * slow to finish dying.
+ */
+const TEARDOWN_CLOSE_GRACE_MS = 1000;
+
+/**
+ * Wait for `child` to emit `'close'`, giving up after `ms`.
+ *
+ * Resolves `true` when the stdio closed within the bound and `false`
+ * when it did not.  Both outcomes release the timer and the `'close'`
+ * listener, so a child that outlives the bound leaves nothing of ours
+ * attached to it.
+ *
+ * @param {import('child_process').ChildProcess} child
+ * @param {number} ms
+ * @returns {Promise<boolean>}
+ */
+const raceChildClose = (child, ms) =>
+  new Promise(resolve => {
+    /** @type {ReturnType<typeof setTimeout>} */
+    let timer;
+    const onClose = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    timer = setTimeout(() => {
+      child.removeListener('close', onClose);
+      resolve(false);
+    }, ms);
+    // Nothing should stay alive merely to keep watching a straggler.
+    if (typeof timer.unref === 'function') timer.unref();
+    child.once('close', onClose);
+  });
+harden(raceChildClose);
 
 /**
  * Inner mount points the driver always installs for a usable rootfs.
@@ -96,69 +158,6 @@ const parseBwrapVersion = stdout => {
 harden(parseBwrapVersion);
 
 /**
- * Spawn a child process and collect its stdout / stderr.  Used for
- * `--version` probes and short-lived control commands like `pasta`
- * and `nft -f`.
- *
- * @param {typeof import('child_process')} cpModule
- * @param {string} command
- * @param {string[]} args
- * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
- */
-const spawnAndCollect = (cpModule, command, args) => {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = cpModule.spawn(command, args, { stdio: 'pipe' });
-    } catch (e) {
-      reject(/** @type {Error} */ (e));
-      return;
-    }
-    /** @type {Buffer[]} */
-    const stdoutChunks = [];
-    /** @type {Buffer[]} */
-    const stderrChunks = [];
-    child.stdout?.on('data', chunk => stdoutChunks.push(chunk));
-    child.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      resolve({
-        code,
-        signal,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      });
-    });
-  });
-};
-harden(spawnAndCollect);
-
-/**
- * Wrap a Node `Readable` stream as a single-use async iterable of
- * `Uint8Array` chunks.  Each `[Symbol.asyncIterator]()` call returns
- * the SAME underlying stream iterator — Node streams are not
- * re-iterable.  The factory's reader-ref adapter consumes the
- * iterator exactly once.
- *
- * @param {NodeJS.ReadableStream | null} stream
- * @returns {AsyncIterable<Uint8Array> | null}
- */
-const readableToAsyncIterable = stream => {
-  if (stream === null || stream === undefined) return null;
-  /** @type {AsyncIterableIterator<Uint8Array> | null} */
-  let cached = null;
-  return {
-    [Symbol.asyncIterator]() {
-      if (cached === null) {
-        cached = /** @type {any} */ (stream)[Symbol.asyncIterator]();
-      }
-      return /** @type {AsyncIterableIterator<Uint8Array>} */ (cached);
-    },
-  };
-};
-harden(readableToAsyncIterable);
-
-/**
  * Internal slice context the driver hands back from `prepareSlice` and
  * receives in `spawn` / `teardown`.
  *
@@ -189,8 +188,7 @@ harden(readableToAsyncIterable);
  * Assemble the bwrap argv prefix from a `SliceSpec`.  Returns the
  * arguments that go BEFORE the `--` separator and the user's argv.
  *
- * The assembly order mirrors the TODO checklist in
- * `TODO/13_endo_posix_sandbox_phase1_bwrap.md`:
+ * The assembly order is:
  *   1. Namespace flags (`--unshare-all`, optional `--share-net`).
  *   2. Lifecycle (`--die-with-parent`).
  *   3. Capability drop (`--cap-drop ALL`).
@@ -390,8 +388,7 @@ export const assembleSliceArgv = async (spec, extras) => {
     argv.push(flag, mount.hostPath, mount.innerPath);
     // Caller-mount bin-dirs land **after** rootfs-derived defaults so
     // a hostile mount cannot shadow `/usr/bin` with `bin/foo` of its
-    // own.  See `TADA/22_sandbox_bwrap_path_refinements.md` for the
-    // threat model.
+    // own.
     for (const innerPath of detectMountBinPaths(mount, {
       exists: extras.exists,
     })) {
@@ -400,8 +397,8 @@ export const assembleSliceArgv = async (spec, extras) => {
   }
 
   // 7. Writable scratch upper layer.  Mounted as `/scratch` so it is
-  //    visible without conflicting with any rootfs bind.  The genie
-  //    workspace integration points `GENIE_WORKSPACE` here.
+  //    visible without conflicting with any rootfs bind.  A caller's
+  //    workspace integration can point its own env var here.
   if (spec.scratchHostPath !== '') {
     argv.push('--bind', spec.scratchHostPath, '/scratch');
   }
@@ -552,7 +549,9 @@ export const makeBwrapDriver = ({
 
     let result;
     try {
-      result = await spawnAndCollect(cp, 'bwrap', ['--version']);
+      result = await spawnAndCollect(cp, 'bwrap', ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       const reason =
@@ -577,6 +576,41 @@ export const makeBwrapDriver = ({
       });
     }
 
+    let helpResult;
+    try {
+      helpResult = await spawnAndCollect(cp, 'bwrap', ['--help'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
+    } catch (e) {
+      return harden({
+        available: false,
+        version,
+        reason: `failed to probe bwrap lifecycle flags: ${/** @type {Error} */ (e).message}`,
+      });
+    }
+    // bwrap writes its usage to either stream depending on version, so
+    // test both rather than materialising a concatenated copy.
+    const advertises = (/** @type {string} */ flag) =>
+      helpResult.stdout.includes(flag) || helpResult.stderr.includes(flag);
+    if (
+      helpResult.code !== 0 ||
+      !advertises('--die-with-parent') ||
+      !advertises('--new-session')
+    ) {
+      return harden({
+        available: false,
+        version,
+        reason:
+          'bwrap does not advertise required --die-with-parent and --new-session lifecycle support',
+        details: harden({
+          lifecycle: harden({
+            available: false,
+            reason: 'required bwrap lifecycle flags unavailable',
+          }),
+        }),
+      });
+    }
+
     // Run Phase 1.5 kernel-feature probes in parallel.  These never
     // throw — `LandlockProbe.probe()` / `Cgroup2Probe.probe()` always
     // resolve, with `available: false` on any error path.
@@ -586,6 +620,9 @@ export const makeBwrapDriver = ({
     ]);
     /** @type {BackendProbeDetails} */
     const details = harden({
+      lifecycle: harden({
+        available: true,
+      }),
       landlock: harden({
         available: landlock.available,
         ...(landlock.reason !== undefined ? { reason: landlock.reason } : {}),
@@ -740,8 +777,7 @@ export const makeBwrapDriver = ({
     // must be told to use pasta's netns via `--unshare-net` plus a
     // userns-block-fd handshake.  Phase 1 leaves the pasta subprocess
     // as a teardown placeholder; full integration lands alongside the
-    // genie workspace work that needs `private` networking.  See
-    // PLAN/endo_posix_sandbox.md § "Network policy" for the design.
+    // first consumer that needs `private` networking.
     if (spec.network === 'private') {
       // Documented but not yet wired end-to-end.  We still record
       // what would happen so teardown is correct if a future code
@@ -802,7 +838,15 @@ export const makeBwrapDriver = ({
     let child;
     try {
       child = cp.spawn(execProgram, execArgv, {
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: [
+          'pipe',
+          opts.captureStdout === false ? 'ignore' : 'pipe',
+          opts.captureStderr === false ? 'ignore' : 'pipe',
+        ],
+        // A distinct host process group lets every termination path signal
+        // bwrap, its launcher, and all descendants with one negative pid.
+        // `--die-with-parent` independently covers an ungraceful daemon exit.
+        detached: true,
         // Inherit minimal env: bwrap itself needs PATH to find
         // libraries; the slice's clearenv inside takes effect after
         // the bwrap binary execs.
@@ -816,17 +860,19 @@ export const makeBwrapDriver = ({
 
     slice.live.add(child);
 
-    /** @type {Promise<{ code: number | null; signal: string | null }>} */
-    const exited = new Promise((resolve, reject) => {
-      child.once('error', err => {
-        slice.live.delete(child);
-        reject(err);
-      });
-      child.once('close', (code, signal) => {
-        slice.live.delete(child);
-        resolve({ code, signal });
-      });
+    const {
+      promise: exited,
+      resolve: resolveExit,
+      reject: rejectExit,
+    } = /** @type {import('@endo/promise-kit').PromiseKit<{ code: number | null, signal: string | null }>} */ (
+      makePromiseKit()
+    );
+    child.once('error', err => {
+      slice.live.delete(child);
+      rejectExit(err);
     });
+    child.once('exit', (code, signal) => resolveExit({ code, signal }));
+    child.once('close', () => slice.live.delete(child));
 
     // The DriverProcess surface exposes async-iterables for stdout
     // and stderr, plus closures that the factory wires into a
@@ -842,13 +888,7 @@ export const makeBwrapDriver = ({
       stderr: readableToAsyncIterable(child.stderr),
       wait: () => exited,
       kill: async signal => {
-        try {
-          child.kill(/** @type {NodeJS.Signals} */ (signal ?? 'SIGTERM'));
-        } catch (e) {
-          // ESRCH (process already gone) is fine; rethrow others.
-          const err = /** @type {Error & { code?: string }} */ (e);
-          if (err.code !== 'ESRCH') throw err;
-        }
+        killProcessGroup(child, signal ?? 'SIGTERM');
       },
       /** @param {Uint8Array} chunk */
       writeStdin: async chunk => {
@@ -868,41 +908,41 @@ export const makeBwrapDriver = ({
   };
 
   /**
+   * Release everything the slice still holds.
+   *
+   * Rejects when the SIGKILL sweep cannot prove the slice's stdio was
+   * released within `TEARDOWN_CLOSE_GRACE_MS`.  The rest of the teardown
+   * (pasta, seccomp temp file) runs first either way, so the rejection
+   * costs the caller no cleanup.
+   *
    * @param {BwrapSliceContext} slice
    * @returns {Promise<void>}
    */
   const teardown = async slice => {
-    // Kill any stragglers.  SIGTERM first, then SIGKILL after the
-    // grace window.  The factory layer already issues kills before
-    // teardown(); this is the safety net for code paths that skip it.
-    /** @type {Promise<void>[]} */
-    const reaped = [];
-    for (const child of slice.live) {
-      reaped.push(
-        new Promise(resolve => {
-          /** @type {NodeJS.Timeout | undefined} */
-          let killTimer;
-          const finish = () => {
-            if (killTimer !== undefined) clearTimeout(killTimer);
-            resolve();
-          };
-          child.once('close', finish);
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            // ignore
-          }
-          killTimer = setTimeout(() => {
-            try {
-              child.kill('SIGKILL');
-            } catch {
-              // ignore
-            }
-          }, DEFAULT_KILL_GRACE_MS);
-        }),
-      );
-    }
-    await Promise.all(reaped);
+    // Kill any stragglers.  The factory owns the graceful ladder and
+    // reaps every process before it calls teardown(), so reaching a
+    // straggler here means the soft path is already spent (or was
+    // skipped entirely) — go straight to SIGKILL rather than running a
+    // second escalation on a budget that disagrees with the factory's.
+    const stragglers = [...slice.live];
+    const closures = stragglers.map(child => {
+      // Arm the bounded wait before signalling so a child that dies
+      // instantly cannot close between the kill and the listener.
+      const closed = raceChildClose(child, TEARDOWN_CLOSE_GRACE_MS);
+      try {
+        killProcessGroup(child, 'SIGKILL');
+      } catch {
+        // A backend refusal here is reported by the supervisor's
+        // own kill path; teardown must still finish the sweep.
+      }
+      return closed;
+    });
+    const closed = await Promise.all(closures);
+    const escaped = closed.filter(ok => !ok).length;
+    // The ladder is spent whatever the outcome: a second sweep would
+    // re-signal a process group the kernel may already have reissued,
+    // and holding the handles would only retain the child objects and
+    // their stdio buffers.
     slice.live.clear();
 
     // Stop pasta if we ever spawned one.
@@ -924,6 +964,18 @@ export const makeBwrapDriver = ({
         // already gone
       }
       slice.seccompTempPath = null;
+    }
+
+    if (escaped > 0) {
+      // Reported rather than logged: `dispose()` already rejects to say
+      // "could not prove containment", and the supervisor's other
+      // teardown call site folds a teardown rejection into that same
+      // report.  Resolving here would claim the slice was released while
+      // an fd is still out, which is exactly what tracking `'close'`
+      // instead of `'exit'` exists to detect.
+      throw makeError(
+        X`bwrap teardown could not prove containment: ${q(escaped)} of ${q(stragglers.length)} slice children still held stdio open ${q(TEARDOWN_CLOSE_GRACE_MS)}ms after SIGKILL; a descendant likely escaped the process group with an inherited pipe`,
+      );
     }
   };
 

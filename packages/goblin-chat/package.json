@@ -55,18 +55,17 @@
     "@endo/marshal": "workspace:^",
     "@endo/ocapn": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "ink": "^7.0.1",
-    "react": "^19.2.0"
+    "ink": "^7.1.1",
+    "react": "^19.2.8"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",
-    "@types/react": "^19.2.0",
+    "@types/react": "^19.2.18",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
     "ses": "workspace:^",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -80,22 +79,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "rules": {
-      "import/no-unresolved": [
-        "error",
-        {
-          "ignore": [
-            "ava",
-            "^@endo/ocapn(?:/.*)?$"
-          ]
-        }
-      ]
-    }
   },
   "ava": {
     "files": [

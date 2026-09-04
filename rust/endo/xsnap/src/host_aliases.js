@@ -62,7 +62,9 @@
     hostSha256Update: 'sha256Update',
     hostSha256UpdateBytes: 'sha256UpdateBytes',
     hostSha256Finish: 'sha256Finish',
+    hostSha256Bytes: 'sha256Bytes',
     hostRandomHex256: 'randomHex256',
+    hostRandomFillBytes: 'randomFillBytes',
     hostEd25519Keygen: 'ed25519Keygen',
     hostEd25519Sign: 'ed25519Sign',
   };

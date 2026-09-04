@@ -1,7 +1,6 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { setTimeout } from 'node:timers';
 import { makeContextMaker } from '../src/context.js';
 
 /** @typedef {import('../src/types.js').FormulaIdentifier} FormulaIdentifier */
@@ -121,22 +120,30 @@ test('onCancel after cancel is a no-op', async t => {
   t.false(lateHookRan, 'hook registered after cancel should not run');
 });
 
-test('thatDiesIfThisDies after cancel is a no-op', async t => {
+test('thatDiesIfThisDies after cancel cancels the dependent', async t => {
   const { createContext } = setupContextMaker();
   const parent = createContext(id('parent:node'));
   const child = createContext(id('child:node'));
 
-  await parent.cancel(new Error('already done'));
+  const reason = new Error('already done');
+  const hookFailure = new Error('late dependent hook failure');
+  child.onCancel(() => {
+    throw hookFailure;
+  });
+  await parent.cancel(reason);
 
-  // Registering a dependent after cancel should not throw.
-  parent.thatDiesIfThisDies(id('child:node'));
-  // Child should NOT have been cancelled (parent was already done).
-  // We verify by checking that child.cancelled has not been rejected.
-  const raceResult = await Promise.race([
-    child.cancelled.then(() => 'resolved').catch(() => 'rejected'),
-    new Promise(resolve => setTimeout(() => resolve('pending'), 50)),
-  ]);
-  t.is(raceResult, 'pending', 'child should remain uncancelled');
+  let childCancellationReason;
+  child.cancelled.catch(error => {
+    childCancellationReason = error;
+  });
+  t.notThrows(() => parent.thatDiesIfThisDies(id('child:node')));
+  await null;
+  t.is(childCancellationReason, reason);
+  const aggregate = await t.throwsAsync(() => child.disposed, {
+    instanceOf: AggregateError,
+    message: 'Cancellation hooks failed for child:node',
+  });
+  t.deepEqual(aggregate.errors, [hookFailure]);
 });
 
 test('cancel removes controller from map', async t => {
@@ -151,15 +158,62 @@ test('cancel removes controller from map', async t => {
   t.pass('cancel completes without error');
 });
 
-test('multiple onCancel hooks all run', async t => {
+test('synchronously throwing onCancel hook does not wedge disposal', async t => {
   const { createContext } = setupContextMaker();
   const ctx = createContext(id('a:node'));
 
+  const failure = new Error('synchronous hook failure');
   const results = [];
-  ctx.onCancel(() => results.push('hook1'));
-  ctx.onCancel(() => results.push('hook2'));
-  ctx.onCancel(() => results.push('hook3'));
+  ctx.onCancel(() => results.push('first'));
+  ctx.onCancel(() => {
+    results.push('throwing');
+    throw failure;
+  });
+  ctx.onCancel(() => results.push('last'));
 
-  await ctx.cancel(new Error('done'));
-  t.deepEqual(results, ['hook1', 'hook2', 'hook3']);
+  let disposed;
+  t.notThrows(() => {
+    disposed = ctx.cancel(new Error('done'));
+  });
+  const aggregate = await t.throwsAsync(() => disposed, {
+    instanceOf: AggregateError,
+    message: 'Cancellation hooks failed for a:node',
+  });
+  t.deepEqual(results, ['last', 'throwing', 'first']);
+  t.deepEqual(aggregate.errors, [failure]);
+});
+
+test('onCancel hooks run in LIFO order and settle all failures', async t => {
+  const { createContext } = setupContextMaker();
+  const ctx = createContext(id('a:node'));
+
+  const firstFailure = new Error('first hook failure');
+  const secondFailure = new Error('second hook failure');
+  const results = [];
+  ctx.onCancel(async () => {
+    results.push('first start');
+    await null;
+    results.push('first end');
+    throw firstFailure;
+  });
+  ctx.onCancel(async () => {
+    results.push('second start');
+    await null;
+    results.push('second end');
+    throw secondFailure;
+  });
+  ctx.onCancel(() => results.push('last'));
+
+  const aggregate = await t.throwsAsync(() => ctx.cancel(new Error('done')), {
+    instanceOf: AggregateError,
+    message: 'Cancellation hooks failed for a:node',
+  });
+  t.deepEqual(results, [
+    'last',
+    'second start',
+    'second end',
+    'first start',
+    'first end',
+  ]);
+  t.deepEqual(aggregate.errors, [secondFailure, firstFailure]);
 });

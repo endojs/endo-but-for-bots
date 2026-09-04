@@ -1,5 +1,5 @@
 // @ts-check
-/* global globalThis, process */
+/* global process */
 
 import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
@@ -7,7 +7,7 @@ import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { ZipWriter } from '@endo/zip/writer.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeNetstringCapTP } from './connection.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
@@ -130,7 +130,7 @@ export const makeWorkerFacet = ({ cancel }) => {
             import('@endo/compartment-mapper/import-archive-all-parsers.js'),
           ]);
         const zip = new ZipWriter();
-        zip.write('compartment-map.json', bytesFromText(mapText));
+        zip.write('compartment-map.json', encodeUtf8(mapText));
 
         for (const [compartmentName, descriptor] of Object.entries(
           compartmentMap.compartments,
@@ -151,7 +151,7 @@ export const makeWorkerFacet = ({ cancel }) => {
               );
               // eslint-disable-next-line no-await-in-loop
               const src = await E(/** @type {any} */ (blob)).text();
-              zip.write(archivePath, bytesFromText(src));
+              zip.write(archivePath, encodeUtf8(src));
             }
           }
         }

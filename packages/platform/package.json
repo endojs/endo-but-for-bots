@@ -1,7 +1,6 @@
 {
   "name": "@endo/platform",
   "version": "0.1.0",
-  "private": true,
   "description": "Platform filesystem types and adapters for Endo",
   "keywords": [
     "endo",
@@ -21,26 +20,50 @@
   },
   "type": "module",
   "exports": {
+    "./blob": "./src/blob.js",
     "./fs": {
       "node": "./src/fs-node/index.js"
     },
     "./fs/lite": "./src/fs/index.js",
     "./fs/lite/types": {
-      "types": "./src/fs/types.d.ts"
+      "types": "./src/fs/types-index.d.ts"
     },
     "./fs/lite/types.js": {
-      "types": "./src/fs/types.d.ts"
+      "types": "./src/fs/types-index.d.ts"
     },
     "./fs/node": "./src/fs-node/index.js",
+    "./fs/search": "./src/fs/search.js",
+    "./fs/search.types": {
+      "types": "./src/fs/search-types-index.d.ts"
+    },
+    "./fs/search.types.js": {
+      "types": "./src/fs/search-types-index.d.ts"
+    },
+    "./fs/node/search": "./src/fs-node/search-powers.js",
     "./fs/extended": {
-      "types": "./src/fs/extended/types-index.d.ts",
+      "types": "./src/fs/extended/types-index.types.d.ts",
       "default": "./src/fs/extended/index.js"
     },
     "./fs/extended/types-index.js": {
-      "types": "./src/fs/extended/types-index.d.ts",
+      "types": "./src/fs/extended/types-index.types.d.ts",
       "default": "./src/fs/extended/types-index.js"
     },
-    "./fs/extended/*": "./src/fs/extended/*",
+    "./fs/extended/backend-types": {
+      "types": "./src/fs/extended/backend-types-index.d.ts"
+    },
+    "./fs/extended/backend-types.js": {
+      "types": "./src/fs/extended/backend-types-index.d.ts"
+    },
+    "./fs/extended/cached-fs.js": "./src/fs/extended/cached-fs.js",
+    "./fs/extended/cas.js": "./src/fs/extended/cas.js",
+    "./fs/extended/from-mount.js": "./src/fs/extended/from-mount.js",
+    "./fs/extended/in-memory.js": "./src/fs/extended/in-memory.js",
+    "./fs/extended/layer.js": "./src/fs/extended/layer.js",
+    "./fs/extended/node-fs-module.js": "./src/fs/extended/node-fs-module.js",
+    "./fs/extended/node-fs.js": "./src/fs/extended/node-fs.js",
+    "./fs/extended/readonly.js": "./src/fs/extended/readonly.js",
+    "./fs/extended/shared/helpers.js": "./src/fs/extended/shared/helpers.js",
+    "./fs/extended/wrap-backend.js": "./src/fs/extended/wrap-backend.js",
     "./proc": "./src/proc.js",
     "./exo-fs": "./src/exo-fs.js",
     "./package.json": "./package.json"
@@ -51,7 +74,8 @@
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "test": "ava"
+    "test": "ava",
+    "test:types": "tsc --project tsconfig.test-types.json"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -64,14 +88,18 @@
     "@endo/hex": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@endo/stream": "workspace:^",
-    "@endo/stream-node": "workspace:^"
+    "@endo/stream-node": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
     "@endo/captp": "workspace:^",
     "@endo/pass-style": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -84,11 +112,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [

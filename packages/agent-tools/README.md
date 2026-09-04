@@ -1,190 +1,274 @@
 # `@endo/agent-tools`
 
-Provider-independent agent tool records for Endo capabilities.
+`@endo/agent-tools` is an embeddable tool and adapter layer for Endo agents.
+It owns provider-independent tool records, code-mode evaluation, capability
+declarations, and provider bridges.
+It is not a complete Pi harness, interactive loop, transcript store, or CLI.
 
-The package helps adapters expose Endo capabilities to LLM or MCP-style tool
-callers without giving those callers ambient authority. Each tool record pairs
-a JSON Schema with an `invoke(args)` function that validates the named
-arguments before dispatching to a capability.
+`@endo/agentry` owns the complete Pi harness, including agent construction,
+the code-mode preset and prompt assembly, session behavior, eval runners, and
+the future packaged CLI.
+An external MCP server is a separate consumer of `@endo/agent-tools`.
+
+## One tool, two hosts
+
+The host-independent code-mode surface is the `evaluate` tool.
+Its generated capability declarations and provider adapters accompany it.
+The same tool can run on either of two hosts.
+
+The in-process host is `makeCompartmentEvaluate`.
+It evaluates source in a fresh SES `Compartment`, with no daemon, credentials,
+or network authority.
+It suits evals, CI, tests, and a standalone MCP demo.
+Results live only as long as the process.
+
+The daemon host is `makeDaemonEvaluate`.
+It forwards source and lexical capability names through a live powers reference
+to a daemon-style host's `evaluate` method.
+The daemon host is intended for real agent use and provides durable results,
+pet-name storage, resume, mailbox, and remote messaging.
+It imports no daemon implementation.
+
+Storage authority is an explicit host concern.
+The settled host policy is that an in-process host without a store exposes the
+`{ source }` schema, while a supplied store enables the `resultName` parameter.
+An in-memory map is sufficient for light tests.
+The store hook is named `storeValue(valueOrPromise, nameOrPath)` to match the
+daemon Host and Guest interfaces.
+
+```js
+import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
+import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+
+const values = new Map();
+const storeValue = async (valueOrPromise, nameOrPath) => {
+  const key = Array.isArray(nameOrPath) ? nameOrPath.join('/') : nameOrPath;
+  values.set(key, await valueOrPromise);
+};
+const evaluate = makeCompartmentEvaluate({
+  endowments: {},
+  storeValue,
+});
+const tool = makeEvaluateTool(evaluate, [], storeValue);
+await tool.invoke({ source: '41 + 1', resultName: 'answer' });
+values.get('answer'); // 42
+```
+
+The daemon host always advertises `resultName` and forwards it to the daemon's
+`evaluate`, where formula capture keeps the named value durable.
+
+The MCP adapter gap remains separate.
+This package still does not map the tool record to MCP `outputSchema` or
+`structuredContent`; an MCP protocol adapter will own that mapping.
+
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `src/tool.js` | Provider-independent `makeTool` and `ToolRecord`. |
+| `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
+| `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
+| `src/code-mode-globals/` | Per-capability global descriptor factories for the local filesystem, Shell, HTTP, Git, and GitRemote, plus the workspace seam helpers. |
+| `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
+| `generated/code-mode-globals/` | Checked-in generated declaration artifacts. |
+
+The code-generation extractors currently read the checked-in
+`packages/exo-git/src/types.ts` and the platform filesystem guards through raw
+relative paths.
+Declared package references are the intended long-term shape.
 
 ## Exports
+
+The package root exports the parked JSON record makers and their types:
 
 ```js
 import {
   makeTool,
+  makeGitHistoryTool,
   makeGitTool,
   makeGitMountTools,
+  makeGitRemoteTool,
   makeMountReadTool,
   makeMountListTool,
   makeMountStatTool,
   makeMountEditTool,
   makeMountFsTools,
+  makeShellTool,
+  makeHttpTool,
 } from '@endo/agent-tools';
 ```
 
-```ts
-import type { ToolRecord, ToolSpec } from '@endo/agent-tools';
-```
-
-Subpath exports are also available:
+Scoped imports expose each layer:
 
 ```js
-import { makeTool } from '@endo/agent-tools/tool.js';
-import { makeGitTool } from '@endo/agent-tools/git-tool.js';
-import { makeGitMountTools } from '@endo/agent-tools/git-mount-tool.js';
-import { makeMountReadTool } from '@endo/agent-tools/mount-fs.js';
+import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
+import { makeDaemonEvaluate } from '@endo/agent-tools/code-mode/daemon.js';
+import { makeGitGlobal } from '@endo/agent-tools/code-mode-globals/git.js';
+import { makeWorkspaceGlobal } from '@endo/agent-tools/code-mode-globals/fs.js';
+import {
+  makeInMemoryWorkspaceSeam,
+  makeNodeWorkspaceSeam,
+} from '@endo/agent-tools/code-mode-globals/fs-seams.js';
+import { makeGitRemoteGlobal } from '@endo/agent-tools/code-mode-globals/git-remote.js';
+import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
+import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
+import { toPiAgentTool } from '@endo/agent-tools/pi';
+import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
 ```
 
-## Tool Records
+The Pi packages remain optional peer dependencies.
+Importing the root or a non-Pi module does not opt a consumer into Pi.
 
-A tool record has the shape:
+Code-mode global factories describe capabilities already granted by a host.
+`makeWorkspaceGlobal` describes the raw daemon mount provisioned for the
+repository workspace, while `makeFilesystemGlobal` describes the local
+`@endo/platform/fs/extended` adapter used by the standalone seams.
+The Shell, HTTP, Git, and GitRemote factories likewise carry no provisioning,
+attenuation, credential, or controller authority.
 
-```ts
-interface ToolRecord {
-  name: string;
-  description: string;
-  parameters: object;
-  inputSchema: object;
-  invoke(args: Record<string, unknown>): Promise<unknown>;
-}
-```
+Planned adapter modules have shape only in this release.
+The MCP adapter is not implemented, including its `outputSchema` and
+`structuredContent` mapping, and Codex and Claude Code adapters are future
+provider bridges over the same tool records.
 
-`parameters` and `inputSchema` are the same JSON Schema object. Adapters can
-use `parameters` for LLM tool definitions and `inputSchema` for MCP tool
-definitions.
+## Choosing a workspace backing
 
-## Named Arguments
+The `workspace` global is one guest-facing name over several host-side
+backings.
+The host must pair each backing with its matching descriptor: a raw daemon
+mount uses `makeWorkspaceGlobal`, while an extended Filesystem uses
+`makeFilesystemGlobal`.
+When using `makeCodeModeAgent` directly, set `powers.workspaceSurface` to
+`'filesystem'` for the latter; the default `'mount'` surface is reserved for a
+daemon mount.
 
-`makeTool` accepts optional positional guards, but callers pass a JSON object.
-The positional arguments are encoded as `arg0`, `arg1`, and so on:
+| Deployment | Backing | Who mints it | Who binds it |
+| --- | --- | --- | --- |
+| Compartment evaluate — evals, CI, tests | in-memory | `makeInMemoryWorkspaceSeam()` | the host, as a compartment endowment |
+| Compartment evaluate — local development | `node:fs` under a root path | `makeNodeWorkspaceSeam({ rootPath })` | the host, as a compartment endowment |
+| Daemon evaluate — real agent use | a daemon mount | the host's provisioning policy | the daemon, under the guest's `workspace` pet name |
+| Any host — historical view | a git tree or a read-only attenuation | the host, pre-attenuated | whichever seam above it is handed to |
+
+The two seam helpers mint a backing and the matching descriptor as one pair,
+so the declaration a guest reads cannot drift from the authority it was handed:
 
 ```js
-const tool = makeTool({
-  name: 'commit',
-  description: 'Record staged changes as a new commit.',
-  parameters: harden({
-    type: 'object',
-    properties: {
-      arg0: { type: 'string', description: 'The commit message.' },
-    },
-    required: ['arg0'],
-    additionalProperties: false,
-  }),
-  argGuards: harden([M.string()]),
-  execute: async ({ arg0 }) => E(git).commit(arg0),
-});
+import { E } from '@endo/eventual-send';
+import { makeCompartmentEvaluate } from '@endo/agent-tools/code-mode/compartment.js';
+import { makeEvaluateTool } from '@endo/agent-tools/code-mode/evaluate-tool.js';
+import { makeNodeWorkspaceSeam } from '@endo/agent-tools/code-mode-globals/fs-seams.js';
 
-await tool.invoke({ arg0: 'Update docs' });
+const { workspace, global } = makeNodeWorkspaceSeam({ rootPath: '/srv/repo' });
+const evaluate = makeCompartmentEvaluate({ endowments: { E, workspace } });
+const tool = makeEvaluateTool(evaluate, [global]);
 ```
 
-This is the current MCP-facing wire shape: MCP tool calls use named JSON
-object properties, so the adapter gives positional APIs stable `argN` names.
-A future adapter can expose separate variants that accept `{ args: [...] }` or
-another positional shape when the caller supports it.
+The node backing confines every path to `rootPath`, rejecting a symlink whose
+`realpath` escapes it, so the guest's reach is the subtree the host names and
+nothing above it.
 
-When guards are present, `invoke` rejects unknown `argN` keys, rejects missing
-required arguments declared by the schema, copy-hardens incoming parsed JSON
-objects, and validates supplied positional arguments with `mustMatch` before
-calling `execute`.
-
-## Git Tools
-
-`makeGitTool(gitCap)` builds tool records over a live `@endo/exo-git` `Git`
-capability:
+There is deliberately no daemon seam helper here: this package imports no
+daemon implementation.
+The daemon recipe is to provision a mount and bind it under the guest's
+`workspace` pet name:
 
 ```js
-const tools = makeGitTool(git);
+const mount = await E(host).provideMount(hostPath, petName);
+const workspace = mount;
 ```
 
-The current slice exposes:
+The descriptor is `makeWorkspaceGlobal({ name: 'workspace' })`.
+The executable form of this recipe belongs to provisioning policy, not to this
+package: which host path, which pet name, and which guest may ask for it are
+policy decisions `@endo/agent-tools` does not make.
 
-- `log`
-- `diff`
-- `show`
-- `commit`
-- `branches`
-- `createBranch`
-- `switchBranch`
-- `currentBranch`
+Read-only historical views arrive pre-attenuated and need no separate seam.
+`E(git).filesystemAt(ref)` yields a `Filesystem` over a commit's tree, and
+`readOnly(fs)` attenuates any `Filesystem` so its mutating methods reject with
+`EACCES`.
+Bind an extended Filesystem under `workspace` with
+`makeFilesystemGlobal({ name: 'workspace' })`.
+The verbs it cannot use fail at the capability, which is where authority is
+enforced.
 
-This slice holds only the JSON-transparent methods whose hand-authored tool
-schema maps one-to-one onto their `GitInterface` guard. Methods whose native
-signatures traffic in live capabilities — `status` (its rows carry mount-entry
-remotables) and `add` (it takes an array of mount-entry remotables) — are
-served instead by `makeGitMountTools` below. `restore` and `filesystemAt`
-remain deferred.
+## Parked JSON wrappers
 
-`makeGitMountTools(gitCap)` bridges the two capability-bearing methods at the
-wire boundary, so the model still sees only JSON:
+The JSON wrappers remain available for hosts that need one call per action.
+They are provider-independent but are parked while code mode is the primary
+way to compose several capability operations.
 
 ```js
-const mountTools = makeGitMountTools(git);
+import { makeGitTool } from '@endo/agent-tools/json-tools/git.js';
+import { makeGitMountTools } from '@endo/agent-tools/json-tools/git-mount.js';
+import { makeGitRemoteTool } from '@endo/agent-tools/json-tools/git-remote.js';
+import { makeMountFsTools } from '@endo/agent-tools/json-tools/fs.js';
+import { makeShellTool } from '@endo/agent-tools/json-tools/shell.js';
+import { makeHttpTool } from '@endo/agent-tools/json-tools/http.js';
 ```
 
-- `status` projects each row to a JSON-safe `{ path, index, worktree }` (plus
-  `renamedFrom` on a rename), stripping the authority-bearing `entry`/`node`
-  remotables so none crosses the tool wire.
-- `add` takes mount-relative path strings, resolves each to an `EndoMountEntry`
-  minted by the worktree mount, and stages additively (never discarding
-  working-tree changes). A `..` segment is contained by the mount, clamped at
-  the worktree root rather than escaping it; a path that addresses only the
-  root (`.`, `/`) is rejected.
+`makeTool` produces a `ToolRecord` with a JSON-schema `parameters`, the same
+schema as `inputSchema`, and an `invoke(args)` function.
+`toPiAgentTool` maps that record to the optional Pi `AgentTool` contract and
+accepts a result renderer.
 
-The two makers compose into the full status/diff/log/add/commit surface:
+The SmallCaps renderer is supplied by `adapters/smallcaps.js` so plain-data
+completion values preserve BigInts, `undefined`, and sigil-prefixed strings.
+Capability-bearing values remain out of band.
 
-```js
-const gitTools = [...makeGitTool(git), ...makeGitMountTools(git)];
-```
+## Git remote tools
 
-`add`/`status` deliberately live outside `makeGitTool` so its one-to-one
-schema-to-guard divergence gate stays intact; `makeGitMountTools`'s tool wire
-diverges from the raw `Git` guard by design.
+`makeGitRemoteTool(remoteCap)` is the push tier: the network and credential
+layer, exposed only to a host that has granted a `@endo/exo-git` `GitRemote`.
+It emits `fetch`, `pull`, and `push` records plus a credential-free `inspect`
+that reports the remote's policy bounds, so an agent can read its allowed
+refspecs and directions instead of discovering them by rejection.
 
-## Filesystem Tools
+Every bound is the granted capability's — the endpoint URL, the allowed
+directions, the refspecs, and the force/tags/delete flags — and the
+policy-bearing `GitRemoteController` stays host-side, never an agent-facing
+tool. A read-only `Git` cannot construct a `GitRemote` at all, so the read tier
+structurally excludes push.
 
-The file-tool set covers read, list, stat, and edit over an
-`@endo/platform/fs/extended` `Filesystem` capability. The same set serves the
-live worktree (`mountAsFilesystem(mount)`) and history (`Git.filesystemAt(ref)`)
-unchanged, because both present the same `Filesystem` shape. Each tool holds the
-capability, not a path string: containment, symlink handling, attenuation,
-subtree scoping, and fail-closed revocation are the capability's guarantees.
+`push` accepts `forceWithLease`, a 40-character object ID the destination must
+still name for the update to land. That is what makes a branch usable as a
+transactional ledger: read the tip, compose the update, push against the tip you
+read. It requires the `allowForcePush` policy and an explicit `source`, the
+destination must be a concrete ref, the all-zeros ID is refused (git reads it as
+"this ref must not exist"), and it cannot be combined with `force`.
 
-| Maker | Tool `name` | Slice |
-|---|---|---|
-| `makeMountReadTool(fs, opts?)` | `mountReadText` | read (bounded UTF-8 text; 50k-char default cap, `maxChars: 0` disables) |
-| `makeMountListTool(fs)` | `mountList` | read (name/kind entries of a directory) |
-| `makeMountStatTool(fs)` | `mountStat` | read (kind and size / mtime / atime; `bigint`s decimal-string-encoded) |
-| `makeMountEditTool(fs)` | `mountWriteText` | write (whole-file create-or-overwrite) |
+Each maker names its records after the capability's own methods, so names can
+collide across makers: `makeGitRemoteTool` emits `inspect` and `fetch`, which
+`makeShellTool` and `makeHttpTool` also emit. A host composing several makers
+into one flat tool list must disambiguate them itself; nothing in `makeTool`
+prefixes or dedupes.
 
-`makeMountFsTools(fs, opts?)` composes the whole set as a `ToolRecord[]`:
+## Git history tools
 
-```js
-import { readOnly } from '@endo/platform/fs/extended';
-import { makeMountFsTools } from '@endo/agent-tools/mount-fs.js';
+`makeGitTool` derives its catalog from the facet named by its `facet` option.
+The default writer catalog exposes ordinary read/write operations but no
+history rewrite.
+It includes `add` and `checkoutConflict` with worktree-relative string paths;
+the Git capability resolves those paths through its own confined mount.
+`makeGitMountTools` retains `status` so that tool can default to collapsed
+untracked directories.
+A host that deliberately grants a rewriter capability selects
+`{ facet: 'rewriter' }` to add `commit` with `options.amend`, `reword`,
+`cherryPick`, and `rebase`.
+The deprecated `makeGitHistoryTool(gitCap)` remains the explicit, history-only
+compatibility inventory.
+It emits exactly `commit`, `reword`, `cherryPick`, and `rebase`, in that order,
+while projecting the same schemas, descriptions, and runtime guards as those
+tools in the canonical rewriter catalog.
+It therefore does not repeat the rewriter catalog's read, navigation, or
+ordinary branch-edit tools when a host composes the writer and history
+inventories.
 
-// Writable agent: read + list + stat + edit.
-const tools = makeMountFsTools(projectFs);
-
-// Read-only agent: the edit tool is filtered out at construction, so it is
-// never advertised to the model. Attenuate the capability as well so an edit
-// also fails closed at the cap.
-const readOnlyTools = makeMountFsTools(readOnly(projectFs), { readOnly: true });
-```
-
-The read / list / stat tools carry a build-time `scope: 'read'` tag and the edit
-tool `scope: 'write'`. When `opts.readOnly` is set the write slice is dropped at
-construction; the `scope` tag is build-time only and never reaches the wire
-schema the model receives (the same discipline `makeGitTool` applies via
-`isGitReadOnly`). Because a `Filesystem` capability is an `ERef` with no
-synchronous read-only probe, the host declares the attenuation through
-`opts.readOnly` rather than by cap inspection.
-
-Inherited `Filesystem` limits apply: whole-file reads and writes (no partial
-range at the mount backing), no POSIX mode / uid / gid, and directory `size`
-reported as the base seam's `0`. The edit tool overwrites an existing-or-new
-child of an existing directory; it does not create intermediate directories.
-
-## Schema Conformance
-
-JSON Schemas are hand-authored. The package tests compare those schemas with
-the runtime `@endo/patterns` guards so schema drift is caught in CI.
+The JSON rebase tool supports `start` (with required `upstream` and optional
+`autosquash`), `continue`, `abort`, and `skip`.
+If `start` or `continue` stops for conflicts, inspect status, resolve and stage
+the conflicts, and then continue the rebase, skip the stopped commit, or abort.
+`checkoutConflict` selects Git index stages rather than stable branch roles:
+`ours` is stage 2 and `theirs` is stage 3.
+During rebase, Git calls the upstream side `ours` and the commit being replayed
+`theirs`, which is inverted from intuitive current/incoming branch wording.

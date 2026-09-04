@@ -1,10 +1,12 @@
 // @ts-check
 
-/* global Buffer, process, setTimeout, clearTimeout */
+/* global Buffer, process */
 
 import { makeError, q, X } from '@endo/errors';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeCgroup2Probe } from '../limits.js';
+import { readableToAsyncIterable, spawnAndCollect } from './child-process.js';
 import { DEFAULT_PATH } from './path.js';
 
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails } from '../types.js' */
@@ -12,60 +14,49 @@ import { DEFAULT_PATH } from './path.js';
 /**
  * `SandboxDriver` for rootless `podman` on Linux.
  *
- * Phase 2 driver.  Translates a fully-resolved `SliceSpec` (host paths
- * only, no Endo capabilities) into a long-running container that hosts
- * subsequent `spawn` calls via `podman exec`.  The driver is stateless
- * except for the per-slice context returned from `prepareSlice`, which
- * carries the container name, the live exec children, and the
- * runtime-feature report the factory weaves into `slice.help()`.
+ * Translates a fully-resolved `SliceSpec` (host paths only, no Endo
+ * capabilities) into one operation container per spawn. The driver is
+ * stateless except for the per-slice context returned from `prepareSlice`,
+ * which carries immutable construction policy, live operation containers,
+ * and the runtime-feature report woven into `slice.help()`.
  *
  * Lifecycle:
- *   1. `prepareSlice` runs `podman pull` (if `rootfs.kind === 'oci'`
- *      and the image is missing), `podman create`, and `podman start`.
- *      The container's PID 1 is `sleep infinity` so the namespace
- *      stays alive across multiple `exec` calls.
- *   2. `spawn` runs `podman exec -i <name> <argv...>` and pipes stdio
- *      back through the same reader/writer adapters the bwrap driver
- *      uses.
- *   3. `teardown` runs `podman stop --time 5 <name>` then
- *      `podman rm <name>`.
+ *   1. `prepareSlice` verifies the OCI image, network backend, runtime, and
+ *      immutable policy without starting a container.
+ *   2. `spawn` creates an exactly labelled operation container whose PID 1
+ *      is the requested argv, then attaches its three standard streams.
+ *   3. wait, kill, and teardown remove each operation container before
+ *      settling.
  *
- * Boot-time GC: on first `probe()`, the driver sweeps containers whose
- * names start with `ENDO_SANDBOX_PREFIX` and removes them, on the
- * assumption that any survivor is an orphan from a daemon that exited
- * uncleanly.  Tests can disable the sweep by passing `reapOrphans:
- * false` to the constructor.
+ * Crash reconciliation is scoped by the exact `PODMAN_OWNER_LABEL=ownerId`
+ * filter. A stable, host-private owner id is mandatory; a missing id or a
+ * failed reconciliation makes the driver unavailable.
  */
 
 /**
- * Container-name prefix for every slice this driver mints.  Stable
- * across daemon restarts so the boot-time orphan sweep can match
- * leftover containers from a previous run.  Also exported for tests.
+ * Container-name prefix for operations minted by this driver. Names are for
+ * diagnostics only; cleanup authority comes exclusively from exact labels.
  */
 export const ENDO_SANDBOX_PREFIX = 'endo-sandbox-';
 harden(ENDO_SANDBOX_PREFIX);
 
-const DEFAULT_KILL_GRACE_MS = 5000;
-const DEFAULT_STOP_GRACE_S = 5;
+export const PODMAN_OWNER_LABEL = 'io.endo.sandbox.owner';
+harden(PODMAN_OWNER_LABEL);
+
+export const PODMAN_OPERATION_LABEL = 'io.endo.sandbox.operation';
+harden(PODMAN_OPERATION_LABEL);
 
 /**
- * Inner command podman runs as the container's PID 1.  `sleep
- * infinity` is portable across both Alpine's busybox and Debian's
- * coreutils, and exits cleanly on SIGTERM.  Subsequent slice work
- * happens via `podman exec`; PID 1 just keeps the namespace alive.
- *
- * The path is **absolute** (`/bin/sleep`) so PID 1 starts even when
- * the slice's `$PATH` is too restrictive to find `sleep` by short
- * name.  This matters for callers who supply their own
- * `spec.env.PATH = /opt/myapp/bin` — without an absolute path we
- * would emit a confusing `crun: executable file `sleep` not found in
- * $PATH` error from `podman start`.  Both Alpine (busybox) and
- * Debian / Ubuntu / RHEL (coreutils) ship `sleep` at `/bin/sleep`
- * (RHEL has it as a `/usr/bin/sleep` symlink target via the usrmerge
- * symlink farm; the entry point is reachable through `/bin/sleep`
- * either way).
+ * Deadline applied to lifecycle-critical podman control commands
+ * (`create`, `kill`, `rm`) and to every command on the probe path
+ * (`--version`, `info`, the orphan sweep's `ps`). A stalled control
+ * command must not be able to wedge admission, termination, or
+ * reaping, and a stalled probe must not be able to wedge backend
+ * selection — and therefore `make()` — indefinitely, which is why the
+ * bwrap driver bounds its probes with the same 30s budget. Commands
+ * with legitimately unbounded duration (`pull`) are not subject to it.
  */
-const IDLE_PID1 = harden(['/bin/sleep', 'infinity']);
+const CONTROL_COMMAND_TIMEOUT_MS = 30_000;
 
 /**
  * Parse `podman --version` output into a version string.
@@ -84,83 +75,75 @@ const parsePodmanVersion = stdout => {
 harden(parsePodmanVersion);
 
 /**
- * Spawn a child process and collect its stdout / stderr.  Used for
- * `--version` probes and short-lived control commands like `podman
- * pull` and `podman create`.
+ * Recognise podman's "the container is already gone" family of errors.
  *
- * @param {typeof import('child_process')} cpModule
- * @param {string} command
- * @param {string[]} args
- * @returns {Promise<{ code: number | null; signal: string | null; stdout: string; stderr: string }>}
+ * Removal and signalling are both idempotent goals rather than
+ * commands: a container that no longer exists is the desired state, not
+ * a failure. Every other non-zero exit is a live backend failure
+ * (storage, permission, daemon) that the supervisor must see.
+ *
+ * Exported for unit testing.
+ *
+ * @param {{ stdout: string, stderr: string }} result
+ * @returns {boolean}
  */
-const spawnAndCollect = (cpModule, command, args) => {
-  return new Promise((resolve, reject) => {
-    let child;
-    try {
-      child = cpModule.spawn(command, args, { stdio: 'pipe' });
-    } catch (e) {
-      reject(/** @type {Error} */ (e));
-      return;
-    }
-    /** @type {Buffer[]} */
-    const stdoutChunks = [];
-    /** @type {Buffer[]} */
-    const stderrChunks = [];
-    child.stdout?.on('data', chunk => stdoutChunks.push(chunk));
-    child.stderr?.on('data', chunk => stderrChunks.push(chunk));
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      resolve({
-        code,
-        signal,
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-      });
-    });
-  });
-};
-harden(spawnAndCollect);
+export const reportsContainerGone = ({ stdout, stderr }) =>
+  /no such (container|object)|does not exist/i.test(`${stderr}\n${stdout}`);
+harden(reportsContainerGone);
 
 /**
- * Wrap a Node `Readable` stream as a single-use async iterable of
- * `Uint8Array` chunks.  Each `[Symbol.asyncIterator]()` call returns
- * the SAME underlying stream iterator — Node streams are not
- * re-iterable.  The factory's reader-ref adapter consumes the
- * iterator exactly once.
+ * Recognise podman's "the container is not in a killable state" family
+ * of errors, which is the signalling counterpart of
+ * `reportsContainerGone`.
  *
- * @param {NodeJS.ReadableStream | null} stream
- * @returns {AsyncIterable<Uint8Array> | null}
+ * podman refuses to signal a container that has already stopped:
+ *
+ *   Error: can only kill running containers. <id> is in state exited:
+ *   container state improper
+ *
+ * That is reachable on the ordinary graceful path. `podman rm -f` gates
+ * the operation's `wait()`, so a process that handled SIGTERM promptly
+ * but whose removal is still in flight looks un-exited to the
+ * supervisor's kill ladder, which then escalates onto a container that
+ * is already gone in every sense that matters. Treating the refusal as
+ * a backend failure would make the supervisor declare that it could not
+ * prove containment of a process that exited on its own.
+ *
+ * The match is deliberately anchored on podman's kill-path prefix and
+ * on the non-running container states it names, not on the generic
+ * `container state improper` sentinel: that sentinel also covers the
+ * opposite verdict (`cannot remove container ... as it is running`),
+ * which must stay a live failure. Storage, permission, and daemon
+ * failures name none of these.
+ *
+ * Exported for unit testing.
+ *
+ * @param {{ stdout: string, stderr: string }} result
+ * @returns {boolean}
  */
-const readableToAsyncIterable = stream => {
-  if (stream === null || stream === undefined) return null;
-  /** @type {AsyncIterableIterator<Uint8Array> | null} */
-  let cached = null;
-  return {
-    [Symbol.asyncIterator]() {
-      if (cached === null) {
-        cached = /** @type {any} */ (stream)[Symbol.asyncIterator]();
-      }
-      return /** @type {AsyncIterableIterator<Uint8Array>} */ (cached);
-    },
-  };
+export const reportsContainerNotRunning = ({ stdout, stderr }) => {
+  const text = `${stderr}\n${stdout}`;
+  return (
+    /can only kill running containers/i.test(text) ||
+    /is in state (configured|created|exited|stopped|removing)\b/i.test(text)
+  );
 };
-harden(readableToAsyncIterable);
+harden(reportsContainerNotRunning);
 
 /**
- * Generate a fresh slice container name.  The suffix is 8 hex
- * characters drawn from `Math.random` — collision-resistant enough for
- * the in-memory live-slice set on a single host without pulling in
- * `crypto`, which is overkill for a name suffix.
+ * Generate a fresh operation-container name. The single-owner invariant and
+ * process-local counter make the value unique within a daemon incarnation;
+ * the pid and time keep diagnostics distinct across clean restarts. Crash
+ * reconciliation removes the exact owner's prior incarnation before spawn.
  *
  * @returns {string}
  */
-const makeSliceName = () => {
-  const a = Math.floor(Math.random() * 0x1_0000_0000)
-    .toString(16)
-    .padStart(8, '0');
-  return `${ENDO_SANDBOX_PREFIX}${a}`;
+let nextOperationNumber = 0n;
+const makeOperationName = () => {
+  nextOperationNumber += 1n;
+  return `${ENDO_SANDBOX_PREFIX}${process.pid.toString(16)}-${Date.now().toString(16)}-${nextOperationNumber.toString(16)}`;
 };
-harden(makeSliceName);
+harden(makeOperationName);
 
 /**
  * Rootless network backend the driver prefers when mapping the
@@ -187,13 +170,31 @@ harden(makeSliceName);
  * (the path is then folded into `assembleCreateArgv` via
  * `extras.seccompProfilePath`).
  *
+ * A caller-supplied `{ profile }` with no materialised path fails
+ * closed. Returning `undefined` there would silently downgrade the
+ * container to podman's default allow-list — a weaker policy than the
+ * caller asked for, applied without any signal. The predicate here is
+ * the same one `prepareSlice` uses to decide whether to materialise a
+ * profile, so the two cannot drift apart.
+ *
+ * Exported for unit testing.
+ *
  * @param {SliceSpec['seccomp']} policy
  * @param {string | null} seccompProfilePath
  * @returns {string | undefined}
+ * @throws {Error} when `policy` names a caller-supplied profile that
+ *   was never materialised to a path.
  */
-const seccompSecurityOpt = (policy, seccompProfilePath) => {
+export const seccompSecurityOpt = (policy, seccompProfilePath) => {
   if (policy === 'unconfined') return 'seccomp=unconfined';
-  if (seccompProfilePath !== null) return `seccomp=${seccompProfilePath}`;
+  if (typeof policy === 'object' && policy !== null && 'profile' in policy) {
+    if (seccompProfilePath === null) {
+      throw makeError(
+        X`podman driver: caller-supplied seccomp profile was requested but no materialised profile path is available`,
+      );
+    }
+    return `seccomp=${seccompProfilePath}`;
+  }
   return undefined;
 };
 harden(seccompSecurityOpt);
@@ -279,8 +280,10 @@ const probeRootlessNetBackend = async cp => {
   for (const candidate of /** @type {const} */ (['slirp4netns', 'pasta'])) {
     let result;
     try {
-      // eslint-disable-next-line no-await-in-loop, @jessie.js/safe-await-separator
-      result = await spawnAndCollect(cp, candidate, ['--version']);
+      // eslint-disable-next-line no-await-in-loop
+      result = await spawnAndCollect(cp, candidate, ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       // eslint-disable-next-line no-continue
@@ -303,8 +306,9 @@ harden(probeRootlessNetBackend);
  * receives in `spawn` / `teardown`.
  *
  * @typedef {object} PodmanSliceContext
- * @property {string} containerName    Stable name (`endo-sandbox-…`).
  * @property {SliceSpec} spec          Original slice spec.
+ * @property {string} ref              Pinned OCI image reference.
+ * @property {RootlessNetBackend} netBackend Rootless network backend.
  * @property {string} runtime          Resolved OCI runtime override
  *                                     (`crun`, `runc`, …) or empty
  *                                     string when podman's default is
@@ -312,12 +316,10 @@ harden(probeRootlessNetBackend);
  *                                     creation so subsequent spawns
  *                                     stay on the same runtime even if
  *                                     the host's default flips.
- * @property {Set<import('child_process').ChildProcess>} live  Live
- *                                     `podman exec` children for
- *                                     teardown.
- * @property {boolean} started         True after `podman start` has
- *                                     succeeded.  Subsequent spawns
- *                                     skip the start step.
+ * @property {Map<string, { child: import('child_process').ChildProcess, wait: Promise<{ code: number | null, signal: string | null }> }>} live
+ *                                     Live operation containers keyed by
+ *                                     container name, with the attached
+ *                                     podman client for each.
  * @property {string | null} seccompTempPath  Temp file path holding the
  *                                     caller-supplied seccomp profile,
  *                                     or `null` when no profile was
@@ -401,7 +403,7 @@ harden(parseImagePathFromConfigEnv);
  * @param {SliceSpec} spec
  * @param {string} containerName
  * @param {RootlessNetBackend} netBackend
- * @param {{ seccompProfilePath: string | null, pathInjection: string | null }} extras
+ * @param {{ seccompProfilePath: string | null, pathInjection: string | null, ownerId: string, operationId: string }} extras
  *   `pathInjection` is the `PATH` value to inject as `-e PATH=…` when
  *   the caller did not set one.  `null` means "leave the image's
  *   `Config.Env` PATH alone" — used when the caller's `spec.env`
@@ -417,6 +419,10 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
     '--name',
     containerName,
     '--replace=false',
+    '--label',
+    `${PODMAN_OWNER_LABEL}=${extras.ownerId}`,
+    '--label',
+    `${PODMAN_OPERATION_LABEL}=${extras.operationId}`,
     // Hardening flags equivalent to bwrap's `--unshare-all` +
     // `--cap-drop ALL` posture.
     '--security-opt',
@@ -499,13 +505,6 @@ harden(assembleCreateArgv);
  *                                                            process module
  *                                                            override
  *                                                            (tests).
- * @param {boolean} [input.reapOrphans]                       Whether to
- *                                                            sweep stale
- *                                                            `endo-sandbox-`
- *                                                            containers
- *                                                            on first
- *                                                            probe.  Defaults
- *                                                            to true.
  * @param {string} [input.ociRuntime]                         Override the
  *                                                            podman OCI
  *                                                            runtime
@@ -527,13 +526,20 @@ harden(assembleCreateArgv);
  *                                                            slice's spawn
  *                                                            surface keeps
  *                                                            working.
+ * @param {string} [input.ownerId]                           Stable,
+ *                                                            host-private
+ *                                                            cleanup scope
+ *                                                            (normally the
+ *                                                            owning formula
+ *                                                            id). Required
+ *                                                            for availability.
  * @returns {SandboxDriver}
  */
 export const makePodmanDriver = ({
   env: _env = {},
   childProcess: childProcessModule,
-  reapOrphans = true,
   ociRuntime,
+  ownerId,
 } = {}) => {
   // Lazy-resolve `child_process` so callers in test environments can
   // inject a stub without paying the import cost up front.
@@ -552,8 +558,18 @@ export const makePodmanDriver = ({
   // the container's, so we do not surface it on this driver.
   const cgroup2Probe = makeCgroup2Probe();
 
-  /** @type {boolean} */
-  let orphanSweepDone = false;
+  /**
+   * Memo for the boot-time orphan sweep. A promise rather than a
+   * boolean: `probe()` now runs on every `make()` and `listBackends()`,
+   * so a flag checked and set across an `await` lets a second probe
+   * start a second sweep while the first is still listing — and that
+   * second sweep can remove a container a concurrently admitted
+   * operation has already spawned. Memoizing the promise makes every
+   * caller await the one sweep instead.
+   *
+   * @type {Promise<void> | null}
+   */
+  let orphanSweep = null;
 
   /**
    * Cached OCI-runtime selection.  `null` until the first probe / slice
@@ -594,11 +610,12 @@ export const makePodmanDriver = ({
     if (resolvedRuntime !== null) return resolvedRuntime;
     let info;
     try {
-      info = await spawnAndCollect(cp, 'podman', [
-        'info',
-        '--format',
-        '{{.Host.OCIRuntime.Name}}',
-      ]);
+      info = await spawnAndCollect(
+        cp,
+        'podman',
+        ['info', '--format', '{{.Host.OCIRuntime.Name}}'],
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
     } catch {
       resolvedRuntime = '';
       return resolvedRuntime;
@@ -617,10 +634,10 @@ export const makePodmanDriver = ({
     // on PATH; if none exist, surface the default and let podman fail
     // with its own error message.
     for (const candidate of EXEC_CAPABLE_RUNTIMES) {
-      // eslint-disable-next-line no-await-in-loop, @jessie.js/safe-await-separator
-      const v = await spawnAndCollect(cp, candidate, ['--version']).catch(
-        () => null,
-      );
+      // eslint-disable-next-line no-await-in-loop
+      const v = await spawnAndCollect(cp, candidate, ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      }).catch(() => null);
       if (v !== null && v.code === 0) {
         resolvedRuntime = candidate;
         return resolvedRuntime;
@@ -643,56 +660,95 @@ export const makePodmanDriver = ({
     runtime === '' ? args : ['--runtime', runtime, ...args];
 
   /**
-   * Reap leftover `endo-sandbox-` containers from a previous daemon
-   * run.  Best-effort: failures are swallowed because a clean host
-   * with no leftover containers is the common case.
+   * Remove one operation container, forcibly and under the control
+   * deadline. Every removal path — orphan sweep, abandoned admission,
+   * reap, teardown — goes through here so the deadline policy cannot be
+   * applied to some of them and forgotten on the rest.
    *
    * @param {typeof import('child_process')} cp
-   * @returns {Promise<string[]>}  Names of containers that were
-   *                                removed.
+   * @param {string} runtime
+   * @param {string} name
+   */
+  const removeContainer = (cp, runtime, name) =>
+    spawnAndCollect(cp, 'podman', podmanArgs(runtime, ['rm', '-f', name]), {
+      timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+    });
+
+  /**
+   * Reap containers with this driver's exact owner label from a previous
+   * daemon run. Listing or removal failures make the lifecycle probe fail
+   * closed.
+   *
+   * @param {typeof import('child_process')} cp
+   * @returns {Promise<void>}
    */
   const sweepOrphans = async cp => {
-    /** @type {string[]} */
-    const reaped = [];
     const runtime = await ensureRuntime(cp);
-    let listing;
-    try {
-      listing = await spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(runtime, [
-          'ps',
-          '-a',
-          '--filter',
-          `name=^${ENDO_SANDBOX_PREFIX}`,
-          '--format',
-          '{{.Names}}',
-        ]),
+    const listing = await spawnAndCollect(
+      cp,
+      'podman',
+      podmanArgs(runtime, [
+        'ps',
+        '-a',
+        '--filter',
+        `label=${PODMAN_OWNER_LABEL}=${ownerId}`,
+        '--format',
+        '{{.Names}}',
+      ]),
+      { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+    );
+    if (listing.code !== 0) {
+      throw makeError(
+        X`podman exact-label orphan listing failed: ${q(listing.stderr.trim() || listing.stdout.trim())}`,
       );
-    } catch {
-      return reaped;
     }
-    if (listing.code !== 0) return reaped;
     const names = listing.stdout
       .split('\n')
       .map(s => s.trim())
-      .filter(s => s.startsWith(ENDO_SANDBOX_PREFIX));
-    await Promise.all(
+      .filter(s => s !== '');
+    const removals = await Promise.all(
       names.map(async name => {
         await null;
-        try {
-          const result = await spawnAndCollect(
-            cp,
-            'podman',
-            podmanArgs(runtime, ['rm', '-f', name]),
-          );
-          if (result.code === 0) reaped.push(name);
-        } catch {
-          // ignore; the container may have been removed concurrently
+        const result = await removeContainer(cp, runtime, name);
+        // Removal is a goal, not a command: a container that another
+        // sweep, another daemon incarnation, or the operation's own
+        // reaper already removed between the listing above and this
+        // call is in exactly the state we wanted.
+        if (result.code === 0 || reportsContainerGone(result)) {
+          return undefined;
         }
+        return `${name}: ${result.stderr.trim() || result.stdout.trim()}`;
       }),
     );
-    return reaped;
+    const failures = removals.filter(result => result !== undefined);
+    if (failures.length > 0) {
+      throw makeError(
+        X`podman exact-label orphan removal failed: ${q(failures.join('; '))}`,
+      );
+    }
+  };
+
+  /**
+   * Run the exact-label orphan sweep at most once per driver, and hand
+   * every subsequent caller the same settled promise.
+   *
+   * A failed sweep clears the memo: reconciliation is the crash-cleanup
+   * proof, and a transient listing failure should make this probe report
+   * unavailable rather than condemn the driver for its whole lifetime.
+   *
+   * @param {typeof import('child_process')} cp
+   * @returns {Promise<void>}
+   */
+  const ensureOrphanSweep = cp => {
+    if (orphanSweep === null) {
+      /** @type {Promise<void>} */
+      const attempt = sweepOrphans(cp).catch(e => {
+        if (orphanSweep === attempt) orphanSweep = null;
+        throw e;
+      });
+      orphanSweep = attempt;
+    }
+    return orphanSweep;
   };
 
   /**
@@ -703,8 +759,44 @@ export const makePodmanDriver = ({
    *
    * @returns {Promise<Omit<BackendProbe, 'name'>>}
    */
+  /**
+   * Report the driver unavailable because crash cleanup cannot be
+   * proven. Process-group termination is never in doubt for podman —
+   * the operation is container PID 1 — so only the cleanup half varies.
+   *
+   * @param {string} reason           Caller-facing summary.
+   * @param {string} lifecycleReason  Which lifecycle proof is missing.
+   * @param {Partial<Omit<BackendProbe, 'name' | 'available' | 'reason'>>} [extra]
+   * @returns {Omit<BackendProbe, 'name'>}
+   */
+  const crashCleanupUnavailable = (reason, lifecycleReason, extra = {}) =>
+    harden({
+      available: false,
+      ...extra,
+      reason,
+      details: harden({
+        lifecycle: harden({
+          available: false,
+          reason: lifecycleReason,
+        }),
+        ...extra.details,
+      }),
+    });
+
+  // Probes deliberately re-run per `make()` so backend availability is a
+  // fresh fail-closed proof. Enforcement (exact labels, the termination
+  // ladder, and containment teardown) is per-operation and does not depend
+  // on probe freshness. Memoizing the probe verdict would need an
+  // invalidation policy reconciled with the `listBackends()` re-probe
+  // contract; revisit if `make()` frequency ever makes probe cost material.
   const probe = async () => {
     await null;
+    if (ownerId === undefined || ownerId === '' || /[\0\r\n]/.test(ownerId)) {
+      return crashCleanupUnavailable(
+        'podman driver requires a stable ownerId for exact-label crash cleanup',
+        'stable ownerId is not configured',
+      );
+    }
     let cp;
     try {
       cp = await getCp();
@@ -718,7 +810,9 @@ export const makePodmanDriver = ({
 
     let versionResult;
     try {
-      versionResult = await spawnAndCollect(cp, 'podman', ['--version']);
+      versionResult = await spawnAndCollect(cp, 'podman', ['--version'], {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+      });
     } catch (e) {
       const cause = /** @type {Error & { code?: string }} */ (e);
       const reason =
@@ -746,11 +840,12 @@ export const makePodmanDriver = ({
     // could not initialise its storage; that is fatal for the driver.
     let rootlessResult;
     try {
-      rootlessResult = await spawnAndCollect(cp, 'podman', [
-        'info',
-        '--format',
-        '{{.Host.Security.Rootless}}',
-      ]);
+      rootlessResult = await spawnAndCollect(
+        cp,
+        'podman',
+        ['info', '--format', '{{.Host.Security.Rootless}}'],
+        { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+      );
     } catch (e) {
       const cause = /** @type {Error} */ (e);
       return harden({
@@ -796,21 +891,25 @@ export const makePodmanDriver = ({
     // failures degrade to "no override".
     await ensureRuntime(cp);
 
-    // Boot-time orphan reap.  We swallow the result list — the test
-    // suite calls `_sweepOrphans()` directly when it wants to assert
-    // names.
-    if (reapOrphans && !orphanSweepDone) {
-      orphanSweepDone = true;
-      try {
-        await sweepOrphans(cp);
-      } catch {
-        // ignore — best-effort
-      }
+    // Boot-time orphan reap. Reconciliation is the crash-cleanup proof,
+    // so a failure here makes the driver unavailable rather than
+    // degrading it.
+    try {
+      await ensureOrphanSweep(cp);
+    } catch (e) {
+      return crashCleanupUnavailable(
+        /** @type {Error} */ (e).message,
+        'exact-label orphan reconciliation failed',
+        harden({ version, details: harden({ rootless }) }),
+      );
     }
 
     const cgroup2 = await cgroup2Probe.probe();
     /** @type {BackendProbeDetails} */
     const details = harden({
+      lifecycle: harden({
+        available: true,
+      }),
       cgroup2: harden({
         available: cgroup2.available,
         controllers: cgroup2.controllers,
@@ -991,53 +1090,10 @@ export const makePodmanDriver = ({
     }
 
     const runtime = await ensureRuntime(cp);
-    const containerName = makeSliceName();
-    // Resolve the slice's effective `PATH` once so we can both inject
-    // it into the container's create-time env and surface it via
-    // `runtimeDetails.path` for `slice.help()`.  When the caller's
-    // `spec.env` already includes a `PATH` we leave `pathInjection`
-    // null and let the per-key loop in `assembleCreateArgv` emit it
-    // (the resolved record still records `source: 'env'` so the help
-    // line stays accurate).
+    // Each spawn gets a one-operation container. The slice retains only
+    // immutable construction policy, so terminating one operation never
+    // depends on signalling a `podman exec` proxy or disturbs a sibling.
     const slicePath = resolveSlicePath(spec, imagePath);
-    const pathInjection = slicePath.source === 'env' ? null : slicePath.value;
-    const createArgv = podmanArgs(runtime, [
-      ...assembleCreateArgv(spec, containerName, netBackend, {
-        seccompProfilePath: seccompTempPath,
-        pathInjection,
-      }),
-      ref,
-      ...IDLE_PID1,
-    ]);
-    const created = await spawnAndCollect(cp, 'podman', createArgv);
-    if (created.code !== 0) {
-      throw makeError(
-        X`podman create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
-      );
-    }
-
-    // Start the container immediately so subsequent `exec` calls have
-    // a live PID 1 to attach to.  If start fails, we must rm the
-    // half-created container so a retry can pick a fresh name.
-    const started = await spawnAndCollect(
-      cp,
-      'podman',
-      podmanArgs(runtime, ['start', containerName]),
-    );
-    if (started.code !== 0) {
-      try {
-        await spawnAndCollect(
-          cp,
-          'podman',
-          podmanArgs(runtime, ['rm', '-f', containerName]),
-        );
-      } catch {
-        // ignore — we are already in an error path
-      }
-      throw makeError(
-        X`podman start failed: ${q(started.stderr.trim() || started.stdout.trim())}`,
-      );
-    }
 
     const cgroup2 = await cgroup2Probe.probe();
     /** @type {PodmanSliceContext['runtimeDetails']} */
@@ -1062,11 +1118,11 @@ export const makePodmanDriver = ({
 
     /** @type {PodmanSliceContext} */
     const ctx = {
-      containerName,
       spec,
+      ref,
+      netBackend,
       runtime,
-      live: new Set(),
-      started: true,
+      live: new Map(),
       seccompTempPath,
       runtimeDetails,
     };
@@ -1077,59 +1133,134 @@ export const makePodmanDriver = ({
    * @param {PodmanSliceContext} slice
    * @param {string[]} argv
    * @param {SpawnOpts} opts
+   * @param {import('../types.js').DriverSpawnControls} [controls]
    * @returns {Promise<DriverProcess>}
    */
-  const spawn = async (slice, argv, opts) => {
+  const spawn = async (slice, argv, opts, controls) => {
     if (argv.length === 0) {
       throw makeError(X`spawn argv must be non-empty`);
     }
     const cp = await getCp();
+    if (ownerId === undefined) {
+      throw makeError(X`podman driver ownerId is not configured`);
+    }
+    const admissionCancelled = controls?.cancelled;
+    const isAdmissionCancelled = controls?.isCancelled;
 
-    /** @type {string[]} */
-    const innerArgv = ['exec', '-i'];
+    const containerName = makeOperationName();
+    // Names include pid, time, and a counter, so the operation label remains
+    // unique even when multiple handles share one formula owner.
+    const operationId = containerName;
+    const operationSpec = harden({
+      ...slice.spec,
+      env: harden({ ...slice.spec.env, ...(opts.env ?? {}) }),
+      cwd: opts.cwd ?? slice.spec.cwd,
+    });
+    const slicePath = resolveSlicePath(
+      operationSpec,
+      slice.runtimeDetails.path.value,
+    );
+    const pathInjection = slicePath.source === 'env' ? null : slicePath.value;
+    const createArgv = podmanArgs(slice.runtime, [
+      ...assembleCreateArgv(operationSpec, containerName, slice.netBackend, {
+        seccompProfilePath: slice.seccompTempPath,
+        pathInjection,
+        ownerId,
+        operationId,
+      }),
+      slice.ref,
+      ...argv,
+    ]);
+    // Bounded removal of the exact named operation this spawn minted.
+    // Used on every abandonment path so an aborted or failed admission
+    // cannot leak the container.
+    const removeOperation = () =>
+      removeContainer(cp, slice.runtime, containerName).catch(() => undefined);
 
-    // Per-spawn cwd override.  Falls back to the slice's --workdir.
-    if (opts.cwd !== undefined && opts.cwd !== '') {
-      innerArgv.push('--workdir', opts.cwd);
+    let created;
+    try {
+      created = await spawnAndCollect(cp, 'podman', createArgv, {
+        timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
+        cancelled: admissionCancelled,
+        isCancelled: isAdmissionCancelled,
+      });
+    } catch (e) {
+      // The stalled or aborted create may have registered the name
+      // before dying; remove it so nothing outlives the admission.
+      await removeOperation();
+      throw e;
+    }
+    if (created.code !== 0) {
+      throw makeError(
+        X`podman operation create failed: ${q(created.stderr.trim() || created.stdout.trim())}`,
+      );
+    }
+    if (isAdmissionCancelled?.()) {
+      await removeOperation();
+      throw makeError(X`podman operation admission aborted`);
     }
 
-    // Per-spawn env overrides, layered on top of the slice's --env
-    // dictionary (already baked into the container).
-    if (opts.env !== undefined) {
-      for (const [key, value] of Object.entries(opts.env)) {
-        innerArgv.push('-e', `${key}=${value}`);
-      }
-    }
-
-    innerArgv.push(slice.containerName, ...argv);
-    const execArgv = podmanArgs(slice.runtime, innerArgv);
+    const startArgv = podmanArgs(slice.runtime, [
+      'start',
+      '--attach',
+      '--interactive',
+      containerName,
+    ]);
 
     /** @type {import('child_process').ChildProcess} */
     let child;
     try {
-      child = cp.spawn('podman', execArgv, {
-        stdio: ['pipe', 'pipe', 'pipe'],
+      child = cp.spawn('podman', startArgv, {
+        stdio: [
+          'pipe',
+          opts.captureStdout === false ? 'ignore' : 'pipe',
+          opts.captureStderr === false ? 'ignore' : 'pipe',
+        ],
         env: { PATH: process.env.PATH ?? '/usr/bin:/bin' },
       });
     } catch (e) {
+      await removeOperation();
       throw makeError(
-        X`failed to spawn podman exec: ${q(/** @type {Error} */ (e).message)}`,
+        X`failed to attach podman operation: ${q(/** @type {Error} */ (e).message)}`,
       );
     }
 
-    slice.live.add(child);
+    const {
+      promise: proxyExited,
+      resolve: resolveProxy,
+      reject: rejectProxy,
+    } = /** @type {import('@endo/promise-kit').PromiseKit<{ code: number | null, signal: string | null }>} */ (
+      makePromiseKit()
+    );
+    child.once('error', rejectProxy);
+    child.once('exit', (code, signal) => resolveProxy({ code, signal }));
+    proxyExited.catch(() => undefined);
 
-    /** @type {Promise<{ code: number | null; signal: string | null }>} */
-    const exited = new Promise((resolve, reject) => {
-      child.once('error', err => {
-        slice.live.delete(child);
-        reject(err);
-      });
-      child.once('close', (code, signal) => {
-        slice.live.delete(child);
-        resolve({ code, signal });
-      });
-    });
+    const exited = (async () => {
+      await null;
+      let status;
+      let proxyFailure;
+      try {
+        status = await proxyExited;
+      } catch (e) {
+        proxyFailure = e;
+      }
+      const removed = await removeContainer(cp, slice.runtime, containerName);
+      slice.live.delete(containerName);
+      if (removed.code !== 0 && !reportsContainerGone(removed)) {
+        throw makeError(
+          X`podman operation reap failed: ${q(removed.stderr.trim() || removed.stdout.trim())}`,
+        );
+      }
+      if (proxyFailure !== undefined) throw proxyFailure;
+      return /** @type {{ code: number | null, signal: string | null }} */ (
+        status
+      );
+    })();
+    exited.catch(() => undefined);
+    // Not hardened: the entry holds a Node ChildProcess, whose internal
+    // stream state cannot survive a deep freeze.
+    slice.live.set(containerName, { child, wait: exited });
 
     const stdinStream = child.stdin;
     /** @type {DriverProcess & { writeStdin(chunk: Uint8Array): Promise<void>, closeStdin(): Promise<void> }} */
@@ -1140,18 +1271,28 @@ export const makePodmanDriver = ({
       stderr: readableToAsyncIterable(child.stderr),
       wait: () => exited,
       kill: async signal => {
-        // `podman exec` is a foreground proxy: SIGTERM / SIGINT are
-        // forwarded to the in-container process.  For SIGKILL the
-        // proxy itself dies first, leaving the container-side process
-        // to be cleaned up by the next `podman exec` or by the
-        // container's PID-1 reaper at teardown.  This is the same
-        // failure mode rootless docker has and is acceptable for the
-        // sandbox's lifecycle guarantees.
-        try {
-          child.kill(/** @type {NodeJS.Signals} */ (signal ?? 'SIGTERM'));
-        } catch (e) {
-          const err = /** @type {Error & { code?: string }} */ (e);
-          if (err.code !== 'ESRCH') throw err;
+        // The operation itself is container PID 1. Signalling the exact
+        // container therefore covers every descendant, unlike signalling a
+        // host-side `podman exec` proxy.
+        const result = await spawnAndCollect(
+          cp,
+          'podman',
+          podmanArgs(slice.runtime, [
+            'kill',
+            '--signal',
+            String(signal ?? 'SIGTERM'),
+            containerName,
+          ]),
+          { timeoutMs: CONTROL_COMMAND_TIMEOUT_MS },
+        );
+        if (
+          result.code !== 0 &&
+          !reportsContainerGone(result) &&
+          !reportsContainerNotRunning(result)
+        ) {
+          throw makeError(
+            X`podman operation signal failed: ${q(result.stderr.trim() || result.stdout.trim())}`,
+          );
         }
       },
       /** @param {Uint8Array} chunk */
@@ -1176,71 +1317,22 @@ export const makePodmanDriver = ({
    * @returns {Promise<void>}
    */
   const teardown = async slice => {
-    /** @type {Promise<void>[]} */
-    const reaped = [];
-    for (const child of slice.live) {
-      reaped.push(
-        new Promise(resolve => {
-          /** @type {NodeJS.Timeout | undefined} */
-          let killTimer;
-          const finish = () => {
-            if (killTimer !== undefined) clearTimeout(killTimer);
-            resolve();
-          };
-          child.once('close', finish);
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            // ignore
-          }
-          killTimer = setTimeout(() => {
-            try {
-              child.kill('SIGKILL');
-            } catch {
-              // ignore
-            }
-          }, DEFAULT_KILL_GRACE_MS);
-        }),
-      );
-    }
-    await Promise.all(reaped);
+    const cp = await getCp();
+    // The factory owns the graceful ladder and reaps every operation
+    // before it calls teardown(), so a straggler here has already spent
+    // the soft path: remove it forcibly rather than running a second
+    // escalation on a budget that disagrees with the factory's. Each
+    // operation removes and then awaits its own reaper independently,
+    // so one slow container does not gate the rest; the reaper tolerates
+    // finding the container already gone.
+    await Promise.all(
+      [...slice.live].map(async ([name, operation]) => {
+        await null;
+        await removeContainer(cp, slice.runtime, name).catch(() => undefined);
+        await operation.wait.catch(() => undefined);
+      }),
+    );
     slice.live.clear();
-
-    let cp;
-    try {
-      cp = await getCp();
-    } catch {
-      return;
-    }
-
-    // `podman stop` sends SIGTERM and then SIGKILL after the grace
-    // window; rm cleans the container record.  Both are best-effort
-    // because teardown is also called from disposal-of-already-dead
-    // slices.
-    try {
-      await spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(slice.runtime, [
-          'stop',
-          '--time',
-          String(DEFAULT_STOP_GRACE_S),
-          slice.containerName,
-        ]),
-      );
-    } catch {
-      // ignore — proceed to rm
-    }
-    try {
-      await spawnAndCollect(
-        cp,
-        'podman',
-        podmanArgs(slice.runtime, ['rm', '-f', slice.containerName]),
-      );
-    } catch {
-      // ignore
-    }
-    slice.started = false;
 
     // Unlink any seccomp profile we materialised for `--security-opt
     // seccomp=<path>`.  Best-effort: if the temp file was already

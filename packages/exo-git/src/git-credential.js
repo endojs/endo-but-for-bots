@@ -5,6 +5,12 @@ import { q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 
 import {
+  basicCredentialHelp,
+  bearerCredentialHelp,
+  gitCredentialControllerHelp,
+  makeHelp,
+} from './help-text.js';
+import {
   BasicCredentialInterface,
   BearerCredentialInterface,
   GitCredentialControllerInterface,
@@ -83,6 +89,8 @@ harden(normalizeMaterial);
  */
 const makeGitCredentialController = record =>
   makeExo('GitCredentialController', GitCredentialControllerInterface, {
+    help: makeHelp(gitCredentialControllerHelp),
+
     async inspect() {
       return harden({
         kind: record.kind,
@@ -221,6 +229,7 @@ export const makeBearerCredential = ({
     audience() {
       return normalizedAudience;
     },
+    help: makeHelp(bearerCredentialHelp),
   });
   return registerCredential(credential, {
     kind: 'bearer',
@@ -286,6 +295,7 @@ export const makeBasicCredential = ({
     audience() {
       return normalizedAudience;
     },
+    help: makeHelp(basicCredentialHelp),
   });
   return registerCredential(credential, {
     kind: 'basic',
@@ -346,6 +356,9 @@ export const makeUnavailableGitCredential = ({
       audience() {
         return normalizedAudience;
       },
+      help: makeHelp(
+        kind === 'bearer' ? bearerCredentialHelp : basicCredentialHelp,
+      ),
     },
   );
   /** @type {GitCredentialMaterial} */

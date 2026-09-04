@@ -285,13 +285,7 @@ export type Language = LiteralUnion<BuiltinLanguage, string>;
  * Languages natively recognized by `compartment-mapper`
  */
 export type BuiltinLanguage =
-  | 'mjs'
-  | 'cjs'
-  | 'json'
-  | 'bytes'
-  | 'text'
-  | 'pre-mjs-json'
-  | 'pre-cjs-json';
+  'mjs' | 'cjs' | 'json' | 'bytes' | 'text' | 'pre-mjs-json' | 'pre-cjs-json';
 
 /**
  * Mapping of file extension to {@link Language Languages}.

@@ -1,7 +1,6 @@
 {
   "name": "@endo/agent-tools",
   "version": "0.0.1",
-  "private": true,
   "description": "Provider-independent agent tool catalog for Endo, including capability-scoped filesystem tools backed by an @endo/platform/fs/extended Filesystem",
   "keywords": [],
   "author": "Endo contributors",
@@ -15,78 +14,143 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "types": "./types-index.d.ts",
+  "types": "./types-index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./types-index.js"
     },
     "./pi": {
-      "types": "./pi.d.ts",
-      "default": "./src/pi.js"
+      "types": "./pi.types.d.ts",
+      "default": "./src/adapters/pi.js"
     },
     "./tool.js": {
-      "types": "./tool.d.ts",
+      "types": "./tool.types.d.ts",
       "default": "./src/tool.js"
     },
-    "./src/pi.js": {
-      "types": "./src/pi.d.ts",
-      "default": "./src/pi.js"
+    "./workspace.js": {
+      "types": "./workspace.types.d.ts",
+      "default": "./src/workspace.js"
     },
-    "./git-tool.js": {
-      "types": "./git-tool.d.ts",
-      "default": "./src/git-tool.js"
+    "./json-tools/git.js": {
+      "types": "./json-tools/git.types.d.ts",
+      "default": "./src/json-tools/git.js"
     },
-    "./git-mount-tool.js": {
-      "types": "./git-mount-tool.d.ts",
-      "default": "./src/git-mount-tool.js"
+    "./json-tools/git-mount.js": {
+      "types": "./json-tools/git-mount.types.d.ts",
+      "default": "./src/json-tools/git-mount.js"
     },
-    "./shell-tool.js": {
-      "types": "./shell-tool.d.ts",
-      "default": "./src/shell-tool.js"
+    "./json-tools/git-remote.js": {
+      "types": "./json-tools/git-remote.types.d.ts",
+      "default": "./src/json-tools/git-remote.js"
     },
-    "./mount-fs.js": {
-      "types": "./mount-fs.d.ts",
-      "default": "./src/mount-fs.js"
+    "./json-tools/fs.js": {
+      "types": "./json-tools/fs.types.d.ts",
+      "default": "./src/json-tools/fs.js"
     },
-    "./src/index.js": {
-      "types": "./src/index.d.ts",
-      "default": "./src/index.js"
+    "./json-tools/shell.js": {
+      "types": "./json-tools/shell.types.d.ts",
+      "default": "./src/json-tools/shell.js"
     },
-    "./src/tool.js": {
-      "types": "./src/tool.d.ts",
-      "default": "./src/tool.js"
+    "./json-tools/http.js": {
+      "types": "./json-tools/http.types.d.ts",
+      "default": "./src/json-tools/http.js"
     },
-    "./src/git-tool.js": {
-      "types": "./src/git-tool.d.ts",
-      "default": "./src/git-tool.js"
+    "./code-mode/evaluate-tool.js": {
+      "types": "./code-mode/evaluate-tool.types.d.ts",
+      "default": "./src/code-mode/evaluate-tool.js"
     },
-    "./src/git-mount-tool.js": {
-      "types": "./src/git-mount-tool.d.ts",
-      "default": "./src/git-mount-tool.js"
+    "./code-mode/compartment.js": {
+      "types": "./src/code-mode/compartment.js",
+      "default": "./src/code-mode/compartment.js"
     },
-    "./src/shell-tool.js": {
-      "types": "./src/shell-tool.d.ts",
-      "default": "./src/shell-tool.js"
+    "./code-mode/daemon.js": {
+      "types": "./src/code-mode/daemon.js",
+      "default": "./src/code-mode/daemon.js"
     },
-    "./src/mount-fs.js": {
-      "types": "./src/mount-fs.d.ts",
-      "default": "./src/mount-fs.js"
+    "./code-mode/declarations.js": {
+      "types": "./src/code-mode/declarations.js",
+      "default": "./src/code-mode/declarations.js"
+    },
+    "./code-mode-globals/git.js": {
+      "types": "./src/code-mode-globals/git.js",
+      "default": "./src/code-mode-globals/git.js"
+    },
+    "./code-mode-globals/fs.js": {
+      "types": "./src/code-mode-globals/fs.js",
+      "default": "./src/code-mode-globals/fs.js"
+    },
+    "./code-mode-globals/fs-seams.js": {
+      "types": "./src/code-mode-globals/fs-seams.js",
+      "default": "./src/code-mode-globals/fs-seams.js"
+    },
+    "./code-mode-globals/shell.js": {
+      "types": "./src/code-mode-globals/shell.js",
+      "default": "./src/code-mode-globals/shell.js"
+    },
+    "./code-mode-globals/http.js": {
+      "types": "./src/code-mode-globals/http.js",
+      "default": "./src/code-mode-globals/http.js"
+    },
+    "./code-mode-globals/git-remote.js": {
+      "types": "./src/code-mode-globals/git-remote.js",
+      "default": "./src/code-mode-globals/git-remote.js"
+    },
+    "./adapters/pi.js": {
+      "types": "./adapters/pi.types.d.ts",
+      "default": "./src/adapters/pi.js"
+    },
+    "./code-mode/types.js": {
+      "types": "./src/code-mode/types-index.types.d.ts",
+      "default": "./src/code-mode/types-index.js"
+    },
+    "./adapters/smallcaps.js": {
+      "types": "./src/adapters/smallcaps.js",
+      "default": "./src/adapters/smallcaps.js"
+    },
+    "./adapters/mcp.js": {
+      "types": "./src/adapters/mcp.js",
+      "default": "./src/adapters/mcp.js"
+    },
+    "./generated/code-mode-globals/git-declarations.js": {
+      "types": "./generated/code-mode-globals/git-declarations.js",
+      "default": "./generated/code-mode-globals/git-declarations.js"
+    },
+    "./generated/code-mode-globals/fs-declarations.js": {
+      "types": "./generated/code-mode-globals/fs-declarations.js",
+      "default": "./generated/code-mode-globals/fs-declarations.js"
+    },
+    "./generated/code-mode-globals/shell-declarations.js": {
+      "types": "./generated/code-mode-globals/shell-declarations.js",
+      "default": "./generated/code-mode-globals/shell-declarations.js"
+    },
+    "./generated/code-mode-globals/http-declarations.js": {
+      "types": "./generated/code-mode-globals/http-declarations.js",
+      "default": "./generated/code-mode-globals/http-declarations.js"
+    },
+    "./generated/code-mode-globals/git-remote-declarations.js": {
+      "types": "./generated/code-mode-globals/git-remote-declarations.js",
+      "default": "./generated/code-mode-globals/git-remote-declarations.js"
     },
     "./types-index.js": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./types-index.js"
     },
     "./package.json": "./package.json"
   },
   "scripts": {
     "build": "exit 0",
+    "gen:code-mode-types": "node scripts/gen-code-mode-types.js",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
+    "test:types": "tsc --project tsconfig.test-types.json",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
     "lint:types": "tsc"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "ava": {
     "files": [
@@ -97,27 +161,32 @@
   "dependencies": {
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-git": "workspace:^",
+    "@endo/exo-http-client": "workspace:^",
     "@endo/exo-shell": "workspace:^",
     "@endo/far": "workspace:^",
+    "@endo/marshal": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^"
   },
   "devDependencies": {
-    "@earendil-works/pi-agent-core": "^0.79.0",
-    "@earendil-works/pi-ai": "^0.79.0",
+    "@earendil-works/pi-agent-core": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.84.2",
     "@endo/daemon": "workspace:^",
     "@endo/git": "workspace:^",
+    "@endo/host-spawner": "workspace:^",
     "@endo/init": "workspace:^",
-    "@endo/pass-style": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
     "ajv": "^8.17.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
   },
   "peerDependencies": {
-    "@earendil-works/pi-agent-core": "^0.79.0",
-    "@earendil-works/pi-ai": "^0.79.0"
+    "@earendil-works/pi-agent-core": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.84.2"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-agent-core": {
@@ -126,10 +195,5 @@
     "@earendil-works/pi-ai": {
       "optional": true
     }
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   }
 }

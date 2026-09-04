@@ -15,6 +15,17 @@ const HelpMethod = M.call().optional(M.string()).returns(M.string());
 const NamePathShape = M.arrayOf(M.string());
 const NameOrPathShape = M.or(M.string(), M.arrayOf(M.string()));
 
+// PathEntry is the portable descriptor for an authority-bearing path selector.
+// It is intentionally inert: holders can inspect the confined segments and
+// derive child selectors, but actual filesystem authority stays on the mount,
+// directory, or Git capability that accepts the entry.
+export const pathEntryMethodGuards = harden({
+  help: HelpMethod,
+  segments: M.call().returns(NamePathShape),
+  displayPath: M.call().returns(M.string()),
+  child: M.call(M.string()).returns(M.remotable('PathEntry')),
+});
+
 // `readableBlobMethodGuards` is the shared read-surface for immutable bytes.
 // `SnapshotBlob` adds `sha256`; `File` adds the write surface. Exported so the
 // extended cap-FS engine and the daemon blob caps can spread one definition
@@ -41,10 +52,10 @@ export const readableTreeMethodGuards = harden({
 // `readableNameHubMethodGuards` is the read surface of a *mutable* name hub /
 // directory: the readable-tree read methods plus `maybeLookup`
 // (lookup-or-undefined). It is the portable contract that the daemon's
-// `EndoDirectory` / `EndoGuest` / `EndoHost` / `EndoMount` and genie's
+// `EndoDirectory` / `EndoGuest` / `EndoHost` / `EndoMount` and an agent host's
 // `LocalMount` all satisfy by method name (the daemon's full registry hub adds
 // locator/identifier methods on top, which stay daemon-side). Lives here, not
-// in `@endo/daemon`, so non-daemon hosts (genie, a browser/Go/Rust client) can
+// in `@endo/daemon`, so non-daemon hosts (a browser/Go/Rust client) can
 // consume it without depending on the daemon. See
 // designs/fs-interface-consolidation.md § C1.
 export const readableNameHubMethodGuards = harden({
@@ -54,7 +65,7 @@ export const readableNameHubMethodGuards = harden({
 
 // `directoryFileMethodGuards` is the live read/write surface a directory or
 // mount adds on top of the read contract: directory creation plus text I/O.
-// Shared by `EndoDirectory` / `EndoGuest` / `EndoHost` and genie's `LocalMount`
+// Shared by `EndoDirectory` / `EndoGuest` / `EndoHost` and an agent host's `LocalMount`
 // (all on `NameOrPathShape`); `EndoMount` widens these to its entry-accepting
 // shape in its own guard.
 export const directoryFileMethodGuards = harden({
@@ -90,6 +101,56 @@ export const rangeReadMethodGuards = harden({
   fetch: M.call(M.bigint(), M.bigint()).returns(M.any()),
 });
 
+// Whole-value range-read conveniences, layered on top of the streaming
+// `fetch` primitive. These consolidate the windowed-read features that
+// previously lived in the lal / fae agent toolkits into the
+// platform's own readable-blob surface (those toolkits are being retired in
+// favour of the platform). See designs/platform-range-and-tree-reads.md.
+//
+// - `rangeRead(offset, length) → Uint8Array` returns the raw bytes of the
+//   window `[offset, offset + length)`, clamped at EOF, in one round-trip —
+//   the ergonomic form (a plain byte array) distinct from `fetch`'s
+//   incremental `PassableBytesReader`. Offsets are `bigint` to match `fetch`
+//   (a blob may exceed `Number.MAX_SAFE_INTEGER` bytes).
+// - `rangeReadText(startLine, endLine) → string` decodes the blob as UTF-8
+//   and returns lines `[startLine, endLine)` (0-based, end-exclusive) joined
+//   with '\n'. Line indices are plain numbers (ordinary counts, not byte
+//   offsets). An `endLine` past the last line clamps to the end.
+//
+// Note: `stat` is deliberately **not** part of this surface — a whole-file
+// `stat` leaks host implementation details (mtime/atime/mode/inode) that are
+// germane to security; a caller that needs size uses `getInfo().size`.
+export const rangeReadConvenienceMethodGuards = harden({
+  rangeRead: M.call(M.bigint(), M.bigint()).returns(M.promise()),
+  rangeReadText: M.call(M.number(), M.number()).returns(M.promise()),
+});
+
+// `listTree(petNamePath, options?)` is the recursive counterpart to `list`:
+// where `list` yields only the immediate child names of the sub-path,
+// `listTree` walks the whole subtree in one round-trip and returns every
+// descendant as a `{ path: string[], type: 'file' | 'directory' }` record,
+// lexically sorted, parents before children. It consolidates the
+// recursive-list feature of the lal / fae toolkits. The record omits
+// size and any host stat fields for the same security reason `stat` is
+// omitted from the blob surface — `type` is structural, not an
+// implementation-detail leak. See designs/platform-range-and-tree-reads.md.
+//
+// The query takes a `PetNamePath` (a single `string` name or a `string[]`
+// path — the same shape `lookup` accepts; `[]` names the whole tree) rather
+// than a rest argument, leaving the second parameter free for an options bag.
+// `options.ignore` **augments** (does not replace) the tree's own ignore set
+// for this one call, so a caller can hide additional names at the read site
+// without the surface baking in an arbitrary default list.
+const listTreeOptionsShape = M.splitRecord(
+  {},
+  { ignore: M.arrayOf(M.string()) },
+);
+export const recursiveListMethodGuards = harden({
+  listTree: M.call(NameOrPathShape)
+    .optional(listTreeOptionsShape)
+    .returns(M.promise()),
+});
+
 export const ReadableBlobInterface = M.interface('ReadableBlob', {
   ...readableBlobMethodGuards,
 });
@@ -109,6 +170,24 @@ export const ReadableBlobRangeInterface = M.interface('ReadableBlobRange', {
 });
 harden(ReadableBlobRangeInterface);
 
+// A `ReadableBlobRange` that also carries the whole-value range
+// conveniences (`rangeRead` / `rangeReadText`). This is the full read
+// surface the platform's own `LocalBlob` implements; the daemon / git blob
+// exos keep the leaner `ReadableBlobRangeInterface` until they adopt the
+// conveniences (a documented follow-up in
+// designs/platform-range-and-tree-reads.md). The interface tag is distinct
+// so the shapes don't collide in diagnostics; feature detection keys on
+// method names, not the tag.
+export const ReadableBlobRangeReadInterface = M.interface(
+  'ReadableBlobRangeRead',
+  {
+    ...readableBlobMethodGuards,
+    ...rangeReadMethodGuards,
+    ...rangeReadConvenienceMethodGuards,
+  },
+);
+harden(ReadableBlobRangeReadInterface);
+
 export const SnapshotBlobInterface = M.interface('SnapshotBlob', {
   ...readableBlobMethodGuards,
   ...getInfoMethodGuard,
@@ -116,8 +195,16 @@ export const SnapshotBlobInterface = M.interface('SnapshotBlob', {
 });
 harden(SnapshotBlobInterface);
 
+// A tree implies recursion, so the recursive `listTree` lives on the plain
+// `ReadableTreeInterface` rather than a separate "recursive tree" variant.
+// This is the read surface the platform's own `LocalTree` implements. Because
+// `listTree` is spread here — not into the shared `readableTreeMethodGuards`
+// — the daemon / git / mount tree exos (which carry their own separately
+// tagged tree interfaces) are unaffected; adopting `listTree` there is a
+// documented follow-up in designs/platform-range-and-tree-reads.md.
 export const ReadableTreeInterface = M.interface('ReadableTree', {
   ...readableTreeMethodGuards,
+  ...recursiveListMethodGuards,
 });
 harden(ReadableTreeInterface);
 
@@ -127,6 +214,22 @@ export const SnapshotTreeInterface = M.interface('SnapshotTree', {
   sha256: M.call().returns(M.string()),
 });
 harden(SnapshotTreeInterface);
+
+export const PathEntryInterface = M.interface('PathEntry', {
+  ...pathEntryMethodGuards,
+});
+harden(PathEntryInterface);
+
+export const pathEntryIssuerMethodGuards = harden({
+  entry: M.call(M.or(M.string(), M.arrayOf(M.string()))).returns(
+    M.remotable('PathEntry'),
+  ),
+});
+
+export const PathEntryIssuerInterface = M.interface('PathEntryIssuer', {
+  ...pathEntryIssuerMethodGuards,
+});
+harden(PathEntryIssuerInterface);
 
 export const TreeWriterInterface = M.interface('TreeWriter', {
   help: HelpMethod,

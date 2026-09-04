@@ -1,6 +1,6 @@
 // @ts-check
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
 import { BufferReader } from './buffer-reader.js';
 
@@ -64,7 +64,7 @@ function readBoolean(bufferReader, name) {
 /** @typedef {{type: 'float64', value: number}} ReadTypeFloat64Result */
 // Number-prefixed types, value is read
 /** @typedef {{type: 'integer', value: bigint}} ReadTypeIntegerResult */
-/** @typedef {{type: 'bytestring', value: ArrayBufferLike}} ReadTypeBytestringResult */
+/** @typedef {{type: 'bytestring', value: Uint8Array}} ReadTypeBytestringResult */
 /** @typedef {{type: 'string', value: string}} ReadTypeStringResult */
 /** @typedef {{type: 'selector', value: string}} ReadTypeSelectorResult */
 /** @typedef {ReadTypeBooleanResult | ReadTypeFloat64Result | ReadTypeIntegerResult | ReadTypeBytestringResult | ReadTypeStringResult | ReadTypeSelectorResult} ReadTypeAtomResult */
@@ -134,7 +134,7 @@ function readTypeAndMaybeValue(bufferReader, name) {
     const number = Number.parseInt(numberString, 10);
     const valueBytes = bufferReader.read(number);
     // Convert Uint8Array to immutable ArrayBuffer
-    const arrayBuffer = bytesToImmutable(valueBytes);
+    const arrayBuffer = frozenBytes(valueBytes);
     return { type: 'bytestring', value: arrayBuffer };
   }
   if (typeByte === STRING_START) {
@@ -201,7 +201,7 @@ function readSelectorAsString(bufferReader, name) {
 /**
  * @param {BufferReader} bufferReader
  * @param {string} name
- * @returns {ArrayBufferLike}
+ * @returns {Uint8Array}
  */
 function readBytestring(bufferReader, name) {
   return readAndAssertType(bufferReader, 'bytestring', name);
@@ -210,7 +210,7 @@ function readBytestring(bufferReader, name) {
 /**
  * @param {BufferReader} bufferReader
  * @param {string} name
- * @returns {{value: string, type: 'selector'} | {value: ArrayBufferLike, type: 'bytestring'} | {value: string, type: 'string'}}
+ * @returns {{value: string, type: 'selector'} | {value: Uint8Array, type: 'bytestring'} | {value: string, type: 'string'}}
  * see https://github.com/ocapn/syrup/issues/22
  */
 function readRecordLabel(bufferReader, name) {
@@ -385,7 +385,7 @@ export class SyrupReader {
   }
 
   /**
-   * @returns {{value: string, type: 'selector'} | {value: ArrayBufferLike, type: 'bytestring'} | {value: string, type: 'string'}}
+   * @returns {{value: string, type: 'selector'} | {value: Uint8Array, type: 'bytestring'} | {value: string, type: 'string'}}
    */
   readRecordLabel() {
     return readRecordLabel(this.bufferReader, this.name);
@@ -474,7 +474,7 @@ export class SyrupReader {
   }
 
   /**
-   * @returns {ArrayBufferLike}
+   * @returns {Uint8Array}
    */
   readBytestring() {
     return readBytestring(this.bufferReader, this.name);

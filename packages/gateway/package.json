@@ -24,10 +24,10 @@
   "type": "module",
   "main": "./index.js",
   "module": "./index.js",
-  "types": "./types.d.ts",
+  "types": "./index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types.d.ts",
+      "types": "./index.types.d.ts",
       "default": "./index.js"
     },
     "./src/config.js": "./src/config.js",
@@ -55,7 +55,7 @@
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
-    "@types/node": "^25.2.3",
+    "@types/node": "^26.2.0",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
@@ -74,11 +74,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [

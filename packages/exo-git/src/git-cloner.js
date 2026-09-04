@@ -2,7 +2,11 @@
 /// <reference types="ses"/>
 
 /**
- * @import { GitRemote, GitRemoteEndpoint } from './types.js'
+ * @import {
+ *   GitRemote,
+ *   GitRemoteCredential,
+ *   GitRemoteEndpoint,
+ * } from './types.js'
  */
 
 /**
@@ -27,9 +31,9 @@
  *
  * @param {object} args
  * @param {GitRemoteEndpoint} args.endpoint  The reusable remote authority.
- * @param {(input: { url: string, destPath: string, allowLocalFileTransport: boolean, credential?: { kind: string, material: unknown }, signal?: AbortSignal }) => Promise<unknown>} args.clone
+ * @param {(input: { url: string, destPath: string, allowLocalFileTransport: boolean, credential?: GitRemoteCredential, signal?: AbortSignal }) => Promise<unknown>} args.clone
  *   Native constructive clone into `destPath` from the endpoint URL.
- * @param {(input: { destMount: object, destPath: string }) => Promise<object>} args.makeGit
+ * @param {(powers: { destMount: object, destPath: string }, opts?: object) => Promise<object>} args.makeGit
  *   Build a writable `Git` over the freshly-cloned destination.
  * @param {(input: { git: object, endpoint: GitRemoteEndpoint }) => Promise<GitRemote>} args.makeRemote
  *   Bind `origin` as a `GitRemote` over endpoint x the new `Git`.
@@ -96,7 +100,7 @@ export const makeGitCloner = ({ endpoint, clone, makeGit, makeRemote }) => {
       }
       endpoint.assertCredentialUnchanged('clone', credentialVersion);
       // The destination is now a worktree; derive its `Git`.
-      const git = await makeGit({ destMount, destPath });
+      const git = await makeGit({ destMount, destPath }, {});
       endpoint.assertCredentialUnchanged('clone', credentialVersion);
       // Compose: endpoint x Git -> origin-pre-bound `GitRemote`.
       const remote = await makeRemote({ git, endpoint });

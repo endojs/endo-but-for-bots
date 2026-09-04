@@ -1,5 +1,5 @@
 // TODO parameterize MatchHelper which will solve most of them
-/* eslint-disable no-continue */
+
 import harden from '@endo/harden';
 import {
   q,
@@ -1311,7 +1311,7 @@ const makePatternKit = () => {
       // prettier-ignore
       return (
         confirmKind(specimen, 'byteArray', reject) &&
-        (/** @type {ArrayBuffer} */ (specimen).byteLength <= byteLengthLimit ||
+        (/** @type {Uint8Array} */ (specimen).byteLength <= byteLengthLimit ||
           reject && reject`byteArray ${specimen} must not be bigger than ${byteLengthLimit}`)
       );
     },
@@ -1624,7 +1624,6 @@ const makePatternKit = () => {
       );
       return (
         confirmKind(specimen, 'copyMap', reject) &&
-        // eslint-disable-next-line @endo/restrict-comparison-operands
         (specimenMap.payload.keys.length <= numMapEntriesLimit ||
           (reject &&
             reject`CopyMap must have no more than ${q(

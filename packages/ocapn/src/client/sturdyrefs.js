@@ -1,3 +1,4 @@
+// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term used package-wide.
 // @ts-check
 
 /**
@@ -6,9 +7,15 @@
  */
 
 import harden from '@endo/harden';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 import { E } from '@endo/eventual-send';
 import { makeTagged } from '@endo/pass-style';
-import { encodeSwissnum, swissnumFromBytes } from './util.js';
+import {
+  decodeSwissnum,
+  encodeSwissnum,
+  swissnumFromBytes,
+  swissnumToBytes,
+} from './util.js';
 
 /**
  * @import { CopyTagged } from '@endo/pass-style'
@@ -36,6 +43,21 @@ export const isSturdyRef = value => sturdyRefDetails.has(value);
 
 /** @param {SturdyRef} sturdyRef */
 export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
+
+/**
+ * Mint a `SturdyRef` value for `(location, secret)`. Sturdyrefs are
+ * opaque pointers: user space passes them around as plain values and
+ * only the OCapN layer (via `getSturdyRefDetails`) can see inside.
+ *
+ * @param {OcapnLocation} location
+ * @param {string | Uint8Array} secret
+ * @returns {SturdyRef}
+ */
+export const makeSturdyRef = (location, secret) => {
+  const sturdyRef = makeTagged('ocapn-sturdyref', undefined);
+  sturdyRefDetails.set(sturdyRef, { location, secret });
+  return harden(sturdyRef);
+};
 
 /**
  * Resolve a `SturdyRef` to an actual reference: local values come from
@@ -80,13 +102,13 @@ export const enlivenSturdyRef = async (
     typeof secret === 'string'
       ? encodeSwissnum(secret)
       : swissnumFromBytes(secret);
-  return E(/** @type {any} */ (ocapn.getRemoteBootstrap())).fetch(wireSecret);
+  return E(ocapn.getRemoteBootstrap()).fetch(wireSecret);
 };
 
 /**
  * @typedef {object} SturdyRefTracker
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
- * @property {(secretBytes: ArrayBufferLike) => Promise<any | undefined>} lookup
+ * @property {(secretBytes: Uint8Array) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
  *   ASCII-decoded string (for printable secrets) or the raw bytes (for
@@ -98,29 +120,22 @@ export const enlivenSturdyRef = async (
  * @returns {SturdyRefTracker}
  */
 export const makeSturdyRefTracker = locator => {
-  const textDecoder = new TextDecoder('ascii', { fatal: true });
   return harden({
-    makeSturdyRef: (location, secret) => {
-      const sturdyRef = makeTagged('ocapn-sturdyref', undefined);
-      sturdyRefDetails.set(sturdyRef, { location, secret });
-      return harden(sturdyRef);
-    },
+    makeSturdyRef: (location, secret) => makeSturdyRef(location, secret),
     lookup: async secretBytes => {
-      const view =
-        secretBytes instanceof Uint8Array
-          ? secretBytes
-          : new Uint8Array(/** @type {ArrayBuffer} */ (secretBytes.slice()));
+      const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
       // Try ASCII decoding first so locators keyed by friendly string
       // names continue to match. If the bytes aren't valid ASCII (e.g.
       // a Spritely-style random 24-byte secret), fall back to passing
       // the raw bytes through; locators that index by bytes can match
       // those, locators that don't will simply return undefined.
+      let secret;
       try {
-        const secret = textDecoder.decode(view);
-        return locator.get(secret);
+        secret = decodeSwissnum(swissNum);
       } catch {
-        return locator.get(view);
+        return locator.get(swissnumToBytes(swissNum));
       }
+      return locator.get(secret);
     },
   });
 };

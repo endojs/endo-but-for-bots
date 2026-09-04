@@ -25,7 +25,7 @@ import {
 } from './_subpath-patterns-assertions.js';
 
 const fixture = new URL(
-  'fixtures-package-imports-exports/node_modules/app/main.js',
+  'fixtures-package-imports-exports/node_modules/app/assert-main.js',
   import.meta.url,
 ).toString();
 

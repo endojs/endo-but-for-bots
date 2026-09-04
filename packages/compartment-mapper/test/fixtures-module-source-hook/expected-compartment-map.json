@@ -1,0 +1,32 @@
+{
+  "compartments": {
+    "app-implicit": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "emulatedHooks": {
+    "exitModuleImports": [
+      "dependency-b"
+    ],
+    "moduleSources": [
+      {
+        "origin": "file",
+        "specifier": "./index.js"
+      },
+      {
+        "origin": "synthetic",
+        "specifier": "dependency-b"
+      }
+    ]
+  },
+  "entry": "node_modules/app-implicit/index.js",
+  "entryCompartment": "app-implicit",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-module-source-hook",
+  "oracle": "node",
+  "projection": "archive-host-hooks"
+}

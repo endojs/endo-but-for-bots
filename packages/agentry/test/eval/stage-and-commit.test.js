@@ -12,13 +12,14 @@ import {
   registerFauxProvider,
   fauxAssistantMessage,
   fauxToolCall,
-} from '@earendil-works/pi-ai';
+} from '@earendil-works/pi-ai/compat';
 
 import {
   makeRunMetricsRecorder,
-  makeStageAndCommitScenario,
   runGitScenario,
 } from '../../src/eval/index.js';
+import { makeStageAndCommitScenario } from '../../src/eval/scenarios/stage-and-commit/index.js';
+import { stageAndCommitSource } from '../../src/eval/scenarios/stage-and-commit/reference.js';
 import { readText } from '../_eval-fixture.js';
 import { provisionStageAndCommitRepo } from './_stage-and-commit-repo.js';
 
@@ -85,28 +86,6 @@ const fauxModel = (t, responses) => {
 };
 
 /**
- * Source the faux model "writes" into a single execute call: find the target
- * path's status row, stage it, and commit with `message`. This is the reference
- * solution a competent code-mode agent would converge on; the live eval scores
- * a real model against the same outcome.
- *
- * @param {string} filePath
- * @param {string} message
- * @returns {string}
- */
-const stageAndCommitSource = (filePath, message) => `\
-(async () => {
-  const rows = await E(git).status();
-  const row = rows.find(candidate => candidate.path === ${JSON.stringify(filePath)});
-  if (row === undefined) {
-    throw new Error('target path not found in git status');
-  }
-  await E(git).add([row.entry]);
-  const commit = await E(git).commit(${JSON.stringify(message)});
-  return commit.summary;
-})()`;
-
-/**
  * A faux-model source that overwrites the target path with the WRONG bytes
  * before staging and committing it with the RIGHT message. The working tree's
  * `wrongContent` replaces the fixture's correct content, so the commit lands the
@@ -125,14 +104,14 @@ const stageWrongContentAndCommitSource = (filePath, wrongContent, message) => `\
   await E(root).write(${JSON.stringify(filePath)}, ${JSON.stringify(
     wrongContent,
   )});
-  const rows = await E(git).status();
-  const row = rows.find(candidate => candidate.path === ${JSON.stringify(
+  const status = await E(git).status();
+  const row = status.entries.find(candidate => candidate.path === ${JSON.stringify(
     filePath,
   )});
   if (row === undefined) {
     throw new Error('target path not found in git status');
   }
-  await E(git).add([row.entry]);
+  await E(git).add([row.path]);
   const commit = await E(git).commit(${JSON.stringify(message)});
   return commit.summary;
 })()`;
@@ -142,9 +121,9 @@ const stageWrongContentAndCommitSource = (filePath, wrongContent, message) => `\
  * @param {string} source
  * @returns {Model<string>}
  */
-const executeOnceModel = (t, source) =>
+const evaluateOnceModel = (t, source) =>
   fauxModel(t, [
-    fauxAssistantMessage(fauxToolCall('execute', { source }), {
+    fauxAssistantMessage(fauxToolCall('evaluate', { source }), {
       stopReason: 'toolUse',
     }),
     fauxAssistantMessage('done'),
@@ -183,14 +162,14 @@ test('run metrics recorder sums assistant usage and tool errors', t => {
   recorder.listener({
     type: 'tool_execution_end',
     toolCallId: 'call-1',
-    toolName: 'execute',
+    toolName: 'evaluate',
     result: {},
     isError: false,
   });
   recorder.listener({
     type: 'tool_execution_end',
     toolCallId: 'call-2',
-    toolName: 'execute',
+    toolName: 'evaluate',
     result: {},
     isError: true,
   });
@@ -219,10 +198,12 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
     path: scenario.expected.path,
     content: scenario.expected.content,
   });
-  const model = executeOnceModel(
+  const model = evaluateOnceModel(
     t,
     stageAndCommitSource(scenario.expected.path, scenario.expected.message),
   );
+  /** @type {string[]} */
+  const events = [];
 
   const { outcome, metrics } = await runGitScenario({
     model,
@@ -230,6 +211,9 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
     git,
     scenario,
     readText,
+    onEvent: event => {
+      events.push(event.type);
+    },
   });
 
   t.true(
@@ -260,6 +244,9 @@ test('outcome assertion passes when the scripted run reaches the target end-stat
       metrics.usage.cacheWrite,
   );
   t.true(metrics.wallTimeMs >= 0);
+  t.true(events.includes('agent_start'));
+  t.true(events.includes('tool_execution_start'));
+  t.true(events.includes('agent_end'));
 });
 
 test('outcome assertion fails the commit-message check when the wrong message is used', async t => {
@@ -269,7 +256,7 @@ test('outcome assertion fails the commit-message check when the wrong message is
     content: scenario.expected.content,
   });
   // The run stages and commits the right file with the WRONG message.
-  const model = executeOnceModel(
+  const model = evaluateOnceModel(
     t,
     stageAndCommitSource(scenario.expected.path, 'chore: wrong message'),
   );
@@ -303,7 +290,7 @@ test('outcome assertion fails the file-content check when the wrong content is c
   // `file-content` check: the file is tracked at HEAD and the message matches,
   // but the committed content differs from the target.
   const wrongContent = `${scenario.expected.content}DIVERGED\n`;
-  const model = executeOnceModel(
+  const model = evaluateOnceModel(
     t,
     stageWrongContentAndCommitSource(
       scenario.expected.path,
@@ -338,7 +325,7 @@ test('outcome assertion fails when the agent never commits the file', async t =>
     path: scenario.expected.path,
     content: scenario.expected.content,
   });
-  // The model answers in prose without ever calling execute: the working tree
+  // The model answers in prose without ever calling evaluate: the working tree
   // is untouched, so the target file stays untracked.
   const model = fauxModel(t, [
     fauxAssistantMessage('I will not touch the repo.'),

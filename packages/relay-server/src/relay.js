@@ -1,7 +1,7 @@
 // @ts-check
 /* global clearInterval, clearTimeout, setInterval, setTimeout */
 import crypto from 'node:crypto';
-import { ed25519 } from '@noble/curves/ed25519';
+import { ed25519 } from '@noble/curves/ed25519.js';
 import {
   MSG_HELLO,
   MSG_RESPONSE,

@@ -64,7 +64,7 @@ test('try disconnecting captp', async t => {
   await Promise.all(ps);
 });
 
-test('try aborting captp with reason', async t => {
+test('one-argument onReject observes an abort reason once', async t => {
   const objs = [];
   const rejected = [];
   const { getBootstrap, abort } = makeCapTP(
@@ -124,4 +124,82 @@ test('try aborting captp with reason', async t => {
   );
   await Promise.all(ps);
   t.deepEqual(rejected, [aborted.reason], 'error disconnect');
+});
+
+test('graceful shutdown does not report an exception', async t => {
+  const objs = [];
+  const rejected = [];
+  const { getBootstrap, shutdown } = makeCapTP(
+    'us',
+    obj => objs.push(obj),
+    Far('test hello', {
+      method() {
+        return 'hello';
+      },
+    }),
+    {
+      onReject(e) {
+        rejected.push(e);
+      },
+    },
+  );
+  const bs = getBootstrap();
+  const ps = [];
+  ps.push(
+    t.throwsAsync(
+      E(bs).method(),
+      { message: 'session closed' },
+      'rejected method with the shutdown reason',
+    ),
+  );
+  const reason = Error('session closed');
+  shutdown(reason);
+  await t.throwsAsync(
+    getBootstrap(),
+    { message: 'session closed' },
+    'rejected bootstrap after shutdown',
+  );
+  t.deepEqual(
+    objs,
+    [
+      { type: 'CTP_BOOTSTRAP', questionID: 'q-1', epoch: 0 },
+      { type: 'CTP_DISCONNECT', reason, epoch: 0, graceful: true },
+    ],
+    'expected graceful disconnect on the wire',
+  );
+  await Promise.all(ps);
+  t.deepEqual(rejected, [], 'no exception reported for a graceful shutdown');
+});
+
+test('receiving a graceful disconnect does not report an exception', async t => {
+  const rejected = [];
+  const { dispatch, getBootstrap } = makeCapTP('us', () => {}, undefined, {
+    onReject(e) {
+      rejected.push(e);
+    },
+  });
+  const reason = Error('peer went home');
+  dispatch({ type: 'CTP_DISCONNECT', epoch: 0, reason, graceful: true });
+  await t.throwsAsync(
+    getBootstrap(),
+    { message: 'peer went home' },
+    'rejected bootstrap after peer shutdown',
+  );
+  t.deepEqual(rejected, [], 'no exception reported for a peer shutdown');
+});
+
+test('only boolean true marks a graceful disconnect', async t => {
+  const rejected = [];
+  const { dispatch } = makeCapTP('us', () => {}, undefined, {
+    onReject(e) {
+      rejected.push(e);
+    },
+  });
+  const reason = Error('peer failed');
+  dispatch({ type: 'CTP_DISCONNECT', epoch: 0, reason, graceful: 'true' });
+  t.deepEqual(
+    rejected,
+    [reason],
+    'a non-boolean marker does not suppress the exception',
+  );
 });

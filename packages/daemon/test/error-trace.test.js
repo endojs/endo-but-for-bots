@@ -1,5 +1,4 @@
 // @ts-check
-/* global process */
 
 // Use the ses-ava test wrapper so that a failing assertion surfaces the
 // unredacted error info (stack, cause chain, hidden notes) through the
@@ -14,7 +13,7 @@ import { E } from '@endo/eventual-send';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { start, stop, purge, makeEndoClient } from '../index.js';
-import { makeCryptoPowers } from '../src/daemon-node-powers.js';
+import { makeCryptoPowers } from '../src/manager-node-powers.js';
 
 const cryptoPowers = makeCryptoPowers(crypto);
 
@@ -110,9 +109,10 @@ test.beforeEach(t => {
 });
 
 test.afterEach.always(async t => {
-  const ctxList = /** @type {Array<{ cancel: (e: Error) => void,
-   *                                  cancelled: Promise<unknown>,
-   *                                  config: any }>} */ (t.context);
+  const ctxList =
+    /** @type {Array<{ cancel: (e: Error) => void,
+     *                                  cancelled: Promise<unknown>,
+     *                                  config: any }>} */ (t.context);
   for (const { config } of ctxList) {
     // eslint-disable-next-line no-await-in-loop
     await stop(config).catch(() => {});

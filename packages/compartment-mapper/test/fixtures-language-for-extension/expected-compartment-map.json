@@ -1,0 +1,19 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./module.xsonp": {
+          "language": "jsonp"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/module-app/module.xsonp",
+  "entryCompartment": "app",
+  "entryModule": "./module.xsonp",
+  "fixture": "fixtures-language-for-extension",
+  "languageForExtension": {
+    "xsonp": "jsonp"
+  },
+  "oracle": "node"
+}

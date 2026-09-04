@@ -10,7 +10,6 @@ import { makeMockPowers } from '../helpers/mock-powers.js';
 import {
   createDOM,
   createInputElements,
-  tick,
   waitFor,
 } from '../helpers/dom-setup.js';
 
@@ -103,18 +102,18 @@ const setup = async (names = ['alice', 'bob', 'charlie']) => {
   testDocument.body.innerHTML = '';
   const { $input, $menu } = createInputElements(testDocument);
 
-  const { powers, addName, removeName } = makeMockPowers({ names });
+  const { powers } = makeMockPowers({ names });
 
   const api = tokenAutocompleteComponent($input, $menu, {
     E,
     iterateReader,
     powers,
+    // These tests exercise filtering and rendering, not the async inventory
+    // subscription.
+    // Supplying the fixture's known names avoids a fixed-delay race in the
+    // setup phase.
+    externalPetNames: names,
   });
-
-  // Let followNameChanges populate the pet names list. Kept as a fixed tick:
-  // the populated list has no observable signal until a token is typed, so there
-  // is nothing to poll for at setup time.
-  await tick(50);
 
   // Focus and set initial cursor
   $input.focus();
@@ -127,7 +126,7 @@ const setup = async (names = ['alice', 'bob', 'charlie']) => {
     sel.addRange(range);
   }
 
-  return { $input, $menu, api, addName, removeName };
+  return { $input, $menu, api };
 };
 
 // ── Menu visibility ──

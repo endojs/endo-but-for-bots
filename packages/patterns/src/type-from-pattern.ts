@@ -1,5 +1,4 @@
 /// <reference types="ses"/>
-/* eslint-disable no-use-before-define */
 
 import type {
   CopyArray,
@@ -61,7 +60,10 @@ type TFStructuralPattern<P> =
     : P extends readonly [infer H, ...infer T]
       ? [TypeFromPattern<H>, ...TFTuple<T>]
       : P extends CopyRecord<any>
-        ? Simplify<{ [K in keyof P]: TypeFromPattern<P[K]> }>
+        ? // Const type parameters preserve object literals as readonly, but
+          // TypeFromPattern describes matched values using the existing mutable
+          // record shape.
+          Simplify<{ -readonly [K in keyof P]: TypeFromPattern<P[K]> }>
         : P;
 
 // ===== Internal helpers =====
@@ -74,6 +76,41 @@ type TFTuple<T extends readonly any[]> = T extends readonly [
   ? [TypeFromPattern<H>, ...TFTuple<R>]
   : [];
 
+/** Detect `any` without also matching `unknown`. */
+type IsAny<T> = 0 extends 1 & T ? true : false;
+
+/** Keep the key portion of a pattern without leaving noisy intersections. */
+type KeyFromPattern<P> =
+  IsAny<P> extends true
+    ? Key
+    : IsAny<TypeFromPattern<P>> extends true
+      ? Key
+      : Key extends TypeFromPattern<P>
+        ? Key
+        : TypeFromPattern<P> extends Key
+          ? TypeFromPattern<P>
+          : Extract<TypeFromPattern<P>, Key>;
+
+/** Keep the string portion of a tag pattern without allowing `any` through. */
+type StringFromPattern<P> =
+  IsAny<P> extends true
+    ? string
+    : IsAny<TypeFromPattern<P>> extends true
+      ? string
+      : TypeFromPattern<P> extends string
+        ? TypeFromPattern<P>
+        : Extract<TypeFromPattern<P>, string>;
+
+/** Keep the passable portion of a pattern without noisy intersections. */
+type PassableFromPattern<P> =
+  IsAny<P> extends true
+    ? Passable
+    : IsAny<TypeFromPattern<P>> extends true
+      ? Passable
+      : TypeFromPattern<P> extends Passable
+        ? TypeFromPattern<P>
+        : TypeFromPattern<P> & Passable;
+
 /**
  * Leaf matcher lookup table.
  * These matcher types return their Payload type directly or a fixed type, with no
@@ -83,7 +120,7 @@ type TFTuple<T extends readonly any[]> = T extends readonly [
  */
 type TFLeafMap<Payload> = {
   any: Passable;
-  byteArray: ArrayBuffer;
+  byteArray: Uint8Array;
   string: Payload;
   number: Payload;
   bigint: Payload;
@@ -126,7 +163,7 @@ type TFKindMap = {
   bigint: bigint;
   string: string;
   symbol: symbol;
-  byteArray: ArrayBuffer; // TODO: update to Uint8Array when @endo/pass-style changes the byteArray type
+  byteArray: Uint8Array;
   copyRecord: CopyRecord;
   copyArray: CopyArray;
   copySet: CopySet;
@@ -168,18 +205,23 @@ type TFStructural<K extends string, Payload> = K extends 'kind'
           ? TFAnd<Payload>
           : Passable
         : K extends 'arrayOf'
-          ? Array<TypeFromPattern<Payload>>
+          ? IsAny<Payload> extends true
+            ? CopyArray
+            : CopyArray<PassableFromPattern<Payload>>
           : K extends 'recordOf'
-            ? Payload extends readonly [any, infer VP]
-              ? Record<string, TypeFromPattern<VP>>
-              : Record<string, any>
+            ? IsAny<Payload> extends true
+              ? CopyRecord
+              : Payload extends readonly [any, infer VP]
+                ? IsAny<VP> extends true
+                  ? CopyRecord
+                  : Record<string, TypeFromPattern<VP>>
+                : CopyRecord
             : K extends 'mapOf'
-              ? Payload extends readonly [infer KP, infer VP]
-                ? CopyMap<
-                    TypeFromPattern<KP> & Key,
-                    TypeFromPattern<VP> & Passable
-                  >
-                : CopyMap
+              ? IsAny<Payload> extends true
+                ? CopyMap
+                : Payload extends readonly [infer KP, infer VP]
+                  ? CopyMap<KeyFromPattern<KP>, PassableFromPattern<VP>>
+                  : CopyMap
               : K extends 'splitRecord'
                 ? Payload extends readonly [infer Req, infer Opt, infer Rest]
                   ? TFSplitRecord<Req, Opt, Rest>
@@ -193,14 +235,18 @@ type TFStructural<K extends string, Payload> = K extends 'kind'
                       ? TFSplitArray<Req, Opt>
                       : CopyArray
                   : K extends 'setOf'
-                    ? CopySet<TypeFromPattern<Payload> & Key>
+                    ? IsAny<Payload> extends true
+                      ? CopySet
+                      : CopySet<KeyFromPattern<Payload>>
                     : K extends 'bagOf'
-                      ? CopyBag<TypeFromPattern<Payload> & Key>
+                      ? IsAny<Payload> extends true
+                        ? CopyBag
+                        : CopyBag<KeyFromPattern<Payload>>
                       : K extends 'tagged'
                         ? Payload extends readonly [infer TP, infer PP]
                           ? CopyTagged<
-                              TypeFromPattern<TP> & string,
-                              TypeFromPattern<PP> & Passable
+                              StringFromPattern<TP>,
+                              PassableFromPattern<PP>
                             >
                           : CopyTagged
                         : K extends 'remotable'
@@ -233,13 +279,18 @@ type TFAnd<T extends readonly any[]> = T extends readonly [infer H, ...infer R]
       : TypeFromPattern<E>
     : unknown;
 
-/** Infer a split record: required fields + optional fields + rest (index signature). */
+/**
+ * Infer a split record: required fields + optional fields + rest (index
+ * signature).
+ * Const type parameters preserve object literals as readonly, but matched
+ * record values retain the existing mutable shape.
+ */
 type TFSplitRecord<Req, Opt, Rest = never> = Simplify<
   (Req extends CopyRecord<any>
-    ? { [K in keyof Req]: TypeFromPattern<Req[K]> }
+    ? { -readonly [K in keyof Req]: TypeFromPattern<Req[K]> }
     : {}) &
     (Opt extends CopyRecord<any>
-      ? { [K in keyof Opt]?: TypeFromPattern<Opt[K]> }
+      ? { -readonly [K in keyof Opt]?: TypeFromPattern<Opt[K]> }
       : {}) &
     // When the rest arg is the empty-record pattern `{}`
     // (i.e. "refuse unsupported options"), don't emit an index
@@ -283,12 +334,11 @@ type TFOptionalTuple<T extends readonly any[]> = {
  * - `M.remotable<typeof SomeInterfaceGuard>()`: the Payload carries the
  *   InterfaceGuard type. We resolve to the interface's methods with
  *   remotable branding, giving facet-isolated return types.
- * - `M.remotable<SomeTypedef>()` (or via a TypedPattern cast): the
- *   Payload is a concrete remotable type like `Brand`. Return it
- *   directly so guards using these shapes preserve the actual type.
- * - Unparameterized (`M.remotable()`): Payload defaults to `any` so
- *   the inferred type is compatible with any concrete remotable
- *   interface, matching `M.promise()`.
+ * - Other payloads, including unparameterized `M.remotable()`, resolve to
+ *   `any` so they remain compatible with any concrete remotable interface,
+ *   matching `M.promise()`.
+ *   Use `CastedPattern<T>` to claim a concrete non-InterfaceGuard remotable
+ *   type.
  */
 type TFRemotable<Payload> =
   Payload extends InterfaceGuard<infer MG>
@@ -342,7 +392,7 @@ type TypeFromReturnGuard<G> = G extends {
  * against pattern P. Two cases:
  *
  * - If P infers to an array type (e.g. `M.arrayOf(M.string())` →
- *   `string[]`), the rest type IS that array — don't wrap.
+ *   `CopyArray<string>`), the rest type IS that array — don't wrap.
  * - If P infers to a non-array (e.g. `M.any()` → `Passable`), each
  *   individual rest arg must match P, so the rest type is `P[]`.
  *
@@ -449,7 +499,7 @@ export declare const M: MatcherNamespace;
  * collision with the runtime `M` value.  Generic type parameters also named
  * `M` (e.g. `<M extends Methods>`) are locally scoped and do not conflict.
  */
-// eslint-disable-next-line @typescript-eslint/no-namespace, no-redeclare, import/export
+// eslint-disable-next-line no-redeclare, import/export
 export namespace M {
   /**
    * Infer the TypeScript type that a Pattern matches.

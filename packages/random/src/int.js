@@ -11,7 +11,7 @@ import {
   randomUint53,
 } from './uint.js';
 
-/** @import { RandomSource } from '../types.d.ts' */
+/** @import { RandomSource } from '../random-source.types.js' */
 
 /**
  * Returns a uniformly distributed integer in the closed interval

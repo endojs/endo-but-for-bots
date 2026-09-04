@@ -4,8 +4,6 @@
  * @module
  */
 
-/* eslint-disable no-use-before-define */
-
 import type { LiteralUnion, SomeObject } from './typescript.js';
 
 export type PackageNamingKit = {
@@ -21,8 +19,7 @@ export type Attenuator<
 > = {
   attenuateGlobals?: GlobalAttenuatorFn<GlobalParams> | undefined;
   attenuateModule?:
-    | ModuleAttenuatorFn<ModuleParams, SomeObject, SomeObject>
-    | undefined;
+    ModuleAttenuatorFn<ModuleParams, SomeObject, SomeObject> | undefined;
 };
 
 export type GlobalAttenuatorFn<

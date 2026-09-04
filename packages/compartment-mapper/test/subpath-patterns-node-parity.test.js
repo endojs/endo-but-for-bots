@@ -20,7 +20,7 @@ const fixtureBase = new URL(
 );
 
 test('subpath patterns - node parity', async t => {
-  const ns = await import(new URL('main.js', fixtureBase).href);
+  const ns = await import(new URL('assert-main.js', fixtureBase).href);
   assertMain(t, ns);
 });
 

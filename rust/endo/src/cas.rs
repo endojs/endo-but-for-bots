@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -47,7 +47,9 @@ impl ContentType {
 /// A tree manifest in the CAS — maps names to child entries.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TreeManifest {
-    pub entries: HashMap<String, TreeEntry>,
+    /// Entries are ordered so derived JSON serialization is canonical and a
+    /// tree's CAS hash depends only on its content, not randomized map order.
+    pub entries: BTreeMap<String, TreeEntry>,
 }
 
 /// A single entry in a CAS tree.
@@ -145,7 +147,10 @@ impl ContentStore {
     pub fn read_tree(&self, hash: &str) -> io::Result<TreeManifest> {
         let data = self.fetch(hash)?;
         serde_json::from_slice(&data).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, format!("invalid tree JSON: {e}"))
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid tree JSON: {e}"),
+            )
         })
     }
 
@@ -165,10 +170,7 @@ impl ContentStore {
         for (i, part) in parts.iter().enumerate() {
             let tree = self.read_tree(&current_hash)?;
             let entry = tree.entries.get(*part).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("entry not found: {part}"),
-                )
+                io::Error::new(io::ErrorKind::NotFound, format!("entry not found: {part}"))
             })?;
             if i < parts.len() - 1 {
                 // Intermediate path component — must be a tree.
@@ -268,9 +270,7 @@ impl ContentStore {
 
     fn write_meta(&self, hash: &str, content_type: &str, ref_count: u32) -> io::Result<()> {
         let meta_path = self.dir.join(format!("{hash}.meta"));
-        let json = format!(
-            "{{\"type\":\"{content_type}\",\"refs\":{ref_count}}}"
-        );
+        let json = format!("{{\"type\":\"{content_type}\",\"refs\":{ref_count}}}");
         fs::write(&meta_path, json.as_bytes())
     }
 }
@@ -399,17 +399,23 @@ mod tests {
         let blob_hash = cas.store(b"content", "blob").unwrap();
         let tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("b.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: blob_hash.clone(),
-                    size: Some(7),
-                });
-                m.insert("a.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: blob_hash,
-                    size: Some(7),
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "b.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: blob_hash.clone(),
+                        size: Some(7),
+                    },
+                );
+                m.insert(
+                    "a.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: blob_hash,
+                        size: Some(7),
+                    },
+                );
                 m
             },
         };
@@ -429,12 +435,15 @@ mod tests {
         let blob_hash = cas.store(src, "blob").unwrap();
         let tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("index.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: blob_hash,
-                    size: Some(src.len() as u64),
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "index.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: blob_hash,
+                        size: Some(src.len() as u64),
+                    },
+                );
                 m
             },
         };
@@ -456,12 +465,15 @@ mod tests {
 
         let lib_tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("util.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: util_hash,
-                    size: Some(util_src.len() as u64),
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "util.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: util_hash,
+                        size: Some(util_src.len() as u64),
+                    },
+                );
                 m
             },
         };
@@ -470,12 +482,15 @@ mod tests {
 
         let root_tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("lib".to_string(), TreeEntry {
-                    entry_type: "tree".to_string(),
-                    hash: lib_hash,
-                    size: None,
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "lib".to_string(),
+                    TreeEntry {
+                        entry_type: "tree".to_string(),
+                        hash: lib_hash,
+                        size: None,
+                    },
+                );
                 m
             },
         };
@@ -492,7 +507,7 @@ mod tests {
         let cas = ContentStore::open(tmp.path()).unwrap();
 
         let tree = TreeManifest {
-            entries: HashMap::new(),
+            entries: BTreeMap::new(),
         };
         let tree_json = serde_json::to_vec(&tree).unwrap();
         let root_hash = cas.store_tree(&tree_json).unwrap();
@@ -543,12 +558,15 @@ mod tests {
         let blob_hash = cas.store(b"tree child", "blob").unwrap();
         let tree = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("child.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: blob_hash.clone(),
-                    size: Some(10),
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "child.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: blob_hash.clone(),
+                        size: Some(10),
+                    },
+                );
                 m
             },
         };
@@ -577,35 +595,49 @@ mod tests {
 
         let tree1 = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("shared.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: shared_blob.clone(),
-                    size: Some(14),
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "shared.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: shared_blob.clone(),
+                        size: Some(14),
+                    },
+                );
                 m
             },
         };
         let tree2 = TreeManifest {
             entries: {
-                let mut m = HashMap::new();
-                m.insert("also-shared.js".to_string(), TreeEntry {
-                    entry_type: "blob".to_string(),
-                    hash: shared_blob.clone(),
-                    size: Some(14),
-                });
+                let mut m = BTreeMap::new();
+                m.insert(
+                    "also-shared.js".to_string(),
+                    TreeEntry {
+                        entry_type: "blob".to_string(),
+                        hash: shared_blob.clone(),
+                        size: Some(14),
+                    },
+                );
                 m
             },
         };
 
-        let h1 = cas.store_tree(&serde_json::to_vec(&tree1).unwrap()).unwrap();
-        let h2 = cas.store_tree(&serde_json::to_vec(&tree2).unwrap()).unwrap();
+        let h1 = cas
+            .store_tree(&serde_json::to_vec(&tree1).unwrap())
+            .unwrap();
+        let h2 = cas
+            .store_tree(&serde_json::to_vec(&tree2).unwrap())
+            .unwrap();
 
         // Trees have different hashes.
         assert_ne!(h1, h2);
         // But both reference the same blob.
-        let b1 = cas.read_tree(&h1).unwrap().entries["shared.js"].hash.clone();
-        let b2 = cas.read_tree(&h2).unwrap().entries["also-shared.js"].hash.clone();
+        let b1 = cas.read_tree(&h1).unwrap().entries["shared.js"]
+            .hash
+            .clone();
+        let b2 = cas.read_tree(&h2).unwrap().entries["also-shared.js"]
+            .hash
+            .clone();
         assert_eq!(b1, b2);
         assert_eq!(b1, shared_blob);
     }

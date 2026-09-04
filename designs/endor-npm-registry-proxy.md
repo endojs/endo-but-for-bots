@@ -3,27 +3,141 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-04-17 |
+| **Updated** | 2026-08-01 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Complete |
 
 ## Status
 
-Phases 1 and 3 implemented:
+All five phases implemented:
 
 - **Phase 1**: `rust/endo/src/registry.rs` — SQLite-backed
   `RegistryTable` with `lookup`, `insert`, `list_versions`,
   `get_meta`/`set_meta`, `count`. Schema matches the design:
   `packages(name, version, hash, integrity, fetched_at)` and
   `package_meta(name, versions_json, fetched_at)`.
+- **Phase 2**: `rust/endo/src/fetch.rs` — registry metadata
+  fetch (cached in `package_meta`), tarball download, SHA-512
+  SRI verification, extraction into the CAS as blob/tree
+  manifests, registry-table recording. `HttpClient` trait with
+  a `ureq` production client.
 - **Phase 3**: `rust/endo/src/semver.rs` — `Version` parsing
   with ordering, `Range` parsing with `^`, `~`, `>=`, `<`, `<=`,
-  `*`, exact versions, and space-separated AND composites.
+  `*`, exact versions, space-separated AND composites,
+  partial/wildcard forms (`2`, `2.1`, `2.x`, `>=2`, `~0`), and
+  `||`-separated OR alternatives (`^17 || ^18`, the
+  peer-dependency staple) with correct union semantics — each
+  alternative an AND set, a version matching any alternative.
   `select_versions` implements Go-like MVS: greatest available
   version per major satisfying all ranges.
+- **Phase 4 (resolver half)**: `rust/endo/src/npm_resolve.rs` —
+  `resolve_transitive` drives fetch + MVS to a fixpoint over the
+  transitive dependency graph: ranges accumulate per package,
+  each range anchors to a major, each anchor group selects the
+  greatest satisfying version of that major (distinct majors
+  coexist), and every selected package's `package.json` is read
+  back out of its CAS tree to fold its `dependencies` into the
+  requirement set. Exposed as `endor npm-resolve
+  [--registry <url>] <name[@range]>...`. A fully cached graph
+  resolves with zero network traffic — the registry table and
+  CAS acting as the npm-registry proxy this design names.
+- **Phase 4 (assembly + execution)**: `rust/endo/src/assemble.rs`
+  locates the entry package root, resolves and fetches its
+  transitive dependencies via `npm_resolve`, ingests the entry
+  package into the CAS as a tree (never `node_modules` or VCS
+  metadata), and stores a deterministic compartment map whose
+  locations are `cas:sha256:<tree>` URIs and whose dependency
+  edges name the MVS-selected compartments.
+  `rust/endo/src/execute.rs` loads that map back out of the CAS
+  into a runnable archive — module files from the CAS trees,
+  `"."` edges bound to each target's concrete main module
+  (npm's `main` completions), sources normalized to ESM
+  (`.json` → default export; CommonJS as a one-line ESM facade
+  over the raw source, evaluated by the archive runtime's
+  CommonJS loader with a **working `require`**) — and
+  `endor run <entry.js>` executes it in an XS machine.
+- **Phase 5**: `rust/endo/src/npmrc.rs` — `NpmConfig` parsing
+  the `.npmrc` subset the fetch layer consumes (`registry`,
+  `@scope:registry`, and the nerf-dart credential keys
+  `:_authToken`, `:username`+`:_password`, legacy `:_auth`,
+  plus their top-level forms bound to the default registry),
+  layered user `~/.npmrc` → project `.npmrc` →
+  `NPM_CONFIG_REGISTRY` → `--registry`, with npm-style `${VAR}`
+  environment expansion in values (an unset variable skips the
+  line rather than aborting, so CI-only lines degrade
+  cleanly). Scoped packages route to their scope's registry;
+  the matching credential accompanies requests as
+  `Authorization: Bearer <token>` or
+  `Basic base64(username:password)`. `endor run --offline`
+  and `endor npm-resolve --offline` swap in an `OfflineClient`
+  that refuses every network request with a typed error, so
+  only registry-table and CAS hits resolve — the
+  registry-table-as-lock-file behaviour, guaranteed rather
+  than assumed.
+- **Maintenance surface**: `endor registry` — `list` (cached
+  package versions with tree hashes), `meta` (cached
+  version-listing rows, or one package's raw registry JSON),
+  `refresh <name>...` (invalidate `package_meta` rows so the
+  next resolution observes newly published versions — the
+  deliberate freshness path through the otherwise write-once
+  metadata cache; package contents in the CAS are immutable
+  and never invalidated), and `verify` (walk every cached
+  package's CAS tree and report entries whose blobs are
+  missing, exiting non-zero on incompleteness).
 
-Remaining: Phase 2 (HTTP client for package fetching), Phase 4
-(compartment mapper integration), Phase 5 (offline mode, .npmrc).
+Post-finish-line extensions and constraints are recorded below.
+The two execution gaps this section used to record are both
+resolved. Directory-relative
+resolution: the archive loader's resolve hook resolves `./`
+and `../` specifiers against the referrer module's directory
+(escaping the package root is a clean error), so multi-file
+packages whose modules import one another relatively — and
+packages whose entry lives in a subdirectory — execute.
+CommonJS linkage: the archive runtime evaluates CJS sources
+under a Node-style function wrapper with a real per-module
+`require` (relative specifiers against the requiring module's
+directory with `.js`/`.json`/`index` completion, bare and
+subpath specifiers through the link map and the exports
+resolver with `require`-conditions-first, a cycle-safe module
+cache, `require.resolve`, `__filename`/`__dirname`), so real
+CJS packages — `semver@7.5.4` requiring `lru-cache` requiring
+`yallist` — fetch, cache, and execute. Node **core builtins**
+(`require('fs')`, `require('tty')`, …) remain unavailable by
+design of the confined runtime; packages touching them fail at
+require with a clean cannot-find error. The **`process` global**
+— not a builtin module, and read bare by virtually every
+published package before it does anything else
+(`process.env.NODE_ENV` gates react's and graphql's entry
+modules) — is endowed as a minimal frozen shim: a deterministic
+`Object.freeze({ NODE_ENV: 'production' })` environment (never
+the host's), `nextTick` riding the promise queue, and a
+`versions` without a `node` key so Node-detection takes its
+non-Node branch, and the event-emitter surface (`on`, `once`,
+`emit`, …) as chainable no-ops — packages register
+`exit`/signal handlers as a load-time side effect, and a no-op
+listener grants no authority. The rest of Node's `process`
+surface (`stdout`, `exit`, signals, `hrtime`) stays absent;
+packages touching it fail with the same clean undefined read
+as before. Ambiguous `.js` files —
+no `"type"` field in the package manifest, the shape of every
+quick-start entry — get Node-style **module-syntax detection**
+(`rust/endo/src/cjs_lexer.rs` `detect_esm_syntax`): a top-level
+`import`/`export` declaration classifies the file as ESM, so an
+`import`-bearing entry runs instead of dying in the CJS wrapper
+with `SyntaxError: invalid import`; dynamic `import()` and
+keyword mentions in strings/comments/nested scopes do not flip a
+real CJS file.
+
+### Reverification
+
+The finish line was reverified on 2026-08-01 with a clean
+application containing only `package.json` and `main.js`:
+`endor run main.js` fetched and executed `semver@7.5.4` and its
+transitive CommonJS dependencies, and a second `endor run
+--offline main.js` produced the same `semver@7.5.4` result from
+the SQLite registry table and CAS. `endor registry verify`
+reported three packages verified and zero incomplete; the
+application had no lockfile and no `node_modules` directory.
 
 ## What is the Problem Being Solved?
 
@@ -380,16 +494,162 @@ The tree's children are the package's files, stored as blobs.
    registry table for reproducibility, but the implicit
    behavior is sufficient for development workflows.
 
-## Known gaps
+## Post-finish-line extensions and constraints
 
-- [ ] Private registry authentication beyond `.npmrc` tokens.
-- [ ] Workspace-protocol resolution for monorepos not yet
-      published to a registry.
-- [ ] `peerDependencies` and `optionalDependencies` handling.
+- [x] Private registry authentication beyond `.npmrc` tokens:
+      basic auth via nerf-darted `:username`+`:_password`
+      (base64-encoded password, npm's storage shape) and legacy
+      `:_auth`, the top-level `_auth`/`username`/`_password`
+      keys bound to the default registry only, and `${VAR}`
+      environment expansion in `.npmrc` values. Within one
+      nerf-dart, `_authToken` outranks the basic pair, which
+      outranks `_auth` (npm's field order). Still out of scope:
+      auth challenges beyond a static header (OTP/webauthn
+      login flows, keyring integration) — `endor` consumes
+      credentials, it does not mint them.
+- [x] Workspace-protocol resolution for monorepos not yet
+      published to a registry: `rust/endo/src/workspace.rs`
+      discovers the enclosing workspace (nearest ancestor
+      `package.json` declaring `workspaces`, array or
+      `{"packages": [...]}` form; glob subset: literal
+      segments, `*` within a segment, whole-segment `**`), and
+      assembly resolves dependency edges naming sibling members
+      to their local working trees, ingested into the CAS —
+      `workspace:` protocol ranges always (`workspace:*`/`^`/`~`
+      accept the local version; concrete ranges are checked
+      against it, since no registry can serve them), and plain
+      semver ranges when the sibling's local version satisfies
+      them, with registry fallback otherwise. Member-to-member
+      edges recurse, so a monorepo slice assembles with only
+      its external dependencies touching the registry, and a
+      member satisfying a range shadows any registry version
+      of the same name (npm links workspace siblings in
+      preference to installing them). Remaining sub-gaps,
+      deliberate: negation patterns (`!pkg`) and `?`/`[`/`{`
+      globs are rejected rather than misread, and lockstep
+      co-versioning across members is implicit (each member
+      has exactly one local version) rather than enforced.
+- [x] `peerDependencies` and `optionalDependencies` handling
+      (npm ≥7-alike, adapted to MVS): non-optional peers fold
+      into the shared requirement set as required edges — MVS
+      unifies a peer with whatever version another edge selected
+      — and bind compartment-map edges so `require('peer')`
+      links at runtime; `optionalDependencies` are attempted and
+      skipped on failure (no matching version, unsupported
+      range, fetch error), the skip reported by `endor run` /
+      `endor npm-resolve` and the map edge omitted so a guarded
+      `require` fails with a clean cannot-find; peers marked
+      optional in `peerDependenciesMeta` are constrain-only —
+      their range applies when some other edge activates the
+      package, and never activates it. Deliberate
+      simplifications: required-ness does not propagate through
+      an optional subtree (a failure below an optional package
+      skips the failing node, where npm drops the whole
+      subtree), and a whole package name is skipped when any of
+      its selected majors fails. Verified against the live
+      registry: `endor npm-resolve 'react-redux@^9.0.0'` selects
+      `react` purely via peer edges (18.3.1 from react-redux's
+      `^18.0 || ^19`, 16.14.0 from use-sync-external-store's
+      `^16.8.0 || ^17 || ^18` — distinct anchor majors coexist)
+      and leaves the optional peers `redux` / `@types/react`
+      unactivated.
+- [x] A `process` global for the archive runtime's CJS loader:
+      real-world CJS packages gate dev/prod entry selection on
+      `process.env.NODE_ENV` (`react`, `graphql`), so their
+      evaluation died on `get process: undefined variable` even
+      after their (peer) edges linked. Endowed as a minimal
+      **frozen** shim: `env` is `Object.freeze({ NODE_ENV:
+      'production' })` (deterministic, never the host's),
+      `nextTick` rides the promise queue, `versions` has no
+      `node` key (Node-detection takes its non-Node branch),
+      and the event-emitter surface (`on`, `once`, `emit`,
+      ...) is chainable no-ops. The rest of Node's `process`
+      surface (`stdout`, `exit`, signals, `hrtime`) stays
+      absent; packages touching it fail with a clean undefined
+      read. Verified by real execution: `endor run` of a
+      program reading `process.env.NODE_ENV` returns
+      `production`, `'node' in process.versions` is
+      `false`, and `process.platform` is `xs`.
 - [ ] Pre/post-install scripts (intentionally omitted — Endo
       does not execute arbitrary install scripts).
 - [ ] Binary packages (`.node` native modules) — not
       supported in XS.
+- [x] Package `imports` field (subpath imports): `#`-prefixed
+      specifiers resolve through the importing package's own
+      `imports` map in the archive runtime — ESM `import` and
+      CJS `require` alike, with the exports grammar (wildcard
+      patterns, condition objects with the same
+      import-pass/require-pass ordering, array fallbacks,
+      `null` blocks). An in-package `./` target loads under
+      its canonical key, so its own relative imports resolve
+      against its real directory; a bare-package target routes
+      back through the compartment's link map. Proven on
+      chalk@5.6.2 (`#ansi-styles`, conditional
+      `#supports-color`), which fetches, caches, and executes.
+- [x] Web-platform `URL`/`URLSearchParams` globals: endowed to
+      archive compartments as a veneer over the host's
+      spec-faithful WHATWG parser (rust-url's `quirks` surface,
+      the same implementation the fetch layer already links)
+      through `hostUrlParse`/`hostUrlSet`/`hostFormUrlDecode`/
+      `hostFormUrlEncode` — packages like `normalize-url` that
+      construct and normalize URLs execute. Remaining web-global
+      gaps: `crypto.subtle`, streaming/`fatal` `TextDecoder`
+      fidelity, `encodeInto`.
+- [x] Runtime identity for browser-oriented packages, first step:
+      archive compartments are endowed with web-platform `crypto`
+      (`getRandomValues`, `randomUUID` — a standard veneer over the
+      already-endowed `randomHex256` host function, no new
+      authority). Package-exports condition selection, including a
+      possible browser condition, remains deferred to the existing
+      JavaScript `compartment-mapper` implementation rather than
+      duplicating that resolver in Rust. Still open within this lane:
+      `TextEncoder`/`TextDecoder`, `crypto.subtle`, `atob`/`btoa`/
+      `URL`, and `Intl` (an engine-surface matter for the xs2rust
+      arc, not this proxy).
+- [x] Top-level `await` in the entry module (or any module in
+      the graph): the standalone runners now import the entry
+      through the asynchronous `Compartment.prototype.import`
+      path (an async `loadHook` beside `loadNowHook`, with
+      cross-compartment edges as lazy namespace descriptors),
+      so async modules evaluate instead of failing with
+      `TypeError: async module`. The daemon-side archive
+      install (worker host power) still uses the synchronous
+      path.
+- [x] Full CommonJS `require` linkage: CJS modules evaluate
+      under a function wrapper via the runtime CommonJS loader
+      (`__loadCjs`), with a per-module `require`, a Node-style
+      cycle-safe module cache, `require`-conditions-first
+      exports resolution, `require.resolve`, and
+      `__filename`/`__dirname`; ESM importers of a CJS module
+      see `module.exports` as the default export, and a CJS
+      `require` of an ESM module returns its namespace
+      (modern-Node `require(esm)` shape). ESM `import` of a
+      CJS module also binds **named exports**: the archive
+      builder statically scans the raw CJS source
+      (`rust/endo/src/cjs_lexer.rs`, cjs-module-lexer shape —
+      `exports.name =`, `exports["name"] =`,
+      `Object.defineProperty(exports, "name", …)`, and
+      top-level `module.exports = { … }` literal keys, with
+      comments/strings/templates/regexes skipped) and the ESM
+      facade synthesizes an `export const` per detected name;
+      as in Node's interop the detection over-approximates —
+      a lexed name never actually assigned binds `undefined` —
+      and re-export shapes (`module.exports = require(…)`,
+      `__exportStar`) are not chased across modules, so those
+      names reach importers only through `default`. Remaining
+      CJS sub-gaps, all deliberate: Node core builtins are
+      not provided (confined runtime — a clean cannot-find
+      error); re-exported names of
+      `module.exports = require(…)` modules are not
+      synthesized (above);
+      `require('./dir')` completes through `dir/index.js(on)`
+      but does not consult a nested `dir/package.json` `main`;
+      `require.resolve`, `__filename`, and `__dirname` return
+      archive-relative (`./`-prefixed) keys, not Node's absolute
+      filesystem paths (no filesystem in the confined runtime);
+      and `require` resolution activates the `import` exports
+      condition as a lenient fallback after `require`, where
+      Node's `require` never selects `import`.
 
 ## Prompt
 

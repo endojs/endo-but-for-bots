@@ -16,10 +16,10 @@ import { walk, collectBytes } from '@endo/platform/fs/extended';
 import { makeNativeGitBackend } from '@endo/git';
 import { makeGit } from '@endo/exo-git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
-import { makeFilePowers } from '@endo/daemon/src/daemon-node-powers.js';
+import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
-import { makeGitTool } from '../src/git-tool.js';
-import { makeGitMountTools } from '../src/git-mount-tool.js';
+import { makeGitTool } from '../src/json-tools/git.js';
+import { makeGitMountTools } from '../src/json-tools/git-mount.js';
 
 /**
  * Integration proof that `makeGitTool`'s agent-facing tool records drive a
@@ -29,10 +29,9 @@ import { makeGitMountTools } from '../src/git-mount-tool.js';
  * a real on-disk repository: the records `invoke` correctly, the named→positional
  * marshal reaches the capability, and the capability's results flow back.
  *
- * `add` and `status` — whose native signatures traffic in mount-entry
- * remotables — are driven through the mount-bridged `makeGitMountTools` records
- * (Phase 3: path strings in, JSON-safe rows out), while the in-slice JSON-safe
- * methods (`commit`, `log`, the branch operations) go through `makeGitTool`.
+ * `status` is driven through `makeGitMountTools` for its agent-facing untracked
+ * default, while `add` and the other JSON-safe methods (`commit`, `log`, the
+ * branch operations) go through `makeGitTool`.
  * Only `filesystemAt` (it returns a live `Filesystem` remotable) is still driven
  * through the raw cap, awaiting the result serialization of a later PR.
  */
@@ -104,6 +103,26 @@ const provisionGit = async (t, rootPath) => {
 };
 
 /**
+ * Construct a live exo `Git` capability with history-rewrite authority
+ * (`allowHistoryRewrite: true`), for the tests that drive `makeGitTool`'s
+ * `rewriter`-facet catalog against a real backend.
+ *
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} [rootPath]
+ */
+const provisionRewriterGit = async (t, rootPath) => {
+  const repoRoot = await provisionGitWorktree(t, rootPath);
+  const filePowers = makeFilePowers({ fs, path });
+  const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
+  const backend = makeNativeGitBackend({ repoRoot });
+  const git = makeGit(
+    { mount, backend, lineageOf },
+    { allowHistoryRewrite: true },
+  );
+  return { repoRoot, mount, git };
+};
+
+/**
  * Look a tool up by name, throwing if absent (so the result is non-undefined).
  *
  * @param {import('../src/types.js').ToolRecord[]} tools
@@ -119,24 +138,24 @@ test('git tools drive a real Git cap: stage → status → commit → log → fi
   const byName = byNameOf(makeGitTool(git));
   const byMountName = byNameOf(makeGitMountTools(git));
 
-  // Write and stage a file entirely through the mount-bridged `add` tool: it
-  // takes a path string, resolves it to a mount entry, and reaches the cap.
+  // Write and stage a file through the guard-mapped `add` tool.
   await fs.promises.writeFile(
     path.join(repoRoot, 'greeting.txt'),
     'hello tools',
   );
-  const added = await byMountName('add').invoke({ paths: ['greeting.txt'] });
-  t.is(added, 'Staged 1 path.');
+  const added = await byName('add').invoke({ paths: ['greeting.txt'] });
+  t.is(added, undefined);
 
   // `status` (mount-bridged tool) reports the staged file as JSON-safe rows,
   // with no remotables on the wire.
-  const staged = /** @type {Array<{ path: string, index: string }>} */ (
-    await byMountName('status').invoke({})
-  );
-  const stagedRow = staged.find(row => row.path === 'greeting.txt');
+  const staged =
+    /** @type {{ entries: Array<{ path: string, index: string }> }} */ (
+      await byMountName('status').invoke({})
+    );
+  const stagedRow = staged.entries.find(row => row.path === 'greeting.txt');
   t.truthy(stagedRow, 'status should report the staged file');
   t.is(stagedRow?.index, 'added');
-  for (const row of staged) {
+  for (const row of staged.entries) {
     t.false('entry' in row);
     t.false('node' in row);
   }
@@ -149,11 +168,11 @@ test('git tools drive a real Git cap: stage → status → commit → log → fi
   t.is(commit.summary, 'add greeting');
 
   // Status (mount-bridged tool) is clean once the file is committed.
-  const afterStatus = /** @type {Array<{ path: string }>} */ (
+  const afterStatus = /** @type {{ entries: Array<{ path: string }> }} */ (
     await byMountName('status').invoke({})
   );
   t.false(
-    afterStatus.some(row => row.path === 'greeting.txt'),
+    afterStatus.entries.some(row => row.path === 'greeting.txt'),
     'the committed file should no longer be dirty',
   );
 
@@ -205,6 +224,83 @@ test('makeGitTool drives branch operations over a real Git cap', async t => {
   t.deepEqual(names, ['feature', 'main']);
 });
 
+test('makeGitTool derives the rewriter-facet catalog against a real Git cap', async t => {
+  const { repoRoot, git } = await provisionRewriterGit(t);
+  const byName = byNameOf(
+    makeGitTool(/** @type {any} */ (git), { facet: 'rewriter' }),
+  );
+
+  // `reword`, `cherryPick`, and `rebase` are absent from the default (writer)
+  // facet catalog but present here, driven against a real
+  // history-rewrite-authorized cap.
+  await fs.promises.writeFile(path.join(repoRoot, 'greeting.txt'), 'hello');
+  await execFileAsync('git', ['add', 'greeting.txt'], { cwd: repoRoot });
+  const first = /** @type {{ oid: string, summary: string }} */ (
+    await byName('commit').invoke({ message: 'first commit' })
+  );
+  const reworded = /** @type {{ oid: string, summary: string }} */ (
+    await byName('reword').invoke({
+      ref: first.oid,
+      message: 'reworded commit',
+    })
+  );
+  t.is(reworded.summary, 'reworded commit');
+
+  // `commit`'s `amend` option, absent from the writer facet's schema, is
+  // advertised and honored at the rewriter facet.
+  await fs.promises.writeFile(path.join(repoRoot, 'note.txt'), 'a note');
+  await execFileAsync('git', ['add', 'note.txt'], { cwd: repoRoot });
+  const amended = /** @type {{ oid: string, summary: string }} */ (
+    await byName('commit').invoke({
+      message: 'amended commit',
+      options: harden({ amend: true }),
+    })
+  );
+  t.is(amended.summary, 'amended commit');
+  const log = /** @type {Array<{ oid: string }>} */ (
+    await byName('log').invoke({})
+  );
+  // The init commit plus the amended commit — amend replaces HEAD rather than
+  // adding a third commit on top of it.
+  t.is(log.length, 2, 'amend should replace HEAD rather than add a commit');
+
+  // `createBranch` off the amended HEAD, then `cherryPick` and `rebase` — the
+  // exact history-rewrite verbs the writer facet withholds.
+  await execFileAsync('git', ['branch', 'side'], { cwd: repoRoot });
+  await execFileAsync('git', ['switch', 'side'], { cwd: repoRoot });
+  await fs.promises.writeFile(path.join(repoRoot, 'side.txt'), 'side change');
+  await execFileAsync('git', ['add', 'side.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'side commit',
+    ],
+    { cwd: repoRoot },
+  );
+  const sideOid = (
+    await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoRoot })
+  ).stdout.trim();
+  await execFileAsync('git', ['switch', 'main'], { cwd: repoRoot });
+
+  const picked = /** @type {string} */ (
+    await byName('cherryPick').invoke({ ref: sideOid })
+  );
+  t.truthy(picked);
+
+  const rebased = /** @type {string} */ (
+    await byName('rebase').invoke({
+      input: harden({ mode: 'start', upstream: 'main' }),
+    })
+  );
+  t.truthy(rebased);
+});
+
 test('the runtime guard rejects a bad arg before reaching the live cap', async t => {
   const { git } = await provisionGit(t);
   const byName = byNameOf(makeGitTool(git));
@@ -217,17 +313,15 @@ test('the runtime guard rejects a bad arg before reaching the live cap', async t
   await t.throwsAsync(() => byName('commit').invoke({ bogus: 'x' }));
 });
 
-test('add/restore stay out of the JSON-transparent makeGitTool slice', t => {
+test('path-string mutators join makeGitTool while restore stays out', t => {
   // The cap is only touched at invoke time, so an empty object suffices to
   // inspect the record names.
   const tools = makeGitTool(
     /** @type {import('../src/types.js').GitToolCapability} */ (harden({})),
   );
   const names = new Set(tools.map(tool => tool.name));
-  // `add`/`restore` take `M.arrayOf(M.remotable())`, so they cannot sit in the
-  // one-to-one guard-mapped slice. `add` is now served by the mount-bridged
-  // `makeGitMountTools` (proved above); `restore` remains deferred entirely.
-  t.false(names.has('add'));
+  t.true(names.has('add'));
+  t.true(names.has('checkoutConflict'));
   t.false(names.has('restore'));
   t.false(names.has('status'));
 
@@ -238,7 +332,8 @@ test('add/restore stay out of the JSON-transparent makeGitTool slice', t => {
       ),
     ).map(tool => tool.name),
   );
-  t.true(mountToolNames.has('add'));
+  t.false(mountToolNames.has('add'));
+  t.false(mountToolNames.has('checkoutConflict'));
   t.true(mountToolNames.has('status'));
   t.false(mountToolNames.has('restore'));
 });
@@ -262,6 +357,7 @@ test('a "../" escape in an add path is contained by the mount, clamped at the wo
   await fs.promises.mkdir(repoRoot);
 
   const { git } = await provisionGit(t, repoRoot);
+  const byName = byNameOf(makeGitTool(git));
   const byMountName = byNameOf(makeGitMountTools(git));
 
   await fs.promises.writeFile(
@@ -269,25 +365,26 @@ test('a "../" escape in an add path is contained by the mount, clamped at the wo
     'inside the worktree',
   );
 
-  // Drive `add` with a `../`-bearing path through the real tool → mount → Git →
+  // Drive `add` with a `../`-bearing path through the real tool → Git → mount →
   // git-binary stack. The `..` pops but is clamped at the worktree root, so the
   // path resolves to `contained.txt` at the root: staging SUCCEEDS and stays
   // inside the repo rather than escaping upward.
-  const added = await byMountName('add').invoke({
+  const added = await byName('add').invoke({
     paths: ['../contained.txt'],
   });
-  t.is(added, 'Staged 1 path.');
+  t.is(added, undefined);
 
   // `status` reports the file at its root-relative path — no leading `..`, no
   // outer path — proving the segment was clamped, not preserved as an escape.
-  const staged = /** @type {Array<{ path: string, index: string }>} */ (
-    await byMountName('status').invoke({})
-  );
-  const row = staged.find(entry => entry.path === 'contained.txt');
+  const staged =
+    /** @type {{ entries: Array<{ path: string, index: string }> }} */ (
+      await byMountName('status').invoke({})
+    );
+  const row = staged.entries.find(entry => entry.path === 'contained.txt');
   t.truthy(row, 'the clamped path should stage the in-repo root file');
   t.is(row?.index, 'added');
   t.false(
-    staged.some(entry => entry.path.includes('..')),
+    staged.entries.some(entry => entry.path.includes('..')),
     'no staged path should retain a ".." segment',
   );
 

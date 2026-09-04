@@ -3,6 +3,15 @@
   "files": [],
   "references": [
     {
+      "path": "packages/agent-tools/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/agentry/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/ascii/tsconfig.composite.json"
+    },
+    {
       "path": "packages/base64/tsconfig.composite.json"
     },
     {
@@ -21,7 +30,13 @@
       "path": "packages/cancel/tsconfig.composite.json"
     },
     {
+      "path": "packages/capn-web/tsconfig.composite.json"
+    },
+    {
       "path": "packages/captp/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/cbor/tsconfig.composite.json"
     },
     {
       "path": "packages/chacha12/tsconfig.composite.json"
@@ -39,6 +54,9 @@
       "path": "packages/cjs-module-analyzer/tsconfig.composite.json"
     },
     {
+      "path": "packages/claude-sandbox/tsconfig.composite.json"
+    },
+    {
       "path": "packages/cli/tsconfig.composite.json"
     },
     {
@@ -46,6 +64,9 @@
     },
     {
       "path": "packages/compartment-mapper/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/crc32/tsconfig.composite.json"
     },
     {
       "path": "packages/daemon/tsconfig.composite.json"
@@ -78,6 +99,12 @@
       "path": "packages/exo-http-client/tsconfig.composite.json"
     },
     {
+      "path": "packages/exo-npm/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/exo-package-manager/tsconfig.composite.json"
+    },
+    {
       "path": "packages/exo-playwright/tsconfig.composite.json"
     },
     {
@@ -85,6 +112,12 @@
     },
     {
       "path": "packages/exo-stream/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/exo-unzip/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/exo-zip/tsconfig.composite.json"
     },
     {
       "path": "packages/familiar/tsconfig.composite.json"
@@ -105,6 +138,12 @@
       "path": "packages/harden/tsconfig.composite.json"
     },
     {
+      "path": "packages/hardened262/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/helpdown/tsconfig.composite.json"
+    },
+    {
       "path": "packages/hex/tsconfig.composite.json"
     },
     {
@@ -123,6 +162,9 @@
       "path": "packages/init/tsconfig.composite.json"
     },
     {
+      "path": "packages/is-well-formed-string/tsconfig.composite.json"
+    },
+    {
       "path": "packages/lal/tsconfig.composite.json"
     },
     {
@@ -133,6 +175,9 @@
     },
     {
       "path": "packages/marshal/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/mem-cas/tsconfig.composite.json"
     },
     {
       "path": "packages/memoize/tsconfig.composite.json"
@@ -150,10 +195,16 @@
       "path": "packages/ocapn/tsconfig.composite.json"
     },
     {
+      "path": "packages/ocapn-iroh/tsconfig.composite.json"
+    },
+    {
       "path": "packages/ocapn-noise/tsconfig.composite.json"
     },
     {
       "path": "packages/panic/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/parser-pipeline/tsconfig.composite.json"
     },
     {
       "path": "packages/pass-style/tsconfig.composite.json"
@@ -183,6 +234,9 @@
       "path": "packages/ses-ava/tsconfig.composite.json"
     },
     {
+      "path": "packages/sha256/tsconfig.composite.json"
+    },
+    {
       "path": "packages/skel/tsconfig.composite.json"
     },
     {
@@ -201,10 +255,19 @@
       "path": "packages/test262-runner/tsconfig.composite.json"
     },
     {
+      "path": "packages/thixotrope/tsconfig.composite.json"
+    },
+    {
       "path": "packages/trampoline/tsconfig.composite.json"
     },
     {
+      "path": "packages/utf8/tsconfig.composite.json"
+    },
+    {
       "path": "packages/where/tsconfig.composite.json"
+    },
+    {
+      "path": "packages/x402/tsconfig.composite.json"
     },
     {
       "path": "packages/zip/tsconfig.composite.json"

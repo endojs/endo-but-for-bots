@@ -49,6 +49,7 @@
     "timeout": "2m"
   },
   "dependencies": {
+    "@endo/agentry": "workspace:^",
     "@endo/conversation-tree": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
@@ -61,17 +62,14 @@
     "@endo/marshal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "@endo/promise-kit": "workspace:^"
+    "@endo/platform": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
+    "safe-regex2": "^5.1.1"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   }
 }

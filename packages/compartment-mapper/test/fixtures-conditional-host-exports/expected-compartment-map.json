@@ -1,0 +1,29 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "lib": {
+          "link": "lib"
+        }
+      }
+    },
+    "lib": {
+      "modules": {
+        "./endo.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "conditions": [
+    "endo:lib"
+  ],
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-conditional-host-exports",
+  "oracle": "node"
+}

@@ -35,12 +35,14 @@
     "lint:types": "tsc"
   },
   "dependencies": {
+    "@endo/cancel": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-stream": "workspace:^",
-    "@endo/patterns": "workspace:^"
+    "@endo/patterns": "workspace:^",
+    "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
@@ -61,11 +63,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",

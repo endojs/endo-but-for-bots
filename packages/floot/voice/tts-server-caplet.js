@@ -34,7 +34,8 @@ import { M } from '@endo/patterns';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-import { makeBufferedReader } from '../src/buffered-channel.js';
+import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
+import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 // `synthesize` is synchronous (returns the audio reader immediately, then
 // streams), so it is guarded with `M.call`. Guards are permissive — the daemon
@@ -129,9 +130,7 @@ const makeChunker = () => {
 // (piper) can be aborted — otherwise an interrupted replay keeps synthesizing
 // every remaining sentence with no one to receive the audio.
 const makeAudioChannel = onClose => {
-  const { push, reader, isClosed } = makeBufferedReader('AudioReader', {
-    onClose,
-  });
+  const { push, reader, isClosed } = makeBufferedReader({ onClose });
   const writer = {
     bytes: (b64, sampleRate) => push({ type: 'bytes', b64, sampleRate }),
     setPhase: phase => push({ type: 'phase', phase: `${phase}` }),
@@ -234,10 +233,7 @@ const pump = async (piper, textReader, writer) => {
   };
 
   try {
-    for (;;) {
-      // eslint-disable-next-line no-await-in-loop
-      const { value, done } = await E(textReader).next();
-      if (done) break;
+    for await (const value of iterateReader(textReader, { buffer: 4 })) {
       if (value.type === 'delta') {
         for (const s of chunker.push(value.text)) queue.push(s);
         // eslint-disable-next-line no-await-in-loop

@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global Buffer, process, setTimeout */
 
 // Establish a perimeter:
 // eslint-disable-next-line import/order
@@ -18,6 +17,7 @@ import { Far } from '@endo/pass-style';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeCancelKit } from '@endo/cancel';
+import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { makeArchive as makeCompartmentArchive } from '@endo/compartment-mapper';
 import { makeReadPowers } from '@endo/compartment-mapper/node-powers.js';
 import { defaultParserForLanguage as sourceParserForLanguage } from '@endo/compartment-mapper/import-parsers.js';
@@ -26,14 +26,16 @@ import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iter
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { start, stop, restart, purge, makeEndoClient } from '../index.js';
-import { makeCryptoPowers } from '../src/daemon-node-powers.js';
-import { makeDaemonDatabase } from '../src/daemon-database-node.js';
+import { makeCryptoPowers } from '../src/manager-node-powers.js';
+import { makeDaemonDatabase } from '../src/manager-database-node.js';
+import { makeContentDataPlaneRegistry } from '../src/content-data-plane.js';
 import { formatId, parseId } from '../src/formula-identifier.js';
 import {
   formatLocator,
   parseLocator,
   addressesFromLocator,
   idFromLocator,
+  parseContentLocator,
 } from '../src/locator.js';
 
 /**
@@ -84,7 +86,7 @@ const drainIterator = async (iteratorRef, count) => {
  * Open a read-only handle to the daemon's database for test inspection.
  *
  * @param {string} statePath
- * @returns {import('../src/daemon-database.js').DaemonDatabase}
+ * @returns {import('../src/manager-database.js').DaemonDatabase}
  */
 const openTestDb = statePath => {
   return makeDaemonDatabase({
@@ -1452,6 +1454,140 @@ test('mailboxes persist messages across restart', async t => {
   );
 });
 
+// The encrypted secret backend seals blobs with the manager's crypto powers.
+// `makeXsCryptoPowers` stubs `sealSecret`/`openSecret` to throw ("Local
+// encrypted secret backend is unavailable on XS", see
+// src/bus-manager-rust-xs-powers.js), so an XS-hosted manager can neither
+// create nor read secret blobs, and `@secrets` is wired only into the Node
+// manager (src/manager.js). `ENDO_MANAGER_NODE=1` (yarn test:rust-node-manager)
+// puts the manager back in Node, where this works.
+const testNeedsNodeManager =
+  process.env.ENDO_BIN && !process.env.ENDO_MANAGER_NODE
+    ? test.serial.skip
+    : test.serial;
+
+testNeedsNodeManager(
+  'secret lookup capabilities and values survive restart',
+  async t => {
+    const { cancelled, config, host } = await prepareHost(t);
+    const canary = 'CANARY-daemon-secret-value';
+
+    t.true((await E(host).list()).includes('@secrets'));
+    t.deepEqual(await E(host).list('@secrets'), ['audit', 'catalog', 'create']);
+    const importer = await E(host).lookup(['@secrets', 'create']);
+    const summary = await E(importer).createBase64(
+      'release',
+      'Publish release artifacts',
+      encodeBase64(new TextEncoder().encode(canary)),
+    );
+    t.is(summary.state, 'active');
+    t.is(summary.description, 'Publish release artifacts');
+
+    const secretId = await E(host).identify('secrets', 'release');
+    t.truthy(secretId);
+    const formula = await E(E(host).diagnostics()).getFormula(secretId);
+    t.is(formula.type, 'lookup');
+    t.false(JSON.stringify(formula).includes(canary));
+    const blob = await E(host).lookup(['secrets', 'release']);
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(blob).readBase64())),
+      canary,
+    );
+
+    await restart(config);
+    const { host: hostAfter } = await makeHost(config, cancelled);
+    const blobAfter = await E(hostAfter).lookup(['secrets', 'release']);
+    t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(blobAfter).readBase64())),
+      canary,
+    );
+
+    const guest = await E(hostAfter).provideGuest('secret-recipient');
+    await E(hostAfter).send(
+      'secret-recipient',
+      ['Use ', ' without reading it in the agent session.'],
+      ['credential'],
+      [['secrets', 'release']],
+    );
+    const [message] = await E(guest).listMessages();
+    await E(guest).adopt(message.number, 'credential', 'release-credential');
+    const delegated = await E(guest).lookup('release-credential');
+    t.is(
+      new TextDecoder().decode(decodeBase64(await E(delegated).readBase64())),
+      canary,
+    );
+
+    const sqlite = await fsp.readFile(
+      path.join(config.statePath, 'endo.sqlite'),
+    );
+    t.false(sqlite.includes(new TextEncoder().encode(canary)));
+    const secretFiles = await fsp.readdir(
+      path.join(config.statePath, 'secret-store-v1'),
+    );
+    const envelope = await fsp.readFile(
+      path.join(config.statePath, 'secret-store-v1', secretFiles[0]),
+    );
+    t.false(envelope.includes(new TextEncoder().encode(canary)));
+
+    const catalog = await E(hostAfter).lookup(['@secrets', 'catalog']);
+    await E(hostAfter).copy(['secrets', 'release'], ['release-alias']);
+    const [entry] = await E(catalog).list();
+    t.deepEqual(entry.petNamePaths, [
+      ['release-alias'],
+      ['secrets', 'release'],
+    ]);
+    await t.throwsAsync(() => E(entry.admin).delete(), {
+      message: /Secret operation failed/,
+    });
+    await E(entry.admin).revoke();
+    await t.throwsAsync(() => E(delegated).readBase64(), {
+      message: /Secret operation failed/,
+    });
+    await t.throwsAsync(() => E(blobAfter).readBase64(), {
+      message: /Secret operation failed/,
+    });
+    await E(entry.admin).delete();
+    t.false(await E(hostAfter).has('secrets', 'release'));
+    t.false(await E(hostAfter).has('release-alias'));
+    t.deepEqual(await E(catalog).list(), []);
+    const audit = await E(hostAfter).lookup(['@secrets', 'audit']);
+    t.true(
+      (await E(audit).list()).some(
+        event => event.operation === 'delete' && event.outcome === 'succeeded',
+      ),
+    );
+  },
+);
+
+testNeedsNodeManager('only the root host manages secrets', async t => {
+  const { host } = await prepareHost(t);
+  const child = await E(host).provideHost('space-a');
+
+  t.true((await E(host).list()).includes('@secrets'));
+  t.truthy(await E(host).lookup(['@secrets', 'catalog']));
+
+  // A child host does not advertise `@secrets`, and every name-hub method
+  // rejects the path rather than resolving it: `@secrets` is absent from
+  // its special names, so `isPetName` refuses it outright.
+  t.false((await E(child).list()).includes('@secrets'));
+  await t.throwsAsync(() => E(child).has('@secrets'), {
+    message: /Invalid pet name/,
+  });
+  await t.throwsAsync(() => E(child).lookup(['@secrets', 'catalog']), {
+    message: /Invalid pet name/,
+  });
+
+  // Hygiene, not containment: the child still reaches the root host through
+  // its ambient `@endo`, so withholding the name narrows the namespace
+  // rather than the authority. See designs/daemon-secret-manager.md.
+  const rootViaChild = await E(await E(child).lookup('@endo')).host();
+  t.is(
+    await E(rootViaChild).identify('@agent'),
+    await E(host).identify('@agent'),
+  );
+});
+
 test('rehydrated requests can be resolved after restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
 
@@ -1600,13 +1736,16 @@ test('followNameChanges existing names carry type', async t => {
   // Store before subscribing so the value is in the "existing names" batch.
   await E(host).storeValue('first', 'one');
 
+  // Size the initial batch from the host itself rather than a literal: the
+  // special-name set grows over time, and 'one' sorts after every '@' name.
+  const existingNames = /** @type {string[]} */ (await E(host).list());
+
   const changesIterator = iterateReader(await E(host).followNameChanges());
   // Read existing values until we find our name. Special names (@self, etc)
   // are interleaved alphabetically and also carry types now.
   /** @type {Map<string, any>} */
   const existing = new Map();
-  // Pull a generous prefix; the host has a known special-name set plus 'one'.
-  for (let i = 0; i < 12; i += 1) {
+  for (let i = 0; i < existingNames.length; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const { value, done } = await changesIterator.next();
     if (done) break;
@@ -3274,6 +3413,47 @@ test('guest has its own @nets special name', async t => {
   );
 });
 
+test('agents have distinct empty @planes directories', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+
+  t.deepEqual(await E(host).list('@planes'), []);
+  t.deepEqual(await E(guest).list('@planes'), []);
+
+  const hostPlanesLocator = await E(host).locate('@planes');
+  const guestPlanesLocator = await E(guest).locate('@planes');
+  t.truthy(hostPlanesLocator);
+  t.truthy(guestPlanesLocator);
+  t.not(hostPlanesLocator, guestPlanesLocator);
+});
+
+test('content data plane registry resolves hints from registered shares', async t => {
+  const registry = makeContentDataPlaneRegistry();
+  /** @type {string[]} */
+  const calls = [];
+  registry.register({
+    name: 'web-seed',
+    source: async (hash, kind, share) => {
+      calls.push(`${hash}:${kind}:${share}`);
+      return [{ plane: 'ws', payload: `https://${share}/${hash}` }];
+    },
+  });
+
+  const hash = 'a'.repeat(64);
+  const sources = await registry.getAllContentSources(
+    [
+      { name: 'unregistered', share: 'ignored' },
+      { name: 'web-seed', share: 'example.test/content' },
+    ],
+    { hash, kind: 'blob' },
+  );
+
+  t.deepEqual(calls, [`${hash}:blob:example.test/content`]);
+  t.deepEqual(sources, [
+    { plane: 'ws', payload: `https://example.test/content/${hash}` },
+  ]);
+});
+
 test('locate produces locators with connection hints from agent NETS', async t => {
   const { host } = await prepareHost(t);
 
@@ -4341,6 +4521,249 @@ const makeFarTree = children => {
   });
 };
 
+// Content locators (magnet URNs), Phase 2: the `<verb>Content` interface
+// methods (`designs/endo-content-locators-magnet-urn.md` § Interface
+// extension, § Phased implementation step 2). With no `@planes` yet (Phase 3),
+// every locator these produce is `xt`-only.
+
+test('locateContent resolves a readable-blob to an xt-only magnet URN', async t => {
+  const { host } = await prepareHost(t);
+  const payload = 'content-locator payload\n';
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode(payload),
+  ]);
+  await E(host).storeBlob(readerRef, 'payload-blob');
+
+  const contentLocator = await E(host).locateContent('payload-blob');
+  // The `xt` hash is the same SHA-256 content address the CAS keys on.
+  const expectedHash = crypto
+    .createHash('sha256')
+    .update(payload)
+    .digest('hex');
+  t.is(contentLocator, `magnet:?xt=urn:endo-blob:${expectedHash}`);
+
+  const parsed = parseContentLocator(contentLocator);
+  t.is(parsed.hash, expectedHash);
+  t.is(parsed.kind, 'blob');
+  // `xt`-only: an empty `@planes` advertises no data-plane source (Phase 3).
+  t.deepEqual(parsed.sources, []);
+});
+
+test('locateContent rejects a non-content formula', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue(10, 'ten');
+  await t.throwsAsync(E(host).locateContent('ten'), {
+    message: /not a content-bearing formula/,
+  });
+});
+
+test('locateContent returns undefined for an unknown name', async t => {
+  const { host } = await prepareHost(t);
+  t.is(await E(host).locateContent('no-such-name'), undefined);
+});
+
+test('storeContent returns the same xt-only locator as locateContent', async t => {
+  const { host } = await prepareHost(t);
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('publish me\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'to-publish');
+  const located = await E(host).locateContent('to-publish');
+  const stored = await E(host).storeContent('to-publish');
+  t.is(stored, located);
+});
+
+test('storeContent returns undefined for an unknown name', async t => {
+  const { host } = await prepareHost(t);
+  t.is(await E(host).storeContent('no-such-name'), undefined);
+});
+
+test('storeContent rejects a non-content formula', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue(10, 'ten');
+  await t.throwsAsync(E(host).storeContent('ten'), {
+    message: /not a content-bearing formula/,
+  });
+});
+
+test('reverseLocateContent finds the pet names for a content locator', async t => {
+  const { host } = await prepareHost(t);
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('reverse me\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'reverse-blob');
+  const contentLocator = await E(host).locateContent('reverse-blob');
+  const names = await E(host).reverseLocateContent(contentLocator);
+  t.deepEqual(names, ['reverse-blob']);
+});
+
+test('reverseLocateContent returns all matching names, deduped and sorted', async t => {
+  const { host } = await prepareHost(t);
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('shared content\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'zeta-name');
+  // A second pet name for the same content formula (same content identity).
+  await E(host).copy(['zeta-name'], ['alpha-name']);
+  const contentLocator = await E(host).locateContent('zeta-name');
+  const names = await E(host).reverseLocateContent(contentLocator);
+  t.deepEqual(names, ['alpha-name', 'zeta-name']);
+});
+
+test('reverseLocateContent returns an empty array when no content matches', async t => {
+  const { host } = await prepareHost(t);
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('lonely\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'lonely-blob');
+  const contentLocator = await E(host).locateContent('lonely-blob');
+  await E(host).remove('lonely-blob');
+  t.deepEqual(await E(host).reverseLocateContent(contentLocator), []);
+});
+
+test('reverseLocateContent rejects a malformed content locator', async t => {
+  const { host } = await prepareHost(t);
+  await t.throwsAsync(E(host).reverseLocateContent('not-a-magnet-urn'));
+});
+
+test('internalizeContentLocator rejects a malformed content locator', async t => {
+  const { host } = await prepareHost(t);
+  await t.throwsAsync(E(host).internalizeContentLocator('not-a-magnet-urn'));
+});
+
+test('listContent lists only content-bearing entries', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).storeValue(10, 'ten');
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('listed\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'listed-blob');
+  const record = await E(host).listContent();
+  t.true('listed-blob' in record);
+  t.false('ten' in record);
+  t.is(record['listed-blob'], await E(host).locateContent('listed-blob'));
+});
+
+test('internalizeContentLocator parses a content locator', async t => {
+  const { host } = await prepareHost(t);
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('parse me\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'parse-blob');
+  const contentLocator = await E(host).locateContent('parse-blob');
+  const internalized = await E(host).internalizeContentLocator(contentLocator);
+  const { hash } = parseContentLocator(contentLocator);
+  t.is(internalized.hash, hash);
+  t.is(internalized.kind, 'blob');
+  t.deepEqual(internalized.sources, []);
+});
+
+test('locateContent resolves a readable-tree to an xt-only magnet URN', async t => {
+  const { host } = await prepareHost(t);
+  const remoteTree = makeFarTree({
+    'a.txt': makeFarBlob('alpha'),
+    'b.txt': makeFarBlob('beta'),
+  });
+  await E(host).storeTree(remoteTree, 'a-tree');
+  const contentLocator = await E(host).locateContent('a-tree');
+  t.regex(contentLocator, /^magnet:\?xt=urn:endo-tree:[0-9a-f]{64}$/);
+  const parsed = parseContentLocator(contentLocator);
+  t.is(parsed.kind, 'tree');
+  t.deepEqual(parsed.sources, []);
+  const names = await E(host).reverseLocateContent(contentLocator);
+  t.deepEqual(names, ['a-tree']);
+});
+
+test('a guest carries the content-locate family', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  const readerRef = bytesReaderFromIterator([
+    new TextEncoder().encode('guest blob\n'),
+  ]);
+  await E(host).storeBlob(readerRef, 'guest-blob');
+  await E(host).move(['guest-blob'], ['guest-agent', 'guest-blob']);
+  const contentLocator = await E(guest).locateContent('guest-blob');
+  t.regex(contentLocator, /^magnet:\?xt=urn:endo-blob:[0-9a-f]{64}$/);
+});
+
+test('HTTP web-seed loads and verifies a readable blob', async t => {
+  const { host, config } = await prepareHost(t);
+  const originalBytes = new TextEncoder().encode('web-seed payload\n');
+  await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), 'original');
+  const originalLocator = await E(host).locateContent('original');
+  const { hash } = parseContentLocator(originalLocator);
+  const gatewayAddress = fs
+    .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
+    .trim();
+
+  // The first source deliberately serves another valid blob. `loadContent`
+  // must reject it on the xt mismatch and continue to the second web seed.
+  await E(host).storeBlob(
+    bytesReaderFromIterator([new TextEncoder().encode('wrong payload\n')]),
+    'wrong',
+  );
+  const wrongLocator = await E(host).locateContent('wrong');
+  const { hash: wrongHash } = parseContentLocator(wrongLocator);
+  const shareLocation = url.pathToFileURL(
+    path.join(dirname, 'test', 'http-content-share.js'),
+  ).href;
+  await E(host).makeUnconfined('@main', shareLocation, {
+    powersName: '@none',
+    resultName: 'http-share',
+    env: {
+      GATEWAY_ADDRESS: gatewayAddress,
+      WRONG_HASH: wrongHash,
+    },
+  });
+  await E(host).move(['http-share'], ['@planes', 'http']);
+
+  const sharedLocator = await E(host).storeContent('original');
+  const shared = parseContentLocator(sharedLocator);
+  t.is(shared.hash, hash);
+  t.is(shared.sources.length, 2);
+
+  const loaded = await E(host).loadContent(sharedLocator);
+  t.is(await E(loaded).text(), 'web-seed payload\n');
+  t.deepEqual(await E(host).reverseLookup(loaded), []);
+
+  const original = await E(host).lookup('original');
+  const copiedInBand = await E(host).loadContent(originalLocator, original);
+  t.is(await E(copiedInBand).text(), 'web-seed payload\n');
+  t.deepEqual(await E(host).reverseLookup(copiedInBand), []);
+});
+
+test('HTTP web-seed loads a tar tree only after its assembled hash matches xt', async t => {
+  const { host, config } = await prepareHost(t);
+  await E(host).storeTree(
+    makeFarTree({
+      'alpha.txt': makeFarBlob('alpha'),
+      nested: makeFarTree({ 'beta.txt': makeFarBlob('beta') }),
+    }),
+    'tree',
+  );
+  const gatewayAddress = fs
+    .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
+    .trim();
+  const shareLocation = url.pathToFileURL(
+    path.join(dirname, 'test', 'http-content-share.js'),
+  ).href;
+  await E(host).makeUnconfined('@main', shareLocation, {
+    powersName: '@none',
+    resultName: 'http-share',
+    env: { GATEWAY_ADDRESS: gatewayAddress },
+  });
+  await E(host).move(['http-share'], ['@planes', 'http']);
+
+  const locator = await E(host).storeContent('tree');
+  const tree = await E(host).loadContent(locator);
+  t.deepEqual(await E(tree).list(), ['alpha.txt', 'nested']);
+  const nested = await E(tree).lookup('nested');
+  const beta = await E(nested).lookup('beta.txt');
+  t.is(await E(beta).text(), 'beta');
+});
+
 test('store readable tree with blobs', async t => {
   const { host } = await prepareHost(t);
 
@@ -4554,6 +4977,246 @@ const makeArchiveTree = archiveBytes =>
       return bytesReaderFromIterator([archiveBytes]);
     },
   });
+
+testNeedsNodeWorker(
+  'provideGit persists history-rewrite authority in its formula',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(
+      config.statePath,
+      '..',
+      'git-history-policy-repo',
+    );
+    await createGitFixture(repoPath);
+    await fs.promises.writeFile(
+      path.join(repoPath, 'history.txt'),
+      'history rewrite target\n',
+    );
+    await git(repoPath, ['add', 'history.txt']);
+    await git(repoPath, [
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=T',
+      'commit',
+      '-m',
+      'history rewrite target',
+    ]);
+
+    const mount = await E(host).provideMount(repoPath, 'git-history-worktree');
+    const ordinaryGit = await E(host).provideGit(mount, 'git-ordinary');
+    const gitHistory = await E(host).provideGit(mount, 'git-history', {
+      allowHistoryRewrite: true,
+    });
+
+    const runtimeOrdinaryGit =
+      /** @type {import('@endo/exo-git').HistoryRewriteEndoGit} */ (
+        ordinaryGit
+      );
+    // The rewriter-only methods are absent from the writer facet entirely
+    // (facet membership, not a runtime-rejected method call), so an
+    // ordinary Git without history-rewrite authority fails the CapTP
+    // method lookup rather than a bespoke authority check.
+    await t.throwsAsync(
+      E(runtimeOrdinaryGit).reword('HEAD', 'blocked ordinary rewrite'),
+      {
+        message: /has no method "reword"/,
+      },
+    );
+    const amended = await E(gitHistory).commit('amended before cancel', {
+      amend: true,
+    });
+    t.is(amended.summary, 'amended before cancel');
+
+    await E(host).cancel('git-history');
+    const reincarnated = await E(host).lookup('git-history');
+    const reworded = await E(reincarnated).reword(
+      'HEAD',
+      'reworded after reification',
+    );
+    t.is(reworded.summary, 'reworded after reification');
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit persists the commit identity in its formula',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(config.statePath, '..', 'git-identity-repo');
+    await createGitFixture(repoPath);
+
+    const mount = await E(host).provideMount(repoPath, 'git-identity-worktree');
+    const gitCap = await E(host).provideGit(mount, 'git-identity', {
+      identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
+    });
+
+    await fs.promises.writeFile(
+      path.join(repoPath, 'identity.txt'),
+      'identity\n',
+    );
+    const firstEntry = await E(mount).entry(['identity.txt']);
+    await E(gitCap).add([firstEntry]);
+    const first = await E(gitCap).commit('identity subject');
+    const firstShow = await git(repoPath, [
+      'show',
+      '-s',
+      '--format=%an%x00%ae%x00%cn%x00%ce',
+      first.oid,
+    ]);
+    t.is(
+      firstShow.stdout.replace(/\n$/u, ''),
+      ['Ada Agent', 'ada@example.test', 'Ada Agent', 'ada@example.test'].join(
+        '\0',
+      ),
+      'the formula identity attributes the initial commit',
+    );
+
+    // The identity is formula-owned, so it survives deincarnation: cancel the
+    // cap and reincarnate it from the persisted formula, then commit again.
+    await E(host).cancel('git-identity');
+    const reincarnated = await E(host).lookup('git-identity');
+    await fs.promises.writeFile(
+      path.join(repoPath, 'identity.txt'),
+      'identity again\n',
+    );
+    const secondEntry = await E(mount).entry(['identity.txt']);
+    await E(reincarnated).add([secondEntry]);
+    const second = await E(reincarnated).commit('identity subject two');
+    const secondShow = await git(repoPath, [
+      'show',
+      '-s',
+      '--format=%an%x00%ae%x00%cn%x00%ce',
+      second.oid,
+    ]);
+    t.is(
+      secondShow.stdout.replace(/\n$/u, ''),
+      ['Ada Agent', 'ada@example.test', 'Ada Agent', 'ada@example.test'].join(
+        '\0',
+      ),
+      'the identity survives deincarnation and reincarnation',
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit rejects writable Git over a read-only mount',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(config.statePath, '..', 'git-readonly-repo');
+    await createGitFixture(repoPath);
+
+    const readOnlyMount = await E(host).provideMount(
+      repoPath,
+      'git-readonly-worktree',
+      { readOnly: true },
+    );
+    await t.throwsAsync(
+      E(host).provideGit(readOnlyMount, 'git-readonly-ordinary'),
+      { message: /cannot construct writable Git over a read-only mount/ },
+    );
+    await t.throwsAsync(
+      E(host).provideGit(readOnlyMount, 'git-readonly-history', {
+        allowHistoryRewrite: true,
+      }),
+      { message: /cannot construct writable Git over a read-only mount/ },
+    );
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit allows a declared read-only Git over a read-only mount',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(
+      config.statePath,
+      '..',
+      'git-readonly-declared-repo',
+    );
+    await createGitFixture(repoPath);
+
+    const readOnlyMount = await E(host).provideMount(
+      repoPath,
+      'git-readonly-declared-worktree',
+      { readOnly: true },
+    );
+    const gitCap = await E(host).provideGit(
+      readOnlyMount,
+      'git-readonly-declared',
+      { readOnly: true },
+    );
+    const status = await E(gitCap).status();
+    t.true(Array.isArray(status.entries));
+    // `commit` is absent from the reader facet entirely (facet
+    // membership, not a runtime-rejected method call), so a read-only
+    // Git fails the CapTP method lookup rather than a bespoke authority
+    // check. See the analogous `reword` assertion elsewhere in this file.
+    await t.throwsAsync(E(gitCap).commit('blocked'), {
+      message: /has no method "commit"/,
+    });
+  },
+);
+
+testNeedsNodeWorker(
+  'provideGit allows writable Git over a writable mount',
+  async t => {
+    const { host, config } = await prepareHost(t);
+    const repoPath = path.join(config.statePath, '..', 'git-writable-repo');
+    await createGitFixture(repoPath);
+
+    const writableMount = await E(host).provideMount(
+      repoPath,
+      'git-writable-worktree',
+    );
+    const gitCap = await E(host).provideGit(writableMount, 'git-writable');
+    await fs.promises.writeFile(
+      path.join(repoPath, 'writable.txt'),
+      'writable\n',
+    );
+    const entry = await E(writableMount).entry(['writable.txt']);
+    await E(gitCap).add([entry]);
+    const commit = await E(gitCap).commit('writable mount commit');
+    t.is(commit.summary, 'writable mount commit');
+  },
+);
+
+test('provideGit rejects a malformed commit identity at the host boundary', async t => {
+  const { host, config } = await prepareHost(t);
+  const repoPath = path.join(
+    config.statePath,
+    '..',
+    'git-identity-reject-repo',
+  );
+  await createGitFixture(repoPath);
+  const mount = await E(host).provideMount(
+    repoPath,
+    'git-identity-reject-worktree',
+  );
+
+  // These identities all satisfy the interface guard (both fields are strings)
+  // yet must be rejected by the host's `normalizeGitIdentity`, so the failure
+  // surfaces at `provideGit` rather than late on the first commit.  The field
+  // name is `q()`-quoted, so it is disclosed (not redacted to `(a string)`) as
+  // the error crosses the daemon marshal boundary and the assertions can name
+  // the rejected field; only the offending value stays undisclosed.
+  await t.throwsAsync(
+    E(host).provideGit(mount, 'git-identity-empty', {
+      identity: { authorName: '', authorEmail: 'ada@example.test' },
+    }),
+    { message: /identity\.authorName.*must be a non-empty string/ },
+  );
+  await t.throwsAsync(
+    E(host).provideGit(mount, 'git-identity-blank', {
+      identity: { authorName: 'Ada Agent', authorEmail: '   ' },
+    }),
+    { message: /identity\.authorEmail.*must not be blank/ },
+  );
+  await t.throwsAsync(
+    E(host).provideGit(mount, 'git-identity-control', {
+      identity: { authorName: 'Ada\nAgent', authorEmail: 'ada@example.test' },
+    }),
+    { message: /identity\.authorName.*must not contain control characters/ },
+  );
+});
 
 test('provideGit tree exposes immutable commit contents', async t => {
   const { host, config } = await prepareHost(t);
@@ -5202,7 +5865,7 @@ test('mount readOnly() attenuation', async t => {
 
   // The structural narrowing returns a ReadableTree view, not an
   // EndoMount.  Reading through the platform surface (has, list,
-  // lookup) still works.
+  // listTree, lookup) still works.
   const entries = await E(roTree).list();
   t.deepEqual(entries, ['file.txt']);
   t.true(await E(roTree).has('file.txt'));
@@ -5211,13 +5874,14 @@ test('mount readOnly() attenuation', async t => {
   // method names are constrained to the ReadableTree surface
   // (filtering Exo introspection helpers). `help` is part of the
   // platform ReadableTree contract (every capability is
-  // self-documenting), so it appears alongside has/list/lookup.
+  // self-documenting), so it appears alongside has/list/listTree/lookup.
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(roTree).__getMethodNames__();
   t.deepEqual(methods.filter(name => !name.startsWith('__')).sort(), [
     'has',
     'help',
     'list',
+    'listTree',
     'lookup',
   ]);
 });
@@ -5240,6 +5904,176 @@ test('mount dot-dot navigation clamped at root', async t => {
   // (.. is clamped, so '..' from root stays at root)
   const entries = await E(mount).list('..');
   t.deepEqual(entries, ['inside.txt']);
+});
+
+test('provideSubMount read-only attenuation confines writes', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-ro');
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+  });
+
+  // Parent mount is read-WRITE; the sub-mount asks for read-only, so
+  // attenuation is an independent per-formula property, not inherited.
+  await E(host).provideMount(mountPath, 'submount-ro-parent');
+  await E(host).provideSubMount(
+    'submount-ro-parent',
+    ['src'],
+    'submount-ro-child',
+    { readOnly: true },
+  );
+  const child = await E(host).lookup(['submount-ro-child']);
+
+  // Reading through the sub-mount works and is rooted at src/.
+  t.deepEqual(await E(child).list(), ['main.js']);
+  t.true(await E(child).has('main.js'));
+  const file = await E(child).lookup('main.js');
+  t.is(await E(file).text(), 'export default 1;\n');
+
+  // Every mutation is rejected.
+  await t.throwsAsync(E(child).writeText(['added.js'], 'nope'), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).remove(['main.js']), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).makeDirectory(['nested']), {
+    message: /read-only/,
+  });
+
+  // Cross-reference: the backing directory is untouched on disk.
+  const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
+  t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount isolates the child from parent siblings', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-iso');
+  // The canonical isolation case from the design: a sub-mount at
+  // `/project/src` must not be able to reach `/project/secret.txt` via `..`.
+  // (The sibling is a plain filename, not `.env`, so this exercises the `..`
+  // confinement clamp rather than the independent denied-segment guardrail
+  // that would reject `.env` on every mount before the clamp is reached.)
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+    'secret.txt': 'SECRET=xyz\n',
+  });
+
+  await E(host).provideMount(mountPath, 'submount-iso-parent');
+  await E(host).provideSubMount(
+    'submount-iso-parent',
+    ['src'],
+    'submount-iso-child',
+  );
+
+  const parent = await E(host).lookup(['submount-iso-parent']);
+  const child = await E(host).lookup(['submount-iso-child']);
+
+  // The parent can see the secret; the child, rooted at src/, cannot.
+  t.true(await E(parent).has('secret.txt'));
+  t.deepEqual(await E(child).list(), ['main.js']);
+  t.false(await E(child).has('secret.txt'));
+
+  // `..` from the child root is clamped at src/, so the sibling secret
+  // stays invisible both to has() and to list().
+  t.false(await E(child).has('..', 'secret.txt'));
+  t.deepEqual(await E(child).list('..'), ['main.js']);
+});
+
+test('provideSubMount clamps a .. subpath at the parent root', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Nest the parent mount one level deep so there is a real directory
+  // above it to try to escape into.
+  const rootPath = path.join(config.statePath, '..', 'submount-clamp');
+  await createMountFixture(rootPath, {
+    'topsecret.txt': 'do not leak\n',
+    'proj/app.js': 'run();\n',
+  });
+
+  // Mount only the nested `proj` directory as the parent.
+  await E(host).provideMount(path.join(rootPath, 'proj'), 'clamp-parent');
+
+  // A `..` subpath would lexically point at `submount-clamp` (which holds
+  // topsecret.txt), but formulateSubMount clamps it at the parent root,
+  // so the child is rooted back at `proj` and cannot reach the secret.
+  await E(host).provideSubMount('clamp-parent', ['..'], 'clamp-child');
+  const child = await E(host).lookup(['clamp-child']);
+
+  t.true(await E(child).has('app.js'));
+  t.false(await E(child).has('topsecret.txt'));
+  t.deepEqual(await E(child).list(), ['app.js']);
+});
+
+test('provideSubMount cannot widen a read-only parent to read-write', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'submount-monotonic');
+  await createMountFixture(mountPath, {
+    'src/main.js': 'export default 1;\n',
+  });
+
+  // Parent mount is READ-ONLY.  A sub-mount that omits (or sets false)
+  // `readOnly` must NOT regain write authority the parent was attenuated
+  // out of: attenuation is monotonic, so a read-only parent yields a
+  // read-only child regardless of the requested flag.  (Design
+  // daemon-mount.md § Read-only attenuation: a read-only mount "cannot be
+  // upgraded to read-write through any API path".)
+  await E(host).provideMount(mountPath, 'monotonic-parent', {
+    readOnly: true,
+  });
+  await E(host).provideSubMount(
+    'monotonic-parent',
+    ['src'],
+    'monotonic-child',
+    { readOnly: false },
+  );
+  const child = await E(host).lookup(['monotonic-child']);
+
+  // Reading still works and is rooted at src/.
+  t.deepEqual(await E(child).list(), ['main.js']);
+
+  // Writes are rejected even though the child asked for read-write: the
+  // clamp forced the child read-only because the parent is read-only.
+  await t.throwsAsync(E(child).writeText(['added.js'], 'nope'), {
+    message: /read-only/,
+  });
+  await t.throwsAsync(E(child).remove(['main.js']), {
+    message: /read-only/,
+  });
+
+  // Cross-reference: the backing directory is untouched on disk.
+  const actual = await fs.promises.readdir(path.join(mountPath, 'src'));
+  t.deepEqual(actual, ['main.js']);
+});
+
+test('provideSubMount rejects a symlinked subpath that escapes the parent', async t => {
+  const { host, config } = await prepareHost(t);
+
+  // Lay down a secret OUTSIDE the parent mount, then a symlink inside the
+  // parent that points at it.  The lexical `..` clamp cannot catch this
+  // (the subpath has no `..`); the realpath containment check must.
+  const rootPath = path.join(config.statePath, '..', 'submount-symlink');
+  await createMountFixture(rootPath, {
+    'outside/secret.txt': 'do not leak\n',
+    'proj/app.js': 'run();\n',
+  });
+  await fs.promises.symlink(
+    path.join(rootPath, 'outside'),
+    path.join(rootPath, 'proj', 'escape'),
+    'dir',
+  );
+
+  await E(host).provideMount(path.join(rootPath, 'proj'), 'symlink-parent');
+
+  // A sub-mount rooted at the symlink would resolve (via realpath) to
+  // `outside/`, escaping the parent — formulateSubMount must throw.
+  await t.throwsAsync(
+    E(host).provideSubMount('symlink-parent', ['escape'], 'symlink-child'),
+    { message: /escapes parent mount root/ },
+  );
 });
 
 test('scratch mount - create and use', async t => {
@@ -5649,9 +6483,8 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   );
 });
 
-test('provideHostPath rejects a spoof that passes the genie shape gate', async t => {
-  // Pins the layering documented in `@endo/genie`'s `assertIsMountCap`
-  // (see `packages/genie/src/sandbox/slice.js`):
+test('provideHostPath rejects a spoof that passes the MountCap shape gate', async t => {
+  // Pins the layering documented in the agent host's `assertIsMountCap`:
   //
   //   - `assertIsMountCap` (in `spawnAgent`'s workspace / rootfs
   //     pet-name branches) is a **shape** gate.  It probes
@@ -5664,7 +6497,7 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
   //     anything not minted via `provideMount` / `provideScratchMount`
   //     with `not a daemon-minted mount`.
   //
-  // Saboteur finding 3 in TODO/60 flagged that the shape gate is the
+  // A saboteur finding flagged that the shape gate is the
   // *only* authentication on a pet-name Mount cap; this test pins the
   // identity gate's downstream rejection so a spoofed exo with the
   // right method names cannot widen the slice's bind set.  If a
@@ -5681,7 +6514,7 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
   const realMount = await E(host).lookup(['shape-gate-mount']);
   t.is(await E(host).provideHostPath(realMount), mountPath);
 
-  // Hand-roll a `makeExo` with the exact method set the genie's shape
+  // Hand-roll a `makeExo` with the exact method set the shape
   // gate probes for.  This is the canonical "minted by `Far(...)`
   // rather than `formulateMount`" spoof — `__getMethodNames__()`
   // returns the required surface, so the shape gate would happily
@@ -5711,11 +6544,10 @@ test('provideHostPath rejects a spoof that passes the genie shape gate', async t
     },
   });
 
-  // Inline the genie's shape-gate probe (we can't import
-  // `assertIsMountCap` from `@endo/genie` here because
-  // `@endo/daemon` is a dependency of genie, not the other way
-  // around — the genie test in
-  // `packages/genie/test/local-sandbox-powers.test.js` exercises
+  // Inline the agent host's shape-gate probe (we can't import
+  // `assertIsMountCap` from the agent host here because
+  // `@endo/daemon` is a dependency of the agent host, not the other way
+  // around — the agent host's own test exercises
   // the helper directly against the dev-repl's local powers).  The
   // probe matches the helper verbatim so the assertion still pins
   // the saboteur-3 layering: the spoof passes the shape probe but
@@ -6355,6 +7187,55 @@ test('mount symlink - all symlink types together in one listing', async t => {
   const rawEntries = await fs.promises.readdir(mountRoot);
   t.is(rawEntries.length, 8); // 2 real + 2 internal + 4 escaping
   t.is(entries.length, 4); // 2 real + 2 internal
+});
+
+test('mount denies sensitive segments through the mount formula', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-deny');
+  await createMountFixture(mountPath, {
+    '.ssh/id_rsa': 'private key',
+    '.env': 'TOKEN=secret',
+    '.gitignore': 'node_modules\n',
+    'README.md': 'readme',
+  });
+
+  await E(host).provideMount(mountPath, 'deny-mount');
+  const mount = await E(host).lookup(['deny-mount']);
+
+  // The listing hides every denied name but keeps the ordinary dotfile.
+  t.deepEqual(await E(mount).list(), ['.gitignore', 'README.md']);
+  // Direct access to a denied path throws the restricted-path error.
+  await t.throwsAsync(() => E(mount).readText(['.ssh', 'id_rsa']), {
+    message: /restricted path/,
+  });
+  await t.throwsAsync(() => E(mount).readText('.env'), {
+    message: /restricted path/,
+  });
+});
+
+test('cancelling the mount formula revokes live mount and file handles', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const mountPath = path.join(config.statePath, '..', 'mount-test-revoke');
+  await createMountFixture(mountPath, {
+    'src/index.js': 'export default 1;',
+    'top.txt': 'top',
+  });
+
+  await E(host).provideMount(mountPath, 'revoke-mount');
+  const mount = await E(host).lookup(['revoke-mount']);
+  // Hand out live faces before cancelling the formula.
+  const subView = await E(mount).subView('src');
+  const file = await E(mount).lookup(['src', 'index.js']);
+  t.is(await E(file).text(), 'export default 1;');
+
+  // Cancelling the formula runs the daemon's onCancel hook, which revokes.
+  await E(host).cancel('revoke-mount');
+
+  await t.throwsAsync(() => E(mount).list(), { message: /revoked/ });
+  await t.throwsAsync(() => E(subView).list(), { message: /revoked/ });
+  await t.throwsAsync(() => E(file).text(), { message: /revoked/ });
 });
 
 test('readLog streams daemon logs', async t => {

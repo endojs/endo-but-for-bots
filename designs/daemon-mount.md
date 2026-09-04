@@ -103,7 +103,6 @@ partially absorbed by the CLI verb reshape in
 
 ### Not yet implemented
 
-- `provideSubMount` host method (Phase 4)
 - GC cleanup for scratch mount backing directories — extracted to
   [daemon-content-store-gc](daemon-content-store-gc.md)
 - CLI commands: `endo ls`, `endo cat`, `endo write` (Phase 6)
@@ -174,7 +173,6 @@ garbage-collected (unreachable from any pet store).
 type ScratchMountFormula = {
   type: 'scratch-mount';
   readOnly: boolean;
-  parent?: FormulaIdentifier;
 };
 ```
 
@@ -182,7 +180,10 @@ type ScratchMountFormula = {
 |-------|-------------|
 | `type` | `'scratch-mount'` |
 | `readOnly` | If `true`, mutation methods throw |
-| `parent` | Optional parent mount formula |
+
+A `scratch-mount` never carries a `parent`: sub-mounts minted by
+`provideSubMount` are always `type: 'mount'` formulas.  Only
+`MountFormula` has the optional `parent` field.
 
 Both formula types share the same exo interface and implementation.  The
 only difference is how the mount root path is derived: `mount` reads it
@@ -452,22 +453,38 @@ Creates a new `mount` formula rooted at a subdirectory of an existing
 mount and writes it to the caller's pet store under `newName`.  The
 parent mount is recorded in the formula for dependency tracking.
 
+The child root is not a naive `path.join(parentPath, ...subpath)`.  The
+subpath is resolved through `resolveSegments`, which clamps `..` at the
+parent root (so `['..', '.env']` on `/project/src` stays within
+`/project/src`), and — when the derived root already exists — a
+`realpath` containment check rejects a symlinked subpath that escapes the
+parent (see § Sub-mount isolation).  Read-only attenuation is monotonic:
+a read-only parent forces a read-only child regardless of the requested
+flag (see § Read-only attenuation).
+
 ```js
 const provideSubMount = async (mountName, subpath, newName, options = {}) => {
   const { readOnly = false } = options;
   const mountId = petStore.identify(namePathFrom(mountName));
-  const mountFormula = formulaForId.get(mountId);
-  // Derive the full path from parent mount + subpath
-  const parentPath = mountFormula.type === 'mount'
-    ? mountFormula.path
-    : `${statePath}/mounts/${formulaNumberForId(mountId)}`;
-  const fullPath = path.join(parentPath, ...subpath);
+  const parentPath = getMountHostPath(mountId); // rejects non-mount ids
+  const parentFormula = formulaForId.get(mountId);
+  // Monotonic attenuation: never widen the parent's authority.
+  const effectiveReadOnly = readOnly || parentFormula.readOnly;
+  // Clamp `..` at the parent root, then reject a symlink escape.
+  const fullPath = resolveSegments(parentPath, parentPath, subpath, filePowers);
+  if (await filePowers.exists(fullPath)) {
+    const realParent = await filePowers.realPath(parentPath);
+    const realFull = await filePowers.realPath(fullPath);
+    if (realFull !== realParent && !realFull.startsWith(`${realParent}/`)) {
+      throw makeError(X`Sub-mount subpath ${q(subpath)} escapes parent mount root`);
+    }
+  }
 
   /** @type {MountFormula} */
   const formula = harden({
     type: 'mount',
     path: fullPath,
-    readOnly,
+    readOnly: effectiveReadOnly,
     parent: mountId,
   });
 
@@ -566,11 +583,29 @@ The `readOnly` flag is checked at the exo level.  A read-only mount
 cannot be "upgraded" to read-write through any API path.  The flag is
 persisted in the formula, so it survives daemon restarts.
 
+`provideSubMount` preserves this invariant: attenuation is monotonic, so
+a sub-mount of a read-only parent is read-only even when `readOnly` is
+`false` or omitted (`formulateSubMount` clamps the child's flag with
+`readOnly || parent.readOnly`).  A read-write parent may still be narrowed
+to a read-only child; only widening is forbidden.
+
 ### Sub-mount isolation
 
 Sub-mounts created via `provideSubMount` record their parent in the
 formula but have their own confinement root.  A sub-mount at
 `/project/src` cannot reach `/project/.env` via `..`.
+
+Two boundaries protect the child.  At creation, `formulateSubMount`
+clamps the `subpath` at the parent root (`resolveSegments`) and, when the
+derived root already exists, rejects a symlinked subpath whose `realpath`
+escapes the parent's `realpath`.  At runtime, the child's own confinement
+root bounds every operation.  The creation-time symlink check is
+existence-gated and best-effort: it assumes no untrusted process mutates
+the daemon's backing filesystem (planting a symlink at the child root
+after creation) — the same trusted-backing-store assumption the mount's
+own runtime `realpath` confinement rests on.  The load-bearing guarantee
+is the runtime confinement root; the creation-time check is defense in
+depth.
 
 ### No ambient access
 
@@ -627,13 +662,15 @@ disk usage, mitigated by GC when the formula becomes unreachable.
 GC cleanup of scratch-mount backing directories is covered by
 [daemon-content-store-gc](daemon-content-store-gc.md).
 
-### Phase 4: Sub-mounts and snapshot — Partial
+### Phase 4: Sub-mounts and snapshot — **Complete**
 
-1. Implement `provideSubMount` host method
+1. ~~Implement `provideSubMount` host method~~ (shipped via PR #656)
 2. ~~Implement `snapshot()` using the content store from platform-fs~~
    (shipped 2026-05-27 via PR #339; see
    designs/daemon-mount-capabilities.md)
-3. Tests: sub-mount isolation, ~~snapshot round-trip~~
+3. Tests: ~~sub-mount isolation~~ (read-only attenuation, sibling
+   isolation, `..` clamp, monotonic read-only clamp, and symlink-escape
+   rejection shipped via PR #656), ~~snapshot round-trip~~
    (snapshot-round-trip tests shipped 2026-05-27 via PR #339)
 
 ### Phase 5: Transient lookup exos — **Complete**

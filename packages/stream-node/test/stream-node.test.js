@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global setTimeout */
 import test from '@endo/ses-ava/test.js';
 
 import { fileURLToPath } from 'url';
@@ -38,7 +37,7 @@ test('stream to and from Node.js reader/writer', async (/** @type {import('ava')
   const makeProducer = async () => {
     await null;
     let chunkLength = 1;
-    for (let i = 0; i < scratch.byteLength; ) {
+    for (let i = 0; i < scratch.byteLength;) {
       const j = i + chunkLength;
       t.log('->', i, j);
 
@@ -103,7 +102,7 @@ test('stream write error (EPIPE due to exit)', async (/** @type {import('ava').E
   const makeProducer = async () => {
     await null;
     let chunkLength = 1;
-    for (let i = 0; i < scratch.byteLength; ) {
+    for (let i = 0; i < scratch.byteLength;) {
       const j = i + chunkLength;
       t.log('->', i, j);
 
@@ -165,8 +164,8 @@ test('stream writer abort', async (/** @type {import('ava').ExecutionContext} */
   };
 
   const makeConsumer = async () => {
+    // eslint-disable-next-line no-empty
     for await (const _ of reader) {
-      // eslint-disable-next-line no-empty
     }
   };
 

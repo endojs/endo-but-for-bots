@@ -7,7 +7,7 @@ import harden from '@endo/harden';
 import { Far } from '@endo/pass-style';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { makePromiseKit } from '@endo/promise-kit';
-import { createDOM, waitFor } from '../helpers/dom-setup.js';
+import { createDOM, tick, waitFor } from '../helpers/dom-setup.js';
 
 const { document: testDocument } = createDOM();
 
@@ -193,7 +193,7 @@ const setupGutter = async (opts = {}) => {
     $container,
     $modalContainer,
     powers,
-    currentProfilePath: [],
+    currentProfilePath: opts.currentProfilePath || [],
     onNavigate: path => navigated.push([...path]),
   });
 
@@ -274,6 +274,73 @@ test.serial('right-click home space shows Edit but not Delete', async t => {
   // Delete should be hidden (data-menu-scope="delible")
   t.is($delete.style.display, 'none', 'delete is hidden for home');
 });
+
+// ── setActivePath: navigation that did not come from the gutter ──
+
+// The gutter is built once, outside every space, so it no longer learns the
+// current path by being rebuilt with it. This is the seam that replaces that.
+test.serial('setActivePath highlights the space at that path', async t => {
+  const storedValues = new Map();
+  storedValues.set(
+    'spaces/1',
+    harden({
+      id: '1',
+      name: 'Work',
+      icon: '🧙',
+      profilePath: ['work-agent'],
+      mode: 'inbox',
+      scheme: 'auto',
+    }),
+  );
+
+  const { $container, gutter } = await setupGutter({ storedValues });
+  t.truthy($container.querySelector('.space-item.home.active'));
+
+  gutter.setActivePath(['work-agent']);
+  await waitFor(
+    () => !!$container.querySelector('.space-item[data-space-id="1"].active'),
+  );
+  t.falsy($container.querySelector('.space-item.home.active'));
+
+  gutter.setActivePath([]);
+  await waitFor(() => !!$container.querySelector('.space-item.home.active'));
+  t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
+});
+
+test.serial(
+  'setActivePath keeps the open space when two share a path',
+  async t => {
+    const storedValues = new Map();
+    for (const id of ['1', '2']) {
+      storedValues.set(
+        `spaces/${id}`,
+        harden({
+          id,
+          name: `View ${id}`,
+          icon: '🧙',
+          profilePath: ['work-agent'],
+          mode: 'inbox',
+          scheme: 'auto',
+        }),
+      );
+    }
+
+    const { $container, gutter } = await setupGutter({ storedValues });
+
+    gutter.selectSpace('2');
+    await waitFor(
+      () => !!$container.querySelector('.space-item[data-space-id="2"].active'),
+    );
+
+    // The path alone cannot say which of the two is open, so being told about the
+    // path the open space already has must leave the highlight where it is —
+    // deriving from the path would snap it to whichever space came first.
+    gutter.setActivePath(['work-agent']);
+    await tick(50);
+    t.truthy($container.querySelector('.space-item[data-space-id="2"].active'));
+    t.falsy($container.querySelector('.space-item[data-space-id="1"].active'));
+  },
+);
 
 // ── Test 2: Right-click regular space shows both Edit and Delete ──
 
@@ -515,3 +582,152 @@ test.serial(
     );
   },
 );
+
+// ── Default space opens first, without a round trip ──
+//
+// The preference names a space, but opening one needs its profile path and
+// mode, which live on the daemon. Waiting for them meant Home was mounted and
+// torn down before the default space appeared. The gutter caches the whole
+// descriptor beside the preference so the entry point can mount it directly.
+
+test.serial(
+  'refresh caches the default space so the next load can open it',
+  async t => {
+    window.localStorage.clear();
+    const storedValues = new Map();
+    storedValues.set(
+      'spaces/1',
+      harden({
+        id: '1',
+        name: 'Work',
+        icon: '🧙',
+        profilePath: ['work-agent'],
+        mode: 'channel',
+        channelPetName: 'general',
+        scheme: 'dark',
+      }),
+    );
+    // The preference as a previous session left it: a bare space id.
+    window.localStorage.setItem('chat-default-space', '1');
+    await setupGutter({ storedValues });
+
+    const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+    const boot = readBootDefaultSpace();
+    t.is(boot.id, '1');
+    t.deepEqual(boot.profilePath, ['work-agent']);
+    t.is(
+      boot.spaceInfo.mode,
+      'channel',
+      'enough to mount it, not just name it',
+    );
+    t.is(boot.spaceInfo.channelPetName, 'general');
+    t.is(boot.scheme, 'dark');
+  },
+);
+
+test.serial(
+  'a default that no longer resolves leaves nothing cached',
+  async t => {
+    window.localStorage.clear();
+    // A preference naming a space that is not in the store: caching it would
+    // send the next load somewhere the user cannot actually go.
+    window.localStorage.setItem('chat-default-space', '9');
+    await setupGutter();
+
+    const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+    t.is(readBootDefaultSpace(), undefined);
+  },
+);
+
+test.serial(
+  'a cached default naming a since-removed space falls back to Home',
+  async t => {
+    window.localStorage.clear();
+    // A cache left by a previous session for a space that no longer exists.
+    window.localStorage.setItem(
+      'chat-default-space-boot',
+      JSON.stringify({
+        id: '7',
+        profilePath: ['spaces', '7'],
+        spaceInfo: { mode: 'channel' },
+      }),
+    );
+    window.localStorage.setItem('chat-default-space', '7');
+
+    // The entry point would have mounted ['spaces','7']; the gutter is created
+    // with that path and must notice the space is not there.
+    const { navigated } = await setupGutter({
+      currentProfilePath: ['spaces', '7'],
+    });
+
+    await waitFor(() => navigated.length > 0);
+    t.deepEqual(navigated[0], [], 'navigated back to Home');
+
+    const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+    t.is(readBootDefaultSpace(), undefined, 'and dropped the stale cache');
+  },
+);
+
+// The boot cache is read before the first paint and its `mode` decides which
+// component the shell mounts, so what it accepts is worth pinning: too loose
+// and a foreign mode reaches the shell, too tight and ordinary spaces are sent
+// to Home instead of the space the user chose.
+
+test.serial('a boot cache for an inbox-mode space is honored', async t => {
+  window.localStorage.clear();
+  // 'inbox' is the default mode, so it is absent from KNOWN_MODES — that set
+  // exists to normalize everything else *to* it. A validator that tests only
+  // KNOWN_MODES rejects this entry and silently opens Home instead.
+  window.localStorage.setItem(
+    'chat-default-space-boot',
+    JSON.stringify({
+      id: '3',
+      profilePath: ['desk-agent'],
+      spaceInfo: { mode: 'inbox' },
+      scheme: 'light',
+    }),
+  );
+
+  const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+  const boot = readBootDefaultSpace();
+  t.truthy(boot, 'an inbox-mode space is a perfectly ordinary default');
+  t.is(boot.id, '3');
+  t.is(boot.spaceInfo.mode, 'inbox');
+  t.is(boot.scheme, 'light');
+});
+
+test.serial('a boot cache naming an unknown mode is ignored', async t => {
+  window.localStorage.clear();
+  // Written by a build that had a space kind this one does not.
+  window.localStorage.setItem(
+    'chat-default-space-boot',
+    JSON.stringify({
+      id: '4',
+      profilePath: ['agent'],
+      spaceInfo: { mode: 'holodeck' },
+    }),
+  );
+
+  const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+  t.is(readBootDefaultSpace(), undefined);
+});
+
+test.serial('a boot cache with an unusable scheme keeps the space', async t => {
+  window.localStorage.clear();
+  // The scheme reaches `setAttribute` before any of the gutter's own checks.
+  // It is the scheme that is unusable here, not the space, so the space stays.
+  window.localStorage.setItem(
+    'chat-default-space-boot',
+    JSON.stringify({
+      id: '5',
+      profilePath: ['agent'],
+      spaceInfo: { mode: 'channel' },
+      scheme: 'ultraviolet',
+    }),
+  );
+
+  const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+  const boot = readBootDefaultSpace();
+  t.is(boot.id, '5', 'still opens the space');
+  t.is(boot.scheme, undefined, 'but not with a scheme it cannot apply');
+});

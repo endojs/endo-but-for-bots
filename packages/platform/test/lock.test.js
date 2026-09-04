@@ -145,8 +145,29 @@ test('lock with invalid type rejects', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
   const f = await openFile(root, 'f');
+  // The interface guard's LockOpts shape rejects the bad `type` at the
+  // exo boundary, before the lock table's own EINVAL check runs.
   await t.throwsAsync(
     () => E(f).lock({ type: 'mandatory', start: 0n, length: 1n }),
-    { message: /EINVAL/ },
+    { message: /In "lock" method.*Must match one of/s },
   );
+});
+
+test('lock accepts an undeclared extension field of any shape (tolerant reader)', async t => {
+  const fs = makeInMemoryFilesystem();
+  const root = await E(fs).root();
+  const f = await openFile(root, 'f');
+  // `LockOpts` declares no `wait` member (conflicting requests fail
+  // immediately with EAGAIN), so `wait` is just another undeclared
+  // field — the guard must not single it out and type-check it. A
+  // non-boolean value here would previously have been rejected only
+  // because the guard mistakenly declared `wait: M.boolean()`.
+  const lock = await E(f).lock({
+    type: 'exclusive',
+    start: 0n,
+    length: 1n,
+    wait: 'eventually',
+  });
+  await E(lock).release();
+  t.pass();
 });

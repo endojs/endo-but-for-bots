@@ -8,7 +8,9 @@ This file provides conventions and constraints for AI agents working in this rep
 - Packages live in `packages/`
 - Workspace dependencies use `"workspace:^"` version specifiers.
 - Each package has its own `tsconfig.json` and `tsconfig.build.json`.
-- Tests use `ava` (runtime) and `tsd` (types)
+- Tests use `ava` (runtime) and type-contract fixtures.
+- All type-contract suites use `expect-type` assertions compiled by
+  checked-in `tsconfig.test-types.json` projects.
 - Linting: `eslint` with project-specific rules; run `yarn lint` per-package
 - No copyright headers in source files; license is declared in `package.json`.
 
@@ -42,6 +44,12 @@ This file provides conventions and constraints for AI agents working in this rep
 - Use `q()` to safely quote values in error messages.
 - Use tagged template errors where appropriate:
   `throw makeError(X\`No formula for ${ref}\`)`.
+- Name an assertion helper `assertXxx`, never `insistXxx`.
+  "Insist" belongs to an older vocabulary; here the vocabulary is `assert` and
+  `Fail` from `@endo/errors`.
+  Reaching for the name `insistFoo` is a reliable signal that what you want is
+  an `assertFoo` built on `@endo/errors` — usually the one-line
+  `condition || Fail\`...\`` form.
 
 ## TypeScript usage
 
@@ -138,6 +146,37 @@ Never mix `self` and `facets` in the same context type.
 
 ## Code style
 
+### Numeric domain
+
+- Choose the type that matches the domain, not the one that is cheapest to type.
+  For a quantity constrained to natural numbers, use `bigint` unless the range
+  genuinely fits in four bytes, in which case `number` is exact and honest.
+  Establish that range from the domain being modeled, and state the reason
+  accurately: an array index really is capped at `2**32 - 1` by the language, but
+  a typed-array length is spec-bounded at `2**53 - 1`, and a protocol quantity
+  such as a CBOR tag number is not a JavaScript quantity at all. Narrowing one of
+  those to four bytes is a defensible profile choice; describing the narrowing as
+  something JavaScript forces is the same error as the int53 guard below, just
+  pointed the other way, and it forecloses revisiting the choice later.
+- `Number.isSafeInteger` guards and int53 arithmetic are an aberration of
+  JavaScript, not a fact about the domain being modeled.
+  A safe-integer range check on a value whose real domain is wider (a 64-bit wire
+  argument, say) advertises the language's limitation as if it were the
+  protocol's, and silently truncates at 2**53 rather than failing.
+- Do not decompose a wide integer with `Math.floor(x / 0x100)`.
+  That is neither idiom it resembles: if the value needs more than 32 bits it is
+  a `bigint` and shifts (`>> 8n`) express the intent directly; if it fits in 32
+  bits, bitwise operators (`>>> 8`) do.
+  The asm.js integer-coercion idiom is `x | 0`, not `Math.floor`, and it is not
+  what wide-integer decomposition wants either.
+- Substantiate a numeric-representation choice made for speed with a benchmark.
+  Absent evidence, prefer the clearer expression; an unmeasured
+  micro-optimization is a cost with no demonstrated benefit.
+- Prefer expressing a narrow range as a TypeScript JSDoc type over a defensive
+  runtime check inside a package.
+  We only need strong runtime safety at the Exo boundary and at a parser's input
+  edge, where the values genuinely arrive untyped.
+
 ### Imports
 
 Group imports: external `@endo/*` packages first, then local imports, separated
@@ -184,8 +223,11 @@ if (methods.includes('followNameChanges')) {
 
 ## ESLint
 
-The project uses `plugin:@endo/internal` which extends `prettier`,
-`plugin:@jessie.js/recommended`, and `plugin:@endo/strict`.
+The project uses `plugin:@endo/internal` for Endo's internal rules and
+`plugin:@endo/strict` for the shared legacy style, import, and recommended
+rules.
+Jessie is configured separately in the root flat config, where its processor
+and `safe-await-separator` rule are applied explicitly.
 This enforces harden-exports, restricts plus operands, and requires PascalCase
 for interfaces.
 
@@ -205,6 +247,10 @@ for interfaces.
 - Run typechecking with `yarn lint:types` in the changed package, or
   `yarn build:types` at the root when exported declarations or cross-package
   types may have changed.
+- Run `yarn test:types` after `yarn build:types` when public type contracts or
+  `.test-d.ts` fixtures may have changed.
+  The root task uses Turbo to run only packages that opt in with a `test:types`
+  script.
 - Run `yarn docs` at the root when API docs or exported type surfaces may have
   changed.
   This is a CI gate, including for documentation-only PRs, and catches broken
@@ -235,11 +281,12 @@ Running the following before pushing avoids the churn:
 
 ### Lint-rule gotchas
 
-- Do **not** rename "intentionally unused" identifiers with a leading
-  underscore.
-  This conflicts with `no-underscore-dangle`.
-  Use `// eslint-disable-next-line no-unused-vars` instead, or delete the unused
-  declaration.
+- Do **not** rename an intentionally unused identifier solely to silence
+  `no-unused-vars`.
+  Caught errors matching `^_` are explicitly ignored by
+  `caughtErrorsIgnorePattern`, so a form such as `catch (_err)` is allowed.
+  For other declarations, use `// eslint-disable-next-line no-unused-vars` or
+  delete the unused declaration rather than adding a leading underscore.
 - `/** @type {T} */` binds to the next declaration, not the enclosing block.
   When refactoring, keep the tag adjacent to the thing it annotates; hoisting a
   local above its type comment silently retypes the local.

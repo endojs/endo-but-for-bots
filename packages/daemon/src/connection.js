@@ -6,8 +6,8 @@ import { isPassable, passableAsJustin } from '@endo/marshal';
 import { makePromiseKit } from '@endo/promise-kit';
 import { mapWriter, mapReader } from '@endo/stream';
 import { makeNetstringReader, makeNetstringWriter } from '@endo/netstring';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
 
 /** @import { Stream, Reader, Writer } from '@endo/stream' */
 /** @import { CapTpConnectionRegistrar } from './types.js' */
@@ -131,23 +131,11 @@ export const makeMessageCapTP = (
       () => {},
       () => {},
     );
-    // Swallow rejections from writes that race with peer disconnect
-    // (e.g. CTP_DISCONNECT after the other side has already FIN'd).
-    // Without this, CapTP teardown produces "This socket has been
-    // ended by the other party" rejections that fail otherwise-clean
-    // test runs under AVA's strict unhandled-rejection policy.
-    writeP.catch(err => {
-      const msg = String((err && err.message) || err || '');
-      const isPostDisconnect =
-        msg.includes('socket has been ended') ||
-        msg.includes('write after end') ||
-        msg.includes('EPIPE') ||
-        msg.includes('ECONNRESET');
-      if (!isPostDisconnect) {
-        // Still log non-disconnect errors for visibility.
-        console.error(`CapTP ${name} send error:`, msg);
-      }
-    });
+    // Contain this direct branch without changing `writeP`: CapTP observes a
+    // rejected rawSend result, aborts the connection, and routes the failure
+    // through its onReject policy. Logging here would present the same write
+    // failure a second time and would bypass a caller's structured policy.
+    writeP.catch(() => {});
     return writeP;
   };
 
@@ -156,8 +144,9 @@ export const makeMessageCapTP = (
   // The registrar receives `close` before CapTP is initialized, but
   // it only stashes it for later use — it never calls it synchronously.
   // We rely on this invariant to define `close` as a forward reference
-  // that captures `abort` and `drained` from the CapTP setup below.
-  /** @type {(reason?: Error) => Promise<void>} */
+  // that captures `abort`, `shutdown`, and `drained` from the CapTP setup
+  // below.
+  /** @type {(reason?: Error, options?: { graceful?: boolean }) => Promise<void>} */
   let close;
 
   const registrarOptions = registerCapTpConnection(
@@ -174,7 +163,7 @@ export const makeMessageCapTP = (
     ...registrarOptions,
     ...capTpOptions,
   };
-  const { dispatch, getBootstrap, abort } = makeCapTP(
+  const { dispatch, getBootstrap, abort, shutdown } = makeCapTP(
     name,
     send,
     bootstrap,
@@ -199,18 +188,23 @@ export const makeMessageCapTP = (
   );
 
   let isClosed = false;
-  close = reason => {
+  close = (reason, { graceful = false } = {}) => {
     if (isClosed) {
       return closedPromise;
     }
     isClosed = true;
-    abort(reason);
+    if (graceful) {
+      shutdown(reason);
+    } else {
+      abort(reason);
+    }
     Promise.all([
       // Flush any writes still queued on `writeTail` (notably the
-      // CTP_DISCONNECT that `abort` just enqueued) before closing the
-      // writer, so serialization does not drop the final frame. `writeTail`
-      // always settles — it advances on each write's resolution or
-      // rejection — so this cannot wedge close on a live or dead transport.
+      // CTP_DISCONNECT that `abort` or `shutdown` just enqueued) before
+      // closing the writer, so serialization does not drop the final frame.
+      // `writeTail` always settles — it advances on each write's resolution
+      // or rejection — so this cannot wedge close on a live or dead
+      // transport.
       writeTail.then(() => writer.return(undefined)).catch(() => {}),
       drained.catch(() => {}),
     ]).then(() => {
@@ -219,8 +213,13 @@ export const makeMessageCapTP = (
     return closedPromise;
   };
 
+  // Cancellation is the caller's own deliberate teardown signal, so it
+  // closes the connection gracefully: pending operations still reject
+  // with the cancellation reason, but neither this side nor the peer
+  // reports the reason as a CapTP exception. Stream failures keep the
+  // loud `abort` path above.
   const closedP = cancelled.catch(error => {
-    close(error);
+    close(error, { graceful: true });
   });
   const closedRace = Promise.race([closedP, closedPromise]);
 
@@ -259,13 +258,13 @@ export const messageToBytes = message => {
     };
   }
   const text = JSON.stringify(outgoing);
-  const bytes = bytesFromText(text);
+  const bytes = encodeUtf8(text);
   return bytes;
 };
 
 /** @param {Uint8Array} bytes */
 export const bytesToMessage = bytes => {
-  const text = bytesToText(bytes);
+  const text = decodeUtf8(bytes);
   // console.log('<-', text);
   const message = JSON.parse(text);
   return message;

@@ -1,6 +1,5 @@
 // @ts-nocheck - Component test with happy-dom
 
-/* global globalThis */
 /* eslint-disable no-underscore-dangle */
 
 import '@endo/init/debug.js';
@@ -202,6 +201,33 @@ test.serial(
     const storeCall = calls.find(c => c.method === 'storeValue');
     t.truthy(storeCall, 'storeValue invoked');
     t.deepEqual(storeCall.args[1], ['my', 'value'], 'path split on /');
+  },
+);
+
+test.serial(
+  'Escape dismisses the modal even from a focused Save-as input',
+  async t => {
+    const { $frame, $actions, api } = setup();
+    t.teardown(() => api.dismissValue());
+
+    await api.showValue(harden({ a: 1 }));
+    await waitFor(() => !!$actions.querySelector('.value-name-input'));
+    t.is($frame.dataset.show, 'true', 'frame shown while the value is open');
+
+    // Escape dispatched from within the focused name input must dismiss the
+    // modal — the input must not swallow it (regression: the key handler used to
+    // ignore all keys whose target was a text field).
+    const $input = $actions.querySelector('.value-name-input');
+    $input.dispatchEvent(
+      new globalThis.KeyboardEvent('keyup', { key: 'Escape', bubbles: true }),
+    );
+
+    await waitFor(() => $frame.dataset.show === 'false');
+    t.is(
+      $frame.dataset.show,
+      'false',
+      'Escape from the name input dismissed the modal',
+    );
   },
 );
 

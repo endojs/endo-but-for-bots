@@ -19,13 +19,15 @@ import { makeError, X, q } from '@endo/errors';
 import { LockInterface } from '../type-guards.js';
 import { rangesOverlap } from './helpers.js';
 
+/** @import { Lock, LockOpts, LockQuery, LockState } from '../types.js' */
+
 /**
  * Build a fresh lock table.
  *
  * @template K
  * @returns {{
- *   acquire: (key: K, opts: any) => object,
- *   probe: (key: K, opts: any) => { type: 'shared' | 'exclusive', start: bigint, length: bigint } | null,
+ *   acquire: (key: K, opts: LockOpts) => Lock,
+ *   probe: (key: K, opts: LockQuery) => LockState | null,
  * }}
  */
 export const makeLockTable = () => {
@@ -48,7 +50,7 @@ export const makeLockTable = () => {
    * `release()` is called.
    *
    * @param {K} key
-   * @param {any} opts  `{ type: 'shared'|'exclusive', start?: bigint, length?: bigint }`
+   * @param {LockOpts} opts
    */
   const acquire = (key, opts) => {
     const o = opts || {};
@@ -85,7 +87,7 @@ export const makeLockTable = () => {
         if (method === undefined) {
           return 'Lock: in-process advisory range lock on an OpenFile.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -95,7 +97,7 @@ export const makeLockTable = () => {
    * first matching state, or `null` if the range is free.
    *
    * @param {K} key
-   * @param {any} opts  `{ start?: bigint, length?: bigint }`
+   * @param {LockQuery} opts
    */
   const probe = (key, opts) => {
     const o = opts || {};

@@ -1,9 +1,22 @@
 // @ts-check
+// spell-out-exempt: preserve existing public dirPath and makeListDirTool names.
+/* global setTimeout */
 
 import fs from 'fs';
 import path from 'path';
 
 import { E } from '@endo/eventual-send';
+import { applyEdits, normalizeEdits } from '@endo/agentry/edit-text';
+import { defaultDeniedSegments } from '@endo/daemon/src/mount.js';
+import {
+  makeSearch,
+  GLOB_MAX_RESULTS,
+  GREP_MAX_RESULTS,
+} from '@endo/platform/fs/search';
+import { makeNodeSearchPowers } from '@endo/platform/fs/node/search';
+import safeRegex from 'safe-regex2';
+
+/** @import { GrepMatch } from '@endo/platform/fs/search.types.js' */
 
 /**
  * @typedef {object} ToolFunction
@@ -34,12 +47,30 @@ import { E } from '@endo/eventual-send';
  * @returns {string}
  */
 const resolveSafe = (relativePath, cwd) => {
-  const resolved = path.resolve(cwd, relativePath);
-  if (!resolved.startsWith(cwd)) {
+  const root = path.resolve(cwd);
+  const resolved = path.resolve(root, relativePath);
+  const rootPrefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  if (resolved !== root && !resolved.startsWith(rootPrefix)) {
     throw new Error(`Path traversal not allowed: ${relativePath}`);
   }
   return resolved;
 };
+
+/**
+ * BigInt has no JSON representation, so a result that merely *contains* one
+ * throws inside `JSON.stringify` and the whole result is lost — even though
+ * the capabilities most worth calling return them (`stat()` sizes and times, a
+ * workflow's `status()` and `journal()`). Callers worked around that by
+ * hand-rolling this replacer at every call site, which buries the real result
+ * in a re-parsed blob. Decimal strings rather than a marshalling sentinel: a
+ * tool result is text a model reads, and `"1786825186213908033"` is the
+ * readable answer.
+ *
+ * @param {string} _key
+ * @param {unknown} value
+ */
+const bigintsAsDecimalStrings = (_key, value) =>
+  typeof value === 'bigint' ? value.toString() : value;
 
 /**
  * Render a tool result value as text for the model. Plain JSON-serializable
@@ -56,7 +87,7 @@ const resolveSafe = (relativePath, cwd) => {
 const renderToolResult = async result => {
   let json;
   try {
-    json = JSON.stringify(result, null, 2);
+    json = JSON.stringify(result, bigintsAsDecimalStrings, 2);
   } catch {
     json = undefined;
   }
@@ -270,18 +301,42 @@ export const makeWriteFileTool = cwd => {
 harden(makeWriteFileTool);
 
 /**
+ * Edit a file by exact-string replacement, modeled on Pi's edit tool. Accepts
+ * a single `oldText`/`newText` pair or an `edits` array for batching. Each
+ * `oldText` must match exactly once; line endings and a leading BOM are
+ * preserved. The replacement algorithm is shared with the Lal agent through
+ * `@endo/agentry/edit-text`.
+ *
  * @param {string} cwd
  * @returns {FaeTool}
  */
-export const makeEditFileTool = cwd => {
+export const makeEditTool = cwd => {
+  const editShape = {
+    type: 'object',
+    properties: {
+      oldText: {
+        type: 'string',
+        description:
+          'Exact text to replace. Must occur exactly once in the file; ' +
+          'add surrounding context if it is otherwise ambiguous.',
+      },
+      newText: {
+        type: 'string',
+        description: 'Replacement text.',
+      },
+    },
+    required: ['oldText', 'newText'],
+  };
   /** @type {ToolSchema} */
   const toolSchema = harden({
     type: 'function',
     function: {
-      name: 'editFile',
+      name: 'edit',
       description:
-        'Edit a file by replacing the first occurrence of a string with another. ' +
-        'Path is relative to the working directory.',
+        'Edit a file by replacing exact text. Provide a single oldText/newText ' +
+        'pair, or an "edits" array to apply several replacements in one call. ' +
+        'Each oldText must match exactly once. Path is relative to the working ' +
+        'directory.',
       parameters: {
         type: 'object',
         properties: {
@@ -289,16 +344,17 @@ export const makeEditFileTool = cwd => {
             type: 'string',
             description: 'Relative path to the file to edit.',
           },
-          oldString: {
-            type: 'string',
-            description: 'The exact string to search for and replace.',
-          },
-          newString: {
-            type: 'string',
-            description: 'The replacement string.',
+          oldText: editShape.properties.oldText,
+          newText: editShape.properties.newText,
+          edits: {
+            type: 'array',
+            description:
+              'Optional batch of edits; each targets a non-overlapping, ' +
+              'uniquely-matching region of the file.',
+            items: editShape,
           },
         },
-        required: ['filePath', 'oldString', 'newString'],
+        required: ['filePath'],
       },
     },
   });
@@ -308,30 +364,34 @@ export const makeEditFileTool = cwd => {
       return toolSchema;
     },
     async execute(args) {
-      const { filePath, oldString, newString } =
-        /** @type {{ filePath: string, oldString: string, newString: string }} */ (
-          args
-        );
-      if (!filePath || oldString === undefined || newString === undefined) {
-        throw new Error('filePath, oldString, and newString are required');
+      const { filePath } = /** @type {{ filePath: string }} */ (args);
+      if (!filePath) {
+        throw new Error('filePath is required');
       }
+      const edits = normalizeEdits(
+        /** @type {{ oldText?: string, newText?: string, edits?: any[] }} */ (
+          args
+        ),
+      );
       const resolved = resolveSafe(filePath, cwd);
       const content = await fs.promises.readFile(resolved, 'utf-8');
-      if (!content.includes(oldString)) {
-        throw new Error(
-          `oldString not found in ${filePath}. Ensure the string matches exactly.`,
-        );
-      }
-      const updated = content.replace(oldString, newString);
+      const {
+        content: updated,
+        diff,
+        applied,
+      } = applyEdits(content, edits, {
+        fileName: filePath,
+      });
       await fs.promises.writeFile(resolved, updated, 'utf-8');
-      return `Edited ${filePath}`;
+      const summary = `Applied ${applied} edit${applied === 1 ? '' : 's'} to ${filePath}`;
+      return diff ? `${summary}\n\n${diff}` : summary;
     },
     help() {
-      return 'Edit a file by replacing the first occurrence of a string with another.';
+      return 'Edit a file by exact-text replacement (single or batched); returns a unified diff.';
     },
   });
 };
-harden(makeEditFileTool);
+harden(makeEditTool);
 
 /**
  * @param {string} cwd
@@ -382,6 +442,243 @@ export const makeListDirTool = cwd => {
   });
 };
 harden(makeListDirTool);
+
+// The platform search engine (`@endo/platform/fs/search`) over `node:fs`
+// powers. Pure over ambient `node:fs`; one instance serves every tool.
+const search = makeSearch(makeNodeSearchPowers());
+
+const GREP_MAX_MATCH_CHARACTERS = 1000;
+
+/**
+ * Resolve the working directory to its symlink-free physical path and the
+ * requested subdirectory within it. The engine confines by *resolved* paths
+ * (a symlink pointing outside the root is excluded), so the confinement root
+ * must itself be physical — a symlinked cwd (`/tmp` on macOS) would otherwise
+ * exclude everything.
+ *
+ * @param {string} cwd
+ * @param {string} dirPath
+ * @returns {Promise<{ root: string, confinementRoot: string }>}
+ */
+const resolveSearchRoot = async (cwd, dirPath) => {
+  const confinementRoot = await fs.promises.realpath(cwd);
+  const root = resolveSafe(dirPath, confinementRoot);
+  const rootStat = await fs.promises.stat(root);
+  if (!rootStat.isDirectory()) {
+    throw new Error(`Search root is not a directory: ${dirPath}`);
+  }
+  const physicalRoot = await fs.promises.realpath(root);
+  resolveSafe(path.relative(confinementRoot, physicalRoot), confinementRoot);
+  return { root, confinementRoot };
+};
+
+/**
+ * @param {string} cwd
+ * @returns {FaeTool}
+ */
+export const makeGlobTool = cwd => {
+  /** @type {ToolSchema} */
+  const toolSchema = harden({
+    type: 'function',
+    function: {
+      name: 'glob',
+      description:
+        'Find paths matching a glob pattern, like `find` with globs. ' +
+        '`*` matches within one path segment, `**` matches across segments; ' +
+        'every other character is literal. Returns sorted paths relative to ' +
+        'the searched directory.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description: 'Glob pattern, e.g. "src/**/*.js".',
+          },
+          dirPath: {
+            type: 'string',
+            description:
+              'Relative path of the directory to search under. Defaults to ' +
+              '"." (working directory).',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  });
+
+  return harden({
+    schema() {
+      return toolSchema;
+    },
+    async execute(args) {
+      const { pattern, dirPath = '.' } =
+        /** @type {{ pattern: string, dirPath?: string }} */ (args);
+      if (typeof pattern !== 'string' || pattern.length === 0) {
+        throw new Error('pattern is required');
+      }
+      if (typeof dirPath !== 'string') {
+        throw new Error('dirPath must be a string');
+      }
+      const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
+      /** @type {string[]} */
+      const matches = [];
+      let truncated = false;
+      for await (const batch of search.globPaths(root, pattern, {
+        confinementRoot,
+        deniedSegments: [...defaultDeniedSegments],
+      })) {
+        for (const match of batch) {
+          if (matches.length >= GLOB_MAX_RESULTS) {
+            truncated = true;
+            break;
+          }
+          matches.push(match);
+        }
+        if (truncated) {
+          break;
+        }
+      }
+      if (matches.length === 0) {
+        return `No paths match ${pattern}`;
+      }
+      const listing = matches.join('\n');
+      return truncated
+        ? `${listing}\n... (truncated at ${GLOB_MAX_RESULTS} results)`
+        : listing;
+    },
+    help() {
+      return 'Find paths matching a glob pattern (`*` within a segment, `**` across segments) under the working directory.';
+    },
+  });
+};
+harden(makeGlobTool);
+
+/**
+ * @param {string} cwd
+ * @returns {FaeTool}
+ */
+export const makeGrepTool = cwd => {
+  /** @type {ToolSchema} */
+  const toolSchema = harden({
+    type: 'function',
+    function: {
+      name: 'grep',
+      description:
+        'Search file contents for an ECMAScript regular expression, like ' +
+        '`grep -n`. Returns `file:line: text` matches in path-then-line ' +
+        'order with 1-based line numbers and paths relative to the searched ' +
+        'directory. Files that cannot be read are skipped, and long matching ' +
+        'lines are truncated in the rendered result.',
+      parameters: {
+        type: 'object',
+        properties: {
+          pattern: {
+            type: 'string',
+            description:
+              'Flagless, case-sensitive ECMAScript regular expression source, ' +
+              'e.g. "TODO\\(". A conservative complexity check rejects ' +
+              'nested quantifiers and some other high-risk structures.',
+          },
+          dirPath: {
+            type: 'string',
+            description:
+              'Relative path of the directory to search under. Defaults to ' +
+              '"." (working directory).',
+          },
+          glob: {
+            type: 'string',
+            description:
+              'Only search files matching this glob pattern (optional).',
+          },
+        },
+        required: ['pattern'],
+      },
+    },
+  });
+
+  return harden({
+    schema() {
+      return toolSchema;
+    },
+    async execute(args) {
+      const {
+        pattern,
+        dirPath = '.',
+        glob: globPattern,
+      } = /** @type {{ pattern: string, dirPath?: string, glob?: string }} */ (
+        args
+      );
+      if (typeof pattern !== 'string' || pattern.length === 0) {
+        throw new Error('pattern is required');
+      }
+      if (typeof dirPath !== 'string') {
+        throw new Error('dirPath must be a string');
+      }
+      if (globPattern !== undefined && typeof globPattern !== 'string') {
+        throw new Error('glob must be a string');
+      }
+      try {
+        // Compile once at the tool boundary so malformed sources get a
+        // tool-shaped error before the engine starts walking the filesystem.
+        RegExp(pattern);
+      } catch {
+        throw new Error(
+          'pattern must be a valid ECMAScript regular expression',
+        );
+      }
+      if (!safeRegex(pattern)) {
+        throw new Error(
+          'Regular expression fails a conservative complexity check',
+        );
+      }
+      const { root, confinementRoot } = await resolveSearchRoot(cwd, dirPath);
+      const paths =
+        globPattern === undefined
+          ? undefined
+          : search.globPaths(root, globPattern, {
+              confinementRoot,
+              includeDirectories: false,
+              deniedSegments: [...defaultDeniedSegments],
+            });
+      // Ask for one match beyond the cap so truncation is detectable
+      // without misreporting an exactly-at-cap result as truncated.
+      /** @type {GrepMatch[]} */
+      const matches = [];
+      for await (const batch of search.grepFiles(root, pattern, paths, {
+        confinementRoot,
+        deniedSegments: [...defaultDeniedSegments],
+        maxResults: GREP_MAX_RESULTS + 1,
+      })) {
+        matches.push(...batch);
+      }
+      const truncated = matches.length > GREP_MAX_RESULTS;
+      if (truncated) {
+        matches.length = GREP_MAX_RESULTS;
+      }
+      if (matches.length === 0) {
+        return `No matches for ${pattern}`;
+      }
+      const lines = matches.map(match => {
+        const text =
+          match.text.length > GREP_MAX_MATCH_CHARACTERS
+            ? `${match.text.slice(
+                0,
+                GREP_MAX_MATCH_CHARACTERS,
+              )}... (truncated at ${GREP_MAX_MATCH_CHARACTERS} characters)`
+            : match.text;
+        return `${match.file}:${match.line}: ${text}`;
+      });
+      if (truncated) {
+        lines.push(`... (truncated at ${GREP_MAX_RESULTS} matches)`);
+      }
+      return lines.join('\n');
+    },
+    help() {
+      return 'Search file contents for an ECMAScript regular expression under the working directory.';
+    },
+  });
+};
+harden(makeGrepTool);
 
 /**
  * @param {string} cwd
@@ -1141,6 +1438,24 @@ harden(makeAdoptTool);
  * @param {import('@endo/eventual-send').ERef<object>} powers
  * @returns {FaeTool}
  */
+/**
+ * Strip a wrapping markdown code fence from a code string. Models frequently
+ * echo the fenced style used in tool descriptions and hand back
+ * ```` ```js\n…\n``` ```` as the `code` argument; the backticks are then a
+ * SyntaxError inside the Compartment, so a perfectly good multiline snippet
+ * "fails to run". Only strips when the ENTIRE trimmed string is one fenced
+ * block (optionally tagged with a language), leaving inline backticks in real
+ * code untouched.
+ *
+ * @param {string} code
+ * @returns {string}
+ */
+const stripCodeFence = code => {
+  const trimmed = code.trim();
+  const fenced = /^```[^\n`]*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return fenced ? fenced[1] : code;
+};
+
 export const makeExecTool = powers => {
   /** @type {ToolSchema} */
   const toolSchema = harden({
@@ -1155,7 +1470,17 @@ export const makeExecTool = powers => {
         '- powers: your guest interface (adopt, reply, send, lookup, list, followMessages, etc.)\n' +
         '- E: eventual send — use E(ref).method() for all remote calls\n' +
         '- harden: freeze objects for safe passing\n' +
-        '- console: for logging\n\n' +
+        '- console: for logging\n' +
+        '- sleep(ms): await it to wait; the compartment has no timers\n\n' +
+        'The code runs under SES lockdown, which surprises callers who expect a ' +
+        'normal environment:\n' +
+        '- No Date.now() or new Date() — they throw. Pass a timestamp in, or ' +
+        'let a capability supply one.\n' +
+        '- No Math.random(), no setTimeout/setInterval. Use sleep(ms) to wait ' +
+        'between polls within one call.\n' +
+        '- The result is JSON-serialized for the model. BigInts render as ' +
+        'decimal strings, so a stat() or workflow status can be returned as ' +
+        'it came. A remote capability is described by its method names.\n\n' +
         'Example — adopt a channel, join it, and post a reply:\n' +
         '```\n' +
         'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
@@ -1188,14 +1513,38 @@ export const makeExecTool = powers => {
       if (!code) {
         throw new Error('code is required');
       }
+      // Tolerate a markdown-fenced snippet (a common model output) so multiline
+      // code isn't rejected for its wrapping backticks.
+      const source = stripCodeFence(code);
       // Wrap in an async IIFE so top-level await works
-      const wrappedSource = `(async (powers, E, harden, console) => {\n${code}\n})`;
+      const wrappedSource = `(async (powers, E, harden, console, sleep) => {\n${source}\n})`;
       const c = new Compartment({
         __options__: true,
         globals: { BigInt },
       });
-      const fn = c.evaluate(wrappedSource);
-      const result = await fn(powers, E, harden, console);
+      let fn;
+      try {
+        fn = c.evaluate(wrappedSource);
+      } catch (err) {
+        // A parse failure here is almost always malformed code from the model.
+        // Return the error as the tool result (rather than throwing) with a
+        // nudge to resend clean source, so the model can self-correct on the
+        // next round instead of the turn aborting.
+        const message = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Could not parse the code (${message}). Send raw JavaScript in the "code" argument — no markdown fences — and check for syntax errors.`,
+        );
+      }
+      // The compartment has no timers, so an agent watching something change
+      // (a workflow reaching await-approval, a build finishing) could not wait
+      // inside a single call and had to spin or burn a turn per poll. `sleep`
+      // is the host's timer, handed in deliberately: it grants delay, nothing
+      // else, to code that already holds this guest's full authority.
+      const sleep = ms =>
+        new Promise(resolve => {
+          setTimeout(resolve, Math.max(0, Number(ms) || 0));
+        });
+      const result = await fn(powers, E, harden, console, sleep);
       if (result === undefined) {
         return 'done (no return value)';
       }

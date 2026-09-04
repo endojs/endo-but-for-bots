@@ -1,30 +1,25 @@
-# Daemon Message Streaming
+# Daemon Message Revisions
 
 |             |                          |
 |-------------|--------------------------|
 | **Created** | 2026-03-26               |
-| **Updated** | 2026-06-15               |
+| **Updated** | 2026-07-22               |
 | **Author**  | Joshua T Corbin (evoked) |
-| **Status**  | In Progress              |
+| **Status**  | **Complete**             |
 
 ## Status
 
-**In Progress** (design proposed 2026-03-26; Phase 1 implementation
-open as PR #287, not yet merged to `llm`).
-
-Phase 1 (`streamReply` + `StreamWriter` + `StreamReader`) implemented
-on branch `feat/daemon-message-streaming-phase-1` (commit 4af9cd0ea)
-and forwarded under the bot as
-[PR #287](https://github.com/endojs/endo-but-for-bots/pull/287)
-(open).
-Not yet merged to `llm`.
+**Complete.** The `editMessage`, `messageHistory`, and `done` envelope
+surface landed on `llm` in [PR #125](https://github.com/endojs/endo-but-for-bots/pull/125)
+(merge commit `65b0abe27d205743d412dbb5f2c0e806353930ef`). The earlier
+`streamReply` / `StreamWriter` / `StreamReader` proposal is retired. It was
+superseded by whole-message revision, not left as a parallel protocol.
 
 ### Roadmap calibration (per `git blame` on `llm`)
 
 - Design phase: 2026-03-26 (single commit `116f5f06d`, "Mostly
   bot-written design for daemon message streaming").
-- Implementation phase: open as PR #287 against `llm`. No completion
-  date yet. Calendar gap since design is 54+ days.
+- Revision implementation: PR #125 merged to `llm` on 2026-06-22.
 
 ## Motivation
 

@@ -1,0 +1,11 @@
+# The exact authoritative upstream TC39 test262 revision the full Ironhorse
+# conformance sweep pins to. See designs/ironhorse-test262-convergence.md.
+#
+# `scripts/full-run.sh` sources this file and, unless given an existing
+# `--test262-dir`, clones tc39/test262 at exactly this SHA so a published report
+# records precisely which corpus produced it. Bump SHA + DATE together; the
+# runner re-emits the provenance from `git rev-parse HEAD` of the checkout, so a
+# drifted pin is visible in the report.
+TEST262_REPO=https://github.com/tc39/test262.git
+TEST262_SHA=be13516fb6441b950ba8a3df97eb34062c186972
+TEST262_DATE=2026-08-07

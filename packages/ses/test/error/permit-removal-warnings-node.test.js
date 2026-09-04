@@ -1,5 +1,4 @@
 // @ts-nocheck
-/* global Buffer */
 import test from 'ava';
 import url from 'url';
 import { spawn } from 'child_process';
@@ -38,6 +37,18 @@ test('node reporting to stderr with indented group', async t => {
   const stderrBytes = Buffer.concat(stderrChunks);
   const stderrText = new TextDecoder().decode(stderrBytes);
   const stderrLines = stderrText.trim().split('\n');
+
+  // The @endo/immutable-arraybuffer shim installs into
+  // ArrayBuffer.prototype as part of lockdown initialization and warns
+  // about the overwrites it does (the four genuine accessors it shadows
+  // with brand-discriminating equivalents). Skip those warning lines
+  // before the SES intrinsics-removal group label.
+  while (
+    stderrLines.length > 0 &&
+    /^About to overwrite ArrayBuffer\.prototype properties/.test(stderrLines[0])
+  ) {
+    stderrLines.shift();
+  }
 
   // Group label for removing unpermitted intrinsics
   t.is(stderrLines.shift(), 'SES Removing unpermitted intrinsics');

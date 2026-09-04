@@ -1,15 +1,18 @@
 // @ts-check
-/* global globalThis */
 /* eslint-disable @endo/no-polymorphic-call */
 
 // eslint-disable-next-line no-restricted-globals
 const { Error, TypeError, WeakMap } = globalThis;
+
 // eslint-disable-next-line no-restricted-globals
 const { parse, stringify } = JSON;
+
 // eslint-disable-next-line no-restricted-globals
 const { isSafeInteger } = Number;
+
 // eslint-disable-next-line no-restricted-globals
 const { freeze } = Object;
+
 // eslint-disable-next-line no-restricted-globals
 const { toStringTag: toStringTagSymbol } = Symbol;
 
@@ -192,7 +195,7 @@ export const makeCacheMapKit = (capacity, options = {}) => {
       // @ts-expect-error
       MaybeCtor();
       return /** @type {any} */ (MaybeCtor);
-    } catch (err) {
+    } catch (_err) {
       // @ts-expect-error
       const constructNewMap = () => new MaybeCtor();
       return constructNewMap;

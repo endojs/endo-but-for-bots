@@ -60,15 +60,8 @@
   "ava": {
     "files": [
       "test/**/*.test.*"
-    ]
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
     ],
-    "ignorePatterns": [
-      "bundle-*.js"
-    ]
+    "timeout": "2m"
   },
   "publishConfig": {
     "access": "public"

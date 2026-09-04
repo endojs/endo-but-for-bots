@@ -1,0 +1,22 @@
+{
+  "compartments": {
+    "fixtures-implicit-reexport": {
+      "modules": {
+        "./direct.js": {
+          "language": "js"
+        },
+        "./index.js": {
+          "language": "js"
+        },
+        "./indirect.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "index.js",
+  "entryCompartment": "fixtures-implicit-reexport",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-implicit-reexport",
+  "oracle": "node"
+}

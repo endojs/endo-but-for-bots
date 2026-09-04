@@ -1,6 +1,6 @@
 {
   "name": "@endo/evasive-transform",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Source transforms to evade SES censorship",
   "keywords": [
     "ses",
@@ -43,7 +43,6 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -59,11 +58,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [

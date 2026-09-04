@@ -1,0 +1,16 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/main.js",
+  "entryCompartment": "app",
+  "entryModule": "./main.js",
+  "fixture": "fixtures-strict",
+  "oracle": "node"
+}

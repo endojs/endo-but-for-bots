@@ -9,12 +9,20 @@
       "dependsOn": ["build"],
       "outputs": []
     },
+    "lint:types": {
+      "cache": false,
+      "outputs": []
+    },
     "test": {
       "dependsOn": ["build", "^build"],
       "outputs": []
     },
     "test:c8": {
       "dependsOn": ["build", "^build"],
+      "outputs": []
+    },
+    "test:types": {
+      "cache": false,
       "outputs": []
     }
   }

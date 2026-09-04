@@ -1,0 +1,22 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./0.mjs": {
+          "language": "mjs"
+        },
+        "./1.cjs": {
+          "language": "cjs"
+        },
+        "./2.cjs": {
+          "language": "cjs"
+        }
+      }
+    }
+  },
+  "entry": "0.mjs",
+  "entryCompartment": "app",
+  "entryModule": "./0.mjs",
+  "fixture": "fixtures-esm-imports-cjs-define",
+  "oracle": "node"
+}

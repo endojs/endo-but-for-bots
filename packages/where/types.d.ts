@@ -19,3 +19,23 @@ export function whereEndoCache(
   env: { [name: string]: string | undefined },
   info: { home: string },
 ): string;
+export function whereEndoGatewayState(
+  platform: string,
+  env: { [name: string]: string | undefined },
+  info: { home: string },
+): string;
+export function whereEndoGatewayEphemeralState(
+  platform: string,
+  env: { [name: string]: string | undefined },
+  info: { home: string },
+): string;
+export function whereEndoGatewayRegistrarSock(
+  platform: string,
+  env: { [name: string]: string | undefined },
+  info: { home: string },
+): string;
+export function whereEndoGatewayCache(
+  platform: string,
+  env: { [name: string]: string | undefined },
+  info: { home: string },
+): string;

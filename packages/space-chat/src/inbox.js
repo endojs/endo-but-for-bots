@@ -17,6 +17,11 @@ import {
 } from 'preact/hooks';
 
 import { playChime } from '@endo/spaces-util/chime.js';
+import {
+  collectFormValues,
+  fieldKind,
+  initialFormValues,
+} from '@endo/spaces-util/form-fields.js';
 import { idFromLocator } from '@endo/spaces-util/locator.js';
 import { prepareTextWithPlaceholders } from '@endo/spaces-util/markdown-render.js';
 import { markdownToVnodes } from '@endo/spaces-util/markdown-vnodes.js';
@@ -697,15 +702,39 @@ harden(DefinitionBody);
  * A single form field row. Owns its own value and (for secrets) show/hide
  * state. Reports value changes up via `onChange`.
  *
+ * A field whose pattern is `M.boolean()` gets a checkbox and reports a real
+ * boolean; every other field keeps the text input and reports a string. Before
+ * this, a boolean field rendered as text and could not be answered at all.
+ *
  * @param {object} props
- * @param {{ name: string, label?: string, example?: string, default?: string, secret?: boolean }} props.field
- * @param {string} props.value
- * @param {(value: string) => void} props.onChange
+ * @param {{ name: string, label?: string, example?: string, default?: unknown, secret?: boolean, pattern?: unknown }} props.field
+ * @param {string | boolean} props.value
+ * @param {(value: string | boolean) => void} props.onChange
  */
 const FormFieldRow = ({ field, value, onChange }) => {
   const copy = useContext(ClipboardContext);
   const [shown, setShown] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  if (fieldKind(field) === 'boolean') {
+    const checked = value === true;
+    return h(
+      'div',
+      { class: 'form-request-field-row boolean' },
+      h(
+        'label',
+        { class: 'form-request-field-label form-request-field-check' },
+        h('input', {
+          type: 'checkbox',
+          class: 'form-request-field-checkbox',
+          checked,
+          /** @param {{ target: { checked: boolean } }} e */
+          onChange: e => onChange(e.target.checked === true),
+        }),
+        field.label || field.name,
+      ),
+    );
+  }
 
   const $input = h('input', {
     type: field.secret && !shown ? 'password' : 'text',
@@ -714,7 +743,7 @@ const FormFieldRow = ({ field, value, onChange }) => {
     autocomplete: 'off',
     'data-form-type': 'other',
     'data-lpignore': 'true',
-    value,
+    value: typeof value === 'string' ? value : '',
     /** @param {{ target: { value: string } }} e */
     onInput: e => onChange(e.target.value),
   });
@@ -747,7 +776,7 @@ const FormFieldRow = ({ field, value, onChange }) => {
               type: 'button',
               class: 'form-field-copy',
               onClick: () => {
-                copy(value).catch(error =>
+                copy(typeof value === 'string' ? value : '').catch(error =>
                   console.error('Failed to copy:', error),
                 );
                 setCopied(true);
@@ -775,27 +804,15 @@ const FormBody = ({ message, powers, setError }) => {
   const { number, isSent, senderChip } = message;
   const { description, fields } = /** @type {any} */ (message.raw);
   const fieldArray =
-    /** @type {Array<{ name: string, label?: string, example?: string, default?: string, secret?: boolean }>} */ (
+    /** @type {Array<{ name: string, label?: string, example?: string, default?: unknown, secret?: boolean, pattern?: unknown }>} */ (
       Array.isArray(fields) ? fields : []
     );
 
-  const [values, setValues] = useState(() => {
-    /** @type {Record<string, string>} */
-    const initial = {};
-    for (const field of fieldArray) {
-      if (field.default) initial[field.name] = field.default;
-    }
-    return initial;
-  });
+  const [values, setValues] = useState(() => initialFormValues(fieldArray));
 
   const submitForm = () => {
-    /** @type {Record<string, string>} */
-    const collected = {};
-    for (const field of fieldArray) {
-      collected[field.name] = values[field.name] || '';
-    }
     E(powers)
-      .submit(number, collected)
+      .submit(number, collectFormValues(fieldArray, values))
       .catch(err => {
         setError(` ${/** @type {Error} */ (err).message}`);
       });
@@ -825,7 +842,7 @@ const FormBody = ({ message, powers, setError }) => {
         h(FormFieldRow, {
           key: field.name,
           field,
-          value: values[field.name] || '',
+          value: values[field.name],
           onChange: v => setValues(prev => ({ ...prev, [field.name]: v })),
         }),
       ),

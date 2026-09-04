@@ -23,7 +23,7 @@ const { stringify: q } = JSON;
 const copyMapComparison = (() => {
   try {
     return matches(makeCopyMap([]), makeCopyMap([]));
-  } catch (err) {
+  } catch (_err) {
     return false;
   }
 })();
@@ -970,4 +970,10 @@ test('Far functions (callable remotables) are valid Keys', t => {
   // Usable as a CopySet element (set insertion confirms the element is a Key).
   const set = makeCopySet([farFn]);
   t.true(matches(set, M.set()));
+});
+
+test('explicit undefined return guards use the omitted-return default', t => {
+  const omitted = M.call().returns();
+  const explicit = M.call().returns(undefined);
+  t.deepEqual(explicit.payload.returnGuard, omitted.payload.returnGuard);
 });

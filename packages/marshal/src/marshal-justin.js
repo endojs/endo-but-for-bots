@@ -98,7 +98,7 @@ const makeNoIndenter = () => {
     next: token => {
       if (strings.length >= 1) {
         const last = strings[strings.length - 1];
-        // eslint-disable-next-line @endo/restrict-comparison-operands -- error
+
         if (last.length >= 1 && token.length >= 1) {
           const pair = `${last[last.length - 1]}${token[0]}`;
           if (badPairPattern.test(pair)) {
@@ -175,6 +175,11 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           assert.typeof(name, 'string');
           const sym = passableSymbolForName(name);
           assert.typeof(sym, 'symbol');
+          return;
+        }
+        case 'byteArray': {
+          const { data } = rawTree;
+          assert.typeof(data, 'string');
           return;
         }
         case 'tagged': {
@@ -338,6 +343,11 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
             return out.next(`Symbol.${suffix}`);
           }
           return out.next(`passableSymbolForName(${quote(registeredName)})`);
+        }
+        case 'byteArray': {
+          const { data } = rawTree;
+          assert.typeof(data, 'string');
+          return out.next(`frozenBytes(decodeHex(${quote(data)}))`);
         }
         case 'tagged': {
           const { tag, payload } = rawTree;

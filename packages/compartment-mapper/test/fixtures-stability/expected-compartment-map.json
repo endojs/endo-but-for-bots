@@ -1,0 +1,66 @@
+{
+  "compartments": {
+    "a": {
+      "modules": {
+        "./a.js": {
+          "language": "js"
+        },
+        "a": {
+          "link": "a-n1"
+        },
+        "b": {
+          "link": "b"
+        },
+        "dep": {
+          "link": "dep-n2"
+        }
+      }
+    },
+    "a-n1": {
+      "modules": {
+        "./a.js": {
+          "language": "js"
+        },
+        "dep": {
+          "link": "dep"
+        }
+      }
+    },
+    "b": {
+      "modules": {
+        "./b.js": {
+          "language": "js"
+        },
+        "dep": {
+          "link": "dep-n1"
+        }
+      }
+    },
+    "dep": {
+      "modules": {
+        "./dep.js": {
+          "language": "js"
+        }
+      }
+    },
+    "dep-n1": {
+      "modules": {
+        "./dep.js": {
+          "language": "js"
+        }
+      }
+    },
+    "dep-n2": {
+      "modules": {
+        "./dep.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "a.js",
+  "entryCompartment": "a",
+  "entryModule": "./a.js",
+  "fixture": "fixtures-stability",
+  "oracle": "node"
+}

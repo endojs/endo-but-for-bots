@@ -11,18 +11,28 @@ creates an invitation and the other accepts it. From that point on, both
 sides can send messages, share values, and make requests across the
 network.
 
-Two network transports are available:
+Three network transports are available:
 
-- **TCP** (`/network`): Direct TCP connections with netstring framing.
-  Requires an open port. Best for same-network or same-machine setups.
+- **OCapN-Noise** (`setup-ocapn.js`): Daemon-to-daemon connections
+  carried by an authenticated, encrypted OCapN-Noise session over TCP.
+  This is the transport the daemon is migrating to for all
+  daemon-to-daemon connectivity — see
+  [`designs/daemon-ocapn-external-connectivity.md`](../../designs/daemon-ocapn-external-connectivity.md).
+- **TCP** (`/network`): Direct TCP connections with netstring framing,
+  carrying plaintext JSON CapTP. Requires an open port. Retained for
+  now; superseded by the OCapN-Noise transport.
 - **iroh** (`/network-iroh`): Peer-to-peer over iroh ("dial keys, not
   IPs"). Peers are dialed by their Ed25519 NodeId and resolved through
   iroh discovery and relays over mutually authenticated, encrypted QUIC.
   No open ports needed; NAT traversal and relay fallback are built in.
 
-All use CapTP (Capability Transfer Protocol) for capability transport.
-Object identity is preserved across the wire — capabilities sent in a
-message can be adopted by the recipient and used as if they were local.
+The OCapN-Noise transport uses the OCapN (Object Capability Network)
+protocol for capability transport; the TCP and iroh transports use
+CapTP (Capability Transfer Protocol). In all three, object identity is
+preserved across the wire — capabilities sent in a message can be
+adopted by the recipient and used as if they were local. CapTP also
+carries the daemon's local edges (daemon-to-worker, daemon-to-CLI, and
+the browser web gateway), which are unaffected by the OCapN migration.
 
 ## Prerequisites
 
@@ -179,10 +189,64 @@ Invitation locators will include addresses for all active networks. When
 the accepting daemon connects, it tries each address in order and uses the
 first one that succeeds.
 
+## Step 1c: Enable OCapN-Noise Networking
+
+The OCapN-Noise transport carries daemon-to-daemon traffic over an
+authenticated, encrypted OCapN session instead of plaintext CapTP. It
+is installed as an unconfined caplet, the same way the other
+transports are, and registers itself under `@nets/ocapn`.
+
+### Using the Chat UI
+
+In each chat window, run:
+
+```
+/network-ocapn
+```
+
+Fill in the fields:
+
+- **Module**: The `file://` URL to the OCapN network module.
+  Typically `file:///path/to/endo/packages/daemon/src/networks/ocapn.js`
+  (auto-detected when running via `yarn dev`)
+- **Host**: `127.0.0.1` (default)
+- **Port**: `0` (default; OS-assigned ephemeral port)
+
+The command stores the listen address under `ocapn-listen-addr`,
+installs the network module as an unconfined caplet, and moves it to
+`@nets/ocapn` where the daemon discovers it as an active transport.
+
+### Using the CLI
+
+```bash
+# Install the OCapN-Noise network (registers at @nets/ocapn)
+yarn exec endo run --UNCONFINED packages/daemon/src/networks/setup-ocapn.js --powers @agent
+```
+
+By default the transport binds an ephemeral local TCP port. To pin a
+listen address, store it under `ocapn-listen-addr` before installing:
+
+```bash
+yarn exec endo store --text "127.0.0.1:8950" --name ocapn-listen-addr
+```
+
+After this step, each daemon advertises an `ocapn+noise+tcp://`
+connection hint in the locators produced by `invite()`,
+`locateForSharing()`, and `getPeerInfo()`. When the accepting daemon
+connects, the session is established over OCapN-Noise.
+
+> **Known limitation.** Until the
+> [`daemon-agent-network-identity`](../../designs/daemon-agent-network-identity.md)
+> work lands, the OCapN-Noise transport mints a fresh signing key per
+> network rather than reusing the daemon agent's `@keypair`. The
+> connection hint carries the full OCapN location so dialing still
+> works, but the OCapN session identity is not yet bound to the
+> daemon node number.
+
 ## Step 2: Create and Accept an Invitation
 
 One side creates an invitation; the other accepts it. This establishes a
-CapTP session and registers each side's host handle in the other's pet
+peer session and registers each side's host handle in the other's pet
 store.
 
 ### Alice Creates the Invitation
@@ -196,7 +260,7 @@ In Alice's chat:
 Fill in the **Guest name** field with the local name for the remote peer —
 for example, `bob`. The command prints an `endo://` locator URL. Copy it.
 
-The locator looks like:
+For a daemon with TCP networking enabled, the locator looks like:
 
 ```
 endo://abc123/42@tcp%2Bnetstring%2Bjson%2Bcaptp0%3A%2F%2F127.0.0.1%3A54321?type=invitation&from=7
@@ -207,6 +271,24 @@ The first component (here `42`) is the invitation's formula address; each
 subsequent component is a connection hint of the form
 `<transport-prefix>:<transport-payload>`, URL-encoded so that `@`, `/`,
 and `?` inside a hint round-trip cleanly.
+
+For a daemon with OCapN-Noise networking enabled, the locator instead
+carries an `ocapn+noise+tcp:` connection hint that embeds the full
+OCapN location (the agent's Ed25519 public key as the `designator`,
+plus the TCP host/port hints).
+
+When the accepting daemon dials this hint, the Noise IK handshake
+authenticates Alice's agent against the `designator` (her Ed25519
+public key) cryptographically — Alice's identity is *proven* by the
+handshake rather than *asserted* in a `hello` string the way the TCP
+path does it. Subsequent `E(remoteGateway).provide(formulaId)` calls
+flow as native OCapN `op:deliver` messages on that one session; no
+CapTP framing sits on top of the OCapN wire.
+
+If a daemon has more than one transport installed (e.g. both
+`@nets/tcp` and `@nets/ocapn`), the locator carries a connection hint
+per transport and the accepting daemon dials the first one whose
+protocol a local network module `supports`.
 
 ### Bob Accepts the Invitation
 
@@ -344,14 +426,33 @@ message in the inbox and use the reply action, or compose a new message to
 
 ### Connection Lifecycle
 
-1. **TCP Transport**: Each daemon runs a TCP listener via the
-   `tcp-netstring.js` network module
-2. **Invitation URL**: Encodes the inviter's node ID, host handle ID, and
-   TCP address
-3. **Accept**: The acceptor registers the inviter's peer info, resolves
-   the remote invitation formula, and exchanges host handle IDs
-4. **CapTP Session**: A persistent CapTP session carries all subsequent
-   `E()` calls between the daemons
+The lifecycle has the same four stages regardless of transport; only
+the bytes-and-handshake layer differs.
+
+1. **Transport**: Each daemon runs a listener — TCP for `tcp-netstring`,
+   TCP carrying an OCapN-Noise session for `ocapn`, or libp2p's
+   transport stack for `libp2p`.
+2. **Invitation URL**: Encodes the inviter's node id, host handle id,
+   and one or more connection-hint addresses (TCP `at=tcp+netstring+
+   json+captp0://…`, OCapN `at=ocapn+noise+tcp://…`, or libp2p
+   multiaddrs).
+3. **Accept**: The acceptor parses the locator, registers the inviter's
+   peer info, iterates installed networks for one that `supports` the
+   hint's protocol, dials it, and runs the `hello` handshake to
+   exchange host-handle ids.
+4. **Session**: A persistent session carries all subsequent `E()` calls
+   between the daemons. Under `tcp-netstring` and `libp2p` this is a
+   CapTP session over the dialled transport; under `ocapn` it is a
+   single OCapN-Noise session — authenticated by the peer's Ed25519
+   public key and encrypted by the Noise handshake — that the
+   `EndoGreeter`/`EndoGateway` peer protocol rides on top of as
+   `E()` calls inside the OCapN session.
+
+The bootstrap object on each side is the same `EndoGreeter` regardless
+of transport; under `ocapn` the dialing peer first fetches an
+`EndoOcapnBootstrap` exo from the OCapN locator at a well-known
+swissnum and pulls the greeter from it, while under
+`tcp-netstring`/`libp2p` it is the CapTP session bootstrap directly.
 
 ### Formula IDs Across Nodes
 
@@ -364,23 +465,29 @@ gateway, and calls `E(gateway).provide(id)` to fetch the value.
 
 ### Reconnection
 
-If the TCP connection drops, the network transport cancels the peer
-formula context, which evicts the stale controller from the daemon's
-cache. The next `provide()` call for any value on the remote node triggers
-a fresh connection through the RemoteControl state machine (which resets
-to its `start` state on disconnection). Persistent formula graph entries,
-pet store entries, and message records are all strings that survive the
-reconnection.
+If the transport drops the underlying socket, the network module
+cancels the peer formula context, which evicts the stale controller
+from the daemon's cache. The next `provide()` call for any value on
+the remote node triggers a fresh connection through the
+`RemoteControl` state machine (which resets to its `start` state on
+disconnection) and a fresh handshake — over a fresh CapTP session for
+`tcp-netstring`/`libp2p`, over a fresh OCapN-Noise session for
+`ocapn`. Persistent formula graph entries, pet store entries, and
+message records are all strings that survive the reconnection.
 
-Old CapTP `Far` references (live object proxies) are invalidated by a
-connection drop and must be re-resolved via `provide(formulaId)`.
+Old live-object proxies (CapTP `Far` references, or OCapN imports)
+are invalidated by a connection drop and must be re-resolved via
+`provide(formulaId)`.
 
 ## Troubleshooting
 
 ### "Cannot connect to peer: no supported addresses"
 
-The daemon has no network transport installed. Run `/network` to set one
-up.
+The daemon has no network transport installed, or the one it has does
+not `supports` the protocol named in the connection hint. Install one:
+`/network` for TCP+CapTP, `/network-libp2p` for libp2p, or
+`endo run --UNCONFINED packages/daemon/src/networks/setup-ocapn.js
+--powers @agent` for OCapN-Noise.
 
 ### Invitation locator doesn't work
 
@@ -412,6 +519,7 @@ The remote daemon may be unreachable. Check that:
 |-------------------|------------------------------------------------------------|
 | `/network`        | Enable TCP networking (module path + listen address)       |
 | `/network-iroh`   | Enable iroh networking (no open ports needed)              |
+| `/network-ocapn`  | Enable OCapN-Noise authenticated networking over TCP       |
 | `/invite`         | Create an invitation for a peer (prints `endo://` locator) |
 | `/accept`         | Accept an invitation locator and name the peer             |
 | `/adopt`          | Adopt a value from a received message                      |

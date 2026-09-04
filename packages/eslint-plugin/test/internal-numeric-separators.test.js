@@ -16,11 +16,10 @@
 // `lib/configs/internal.js` (e.g., dropping the `binary` clause) fails one of
 // the assertions below; that is the regression evidence per
 // `garden/skills/regression-evidence/SKILL.md`.
-
-const assert = require('assert');
-const { RuleTester } = require('eslint');
-const unicorn = require('eslint-plugin-unicorn');
-const internal = require('../lib/configs/internal');
+import assert from 'node:assert';
+import { RuleTester } from 'eslint';
+import unicorn from 'eslint-plugin-unicorn';
+import internal from '../src/configs/internal.js';
 
 const RULE_ID = 'unicorn/numeric-separators-style';
 const ruleConfig = internal.rules[RULE_ID];
@@ -43,7 +42,7 @@ assert.deepStrictEqual(
   ruleConfig[1],
   {
     onlyIfContainsSeparator: false,
-    number: { minimumDigits: 5, groupLength: 3 },
+    number: { minimumDigits: 5, groupLength: 3, fractionGroupLength: 3 },
     binary: { minimumDigits: 0, groupLength: 4 },
     octal: { minimumDigits: 0, groupLength: 4 },
     hexadecimal: { minimumDigits: 0, groupLength: 4 },
@@ -58,80 +57,109 @@ assert.deepStrictEqual(
 // (harden-exports, no-multi-name-local-export, no-assign-to-exported-let-var-or-function).
 
 const tester = new RuleTester({
-  parserOptions: { ecmaVersion: 2021, sourceType: 'script' },
+  languageOptions: { ecmaVersion: 2021, sourceType: 'script' },
 });
 
 const ruleOptions = ruleConfig[1];
 
-tester.run(
-  'internal preset: unicorn/numeric-separators-style options',
-  unicorn.rules['numeric-separators-style'],
-  {
-    valid: [
-      // Below the 5-digit threshold for decimal.
-      { code: 'const n = 1000;', options: [ruleOptions] },
-      { code: 'const n = 9999;', options: [ruleOptions] },
-      // Already in canonical form.
-      { code: 'const n = 1_000_000;', options: [ruleOptions] },
-      { code: 'const n = 0xABCD;', options: [ruleOptions] },
-      { code: 'const n = 0xAB_CDEF;', options: [ruleOptions] },
-      { code: 'const n = 0b1111_0000;', options: [ruleOptions] },
-      { code: 'const n = 0o1234_5670;', options: [ruleOptions] },
-    ],
-    invalid: [
-      // Decimal: groupLength 3 from the right, kicks in at five digits.
-      {
-        code: 'const n = 10000;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 10_000;',
-      },
-      {
-        code: 'const n = 100000;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 100_000;',
-      },
-      {
-        code: 'const n = 1234567;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 1_234_567;',
-      },
-      // BigInt literals follow the decimal grouping.
-      {
-        code: 'const n = 1234567890123n;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 1_234_567_890_123n;',
-      },
-      // Hex: groupLength 4, minimumDigits 0 (case preserved).
-      {
-        code: 'const n = 0xabcdef;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 0xab_cdef;',
-      },
-      {
-        code: 'const n = 0xABCDEF;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 0xAB_CDEF;',
-      },
-      // Binary: groupLength 4, minimumDigits 0.
-      {
-        code: 'const n = 0b11110000;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 0b1111_0000;',
-      },
-      // Octal: groupLength 4, minimumDigits 0.
-      {
-        code: 'const n = 0o12345670;',
-        options: [ruleOptions],
-        errors: [{ messageId: 'numeric-separators-style' }],
-        output: 'const n = 0o1234_5670;',
-      },
-    ],
-  },
-);
+const rule = unicorn.rules?.['numeric-separators-style'];
+assert.ok(rule, 'unicorn.rules["numeric-separators-style"] must be defined');
+
+tester.run('internal preset: unicorn/numeric-separators-style options', rule, {
+  valid: [
+    // Below the 5-digit threshold for decimal.
+    { code: 'const n = 1000;', options: [ruleOptions] },
+    { code: 'const n = 9999;', options: [ruleOptions] },
+    // Already in canonical form.
+    { code: 'const n = 1_000_000;', options: [ruleOptions] },
+    { code: 'const n = 0xABCD;', options: [ruleOptions] },
+    { code: 'const n = 0xAB_CDEF;', options: [ruleOptions] },
+    { code: 'const n = 0b1111_0000;', options: [ruleOptions] },
+    { code: 'const n = 0o1234_5670;', options: [ruleOptions] },
+    // Fractional parts group from the left in threes, per
+    // `fractionGroupLength`. Dropping that key from the preset makes the rule
+    // fall back to its `Infinity` default (no fractional grouping at all) and
+    // reports every one of these as an invalid group.
+    { code: 'const n = 3.141_59;', options: [ruleOptions] },
+    { code: 'const n = 0.202_492_713_878_710_48;', options: [ruleOptions] },
+    { code: 'const n = 1.110_223_024_625_156_5e-16;', options: [ruleOptions] },
+    // Short fractional parts stay bare, like short integer ones.
+    { code: 'const n = 1.5;', options: [ruleOptions] },
+    { code: 'const n = 0.1234;', options: [ruleOptions] },
+  ],
+  invalid: [
+    // Decimal: groupLength 3 from the right, kicks in at five digits.
+    {
+      code: 'const n = 10000;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 10_000;',
+    },
+    {
+      code: 'const n = 100000;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 100_000;',
+    },
+    {
+      code: 'const n = 1234567;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 1_234_567;',
+    },
+    // BigInt literals follow the decimal grouping.
+    {
+      code: 'const n = 1234567890123n;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 1_234_567_890_123n;',
+    },
+    // Hex: groupLength 4, minimumDigits 0 (case preserved).
+    {
+      code: 'const n = 0xabcdef;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 0xab_cdef;',
+    },
+    {
+      code: 'const n = 0xABCDEF;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 0xAB_CDEF;',
+    },
+    // Binary: groupLength 4, minimumDigits 0.
+    {
+      code: 'const n = 0b11110000;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 0b1111_0000;',
+    },
+    // Octal: groupLength 4, minimumDigits 0.
+    {
+      code: 'const n = 0o12345670;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 0o1234_5670;',
+    },
+    // Fractional: fractionGroupLength 3, grouped from the left.
+    {
+      code: 'const n = 3.14159;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 3.141_59;',
+    },
+    {
+      code: 'const n = 0.20249271387871048;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 0.202_492_713_878_710_48;',
+    },
+    // The exponent is separate from the fractional part it follows.
+    {
+      code: 'const n = 1.1102230246251565e-16;',
+      options: [ruleOptions],
+      errors: [{ messageId: 'numeric-separators-style' }],
+      output: 'const n = 1.110_223_024_625_156_5e-16;',
+    },
+  ],
+});

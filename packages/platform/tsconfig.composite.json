@@ -36,10 +36,16 @@
       "path": "../patterns/tsconfig.composite.json"
     },
     {
+      "path": "../sha256/tsconfig.composite.json"
+    },
+    {
       "path": "../stream/tsconfig.composite.json"
     },
     {
       "path": "../stream-node/tsconfig.composite.json"
+    },
+    {
+      "path": "../utf8/tsconfig.composite.json"
     }
   ]
 }

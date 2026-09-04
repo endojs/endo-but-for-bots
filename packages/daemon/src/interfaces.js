@@ -8,6 +8,8 @@ import {
   readableTreeMethodGuards,
   readableNameHubMethodGuards,
   directoryFileMethodGuards,
+  pathEntryMethodGuards,
+  pathEntryIssuerMethodGuards,
   rangeReadMethodGuards,
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
@@ -76,7 +78,7 @@ export const ResponderInterface = M.interface('EndoResponder', {
 // `readableNameHubMethodGuards` (help / has / list / lookup / maybeLookup) and
 // `directoryFileMethodGuards` (makeDirectory / readText / maybeReadText /
 // writeText) are the portable name-hub records, now owned by
-// `@endo/platform/fs` so non-daemon hosts (genie, future browser/Go/Rust
+// `@endo/platform/fs` so non-daemon hosts (a browser/Go/Rust client, and other
 // clients) can consume them without depending on the daemon. They are imported
 // above; the daemon adds only the registry/locator surface below.
 
@@ -111,7 +113,81 @@ export const nameHubMethodGuards = harden({
   copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
 });
 
+// The content-locate method family (`designs/endo-content-locators-magnet-urn.md`
+// § Interface extension, Design Decision 9): the content-side analogue of the
+// name-resolution family (`locate` / `listLocators` / `reverseLocate`). It is
+// an agent-only surface — spread into `EndoHost` / `EndoGuest`, not the bare
+// name hub — matching the design's "the agent interface gains a content-locate
+// method family". Every shape mirrors its name-resolution twin: a content
+// locator is a string (a `magnet:` URN), guarded as `M.string()` the same way
+// a transport `LocatorShape` is.
+export const contentLocatorMethodGuards = harden({
+  locateContent: M.call().rest(NamePathShape).returns(M.promise()),
+  listContent: M.call().rest(NamePathShape).returns(M.promise()),
+  storeContent: M.call().rest(NamePathShape).returns(M.promise()),
+  reverseLocateContent: M.call(LocatorShape).returns(M.promise()),
+  internalizeContentLocator: M.call(LocatorShape).returns(M.promise()),
+  loadContent: M.call(LocatorShape)
+    .optional(M.remotable())
+    .returns(M.promise()),
+});
+
 export const EnvelopeInterface = M.interface('EndoEnvelope', {});
+
+// A pattern mismatch reports the offending specimen verbatim, so the default
+// `M.string()` length limit of 100000 would interpolate an oversize secret
+// into an error that crosses CapTP and lands in logs. The limit is disabled
+// here so that `decodeSecret` in secret-manager.js — which is written never to
+// echo its input, and which enforces the real MAX_SECRET_BYTES bound — is the
+// sole rejecter of secret payloads. The default also sits below the base64
+// length of a maximum-size secret, so it would reject valid input.
+const SecretBase64Shape = M.string({
+  stringLengthLimit: Number.MAX_SAFE_INTEGER,
+});
+
+export const SecretBlobInterface = M.interface('SecretBlob', {
+  help: M.call().returns(M.string()),
+  getDescription: M.call().returns(M.promise()),
+  // Uint8Array is mutable and therefore not passable. Base64 is the wire
+  // envelope only; the backend and manager continue to store arbitrary bytes.
+  readBase64: M.call().returns(M.promise()),
+});
+
+export const SecretAdminInterface = M.interface('SecretAdmin', {
+  getSummary: M.call().returns(M.promise()),
+  replaceBase64: M.call(SecretBase64Shape).returns(M.promise()),
+  setDescription: M.call(M.string()).returns(M.promise()),
+  revoke: M.call().returns(M.promise()),
+  delete: M.call().returns(M.promise()),
+});
+
+export const SecretImporterInterface = M.interface('SecretImporter', {
+  createBase64: M.call(M.string(), M.string(), SecretBase64Shape).returns(
+    M.promise(),
+  ),
+});
+
+export const SecretCatalogInterface = M.interface('SecretCatalog', {
+  list: M.call().returns(M.promise()),
+});
+
+export const SecretAuditReaderInterface = M.interface('SecretAuditReader', {
+  list: M.call().optional(M.bigint()).returns(M.promise()),
+});
+
+export const SecretManagerDirectoryInterface = M.interface(
+  'SecretManagerDirectory',
+  {
+    help: M.call().returns(M.string()),
+    has: M.call(M.string()).returns(M.promise()),
+    list: M.call().returns(M.promise()),
+    // Guarded like every other directory `lookup` in this file. `M.any()`
+    // would forward a non-string path segment straight into the SQLite bind
+    // layer, surfacing a driver TypeError instead of this module's fixed
+    // error codes.
+    lookup: M.call(NameOrPathShape).returns(M.promise()),
+  },
+);
 
 export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
@@ -141,6 +217,9 @@ export const GuestInterface = M.interface('EndoGuest', {
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  // Content-locate family (agent-only): the content-side analogue of the
+  // name-resolution family above.
+  ...contentLocatorMethodGuards,
   // `followNameChanges` / `followLocatorNameChanges` are async on agents
   // (the exo awaits before wrapping the reader), so they return a Promise
   // where the bare `EndoDirectory` returns the reader synchronously
@@ -240,6 +319,9 @@ export const HostInterface = M.interface('EndoHost', {
   // surface, plus the directory file-I/O surface.
   ...nameHubMethodGuards,
   ...directoryFileMethodGuards,
+  // Content-locate family (agent-only): the content-side analogue of the
+  // name-resolution family above.
+  ...contentLocatorMethodGuards,
   // Async on agents (see EndoGuest): override the shared record's
   // synchronous remotable shape with the agent's promise shape.
   followLocatorNameChanges: M.call(LocatorShape).returns(M.promise()),
@@ -286,24 +368,68 @@ export const HostInterface = M.interface('EndoHost', {
   storeValue: M.call(M.any(), NameOrPathShape).returns(M.promise()),
   // Check in a remote readable-tree Exo, storing content-addressed
   storeTree: M.call(M.remotable(), NameOrPathShape).returns(M.promise()),
-  // Mount an external directory
+  // Mount an external directory. `deniedSegments` replaces the mount's
+  // default restricted-segment set (an empty array disables denial).
   provideMount: M.call(M.string(), NameOrPathShape)
-    .optional(M.splitRecord({}, { readOnly: M.boolean() }))
+    .optional(
+      M.splitRecord(
+        {},
+        { readOnly: M.boolean(), deniedSegments: M.arrayOf(M.string()) },
+      ),
+    )
     .returns(M.promise()),
-  // Create a daemon-managed scratch mount
+  // Create a daemon-managed scratch mount. `deniedSegments` replaces the
+  // mount's default restricted-segment set (an empty array disables denial).
   provideScratchMount: M.call(NameOrPathShape)
+    .optional(
+      M.splitRecord(
+        {},
+        { readOnly: M.boolean(), deniedSegments: M.arrayOf(M.string()) },
+      ),
+    )
+    .returns(M.promise()),
+  // Mint a sub-mount rooted at a subdirectory of an existing mount
+  provideSubMount: M.call(
+    NameOrPathShape,
+    M.arrayOf(M.string()),
+    NameOrPathShape,
+  )
     .optional(M.splitRecord({}, { readOnly: M.boolean() }))
     .returns(M.promise()),
-  // Derive a local Git capability from an authorized mount.
-  provideGit: M.callWhen(M.remotable(), NameOrPathShape).returns(
-    M.remotable('Git'),
-  ),
+  // Derive a local Git capability from an authorized mount.  The optional
+  // `identity` pins the formula-owned, guest-immutable commit author/committer;
+  // omitted, commits default to `Endo <endo@invalid.local>`.
+  provideGit: M.callWhen(M.remotable(), NameOrPathShape)
+    .optional(
+      M.splitRecord(
+        {},
+        {
+          allowHistoryRewrite: M.boolean(),
+          identity: M.splitRecord(
+            { authorName: M.string(), authorEmail: M.string() },
+            { committerName: M.string(), committerEmail: M.string() },
+          ),
+        },
+      ),
+    )
+    .returns(M.remotable('Git')),
   // Derive an allowlisted command-execution Shell from a writable mount.
   provideShell: M.callWhen(
     M.remotable(),
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('Shell')),
+  // Mint a confined outbound-HTTP client from a host-owned `fetch` seam. No
+  // mount arg: the Network tier is rooted in the fetch seam, not a mount.
+  provideHttpClient: M.callWhen(
+    NameOrPathShape,
+    M.recordOf(M.string(), M.any()),
+  ).returns(M.remotable('HttpClient')),
+  // Host-side control facet for a daemon-minted HttpClient cap (policy
+  // mutation, revocation, binding/audit inspection); retained host-side.
+  getHttpClientControl: M.callWhen(M.remotable()).returns(
+    M.remotable('HttpClientControl'),
+  ),
   // Mint a GitRemote capability that wraps a writable Git cap with a
   // policy-bound endpoint and (optional) credential.
   provideGitRemote: M.callWhen(
@@ -568,28 +694,69 @@ const PathSegmentsShape = M.arrayOf(M.string());
 const MountEntryShape = M.remotable('EndoMountEntry');
 const PathArgShape = M.or(M.string(), PathSegmentsShape, MountEntryShape);
 
-// `EndoMount` extends `Directory` from `@endo/platform/fs`.  Method
-// shapes that overlap with `PlatformDirectoryInterface` carry the
-// same `M.call(...)` arguments (path segments arrays plus an
-// `M.remotable()` value for `write`) and return shapes; the
-// mount-specific extensions (entry-arg overloads, `entry`, `stat`,
-// `readText`, `maybeReadText`, `writeText`, `makeFile`, `help`) are
-// additions, not redefinitions.  `has` widens `rest()` to `M.any()`
-// because the daemon supports the single-entry-value overload that
-// the platform contract does not name.
+// `MountInterface` is the canonical runtime Exo / CapTP protocol for daemon
+// mounts and future interchangeable mount backends.
+// `EndoMount` in types.d.ts is the precise TypeScript refinement for callers
+// and the current daemon implementation.
+// Runtime `M.promise()` and `M.remotable()` patterns cannot
+// encode semantic payload types, so the compile-time conformance test pins the
+// exact `lookup`, `maybeLookup`, `subView`, `readOnly`, `snapshot`, and
+// `followNameChanges` results while asserting that their calls fit this guard.
+//
+// Methods shared with `PlatformDirectoryInterface` use the same runtime
+// shapes.
+// Mount-only overloads additionally accept a lineage-bearing entry.
+// `has` deliberately widens `rest()` to `M.any()` because the guard cannot
+// express "variadic strings or exactly one entry"; `segmentsFromHasArgs`
+// performs that validation inside the boundary.
+// `write` accepts a remotable,
+// while the public type narrows that to the portable `DirectoryWriteSource`
+// semantic union.
+// `makeFile` accepts only the public string payload.
 export const MountInterface = M.interface('EndoMount', {
+  ...pathEntryIssuerMethodGuards,
+  // A lookup result can be classified without probing its whole surface.
+  kind: M.call().returns(M.eq('directory')),
   // ReadableTree-compatible surface.  `has` accepts either variadic
   // path segments or a single entry value; the impl validates the
   // shape because rest-with-M.or pattern guards do not narrow
   // remotables consistently across CapTP.
   has: M.call().rest(M.any()).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
+  // Recursive glob search, delegated to the platform engine. Daemon-local
+  // extension beyond the ReadableTree surface.
+  glob: M.call(M.string()).returns(M.promise()),
+  // Content search, delegated to the platform engine. `paths` is optional and
+  // consumed with an implied `await` (`M.callWhen` + `M.await`), so a caller
+  // may pipe a `glob` promise straight in — `grep(pattern, glob(g))` — and the
+  // exo awaits and shape-checks it to a `string[]` before the method runs.
+  // Omitting `paths` searches every file under the face's root. `options`
+  // carries `maxResults` (there is no `glob` option: glob is decoupled, an
+  // independent producer of the `paths` array). See
+  // designs/platform-search-pushdown.md § "The Array surface".
+  grep: M.callWhen(M.string())
+    .optional(
+      M.await(M.arrayOf(M.string())),
+      M.splitRecord({}, { maxResults: M.number() }),
+    )
+    .returns(M.array()),
+  // Fused glob+grep composition. Both patterns are required positionals (unlike
+  // grep's optional `paths`), so the operation can be pushed down to native code
+  // as a single fused enumerate-and-scan call. The reference implementation
+  // composes the delegated surface: `grep(grepPattern, glob(globPattern))`. See
+  // designs/platform-search-pushdown.md § "The Array surface".
+  glorp: M.call(M.string(), M.string())
+    .optional(M.splitRecord({}, { maxResults: M.number() }))
+    .returns(M.promise()),
   lookup: M.call(PathArgShape).returns(M.promise()),
+  // `maybeLookup` is async in every mount implementation, so retain the
+  // promise boundary here even though the shared name-hub record is broader.
+  // It resolves to the same typed file/tree union as `lookup`, plus undefined.
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
   // Widened from the shared `NameOrPathShape` contract to `PathArgShape` so the
   // mount accepts a `MountEntry` cap as the path argument, exactly like
   // `lookup`. See designs/fs-interface-consolidation.md § C1.
-  maybeLookup: M.call(PathArgShape).returns(M.any()),
+  maybeLookup: M.call(PathArgShape).returns(M.promise()),
   // Subscribe to entry-name changes within a named subdirectory (returns
   // an iterator ref). The first batch is a snapshot in alphabetical order;
   // subsequent records diff against the snapshot as entries appear or
@@ -608,8 +775,6 @@ export const MountInterface = M.interface('EndoMount', {
   // overloads accept an `EndoMountEntry` as the path argument).
   write: M.call(PathArgShape, M.remotable()).returns(M.promise()),
   copy: M.call(PathArgShape, PathArgShape).returns(M.promise()),
-  // Mount-scoped descriptor minting (no I/O).
-  entry: M.call(M.or(M.string(), PathSegmentsShape)).returns(MountEntryShape),
   // Metadata.
   stat: M.call(PathArgShape).returns(M.promise()),
   // Raw data I/O
@@ -620,7 +785,7 @@ export const MountInterface = M.interface('EndoMount', {
   // (matches `Directory.makeDirectory(path): Promise<Directory>`);
   // `makeFile` is the constructive sibling for parallel use.
   makeDirectory: M.call(PathArgShape).returns(M.promise()),
-  makeFile: M.call(PathArgShape).optional(M.any()).returns(M.promise()),
+  makeFile: M.call(PathArgShape).optional(M.string()).returns(M.promise()),
   // Mutation
   remove: M.call(PathArgShape).returns(M.promise()),
   move: M.call(PathArgShape, PathArgShape).returns(M.promise()),
@@ -643,6 +808,11 @@ export const MountInterface = M.interface('EndoMount', {
 // `readOnly` narrows to a structural ReadableBlob view that carries the same
 // rich surface.
 export const MountFileInterface = M.interface('EndoMountFile', {
+  // A lookup result can be classified without probing its whole surface.
+  kind: M.call().returns(M.eq('file')),
+  // Diagnostic-only stub: this keeps the common `file.list()` mistake useful
+  // without granting a file any directory authority.
+  list: M.call().returns(M.promise()),
   // Whole-value read surface (help / streamBase64 / text / json) shared with
   // every other readable blob, plus the rich `rangeReadMethodGuards`
   // (getInfo / fetch) over the live file, plus the mount-file write surface.
@@ -662,9 +832,17 @@ export const MountFileInterface = M.interface('EndoMountFile', {
 export { PlatformDirectoryInterface, PlatformFileInterface };
 
 export const MountEntryInterface = M.interface('EndoMountEntry', {
-  segments: M.call().returns(PathSegmentsShape),
-  displayPath: M.call().returns(M.string()),
+  ...pathEntryMethodGuards,
   child: M.call(M.string()).returns(MountEntryShape),
+});
+
+// The caretaker facet returned (paired with the mount) by
+// `makeRevocableMount`. `revoke()` flips the shared liveness record so the
+// mount and every face derived from it begin throwing `Mount has been
+// revoked`. The daemon keeps this facet captive and wires it to the mount
+// formula's `context.onCancel`; it is not currently handed to callers.
+export const MountControlInterface = M.interface('EndoMountControl', {
+  revoke: M.call().returns(),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -689,6 +867,28 @@ export const ReadableTreeInterface = M.interface('EndoReadableTree', {
   ...readableTreeMethodGuards,
   ...getInfoMethodGuard,
   sha256: M.call().returns(M.string()),
+});
+
+// `EndoRegistry` brokers npm-style package resolution and tarball fetch
+// against the content-addressed store, exposed on every host as the
+// `@registry` special name.  See designs/registry-capability.md.
+export const RegistryInterface = M.interface('EndoRegistry', {
+  help: M.call().optional(M.string()).returns(M.string()),
+  // resolve(packageJsonText, options?) -> RegistryResolution.  The entry
+  // package.json crosses the capability boundary as UTF-8/JSON text (a
+  // mutable Uint8Array is not Passable); callers holding bytes decode
+  // first.  A Passable immutable byte-array shape is a follow-up.
+  resolve: M.call(M.string())
+    .optional(
+      M.splitRecord({}, { offline: M.boolean(), workspaceRoot: M.any() }),
+    )
+    .returns(M.promise()),
+  // fetch(name, version) -> readable-tree capability for the package.
+  fetch: M.call(M.string(), M.string()).returns(M.promise()),
+  // lookup(name, version) -> readable-tree capability | undefined.
+  lookup: M.call(M.string(), M.string()).returns(M.promise()),
+  // list(prefix?) -> [{ name, version }].
+  list: M.call().optional(M.string()).returns(M.promise()),
 });
 
 export const DaemonFacetForWorkerInterface = M.interface(
@@ -725,36 +925,10 @@ export const TracesInterface = M.interface('EndoTraces', {
   stats: M.call().returns(M.promise()),
 });
 
-export const WorkerFacetForDaemonInterface = M.interface(
-  'EndoWorkerFacetForDaemon',
-  {
-    terminate: M.call().returns(M.promise()),
-    evaluate: M.call(
-      M.string(),
-      M.arrayOf(M.string()),
-      M.arrayOf(M.any()),
-      IdShape,
-      M.promise(),
-    ).returns(M.promise()),
-    // Args: (readableP, powersP, contextP, env) — readable is a ZIP
-    // archive of a compartment-map plus source-form modules.  These
-    // methods receive promises that get resolved inside the worker.
-    makeArchive: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
-      M.promise(),
-    ),
-    // Args: (treeP, powersP, contextP, env) — tree is a ReadableTree
-    // or Mount whose layout mirrors a compartment-mapper archive
-    // (compartment-map.json at root plus modules at their referenced
-    // paths).
-    makeFromTree: M.call(M.any(), M.any(), M.any(), EnvShape).returns(
-      M.promise(),
-    ),
-    // Args: (specifier, powersP, contextP, env)
-    makeUnconfined: M.call(M.string(), M.any(), M.any(), EnvShape).returns(
-      M.promise(),
-    ),
-  },
-);
+// Defined in `./worker-facet-interface.js` so the XS worker bootstrap
+// can guard its facet with the same pattern without importing this
+// module (which reaches `@endo/platform`'s Node-only paths).
+export { WorkerFacetForDaemonInterface } from './worker-facet-interface.js';
 
 export const EndoInterface = M.interface('Endo', {
   help: M.call().optional(M.string()).returns(M.string()),

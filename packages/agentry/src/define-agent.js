@@ -3,53 +3,12 @@
 
 /** @import { Message, Model } from '@earendil-works/pi-ai' */
 /** @import { Agent, AgentMessage, AgentTool, StreamFn } from '@earendil-works/pi-agent-core' */
-/** @import { Credentials, GetApiKey } from './harness/credentials.js' */
-/** @import { ThinkingLevel } from './harness/model.js' */
+/** @import { Credentials, GetApiKey, ThinkingLevel } from './harness/types.js' */
+/** @import { AgentConfig, AgentDefinition, AgentMakeOptions, AgentMaker } from './types.js' */
 
 import { makeApiKeyGetter, makeEnvCredentials } from './harness/credentials.js';
 import { resolveModelProfile } from './harness/model.js';
 import { makePiAgent } from './harness/pi-agent.js';
-
-/**
- * @typedef {object} AgentDefinition The powerless first stage. Everything
- *   derivable from configuration alone — the resolved model, the system
- *   instructions, and the model-facing tool surface — with no powers in hand.
- * @property {Model<string>} model
- * @property {boolean} localOllama
- * @property {string} instructions
- * @property {AgentTool<any>[]} toolSchemas The model-facing tool surface,
- *   built from powerless placeholders so a definition can advertise its tools
- *   before any power is granted.
- *
- * @typedef {object} AgentMakeOptions The powered second-stage inputs: the live
- *   powers handle plus per-construction wiring that only matters once an agent
- *   is actually built.
- * @property {unknown} [powers]
- * @property {Credentials} [credentials]
- * @property {AgentTool<any>[]} [tools] The powered tool surface (closures bound
- *   to live powers). Falls back to the definition's powerless `toolSchemas`.
- * @property {AgentMessage[]} [messages]
- * @property {StreamFn} [streamFn]
- * @property {(messages: AgentMessage[]) => Message[] | Promise<Message[]>} [convertToLlm]
- * @property {GetApiKey} [getApiKey]
- * @property {ThinkingLevel} [thinkingLevel]
- *
- * @typedef {(options?: AgentMakeOptions) => Agent} AgentMaker A maker function:
- *   the powered second stage. Calling it with a powers handle (and optional
- *   per-construction wiring) builds the live pi-agent-core `Agent`.
- *
- * @typedef {object} AgentConfig
- * @property {Model<string> | string | { provider?: string, model?: string, baseUrl?: string, reasoning?: boolean }} [model]
- *   A concrete pi-ai `Model`, a model-profile config object, or a bare profile
- *   string resolved via the harness (`'sonnet'`, `'anthropic/claude-...'`).
- * @property {string} [instructions] The system prompt.
- * @property {AgentTool<any>[]} [tools] The powerless model-facing tool surface.
- * @property {(definition: AgentDefinition, options: AgentMakeOptions) => { tools?: AgentTool<any>[], getApiKey?: GetApiKey }} [endow]
- *   A hook the maker calls at construction time to derive the powered tool
- *   surface and credential resolver from the live powers. This is the seam
- *   where a powerless definition is endowed with powers without the powerless
- *   stage ever holding a capability.
- */
 
 /**
  * @param {AgentConfig['model']} model

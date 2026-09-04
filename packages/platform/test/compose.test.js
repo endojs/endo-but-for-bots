@@ -76,6 +76,7 @@ const readFile = async (root, name) => {
 test('emptyFilesystem has an empty Directory', async t => {
   const fs = emptyFilesystem();
   const root = await E(fs).root();
+  t.is((await E(root).getAttrs()).btime, null);
   const cursor = await E(root).list();
   const entries = await collectStream(await E(cursor).stream());
   t.deepEqual(entries, []);
@@ -203,6 +204,19 @@ test('namespace exposes named children as mount points', async t => {
   const cursor = await E(root).list();
   const entries = await collectStream(await E(cursor).stream());
   t.deepEqual(entries.map(e => e.name).sort(), ['a', 'b']);
+  t.deepEqual(entries.map(e => [e.name, e.kind]).sort(), [
+    ['a', 'directory'],
+    ['b', 'directory'],
+  ]);
+  t.is((await E(root).getAttrs()).btime, null);
+  const watchFrom = await E(root).watchFrom();
+  const watchedEntries = await collectStream(
+    await E(watchFrom.cursor).stream(),
+  );
+  t.deepEqual(watchedEntries.map(e => [e.name, e.kind]).sort(), [
+    ['a', 'directory'],
+    ['b', 'directory'],
+  ]);
 });
 
 test('namespace cycle detection', async t => {

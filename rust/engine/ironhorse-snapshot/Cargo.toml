@@ -1,0 +1,41 @@
+[package]
+name = "ironhorse-snapshot"
+description = "The ironhorse XS_M atom container writer/reader and index-arena heap serializer (design: designs/ironhorse-engine.md § Snapshots). Writes/reads the length-prefixed big-endian FourCC atom grammar with an ironhorse VERS discriminator. #![forbid(unsafe_code)]."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ironhorse_snapshot"
+path = "src/lib.rs"
+
+[dependencies]
+# The value/heap model this crate serializes. Only public arena/slot
+# surfaces are used (design § Snapshots: the writer is a serializer over
+# the index arenas, not a relocator).
+ironhorse-vm = { path = "../ironhorse-vm" }
+# Compiles the store-suite fixtures (real JS) when the suite is enabled;
+# never part of a plain library build.
+ironhorse-compile = { path = "../ironhorse-compile", optional = true }
+
+[features]
+# The backend-parameterized store acceptance suite (`store_suite`
+# module): test support for backend crates (e.g. the daemon-side
+# SQLite store), kept out of production builds.
+store-suite = ["dep:ironhorse-compile"]
+
+[dev-dependencies]
+# The integration test crate (`tests/supervisor_suspend_resume.rs`) drives
+# a live `Interp` through the supervisor-shaped suspend/resume lifecycle;
+# an integration test compiles as a separate crate, so the engine must be
+# declared here even though it is a regular dependency above.
+ironhorse-vm = { path = "../ironhorse-vm" }
+# The cross-crank restore regression tests (`tests/restore_side_tables.rs`)
+# compile real guest source to bytecode + a SYMB atom so the restored
+# machine reads genuine runtime-materialized globals across a snapshot —
+# the pure-Rust compiler pipeline (no oracle needed) that `dual_run` rides.
+ironhorse-compile = { path = "../ironhorse-compile" }
+# Activates the store-suite feature for this crate's own integration
+# tests (a self dev-dependency only unifies features; it adds no code).
+ironhorse-snapshot = { path = ".", features = ["store-suite"] }

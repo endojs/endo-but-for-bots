@@ -1,4 +1,3 @@
-/* global process */
 import 'ses';
 import fs from 'fs';
 import { makeBundle } from '@endo/compartment-mapper/bundle.js';
@@ -24,10 +23,11 @@ const main = async () => {
     read,
     pathToFileURL(resolve('../src/xs-prelude.js', import.meta.url)).toString(),
   );
-
   await fs.promises.mkdir('prelude', { recursive: true });
-  await write('prelude/node.js', nodePrelude);
-  await write('prelude/xs.js', xsPrelude);
+  // Terminate each bundle expression explicitly before test262-harness
+  // concatenates it with the test source.
+  await write('prelude/node.js', `${nodePrelude}\n;\n`);
+  await write('prelude/xs.js', `${xsPrelude}\n;\n`);
 };
 
 main().catch(err => {

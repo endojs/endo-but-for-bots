@@ -1,0 +1,16 @@
+{
+  "compartments": {
+    "cthuloops": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "main.js",
+  "entryCompartment": "cthuloops",
+  "entryModule": "./main.js",
+  "fixture": "fixtures-cthuloops",
+  "oracle": "node"
+}

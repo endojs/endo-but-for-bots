@@ -1,0 +1,13 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {}
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-missing-optional-peer-dependencies",
+  "oracle": "node",
+  "projection": "dependency-classification"
+}

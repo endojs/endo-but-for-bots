@@ -8,8 +8,6 @@
 import type { WILDCARD_POLICY_VALUE } from '../policy-format.js';
 import type { IsAny } from './typescript.js';
 
-/* eslint-disable no-use-before-define */
-
 /**
  * An object representing a full attenuation definition.
  */
@@ -30,8 +28,7 @@ export type ImplicitAttenuationDefinition = [any, ...any[]];
  * implicit definition.
  */
 export type AttenuationDefinition =
-  | FullAttenuationDefinition
-  | ImplicitAttenuationDefinition;
+  FullAttenuationDefinition | ImplicitAttenuationDefinition;
 
 /**
  * Information about the attenuator implementation
@@ -66,7 +63,7 @@ export type PropertyPolicy = Record<string, boolean>;
  * the type `any` also makes that test succeed, so `PolicyItem<any>` used to
  * reduce to the same as `void` and
  * `PackagePolicy<any, any, any, any> = SomePackagePolicy` was not a supertype of
- * policies with extra string literals (for example, LavaMoat's {@code "root"} on
+ * policies with extra string literals (for example, LavaMoat's `root` on
  * package imports). A separate branch for a wide
  * `any` type parameter yields
  * `PolicyItem<any> = WildcardPolicy | PropertyPolicy | any` so
@@ -112,9 +109,7 @@ export type PackagePolicy<
    * The policy item or nested attenuation definition for builtins.
    */
   builtins?:
-    | NestedAttenuationDefinition
-    | PolicyItem<BuiltinsPolicyExtra>
-    | undefined;
+    NestedAttenuationDefinition | PolicyItem<BuiltinsPolicyExtra> | undefined;
   /**
    * Whether to disable global freeze.
    */

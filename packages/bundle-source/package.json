@@ -14,6 +14,7 @@
   "scripts": {
     "build": "exit 0",
     "test": "ava",
+    "test:types": "tsc --project tsconfig.test-types.json",
     "test:xs": "exit 0",
     "lint-fix": "eslint --fix '**/*.js'",
     "lint": "yarn lint:types && yarn lint:eslint",
@@ -28,7 +29,7 @@
     "@endo/init": "workspace:^",
     "@endo/promise-kit": "workspace:^",
     "@endo/where": "workspace:^",
-    "amaro": "^1.1.9"
+    "amaro": "^1.1.11"
   },
   "devDependencies": {
     "@endo/lockdown": "workspace:^",
@@ -37,6 +38,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
+    "expect-type": "^1.4.0",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
@@ -71,16 +73,6 @@
       "test/**/*.test.*"
     ],
     "timeout": "2m"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "ignorePatterns": [
-      "dist/",
-      "scripts/",
-      "demo/"
-    ]
   },
   "typeCoverage": {
     "atLeast": 69.54

@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../base64/tsconfig.composite.json"
+    },
+    {
       "path": "../captp/tsconfig.composite.json"
     },
     {
@@ -43,6 +46,9 @@
     },
     {
       "path": "../promise-kit/tsconfig.composite.json"
+    },
+    {
+      "path": "../sha256/tsconfig.composite.json"
     },
     {
       "path": "../where/tsconfig.composite.json"

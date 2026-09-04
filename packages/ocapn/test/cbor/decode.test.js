@@ -350,7 +350,7 @@ test('readTypeAndMaybeValue for bytestring', t => {
   const reader = decode('44deadbeef');
   const result = reader.readTypeAndMaybeValue();
   t.is(result.type, 'bytestring');
-  const value = /** @type {ArrayBufferLike} */ (result.value);
+  const value = /** @type {Uint8Array} */ (result.value);
   t.is(value.byteLength, 4);
 });
 
@@ -465,4 +465,94 @@ test('error: wrong type for readInteger', t => {
 test('error: wrong tag for readInteger', t => {
   const reader = decode('d90118666d6574686f64'); // 280("method")
   t.throws(() => reader.readInteger(), { message: /Expected bignum tag/ });
+});
+
+// ===== Canonical-Encoding Strictness =====
+//
+// Adopting @endo/cbor tightened the decoder: its readers reject non-canonical
+// encodings the previous hand-rolled reader tolerated. These pin that intended
+// tightening, so a future primitive-layer change cannot loosen it unnoticed.
+
+test('reject non-minimal head on a text string', t => {
+  // "hello" with its length 5 written in the 1-byte-argument form (0x78 0x05)
+  // instead of the minimal 0x65.
+  const reader = decode('780568656c6c6f');
+  t.throws(() => reader.readString(), { message: /Non-minimal CBOR head/ });
+});
+
+test('reject non-minimal head on an array header', t => {
+  // Empty array with length 0 written as 0x98 0x00 instead of the minimal 0x80.
+  const reader = decode('9800');
+  t.throws(() => reader.enterList(), { message: /Non-minimal CBOR head/ });
+});
+
+test('reject non-minimal head on a map header', t => {
+  // Empty map with 0 pairs written as 0xb8 0x00 instead of the minimal 0xa0.
+  const reader = decode('b800');
+  t.throws(() => reader.enterDictionary(), {
+    message: /Non-minimal CBOR head/,
+  });
+});
+
+test('reject non-minimal head on a byte string', t => {
+  // Empty byte string with length 0 written as 0x58 0x00 instead of the
+  // minimal 0x40.
+  const reader = decode('5800');
+  t.throws(() => reader.readBytestring(), { message: /Non-minimal CBOR head/ });
+});
+
+test('reject non-minimal head on a bignum tag', t => {
+  // Tag 2 written as 0xd8 0x02 instead of the minimal 0xc2.
+  const reader = decode('d8024101');
+  t.throws(() => reader.readInteger(), { message: /Non-minimal CBOR head/ });
+});
+
+test('reject non-minimal head on a selector tag', t => {
+  // Tag 280 written in the 4-byte-argument form instead of the minimal
+  // 0xd9 0x01 0x18.
+  const reader = decode('da00000118666d6574686f64');
+  t.throws(() => reader.readSelectorAsString(), {
+    message: /Non-minimal CBOR head/,
+  });
+});
+
+test('peekTypeHint rejects a non-minimal tag head', t => {
+  // peekTypeHint reads the tag to categorize it, so it must refuse a
+  // non-canonical head rather than launder one into a type answer that a
+  // later read would then accept.
+  const reader = decode('da000000024101');
+  t.throws(() => reader.peekTypeHint(), { message: /Non-minimal CBOR head/ });
+});
+
+test('reject non-minimal bignum payload', t => {
+  // Tag 2 + h'0001': a leading zero byte, so the magnitude is not minimal.
+  const reader = decode('c2420001');
+  t.throws(() => reader.readInteger(), {
+    message: /Non-minimal bignum payload/,
+  });
+});
+
+test('reject indefinite-length byte string', t => {
+  // 0x5f is major 2 with additional info 31 (indefinite length).
+  const reader = decode('5f');
+  t.throws(() => reader.readBytestring(), {
+    message: /Invalid CBOR additional info 31/,
+  });
+});
+
+test('reject float16 where a float64 is required', t => {
+  // 0xf9 is major 7 info 25 (float16); this subset is float64-only.
+  const reader = decode('f900');
+  t.throws(() => reader.readFloat64(), {
+    message: /Expected float64 \(major 7, info 27\)/,
+  });
+});
+
+test('strictness diagnostics carry the reader name and byte offset', t => {
+  const reader = makeCborReader(hexToBytes('780568656c6c6f'), {
+    name: 'named-source',
+  });
+  t.throws(() => reader.readString(), {
+    message: /at index 0 of named-source/,
+  });
 });

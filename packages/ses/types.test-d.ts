@@ -1,6 +1,5 @@
-/* eslint-disable @endo/no-polymorphic-call, import/no-extraneous-dependencies, no-restricted-globals, no-underscore-dangle */
-import { expectType } from 'tsd';
 import type { Assert } from 'ses';
+import { expectTypeOf } from 'expect-type';
 
 // Lockdown
 
@@ -94,9 +93,9 @@ assert.equal('a', 'b', X`equality error left:${q('a')}, right:${q('b')}`);
   type NumRecord = { key: 'num'; value: number };
   type StrRecord = { key: 'str'; value: string };
   const r: NumRecord | StrRecord = null as any;
-  expectType<string | number>(r.value);
+  expectTypeOf(r.value).toEqualTypeOf<string | number>();
   assert.equal(r.key, 'str');
-  expectType<string>(r.value);
+  expectTypeOf(r.value).toEqualTypeOf<string>();
 }
 
 assert.typeof(10.1, 'number');
@@ -175,7 +174,7 @@ interface Dummy {
 
 (n: number | string) => {
   // @ts-expect-error
-  // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
+
   return n + 10;
 };
 // vs
@@ -204,7 +203,7 @@ interface Dummy {
 // Reasserting itself
 
 const assume: Assert = assert.makeAssert(() => {}, true);
-expectType<void>(assume(false, 'definitely'));
+expectTypeOf(assume(false, 'definitely')).toEqualTypeOf<void>();
 
 // ////////////////////////////////////////////////////////////////////////
 
@@ -214,26 +213,39 @@ X`canst thou string?`.toString();
 
 const stringable = q(null);
 
-expectType<Error>(makeError(X`details are ${q(stringable)}`));
+expectTypeOf(makeError(X`details are ${q(stringable)}`)).toEqualTypeOf<Error>();
 
-expectType<Error>(makeError(X`details are ${stringable}`, TypeError));
+expectTypeOf(
+  makeError(X`details are ${stringable}`, TypeError),
+).toEqualTypeOf<Error>();
 
-expectType<Error>(
+expectTypeOf(
   makeError(X`details are ${stringable}`, TypeError, {
     errorName: 'Nom de plum',
   }),
-);
+).toEqualTypeOf<Error>();
 
-expectType<never>(Fail`details are ${stringable}`);
+expectTypeOf(
+  makeError(X`details are ${stringable}`, AggregateError, {
+    errors: [new Error('error 1'), new Error('error 2')],
+  }),
+).toEqualTypeOf<AggregateError>();
 
-// eslint-disable-next-line no-unreachable
-expectType<never>(Fail`details are ${stringable}`);
+expectTypeOf(
+  makeError(X`details are ${stringable}`, Error, {
+    code: '123',
+  }),
+).toExtend<Error & { code?: string }>();
+
+expectTypeOf(Fail`details are ${stringable}`).toEqualTypeOf<never>();
+
+expectTypeOf(Fail`details are ${stringable}`).toEqualTypeOf<never>();
 
 // ////////////////////////////////////////////////////////////////////////
 
 // Immutable ArrayBuffer shim
 
 const arr = new ArrayBuffer(10);
-expectType<ArrayBuffer>(arr.sliceToImmutable());
-expectType<ArrayBuffer>(arr.transferToImmutable());
-expectType<boolean>(arr.immutable);
+expectTypeOf(arr.sliceToImmutable()).toEqualTypeOf<ArrayBuffer>();
+expectTypeOf(arr.transferToImmutable()).toEqualTypeOf<ArrayBuffer>();
+expectTypeOf(arr.immutable).toEqualTypeOf<boolean>();

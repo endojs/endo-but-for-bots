@@ -281,11 +281,14 @@ impl Machine {
     /// This handles CapTP's multi-level async chains where resolving
     /// one promise queues new microtasks (e.g., method call → promise
     /// resolve → serialization → send → further reactions).
+    /// The pending check is per-machine so concurrent machines on
+    /// other threads cannot steal this machine's pending signal and
+    /// leave its queue undrained.
     pub fn quiesce(&self) {
         unsafe {
             loop {
                 fxRunPromiseJobs(self.raw);
-                if ffi::fxHasPendingJobs() == 0 {
+                if ffi::fxMachineHasPendingJobs(self.raw) == 0 {
                     break;
                 }
             }
@@ -731,11 +734,26 @@ impl Machine {
         cas_dir: &std::path::Path,
     ) -> Result<String, SnapshotError> {
         std::fs::create_dir_all(cas_dir).map_err(SnapshotError::Io)?;
-        let tmp_path = cas_dir.join(".snapshot.tmp");
+        // Unique temp name: a fixed name would let two processes (or two
+        // machines in one process) snapshotting into a shared CAS
+        // directory interleave writes and corrupt each other.
+        static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_path = cas_dir.join(format!(
+            ".snapshot.{}.{}.tmp",
+            std::process::id(),
+            seq
+        ));
         let file = std::fs::File::create(&tmp_path)
             .map_err(SnapshotError::Io)?;
         let mut cbs = self.registered_callbacks.borrow().clone();
-        let hash = self.write_snapshot_to_file(signature, &mut cbs, file)?;
+        let hash = match self.write_snapshot_to_file(signature, &mut cbs, file) {
+            Ok(hash) => hash,
+            Err(error) => {
+                let _ = std::fs::remove_file(&tmp_path);
+                return Err(error);
+            }
+        };
         let final_path = cas_dir.join(&hash);
         std::fs::rename(&tmp_path, &final_path).map_err(SnapshotError::Io)?;
         Ok(hash)
@@ -857,14 +875,28 @@ impl Drop for Machine {
 /// bundles so that module-level destructuring of `assert` works.
 pub const POLYFILLS: &str = include_str!("polyfills.js");
 
+/// WHATWG `URL`/`URLSearchParams` veneer over the host's rust-url
+/// parser (`hostUrlParse`/`hostUrlSet`/`hostFormUrlDecode`/
+/// `hostFormUrlEncode`). Evaluated in machines that install npm
+/// archives; guarded so an engine-provided URL is never displaced.
+pub const URL_GLOBALS_JS: &str = include_str!("url_globals.js");
+
 /// Creates `globalThis.host<Name>` aliases for the unprefixed
 /// host functions registered in Rust so that bundled code which
 /// expects `hostReadFile`, `hostSendRawFrame`, etc. resolves to
 /// the real implementations. Evaluated after host powers are
-/// registered and before SES lockdown.
+/// registered and before the SES boot bundle.
 pub const HOST_ALIASES: &str = include_str!("host_aliases.js");
 
-/// HandledPromise shim + harden upgrade.
+/// The `HandledPromise` shim, generated from
+/// `packages/daemon/src/bus-worker-xs-ses-boot.js` by
+/// `packages/daemon/scripts/bundle-bus-worker-xs-ses-boot.mjs`.
+///
+/// Despite the name this bundle does NOT call `lockdown()`, and
+/// nothing else in the boot path does either (`fx_lockdown` is
+/// declared in `ffi.rs` but never called). The realm runs on
+/// unrepaired intrinsics and `polyfills.js`'s deep-freeze `harden`.
+/// Tracked in `designs/worker-rust-xs.md` § Known Gaps.
 pub const SES_BOOT: &str = include_str!("ses_boot.js");
 
 /// The bundled worker JavaScript. Self-executing IIFE that installs
@@ -1123,8 +1155,9 @@ fn dispatch_envelope(machine: &Machine, data: &[u8]) {
     );
 }
 
-/// Bootstrap an XS machine with polyfills and SES lockdown.
-/// Shared by all three entry points.
+/// Bootstrap an XS machine with polyfills and the SES boot bundle.
+/// Shared by all three entry points. Note that no `lockdown()` runs;
+/// see the `SES_BOOT` docs.
 fn bootstrap_ses(machine: &Machine, label: &str) {
     machine
         .eval(POLYFILLS)
@@ -1409,6 +1442,115 @@ fn cbor_skip(data: &[u8], pos: usize) -> Option<usize> {
     }
 }
 
+/// Globals endowed into every archive compartment. Evaluated once per
+/// machine to set `globalThis.__archiveEndowments`, which the archive
+/// installer's compartment factory copies onto each compartment's
+/// globals (see `archive.rs`). Shared by the supervised archive path
+/// and the standalone `endor run` runner so the two cannot drift.
+///
+/// `console` routes log/info/debug to the process stdout so a
+/// program's output is separable from the runner's stderr
+/// diagnostics; warn/error ride the trace channel (stderr).
+///
+/// `crypto` is the web-platform subset a package's `browser` build
+/// reaches for — `getRandomValues` and `randomUUID` — a standard
+/// veneer over the `randomFillBytes` host function, which populates
+/// the caller's view in place with the same shape as
+/// `getRandomValues` (no hexadecimal round-trip), so it grants no
+/// authority the compartment did not already hold. `crypto.subtle`
+/// is deliberately absent.
+///
+/// `process` is a minimal frozen shim of the Node global, not a Node
+/// emulation: real npm packages branch on `process.env.NODE_ENV`
+/// before doing anything else (react and graphql select their
+/// production builds with it), so its absence failed every such
+/// package at `get process: undefined variable`. The environment is a
+/// frozen `{ NODE_ENV: 'production' }` — deterministic, never the
+/// host's environment — `nextTick` rides the promise queue, and
+/// `versions` has no `node` key so Node-detection takes its non-Node
+/// branch. The event-emitter surface (`on`, `once`, `emit`, …) is
+/// present as chainable no-ops: packages register `exit`/signal
+/// handlers as a side effect of loading, and a no-op listener grants
+/// no authority — there is no process lifecycle to observe in the
+/// confined machine. Everything else Node puts on `process`
+/// (`stdout`, `exit`, signals, `hrtime`) stays absent by design of
+/// the confined runtime; packages touching those fail with the same
+/// clean undefined read as before.
+const ARCHIVE_ENDOWMENTS_JS: &str = r#"
+globalThis.__archiveEndowments = {
+    print: trace, trace,
+    console: (function () {
+        var format = function (args) {
+            var parts = [];
+            for (var i = 0; i < args.length; i++) {
+                var a = args[i];
+                if (typeof a === 'string') { parts.push(a); continue; }
+                var s;
+                try { s = JSON.stringify(a); } catch (e) { s = undefined; }
+                parts.push(s === undefined ? String(a) : s);
+            }
+            return parts.join(' ');
+        };
+        var out = function () { stdoutLine(format(arguments)); };
+        var err = function () { trace(format(arguments)); };
+        return { log: out, info: out, debug: out, trace: out, warn: err, error: err };
+    })(),
+    crypto: Object.freeze((function () {
+        var getRandomValues = function (view) {
+            if (!ArrayBuffer.isView(view)) {
+                throw new TypeError(
+                    'crypto.getRandomValues: argument must be an ArrayBuffer view');
+            }
+            randomFillBytes(view);
+            return view;
+        };
+        var randomUUID = function () {
+            var b = getRandomValues(new Uint8Array(16));
+            b[6] = (b[6] & 15) | 64;
+            b[8] = (b[8] & 63) | 128;
+            var text = '';
+            for (var i = 0; i < 16; i++) {
+                text += (b[i] + 256).toString(16).slice(1);
+                if (i === 3 || i === 5 || i === 7 || i === 9) text += '-';
+            }
+            return text;
+        };
+        return { getRandomValues: getRandomValues, randomUUID: randomUUID };
+    })()),
+    process: (function () {
+        var noopChain = function () { return this; };
+        return Object.freeze({
+            env: Object.freeze({ NODE_ENV: 'production' }),
+            argv: Object.freeze(['endor']),
+            platform: 'xs',
+            arch: 'xs',
+            version: 'v0.0.0',
+            versions: Object.freeze({ xs: '0' }),
+            browser: false,
+            cwd: function cwd() { return '/'; },
+            nextTick: function nextTick(cb) {
+                var args = Array.prototype.slice.call(arguments, 1);
+                Promise.resolve().then(function () { cb.apply(null, args); });
+            },
+            on: noopChain, addListener: noopChain, once: noopChain,
+            off: noopChain, removeListener: noopChain,
+            removeAllListeners: noopChain,
+            prependListener: noopChain, prependOnceListener: noopChain,
+            listeners: function listeners() { return []; },
+            emit: function emit() { return false; },
+        });
+    })(),
+    readFileText, writeFileText, readDir, mkdir,
+    remove, rename, exists, isDir, readLink,
+    openReader, read, closeReader,
+    openWriter, write, closeWriter,
+    openDir, closeDir, symlink, link,
+    sha256, sha256Init, sha256Update, sha256Finish,
+    randomHex256, ed25519Keygen, ed25519Sign,
+    getPid, getEnv, joinPath, realPath
+};
+"#;
+
 /// Source for an XS program driven by [`run_xs_program`].
 pub enum XsProgram<'a> {
     /// Inline IIFE/script source. Evaluated at realm top-level.
@@ -1505,13 +1647,13 @@ pub fn run_xs_program(
         // Install host<Name> aliases so bundled code that references
         // hostReadFile / hostSendRawFrame / hostGetDaemonHandle / ...
         // resolves to the unprefixed implementations. This runs BEFORE
-        // SES lockdown so it can write to globalThis.
+        // the SES boot bundle so it can write to globalThis.
         machine
             .eval(HOST_ALIASES)
             .expect("host aliases evaluation failed");
 
-        // Install native TextEncoder/TextDecoder replacements before SES
-        // lockdown so that the bundled `new TextEncoder()` picks up the
+        // Install native TextEncoder/TextDecoder replacements before the
+        // SES boot bundle so that the bundled `new TextEncoder()` picks up the
         // fast native implementation instead of XS's built-in which is
         // extremely slow for large strings (>100KB).
         machine.eval(
@@ -1569,28 +1711,25 @@ pub fn run_xs_program(
             }
             XsProgram::Archive(bytes) => {
                 // Provide globals visible inside archive Compartments.
+                machine.eval(ARCHIVE_ENDOWMENTS_JS);
+                // URL/URLSearchParams ride the host's WHATWG parser;
+                // a separate statement to keep the endowments blob's
+                // conflict surface small.
+                machine.eval(URL_GLOBALS_JS);
                 machine.eval(
-                    "globalThis.__archiveEndowments = { \
-                        print: trace, trace, \
-                        readFileText, writeFileText, readDir, mkdir, \
-                        remove, rename, exists, isDir, readLink, \
-                        openReader, read, closeReader, \
-                        openWriter, write, closeWriter, \
-                        openDir, closeDir, symlink, link, \
-                        sha256, sha256Init, sha256Update, sha256Finish, \
-                        randomHex256, ed25519Keygen, ed25519Sign, \
-                        getPid, getEnv, joinPath, realPath \
-                    };",
+                    "__archiveEndowments.URL = globalThis.URL; \
+                     __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
                 );
                 let cursor = std::io::Cursor::new(bytes);
                 let archive = archive::load_archive(cursor)
                     .map_err(|e| XsnapError::Archive(format!("cannot read archive: {e}")))?;
-                if !archive::install_archive(&machine, &archive) {
+                if !archive::install_archive_async(&machine, &archive) {
                     return Err(XsnapError::Archive(
                         "archive installation failed".to_string(),
                     ));
                 }
                 machine.quiesce();
+                archive::entry_import_result(&machine)?;
             }
         }
         eprintln!("{label}: bootstrap eval complete");
@@ -1631,12 +1770,13 @@ pub fn run_xs_program(
             // non-blocking envelope dispatch so that CapTP round-trips
             // can complete without deadlocking.
             //
-            // fxHasPendingJobs() is check-and-reset: returns 1 if any
-            // promise job was queued since the last call, then clears
-            // the flag. We loop `fxRunPromiseJobs` until no new jobs
-            // are queued, then drain inbound envelopes. If after
-            // draining we still have fresh jobs, repeat. When both
-            // promise jobs and envelopes are exhausted, break.
+            // fxMachineHasPendingJobs() is check-and-reset: returns 1
+            // if any promise job was queued on this machine since the
+            // last call, then clears the flag. We loop
+            // `fxRunPromiseJobs` until no new jobs are queued, then
+            // drain inbound envelopes. If after draining we still have
+            // fresh jobs, repeat. When both promise jobs and envelopes
+            // are exhausted, break.
             let mut metering_abort = false;
             loop {
                 // Drain all ready promise jobs (multiple turns may be
@@ -1657,7 +1797,7 @@ pub fn run_xs_program(
                             break;
                         }
                     }
-                    if unsafe { ffi::fxHasPendingJobs() } == 0 {
+                    if unsafe { ffi::fxMachineHasPendingJobs(machine.raw) } == 0 {
                         break;
                     }
                 }
@@ -1698,7 +1838,7 @@ pub fn run_xs_program(
                 // No envelopes and no ready promise jobs. Check if
                 // any new jobs were queued during envelope handling
                 // (e.g., by sendRawFrame callbacks).
-                if unsafe { ffi::fxHasPendingJobs() } != 0 {
+                if unsafe { ffi::fxMachineHasPendingJobs(machine.raw) } != 0 {
                     continue;
                 }
 
@@ -1823,28 +1963,22 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
     machine.register_worker_io();
     register_host_powers(&machine);
 
-    // Provide archive endowments.
+    // Provide archive endowments (shared with the supervised path).
+    machine.eval(ARCHIVE_ENDOWMENTS_JS);
+    // URL/URLSearchParams ride the host's WHATWG parser; a separate
+    // statement to keep the endowments blob's conflict surface small.
+    machine.eval(URL_GLOBALS_JS);
     machine.eval(
-        "globalThis.__archiveEndowments = { \
-            print: trace, trace, \
-            readFileText, writeFileText, readDir, mkdir, \
-            remove, rename, exists, isDir, readLink, \
-            openReader, read, closeReader, \
-            openWriter, write, closeWriter, \
-            openDir, closeDir, symlink, link, \
-            sha256, sha256Init, sha256Update, sha256Finish, \
-            randomHex256, ed25519Keygen, ed25519Sign, \
-            getPid, getEnv, joinPath, realPath \
-        };",
+        "__archiveEndowments.URL = globalThis.URL; \
+         __archiveEndowments.URLSearchParams = globalThis.URLSearchParams;",
     );
-
-    if !archive::install_archive(&machine, loaded) {
+    if !archive::install_archive_async(&machine, loaded) {
         return Err(XsnapError::Archive(
             "archive installation failed".to_string(),
         ));
     }
     machine.quiesce();
-    Ok(())
+    archive::entry_import_result(&machine)
 }
 
 #[cfg(test)]
@@ -1872,6 +2006,136 @@ mod tests {
     #[test]
     fn create_and_destroy_machine() {
         let _machine = new_machine();
+    }
+
+    /// The async `Compartment.prototype.import` path evaluates a
+    /// module using top-level await, where `importNow` would fail
+    /// with `TypeError: async module`. Foundation for the archive
+    /// loader's `loadHook` (top-level-await entry modules).
+    #[test]
+    fn async_import_evaluates_top_level_await_module() {
+        let machine = new_machine();
+        machine.eval("var __r = 'pending';");
+        machine.eval(
+            "var c = new Compartment({ \
+               resolveHook: function (s) { return s; }, \
+               loadHook: function (s) { \
+                 return { source: new ModuleSource('export const x = await Promise.resolve(42);') }; \
+               } \
+             }); \
+             c.import('./main.js').then( \
+               function (ns) { __r = 'ok:' + ns.x; }, \
+               function (e) { __r = 'err:' + e.message; }); \
+             undefined",
+        );
+        machine.quiesce();
+        match machine.eval("__r") {
+            Some(JsValue::String(s)) => assert_eq!(s, "ok:42"),
+            other => panic!("expected result string, got {:?}", other.map(|v| js_value_debug(&v))),
+        }
+    }
+
+    /// A cross-compartment edge expressed as the lazy
+    /// `{ namespace: <specifier>, compartment }` module descriptor
+    /// lets the engine drive the foreign module's async evaluation,
+    /// so top-level await works in dependencies too. (An eager
+    /// `foreignComp.import()` awaited inside `loadHook` deadlocks
+    /// the loader instead — hence the descriptor form.)
+    #[test]
+    fn async_import_links_top_level_await_dependency() {
+        let machine = new_machine();
+        machine.eval("var __r = 'pending';");
+        machine.eval(
+            "var dep = new Compartment({ \
+               resolveHook: function (s) { return s; }, \
+               loadHook: function (s) { \
+                 return { source: new ModuleSource('export const d = await Promise.resolve(7);') }; \
+               } \
+             }); \
+             var c = new Compartment({ \
+               resolveHook: function (s) { return s; }, \
+               loadHook: function (s) { \
+                 if (s === 'dep') { \
+                   return { namespace: './index.js', compartment: dep }; \
+                 } \
+                 return { source: new ModuleSource(\"import { d } from 'dep'; export const y = d + (await Promise.resolve(1));\") }; \
+               } \
+             }); \
+             c.import('./main.js').then( \
+               function (ns) { __r = 'ok:' + ns.y; }, \
+               function (e) { __r = 'err:' + e.message; }); \
+             undefined",
+        );
+        machine.quiesce();
+        match machine.eval("__r") {
+            Some(JsValue::String(s)) => assert_eq!(s, "ok:8"),
+            other => panic!("expected result string, got {:?}", other.map(|v| js_value_debug(&v))),
+        }
+    }
+
+    /// The WHATWG URL veneer end to end: parsing/normalization,
+    /// relative resolution, setter semantics (silent-ignore for
+    /// component setters, throw for `href`), and the two-way
+    /// URL <-> URLSearchParams linkage, all through the
+    /// rust-url-backed host functions.
+    #[test]
+    fn url_globals_provide_whatwg_url_and_search_params() {
+        let machine = new_machine();
+        machine.define_function("hostUrlParse", worker_io::host_url_parse, 2);
+        machine.define_function("hostUrlSet", worker_io::host_url_set, 3);
+        machine.define_function("hostFormUrlDecode", worker_io::host_form_urlencoded_decode, 1);
+        machine.define_function("hostFormUrlEncode", worker_io::host_form_urlencoded_encode, 1);
+        machine.eval(URL_GLOBALS_JS).expect("url globals eval failed");
+        let probe = r#"(function () {
+            var out = [];
+            var u = new URL('HTTPS://User:Pw@ExAmPle.com:8443/a/b/../c?x=1&y=2#frag');
+            out.push(u.href);
+            out.push([u.protocol, u.hostname, u.port, u.pathname, u.search, u.hash, u.origin].join('|'));
+            out.push(new URL('../up?q=1', 'https://example.com/a/b/c').href);
+            var d = new URL('https://example.com:443/x');
+            out.push(d.href + '|' + d.port);
+            d.port = 'nonsense';
+            d.protocol = 'not a scheme';
+            d.hash = 'h2';
+            d.pathname = 'y';
+            out.push(d.href);
+            var threw = 'no';
+            try { d.href = 'http://['; } catch (e) { threw = e.constructor.name; }
+            out.push(threw + ':' + URL.canParse('http://[') + ':' + URL.canParse('/p', 'https://e.com'));
+            var s = new URL('https://example.com/p?b=2&a=1&a=3');
+            var sp = s.searchParams;
+            out.push(sp.get('b') + '|' + sp.getAll('a').join(',') + '|' + sp.size);
+            sp.append('c', 'sp ce');
+            sp.sort();
+            out.push(s.search);
+            sp.delete('a', '3');
+            sp.set('b', '9');
+            out.push(s.href);
+            s.search = '?fresh=1';
+            out.push(sp.get('fresh') + '|' + sp.has('a') + '|' + sp.toString());
+            var solo = new URLSearchParams('a=%C3%A9&b=1+2');
+            out.push(solo.get('a') + '|' + solo.get('b') + '|' + solo.toString());
+            var it = [];
+            for (var pair of solo) it.push(pair[0] + '=' + pair[1]);
+            out.push(it.join('&'));
+            return out.join('\n');
+        })()"#;
+        let expected = "https://User:Pw@example.com:8443/a/c?x=1&y=2#frag\n\
+            https:|example.com|8443|/a/c|?x=1&y=2|#frag|https://example.com:8443\n\
+            https://example.com/a/up?q=1\n\
+            https://example.com/x|\n\
+            https://example.com/y#h2\n\
+            TypeError:false:true\n\
+            2|1,3|3\n\
+            ?a=1&a=3&b=2&c=sp+ce\n\
+            https://example.com/p?a=1&b=9&c=sp+ce\n\
+            1|false|fresh=1\n\
+            \u{e9}|1 2|a=%C3%A9&b=1+2\n\
+            a=\u{e9}&b=1 2";
+        match machine.eval(probe) {
+            Some(JsValue::String(s)) => assert_eq!(s, expected),
+            other => panic!("url probe failed: {:?}", other.map(|v| js_value_debug(&v))),
+        }
     }
 
     #[test]
@@ -2193,6 +2457,41 @@ mod tests {
                 "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
             ),
             other => panic!("expected hash string, got {:?}", js_value_debug(&other)),
+        }
+
+        // The binary one-shot path preserves bytes above ASCII and returns
+        // the digest as a fresh ArrayBuffer rather than a hex string.
+        match machine
+            .eval(
+                "(function () { \
+                    var digest = sha256Bytes(new Uint8Array([0, 127, 128, 255])); \
+                    return (digest instanceof ArrayBuffer) + ':' + \
+                      Array.from(new Uint8Array(digest), function (byte) { \
+                        return byte.toString(16).padStart(2, '0'); \
+                      }).join(''); \
+                })()",
+            )
+            .unwrap()
+        {
+            JsValue::String(s) => assert_eq!(
+                s,
+                "true:89273d2f70b93285bb7ddb4bcee86a5347ca7159352e3cbdd20c23e9d1e507d3"
+            ),
+            other => panic!("expected binary hash result, got {:?}", js_value_debug(&other)),
+        }
+
+        match machine
+            .eval("new Uint8Array(sha256Bytes(new Uint8Array())).length")
+            .unwrap()
+        {
+            JsValue::Integer(n) => assert_eq!(n, 32),
+            other => panic!("expected 32-byte hash, got {:?}", js_value_debug(&other)),
+        }
+
+        machine.eval(HOST_ALIASES).unwrap();
+        match machine.eval("hostSha256Bytes === sha256Bytes").unwrap() {
+            JsValue::Boolean(equal) => assert!(equal),
+            other => panic!("expected host alias comparison, got {:?}", js_value_debug(&other)),
         }
     }
 
@@ -2889,6 +3188,129 @@ mod tests {
         }
     }
 
+    /// The synchronous install path (daemon-side `import_archive`)
+    /// resolves a module's relative imports against the module's own
+    /// directory: `./sibling.js` from `./lib/helper.js` is
+    /// `./lib/sibling.js`, not a package-root lookup.
+    #[test]
+    fn import_archive_nested_relative_imports() {
+        let map = make_archive_map(
+            vec![(
+                "app-v1",
+                "app",
+                vec![
+                    (".", archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("index.js".to_string()),
+                        sha512: None,
+                    }),
+                    ("./lib/helper.js", archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("lib/helper.js".to_string()),
+                        sha512: None,
+                    }),
+                    ("./lib/sibling.js", archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("lib/sibling.js".to_string()),
+                        sha512: None,
+                    }),
+                ],
+            )],
+            "app-v1",
+            ".",
+        );
+
+        let zip = make_test_zip(&map, &[
+            (
+                "app-v1/index.js",
+                "import { total } from './lib/helper.js'; export const result = total;",
+            ),
+            (
+                "app-v1/lib/helper.js",
+                "import { base } from './sibling.js'; export const total = base + 1;",
+            ),
+            (
+                "app-v1/lib/sibling.js",
+                "export const base = 20;",
+            ),
+        ]);
+
+        let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
+        let machine = new_machine();
+        assert!(machine.import_archive(&loaded));
+
+        match machine.eval("__entryNs.result").unwrap() {
+            JsValue::Integer(n) => assert_eq!(n, 21),
+            other => panic!("expected 21, got {:?}", js_value_debug(&other)),
+        }
+    }
+
+    /// The synchronous install path (daemon-side `import_archive`)
+    /// evaluates CommonJS facades through the shared CJS loader: an
+    /// ESM entry imports a CJS module whose `require` pulls in a
+    /// sibling with `.js` completion.
+    #[test]
+    fn import_archive_cjs_require_linkage() {
+        let map = make_archive_map(
+            vec![(
+                "app-v1",
+                "app",
+                vec![
+                    (".", archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("index.js".to_string()),
+                        sha512: None,
+                    }),
+                    ("./calc.js", archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("calc.js".to_string()),
+                        sha512: None,
+                    }),
+                    ("./lib/add.js", archive::ModuleDescriptor::File {
+                        parser: "mjs".to_string(),
+                        location: Some("lib/add.js".to_string()),
+                        sha512: None,
+                    }),
+                ],
+            )],
+            "app-v1",
+            ".",
+        );
+
+        let zip = make_test_zip(&map, &[
+            (
+                "app-v1/index.js",
+                "import calc from './calc.js'; export const result = calc;",
+            ),
+            // Placeholder registry entries; the runtime loads these
+            // modules through the raw CJS sources injected below.
+            ("app-v1/calc.js", "export default 0;"),
+            ("app-v1/lib/add.js", "export default 0;"),
+        ]);
+
+        let mut loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
+        loaded.sources.insert(
+            ("app-v1".to_string(), "./calc.js".to_string()),
+            "export default __loadCjs(\"app-v1\", \"./calc.js\");\n".to_string(),
+        );
+        loaded.cjs_sources.insert(
+            ("app-v1".to_string(), "./calc.js".to_string()),
+            "var add = require('./lib/add');\nmodule.exports = add(1, 20);\n".to_string(),
+        );
+        loaded.cjs_sources.insert(
+            ("app-v1".to_string(), "./lib/add.js".to_string()),
+            "module.exports = function (a, b) { return a + b; };\n".to_string(),
+        );
+
+        let machine = new_machine();
+        assert!(machine.import_archive(&loaded));
+
+        match machine.eval("__entryNs.result").unwrap() {
+            JsValue::Integer(n) => assert_eq!(n, 21),
+            other => panic!("expected 21, got {:?}", js_value_debug(&other)),
+        }
+    }
+
     #[test]
     fn import_archive_make_pattern() {
         // Test the Endo convention: entry module exports make(powers)
@@ -2927,6 +3349,36 @@ mod tests {
             JsValue::String(s) => assert_eq!(s, "Hello from XS!"),
             other => panic!("expected greeting, got {:?}", js_value_debug(&other)),
         }
+    }
+
+    #[test]
+    fn import_archive_entry_throw_fails_cleanly() {
+        // A throw during the entry import — here a ReferenceError
+        // from an undefined global, the shape of a program run with
+        // a missing endowment — must come back as `false`, not
+        // crash the process.
+        let map = make_archive_map(
+            vec![(
+                "app-v1",
+                "app",
+                vec![("./main.js", archive::ModuleDescriptor::File {
+                    parser: "mjs".to_string(),
+                    location: Some("main.js".to_string()),
+                    sha512: None,
+                })],
+            )],
+            "app-v1",
+            "./main.js",
+        );
+
+        let zip = make_test_zip(&map, &[(
+            "app-v1/main.js",
+            "noSuchGlobal(42); export const unreachable = 1;",
+        )]);
+
+        let loaded = archive::load_archive(std::io::Cursor::new(zip)).unwrap();
+        let machine = new_machine();
+        assert!(!machine.import_archive(&loaded));
     }
 
     #[test]
@@ -3020,7 +3472,8 @@ mod tests {
         let polyfills = include_str!("polyfills.js");
         machine.eval(polyfills).expect("polyfills failed");
 
-        // Step 1: Evaluate SES boot (lockdown + HandledPromise)
+        // Step 1: Evaluate SES boot (HandledPromise shim; note that
+        // it does NOT lock down -- see the SES_BOOT docs above)
         let ses_boot = include_str!("ses_boot.js");
         eprintln!("ses_boot length: {}", ses_boot.len());
         // Use a very fine-grained error handler to get line info

@@ -1,0 +1,10 @@
+{
+  "extends": [
+    "./tsconfig.json",
+    "../../tsconfig-build-options.json"
+  ],
+  "compilerOptions": {
+    "noCheck": true
+  },
+  "exclude": ["test/"]
+}

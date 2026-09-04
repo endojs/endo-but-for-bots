@@ -1,7 +1,5 @@
 // @ts-check
 
-/* global Buffer */
-
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
@@ -9,6 +7,7 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { M } from '@endo/patterns';
 
 import { spawn as nodeSpawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import * as nodeFs from 'node:fs';
 import * as nodeOs from 'node:os';
 import * as nodePath from 'node:path';
@@ -248,6 +247,25 @@ const drainReader = async reader => {
   return Buffer.concat(chunks.map(c => Buffer.from(c)));
 };
 
+/**
+ * @param {number} pid
+ * @param {number} [timeoutMs]
+ */
+const waitForProcessGroupGone = async (pid, timeoutMs = 3000) => {
+  await null;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-pid, 0);
+    } catch (e) {
+      if (/** @type {NodeJS.ErrnoException} */ (e).code === 'ESRCH') return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+  throw new Error(`process group ${pid} survived bounded cleanup`);
+};
+
 test.serial('bwrap probe reports available with a version', async t => {
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) {
@@ -387,7 +405,7 @@ const runInSlice = async (t, handle, argv) => {
 
     // Retries exhausted — skip rather than fail.  This is an
     // environment limitation (concurrent userns contention), not a
-    // regression in the sandbox code under test.  See TODO/17.
+    // regression in the sandbox code under test.
     const m = result.stderr.match(BWRAP_DIAGNOSTIC_RE);
     t.pass(
       `SKIP: ${argv}: persistent transient bwrap failure after ${transientRetries} attempts (${m ? m[0] : result.stderr.trim()})`,
@@ -589,7 +607,7 @@ test.serial(
     }
     // Phase 1 accepts `network: 'private'` for slice construction;
     // the egress filter is documented in src/net/private-egress.nft.
-    // Full wiring (pasta + nft) lands alongside the genie integration.
+    // Full wiring (pasta + nft) lands alongside the first consumer.
     const driver = makeBwrapDriver({ env: {} });
     const { powers, tmpdirs } = makeStubScratchProvider();
     const factory = makeSandboxFactory({
@@ -896,12 +914,242 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
   });
 });
 
+test.serial('bwrap serializes spawn and dispose in both orderings', async t => {
+  t.timeout(10_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const driver = makeBwrapDriver({ env: {} });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  t.teardown(() => {
+    for (const dir of tmpdirs)
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const spawnFirst = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  const spawned = E(spawnFirst).spawn(
+    harden(['/bin/sleep', '300']),
+    harden({ captureStdout: false, captureStderr: false }),
+  );
+  const disposed = E(spawnFirst).dispose();
+  // If disposal wins before spawn settles, spawn rejects; otherwise wait()
+  // reports disposal. Either arm must leave the process group gone.
+  /** @type {Awaited<typeof spawned> | undefined} */
+  let proc;
+  /** @type {Error | undefined} */
+  let admissionError;
+  try {
+    proc = await spawned;
+  } catch (e) {
+    admissionError = /** @type {Error} */ (e);
+  }
+  await disposed;
+  if (proc !== undefined) {
+    const pid = await E(proc).pid();
+    await t.throwsAsync(() => E(proc).wait(), { message: /disposed/ });
+    await waitForProcessGroupGone(pid);
+  } else {
+    t.regex(/** @type {Error} */ (admissionError).message, /disposed/);
+  }
+  await E(spawnFirst).dispose();
+
+  const disposeFirst = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  await E(disposeFirst).dispose();
+  await t.throwsAsync(() => E(disposeFirst).spawn(harden(['/bin/true'])), {
+    message: /disposed/,
+  });
+});
+
+test.serial('bwrap keeps split UTF-8 stdout separate from stderr', async t => {
+  t.timeout(10_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const driver = makeBwrapDriver({ env: {} });
+  const { powers, tmpdirs } = makeStubScratchProvider();
+  const factory = makeSandboxFactory({
+    drivers: harden([driver]),
+    scratchProvider: powers,
+  });
+  const handle = await E(factory).make(
+    harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+  );
+  t.teardown(async () => {
+    await E(handle).dispose();
+    for (const dir of tmpdirs)
+      nodeFs.rmSync(dir, { recursive: true, force: true });
+  });
+  const proc = await E(handle).spawn(
+    harden([
+      '/bin/sh',
+      '-c',
+      "printf '\\342'; sleep 0.05; printf '\\202\\254'; printf err >&2",
+    ]),
+    harden({ stdoutByteLimit: 4n, stderrByteLimit: 4n }),
+  );
+  const [stdout, stderr, status] = await Promise.all([
+    drainReader(await E(proc).stdout()),
+    drainReader(await E(proc).stderr()),
+    E(proc).wait(),
+  ]);
+  t.is(stdout.toString('utf8'), '€');
+  t.is(stderr.toString('utf8'), 'err');
+  t.deepEqual(status, { code: 0, signal: null });
+});
+
+test.serial(
+  'bwrap output cap kills a soft-refusing group with a pipe-holding descendant',
+  async t => {
+    t.timeout(10_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const driver = makeBwrapDriver({ env: {} });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    );
+    t.teardown(async () => {
+      await E(handle).dispose();
+      for (const dir of tmpdirs)
+        nodeFs.rmSync(dir, { recursive: true, force: true });
+    });
+    const proc = await E(handle).spawn(
+      harden([
+        '/bin/sh',
+        '-c',
+        'trap "" TERM; (trap "" TERM; while :; do sleep 60; done) & printf 1234; while :; do sleep 60; done',
+      ]),
+      harden({ stdoutByteLimit: 4n, stderrByteLimit: 1024n }),
+    );
+    const pid = await E(proc).pid();
+    const stdout = drainReader(await E(proc).stdout()).catch(e => e);
+    await t.throwsAsync(() => E(proc).wait(), {
+      message: /stdout.*byte limit/,
+    });
+    await stdout;
+    await waitForProcessGroupGone(pid);
+  },
+);
+
+test.serial(
+  'bwrap timeout and repeated cancellation reap process groups',
+  async t => {
+    t.timeout(15_000);
+    // eslint-disable-next-line @jessie.js/safe-await-separator
+    if (!(await bwrapCheck(t))) return;
+    const driver = makeBwrapDriver({ env: {} });
+    const { powers, tmpdirs } = makeStubScratchProvider();
+    const factory = makeSandboxFactory({
+      drivers: harden([driver]),
+      scratchProvider: powers,
+    });
+    const handle = await E(factory).make(
+      harden({ rootfs: { kind: 'host-bind' }, network: 'none' }),
+    );
+    t.teardown(async () => {
+      await E(handle).dispose();
+      for (const dir of tmpdirs)
+        nodeFs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    // Timeout may win before spawn settles (spawn rejects) or afterwards
+    // (wait() reports timeout); either arm must leave the process group gone.
+    /** @type {Error | undefined} */
+    let admissionError;
+    const timed = await E(handle)
+      .spawn(
+        harden(['/bin/sh', '-c', 'trap "" TERM; while :; do sleep 60; done']),
+        harden({ timeoutMs: 25, captureStdout: false, captureStderr: false }),
+      )
+      .catch(e => {
+        admissionError = /** @type {Error} */ (e);
+        return undefined;
+      });
+    if (timed !== undefined) {
+      const timedPid = await E(timed).pid();
+      await t.throwsAsync(() => E(timed).wait(), { message: /timed out/ });
+      await waitForProcessGroupGone(timedPid);
+    } else {
+      t.regex(/** @type {Error} */ (admissionError).message, /timed out/);
+    }
+
+    const cancelled = await E(handle).spawn(
+      harden(['/bin/sleep', '300']),
+      harden({ captureStdout: false, captureStderr: false }),
+    );
+    const cancelledPid = await E(cancelled).pid();
+    await Promise.all([E(cancelled).kill(), E(cancelled).kill()]);
+    await t.throwsAsync(() => E(cancelled).wait(), { message: /cancelled/ });
+    await waitForProcessGroupGone(cancelledPid);
+  },
+);
+
+test.serial('bwrap parent death leaves no owned process group', async t => {
+  t.timeout(10_000);
+  // eslint-disable-next-line @jessie.js/safe-await-separator
+  if (!(await bwrapCheck(t))) return;
+  const scratch = nodeFs.mkdtempSync(
+    nodePath.join(nodeOs.tmpdir(), 'endo-sandbox-owner-death-'),
+  );
+  const fixture = new URL('./fixtures/bwrap-owner.js', import.meta.url);
+  const owner = nodeSpawn(process.execPath, [fixture.pathname, scratch], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  t.teardown(() => {
+    try {
+      owner.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+    nodeFs.rmSync(scratch, { recursive: true, force: true });
+  });
+  /** @type {Buffer[]} */
+  const stderr = [];
+  owner.stderr?.on('data', chunk => stderr.push(chunk));
+  const pid = await new Promise((resolve, reject) => {
+    let output = '';
+    const timer = setTimeout(
+      () => reject(new Error('bwrap owner fixture did not become ready')),
+      5000,
+    );
+    owner.stdout?.on('data', chunk => {
+      output += String(chunk);
+      const match = output.match(/^(\d+)$/m);
+      if (match !== null) {
+        clearTimeout(timer);
+        resolve(Number(match[1]));
+      }
+    });
+    owner.once('exit', code => {
+      clearTimeout(timer);
+      reject(
+        new Error(
+          `bwrap owner fixture exited ${code}: ${Buffer.concat(stderr).toString('utf8')}`,
+        ),
+      );
+    });
+  });
+  owner.kill('SIGKILL');
+  await new Promise(resolve => owner.once('close', resolve));
+  await waitForProcessGroupGone(/** @type {number} */ (pid));
+});
+
 // --- PATH synthesis tests --------------------------------------------------
 //
 // These exercise `assembleSliceArgv` directly without spawning bwrap so
 // they run on every host (including non-Linux CI matrix entries).  They
-// assert the `--setenv PATH …` argv slot reflects the rules in
-// `TADA/22_sandbox_bwrap_path_refinements.md` for each rootfs shape.
+// assert the `--setenv PATH …` argv slot reflects the `$PATH` synthesis
+// rules (see § "$PATH semantics" in the README) for each rootfs shape.
 
 /**
  * Pull the `--setenv PATH …` value out of an argv produced by
@@ -1466,4 +1714,125 @@ test('PATH synthesis: ambient PATH undefined is not an error', async t => {
     },
   );
   t.is(extractSetenvPath(argv), DEFAULT_PATH);
+});
+
+// --- teardown bounding -----------------------------------------------------
+//
+// These drive `teardown` against an injected `child_process` stub, so
+// they run on every host.  The scenario under test is the one the
+// driver's `'close'`-based liveness tracking exists to detect: the slice
+// child has exited, but a descendant that escaped the process group
+// still holds the inherited pipe, so `'close'` never arrives and the
+// child never leaves `slice.live`.
+
+/**
+ * Build a `child_process`-shaped stub whose `spawn` returns a fake child
+ * that has already exited (so `killProcessGroup` correctly declines to
+ * signal a pid it no longer owns) and whose stdio behaviour is dictated
+ * by `closeOnKill`:
+ *
+ *   - `false` — `'close'` never fires, the escaped-fd case.
+ *   - `true`  — `'close'` fires on the next turn, the ordinary case.
+ *
+ * @param {{ closeOnKill: boolean }} opts
+ * @returns {{ childProcess: any, children: any[] }}
+ */
+const makeStubChildProcess = ({ closeOnKill }) => {
+  /** @type {any[]} */
+  const children = [];
+  const childProcess = {
+    spawn: () => {
+      /** @type {any} */
+      const child = new EventEmitter();
+      // A pid Node has already reaped: `exitCode !== null` makes
+      // `killProcessGroup` decline to signal, so no real process group
+      // on the test host is ever touched.
+      child.pid = 999_999;
+      child.exitCode = 0;
+      child.signalCode = null;
+      child.stdin = null;
+      child.stdout = null;
+      child.stderr = null;
+      if (closeOnKill) {
+        setTimeout(() => child.emit('close', 0, null), 0);
+      }
+      children.push(child);
+      return child;
+    },
+  };
+  return { childProcess, children };
+};
+
+/**
+ * Drive `prepareSlice` + one `spawn` against a stubbed child process.
+ *
+ * @param {any} childProcess
+ * @returns {Promise<{ driver: any, slice: any }>}
+ */
+const prepareStubbedSlice = async childProcess => {
+  const driver = /** @type {any} */ (
+    makeBwrapDriver({ env: {}, childProcess })
+  );
+  const slice = await driver.prepareSlice(
+    makeStubSpec({ rootfs: { kind: 'host-bind' } }),
+  );
+  await driver.spawn(slice, ['/bin/true'], {});
+  return { driver, slice };
+};
+
+test('teardown gives up on a child whose stdio never closes', async t => {
+  // Guards the hang: `slice.live` drops a child only on `'close'`, so
+  // without a bound this teardown never settles and `dispose()` wedges
+  // the whole shutdown path.
+  t.timeout(10_000);
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: false,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess);
+  t.is(children.length, 1, 'the stub should have produced one child');
+  t.is(slice.live.size, 1, 'the child should still be live at teardown');
+  // `spawn` leaves its own liveness listener attached; the assertion
+  // below is that teardown's bounded wait adds none of its own on top.
+  const listenersBefore = children[0].listenerCount('close');
+
+  const started = Date.now();
+  await t.throwsAsync(driver.teardown(slice), {
+    message: /could not prove containment/,
+  });
+  const elapsed = Date.now() - started;
+  t.true(
+    elapsed < 5000,
+    `teardown must settle within its own bound, took ${elapsed}ms`,
+  );
+
+  t.is(slice.live.size, 0, 'teardown must not keep the straggler live');
+  t.is(
+    children[0].listenerCount('close'),
+    listenersBefore,
+    "a bounded-out child must not retain teardown's close listener",
+  );
+});
+
+test('teardown resolves as soon as the child stdio closes', async t => {
+  // The bound is a ceiling, not a floor: the ordinary path must not
+  // wait it out.
+  t.timeout(10_000);
+  const { childProcess, children } = makeStubChildProcess({
+    closeOnKill: true,
+  });
+  const { driver, slice } = await prepareStubbedSlice(childProcess);
+
+  const started = Date.now();
+  await t.notThrowsAsync(driver.teardown(slice));
+  const elapsed = Date.now() - started;
+  t.true(
+    elapsed < 500,
+    `teardown should settle on 'close', not on the bound; took ${elapsed}ms`,
+  );
+  t.is(slice.live.size, 0);
+  t.is(
+    children[0].listenerCount('close'),
+    0,
+    'a closed child must not retain a close listener',
+  );
 });

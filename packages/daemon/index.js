@@ -20,6 +20,7 @@ import {
   whereEndoCache,
 } from '@endo/where';
 import { makeEndoClient } from './src/client.js';
+import { socketLockPath } from './src/socket-lock.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
@@ -66,6 +67,17 @@ const keepStdEnv = new Set([
   'TMPDIR',
   'TZ',
   'USER',
+  // Dynamic-loader and TLS-trust variables. The daemon re-spawns itself and
+  // forks workers that load native addons (better-sqlite3, node-datachannel)
+  // and, for unconfined caplets, foreign binaries (e.g. moonshine's manylinux
+  // wheels via nix-ld). Those need the ambient loader search path / nix-ld
+  // config and CA bundle to survive the env filter, or they fail to resolve
+  // their shared libraries at runtime. Only present when the host sets them.
+  'LD_LIBRARY_PATH',
+  'NIX_LD',
+  'NIX_LD_LIBRARY_PATH',
+  'SSL_CERT_FILE',
+  'SSL_CERT_DIR',
 ]);
 
 /**
@@ -94,6 +106,19 @@ const filterEnv = (env = process.env) => {
     .map(([key, value = '']) => [key, value]);
 };
 
+/**
+ * @typedef {{
+ *   statePath: string,
+ *   ephemeralStatePath: string,
+ *   sockPath: string,
+ *   cachePath: string,
+ *   address: string,
+ *   gcEnabled: boolean,
+ *   registryUrl?: string,
+ * }} Config
+ */
+
+/** @type {Config} */
 const defaultConfig = {
   statePath: whereEndoState(process.platform, process.env, info),
   ephemeralStatePath: whereEndoEphemeralState(
@@ -105,9 +130,8 @@ const defaultConfig = {
   cachePath: whereEndoCache(process.platform, process.env, info),
   address: process.env.ENDO_ADDR || '127.0.0.1:8920',
   gcEnabled: process.env.ENDO_GC === '1',
+  registryUrl: process.env.ENDO_REGISTRY_URL || 'https://registry.npmjs.org',
 };
-/** @typedef {typeof defaultConfig} Config */
-
 /**
  * @param {Config} config
  */
@@ -118,6 +142,7 @@ const configToEnv = config => ({
   ENDO_CACHE_PATH: config.cachePath,
   ENDO_ADDR: config.address,
   ENDO_GC: config.gcEnabled ? '1' : '',
+  ENDO_REGISTRY_URL: config.registryUrl || defaultConfig.registryUrl,
 });
 
 /**
@@ -133,6 +158,7 @@ const configFromEnv = env => {
     ENDO_CACHE_PATH: cachePath = defaultConfig.cachePath,
     ENDO_ADDR: address = defaultConfig.address,
     ENDO_GC: gcEnabledStr,
+    ENDO_REGISTRY_URL: registryUrl = defaultConfig.registryUrl,
   } = env;
   return {
     statePath,
@@ -141,6 +167,7 @@ const configFromEnv = env => {
     cachePath,
     address,
     gcEnabled: gcEnabledStr === '1',
+    registryUrl,
   };
 };
 
@@ -253,7 +280,7 @@ const runEngo = async (detached, config) => {
   const logPath = path.join(config.statePath, 'endo.log');
 
   const endoGoDaemonPath = url.fileURLToPath(
-    new URL('src/daemon-go.js', import.meta.url),
+    new URL('src/manager-go.js', import.meta.url),
   );
 
   const env = {
@@ -313,7 +340,7 @@ const runEndo = async (detached, config) => {
 
   const daemonPath =
     process.env.ENDO_DAEMON_PATH ||
-    url.fileURLToPath(new URL('src/daemon-node.js', import.meta.url));
+    url.fileURLToPath(new URL('src/manager-node.js', import.meta.url));
 
   // TODO modify node-powers to just rely on ENDO_* passed like engo by configToEnv
   const daemonArgs = [
@@ -370,9 +397,9 @@ const runEndo = async (detached, config) => {
   if (typeof message === 'object' && message !== null && 'type' in message) {
     if (message.type === 'ready') {
       // This message corresponds to process.send({ type: 'ready' }) in
-      // src/daemon-node-powers.js and indicates the daemon is ready to receive
+      // src/manager-node-powers.js and indicates the daemon is ready to receive
       // clients.
-      console.debug('endo daemon ready', message);
+      console.error('endo daemon ready', message);
     } else if (
       message.type === 'error' &&
       'message' in message &&
@@ -740,6 +767,9 @@ export const clean = async (config = defaultConfig) => {
   await null;
   if (process.platform !== 'win32') {
     await removePath(config.sockPath).catch(enoentOk);
+    // The marker sits beside the socket, outside the directories `purge`
+    // removes.
+    await removePath(socketLockPath(config.sockPath)).catch(enoentOk);
   }
   const pidPath = path.join(config.ephemeralStatePath, 'endo.pid');
   await fs.promises.rm(pidPath, { force: true }).catch(enoentOk);

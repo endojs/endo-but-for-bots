@@ -6,7 +6,13 @@
   },
   "references": [
     {
+      "path": "../ascii/tsconfig.composite.json"
+    },
+    {
       "path": "../bytes/tsconfig.composite.json"
+    },
+    {
+      "path": "../cbor/tsconfig.composite.json"
     },
     {
       "path": "../eventual-send/tsconfig.composite.json"
@@ -16,6 +22,9 @@
     },
     {
       "path": "../hex/tsconfig.composite.json"
+    },
+    {
+      "path": "../immutable-arraybuffer/tsconfig.composite.json"
     },
     {
       "path": "../init/tsconfig.composite.json"
@@ -37,6 +46,9 @@
     },
     {
       "path": "../syrup-frame/tsconfig.composite.json"
+    },
+    {
+      "path": "../utf8/tsconfig.composite.json"
     }
   ]
 }

@@ -17,7 +17,11 @@
 
 import { mustMatch } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
-import { toolResultToSmallcaps, smallcapsMarshal } from '@endo/agentry/harness';
+import {
+  toolResultToSmallcaps,
+  smallcapsMarshal,
+} from '@endo/agent-tools/adapters/smallcaps.js';
+import { applyEdits } from '@endo/agentry/edit-text';
 
 import { tools } from './tools/index.js';
 
@@ -35,7 +39,7 @@ import { tools } from './tools/index.js';
 // decoded passables rather than the raw JSON strings.
 //
 // The `smallcapsMarshal` codec and the `toolResultToSmallcaps` tool-result
-// encoder now live in `@endo/agentry/harness` (imported above). The codec is
+// encoder now live in `@endo/agent-tools/adapters/smallcaps.js` (imported above). The codec is
 // constructed once at module load there; no slot converters are needed because
 // tool args never carry remotables or promises, and the defaults
 // (`dontEncodeRemotableToSmallcaps` / `dontEncodePromiseToSmallcaps`) throw if
@@ -43,12 +47,23 @@ import { tools } from './tools/index.js';
 
 // Pre-index each tool's @endo/patterns matcher by tool name. The matcher
 // validates the SmallCaps-decoded args record before dispatch, matching the
-// discipline `packages/genie/src/tools/common.js` applies (per-tool schema
-// + nested-JSON fixup) but expressed at the args-record level since lal's
+// discipline the prior agent framework's common tool layer applies (per-tool
+// schema + nested-JSON fixup) but expressed at the args-record level since lal's
 // tools share one switch-dispatcher rather than per-tool closures.
 const paramsByTool = new Map(
   tools.filter(t => t.params !== undefined).map(t => [t.name, t.params]),
 );
+
+// Free-form string arguments the LLM authors in their own dialect — a glob or
+// an ECMAScript regexp source — rather than in SmallCaps. Their first character
+// is routinely a SmallCaps special prefix (`*`, `(`, `#`, `-`, `+`, `%`, …),
+// which `fromCapData` would either throw on (`glob("*.js")` → *Special char "*"
+// reserved for future use*) or silently coerce (`grep("+1")` → BigInt `1n`).
+// These fields therefore bypass the SmallCaps decode and reach the tool
+// verbatim — honoring the "every other string field arrives verbatim" contract
+// stated in `primer/smallcaps.md` and `agent.types.d.ts`, and matching the
+// glob/regexp dialects the tool summaries and primer teach with no escape note.
+const verbatimArgFields = new Set(['pattern', 'glob']);
 
 /**
  * Decode inbound tool args from their SmallCaps JSON representation and
@@ -73,15 +88,32 @@ const paramsByTool = new Map(
  * @returns {Record<string, unknown>} SmallCaps-decoded, validated args.
  */
 const decodeToolArgs = (name, rawArgs) => {
+  // Split off the verbatim (non-SmallCaps) fields before decoding: their raw
+  // string values (glob/regexp sources) must not pass through the SmallCaps
+  // codec, which would throw on or silently coerce a pattern whose first
+  // character is a SmallCaps special prefix.
+  /** @type {Record<string, unknown>} */
+  const toDecode = {};
+  /** @type {Record<string, unknown>} */
+  const verbatim = {};
+  for (const [key, val] of Object.entries(rawArgs)) {
+    if (verbatimArgFields.has(key)) {
+      verbatim[key] = val;
+    } else {
+      toDecode[key] = val;
+    }
+  }
+
   // Reconstruct the SmallCaps body from the JSON-parsed args.
   // `rawArgs` came from JSON.parse (Pi already decoded the JSON wire), so
   // JSON.stringify is lossless for all JSON-representable values. The `#`
   // prefix tells fromCapData to parse as smallcaps rather than capdata.
-  const body = `#${JSON.stringify(rawArgs)}`;
+  const body = `#${JSON.stringify(toDecode)}`;
   /** @type {Record<string, unknown>} */
-  const decoded = /** @type {any} */ (
-    smallcapsMarshal.fromCapData({ body, slots: [] })
-  );
+  const decoded = {
+    .../** @type {any} */ (smallcapsMarshal.fromCapData({ body, slots: [] })),
+    ...verbatim,
+  };
 
   const pattern = paramsByTool.get(name);
   if (pattern === undefined) return decoded;
@@ -99,7 +131,10 @@ const decodeToolArgs = (name, rawArgs) => {
     /** @type {Record<string, unknown>} */
     const next = { ...decoded };
     for (const [key, val] of Object.entries(decoded)) {
-      if (typeof val === 'string') {
+      // Verbatim fields (glob/regexp sources) are never re-parsed: a pattern
+      // that happens to be valid JSON (e.g. `"true"`, `"123"`) must still reach
+      // the tool as the literal string the LLM authored.
+      if (!verbatimArgFields.has(key) && typeof val === 'string') {
         try {
           next[key] = JSON.parse(val);
           fixedAny = true;
@@ -363,6 +398,52 @@ export const makeExecuteTool = powers => {
         const capability = await E(powers).lookup(petNameOrPath);
         return E(capability).writeText(fileName, content);
       }
+      case 'editText': {
+        const { petNameOrPath, fileName, edits } = args;
+        if (
+          petNameOrPath === undefined ||
+          fileName === undefined ||
+          edits === undefined
+        ) {
+          throw new Error('petNameOrPath, fileName, and edits are required');
+        }
+        // Read-modify-write through the tree capability. `applyEdits` is
+        // synchronous, so nothing interleaves *within* the transform, but the
+        // read and the write are two separate eventual-send hops, so the pair
+        // is not atomic: two concurrent editText/writeText calls on the same
+        // file can both read the same original and the later write wins
+        // (last-writer-wins). The capability serializes each individual
+        // writeText, not the read-modify-write pair; a caller needing
+        // atomicity must serialize at a higher level.
+        const capability = await E(powers).lookup(petNameOrPath);
+        const original = await E(capability).readText(fileName);
+        const {
+          content: updated,
+          diff,
+          applied,
+        } = applyEdits(original, edits, { fileName });
+        await E(capability).writeText(fileName, updated);
+        return harden({ applied, diff });
+      }
+      case 'glob': {
+        const { petNameOrPath, pattern } = args;
+        const capability = await E(powers).lookup(petNameOrPath);
+        return E(capability).glob(pattern);
+      }
+      case 'grep': {
+        const { petNameOrPath, pattern, glob, maxResults } = args;
+        const capability = await E(powers).lookup(petNameOrPath);
+        const options =
+          maxResults === undefined ? undefined : harden({ maxResults });
+        if (glob !== undefined) {
+          return options === undefined
+            ? E(capability).glorp(glob, pattern)
+            : E(capability).glorp(glob, pattern, options);
+        }
+        return options === undefined
+          ? E(capability).grep(pattern)
+          : E(capability).grep(pattern, undefined, options);
+      }
 
       // Code evaluation
       case 'evaluate': {
@@ -439,7 +520,7 @@ export function toAgentTool(name, summary, executeTool) {
       // `"+N"` strings (consistent with the encoding it must produce for
       // inbound messageNumber fields) and strings starting with special
       // chars as `"!<s>"`. Plain strings pass through unwrapped. The encoder is
-      // the shared `toolResultToSmallcaps` from `@endo/agentry/harness`.
+      // the shared `toolResultToSmallcaps` from `@endo/agent-tools/adapters/smallcaps.js`.
       const text = toolResultToSmallcaps(result);
       /** @type {AgentToolResult<any>} */
       const toolResult = {

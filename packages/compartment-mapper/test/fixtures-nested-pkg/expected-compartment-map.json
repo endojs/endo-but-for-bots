@@ -1,0 +1,42 @@
+{
+  "compartments": {
+    "apackage": {
+      "modules": {
+        "./afolder/anotherfolder/file2.js": {
+          "language": "js"
+        },
+        "./afolder/file.js": {
+          "language": "js"
+        }
+      }
+    },
+    "app": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "apackage/file": {
+          "link": "apackage"
+        },
+        "apackage/file2": {
+          "link": "apackage"
+        },
+        "bpackage": {
+          "link": "bpackage"
+        }
+      }
+    },
+    "bpackage": {
+      "modules": {
+        "./a.cjs": {
+          "language": "cjs"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-nested-pkg",
+  "oracle": "node"
+}

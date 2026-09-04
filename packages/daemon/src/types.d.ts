@@ -4,7 +4,22 @@ import type { FarRef } from '@endo/eventual-send';
 import type { CapTPOptions } from '@endo/captp';
 import type { Reader, Writer, Stream } from '@endo/stream';
 import type { PassableBytesReader, StreamNode } from '@endo/exo-stream';
-import type { EndoGit, GitRemote } from '@endo/exo-git';
+import type {
+  EndoGit,
+  GitRemote,
+  HistoryRewriteEndoGit,
+  ReadWriteEndoGit,
+} from '@endo/exo-git';
+import type { HttpClient, HttpClientControl } from '@endo/exo-http-client';
+import type {
+  DirectoryWriteSource,
+  PathEntry,
+  PathEntryIssuer,
+  ReadableTree,
+  SnapshotTree,
+  TreeEntry,
+} from '@endo/platform/fs/lite/types';
+import type { ContentKind, ContentSourceHint } from './locator.js';
 
 // Branded string types for pet names and special names
 declare const PetNameBrand: unique symbol;
@@ -66,15 +81,14 @@ export type NameOrPath = Name | NamePath;
 export type NamesOrPaths = NameOrPath[];
 
 export type SomehowAsyncIterable<T> =
-  | AsyncIterable<T>
-  | Iterable<T>
-  | { next: () => IteratorResult<T> };
+  AsyncIterable<T> | Iterable<T> | { next: () => IteratorResult<T> };
 
 export type Config = {
   statePath: string;
   ephemeralStatePath: string;
   cachePath: string;
   sockPath: string;
+  registryUrl?: string;
 };
 
 export type Sha256 = {
@@ -182,12 +196,16 @@ export type HostFormula = {
   hostHandle: FormulaIdentifier;
   mainWorker: FormulaIdentifier;
   nodeWorker: FormulaIdentifier;
+  // Powers the `@registry` special name; required, mirroring `nodeWorker`
+  // (`@node`).  See designs/registry-capability.md § Host special name.
+  registry: FormulaIdentifier;
   inspector: FormulaIdentifier;
   petStore: FormulaIdentifier;
   mailboxStore: FormulaIdentifier;
   mailHub: FormulaIdentifier;
   endo: FormulaIdentifier;
   networks: FormulaIdentifier;
+  planes: FormulaIdentifier;
   pins: FormulaIdentifier;
 };
 
@@ -201,9 +219,10 @@ export type GuestFormula = {
   mailHub: FormulaIdentifier;
   worker: FormulaIdentifier;
   networks: FormulaIdentifier;
+  planes: FormulaIdentifier;
 };
 
-type LeastAuthorityFormula = {
+export type LeastAuthorityFormula = {
   type: 'least-authority';
 };
 
@@ -251,20 +270,90 @@ export type ReadableTreeDeferredTaskParams = {
   readableTreeId: FormulaIdentifier;
 };
 
+// The `EndoRegistry` capability that backs the `@registry` special name.
+// The first cut carries only the configured registry URL; the backing
+// resolver table and tarball cache are process-local (rebuilt on
+// reincarnation) and delegate byte-level retention to the CAS.  See
+// designs/registry-capability.md.
+export type RegistryFormula = {
+  type: 'registry';
+  registryUrl: string;
+};
+
+export type RegistryDeferredTaskParams = {
+  registryId: FormulaIdentifier;
+};
+
 export type MountFormula = {
   type: 'mount';
   path: string;
   readOnly: boolean;
+  // Restricted-segment set replacing the mount's default; present only when
+  // overridden at creation, so a default mount keeps its historical shape.
+  deniedSegments?: string[];
+  /**
+   * Parent mount formula, present only for sub-mounts minted by
+   * `provideSubMount`.  Recorded for dependency tracking so the parent
+   * mount stays reachable while the child references it, and the child is
+   * cancelled together with the parent.
+   */
+  parent?: FormulaIdentifier;
 };
 
 export type ScratchMountFormula = {
   type: 'scratch-mount';
   readOnly: boolean;
+  deniedSegments?: string[];
 };
 
 export type GitFormula = {
   type: 'git';
   mountId: FormulaIdentifier;
+  /**
+   * Formula-owned history-rewrite authority survives deincarnation and restart.
+   * Absence retains the backward-compatible default denial.
+   */
+  allowHistoryRewrite?: boolean;
+  /**
+   * Formula-owned commit-identity policy captured at `provideGit` /
+   * `provideGitClone` construction and threaded into the native backend's
+   * author/committer environment.  Guest-immutable, and it survives
+   * deincarnation and restart.  Absence retains the backend default
+   * `Endo <endo@invalid.local>`.
+   */
+  identity?: GitCommitIdentity;
+};
+
+/**
+ * Formula-owned, guest-immutable commit-identity policy for the Git capability.
+ * `authorName` / `authorEmail` attribute the commit author.  The optional
+ * `committerName` / `committerEmail` attribute the committer and default to the
+ * author fields when omitted, so a bare `{ authorName, authorEmail }` pins both
+ * roles to one identity while a caller that needs a distinct committer can
+ * supply one.  Each supplied field must be a non-blank string free of control
+ * characters.
+ */
+export type GitCommitIdentity = {
+  authorName: string;
+  authorEmail: string;
+  committerName?: string;
+  committerEmail?: string;
+};
+
+export type GitProvisionOptions = {
+  allowHistoryRewrite?: boolean;
+  /**
+   * Formula-owned, guest-immutable commit author/committer identity.
+   * Omitted, commits default to `Endo <endo@invalid.local>`.
+   */
+  identity?: GitCommitIdentity;
+  /**
+   * Declares that the caller intends a read-only Git capability and accepts
+   * a read-only backing mount.  Omitted or `false`, `provideGit` rejects a
+   * read-only mount rather than silently returning a read-only-attenuated
+   * capability for a writable request.
+   */
+  readOnly?: boolean;
 };
 
 /**
@@ -318,6 +407,35 @@ export type ShellDeferredTaskParams = {
   shellId: FormulaIdentifier;
 };
 
+/**
+ * The confinement mode a formula-owned HTTP policy can honor across a daemon
+ * restart on its own. `tofu-prompt` / `tofu-attenuator` are excluded because
+ * they need a live `policyAuthority` capability the formula does not carry.
+ */
+export type HttpClientPolicyMode = 'strict' | 'tofu-auto';
+
+/**
+ * Policy baked into an `http-client` formula at `provideHttpClient` time
+ * (formula-owned, like `ShellPolicy`), so the capability reconstitutes across
+ * daemon restart with identical bounds. The `fetch` and `now` seams are
+ * host-owned and injected at reincarnation, never persisted.
+ */
+export type HttpClientPolicy = {
+  allowedOrigins: string[];
+  maxRequestsPerMinute: number;
+  maxResponseBytes: number;
+  policyMode: HttpClientPolicyMode;
+};
+
+export type HttpClientFormula = {
+  type: 'http-client';
+  policy: HttpClientPolicy;
+};
+
+export type HttpClientDeferredTaskParams = {
+  httpClientId: FormulaIdentifier;
+};
+
 export type GitCredentialFormula = {
   type: 'git-credential';
   kind: 'bearer' | 'basic';
@@ -334,6 +452,7 @@ export type GitRemoteFormula = {
     allowedDirections: Array<'fetch' | 'push'>;
     fetchRefspecs: string[];
     pushRefspecs: string[];
+    defaultPullRef?: string;
     allowedBranches?: string[];
     allowForcePush?: boolean;
     allowTags?: boolean;
@@ -427,7 +546,7 @@ export type HandleFormula = {
   agent: FormulaIdentifier;
 };
 
-type KnownPeersStoreFormula = {
+export type KnownPeersStoreFormula = {
   type: 'known-peers-store';
 };
 
@@ -541,10 +660,12 @@ export type Formula =
   | EvalFormula
   | ReadableBlobFormula
   | ReadableTreeFormula
+  | RegistryFormula
   | MountFormula
   | ScratchMountFormula
   | GitFormula
   | ShellFormula
+  | HttpClientFormula
   | GitCredentialFormula
   | GitRemoteFormula
   | LookupFormula
@@ -688,8 +809,9 @@ export interface Context {
    *
    * @param reason - The reason for the cancellation.
    * @param logPrefix - The prefix to use within the log.
-   * @returns A promise that is resolved when the value is cancelled and
-   * can be garbage collected.
+   * @returns A promise that settles when the value is cancelled and all
+   * disposal hooks have run. The promise rejects with an `AggregateError` if
+   * one or more disposal hooks fail.
    */
   cancel: (reason?: Error, logPrefix?: string) => Promise<void>;
 
@@ -700,10 +822,11 @@ export interface Context {
   cancelled: Promise<never>;
 
   /**
-   * A promise that is resolved when the context is disposed. This occurs
+   * A promise that settles when the context is disposed. This occurs
    * after the `cancelled` promise is rejected, and after all disposal hooks
-   * have been run.
-   * Once resolved, the value may be garbage collected at any time.
+   * have been run. The promise rejects with an `AggregateError` containing
+   * every disposal hook failure, or otherwise fulfills with `undefined`.
+   * Once settled, the value may be garbage collected at any time.
    */
   disposed: Promise<void>;
 
@@ -759,12 +882,10 @@ export interface Handle {
 export type MakeSha256 = () => Sha256;
 
 export type PetStoreNameChange =
-  | { add: Name; value: IdRecord; type?: string }
-  | { remove: Name };
+  { add: Name; value: IdRecord; type?: string } | { remove: Name };
 
 export type PetStoreIdNameChange =
-  | { add: IdRecord; names: Name[] }
-  | { remove: IdRecord; names?: Name[] };
+  { add: IdRecord; names: Name[] } | { remove: IdRecord; names?: Name[] };
 
 export type NameChangesTopic = Topic<PetStoreNameChange>;
 
@@ -812,8 +933,7 @@ export type KnownPeersStore = Omit<
  * `add` and `remove` are locators.
  */
 export type LocatorNameChange =
-  | { add: string; names: Name[] }
-  | { remove: string; names?: Name[] };
+  { add: string; names: Name[] } | { remove: string; names?: Name[] };
 
 export interface NameHub {
   has(...petNamePath: string[]): Promise<boolean>;
@@ -844,6 +964,102 @@ export interface EndoDirectory extends NameHub {
   readText(petNamePath: string | string[]): Promise<string>;
   maybeReadText(petNamePath: string | string[]): Promise<string | undefined>;
   writeText(petNamePath: string | string[], content: string): Promise<void>;
+}
+
+/**
+ * The durable content identity a content locator names: the SHA-256 content
+ * address (`hash`, the `xt`) and the content kind (`blob` / `tree`). Resolved
+ * from a content-bearing formula (`readable-blob` / `readable-tree`) by
+ * `DaemonCore.getContentIdentityForId`
+ * (`designs/endo-content-locators-magnet-urn.md`).
+ */
+export type ContentIdentity = {
+  hash: string;
+  kind: ContentKind;
+};
+
+/**
+ * An extensible data plane represented by a sharing capability in an agent's
+ * `@planes` directory. Phase 3 resolves source hints only. The optional fetch
+ * hook is reserved for the verifying fetch path in Phases 4 and 5.
+ */
+export type ContentDataPlane = {
+  name: string;
+  sourcePlanes?: string[];
+  source: (
+    hash: string,
+    kind: ContentKind,
+    share: unknown,
+  ) => Promise<ContentSourceHint[]>;
+  fetch?: (
+    hint: ContentSourceHint,
+    hash: string,
+    kind: ContentKind,
+  ) => Promise<Uint8Array>;
+};
+
+/**
+ * The content-locate method family (`designs/endo-content-locators-magnet-urn.md`
+ * § Interface extension, Design Decision 9). The content-side analogue of the
+ * name-resolution family (`locate` / `listLocators` / `reverseLocate`),
+ * defined once on the directory node and carried up onto the agent interfaces
+ * (`EndoHost` / `EndoGuest`) the same way. Every method resolves a
+ * content-bearing readable (a readable-blob or readable-tree) to, or from, a
+ * `magnet:` URN naming the content by its SHA-256 content address.
+ *
+ * Phase 2 lands the `xt`-only behavior (no `@planes`, so no data-plane source
+ * hints yet); Phase 3 threads the vended sources through `storeContent` /
+ * `locateContent`.
+ */
+export interface ContentLocatable {
+  /**
+   * Resolve a content-bearing pet name to a content locator (magnet URN), or
+   * `undefined` if the name is unknown. Rejects if the named formula is not
+   * content-bearing.
+   */
+  locateContent(...petNamePath: string[]): Promise<string | undefined>;
+  /**
+   * The content analogue of `listLocators`: a record from name to content
+   * locator for the content-bearing entries of a directory (non-content
+   * entries are omitted).
+   */
+  listContent(...petNamePath: string[]): Promise<Record<string, string>>;
+  /**
+   * The explicit publish verb behind `locateContent`'s resolution: mint the
+   * per-plane sharing capabilities over the agent's `@planes`, ask each vended
+   * plane to begin serving the named readable, and return the content locator
+   * carrying the freshly vended source hints. Phase 2 has no `@planes` to vend,
+   * so it returns the same `xt`-only locator as `locateContent`; `undefined` if
+   * the name is unknown, and rejects if the named formula is not
+   * content-bearing.
+   */
+  storeContent(...petNamePath: string[]): Promise<string | undefined>;
+  /**
+   * Find the pet names in this directory whose content matches a content
+   * locator's `xt` hash (and kind). The content analogue of `reverseLocate`.
+   */
+  reverseLocateContent(contentLocator: string): Promise<Array<Name>>;
+  /**
+   * Parse and validate a content locator, extracting the content hash and kind
+   * and the data-plane source hints (the analogue of `internalizeLocator`
+   * forwarding transport hints to the fetch layer).
+   */
+  internalizeContentLocator(contentLocator: string): Promise<{
+    hash: string;
+    kind: ContentKind;
+    sources: ContentSourceHint[];
+  }>;
+}
+
+export interface ContentLoadable {
+  /**
+   * Fetch a content locator through its advertised data planes, hash every
+   * received byte against `xt`, and return a new local readable.
+   */
+  loadContent(
+    contentLocator: string,
+    inBandReadable?: ERef<EndoReadable | EndoReadableTree>,
+  ): Promise<FarRef<EndoReadable> | FarRef<EndoReadableTree>>;
 }
 
 export type GcHooks = {
@@ -877,7 +1093,10 @@ export type MakeDirectoryNode = (
   agentNodeNumber: NodeNumber,
   isLocalKey: (node: string) => boolean,
   getNetworkAddresses: () => Promise<string[]>,
-) => EndoDirectory;
+  getContentSources: (
+    identity: ContentIdentity,
+  ) => Promise<ContentSourceHint[]>,
+) => EndoDirectory & ContentLocatable;
 
 export interface Mail {
   handle: () => Handle;
@@ -1007,18 +1226,19 @@ export interface EndoReadableTree {
   sha256(): string;
   getInfo(): Promise<BlobInfo>;
   has(...pathSegments: string[]): Promise<boolean>;
-  list(...pathSegments: string[]): Promise<string[]>;
-  lookup(path: string | string[]): Promise<EndoReadableTree | EndoReadable>;
+  list(...pathSegments: string[]): Promise<readonly string[]>;
+  lookup(
+    path: string | readonly string[],
+  ): Promise<EndoReadableTree | EndoReadable>;
   help(method?: string): string;
 }
 
-/**
- * File metadata, aligned with the extended `Stat` shape from
- * `@endo/platform/fs/extended` (size: bigint, mtime/atime: bigint nanoseconds
- * since epoch). `kind` is additive — the mount stats a *path*, which may be a
- * file or directory, where the extended engine relies on the cap type. See
- * designs/fs-interface-consolidation.md.
- */
+// `EndoMountEntry` has no members beyond the portable `PathEntry` selector, so
+// it aliases the canonical platform shape rather than hand-duplicating it — the
+// runtime guard was already consolidated onto `pathEntryMethodGuards`.
+export type EndoMountEntry = PathEntry;
+
+/** File metadata for a daemon-mounted path. */
 export type EndoMountStat = {
   kind: 'file' | 'directory' | 'symlink';
   size: bigint;
@@ -1026,12 +1246,8 @@ export type EndoMountStat = {
   atime: bigint;
 };
 
-export interface EndoMountEntry {
-  segments(): string[];
-  displayPath(): string;
-  child(name: string): EndoMountEntry;
-  help(method?: string): string;
-}
+export type MountNameChange =
+  { add: string; type: 'file' | 'directory' } | { remove: string };
 
 /**
  * The `{ algorithm, hash, size }` content-address triple returned by a rich
@@ -1066,8 +1282,14 @@ export interface ReadableBlobView {
  */
 export interface ReadableTreeView {
   has(...pathSegments: string[]): Promise<boolean>;
-  list(...pathSegments: string[]): Promise<string[]>;
-  lookup(path: string | string[]): Promise<ReadableTreeView | ReadableBlobView>;
+  list(...pathSegments: string[]): Promise<readonly string[]>;
+  listTree(
+    petNamePath: string | readonly string[],
+    options?: { ignore?: readonly string[] },
+  ): Promise<TreeEntry[]>;
+  lookup(
+    path: string | readonly string[],
+  ): Promise<ReadableTreeView | ReadableBlobView>;
   help(method?: string): string;
 }
 
@@ -1075,8 +1297,8 @@ export interface EndoGitTree {
   archiveTar(): PassableBytesReader;
   archiveLossless(): Promise<boolean>;
   has(...pathSegments: string[]): Promise<boolean>;
-  list(...pathSegments: string[]): Promise<string[]>;
-  lookup(path: string | string[]): Promise<EndoGitTree | EndoReadable>;
+  list(...pathSegments: string[]): Promise<readonly string[]>;
+  lookup(path: string | readonly string[]): Promise<EndoGitTree | EndoReadable>;
 }
 
 /**
@@ -1086,6 +1308,12 @@ export interface EndoGitTree {
  * additive; `readOnly()` narrows to a structural `ReadableBlob` view.
  */
 export interface EndoMountFile {
+  kind(): 'file';
+  /**
+   * Diagnostic-only directory-method stub.
+   * Calling it rejects with guidance to use `text()` instead.
+   */
+  list(): Promise<never>;
   text(): Promise<string>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, Passable>>,
@@ -1111,12 +1339,41 @@ export interface EndoMountFile {
  * are additive; `readOnly()` narrows to a structural `ReadableTree`
  * view.
  */
-export interface EndoMount {
+export interface EndoMount extends PathEntryIssuer {
+  kind(): 'directory';
   has(...pathSegments: string[]): Promise<boolean>;
   has(entry: EndoMountEntry): Promise<boolean>;
   list(...pathSegments: string[]): Promise<string[]>;
+  /**
+   * Recursive glob search delegated to the platform engine
+   * (`@endo/platform/fs/search`): mount-face-relative paths matching
+   * `pattern`, UTF-16-sorted and capped at `GLOB_MAX_RESULTS`.
+   */
+  glob(pattern: string): Promise<string[]>;
+  /**
+   * Content search for an ECMAScript RegExp source (no flags). `paths` is
+   * the file set to search; the exo awaits it (`M.await`), so a `glob`
+   * promise pipes straight in: `grep(pattern, glob(g))`. Omitted, every
+   * file under the face's root is searched.
+   */
+  grep(
+    pattern: string,
+    paths?: string[] | Promise<string[]>,
+    options?: { maxResults?: number },
+  ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
+  /**
+   * Fused glob+grep: search the files matching `globPattern` for
+   * `grepPattern`. The reference implementation composes the decoupled
+   * surface (`grep(grepPattern, glob(globPattern))`); a native powers layer
+   * may push both patterns down as one enumerate-and-scan pass.
+   */
+  glorp(
+    globPattern: string,
+    grepPattern: string,
+    options?: { maxResults?: number },
+  ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
   lookup(
-    path: string | string[] | EndoMountEntry,
+    path: string | readonly string[] | EndoMountEntry,
   ): Promise<EndoMount | EndoMountFile>;
   /**
    * The `ReadableNameHub` lookup-or-undefined primitive: resolve `path`
@@ -1126,12 +1383,9 @@ export interface EndoMount {
   maybeLookup(
     path: string | string[] | EndoMountEntry,
   ): Promise<EndoMount | EndoMountFile | undefined>;
-  /**
-   * Part of the name-hub contract, but a live change feed requires a
-   * filesystem watcher behind the mount (filesystem-watchers.md), which is
-   * not yet implemented; throws ENOSYS until then.
-   */
-  followNameChanges(): never;
+  followNameChanges(
+    ...pathSegments: string[]
+  ): import('@endo/exo-stream').PassableReader<MountNameChange, undefined>;
   /**
    * Confined sub-root: returns a sub-mount whose own confinement root is
    * the target directory, so `..` cannot escape it. The transient,
@@ -1140,7 +1394,7 @@ export interface EndoMount {
   subView(path: string | string[] | EndoMountEntry): Promise<EndoMount>;
   write(
     path: string | string[] | EndoMountEntry,
-    value: unknown,
+    value: DirectoryWriteSource,
   ): Promise<void>;
   copy(
     from: string | string[] | EndoMountEntry,
@@ -1169,7 +1423,19 @@ export interface EndoMount {
     to: string | string[] | EndoMountEntry,
   ): Promise<void>;
   readOnly(): ReadableTreeView;
-  snapshot(): Promise<unknown>;
+  snapshot(): Promise<SnapshotTree>;
+  help(method?: string): string;
+}
+
+/**
+ * Caretaker facet paired with a revocable mount by `makeRevocableMount`.
+ * `revoke()` flips the shared liveness record, so the paired mount and
+ * every face derived from it (sub-views, entries, opened files,
+ * `readOnly()` views, open `followNameChanges` streams) begin throwing.
+ * Mirrors the runtime `MountControlInterface` guard.
+ */
+export interface EndoMountControl {
+  revoke(): void;
   help(method?: string): string;
 }
 
@@ -1193,6 +1459,8 @@ export interface EndoPeer {
 
 export interface EndoGateway {
   provide: (id: string) => Promise<unknown>;
+  provideBlob: (hash: string) => Promise<PassableBytesReader>;
+  provideTree: (hash: string) => Promise<PassableBytesReader>;
   followRetentionSet: (
     peerNodeNumber: string,
   ) => Promise<
@@ -1224,7 +1492,8 @@ export interface EndoNetwork {
   connect: (address: string, farContext: FarContext) => Promise<EndoGateway>;
 }
 
-export interface EndoAgent extends EndoDirectory {
+export interface EndoAgent
+  extends EndoDirectory, ContentLocatable, ContentLoadable {
   handle: () => {};
   listMessages: Mail['listMessages'];
   followMessages: Mail['followMessages'];
@@ -1287,6 +1556,87 @@ export interface EndoGuest extends EndoAgent {
   sendValue: Mail['sendValue'];
 }
 
+export type SecretState = 'active' | 'revoked';
+
+export type SecretSummary = {
+  secretId: string;
+  description: string;
+  state: SecretState;
+  generation: bigint;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/**
+ * The durable secret metadata row. `SecretSummary` is its public projection:
+ * the same fields minus the host-private `backendRef`.
+ */
+export type SecretRecord = {
+  secretId: string;
+  backendRef: string;
+  description: string;
+  state: SecretState;
+  generation: bigint;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export interface SecretBlob {
+  help(): string;
+  getDescription(): Promise<string>;
+  readBase64(): Promise<string>;
+}
+
+export interface SecretAdmin {
+  getSummary(): Promise<SecretSummary>;
+  replaceBase64(bytesBase64: string): Promise<void>;
+  setDescription(description: string): Promise<void>;
+  revoke(): Promise<void>;
+  delete(): Promise<void>;
+}
+
+export interface SecretImporter {
+  createBase64(
+    name: string,
+    description: string,
+    bytesBase64: string,
+  ): Promise<SecretSummary>;
+}
+
+export interface SecretCatalogEntry {
+  secretId: string;
+  summary: SecretSummary;
+  petNamePaths: string[][];
+  admin: SecretAdmin;
+}
+
+export interface SecretCatalog {
+  list(): Promise<SecretCatalogEntry[]>;
+}
+
+export type SecretAuditEvent = {
+  eventId: string;
+  secretId: string;
+  operation:
+    'create' | 'read' | 'replace' | 'set-description' | 'revoke' | 'delete';
+  outcome: 'attempted' | 'succeeded' | 'failed';
+  generation: bigint;
+  occurredAt: string;
+  operationId: string;
+  reasonCode?: string;
+};
+
+export interface SecretAuditReader {
+  list(limit?: bigint): Promise<SecretAuditEvent[]>;
+}
+
+export interface SecretManagerDirectory {
+  help(): string;
+  has(name: string): Promise<boolean>;
+  list(): Promise<string[]>;
+  lookup(path: string | string[]): Promise<unknown>;
+}
+
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
@@ -1307,10 +1657,51 @@ export interface EndoHost extends EndoAgent {
   provideMount(
     path: string,
     petName: string | string[],
+    opts?: { readOnly?: boolean; deniedSegments?: string[] },
+  ): Promise<EndoMount>;
+  provideScratchMount(
+    petName: string | string[],
+    opts?: { readOnly?: boolean; deniedSegments?: string[] },
+  ): Promise<EndoMount>;
+  /**
+   * Mint a sub-mount rooted at a subdirectory of an existing mount and
+   * store it under `newName`.  The child gets its own confinement root,
+   * so a sub-mount at `/project/src` cannot reach `/project/.env` via
+   * `..`; the `subpath` itself is clamped at the parent root, so it can
+   * never escape the parent.  The parent is recorded in the child
+   * formula for dependency tracking.
+   *
+   * Read-only attenuation is monotonic: a sub-mount of a read-only parent
+   * is read-only even when `opts.readOnly` is `false` or omitted, so
+   * read-only access can never be widened by re-mounting a subtree.  A
+   * read-write parent may still be narrowed to a read-only child.
+   */
+  provideSubMount(
+    mountName: string | string[],
+    subpath: string[],
+    newName: string | string[],
     opts?: { readOnly?: boolean },
   ): Promise<EndoMount>;
-  provideScratchMount(petName: string | string[]): Promise<EndoMount>;
-  provideGit(mountCap: EndoMount, petName: string | string[]): Promise<EndoGit>;
+  provideGit(
+    mountCap: EndoMount,
+    petName: string | string[],
+    options: GitProvisionOptions & { allowHistoryRewrite: true },
+  ): Promise<HistoryRewriteEndoGit>;
+  provideGit(
+    mountCap: EndoMount,
+    petName: string | string[],
+    options?: GitProvisionOptions & { allowHistoryRewrite?: false },
+  ): Promise<ReadWriteEndoGit>;
+  provideGit(
+    mountCap: EndoMount,
+    petName: string | string[],
+    options: GitProvisionOptions & { allowHistoryRewrite: boolean },
+  ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
+  provideGit(
+    mountCap: EndoMount,
+    petName: string | string[],
+    options?: GitProvisionOptions,
+  ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
   /**
    * Derive an allowlisted, argv-only command-execution `Shell` from a
    * **writable** mount.  The child working directory is resolved host-side
@@ -1324,6 +1715,22 @@ export interface EndoHost extends EndoAgent {
     petName: string | string[],
     policy: ShellPolicy,
   ): Promise<EndoShell>;
+  /**
+   * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
+   * the use-facing client to `petName`. Unlike `provideShell` / `provideGit`
+   * it takes no mount cap — the Network tier is rooted in a host-owned `fetch`
+   * seam, not the mount. The policy-bearing `HttpClientControl` is retained
+   * host-side, reachable via `getHttpClientControl`.
+   */
+  provideHttpClient(
+    petName: string | string[],
+    policy: HttpClientPolicy,
+  ): Promise<HttpClient>;
+  /**
+   * Recover the host-retained `HttpClientControl` for a daemon-minted
+   * `HttpClient` cap (policy mutation, revocation, binding/audit inspection).
+   */
+  getHttpClientControl(clientCap: HttpClient): Promise<HttpClientControl>;
   /**
    * Mint a `GitRemote` capability bound to `gitCap`, persist its
    * formula, and bind it to `petName`.  The remote enforces the
@@ -1343,6 +1750,7 @@ export interface EndoHost extends EndoAgent {
       allowedDirections?: Array<'fetch' | 'push'>;
       fetchRefspecs?: string[];
       pushRefspecs?: string[];
+      defaultPullRef?: string;
       allowedBranches?: string[];
       allowForcePush?: boolean;
       allowTags?: boolean;
@@ -1365,7 +1773,13 @@ export interface EndoHost extends EndoAgent {
       credential?: unknown;
       allowLocalFileTransport?: boolean;
     };
-  }): Promise<{ git: EndoGit; remote: GitRemote }>;
+    /**
+     * Formula-owned, guest-immutable commit author/committer identity for the
+     * cloned repository's `Git` cap.  Omitted, commits default to
+     * `Endo <endo@invalid.local>`.
+     */
+    identity?: GitCommitIdentity;
+  }): Promise<{ git: ReadWriteEndoGit; remote: GitRemote }>;
   /**
    * Mint a bearer-token `GitCredential` capability scoped to
    * `audience` (a URL origin) and bind it to `petName`.  Material
@@ -1756,7 +2170,7 @@ export interface EndoChannelMember {
  *   earlier than `@endo/daemon@4.0.0`.
  */
 export type EndoInspector<RecordT = string> = {
-  lookup(petNameOrPath: RecordT | NameOrPath): Promise<unknown>;
+  lookup(petNameOrPath: RecordT | Name | readonly Name[]): Promise<unknown>;
   list(): RecordT[];
 };
 
@@ -1837,6 +2251,16 @@ export type CryptoPowers = {
   randomHex256: () => Promise<string>;
   generateEd25519Keypair: () => Promise<Ed25519Keypair>;
   ed25519Sign: (privateKey: Uint8Array, message: Uint8Array) => Uint8Array;
+  sealSecret: (
+    key: Uint8Array,
+    plaintext: Uint8Array,
+    associatedData: Uint8Array,
+  ) => Uint8Array;
+  openSecret: (
+    key: Uint8Array,
+    sealed: Uint8Array,
+    associatedData: Uint8Array,
+  ) => Uint8Array;
 };
 
 export type FilePowers = {
@@ -1900,7 +2324,7 @@ export type FilePowers = {
 
 export type AssertValidNameFn = (name: string) => void;
 
-export type DaemonDatabase = import('./daemon-database.js').DaemonDatabase;
+export type DaemonDatabase = import('./manager-database.js').DaemonDatabase;
 
 export type PetStorePowers = {
   makeIdentifiedPetStore: (
@@ -1972,6 +2396,7 @@ export type DaemonicPersistencePowers = {
   initializePersistence: () => Promise<void>;
   provideRootNonce: () => Promise<RootNonceDescriptor>;
   provideRootKeypair: () => Promise<RootKeypairDescriptor>;
+  provideSecretStoreKey: () => Promise<Uint8Array>;
   makeContentStore: () => import('@endo/platform/fs/lite/types').SnapshotStore;
   readFormula: (
     formulaNumber: FormulaNumber,
@@ -2000,6 +2425,14 @@ export type DaemonicPersistencePowers = {
   listRetention: (guestPublicKey: string) => Array<{ formulaNumber: string }>;
   replaceRetention: (guestPublicKey: string, formulaNumbers: string[]) => void;
   deleteAllRetention: (guestPublicKey: string) => void;
+  getSecretRecord: (secretId: string) => SecretRecord | undefined;
+  writeSecretRecord: (record: SecretRecord) => void;
+  listSecretRecords: () => SecretRecord[];
+  getSecretIdForGrant: (grantId: string) => string | undefined;
+  writeSecretGrant: (grantId: string, secretId: string) => void;
+  deleteSecret: (secretId: string) => void;
+  writeSecretAuditEvent: (event: SecretAuditEvent) => void;
+  listSecretAuditEvents: (limit: number) => SecretAuditEvent[];
 };
 
 export interface DaemonWorkerFacet {}
@@ -2058,12 +2491,42 @@ export type DaemonicControlPowers = {
   detachDebugger?: (workerHandle: number) => void;
 };
 
+/**
+ * The capabilities the daemon core implements by spawning a host
+ * process. Injected rather than imported, so that `manager.js` and
+ * `host.js` carry no static import of `@endo/git` or
+ * `@endo/host-spawner` and therefore none of their `node:` builtins,
+ * which the SES/XS bundler cannot resolve. See
+ * `designs/platform-neutral-hash.md`.
+ */
+export type HostToolPowers = {
+  gitClone: typeof import('@endo/git').gitClone;
+  makeNativeGitBackend: typeof import('@endo/git').makeNativeGitBackend;
+  makeHostSpawner: typeof import('@endo/host-spawner').makeHostSpawner;
+};
+
 export type DaemonicPowers = {
   crypto: CryptoPowers;
   petStore: PetStorePowers;
   persistence: DaemonicPersistencePowers;
   control: DaemonicControlPowers;
   filePowers: FilePowers;
+  registry: {
+    registryUrl: string;
+    makeRegistryBackend: (powers: {
+      contentStore: {
+        store: (readable: AsyncIterable<Uint8Array>) => Promise<string>;
+      };
+      makeReadableTree: (sha256: string) => unknown;
+      sha256Hex: (text: string) => string;
+      registryUrl: string;
+    }) => any;
+  };
+  /**
+   * Absent on a supervisor that cannot spawn host processes (the XS
+   * one). `git` and `shell` formulas then refuse with a diagnosis.
+   */
+  hostTools?: Partial<HostToolPowers>;
 };
 
 export type FormulateResult<T> = Promise<{
@@ -2096,6 +2559,7 @@ type FormulateNumberedGuestParams = {
   mailHubId: FormulaIdentifier;
   workerId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
+  planesDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
 
@@ -2116,12 +2580,14 @@ type FormulateNumberedHostParams = {
   agentNodeNumber: NodeNumber;
   mainWorkerId: FormulaIdentifier;
   nodeWorkerId: FormulaIdentifier;
+  registryId: FormulaIdentifier;
   storeId: FormulaIdentifier;
   mailboxStoreId: FormulaIdentifier;
   mailHubId: FormulaIdentifier;
   inspectorId: FormulaIdentifier;
   endoId: FormulaIdentifier;
   networksDirectoryId: FormulaIdentifier;
+  planesDirectoryId: FormulaIdentifier;
   pinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
 };
@@ -2326,15 +2792,26 @@ export interface DaemonCore {
     mountPath: string,
     readOnly: boolean,
     deferredTasks: DeferredTasks<MountDeferredTaskParams>,
+    deniedSegments?: string[],
   ) => FormulateResult<EndoMount>;
 
   formulateScratchMount: (
     readOnly: boolean,
     deferredTasks: DeferredTasks<ScratchMountDeferredTaskParams>,
+    deniedSegments?: string[],
+  ) => FormulateResult<EndoMount>;
+
+  formulateSubMount: (
+    parentMountId: FormulaIdentifier,
+    subpath: string[],
+    readOnly: boolean,
+    deferredTasks: DeferredTasks<MountDeferredTaskParams>,
   ) => FormulateResult<EndoMount>;
 
   formulateGit: (
     mountId: FormulaIdentifier,
+    allowHistoryRewrite: boolean,
+    identity: GitCommitIdentity | undefined,
     deferredTasks: DeferredTasks<GitDeferredTaskParams>,
   ) => FormulateResult<EndoGit>;
 
@@ -2343,6 +2820,11 @@ export interface DaemonCore {
     policy: ShellPolicy,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
+
+  formulateHttpClient: (
+    policy: HttpClientPolicy,
+    deferredTasks: DeferredTasks<HttpClientDeferredTaskParams>,
+  ) => FormulateResult<HttpClient>;
 
   formulateGitCredential: (
     kind: GitCredentialFormula['kind'],
@@ -2388,6 +2870,15 @@ export interface DaemonCore {
     networksDirectoryId: FormulaIdentifier,
   ) => Promise<string[]>;
 
+  /**
+   * Resolve the source hints contributed by registered data planes vended in
+   * one agent's `@planes` directory. An empty directory yields no hints.
+   */
+  getAllContentSources: (
+    planesDirectoryId: FormulaIdentifier,
+    identity: ContentIdentity,
+  ) => Promise<ContentSourceHint[]>;
+
   getIdForRef: (ref: unknown) => FormulaIdentifier | undefined;
 
   /**
@@ -2401,6 +2892,17 @@ export interface DaemonCore {
   getMountHostPath: (id: FormulaIdentifier) => string;
 
   getTypeForId: (id: FormulaIdentifier) => Promise<string>;
+
+  /**
+   * The content identity (SHA-256 content address and content kind) of a
+   * content-bearing formula (`readable-blob` / `readable-tree`), or `undefined`
+   * for any other formula type (including a remote formula, whose content is
+   * not resolvable locally). This is the `xt` identity a content locator
+   * carries (`designs/endo-content-locators-magnet-urn.md`).
+   */
+  getContentIdentityForId: (
+    id: FormulaIdentifier,
+  ) => Promise<ContentIdentity | undefined>;
 
   makeDirectoryNode: MakeDirectoryNode;
 
@@ -2691,3 +3193,196 @@ export interface RemoteControlState {
     dispose: () => void,
   ): { state: RemoteControlState; remoteGateway: ERef<EndoGateway> };
 }
+
+// --- Hashline edit format (see designs/cli-edit-verb.md and
+// src/hashline.js). The pure parser/validator/splice core shared by the
+// daemon-side `EndoMount.edit` / `EndoGuest.edit` capability and the CLI
+// `endo edit` verb, so the agent's view and the daemon's view of a patch
+// agree byte-for-byte.
+
+/** A per-line hash anchor. */
+export type HashlineAnchor = {
+  /** 1-indexed line number. */
+  line: number;
+  /** 2-or-4-char lowercase hex CRC32 anchor. */
+  hash: string;
+};
+
+export type HashlineEditOpKind =
+  | 'replace'
+  | 'replace-range'
+  | 'delete'
+  | 'insert-after'
+  | 'insert-before'
+  | 'prepend'
+  | 'append';
+
+/**
+ * A single edit operation. A discriminated union on `op`, so the presence of
+ * `anchor` / `anchorEnd` / `payload` is fixed by the kind rather than left
+ * all-optional — the shape the validator (`validateEditOp`) actually enforces,
+ * and the shape the splice narrows against without casts. Each `payload` entry
+ * is a bare line content with no embedded LF or CR.
+ */
+export type HashlineEditOp =
+  | { op: 'prepend' | 'append'; payload: string[] }
+  | {
+      op: 'replace' | 'insert-after' | 'insert-before';
+      anchor: HashlineAnchor;
+      payload: string[];
+    }
+  | { op: 'delete'; anchor: HashlineAnchor; anchorEnd?: HashlineAnchor }
+  | {
+      op: 'replace-range';
+      anchor: HashlineAnchor;
+      anchorEnd: HashlineAnchor;
+      payload: string[];
+    };
+
+export type HashlineEditPatch = {
+  /** SHA-256 of the file the agent read, 64-char lowercase hex. */
+  expectedFileHash: string;
+  ops: HashlineEditOp[];
+};
+
+/**
+ * A per-line anchor mismatch report. Because it echoes CRC32 digests of the
+ * *live* line at a caller-named line number, an array of these is a narrow read
+ * oracle over file content: a mount must not forward it to a guest that lacks
+ * `read` authority on the path (see `HashlineEditResult`).
+ */
+export type HashlineAnchorMismatch = {
+  line: number;
+  /** The patch's anchor hash. */
+  hashExpected: string;
+  /**
+   * The live line's CRC32 at the patch anchor's declared hex width
+   * ('' if the line does not exist).
+   */
+  hashActualAtPatchWidth: string;
+  /**
+   * The live line's CRC32 at the file's currently-native width
+   * ('' if the line does not exist).
+   */
+  hashActualAtFileWidth: string;
+};
+
+export type HashlineReapplyAmbiguity = {
+  /** The original anchor line. */
+  line: number;
+  /**
+   * Every line in the reapply window whose hash matches the anchor.
+   */
+  candidates: number[];
+};
+
+export type HashlineEditFailure = {
+  reason:
+    | 'hash-mismatch'
+    | 'file-rev-mismatch'
+    | 'ambiguous-reapply'
+    | 'patch-syntax'
+    | 'path-not-found'
+    | 'permission-denied';
+  /** The live file SHA-256. */
+  fileHashActual: string;
+  /** Human-readable diagnostic. */
+  message?: string;
+  /**
+   * Populated on `hash-mismatch`, and also on `ambiguous-reapply` when a
+   * second anchor was genuinely unlocatable (zero relocation candidates)
+   * while another was ambiguous — the two coexist rather than the
+   * mismatch being dropped.
+   */
+  mismatches?: HashlineAnchorMismatch[];
+  /** Populated on `ambiguous-reapply`. */
+  ambiguities?: HashlineReapplyAmbiguity[];
+};
+
+export type HashlineAnchorRelocation = {
+  /** The anchor's original 1-indexed line. */
+  line: number;
+  /**
+   * The 1-indexed line the anchor was relocated to by the bounded
+   * reapply search.
+   */
+  relocatedTo: number;
+};
+
+/**
+ * The outcome record of an edit — the value a mount may forward across the
+ * guest/daemon capability boundary. A discriminated union on `success`, so a
+ * success carries no `failure` and a failure carries no relocation report, and
+ * — crucially — NO member carries the spliced *file text*. The post-edit
+ * `newText` is returned on a separate channel (`HashlineSpliceOutcome.newText`) the
+ * mount writes to the backing store but must not forward, so a guest cannot
+ * reconstruct the whole file from a single result by construction.
+ *
+ * This closes the whole-file channel, NOT every read channel: a `hash-mismatch`
+ * or `ambiguous-reapply` failure echoes per-line CRC32 digests of *live* lines
+ * (`HashlineAnchorMismatch.hashActualAtPatchWidth` / `hashActualAtFileWidth`, and
+ * `HashlineReapplyAmbiguity.candidates`) for any line number the patch names. Those are
+ * a narrow, per-probe read oracle over file content, so `edit` is not safely
+ * grantable without `read` on the same path: a mount MUST treat the invariant
+ * "`edit` presupposes `read`" as a precondition — or strip `mismatches` /
+ * `ambiguities` before forwarding to a guest that lacks read authority — rather
+ * than relying on this record to be opaque. See `HashlineAnchorMismatch`.
+ */
+export type HashlineEditResult =
+  | {
+      success: true;
+      /** SHA-256 of the file after the edit. */
+      fileHashAfter: string;
+      /**
+       * Present only when the bounded reapply search moved one or more anchors
+       * off their authored line; the mount layer surfaces these so a caller can
+       * tell "landed where I meant" from "an anchor collided and the edit was
+       * applied at a different line".
+       */
+      relocations?: HashlineAnchorRelocation[];
+    }
+  | {
+      success: false;
+      /** SHA-256 of the unchanged file. */
+      fileHashAfter: string;
+      failure: HashlineEditFailure;
+    };
+
+/**
+ * What `applyEditPatch` returns: the boundary-safe `result` plus, on success
+ * only, the spliced `newText` on a SEPARATE channel. Keeping `newText` off
+ * `HashlineEditResult` is what makes the whole-file read impossible to leak by
+ * forwarding the result — the privileged payload the boundary must strip is
+ * simply not a field of the record that crosses it.
+ */
+export type HashlineSpliceOutcome = {
+  result: HashlineEditResult;
+  /** The spliced file content, present only when `result.success` is true. */
+  newText?: string;
+};
+
+/**
+ * A synchronous SHA-256 digest power: bytes to 64-char lowercase hex. Named
+ * `Sha256HexFn` (not `Sha256Hex`) to avoid colliding with `@endo/mem-cas`'s
+ * exported `Sha256Hex`, an incompatible *asynchronous* digest power
+ * (`=> Promise<string>`); both are re-exported from their package roots.
+ */
+export type Sha256HexFn = (bytes: Uint8Array) => string;
+
+/**
+ * The guest-tunable knobs of an edit. The injected `sha256Hex` digest power is
+ * deliberately NOT a member: it is a separate positional parameter of
+ * `applyEditPatch`, so a guest-authored `options` object forwarded by a mount
+ * can never occupy the power's slot (were it a member, the guest would receive
+ * every byte of the file plaintext and could defeat the file-rev CAS by
+ * returning the expected hash).
+ */
+export type HashlineApplyEditOptions = {
+  /** Enable bounded anchor relocation (default false, strict). */
+  reapply?: boolean;
+  /**
+   * Half-width of the relocation search window in lines (default 20,
+   * max 200).
+   */
+  reapplyWindow?: number;
+};

@@ -38,7 +38,7 @@
   "dependencies": {
     "@endo/chacha12": "workspace:^",
     "@endo/harden": "workspace:^",
-    "fast-check": "^4.0.0"
+    "fast-check": "^4.9.0"
   },
   "devDependencies": {
     "@endo/eventual-send": "workspace:^",
@@ -47,7 +47,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
@@ -62,11 +62,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",

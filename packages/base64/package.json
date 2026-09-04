@@ -27,6 +27,8 @@
     "./btoa.js": "./btoa.js",
     "./encode.js": "./encode.js",
     "./decode.js": "./decode.js",
+    "./no-padding-encode": "./src/no-padding-encode.js",
+    "./no-padding-decode": "./src/no-padding-decode.js",
     "./shim.js": "./shim.js",
     "./package.json": "./package.json"
   },
@@ -39,12 +41,15 @@
     "lint:types": "tsc",
     "test": "ava"
   },
+  "dependencies": {
+    "@endo/bytes": "workspace:^"
+  },
   "devDependencies": {
     "ava": "catalog:dev",
     "babel-eslint": "^10.1.0",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -60,15 +65,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "ignorePatterns": [
-      "dist",
-      "types"
-    ]
   },
   "ava": {
     "files": [

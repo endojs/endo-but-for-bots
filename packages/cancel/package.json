@@ -22,9 +22,13 @@
   },
   "type": "module",
   "main": "./index.js",
+  "types": "./types-index.types.d.ts",
   "module": "./index.js",
   "exports": {
-    ".": "./index.js",
+    ".": {
+      "types": "./types-index.types.d.ts",
+      "default": "./index.js"
+    },
     "./abort": "./abort.js",
     "./all-map": "./all-map.js",
     "./any-map": "./any-map.js",
@@ -56,7 +60,6 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -72,11 +75,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [

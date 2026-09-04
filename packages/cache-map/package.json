@@ -22,9 +22,10 @@
   "type": "module",
   "main": "./index.js",
   "module": "./index.js",
+  "types": "./index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types.d.ts",
+      "types": "./index.types.d.ts",
       "default": "./index.js"
     },
     "./package.json": "./package.json"
@@ -43,7 +44,6 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -59,22 +59,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/ses"
-    ],
-    "overrides": [
-      {
-        "files": [
-          "test/**/*.js"
-        ],
-        "rules": {
-          "no-restricted-globals": "off",
-          "@endo/no-polymorphic-call": "off"
-        }
-      }
-    ]
   },
   "ava": {
     "files": [

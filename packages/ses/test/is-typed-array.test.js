@@ -44,7 +44,7 @@ test('isTypedArray negative cases', t => {
   t.assert(!isTypedArray(new Number(42)));
   t.assert(!isTypedArray('foo'));
   t.assert(!isTypedArray(Object('foo')));
-  // eslint-disable-next-line prefer-arrow-callback
+
   t.assert(!isTypedArray(function f() {}));
   t.assert(
     !isTypedArray(function* g() {
@@ -54,4 +54,9 @@ test('isTypedArray negative cases', t => {
   t.assert(!isTypedArray(() => {}));
   t.assert(!isTypedArray([]));
   t.assert(!isTypedArray(new ArrayBuffer(1)));
+  // A DataView is the discriminating case: `ArrayBuffer.isView` is true for it,
+  // but it is not an integer-indexed exotic TypedArray, so the getter-based
+  // brand check must (and does) report false. This is why these sites use the
+  // getter rather than `ArrayBuffer.isView`.
+  t.assert(!isTypedArray(new DataView(new ArrayBuffer(4))));
 });

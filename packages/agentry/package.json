@@ -1,7 +1,6 @@
 {
   "name": "@endo/agentry",
   "version": "0.1.0",
-  "private": true,
   "description": "Shared infrastructure for building agentic harnesses across endo packages",
   "keywords": [],
   "author": "Endo contributors",
@@ -18,30 +17,52 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./src/index.js",
+      "types": "./types-index.types.d.ts",
       "default": "./src/index.js"
     },
     "./harness": {
-      "types": "./src/harness/index.js",
+      "types": "./harness.types.d.ts",
       "default": "./src/harness/index.js"
     },
     "./define-agent": {
-      "types": "./src/define-agent.js",
+      "types": "./define-agent.types.d.ts",
       "default": "./src/define-agent.js"
     },
-    "./execute": {
-      "types": "./src/execute/index.js",
-      "default": "./src/execute/index.js"
+    "./code-mode": {
+      "types": "./code-mode.types.d.ts",
+      "default": "./src/code-mode.js"
+    },
+    "./code-mode-provisioning": {
+      "types": "./code-mode-provisioning.types.d.ts",
+      "default": "./code-mode-provisioning.js"
+    },
+    "./harness/types.js": {
+      "types": "./src/harness/types-index.types.d.ts",
+      "default": "./src/harness/types-index.js"
+    },
+    "./code-mode/types.js": {
+      "types": "./src/code-mode/types-index.types.d.ts",
+      "default": "./src/code-mode/types-index.js"
+    },
+    "./endo-code-mode-pi-extension": {
+      "types": "./endo-code-mode-pi-extension.js",
+      "default": "./endo-code-mode-pi-extension.js"
     },
     "./eval": {
-      "types": "./src/eval/index.js",
+      "types": "./src/eval/index.types.d.ts",
       "default": "./src/eval/index.js"
+    },
+    "./edit-text": {
+      "types": "./src/edit-text.js",
+      "default": "./src/edit-text.js"
     },
     "./package.json": "./package.json"
   },
+  "bin": {
+    "endo-pi": "./bin/endo-pi.js"
+  },
   "scripts": {
     "build": "exit 0",
-    "gen:code-mode-types": "node scripts/gen-code-mode-types.js",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix && yarn lint:types",
     "lint:eslint": "eslint '**/*.js'",
@@ -51,26 +72,35 @@
     "test:live": "ava --config ava-live.config.js"
   },
   "dependencies": {
-    "@earendil-works/pi-agent-core": "^0.79.0",
-    "@earendil-works/pi-ai": "^0.79.0",
+    "@earendil-works/pi-agent-core": "^0.84.2",
+    "@earendil-works/pi-ai": "^0.84.2",
+    "@earendil-works/pi-coding-agent": "^0.84.2",
+    "@earendil-works/pi-tui": "^0.84.2",
     "@endo/agent-tools": "workspace:^",
+    "@endo/cancel": "workspace:^",
+    "@endo/daemon": "workspace:^",
+    "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-git": "workspace:^",
     "@endo/far": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
-    "@endo/pass-style": "workspace:^"
+    "@endo/platform": "workspace:^",
+    "@endo/where": "workspace:^",
+    "ses": "workspace:^"
   },
   "devDependencies": {
-    "@endo/daemon": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
+    "fast-check": "^4.9.0",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -79,21 +109,17 @@
     "./*.map",
     "LICENSE*",
     "SECURITY*",
+    "bin",
     "src"
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [
       "test/**/*.test.*",
       "!test/eval-live.test.js"
     ],
-    "timeout": "2m"
+    "timeout": "3m"
   }
 }

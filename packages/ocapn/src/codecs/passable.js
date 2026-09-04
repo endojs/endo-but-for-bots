@@ -88,7 +88,6 @@ export const makePassableCodecs = descCodecs => {
 
   // OCapN Passable Containers
 
-  /* eslint-disable-next-line no-use-before-define */
   const OcapnStructCodec = makeStructCodecForValues(
     'OcapnStruct',
     // eslint-disable-next-line no-use-before-define
@@ -177,7 +176,7 @@ export const makePassableCodecs = descCodecs => {
           syrupWriter.writeString(value);
         } else if (typeof value === 'bigint') {
           syrupWriter.writeInteger(value);
-        } else if (value instanceof ArrayBuffer) {
+        } else if (value instanceof Uint8Array) {
           syrupWriter.writeBytestring(value);
         } else {
           throw new Error(
@@ -197,9 +196,9 @@ export const makePassableCodecs = descCodecs => {
       // "number-prefix" can be String, ByteArray (Syrup bytestring), Selector, Integer
       'number-prefix': OcapnPassableNumberPrefixUnionCodec,
       record: OcapnPassableRecordUnionCodec,
-      // eslint-disable-next-line no-use-before-define
+
       list: () => ContainerCodecs.list,
-      // eslint-disable-next-line no-use-before-define
+
       dictionary: () => ContainerCodecs.struct,
     },
     // passStyleOf value -> codec

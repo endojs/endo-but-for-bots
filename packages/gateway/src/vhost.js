@@ -24,7 +24,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
 
-/** @import { AppsNameHub } from '../types.d.ts' */
+/** @import { AppsNameHub } from './types.js' */
 
 /**
  * Validate and normalize a virtual-host name. RFC 1123 hostnames

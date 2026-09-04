@@ -1,6 +1,6 @@
 {
   "name": "@endo/immutable-arraybuffer",
-  "version": "1.1.2",
+  "version": "2.0.0",
   "description": "Immutable ArrayBuffer (the shim!)",
   "keywords": [
     "immutable",
@@ -20,10 +20,13 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
-  "main": "./index.js",
-  "module": "./index.js",
+  "dependencies": {
+    "@endo/harden": "workspace:^"
+  },
   "exports": {
-    ".": "./index.js",
+    ".": {
+      "default": "./index.js"
+    },
     "./shim.js": {
       "types": "./shim.types.d.ts",
       "default": "./shim.js"
@@ -38,13 +41,14 @@
     "lint:types": "tsc",
     "test": "ava",
     "test:c8": "c8 ${C8_OPTIONS:-} ava",
+    "test:types": "tsc --project tsconfig.test-types.json",
     "test:xs": "exit 0"
   },
   "devDependencies": {
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -60,11 +64,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/ses"
-    ]
   },
   "ava": {
     "files": [

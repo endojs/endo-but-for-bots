@@ -29,13 +29,14 @@ const execFileAsync = promisify(execFile);
  * tracking config the push set, and the controller's audit trail.
  */
 test('GitRemote fetch / pull / push use the bounded native data plane', async t => {
-  const { git, mount, root } = await provisionGitContext(t);
+  const { git, operations, mount, root } = await provisionGitContext(t);
   const remoteRoot = await provisionBareRemote(t, root);
   const remoteUrl = pathToFileURL(remoteRoot).href;
   const remoteHead = await advanceRemoteMain(t, remoteRoot);
 
   const { remote, controller } = makeGitRemote({
     git,
+    operations,
     name: 'origin',
     policy: {
       url: remoteUrl,
@@ -67,6 +68,7 @@ test('GitRemote fetch / pull / push use the bounded native data plane', async t 
     strategy: 'ff-only',
   });
   t.is(pullResult.integration, 'fast-forward');
+  t.deepEqual(pullResult.head, await E(git).revParse('HEAD'));
   t.deepEqual(
     [...pullResult.fetch.updatedRefs],
     [
@@ -144,6 +146,7 @@ test('GitRemote fetch / pull / push use the bounded native data plane', async t 
     outcome: 'ok',
     integration: 'fast-forward',
   });
+  t.deepEqual(audit[2].head, pullResult.head);
   t.like(audit[3], {
     type: 'pull',
     outcome: 'ok',

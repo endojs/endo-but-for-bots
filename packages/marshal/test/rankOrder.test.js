@@ -2,7 +2,7 @@
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-// eslint-disable-next-line import/no-extraneous-dependencies
+
 import { fc } from '@fast-check/ava';
 import { makeTagged } from '@endo/pass-style';
 import { makeArbitraries } from '@endo/pass-style/tools.js';
@@ -308,4 +308,28 @@ test('coveredEntries empty range', t => {
     result.push(entry);
   }
   t.is(result.length, 0);
+});
+
+// Constructs a byteArray pass-style value (a hardened frozen `Uint8Array`
+// backed by an immutable `ArrayBuffer`) from a list of byte values. On the
+// emulated `@endo/immutable-arraybuffer` path this wrapper has no
+// integer-indexed own properties, so a direct `wrapper[i]` read returns
+// `undefined`; `compareRank` must read its bytes through an amplified path.
+const byteArrayOf = bytes => {
+  const buffer = new ArrayBuffer(bytes.length);
+  new Uint8Array(buffer).set(bytes);
+  return harden(new Uint8Array(buffer.sliceToImmutable()));
+};
+
+test('compareRank orders byteArrays by shortlex, reading bytes correctly', t => {
+  const a = byteArrayOf([0x10, 0x20, 0x30]);
+  const b = byteArrayOf([0x10, 0x20, 0x31]);
+  t.is(compareRank(a, b), -1);
+  t.is(compareRank(b, a), 1);
+  t.is(compareRank(a, byteArrayOf([0x10, 0x20, 0x30])), 0);
+
+  const short = byteArrayOf([0xff]);
+  const long = byteArrayOf([0x00, 0x00]);
+  t.is(compareRank(short, long), -1);
+  t.is(compareRank(long, short), 1);
 });

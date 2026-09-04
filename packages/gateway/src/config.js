@@ -19,7 +19,7 @@
 
 import { makeError, q, X } from '@endo/errors';
 
-/** @import { BindAddress, FeatureToggles, GatewayConfig } from '../types.d.ts' */
+/** @import { BindAddress, FeatureToggles, GatewayConfig } from './types.js' */
 
 /**
  * The default bind address per `designs/gateway-package.md` §

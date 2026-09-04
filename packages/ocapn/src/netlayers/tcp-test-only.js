@@ -42,11 +42,15 @@ const { isNaN } = Number;
 const textEncoder = new TextEncoder();
 
 /**
- * @param {Buffer} buffer
+ * @param {Buffer} nodeBuffer
  * @returns {Uint8Array}
  */
-const bufferToBytes = buffer => {
-  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+const bufferToBytes = nodeBuffer => {
+  return new Uint8Array(
+    nodeBuffer.buffer,
+    nodeBuffer.byteOffset,
+    nodeBuffer.byteLength,
+  );
 };
 
 /**
@@ -436,7 +440,6 @@ export const makeTcpNetLayer = async ({
     sendSessionHandshake: (connection, captpVersion, selfIdentity, codec) => {
       sendHandshake(connection, selfIdentity, captpVersion, codec);
     },
-    // eslint-disable-next-line no-underscore-dangle
     _debug: {
       establishConnection: internalEstablishConnection,
     },

@@ -6,6 +6,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import {
+  makeBasicCredential,
   makeBearerCredential,
   makeGitCloner,
   makeGitRemoteEndpoint,
@@ -38,6 +39,18 @@ test('makeGitRemoteEndpoint factors URL transport and credential authority', t =
   t.deepEqual(endpoint.ensureCredentialUsable(), {
     kind: 'bearer',
     material: { token: 'test-token' },
+  });
+  const basicEndpoint = makeGitRemoteEndpoint({
+    url: 'https://github.com/example/repo.git',
+    credential: makeBasicCredential({
+      audience: 'https://github.com',
+      username: 'test-user',
+      password: 'test-password',
+    }),
+  });
+  t.deepEqual(basicEndpoint.ensureCredentialUsable(), {
+    kind: 'basic',
+    material: { username: 'test-user', password: 'test-password' },
   });
 
   const fileEndpoint = makeGitRemoteEndpoint({
@@ -101,8 +114,8 @@ test('makeGitCloner composes endpoint and destination into Git plus origin remot
     clone: async input => {
       calls.push(harden({ clone: input }));
     },
-    makeGit: async input => {
-      calls.push(harden({ makeGit: input }));
+    makeGit: async (powers, opts) => {
+      calls.push(harden({ makeGit: harden({ powers, opts }) }));
       return gitCap;
     },
     makeRemote: async input => {
@@ -121,6 +134,10 @@ test('makeGitCloner composes endpoint and destination into Git plus origin remot
     url: 'file:///tmp/repo.git',
     destPath: '/tmp/clone',
     allowLocalFileTransport: true,
+  });
+  t.deepEqual(calls[1].makeGit, {
+    powers: { destMount, destPath: '/tmp/clone' },
+    opts: {},
   });
   t.like(calls[2].makeRemote, {
     git: gitCap,

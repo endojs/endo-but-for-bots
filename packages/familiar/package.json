@@ -41,7 +41,10 @@
   },
   "dependencies": {
     "@endo/where": "workspace:^",
-    "electron": "^42.0.1"
+    "electron": "^43.4.1"
+  },
+  "engines": {
+    "node": "^22.0.0 || ^24.0.0"
   },
   "devDependencies": {
     "@electron/packager": "^19.0.5",
@@ -50,9 +53,9 @@
     "@lavamoat/allow-scripts": "^3.4.1",
     "appdmg": "^0.6.6",
     "ava": "catalog:dev",
-    "electron": "^42.0.1",
+    "electron": "^43.4.1",
     "electron-installer-dmg": "^5.0.1",
-    "esbuild": "^0.28.0",
+    "esbuild": "^0.28.2",
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
   },
@@ -61,27 +64,6 @@
       "test/**/*.test.js"
     ],
     "timeout": "120s"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "ignorePatterns": [
-      "out/*"
-    ],
-    "rules": {
-      "no-restricted-globals": "off"
-    },
-    "overrides": [
-      {
-        "files": [
-          "scripts/*.mjs"
-        ],
-        "rules": {
-          "@endo/harden-exports": "off"
-        }
-      }
-    ]
   },
   "lavamoat": {
     "allowScripts": {

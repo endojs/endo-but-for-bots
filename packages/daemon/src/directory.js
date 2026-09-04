@@ -1,13 +1,18 @@
 // @ts-check
 
 import harden from '@endo/harden';
-import { bytesFromText } from '@endo/bytes/from-string.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
-import { externalizeId, internalizeLocator } from './locator.js';
+import {
+  externalizeId,
+  internalizeLocator,
+  externalizeContent,
+  internalizeContentLocator as parseContentLocatorGrammar,
+} from './locator.js';
 import { formatId } from './formula-identifier.js';
 import {
   assertNamePath,
@@ -21,7 +26,7 @@ import { directoryHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface } from './interfaces.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, StoreController } from './types.js' */
 
 /**
  * @param {object} args
@@ -29,6 +34,7 @@ import { DirectoryInterface } from './interfaces.js';
  * @param {(storeId: FormulaIdentifier) => Promise<StoreController>} args.provideStoreController
  * @param {DaemonCore['getIdForRef']} args.getIdForRef
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
+ * @param {DaemonCore['getContentIdentityForId']} args.getContentIdentityForId
  * @param {DaemonCore['formulateDirectory']} args.formulateDirectory
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['pinTransient']} args.pinTransient
@@ -39,6 +45,7 @@ export const makeDirectoryMaker = ({
   provideStoreController,
   getIdForRef,
   getTypeForId,
+  getContentIdentityForId,
   formulateDirectory,
   formulateReadableBlob,
   pinTransient,
@@ -50,6 +57,7 @@ export const makeDirectoryMaker = ({
     agentNodeNumber,
     isLocalKey,
     getNetworkAddresses,
+    getContentSources,
   ) => {
     /** @type {EndoDirectory['lookup']} */
     const lookup = petNamePath => {
@@ -233,6 +241,128 @@ export const makeDirectoryMaker = ({
       return E(hub).listLocators();
     };
 
+    // Content locators (magnet URNs). The content-side analogue of `locate` /
+    // `listLocators` / `reverseLocate`
+    // (`designs/endo-content-locators-magnet-urn.md`, § Interface extension):
+    // resolve a content-bearing pet name — a readable-blob or readable-tree —
+    // to a `magnet:` URN that names the content by its SHA-256 content address
+    // (`xt`), independent of location. A non-content formula type is rejected,
+    // the same way `parseLocator` rejects an unknown query parameter.
+    //
+    // An empty per-agent `@planes` directory resolves to no source hints, so
+    // every locator remains `xt`-only until a data plane is registered and
+    // vended into that directory.
+
+    /**
+     * Build the content locator (magnet URN) for an already-resolved content
+     * identity. This is the single point where the Phase 3 `@planes` source
+     * hints will thread in.
+     *
+     * @param {ContentIdentity} identity
+     * @returns {Promise<string>}
+     */
+    const contentLocatorFromIdentity = async identity => {
+      const { hash, kind } = identity;
+      const sources = await getContentSources(identity);
+      return externalizeContent(hash, kind, sources);
+    };
+
+    /** @type {ContentLocatable['locateContent']} */
+    const locateContent = async (...petNamePath) => {
+      assertNames(petNamePath);
+      const id = await identify(...petNamePath);
+      if (id === undefined) {
+        return undefined;
+      }
+      const identity = await getContentIdentityForId(
+        /** @type {FormulaIdentifier} */ (id),
+      );
+      if (identity === undefined) {
+        throw new Error(
+          `Cannot locate content for ${q(petNamePath)}: not a content-bearing formula (readable-blob or readable-tree)`,
+        );
+      }
+      return contentLocatorFromIdentity(identity);
+    };
+
+    /** @type {ContentLocatable['listContent']} */
+    const listContent = async (...petNamePath) => {
+      assertNames(petNamePath);
+      const names = await list(...petNamePath);
+      /** @type {Record<string, string>} */
+      const record = {};
+      await Promise.all(
+        names.map(async name => {
+          const id = await identify(...petNamePath, name);
+          if (id === undefined) {
+            return;
+          }
+          const identity = await getContentIdentityForId(
+            /** @type {FormulaIdentifier} */ (id),
+          );
+          if (identity === undefined) {
+            // Not a content-bearing formula: omit it (the content analogue of
+            // `listLocators` listing every name, but restricted to content).
+            return;
+          }
+          record[name] = await contentLocatorFromIdentity(identity);
+        }),
+      );
+      return harden(record);
+    };
+
+    /** @type {ContentLocatable['storeContent']} */
+    const storeContent = async (...petNamePath) => {
+      assertNames(petNamePath);
+      const id = await identify(...petNamePath);
+      if (id === undefined) {
+        return undefined;
+      }
+      const identity = await getContentIdentityForId(
+        /** @type {FormulaIdentifier} */ (id),
+      );
+      if (identity === undefined) {
+        throw new Error(
+          `Cannot store content for ${q(petNamePath)}: not a content-bearing formula (readable-blob or readable-tree)`,
+        );
+      }
+      // Each resolver receives its `@planes` sharing capability and starts
+      // serving content if its plane supports this identity. With an empty
+      // directory this remains the same `xt`-only result as locateContent.
+      return contentLocatorFromIdentity(identity);
+    };
+
+    /** @type {ContentLocatable['reverseLocateContent']} */
+    const reverseLocateContent = async contentLocator => {
+      const { hash, kind } = parseContentLocatorGrammar(contentLocator);
+      const names = controller.list();
+      /** @type {Set<Name>} */
+      const matches = new Set();
+      await Promise.all(
+        names.map(async name => {
+          const id = controller.identifyLocal(name);
+          if (id === undefined) {
+            return;
+          }
+          const identity = await getContentIdentityForId(
+            /** @type {FormulaIdentifier} */ (id),
+          );
+          if (
+            identity !== undefined &&
+            identity.hash === hash &&
+            identity.kind === kind
+          ) {
+            matches.add(name);
+          }
+        }),
+      );
+      return harden(Array.from(matches).sort());
+    };
+
+    /** @type {ContentLocatable['internalizeContentLocator']} */
+    const internalizeContentLocator = async contentLocator =>
+      harden(parseContentLocatorGrammar(contentLocator));
+
     /**
      * Enrich a name-change event with the formula type of the named value.
      * The `type` field is additive and appears only on `add` events; old
@@ -413,7 +543,7 @@ export const makeDirectoryMaker = ({
       // directory's own storeIdentifier, which enforces a pet-name leaf.
       const namePath = namePathFrom(petNameOrPath);
       if (namePath.length < 2) {
-        const bytes = bytesFromText(content);
+        const bytes = encodeUtf8(content);
         const readerRef = bytesReaderFromIterator([bytes]);
         /** @type {DeferredTasks<ReadableBlobDeferredTaskParams>} */
         const tasks = makeDeferredTasks();
@@ -427,7 +557,7 @@ export const makeDirectoryMaker = ({
       await E(/** @type {any} */ (hub)).writeText(name, content);
     };
 
-    /** @type {EndoDirectory} */
+    /** @type {EndoDirectory & ContentLocatable} */
     const directory = {
       has,
       identify,
@@ -437,6 +567,11 @@ export const makeDirectoryMaker = ({
       list,
       listIdentifiers,
       listLocators,
+      locateContent,
+      listContent,
+      storeContent,
+      reverseLocateContent,
+      internalizeContentLocator,
       followNameChanges,
       lookup,
       maybeLookup,
@@ -471,11 +606,13 @@ export const makeDirectoryMaker = ({
 
     const petStore = await provideStoreController(petStoreId);
     const noNetworkAddresses = async () => [];
+    const noContentSources = async () => [];
     const directory = makeDirectoryNode(
       petStore,
       agentNodeNumber,
       isLocalKey,
       noNetworkAddresses,
+      noContentSources,
     );
 
     const help = makeHelp(directoryHelp);

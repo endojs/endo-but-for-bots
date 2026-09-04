@@ -6,7 +6,12 @@ out
 tmp
 /packages/ses-integration-test/transform-tests/output
 /packages/test262-runner/prelude
+/packages/parser-pipeline/test/fixture/*-error.js
 test262
+# Borrowed test262 cases and harness includes (third-party format).
+/packages/hardened262/harness
+/packages/hardened262/test
+/packages/hardened262/tmp
 
 *.html
 *.json

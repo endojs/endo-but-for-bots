@@ -25,6 +25,7 @@
     "./markdown-render.js": "./src/markdown-render.js",
     "./markdown-vnodes.js": "./src/markdown-vnodes.js",
     "./code-fence.js": "./src/code-fence.js",
+    "./form-fields.js": "./src/form-fields.js",
     "./value-vnodes.js": "./src/value-vnodes.js",
     "./value-component.js": "./src/value-component.js",
     "./formula-view.js": "./src/formula-view.js",
@@ -81,17 +82,9 @@
     "@endo/patterns": "workspace:^",
     "@endo/preact-container": "workspace:^",
     "marked": "^17.0.5",
-    "preact": "^10.29.2"
+    "preact": "^10.29.8"
   },
   "devDependencies": {
     "eslint": "catalog:dev"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "env": {
-      "browser": true
-    }
   }
 }

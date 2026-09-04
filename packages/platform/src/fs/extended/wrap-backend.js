@@ -31,7 +31,7 @@ import {
 } from './type-guards.js';
 
 import { makeLockTable } from './shared/lock-table.js';
-import { makeBlobRefExo } from './shared/blobref.js';
+import { makeBlobRefExo } from './shared/blob-ref.js';
 import {
   assertChildName,
   computeOpenMode,
@@ -50,10 +50,21 @@ import {
 import { makeXattrsExo } from './shared/xattrs-exo.js';
 import { makeCursorExo } from './shared/cursor-exo.js';
 import { makeNodeWatcherExo } from './shared/watcher-exo.js';
+import { makeFilesystem } from './posture.js';
 
 /**
  * @import { FsBackend } from './backend-types.js'
- * @import { Filesystem } from './types.js'
+ * @import {
+ *   Directory,
+ *   File,
+ *   FileReadOptions,
+ *   FileWriteOptions,
+ *   Filesystem,
+ *   NodeKind,
+ *   OpenFile,
+ *   Qid,
+ * } from './types.js'
+ * @import { FilesystemMethods, FilesystemPosture } from './posture.js'
  */
 
 /**
@@ -71,6 +82,11 @@ const probeCapabilities = backend => {
     rename: typeof b.rename === 'function',
     watch: typeof b.watch === 'function',
     statfs: typeof b.statfs === 'function',
+    // Content-address hooks (`qidFor` / `blobInfoFor`) are probed at
+    // their call sites via optional chaining, not here: a backend that
+    // knows a stronger identity than a path (e.g. a git object OID)
+    // supplies them, and both degrade to `synthQid` / SHA-256 when the
+    // method is absent OR returns `undefined` for a given path.
   });
 };
 
@@ -132,17 +148,48 @@ const narrowStatPatch = patch => {
 /**
  * Build a `Filesystem` exo on top of an `FsBackend`.
  *
+ * The `posture` option states the authority the backend actually confers.
+ * It defaults to `readWrite`, which is correct for a backend this package
+ * mints over storage it fully controls (in-memory, node-fs). A backend that
+ * merely adapts someone else's capability — a daemon mount, say, whose write
+ * methods may reject at the mount boundary — cannot be assumed writable, and
+ * should pass its known posture or `unknown` so that trusted consumers such
+ * as `isFilesystemReadWrite()` fail closed rather than advertise writes the
+ * guest does not have.
+ *
  * @param {FsBackend} backend
  * @param {{
  *   description?: string,
  *   namedDirs?: Record<string, string[]>,
+ *   posture?: FilesystemPosture | 'unknown',
  * }} [opts]
  * @returns {Filesystem}
  */
 export const wrapBackend = (backend, opts = {}) => {
   const caps = probeCapabilities(backend);
+  const posture = opts.posture ?? 'readWrite';
   const description = opts.description ?? 'wrapBackend-built Filesystem';
   const namedDirs = harden({ ...(opts.namedDirs ?? {}) });
+
+  // `getQid` is a synchronous getter — `readOnly()` forwards it sync
+  // and 9p-server pipelines it — so its QID source must be sync too.
+  // A content-address backend may supply `qidFor(path, kind)` returning
+  // a stronger (e.g. git-OID-based) `Qid`; a missing method or a
+  // per-path `undefined` falls back to the path-hash `synthQid`.
+  /**
+   * @template {NodeKind} K
+   * @param {string[]} path
+   * @param {K} kind
+   * @returns {Qid<K>}
+   */
+  const qidOf = (path, kind) => {
+    const supplied = backend.qidFor?.(path, kind);
+    // Re-harden at the trust boundary: `getQid` marshals this across the
+    // exo/CapTP surface, and the wrapper must not rely on every backend
+    // returning a hardened record. `harden` is idempotent.
+    if (supplied !== undefined) return harden(supplied);
+    return synthQid(path, kind);
+  };
 
   // Vat-local advisory lock table, keyed by joined path.
   // Real OS-level locks live in the future PosixFs extension (F15).
@@ -342,9 +389,9 @@ export const wrapBackend = (backend, opts = {}) => {
   // at each assignment site below documents the mutual-recursion
   // shape.
 
-  /** @type {(path: string[]) => any} */
+  /** @type {(path: string[]) => Directory} */
   let makeDirectoryExo;
-  /** @type {(path: string[]) => any} */
+  /** @type {(path: string[]) => File} */
   let makeFileExo;
 
   // ---------- Bound exo factories (delegate to shared/) ----------
@@ -353,7 +400,7 @@ export const wrapBackend = (backend, opts = {}) => {
   const xattrsExoFor = path =>
     makeXattrsExo({ xattrTable, fireLocal, lockKeyOf, path });
   /** @param {string[]} dirPath */
-  const cursorExoFor = dirPath => makeCursorExo({ backend, dirPath });
+  const cursorExoFor = dirPath => makeCursorExo({ backend, dirPath, qidOf });
   /** @param {string[]} path */
   const watcherExoFor = path =>
     makeNodeWatcherExo({
@@ -372,6 +419,7 @@ export const wrapBackend = (backend, opts = {}) => {
    *
    * @param {string[]} path
    * @param {{ read: boolean, write: boolean, append: boolean, truncate: boolean }} mode
+   * @returns {OpenFile}
    */
   const makeOpenFileExo = (path, mode) => {
     let closed = false;
@@ -467,7 +515,7 @@ export const wrapBackend = (backend, opts = {}) => {
         // Truncate is a mutation; bump mtime.
         touch(path, { mtime: true });
       },
-      async fsync(_opts) {
+      async fsync() {
         requireOpen('fsync');
         if (caps.fsync) {
           // @ts-expect-error optional method probed above
@@ -491,7 +539,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'OpenFile: session-shaped file handle — read/write at offsets, stream, truncate, lock, fsync, close.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -503,11 +551,11 @@ export const wrapBackend = (backend, opts = {}) => {
    * Used as the fallback for `Directory.materialise` when the
    * backing doesn't have a faster path.
    *
-   * @param {string[]} startPath
-   * @param {string[]} relPath
+   * @param {readonly string[]} startPath
+   * @param {readonly string[]} relPath
    */
   const materialise = async (startPath, relPath) => {
-    let cur = startPath;
+    let cur = [...startPath];
     for (const seg of relPath) {
       if (
         typeof seg !== 'string' ||
@@ -610,7 +658,7 @@ export const wrapBackend = (backend, opts = {}) => {
       },
       // ---- Legacy: wide-shape attrs + Qid + sidecar xattrs ----
       getQid() {
-        return synthQid(path, 'file');
+        return qidOf(path, 'file');
       },
       async getAttrs() {
         const st = await readFileStat(path);
@@ -660,7 +708,7 @@ export const wrapBackend = (backend, opts = {}) => {
       // over the file bytes (or a slice). Saves the open/close
       // ceremony for the common whole-file case.
       async read(readOpts) {
-        const o = readOpts || {};
+        const o = /** @type {FileReadOptions} */ (readOpts) || {};
         const off = o.offset === undefined ? 0n : BigInt(o.offset);
         const len = o.length === undefined ? undefined : BigInt(o.length);
         const bytes = await backend.read(path, off, len);
@@ -682,12 +730,12 @@ export const wrapBackend = (backend, opts = {}) => {
       // Throw ENOSYS at call time rather than at close time so the
       // caller doesn't push bytes into a sink that won't truncate.
       async write(writeOpts) {
-        const o = writeOpts || {};
-        const truncating = o.offset === undefined;
+        const { offset } = /** @type {FileWriteOptions} */ (writeOpts) || {};
+        const truncating = offset === undefined;
         if (truncating && !caps.setStat) {
           throw notSupported('File.write (whole-file overwrite)');
         }
-        const off = truncating ? 0n : BigInt(o.offset);
+        const off = offset === undefined ? 0n : BigInt(offset);
         /** @type {Uint8Array[]} */
         const chunks = [];
         const sinkIterator = {
@@ -727,16 +775,23 @@ export const wrapBackend = (backend, opts = {}) => {
           throw makeError(X`ENOENT: ${q(path.join('/'))}`);
         }
         const bytes = await backend.read(path);
+        // A content-address backend may supply the native content hash
+        // (e.g. git's `git-sha1` blob OID) via `blobInfoFor`; when it
+        // does we stamp `{ algorithm, hash }` onto the BlobRef instead
+        // of hashing the captured bytes with SHA-256. A missing method
+        // or a per-path `undefined` falls back to the default SHA-256.
+        const infoOverride = backend.blobInfoFor?.(path);
         return makeBlobRefExo(
           bytes,
           `BlobRef: snapshot of ${path.join('/') || '/'}.`,
+          infoOverride,
         );
       },
       help(method) {
         if (method === undefined) {
           return 'File: bytes-level file capability — open(), read(opts), write(bytes, opts), getStat, setStat, watch.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
   };
@@ -780,7 +835,7 @@ export const wrapBackend = (backend, opts = {}) => {
       },
       // ---- Legacy: wide-shape attrs + Qid + sidecar xattrs ----
       getQid() {
-        return synthQid(path, 'directory');
+        return qidOf(path, 'directory');
       },
       async getAttrs() {
         const k = await backend.kind(path);
@@ -802,7 +857,7 @@ export const wrapBackend = (backend, opts = {}) => {
       xattrs() {
         return xattrsExoFor(path);
       },
-      async mkdir(name, _opts) {
+      async mkdir(name) {
         // Legacy synonym for makeDirectory.
         assertChildName(name);
         const childPath = [...path, name];
@@ -927,7 +982,7 @@ export const wrapBackend = (backend, opts = {}) => {
         }
         return makeOpenFileExo(childPath, mode);
       },
-      async makeDirectory(name, _opts) {
+      async makeDirectory(name) {
         assertChildName(name);
         const childPath = [...path, name];
         const k = await backend.kind(childPath);
@@ -982,7 +1037,7 @@ export const wrapBackend = (backend, opts = {}) => {
           await backend.fsync(path);
         }
       },
-      async materialise(relPath, _opts) {
+      async materialise(relPath) {
         const finalPath = await materialise(path, relPath);
         return makeDirectoryExo(finalPath);
       },
@@ -995,7 +1050,7 @@ export const wrapBackend = (backend, opts = {}) => {
         if (method === undefined) {
           return 'Directory: tree-shaped directory capability — lookup, lookupStep, subView, list, write, create, makeDirectory, remove, move, copy, materialise, watch, watchFrom, fsync, getStat, setStat.';
         }
-        return `No documentation for method ${q(method)}.`;
+        return `No documentation available for method ${q(method)}.`;
       },
     });
     dirPaths.set(exo, path);
@@ -1006,7 +1061,8 @@ export const wrapBackend = (backend, opts = {}) => {
 
   const root = makeDirectoryExo([]);
 
-  return makeExo('Filesystem', FilesystemInterface, {
+  /** @type {FilesystemMethods} */
+  const filesystemMethods = {
     root() {
       return root;
     },
@@ -1038,8 +1094,12 @@ export const wrapBackend = (backend, opts = {}) => {
       if (method === undefined) {
         return `Filesystem (${description}): root/named/statfs/brands.`;
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
-  });
+  };
+
+  return posture === 'unknown'
+    ? makeExo('Filesystem', FilesystemInterface, filesystemMethods)
+    : makeFilesystem(filesystemMethods, posture);
 };
 harden(wrapBackend);

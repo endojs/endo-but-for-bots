@@ -56,6 +56,7 @@ import {
   FileInterface,
   OpenFileInterface,
 } from './type-guards.js';
+import { filesystemPostureOf, makeFilesystem } from './posture.js';
 import {
   EMPTY_BYTES,
   makeBytesReaderFromBytes,
@@ -166,7 +167,7 @@ const makeCachingFilesystem = (
   populateInBackground,
   wrapperToInner,
 ) => {
-  return makeExo('Filesystem', FilesystemInterface, {
+  const methods = {
     async root() {
       const { node, qid } = await resolveNodeWithQid(E(inner).root());
       return makeCachingDirectory(
@@ -197,9 +198,13 @@ const makeCachingFilesystem = (
       if (method === undefined) {
         return 'Filesystem (CAS-cached). Reads consult a local CAS before falling through to the underlying file.';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
-  });
+  };
+  const posture = filesystemPostureOf(inner);
+  return posture === undefined
+    ? makeExo('Filesystem', FilesystemInterface, methods)
+    : makeFilesystem(methods, posture);
 };
 
 /**
@@ -370,7 +375,7 @@ const makeCachingDirectory = (
       if (method === undefined) {
         return 'Directory (CAS-cached).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
   wrapperToInner.set(exo, dir);
@@ -485,7 +490,7 @@ const makeCachingFile = (file, cachedQid, cas, populateInBackground) => {
       if (method === undefined) {
         return 'File (CAS-cached).';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };
@@ -623,7 +628,7 @@ const makeCachingOpenFile = (
       if (method === undefined) {
         return 'OpenFile (CAS-cached). `read` consults the CAS; other methods pass through.';
       }
-      return `No documentation for method ${q(method)}.`;
+      return `No documentation available for method ${q(method)}.`;
     },
   });
 };

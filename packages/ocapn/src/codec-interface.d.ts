@@ -22,7 +22,7 @@ export type TypeAndMaybeValue =
   | { type: 'boolean'; value: boolean }
   | { type: 'float64'; value: number }
   | { type: 'integer'; value: bigint }
-  | { type: 'bytestring'; value: ArrayBufferLike }
+  | { type: 'bytestring'; value: Uint8Array }
   | { type: 'string'; value: string }
   | { type: 'selector'; value: string }
   | { type: 'null'; value: null }
@@ -38,7 +38,7 @@ export type TypeAndMaybeValue =
 export type RecordLabelInfo =
   | { type: 'selector'; value: string }
   | { type: 'string'; value: string }
-  | { type: 'bytestring'; value: ArrayBufferLike };
+  | { type: 'bytestring'; value: Uint8Array };
 
 /**
  * Common interface for OCapN readers (decoders).
@@ -52,7 +52,7 @@ export interface OcapnReader {
   readInteger(): bigint;
   readFloat64(): number;
   readString(): string;
-  readBytestring(): ArrayBufferLike;
+  readBytestring(): Uint8Array;
   readSelectorAsString(): string;
 
   peekTypeHint(): TypeHint;
@@ -88,7 +88,7 @@ export interface OcapnWriter {
   writeInteger(value: bigint): void;
   writeFloat64(value: number): void;
   writeString(value: string): void;
-  writeBytestring(value: ArrayBufferLike): void;
+  writeBytestring(value: Uint8Array): void;
   writeSelectorFromString(value: string): void;
 
   enterRecord(elementCount?: number): void;

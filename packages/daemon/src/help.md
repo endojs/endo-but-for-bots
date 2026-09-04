@@ -332,6 +332,14 @@ A host has all guest capabilities plus:
 - Store blobs and values
 - Make unconfined or bundled caplets
 - Manage network peers
+- Manage secret blobs through `@secrets` without revealing them in inventory
+
+`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are management
+facets on the daemon's root host only; a host made with provideHost does not
+carry `@secrets`.
+Created read capabilities are bound beneath the ordinary `secrets` directory.
+Prefer endowing a formula with a secret capability instead of calling its
+`readBase64()` method in an agent session.
 
 Use help("methodName") for details on specific methods.
 
@@ -719,12 +727,36 @@ Example: lookup(["assets", "style.css"]) → EndoReadable
 
 # EndoMount - Live mutable access to a filesystem directory.
 
+Paths: an array is a sequence of segments (["src", "foo.js"]); a plain
+string is a SINGLE name — segments must not contain "/", so
+readText("src/foo.js") is rejected. entry("src/foo.js") is the one method
+that splits a slash-joined string; its token works anywhere a path does.
+
 All paths are confined to the mount root. Symlinks that escape
 the root are invisible. Use readOnly() for an attenuated view.
+
+Well-known credential and configuration names (such as .ssh, .aws,
+.env, and .gnupg) are restricted: naming one in a path throws
+"Access denied", and list() and followNameChanges() omit them.
+Matching is case-insensitive. Ordinary dotfiles like .gitignore stay
+accessible. The set can be replaced when the mount is created.
 
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
+
+## kind() -> "directory"
+
+Return the structural kind of this lookup result.
+Use this before choosing directory-only or file-only methods.
+
+## entry(path) -> EndoMountEntry
+
+Mint a path token for this mount.
+path: string | string[] — The one mount API where a string is slash-joined:
+entry("dir/file.txt") splits on "/" into segments; an array of segments is
+also accepted.
+Pass the token to any path-taking method: readText(entry("src/foo.js")).
 
 ## has(...pathSegments | entry) -> Promise<boolean>
 
@@ -738,45 +770,93 @@ Each argument is one path segment: list("subdir").
 Call with no arguments to list the root.
 Entries with symlinks escaping the mount root are excluded.
 
+## glob(pattern) -> Promise<string[]>
+
+Recursively enumerate paths matching a glob pattern, relative to this mount face.
+pattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.
+`*` matches zero or more characters within one segment (never `/`, and it does match
+leading-dot names); `**` as a whole segment matches zero or more directory levels,
+and a trailing `**` additionally matches file descendants, not only directories.
+Every other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
+Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
+Entries whose symlinks escape the mount root are excluded. Results include
+directories as well as files, are sorted by UTF-16 code unit, and are capped at
+10,000 with silent truncation.
+Example: glob("**/*.js") → all JavaScript files at any depth.
+Example: glob("src/*") → the immediate children of src.
+
+## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
+
+Search file contents for a regular expression across selected files.
+pattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.
+paths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose
+the two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of
+paths (the promise is awaited for you). Omit it to search every file under the mount face.
+options.maxResults: number — Cap on the number of match records (default 1000).
+Each matching line yields one { file, line, text } record: file is the mount-face-relative
+path, line is 1-based, and text is the whole line with any trailing carriage return stripped
+(CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot
+be read is skipped silently.
+Example: grep("TODO", glob("src/**/*.js")) → every TODO line under src.
+Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+
+## glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>
+
+Fused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.
+glob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.
+grep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.
+Both patterns are required, so the whole operation is one call whose two patterns a native filesystem
+layer can push down and fuse into a single enumerate-and-scan pass. It returns the same
+{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
+options.maxResults: number — Cap on the number of match records (default 1000).
+glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
+Example: glorp("src/**/*.js", "TODO") → every TODO line under src.
+
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 
 Resolve a path within the mount.
-path: string | string[] — Name or path segments.
+path: string | string[] | EndoMountEntry — A string is one segment; an array
+is a sequence of segments. For a slash-joined nested path, use
+lookup(entry("dir/file.txt")) or pass lookup(["dir", "file.txt"]).
 Returns EndoMount for directories, EndoMountFile for files.
 
 ## readText(path) -> Promise<string>
 
 Read a file as UTF-8 text.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a
+slash-joined string is rejected (see entry()).
 Throws if the file does not exist.
 
 ## maybeReadText(path) -> Promise<string | undefined>
 
 Read a file as UTF-8 text, returning undefined if missing.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a
+slash-joined string is rejected (see entry()).
 
 ## writeText(path, content) -> Promise<void>
 
 Write UTF-8 text to a file at the given path.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a
+slash-joined string is rejected (see entry()).
 content: string — Text content to write.
 Creates parent directories as needed. Throws if read-only.
 
 ## remove(path) -> Promise<void>
 
 Remove a file or empty directory.
-path: string | string[] — Name or path segments.
+path: string | string[] — One segment, or an array of segments; a
+slash-joined string is rejected (see entry()).
 
 ## move(from, to) -> Promise<void>
 
 Rename an entry within the mount.
-from: string | string[] — Source name or path segments.
-to: string | string[] — Destination name or path segments.
+from, to: string | string[] — One segment, or an array of segments; a
+slash-joined string is rejected (see entry()).
 
 ## makeDirectory(path) -> Promise<EndoMount>
 
 Create a directory (and missing parents) at the given path; returns a sub-mount.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).
 
 ## followNameChanges(...pathSegments) -> AsyncIterator
 
@@ -790,13 +870,13 @@ Releases the underlying OS watcher when the iterator is dropped.
 ## makeFile(path, content?) -> Promise<void>
 
 Create a file at the given path, with optional initial text content.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).
 content: string (optional) — Initial text content. An existing file is truncated when content is provided. For binary content, use `write(path, readableBlob)`.
 
 ## write(path, value) -> Promise<void>
 
 Materialize a ReadableBlob or ReadableTree at the given path.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).
 value: ReadableBlob | ReadableTree — Source remotable; blobs are written as bytes, trees recurse.
 
 ## copy(from, to) -> Promise<void>
@@ -809,7 +889,7 @@ Both endpoints are confinement-checked.
 ## stat(path) -> Promise<EndoMountStat | undefined>
 
 Query metadata for a path within the mount.
-path: string | string[] | EndoMountEntry — Name, path segments, or mount entry.
+path: string | string[] | EndoMountEntry — One segment, an array of segments, or a mount entry; a slash-joined string is rejected (see entry()).
 Returns undefined when the path is missing or escapes the mount.
 
 ## readOnly() -> ReadableTree
@@ -826,11 +906,21 @@ Capture current state as an immutable readable-tree.
 A live, host-backed file. Read it with text() / json() / streamBase64(),
 inspect and range-read it with getInfo() / fetch(), write it with
 writeText() / append() / writeBytes(), or snapshot() it into the content
-store. stat() returns the bigint-nanosecond metadata record.
+store. kind() returns "file" and stat() returns the bigint-nanosecond metadata
+record.
 
 ## help(methodName?) -> string
 
 Get documentation for this interface or a specific method.
+
+## kind() -> "file"
+
+Return the structural kind of this lookup result.
+
+## list() -> never
+
+Not available on a file.
+Use text() to read its contents.
 
 ## getInfo() -> Promise<{ algorithm, hash, size }>
 

@@ -1,7 +1,7 @@
 // @ts-check
 /// <reference types="ses"/>
 
-/* global globalThis */
+/** @import { Credentials, GetApiKey } from './types.js' */
 
 // TODO(secure): the credentials provider built below reads whatever record it
 // is handed. The default record is the ambient process environment, which is
@@ -31,22 +31,6 @@ harden(getAmbientEnv);
  */
 const nonEmptyString = value =>
   typeof value === 'string' && value.length > 0 ? value : undefined;
-
-/**
- * @typedef {object} Credentials
- * @property {(name: string) => string | undefined} get Resolve a named secret
- *   (an environment-variable name today) to its value, or `undefined` when it
- *   is unset or empty.
- */
-
-/**
- * The single signature for a pi-agent-core `getApiKey` hook: given a provider
- * name, resolve its API key (synchronously or asynchronously), or `undefined`
- * when none is available. Every consumer that wires `getApiKey` references this
- * typedef rather than re-declaring the inline shape.
- *
- * @typedef {(provider: string) => Promise<string | undefined> | string | undefined} GetApiKey
- */
 
 /**
  * Build an environment-backed credentials provider — the harness's one choke

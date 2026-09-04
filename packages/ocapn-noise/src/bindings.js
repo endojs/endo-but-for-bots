@@ -11,7 +11,7 @@ import harden from '@endo/harden';
 /**
  * @typedef {object} OcapnSessionCryptographyOptions
  * @property {WebAssembly.Module} wasmModule - The compiled WASM module
- * @property {(array: Uint8Array) => void} getRandomValues - Function to fill array with random values
+ * @property {(array: Uint8Array<ArrayBuffer>) => void} getRandomValues - Function to fill array with random values
  * @property {SigningKeys} [signingKeys] - Optional pre-generated signing keys
  * @property {number[]} [supportedEncodings] - Array of supported encoding versions (default: [0])
  */

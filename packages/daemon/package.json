@@ -27,12 +27,14 @@
       "types": "./types.d.ts",
       "default": "./index.js"
     },
+    "./iroh.js": "./src/networks/iroh.js",
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
     "./src/interfaces.js": "./src/interfaces.js",
     "./src/mount.js": "./src/mount.js",
-    "./src/daemon-node-powers.js": "./src/daemon-node-powers.js",
+    "./src/hashline.js": "./src/hashline.js",
+    "./src/manager-node-powers.js": "./src/manager-node-powers.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -40,6 +42,7 @@
     "prepack": "git clean -fX -e node_modules/ && tsc --build tsconfig.build.json",
     "postpack": "git clean -fX -e node_modules/",
     "cover": "c8 ava --config test/_ava-ses.config.js",
+    "generate:help": "node scripts/generate-help-text-data.mjs",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
@@ -51,7 +54,8 @@
     "test:rust": "ENDO_BIN=../../target/release/endor ENDO_WORKER_BIN='../../target/release/endor worker' ava",
     "test:rust-node-workers": "ENDO_BIN=../../target/release/endor ENDO_WORKER_BIN='../../target/release/endor worker' ENDO_NODE_WORKER_BIN='node src/bus-worker-node-raw.js' ava",
     "test:rust-node-manager": "ENDO_MANAGER_NODE=1 ENDO_BIN=../../target/release/endor ENDO_WORKER_BIN='../../target/release/endor worker' ENDO_NODE_WORKER_BIN='node src/bus-worker-node-raw.js' ava",
-    "test:supervisors": "yarn test:go && yarn test:rust"
+    "test:supervisors": "yarn test:go && yarn test:rust",
+    "test:types": "tsc --project tsconfig.test-types.json"
   },
   "dependencies": {
     "@endo/base64": "workspace:^",
@@ -59,22 +63,27 @@
     "@endo/cancel": "workspace:^",
     "@endo/captp": "workspace:^",
     "@endo/compartment-mapper": "workspace:^",
+    "@endo/crc32": "workspace:^",
     "@endo/daemon-cas": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/exo-git": "workspace:^",
+    "@endo/exo-http-client": "workspace:^",
     "@endo/exo-shell": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/helpdown": "workspace:^",
     "@endo/hex": "workspace:^",
     "@endo/host-spawner": "workspace:^",
     "@endo/import-bundle": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/netstring": "workspace:^",
+    "@endo/ocapn": "workspace:^",
+    "@endo/ocapn-noise": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
@@ -83,22 +92,25 @@
     "@endo/stream": "workspace:^",
     "@endo/stream-node": "workspace:^",
     "@endo/tar": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "@endo/where": "workspace:^",
     "@endo/zip": "workspace:^",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^12.0.0",
     "ses": "workspace:^",
-    "ws": "^8.13.0"
+    "ws": "^8.21.3"
   },
   "optionalDependencies": {
-    "@number0/iroh": "^1.0.0"
+    "@number0/iroh": "^1.1.0"
   },
   "devDependencies": {
     "@endo/bundle-source": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@endo/sha256": "workspace:^",
     "@types/ws": "^8.18.1",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -114,11 +126,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/daemon"
-    ]
   },
   "ava": {
     "files": [

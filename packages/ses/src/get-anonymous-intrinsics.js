@@ -16,7 +16,6 @@ import {
   globalThis,
   assign,
   AsyncGeneratorFunctionInstance,
-  ArrayBuffer,
 } from './commons.js';
 import { InertCompartment } from './compartment.js';
 
@@ -54,7 +53,6 @@ export const getAnonymousIntrinsics = () => {
 
   // 21.1.5.2 The %StringIteratorPrototype% Object
 
-  // eslint-disable-next-line no-new-wrappers
   const StringIteratorObject = iterateString(new String());
   const StringIteratorPrototype = getPrototypeOf(StringIteratorObject);
 
@@ -66,7 +64,6 @@ export const getAnonymousIntrinsics = () => {
 
   // 22.1.5.2 The %ArrayIteratorPrototype% Object
 
-  // eslint-disable-next-line no-array-constructor
   const ArrayIteratorObject = iterateArray([]);
   const ArrayIteratorPrototype = getPrototypeOf(ArrayIteratorObject);
 
@@ -156,6 +153,16 @@ export const getAnonymousIntrinsics = () => {
     );
   }
 
+  if (typeof globalThis.URLSearchParams === 'function') {
+    // The URLSearchParams iterator prototype has no name on the global; it is
+    // reachable only by walking an instance. Sample it so the whitelist pass
+    // and harden reach it, mirroring `%ArrayIteratorPrototype%`.
+    intrinsics['%URLSearchParamsIteratorPrototype%'] = getPrototypeOf(
+      // eslint-disable-next-line @endo/no-polymorphic-call
+      new globalThis.URLSearchParams().entries(),
+    );
+  }
+
   if (globalThis.AsyncIterator) {
     intrinsics['%AsyncIteratorHelperPrototype%'] = getPrototypeOf(
       // eslint-disable-next-line @endo/no-polymorphic-call
@@ -165,15 +172,6 @@ export const getAnonymousIntrinsics = () => {
       // eslint-disable-next-line @endo/no-polymorphic-call
       globalThis.AsyncIterator.from({ next() {} }),
     );
-  }
-
-  const ab = new ArrayBuffer(0);
-  // eslint-disable-next-line @endo/no-polymorphic-call
-  const iab = ab.sliceToImmutable();
-  const iabProto = getPrototypeOf(iab);
-  if (iabProto !== ArrayBuffer.prototype) {
-    // In a native implementation, these will be the same prototype
-    intrinsics['%ImmutableArrayBufferPrototype%'] = iabProto;
   }
 
   return intrinsics;

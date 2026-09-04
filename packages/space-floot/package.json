@@ -33,17 +33,9 @@
   },
   "dependencies": {
     "@endo/harden": "workspace:^",
-    "preact": "^10.29.2"
+    "preact": "^10.29.8"
   },
   "devDependencies": {
     "eslint": "catalog:dev"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ],
-    "env": {
-      "browser": true
-    }
   }
 }

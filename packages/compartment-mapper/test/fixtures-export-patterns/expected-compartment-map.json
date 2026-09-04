@@ -1,0 +1,28 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "#internal/util.js": {
+          "link": "app"
+        },
+        "./lib/util.js": {
+          "language": "js"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./src/x/foo/y/bar/z.js": {
+          "language": "js"
+        },
+        "app/x/foo/y/bar/z.js": {
+          "link": "app"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/main.js",
+  "entryCompartment": "app",
+  "entryModule": "./main.js",
+  "fixture": "fixtures-export-patterns",
+  "oracle": "node"
+}

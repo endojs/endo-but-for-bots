@@ -1,6 +1,5 @@
 // @ts-check
 /* eslint-disable no-await-in-loop */
-/* global setTimeout */
 /**
  * Regression tests for the post-migration audit fixes.
  *
@@ -24,6 +23,30 @@ import { readOnly } from '../src/fs/extended/readonly.js';
 import { makeMemoryCas } from '../src/fs/extended/cas.js';
 import { withCachedReads } from '../src/fs/extended/cached-fs.js';
 import { chroot } from '../src/fs/extended/compose.js';
+
+/**
+ * @import { Directory, File } from '../src/fs/extended/types.js'
+ */
+
+// `Directory.lookup` reports `Directory | File`; these tests know which kind
+// they created, so they narrow at the call site rather than duck-typing the
+// result.
+
+/**
+ * @param {any} dirRef
+ * @param {string | string[]} nameOrPath
+ * @returns {Promise<File>}
+ */
+const lookupFile = (dirRef, nameOrPath) =>
+  /** @type {Promise<File>} */ (E(dirRef).lookup(nameOrPath));
+
+/**
+ * @param {any} dirRef
+ * @param {string | string[]} nameOrPath
+ * @returns {Promise<Directory>}
+ */
+const lookupDirectory = (dirRef, nameOrPath) =>
+  /** @type {Promise<Directory>} */ (E(dirRef).lookup(nameOrPath));
 
 const utf8 = s => new TextEncoder().encode(s);
 const fromUtf8 = b => new TextDecoder().decode(b);
@@ -133,10 +156,10 @@ const makeStubBackend = opts => {
 test('rename fires child-removed on src parent and child-added on dst parent', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  await E(root).mkdir('a', {});
-  await E(root).mkdir('b', {});
-  const subA = await E(root).lookup('a');
-  const subB = await E(root).lookup('b');
+  await E(root).mkdir('a');
+  await E(root).mkdir('b');
+  const subA = await lookupDirectory(root, 'a');
+  const subB = await lookupDirectory(root, 'b');
   const oh = await E(subA).create('thing', {});
   await E(oh).close();
 
@@ -241,7 +264,7 @@ test('File.write({}) throws ENOSYS when backend lacks setStat (no silent tail-le
   await writeBytes(await E(oh).write(0n), utf8('0123456789'));
   await E(oh).close();
 
-  const file = await E(root).lookup('w');
+  const file = await lookupFile(root, 'w');
   // File.write() with no opts is the whole-file overwrite porcelain;
   // without backend.setStat we can't truncate the tail. Must throw
   // at call time (before the caller pushes any bytes into a sink
@@ -283,7 +306,7 @@ test('File.write({offset}) (pwrite) still works without setStat', async t => {
   const oh = await E(root).create('w', {});
   await writeBytes(await E(oh).write(0n), utf8('AAAAAAAAAA'));
   await E(oh).close();
-  const file = await E(root).lookup('w');
+  const file = await lookupFile(root, 'w');
   // pwrite at offset 2 should succeed even without setStat.
   await writeBytes(await E(file).write({ offset: 2n }), utf8('XX'));
   const bytes = await drainReader(await E(file).read());
@@ -342,7 +365,7 @@ test('File.setStat({size, mtime}) preserves the caller-supplied mtime (no touch 
   await writeBytes(await E(oh).write(0n), utf8('hello'));
   await E(oh).close();
 
-  const file = await E(root).lookup('clobber.txt');
+  const file = await lookupFile(root, 'clobber.txt');
   const explicit = 12_345n; // some explicit ns-since-epoch timestamp
   await E(file).setStat({ size: 3n, mtime: explicit });
 
@@ -363,7 +386,7 @@ test('OpenFile.read updates atime; OpenFile.write updates mtime', async t => {
   await writeBytes(await E(oh0).write(0n), utf8('initial'));
   await E(oh0).close();
 
-  const file = await E(root).lookup('touchy.txt');
+  const file = await lookupFile(root, 'touchy.txt');
   const baseline = await E(file).getAttrs();
 
   // Force a clock tick — wall-clock granularity on some hosts is
@@ -424,7 +447,7 @@ test('wrap-backend prefers backend.getStat over the vat-local stat table', async
   await writeBytes(await E(oh).write(0n), utf8('hello'));
   await E(oh).close();
 
-  const file = await E(root).lookup('tagged');
+  const file = await lookupFile(root, 'tagged');
   const stat = await E(file).getStat();
   t.is(stat.mtime, explicitMtime, 'should use backend.getStat mtime');
   t.is(stat.atime, explicitAtime, 'should use backend.getStat atime');
@@ -439,11 +462,11 @@ test('Directory.remove cleans up xattr / stat table entries', async t => {
   const oh = await E(root).create('ghost', {});
   await writeBytes(await E(oh).write(0n), utf8('alive'));
   await E(oh).close();
-  const file = await E(root).lookup('ghost');
+  const file = await lookupFile(root, 'ghost');
 
   // Set an xattr.
   await writeBytes(
-    await E(await E(file).xattrs()).set('user.tag', {}),
+    await E(await E(file).xattrs()).set('user.tag'),
     utf8('ghost-tag'),
   );
 
@@ -454,7 +477,7 @@ test('Directory.remove cleans up xattr / stat table entries', async t => {
   const oh2 = await E(root).create('ghost', {});
   await writeBytes(await E(oh2).write(0n), utf8('reborn'));
   await E(oh2).close();
-  const file2 = await E(root).lookup('ghost');
+  const file2 = await lookupFile(root, 'ghost');
 
   // The new file should NOT inherit the predecessor's xattr.
   const xattrs2 = await E(file2).xattrs();
@@ -471,16 +494,16 @@ test('Directory.rename moves xattr / stat table entries to the new path', async 
   const oh = await E(root).create('alpha', {});
   await writeBytes(await E(oh).write(0n), utf8('content'));
   await E(oh).close();
-  const before = await E(root).lookup('alpha');
+  const before = await lookupFile(root, 'alpha');
   await writeBytes(
-    await E(await E(before).xattrs()).set('user.tag', {}),
+    await E(await E(before).xattrs()).set('user.tag'),
     utf8('preserved'),
   );
 
   await E(root).rename('alpha', root, 'beta');
 
   // Xattr should now be readable on the new path.
-  const renamed = await E(root).lookup('beta');
+  const renamed = await lookupFile(root, 'beta');
   const back = await drainReader(
     await E(await E(renamed).xattrs()).get('user.tag'),
   );
@@ -520,7 +543,7 @@ test('Node.watch() events stream closes when the watched path is removed', async
   await writeBytes(await E(oh).write(0n), utf8('initial'));
   await E(oh).close();
 
-  const file = await E(root).lookup('watched');
+  const file = await lookupFile(root, 'watched');
   const watcher = await E(file).watch();
   const eventsP = E(watcher).events();
 
@@ -544,7 +567,7 @@ test('Node.watch() events stream closes when the watched path is renamed away', 
   await writeBytes(await E(oh).write(0n), utf8('content'));
   await E(oh).close();
 
-  const file = await E(root).lookup('alpha');
+  const file = await lookupFile(root, 'alpha');
   const watcher = await E(file).watch();
   const eventsP = E(watcher).events();
 
@@ -567,7 +590,7 @@ test('readOnly wrapper forwards File.read and denies File.write', async t => {
 
   const ro = readOnly(fs);
   const roRoot = await E(ro).root();
-  const roFile = await E(roRoot).lookup('payload');
+  const roFile = await lookupFile(roRoot, 'payload');
 
   // read porcelain works through the attenuator.
   const bytes = await drainReader(await E(roFile).read());
@@ -580,15 +603,15 @@ test('readOnly wrapper forwards File.read and denies File.write', async t => {
 test('chroot wrapper exposes File.read porcelain via wrapped File caps', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  await E(root).makeDirectory('sub', {});
-  const sub = await E(root).lookup('sub');
+  await E(root).makeDirectory('sub');
+  const sub = await lookupDirectory(root, 'sub');
   const oh = await E(sub).create('inner', {});
   await writeBytes(await E(oh).write(0n), utf8('chrooted'));
   await E(oh).close();
 
   const view = chroot(fs, ['sub']);
   const viewRoot = await E(view).root();
-  const viewFile = await E(viewRoot).lookup('inner');
+  const viewFile = await lookupFile(viewRoot, 'inner');
   const bytes = await drainReader(await E(viewFile).read());
   t.is(fromUtf8(bytes), 'chrooted');
 });
@@ -602,7 +625,7 @@ test('withCachedReads wrapper forwards File.read and File.write porcelain', asyn
 
   const cached = withCachedReads(fs, makeMemoryCas());
   const cachedRoot = await E(cached).root();
-  const cachedFile = await E(cachedRoot).lookup('blob');
+  const cachedFile = await lookupFile(cachedRoot, 'blob');
 
   const beforeBytes = await drainReader(await E(cachedFile).read());
   t.is(fromUtf8(beforeBytes), 'original');
@@ -617,8 +640,8 @@ test('withCachedReads wrapper forwards File.read and File.write porcelain', asyn
 test('Directory.getAttrs() throws ENOENT on a removed path', async t => {
   const fs = makeInMemoryFilesystem();
   const root = await E(fs).root();
-  await E(root).makeDirectory('doomed', {});
-  const dir = await E(root).lookup('doomed');
+  await E(root).makeDirectory('doomed');
+  const dir = await lookupDirectory(root, 'doomed');
   await E(root).remove('doomed');
 
   await t.throwsAsync(() => E(dir).getAttrs(), { message: /ENOENT/ });

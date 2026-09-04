@@ -6,19 +6,39 @@
  * Implements the OCapN CBOR encoding specification, validating canonical
  * encoding for signature verification.
  *
+ * The RFC 8949 head grammar, byte/text strings, tags, floats, simple values,
+ * and bignums are the shared canonical subset now provided by `@endo/cbor`
+ * (see designs/cbor-codec.md); this module retains only the OCapN-specific
+ * policy layer: the `CborReader` class implementing the `OcapnReader` interface
+ * (structure stack, record labels, `peekTypeHint` type-hinting), the
+ * immutability conversion on byte strings, and selector tag 280 / record tag 27
+ * handling. `@endo/cbor`'s readers are strict — they reject non-minimal heads
+ * and non-minimal bignum payloads — so this decoder no longer accepts
+ * non-canonical encodings the previous hand-rolled reader tolerated.
+ *
  * See docs/cbor-encoding.md for the specification.
  */
 
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 
-import { BufferReader } from '../syrup/buffer-reader.js';
+import {
+  makeCborReader as makeCborReaderState,
+  readArrayHeader,
+  readBignum,
+  readBoolean,
+  readByteString,
+  readFloat64,
+  readHead,
+  readMapHeader,
+  readTag,
+  readTextString,
+  peekHead,
+} from '@endo/cbor';
 
 /**
  * @import { OcapnReader, TypeHint, RecordLabelInfo, TypeAndMaybeValue } from '../codec-interface.js'
+ * @import { CborReader as CborReaderState } from '@endo/cbor'
  */
-
-const textDecoder = new TextDecoder('utf-8', { fatal: true });
-const { freeze } = Object;
 
 // CBOR Major Types (3 most significant bits)
 // Major types 0 and 1 (unsigned/negative) are not used directly
@@ -30,12 +50,8 @@ const MAJOR_MAP = 5;
 const MAJOR_TAG = 6;
 const MAJOR_FLOAT_SIMPLE = 7;
 
-// CBOR Additional Info values
-const AI_1BYTE = 24;
-const AI_2BYTE = 25;
-const AI_4BYTE = 26;
+// CBOR Additional Info value for an 8-byte argument (a float64 head).
 const AI_8BYTE = 27;
-const AI_INDEFINITE = 31;
 
 // CBOR Simple Values (Major 7)
 const SIMPLE_FALSE = 20;
@@ -43,22 +59,31 @@ const SIMPLE_TRUE = 21;
 const SIMPLE_NULL = 22;
 const SIMPLE_UNDEFINED = 23;
 
-// CBOR Tags used in OCapN
+// CBOR Tags used in OCapN. Kept as bigints for the cross-module contract with
+// the codec layer, which compares against these exact values.
 const TAG_UNSIGNED_BIGNUM = 2n;
 const TAG_NEGATIVE_BIGNUM = 3n;
 const TAG_RECORD = 27n;
 const TAG_SYMBOL = 280n;
 const TAG_TAGGED_VALUE = 55_799n;
 
-// Canonical NaN representation
-const CANONICAL_NAN = freeze([0x7f, 0xf8, 0, 0, 0, 0, 0, 0]);
-
 /**
- * Parse the major type and additional info from a type byte
- * @param {number} byte
+ * Peek the major type and additional-info nibble of the next initial byte,
+ * without consuming it or reading any argument bytes. Unlike `@endo/cbor`'s
+ * `peekHead`, this stays at the single byte: a `float64` head is not read as an
+ * 8-byte argument, so it is safe to probe a type category before deciding how
+ * to read it. Retained OCapN policy per the design's "what stays" table.
+ *
+ * @param {CborReaderState} reader
  * @returns {{major: number, info: number}}
  */
-function parseTypeByte(byte) {
+function peekTypeByte(reader) {
+  if (reader.index >= reader.bytes.length) {
+    throw new Error(
+      `Unexpected end of CBOR input at index ${reader.index} of ${reader.name}`,
+    );
+  }
+  const byte = reader.bytes[reader.index];
   return {
     // eslint-disable-next-line no-bitwise
     major: byte >> 5,
@@ -68,256 +93,37 @@ function parseTypeByte(byte) {
 }
 
 /**
- * Read the "argument" (length/value) from additional info
- * @param {BufferReader} reader
- * @param {number} info - Additional info from type byte
- * @param {string} name - Reader name for errors
- * @returns {bigint}
- */
-function readArgument(reader, info, name) {
-  if (info < 24) {
-    return BigInt(info);
-  }
-  if (info === AI_1BYTE) {
-    return BigInt(reader.readUint8());
-  }
-  if (info === AI_2BYTE) {
-    return BigInt(reader.readUint16(false)); // big-endian
-  }
-  if (info === AI_4BYTE) {
-    return BigInt(reader.readUint32(false)); // big-endian
-  }
-  if (info === AI_8BYTE) {
-    // Read 8 bytes as bigint
-    const high = BigInt(reader.readUint32(false));
-    const low = BigInt(reader.readUint32(false));
-    // eslint-disable-next-line no-bitwise
-    return (high << 32n) | low;
-  }
-  if (info === AI_INDEFINITE) {
-    throw new Error(
-      `Indefinite length not supported in OCapN CBOR at index ${reader.index} of ${name}`,
-    );
-  }
-  throw new Error(
-    `Invalid additional info ${info} at index ${reader.index} of ${name}`,
-  );
-}
-
-/**
- * Read a CBOR byte string
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {ArrayBufferLike}
- */
-function readBytestring(reader, name) {
-  const byte = reader.readByte();
-  const { major, info } = parseTypeByte(byte);
-  if (major !== MAJOR_BYTESTRING) {
-    throw new Error(
-      `Expected byte string (major 2), got major ${major} at index ${reader.index - 1} of ${name}`,
-    );
-  }
-  const length = Number(readArgument(reader, info, name));
-  const bytes = reader.read(length);
-  return bytesToImmutable(bytes);
-}
-
-/**
- * Read a CBOR text string
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {string}
- */
-function readString(reader, name) {
-  const byte = reader.readByte();
-  const { major, info } = parseTypeByte(byte);
-  if (major !== MAJOR_TEXTSTRING) {
-    throw new Error(
-      `Expected text string (major 3), got major ${major} at index ${reader.index - 1} of ${name}`,
-    );
-  }
-  const length = Number(readArgument(reader, info, name));
-  const bytes = reader.read(length);
-  return textDecoder.decode(bytes);
-}
-
-/**
- * Read a CBOR boolean
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {boolean}
- */
-function readBoolean(reader, name) {
-  const byte = reader.readByte();
-  const { major, info } = parseTypeByte(byte);
-  if (major !== MAJOR_FLOAT_SIMPLE) {
-    throw new Error(
-      `Expected boolean (major 7), got major ${major} at index ${reader.index - 1} of ${name}`,
-    );
-  }
-  if (info === SIMPLE_TRUE) {
-    return true;
-  }
-  if (info === SIMPLE_FALSE) {
-    return false;
-  }
-  throw new Error(
-    `Expected boolean (20 or 21), got simple value ${info} at index ${reader.index - 1} of ${name}`,
-  );
-}
-
-/**
- * Convert big-endian bytes to bigint
- * @param {Uint8Array} bytes
- * @returns {bigint}
- */
-function bytesToBigint(bytes) {
-  if (bytes.length === 0) {
-    return 0n;
-  }
-  let result = 0n;
-  for (const byte of bytes) {
-    // eslint-disable-next-line no-bitwise
-    result = (result << 8n) | BigInt(byte);
-  }
-  return result;
-}
-
-/**
- * Read a CBOR tag
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {bigint}
- */
-function readTag(reader, name) {
-  const byte = reader.readByte();
-  const { major, info } = parseTypeByte(byte);
-  if (major !== MAJOR_TAG) {
-    throw new Error(
-      `Expected tag (major 6), got major ${major} at index ${reader.index - 1} of ${name}`,
-    );
-  }
-  return readArgument(reader, info, name);
-}
-
-/**
- * Read a CBOR integer (as bignum with Tag 2 or 3)
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {bigint}
- */
-function readInteger(reader, name) {
-  const start = reader.index;
-  const tag = readTag(reader, name);
-
-  if (tag === TAG_UNSIGNED_BIGNUM) {
-    const bytes = readBytestring(reader, name);
-    const uint8 = new Uint8Array(bytes.slice());
-    return bytesToBigint(uint8);
-  }
-
-  if (tag === TAG_NEGATIVE_BIGNUM) {
-    const bytes = readBytestring(reader, name);
-    const uint8 = new Uint8Array(bytes.slice());
-    const magnitude = bytesToBigint(uint8);
-    return -1n - magnitude;
-  }
-
-  throw new Error(
-    `Expected bignum tag (2 or 3), got tag ${tag} at index ${start} of ${name}`,
-  );
-}
-
-/**
- * Read a float64 value, validating canonical NaN
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {number}
- */
-function readFloat64(reader, name) {
-  const start = reader.index;
-  const byte = reader.readByte();
-  const { major, info } = parseTypeByte(byte);
-
-  if (major !== MAJOR_FLOAT_SIMPLE || info !== AI_8BYTE) {
-    throw new Error(
-      `Expected float64 (major 7, info 27), got major ${major}, info ${info} at index ${start} of ${name}`,
-    );
-  }
-
-  const floatStart = reader.index;
-  const value = reader.readFloat64(false); // big-endian
-
-  // Validate canonical zero
-  if (value === 0) {
-    // Check it's not negative zero encoded non-canonically
-    // Both +0 and -0 have specific bit patterns that are allowed
-  }
-
-  // Validate canonical NaN
-  if (Number.isNaN(value)) {
-    // @ts-expect-error CANONICAL_NAN is a frozen array
-    if (!reader.matchAt(floatStart, CANONICAL_NAN)) {
-      throw new Error(`Non-canonical NaN at index ${floatStart} of ${name}`);
-    }
-  }
-
-  return value;
-}
-
-/**
- * Read a symbol (Tag 280 + text string)
- * @param {BufferReader} reader
- * @param {string} name
- * @returns {string}
- */
-function readSelectorAsString(reader, name) {
-  const start = reader.index;
-  const tag = readTag(reader, name);
-
-  if (tag !== TAG_SYMBOL) {
-    throw new Error(
-      `Expected symbol tag (280), got tag ${tag} at index ${start} of ${name}`,
-    );
-  }
-
-  return readString(reader, name);
-}
-
-/**
- * Peek at the type byte without consuming it
- * @param {BufferReader} reader
- * @returns {{major: number, info: number}}
- */
-function peekType(reader) {
-  const byte = reader.peekByte();
-  return parseTypeByte(byte);
-}
-
-/**
- * Peek at a tag value without consuming it
- * @param {BufferReader} reader
- * @param {string} name
+ * Peek at a tag value without consuming it.
+ *
+ * @param {CborReaderState} reader
  * @returns {bigint | null} The tag number, or null if not a tag
  */
-function peekTag(reader, name) {
-  const { major, info } = peekType(reader);
+function peekTag(reader) {
+  const { major } = peekTypeByte(reader);
   if (major !== MAJOR_TAG) {
     return null;
   }
+  // peekHead reads the full (minimal-checked) head and rewinds the cursor.
+  return peekHead(reader).value;
+}
 
-  // Save position
-  const savedIndex = reader.index;
+/**
+ * Read a symbol (Tag 280 + text string).
+ *
+ * @param {CborReaderState} reader
+ * @returns {string}
+ */
+function readSelectorAsString(reader) {
+  const start = reader.index;
+  const tag = readTag(reader);
 
-  // Read the tag
-  reader.readByte(); // consume type byte
-  const tagValue = readArgument(reader, info, name);
+  if (tag !== Number(TAG_SYMBOL)) {
+    throw new Error(
+      `Expected symbol tag (280), got tag ${tag} at index ${start} of ${reader.name}`,
+    );
+  }
 
-  // Restore position
-  reader.index = savedIndex;
-
-  return tagValue;
+  return readTextString(reader);
 }
 
 /**
@@ -333,8 +139,8 @@ function peekTag(reader, name) {
  * @implements {OcapnReader}
  */
 export class CborReader {
-  /** @type {BufferReader} */
-  #bufferReader;
+  /** @type {CborReaderState} */
+  #reader;
 
   /** @type {string} */
   name;
@@ -350,18 +156,18 @@ export class CborReader {
   #stack = [];
 
   /**
-   * @param {BufferReader} bufferReader
+   * @param {CborReaderState} reader
    * @param {object} options
    * @param {string} [options.name]
    */
-  constructor(bufferReader, options = {}) {
+  constructor(reader, options = {}) {
     const { name = '<unknown>' } = options;
     this.name = name;
-    this.#bufferReader = bufferReader;
+    this.#reader = reader;
   }
 
   get index() {
-    return this.#bufferReader.index;
+    return this.#reader.index;
   }
 
   /**
@@ -369,7 +175,7 @@ export class CborReader {
    */
   readBoolean() {
     this.#decrementRemaining();
-    return readBoolean(this.#bufferReader, this.name);
+    return readBoolean(this.#reader);
   }
 
   /**
@@ -377,7 +183,7 @@ export class CborReader {
    */
   readInteger() {
     this.#decrementRemaining();
-    return readInteger(this.#bufferReader, this.name);
+    return readBignum(this.#reader);
   }
 
   /**
@@ -385,7 +191,7 @@ export class CborReader {
    */
   readFloat64() {
     this.#decrementRemaining();
-    return readFloat64(this.#bufferReader, this.name);
+    return readFloat64(this.#reader);
   }
 
   /**
@@ -393,15 +199,16 @@ export class CborReader {
    */
   readString() {
     this.#decrementRemaining();
-    return readString(this.#bufferReader, this.name);
+    return readTextString(this.#reader);
   }
 
   /**
-   * @returns {ArrayBufferLike}
+   * @returns {Uint8Array}
    */
   readBytestring() {
     this.#decrementRemaining();
-    return readBytestring(this.#bufferReader, this.name);
+    // Immutability conversion stays OCapN policy at the class layer.
+    return frozenBytes(readByteString(this.#reader));
   }
 
   /**
@@ -409,7 +216,7 @@ export class CborReader {
    */
   readSelectorAsString() {
     this.#decrementRemaining();
-    return readSelectorAsString(this.#bufferReader, this.name);
+    return readSelectorAsString(this.#reader);
   }
 
   /**
@@ -417,11 +224,11 @@ export class CborReader {
    * @returns {TypeHint}
    */
   peekTypeHint() {
-    const { major, info } = peekType(this.#bufferReader);
+    const { major, info } = peekTypeByte(this.#reader);
 
     // Check for tag first
     if (major === MAJOR_TAG) {
-      const tag = peekTag(this.#bufferReader, this.name);
+      const tag = peekTag(this.#reader);
       if (tag === TAG_UNSIGNED_BIGNUM || tag === TAG_NEGATIVE_BIGNUM) {
         return 'number-prefix'; // Integer encoded as bignum
       }
@@ -453,7 +260,7 @@ export class CborReader {
         return 'dictionary';
       default:
         throw new Error(
-          `Unexpected CBOR major type ${major} at index ${this.#bufferReader.index} of ${this.name}`,
+          `Unexpected CBOR major type ${major} at index ${this.#reader.index} of ${this.name}`,
         );
     }
   }
@@ -466,12 +273,12 @@ export class CborReader {
    * @returns {TypeAndMaybeValue}
    */
   readTypeAndMaybeValue() {
-    const start = this.#bufferReader.index;
-    const { major, info } = peekType(this.#bufferReader);
+    const start = this.#reader.index;
+    const { major, info } = peekTypeByte(this.#reader);
 
     // Handle tags
     if (major === MAJOR_TAG) {
-      const tag = peekTag(this.#bufferReader, this.name);
+      const tag = peekTag(this.#reader);
 
       if (tag === TAG_UNSIGNED_BIGNUM || tag === TAG_NEGATIVE_BIGNUM) {
         const value = this.readInteger();
@@ -484,9 +291,9 @@ export class CborReader {
       }
 
       if (tag === TAG_RECORD) {
-        // Don't consume, let enterRecord handle it
-        this.#bufferReader.readByte(); // consume tag type byte
-        readArgument(this.#bufferReader, info, this.name); // consume tag value
+        // Don't consume the array, let enterRecord handle it; consume just the
+        // tag head.
+        readHead(this.#reader);
         return { type: 'record', value: null };
       }
 
@@ -498,19 +305,19 @@ export class CborReader {
     switch (major) {
       case MAJOR_FLOAT_SIMPLE:
         if (info === SIMPLE_TRUE) {
-          this.#bufferReader.readByte();
+          readHead(this.#reader);
           return { type: 'boolean', value: true };
         }
         if (info === SIMPLE_FALSE) {
-          this.#bufferReader.readByte();
+          readHead(this.#reader);
           return { type: 'boolean', value: false };
         }
         if (info === SIMPLE_NULL) {
-          this.#bufferReader.readByte();
+          readHead(this.#reader);
           return { type: 'null', value: null };
         }
         if (info === SIMPLE_UNDEFINED) {
-          this.#bufferReader.readByte();
+          readHead(this.#reader);
           return { type: 'undefined', value: undefined };
         }
         if (info === AI_8BYTE) {
@@ -553,14 +360,13 @@ export class CborReader {
     // Entering a record counts as one element of the parent structure
     this.#decrementRemaining();
 
-    const start = this.#bufferReader.index;
-    const byte = this.#bufferReader.peekByte();
-    const { major } = parseTypeByte(byte);
+    const start = this.#reader.index;
+    const { major } = peekTypeByte(this.#reader);
 
     // The tag might already be consumed by readTypeAndMaybeValue
     if (major === MAJOR_TAG) {
-      const tag = readTag(this.#bufferReader, this.name);
-      if (tag !== TAG_RECORD) {
+      const tag = readTag(this.#reader);
+      if (tag !== Number(TAG_RECORD)) {
         throw new Error(
           `Expected record tag (27), got tag ${tag} at index ${start} of ${this.name}`,
         );
@@ -568,16 +374,7 @@ export class CborReader {
     }
 
     // Now read the array header
-    const arrayByte = this.#bufferReader.readByte();
-    const { major: arrayMajor, info } = parseTypeByte(arrayByte);
-
-    if (arrayMajor !== MAJOR_ARRAY) {
-      throw new Error(
-        `Expected array after record tag, got major ${arrayMajor} at index ${this.#bufferReader.index - 1} of ${this.name}`,
-      );
-    }
-
-    const length = Number(readArgument(this.#bufferReader, info, this.name));
+    const length = readArrayHeader(this.#reader);
     this.#stack.push({ type: 'record', remaining: length, start });
   }
 
@@ -585,12 +382,12 @@ export class CborReader {
     const entry = this.#stack.pop();
     if (!entry || entry.type !== 'record') {
       throw new Error(
-        `Cannot exit record: not inside a record at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot exit record: not inside a record at index ${this.#reader.index} of ${this.name}`,
       );
     }
     if (entry.remaining !== 0) {
       throw new Error(
-        `Record has ${entry.remaining} remaining elements at index ${this.#bufferReader.index} of ${this.name}`,
+        `Record has ${entry.remaining} remaining elements at index ${this.#reader.index} of ${this.name}`,
       );
     }
   }
@@ -599,7 +396,7 @@ export class CborReader {
     const entry = this.#stack[this.#stack.length - 1];
     if (!entry || entry.type !== 'record') {
       throw new Error(
-        `Cannot peek record end: not inside a record at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot peek record end: not inside a record at index ${this.#reader.index} of ${this.name}`,
       );
     }
     return entry.remaining === 0;
@@ -615,30 +412,30 @@ export class CborReader {
     this.#decrementRemaining();
 
     // In CBOR, record labels are typically symbols (Tag 280)
-    const tag = peekTag(this.#bufferReader, this.name);
+    const tag = peekTag(this.#reader);
 
     if (tag === TAG_SYMBOL) {
       // Use raw function to avoid double-decrement
-      const value = readSelectorAsString(this.#bufferReader, this.name);
+      const value = readSelectorAsString(this.#reader);
       return { type: 'selector', value };
     }
 
     // Could also be a plain string
-    const { major } = peekType(this.#bufferReader);
+    const { major } = peekTypeByte(this.#reader);
     if (major === MAJOR_TEXTSTRING) {
       // Use raw function to avoid double-decrement
-      const value = readString(this.#bufferReader, this.name);
+      const value = readTextString(this.#reader);
       return { type: 'string', value };
     }
 
     if (major === MAJOR_BYTESTRING) {
       // Use raw function to avoid double-decrement
-      const value = readBytestring(this.#bufferReader, this.name);
+      const value = frozenBytes(readByteString(this.#reader));
       return { type: 'bytestring', value };
     }
 
     throw new Error(
-      `Expected record label (symbol, string, or bytestring) at index ${this.#bufferReader.index} of ${this.name}`,
+      `Expected record label (symbol, string, or bytestring) at index ${this.#reader.index} of ${this.name}`,
     );
   }
 
@@ -646,17 +443,10 @@ export class CborReader {
     // Entering a list counts as one element of the parent structure
     this.#decrementRemaining();
 
-    const start = this.#bufferReader.index;
-    const byte = this.#bufferReader.readByte();
-    const { major, info } = parseTypeByte(byte);
-
-    if (major !== MAJOR_ARRAY) {
-      throw new Error(
-        `Expected array (major 4), got major ${major} at index ${start} of ${this.name}`,
-      );
-    }
-
-    const length = Number(readArgument(this.#bufferReader, info, this.name));
+    const start = this.#reader.index;
+    // readArrayHeader rejects a non-array with the same "Expected array
+    // (major 4), got major N at index N of NAME" diagnostic as before.
+    const length = readArrayHeader(this.#reader);
     this.#stack.push({ type: 'list', remaining: length, start });
   }
 
@@ -664,12 +454,12 @@ export class CborReader {
     const entry = this.#stack.pop();
     if (!entry || entry.type !== 'list') {
       throw new Error(
-        `Cannot exit list: not inside a list at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot exit list: not inside a list at index ${this.#reader.index} of ${this.name}`,
       );
     }
     if (entry.remaining !== 0) {
       throw new Error(
-        `List has ${entry.remaining} remaining elements at index ${this.#bufferReader.index} of ${this.name}`,
+        `List has ${entry.remaining} remaining elements at index ${this.#reader.index} of ${this.name}`,
       );
     }
   }
@@ -678,7 +468,7 @@ export class CborReader {
     const entry = this.#stack[this.#stack.length - 1];
     if (!entry || entry.type !== 'list') {
       throw new Error(
-        `Cannot peek list end: not inside a list at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot peek list end: not inside a list at index ${this.#reader.index} of ${this.name}`,
       );
     }
     return entry.remaining === 0;
@@ -688,17 +478,10 @@ export class CborReader {
     // Entering a dictionary counts as one element of the parent structure
     this.#decrementRemaining();
 
-    const start = this.#bufferReader.index;
-    const byte = this.#bufferReader.readByte();
-    const { major, info } = parseTypeByte(byte);
-
-    if (major !== MAJOR_MAP) {
-      throw new Error(
-        `Expected map (major 5), got major ${major} at index ${start} of ${this.name}`,
-      );
-    }
-
-    const length = Number(readArgument(this.#bufferReader, info, this.name));
+    const start = this.#reader.index;
+    // readMapHeader rejects a non-map with the same "Expected map (major 5),
+    // got major N at index N of NAME" diagnostic as before.
+    const length = readMapHeader(this.#reader);
     // For maps, length is number of pairs, so remaining is 2x
     this.#stack.push({ type: 'dictionary', remaining: length * 2, start });
   }
@@ -707,12 +490,12 @@ export class CborReader {
     const entry = this.#stack.pop();
     if (!entry || entry.type !== 'dictionary') {
       throw new Error(
-        `Cannot exit dictionary: not inside a dictionary at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot exit dictionary: not inside a dictionary at index ${this.#reader.index} of ${this.name}`,
       );
     }
     if (entry.remaining !== 0) {
       throw new Error(
-        `Dictionary has ${entry.remaining / 2} remaining pairs at index ${this.#bufferReader.index} of ${this.name}`,
+        `Dictionary has ${entry.remaining / 2} remaining pairs at index ${this.#reader.index} of ${this.name}`,
       );
     }
   }
@@ -721,7 +504,7 @@ export class CborReader {
     const entry = this.#stack[this.#stack.length - 1];
     if (!entry || entry.type !== 'dictionary') {
       throw new Error(
-        `Cannot peek dictionary end: not inside a dictionary at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot peek dictionary end: not inside a dictionary at index ${this.#reader.index} of ${this.name}`,
       );
     }
     return entry.remaining === 0;
@@ -739,12 +522,12 @@ export class CborReader {
     const entry = this.#stack.pop();
     if (!entry || entry.type !== 'set') {
       throw new Error(
-        `Cannot exit set: not inside a set at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot exit set: not inside a set at index ${this.#reader.index} of ${this.name}`,
       );
     }
     if (entry.remaining !== 0) {
       throw new Error(
-        `Set has ${entry.remaining} remaining elements at index ${this.#bufferReader.index} of ${this.name}`,
+        `Set has ${entry.remaining} remaining elements at index ${this.#reader.index} of ${this.name}`,
       );
     }
   }
@@ -753,7 +536,7 @@ export class CborReader {
     const entry = this.#stack[this.#stack.length - 1];
     if (!entry || entry.type !== 'set') {
       throw new Error(
-        `Cannot peek set end: not inside a set at index ${this.#bufferReader.index} of ${this.name}`,
+        `Cannot peek set end: not inside a set at index ${this.#reader.index} of ${this.name}`,
       );
     }
     return entry.remaining === 0;
@@ -770,7 +553,7 @@ export class CborReader {
     }
     if (entry.remaining <= 0) {
       throw new Error(
-        `No more elements in ${entry.type} at index ${this.#bufferReader.index} of ${this.name}`,
+        `No more elements in ${entry.type} at index ${this.#reader.index} of ${this.name}`,
       );
     }
     entry.remaining -= 1;
@@ -786,8 +569,8 @@ export class CborReader {
  * @returns {CborReader}
  */
 export function makeCborReader(bytes, options = {}) {
-  const bufferReader = BufferReader.fromBytes(bytes);
-  return new CborReader(bufferReader, options);
+  const reader = makeCborReaderState(bytes, options);
+  return new CborReader(reader, options);
 }
 
 // Export tag constants for use by codec layer

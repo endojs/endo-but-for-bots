@@ -17,7 +17,7 @@ import {
   readOnly,
 } from '@endo/platform/fs/extended';
 import { makeMount } from '@endo/daemon/src/mount.js';
-import { makeFilePowers } from '@endo/daemon/src/daemon-node-powers.js';
+import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
 
 import {
   makeMountReadTool,
@@ -25,8 +25,8 @@ import {
   makeMountStatTool,
   makeMountEditTool,
   makeMountFsTools,
-} from '../src/mount-fs.js';
-import { toPiAgentTool } from '../src/pi.js';
+} from '../src/json-tools/fs.js';
+import { toPiAgentTool } from '../src/adapters/pi.js';
 
 /**
  * @param {ExecutionContext} t
@@ -219,11 +219,13 @@ overBackings(
 
 overBackings('mountList on a file throws', async (t, make) => {
   const filesystem = make(seedTree(t));
-  // Listing resolves to `Directory.list`; a File node exposes no such method,
-  // so the cap rejects rather than silently returning an empty listing.
+  // Listing resolves to `Directory.list`; a File node rejects with a targeted
+  // diagnostic when the backing is a daemon mount, rather than silently
+  // returning an empty listing. The native node backend retains its own
+  // platform-level missing-method diagnostic.
   await t.throwsAsync(
     () => makeMountListTool(filesystem).invoke({ path: 'a.txt' }),
-    { message: /no method "list"/ },
+    { message: /list\(\) is not available on a file|no method "list"/ },
   );
 });
 

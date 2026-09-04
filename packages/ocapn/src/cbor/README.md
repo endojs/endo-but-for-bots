@@ -3,6 +3,18 @@
 This directory contains a CBOR (Concise Binary Object Representation) encoder
 and decoder for OCapN messages, as an alternative to the Syrup codec.
 
+The canonical RFC 8949 head grammar and the single-item primitives — writing and
+reading heads, byte strings, text strings, arrays, maps, tags, floats, simple
+values, and bignums — now come from the shared [`@endo/cbor`](../../../cbor)
+package (design: [`designs/cbor-codec.md`](../../../../designs/cbor-codec.md)).
+What remains here is the OCapN policy layer: the `CborWriter` / `CborReader`
+classes implementing the `OcapnWriter` / `OcapnReader` interface (structure
+tracking, record labels, `peekTypeHint`), the immutability conversion on byte
+strings, and the OCapN tag conventions (selector tag 280, record tag 27, the
+self-described tag 55799). Because `@endo/cbor`'s readers are strict, this
+decoder now rejects non-minimal heads and non-minimal bignum payloads that the
+previous hand-rolled reader tolerated; canonical writer output is unchanged.
+
 ## Directory Structure
 
 ```

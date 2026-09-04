@@ -24,11 +24,11 @@ import { makeSandboxFactory } from './factory.js';
  * Mirrors `packages/lal/agent.js`'s entry-point shape.
  *
  * @param {SandboxPowers} powers - guest powers from the daemon
- * @param {unknown} _context - cancellation context (unused in v1)
- * @param {{ env?: Record<string, string> }} [options]
+ * @param {unknown} context - formula cancellation context
+ * @param {{ env?: Record<string, string>, ownerId?: string }} [options]
  * @returns {Promise<SandboxFactory>}
  */
-export const make = async (powers, _context, options = {}) => {
+export const make = async (powers, context, options = {}) => {
   /** @type {SandboxDriver[]} */
   const drivers = [];
 
@@ -41,23 +41,27 @@ export const make = async (powers, _context, options = {}) => {
     // The bwrap driver factory does not currently throw, but be
     // defensive against future refactors so a misconfigured driver
     // never breaks the daemon's boot path.
-    // eslint-disable-next-line no-console
-    console.warn('@endo/sandbox: bwrap driver registration failed', e);
+    console.error('@endo/sandbox: bwrap driver registration failed', e);
   }
 
   // podman (Linux, Phase 2).  Same probe-gated pattern as bwrap: a
   // missing podman binary or rootful-only install reports
   // `available: false` rather than failing daemon boot.
   try {
-    drivers.push(makePodmanDriver({ env: options.env ?? {} }));
+    drivers.push(
+      makePodmanDriver({
+        env: options.env ?? {},
+        ownerId: options.ownerId ?? options.env?.ENDO_SANDBOX_OWNER_ID,
+      }),
+    );
   } catch (e) {
-    // eslint-disable-next-line no-console
-    console.warn('@endo/sandbox: podman driver registration failed', e);
+    console.error('@endo/sandbox: podman driver registration failed', e);
   }
 
   return makeSandboxFactory({
     drivers: harden(drivers),
     scratchProvider: powers,
+    context: /** @type {any} */ (context),
   });
 };
 harden(make);

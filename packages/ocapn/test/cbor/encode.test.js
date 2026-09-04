@@ -1,7 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/test.js';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
+import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makeCborWriter } from '../../src/cbor/encode.js';
 import {
   cborToDiagnostic,
@@ -190,23 +190,21 @@ test('encode string rejects unpaired surrogates', t => {
   // String with lone high surrogate (U+D800)
   const invalidString = String.fromCharCode(0xd800);
   t.throws(() => writer.writeString(invalidString), {
-    message: /Expected well-formed string/,
+    message: /well-formed string/,
   });
 
   // String with lone low surrogate (U+DC00)
   const writer2 = makeCborWriter();
   const invalidString2 = String.fromCharCode(0xdc00);
   t.throws(() => writer2.writeString(invalidString2), {
-    message: /Expected well-formed string/,
+    message: /well-formed string/,
   });
 });
 
 // ===== Byte Strings =====
 
 test('encode empty byte string', t => {
-  const { hex, diagnostic } = encode(w =>
-    w.writeBytestring(new ArrayBuffer(0)),
-  );
+  const { hex, diagnostic } = encode(w => w.writeBytestring(new Uint8Array(0)));
   t.is(hex, '40'); // Major 2, length 0
   t.is(diagnostic, "h''");
 });
@@ -214,7 +212,7 @@ test('encode empty byte string', t => {
 test('encode byte string', t => {
   const bytes = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
   const { hex, diagnostic } = encode(w =>
-    w.writeBytestring(bytesToImmutable(bytes)),
+    w.writeBytestring(frozenBytes(bytes)),
   );
   t.is(hex, '44deadbeef'); // Major 2, length 4, bytes
   t.is(diagnostic, "h'deadbeef'");
@@ -373,4 +371,43 @@ test('encode string length 256 (2-byte length)', t => {
   const { hex } = encode(w => w.writeString(str));
   // Major 3, AI 25 = 0x79, then 2 byte length (256 = 0x0100)
   t.true(hex.startsWith('790100'));
+});
+
+// ===== Writer Argument Validation =====
+//
+// @endo/cbor's writers reject an argument of the wrong type. The previous
+// hand-rolled writers coerced instead: writeBoolean('x') silently emitted f5
+// (true) and writeFloat64('x') emitted a NaN pattern, so a caller's type error
+// became a well-formed message carrying the wrong value. These pin the
+// rejection.
+
+test('encode boolean rejects a non-boolean', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeBoolean(/** @type {any} */ ('x')), {
+    message: /boolean expected/,
+  });
+});
+
+test('encode float64 rejects a non-number', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeFloat64(/** @type {any} */ ('x')), {
+    message: /number expected/,
+  });
+});
+
+test('encode integer rejects a non-bigint', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeInteger(/** @type {any} */ (1)), {
+    message: /bigint expected/,
+  });
+});
+
+test('encode array header rejects a count outside [0, 2**32)', t => {
+  const writer = makeCborWriter();
+  t.throws(() => writer.writeArrayHeader(-1), {
+    message: /array length must be an integer/,
+  });
+  t.throws(() => writer.writeArrayHeader(2 ** 32), {
+    message: /array length must be an integer/,
+  });
 });

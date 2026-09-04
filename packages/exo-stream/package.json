@@ -1,7 +1,6 @@
 {
   "name": "@endo/exo-stream",
   "version": "0.1.0",
-  "private": true,
   "description": "CapTP abstraction for bridging async iterator streams",
   "keywords": [
     "endo",
@@ -24,7 +23,7 @@
   "type": "module",
   "exports": {
     ".": {
-      "types": "./types.d.ts",
+      "types": "./types.types.d.ts",
       "default": "./index.js"
     },
     "./reader-pump.js": {
@@ -67,6 +66,10 @@
       "types": "./iterate-writer.d.ts",
       "default": "./iterate-writer.js"
     },
+    "./buffered-channel.js": {
+      "types": "./buffered-channel.d.ts",
+      "default": "./buffered-channel.js"
+    },
     "./type-guards.js": {
       "types": "./type-guards.d.ts",
       "default": "./type-guards.js"
@@ -106,13 +109,13 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },
   "files": [
     "./*.d.ts",
     "./*.js",
     "./*.map",
+    "./*.ts",
     "LICENSE*",
     "SECURITY*",
     "dist",
@@ -122,11 +125,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "ava": {
     "files": [

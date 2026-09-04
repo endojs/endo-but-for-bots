@@ -1,0 +1,11 @@
+test/Compartment/constructor/modules-types.js
+test/Compartment/import-hook/module-source-evaluate.js
+test/Compartment/import-now-hook/record-and-specifier-descriptor.js
+test/Compartment/import-now-hook/redirect-record.js
+test/freeze/monadic.js
+test/modules/module-source-reflection/ses-legacy/duplicate-import.js
+test/modules/module-source-reflection/ses-legacy/export-all-from.js
+test/modules/module-source-reflection/ses-legacy/export-default.js
+test/modules/module-source-reflection/ses-legacy/export-empty-from.js
+test/modules/module-source-reflection/ses-legacy/import-all-as.js
+test/modules/virtual-module-source/import-and-export.js

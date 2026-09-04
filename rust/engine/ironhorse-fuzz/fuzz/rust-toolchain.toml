@@ -1,0 +1,12 @@
+# Pinned nightly for the ironhorse-fuzz cargo-fuzz targets.
+#
+# Fuzzing has moved OUT of pull-request CI (the `fuzz-ironhorse` job was removed) and
+# is driven continuously in the background by a garden service instead. This pin used
+# to live ONLY in that CI job's `FUZZ_TOOLCHAIN` env; it is relocated here so local
+# runs stay reproducible and share one source of truth. With this file present,
+# `cargo fuzz run <target>` from this `fuzz/` directory uses the pinned nightly
+# automatically (no `+nightly-…` needed). Bump deliberately, validated against the
+# whole target set.
+[toolchain]
+channel = "nightly-2026-08-15"
+profile = "minimal"

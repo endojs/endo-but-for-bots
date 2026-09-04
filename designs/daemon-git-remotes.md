@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-05-18 |
-| **Updated** | 2026-05-29 |
+| **Updated** | 2026-07-11 |
 | **Author** | 0xPatrick (prompted) |
-| **Status** | Proposed (Phases 1-5 landed via #365; fd-pipe askpass landed via #368) |
+| **Status** | In Progress (accepted 2026-07-11 with the stack plan in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan; Phases 1-5 landed via #365, fd-pipe askpass via #368, `provideGitClone` bootstrap via #538; Phases 6-7 open) |
 
 > **Read in order.**
 > This is doc 3 of 3.
@@ -205,6 +205,8 @@ interface GitRemote {
     source?: GitRef | string;
     destination?: string;
     force?: boolean;
+    /** 40-hex object ID the destination must still name; see § Force-with-lease. */
+    forceWithLease?: string;
     setUpstream?: boolean;
   }): Promise<GitPushResult>;
 }
@@ -419,7 +421,7 @@ The implementation should reject the listed "Rejected" forms with a structured e
 | `allowedBranches` | A list of branch names or `refs/heads/<glob>` patterns interpreted as a shortcut: equivalent to a derived `pushRefspecs` of `refs/heads/<b>:refs/heads/<b>` for each branch, AND a destination-side filter on any explicit `pushRefspecs` | Short names with no `refs/heads/` anchoring that would also match tags or remote-tracking refs by accident | If both `allowedBranches` and `pushRefspecs` are set, the union is forbidden: the policy must choose one mode.  If only `allowedBranches` is set, the implementation derives `pushRefspecs` from it.  If `pushRefspecs` is empty AND `allowedBranches` is empty, push is rejected entirely (a push-direction remote with no allowed targets is misconfigured, not "permit nothing"; the operator must say so explicitly with `allowedDirections: ['fetch']`) |
 | `allowTags` | `true` to allow tag refspecs in fetch and push (`refs/tags/*` on either side); `false` (default) to reject any tag-prefix refspec | Tag refspecs when `false` | Validated at refspec-parse time against both `fetchRefspecs` and `pushRefspecs` |
 | `allowDelete` | `true` to allow deletion refspecs (empty `<src>`) in fetch (`:refs/remotes/origin/foo`) and push (`:refs/heads/foo`); `false` (default) to reject deletion forms | Deletion refspecs when `false` | Deletion form is detected by an empty `<src>` in `[+]<src>:<dst>`; both directions are gated by the same flag |
-| `allowForcePush` | `true` to allow leading `+` on `pushRefspecs` entries; `false` (default) to reject the `+` prefix on push.  Fetch-side `+` is unaffected (remote-tracking refs are local). | `+`-prefixed push refspecs when `false`; non-`+` push refspecs that the server reports as non-fast-forward (the local validation cannot detect this; the post-push response check fail-closes) | Local validation rejects the `+` prefix at refspec-parse time; the post-push response check rejects an upstream non-fast-forward result regardless of the `+` flag |
+| `allowForcePush` | `true` to allow leading `+` on `pushRefspecs` entries AND to allow `push({ forceWithLease })` (§ Force-with-lease); `false` (default) to reject both.  Fetch-side `+` is unaffected (remote-tracking refs are local). | `+`-prefixed push refspecs when `false`; `forceWithLease` when `false`; non-`+` push refspecs that the server reports as non-fast-forward (the local validation cannot detect this; the post-push response check fail-closes) | Local validation rejects the `+` prefix at refspec-parse time; a lease refspec deliberately carries no `+`, so the lease path is gated by an explicit `allowForcePush` check rather than by the prefix rule; the post-push response check rejects an upstream non-fast-forward result regardless of the `+` flag |
 
 ## Operation Semantics
 
@@ -449,6 +451,35 @@ The implementation should reject the listed "Rejected" forms with a structured e
 - validates source and destination against push policy;
 - refuses force, tag creation, and deletes unless explicitly authorized;
 - uses only the bound credential and endpoint.
+
+#### Force-with-lease
+
+`push({ forceWithLease })` is the capability form of git's
+`--force-with-lease=<destination>:<oid>`: the destination is force-updated only
+while it still names the object ID the caller observed. This is what makes a
+branch usable as a **transactional ledger** — a writer reads the branch tip,
+composes its update, and pushes with the tip it read, so a concurrent writer's
+work is never silently overwritten.
+
+The bound is the granted capability's, as everywhere else:
+
+- it requires `allowForcePush`. A lease refspec deliberately carries **no** `+`
+  prefix, because git lets a refspec's own force convert a stale-lease rejection
+  into a forced update — the `+` would silently void the lease. The refspec rule
+  therefore cannot gate this path, and an explicit check does;
+- it requires an explicit `source`, and is mutually exclusive with `force`;
+- the destination must be a **concrete** ref. Git matches a lease refname with
+  `refname_match` (DWIM, no globbing) and does not warn on an entry that matches
+  nothing, so a wildcard destination would bind the lease to nothing. That fails
+  closed — without a `+` the push degrades to a plain non-force push, not an
+  unguarded force — but it silently falsifies the published guarantee;
+- the expected OID must be 40 hex digits and must not be the **null** OID, which
+  git reads as *"this ref must not exist"* — create-only, the inverse of what the
+  option means.
+
+The backend re-asserts the no-force-refspec pairing at the layer that builds the
+argv, because that is the one precondition whose breach is a silent authority
+escalation rather than an error.
 
 ## Remote Data Plane
 
@@ -509,7 +540,10 @@ For the MVP there are two legitimate product flows:
 
 The second flow is product-relevant when an agent starts from only a remote repository, but it should remain host-mediated.
 It should not become guest authority to clone arbitrary remotes into arbitrary host paths.
-The exact bootstrap API is a follow-up design point because it must combine mount creation, endpoint policy, and sealed credential authority before a local `Git` exists.
+
+**Landed (2026-07-11 reconciliation note).**
+The second flow shipped host-mediated via #538 as `EndoHost.provideGitClone(opts)`: the host method validates the endpoint, a writable destination mount, and the credential, then drives the `makeGitCloner` seam in `@endo/exo-git` (`packages/exo-git/src/git-cloner.js`) over the native clone helper in `@endo/git`, returning the derived capabilities once the clone lands in the mount.
+The once-planned separate `daemon-git-clone.md` is therefore no longer needed for the clone half; the residual bootstrap gap is the **commit-identity boundary**, pinned and sequenced as Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan (§ Commit-identity boundary there carries the shape: formula-owned `{ identity: { authorName, authorEmail } }` construction option on `provideGit` / `provideGitClone`, guest-immutable).
 
 ## Security Model
 
@@ -767,6 +801,8 @@ It is not part of the normative design.
 - **#368** (`feat(daemon): use fd askpass for Git credentials`) — the design-compliant fd-pipe askpass helper described in § Initial Backend ("a daemon-shipped `GIT_ASKPASS` helper binary, exec'd by `git` and fed the credential through an anonymous pipe whose read-end fd is inherited by the helper").
   The daemon-shipped helper lives at `packages/daemon/src/git-askpass-helper.cjs`, exec'd by `git` and reading from fd 3; the fd number (`ENDO_GIT_ASKPASS_FD`) is the only credential-related value reaching the child env, so the secret never appears in argv, the process env, `/proc/<git>/environ`, or a temp file.
   The anonymous-pipe transport has no socket to keep open, so the askpass-socket-lifetime narrowing is structurally satisfied; the OS-user-account boundary (`mkdtemp` 0o700 parent directory) remains the trust model.
+- **#538** (`feat(exo-git): add remote endpoint clone seam` and siblings) — the host-mediated repository bootstrap: `EndoHost.provideGitClone`, the `makeGitCloner` seam in `@endo/exo-git`, the native clone helper in `@endo/git`, read-only-destination rejection, and credential fencing across the cloner lifecycle.
+  See § Repository Bootstrap and `clone` for how this resolves the bootstrap follow-up.
 
 Fix, test-coverage, and legibility follow-ups on the shipped trio code (issue #378) are tracked there, not here.
 
@@ -802,8 +838,8 @@ Each gets a one-line follow-up deliverable.
   If a non-trivial fraction needs SSH, the SSH design in Phase 7 moves earlier.
   Deliverable: a one-page note in `designs/` confirming or revising the HTTPS-only Phase 1.
 - **Bootstrap / clone API.**
-  A `provideGitClone({...})` host flow that composes mount creation + endpoint policy + sealed credential authority before a local `Git` exists is a real follow-up requirement (early-draft Open Question #6).
-  Design lives in its own `designs/daemon-git-clone.md` follow-up; the spike's deliverable is the design doc, scheduled for Phase 6 after HTTPS fetch/push are exercised in real workflows.
+  Resolved: `provideGitClone` landed host-mediated via #538 (see § Repository Bootstrap and `clone`), without a separate `daemon-git-clone.md`.
+  The residual identity boundary is Phase 2 of [daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan.
 - **Telemetry to distinguish CapTP control-plane time from remote transport data-plane time.**
   During Phase 2, add structured timing fields to `GitFetchResult` and `GitPushResult` (initial shape: `{ captpMs: number; transportMs: number }` augmenting the existing result types) and iterate based on what debug sessions actually need.
   The shape may change after the spike; the principle (timing is observable) is decision 12.

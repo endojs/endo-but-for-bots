@@ -1,4 +1,3 @@
-/* global process, fetch */
 /**
  * Downloads a Node.js binary for the target platform into
  * packages/familiar/binaries/.
@@ -19,7 +18,10 @@ import { fileURLToPath } from 'node:url';
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const binariesDir = path.resolve(dirname, '..', 'binaries');
 
-const nodeVersion = process.argv[2] || 'v20.18.1';
+// Bundled Node LTS pin. Node 22 (Jod) is in Maintenance LTS as of 2026-05;
+// Node 20 (Iron) reached EOL in 2026-04. Bump in lockstep with the
+// `download-node.sh` pin and the `familiar-release.yml` workflow.
+const nodeVersion = process.argv[2] || 'v22.22.3';
 
 // Determine target OS.
 // Node.js dist uses "win" for Windows, "darwin" for macOS, "linux" for Linux.

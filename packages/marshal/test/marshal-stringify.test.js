@@ -1,7 +1,7 @@
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-import { Far } from '@endo/pass-style';
+import { Far, passStyleOf } from '@endo/pass-style';
 import { stringify, parse } from '../src/marshal-stringify.js';
 import { roundTripPairs } from '../tools/marshal-test-data.js';
 
@@ -13,7 +13,14 @@ test('stringify parse round trip pairs', t => {
     const encoding = JSON.stringify(encoded);
     t.is(str, encoding);
     const decoding = parse(str);
-    t.deepEqual(decoding, plain);
+    if (passStyleOf(plain) === 'byteArray') {
+      t.deepEqual(
+        [.../** @type {Uint8Array} */ (decoding)],
+        [.../** @type {Uint8Array} */ (plain)],
+      );
+    } else {
+      t.deepEqual(decoding, plain);
+    }
     t.assert(isFrozen(decoding));
   }
 });

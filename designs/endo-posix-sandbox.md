@@ -10,17 +10,18 @@
 
 ## Source
 
-This design mirrors and tracks
-[`PLAN/endo_posix_sandbox.md`](../PLAN/endo_posix_sandbox.md) on the
-`packages/sandbox` working branch.
-The PLAN is the authoritative phase-by-phase implementation log;
-this design is the roadmap-aligned mirror for milestone-tracking
-purposes (project velocity, ETD per milestone) per
+This design is the authoritative record of the Endo POSIX sandbox
+plugin, tracking the `packages/sandbox` working branch. It began as a
+roadmap-aligned mirror of a separate phase-by-phase implementation log
+(kept for milestone-tracking purposes — project velocity, ETD per
+milestone — per
 [review comment 3203724907](https://github.com/endojs/endo-but-for-bots/pull/119#discussion_r3203724907)
-on PR #119.
+on PR #119); that log has since been retired and folded into this
+document, which now carries both the roadmap and the phase progression.
 
-When the PLAN advances a phase, this design's Status row and the
-Phase Progression table below should be updated to match.
+As each phase lands on the `packages/sandbox` branch, this design's
+Status row and the Phase Progression table below should be updated to
+match.
 
 ## What is the Problem Being Solved?
 

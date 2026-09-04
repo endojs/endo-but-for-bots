@@ -120,7 +120,7 @@ packages/platform/
       // Future: "browser", "endo-go", "endo-rust"
     },
     "./fs/lite": {
-      "types": "./src/fs/types.d.ts",
+      "types": "./src/fs/types-index.d.ts",
       "default": "./src/fs/index.js"
     },
     "./fs/node": {
@@ -701,7 +701,7 @@ that composes `@endo/platform/fs` primitives.
 ### Phase 1: Package Skeleton and Types (S)
 
 - Create `packages/platform/` with `package.json`, conditional exports.
-- Define all TypeScript types in `src/fs/types.d.ts`.
+- Define all TypeScript types in the checked `src/fs/types.ts` source module.
 - Define interface guards in `src/fs/interfaces.js`.
 - No behavioral code yet — types and guards only.
 

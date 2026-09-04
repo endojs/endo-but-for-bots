@@ -54,7 +54,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "prettier": "^3.5.3",
+    "prettier": "^3.9.6",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
@@ -70,11 +70,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",

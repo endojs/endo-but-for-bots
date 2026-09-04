@@ -2,8 +2,10 @@
 
 export {
   makeGit,
+  makeGitKit,
+  makeGitOperations,
+  isGitHistoryRewrite,
   isGitReadOnly,
-  getGitBackend,
   makeNotYetImplementedBackend,
 } from './git.js';
 
@@ -14,6 +16,8 @@ export {
   makeGitRemote,
   getGitRemoteController,
 } from './git-remote.js';
+
+export { normalizeGitRemotePolicy } from './git-remote-policy.js';
 
 export { makeGitCloner } from './git-cloner.js';
 
@@ -27,7 +31,22 @@ export {
 } from './git-credential.js';
 
 export {
+  basicCredentialHelp,
+  bearerCredentialHelp,
+  gitCredentialControllerHelp,
+  gitBlobHelp,
+  gitHelp,
+  gitRemoteControllerHelp,
+  gitRemoteHelp,
+  gitTreeHelp,
+  makeHelp,
+} from './help-text.js';
+
+export {
   GitInterface,
+  GitReaderInterface,
+  GitWriterInterface,
+  GitRewriterInterface,
   GitTreeInterface,
   GitRemoteInterface,
   GitRemoteControllerInterface,

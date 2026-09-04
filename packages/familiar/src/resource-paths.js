@@ -1,5 +1,5 @@
 // @ts-check
-/* global process, globalThis */
+/* global process */
 
 /**
  * Centralizes all resource path resolution with a dev/packaged switch.
@@ -50,7 +50,7 @@ if (isPackaged) {
   nodePath = 'node';
   endoCliPath = path.join(repoRoot, 'packages/cli/bin/endo.cjs');
   chatDistPath = path.join(repoRoot, 'packages/chat/dist/index.html');
-  endoDaemonPath = path.join(repoRoot, 'packages/daemon/src/daemon-node.js');
+  endoDaemonPath = path.join(repoRoot, 'packages/daemon/src/manager-node.js');
   workerSubprocessPath = path.join(
     repoRoot,
     'packages/daemon/src/worker-node.js',

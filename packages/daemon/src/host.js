@@ -1,11 +1,12 @@
 // @ts-check
-/** @import { EndoGit } from '@endo/exo-git' */
+/** @import { HistoryRewriteEndoGit, ReadWriteEndoGit } from '@endo/exo-git' */
 /// <reference types="ses"/>
 /* global process */
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitRemoteDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -18,7 +19,6 @@ import {
   makeGitCloner,
   makeGitRemoteEndpoint,
 } from '@endo/exo-git';
-import { gitClone } from '@endo/git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   assertPetName,
@@ -160,6 +160,134 @@ export const normalizeShellPolicy = policy => {
 };
 harden(normalizeShellPolicy);
 
+const HTTP_CLIENT_POLICY_MODES = harden(['strict', 'tofu-auto']);
+const HTTP_ORIGIN_SCHEMES = harden(['http:', 'https:']);
+
+/**
+ * Pin an allowlist entry to the exact origin shape the `HttpClient` exo accepts
+ * (`@endo/http-confine`'s `parseAllowedOrigins`): a well-formed `http:`/`https:`
+ * URL whose serialized origin (scheme://host[:port], default ports normalized
+ * away) equals the entry verbatim — no path, query, or fragment.  Mirrored here
+ * so `provideHttpClient` rejects a path-bearing or off-scheme origin up front
+ * rather than persisting a formula the exo will reject on every incarnation.
+ *
+ * @param {string} origin
+ */
+const assertHttpClientOrigin = origin => {
+  let parsed;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    throw makeError(
+      X`provideHttpClient: policy.allowedOrigins entry ${q(
+        origin,
+      )} must be a valid http(s) origin`,
+    );
+  }
+  if (
+    !HTTP_ORIGIN_SCHEMES.includes(parsed.protocol) ||
+    parsed.origin !== origin
+  ) {
+    throw makeError(
+      X`provideHttpClient: policy.allowedOrigins entry ${q(
+        origin,
+      )} must be exactly an http(s) origin (scheme://host[:port], no path, query, or fragment)`,
+    );
+  }
+};
+
+/**
+ * Validate and normalize a caller-supplied HTTP-client policy into the frozen
+ * record baked into the `http-client` formula at `provideHttpClient` time
+ * (formula-owned, like `GitRemote`'s endpoint policy), so the capability
+ * reconstitutes across daemon restart with identical bounds.  Rejects a
+ * malformed policy up front — including a path-bearing origin or an unsafe
+ * integer limit the exo would reject at incarnation — so a doomed formula is
+ * never persisted.
+ *
+ * `policyMode` is restricted to the modes a formula-owned policy can honor on
+ * its own across a restart: `strict` (only the static allowlist is reachable)
+ * and `tofu-auto` (trust-on-first-bind auto-pinning).  The `tofu-prompt` /
+ * `tofu-attenuator` modes require a live `policyAuthority` capability that this
+ * phase does not wire into the formula, so they are refused rather than
+ * silently degraded.
+ *
+ * @param {unknown} policy
+ * @returns {import('./types.js').HttpClientPolicy}
+ */
+export const normalizeHttpClientPolicy = policy => {
+  if (!policy || typeof policy !== 'object') {
+    throw makeError(X`provideHttpClient: policy must be an object`);
+  }
+  const { allowedOrigins, maxRequestsPerMinute, maxResponseBytes, policyMode } =
+    /** @type {Record<string, unknown>} */ (policy);
+
+  /** @type {string[]} */
+  let normalizedOrigins = [];
+  if (allowedOrigins !== undefined) {
+    if (
+      !Array.isArray(allowedOrigins) ||
+      !allowedOrigins.every(o => typeof o === 'string' && o.length > 0)
+    ) {
+      throw makeError(
+        X`provideHttpClient: policy.allowedOrigins must be an array of non-empty origin strings`,
+      );
+    }
+    for (const origin of allowedOrigins) {
+      assertHttpClientOrigin(origin);
+    }
+    normalizedOrigins = [...allowedOrigins];
+  }
+
+  // Default to the exo's own defaults (60 / 1 MiB) when unspecified, but bake an
+  // explicit number so the formula record is self-describing across a restart.
+  const normalizedMaxRequestsPerMinute =
+    maxRequestsPerMinute === undefined ? 60 : maxRequestsPerMinute;
+  if (
+    !Number.isSafeInteger(normalizedMaxRequestsPerMinute) ||
+    /** @type {number} */ (normalizedMaxRequestsPerMinute) <= 0
+  ) {
+    throw makeError(
+      X`provideHttpClient: policy.maxRequestsPerMinute must be a positive safe integer`,
+    );
+  }
+
+  const normalizedMaxResponseBytes =
+    maxResponseBytes === undefined ? 1024 * 1024 : maxResponseBytes;
+  if (
+    !Number.isSafeInteger(normalizedMaxResponseBytes) ||
+    /** @type {number} */ (normalizedMaxResponseBytes) <= 0
+  ) {
+    throw makeError(
+      X`provideHttpClient: policy.maxResponseBytes must be a positive safe integer`,
+    );
+  }
+
+  const normalizedPolicyMode = policyMode === undefined ? 'strict' : policyMode;
+  if (
+    typeof normalizedPolicyMode !== 'string' ||
+    !HTTP_CLIENT_POLICY_MODES.includes(normalizedPolicyMode)
+  ) {
+    throw makeError(
+      X`provideHttpClient: policy.policyMode must be one of ${q(
+        HTTP_CLIENT_POLICY_MODES,
+      )}`,
+    );
+  }
+
+  return harden({
+    allowedOrigins: harden(normalizedOrigins),
+    maxRequestsPerMinute: /** @type {number} */ (
+      normalizedMaxRequestsPerMinute
+    ),
+    maxResponseBytes: /** @type {number} */ (normalizedMaxResponseBytes),
+    policyMode: /** @type {import('./types.js').HttpClientPolicyMode} */ (
+      normalizedPolicyMode
+    ),
+  });
+};
+harden(normalizeHttpClientPolicy);
+
 /**
  * @param {object} args
  * @param {DaemonCore['provide']} args.provide
@@ -175,13 +303,19 @@ harden(normalizeShellPolicy);
  * @param {DaemonCore['formulateFromTree']} args.formulateFromTree
  * @param {(id: FormulaIdentifier) => string} args.getScratchMountPath
  * @param {(id: FormulaIdentifier) => string} args.getMountHostPath
+ * @param {HostToolPowers['gitClone']} [args.gitClone]
  * @param {(ref: unknown) => FormulaIdentifier | undefined} args.getIdForRef
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['checkinTree']} args.checkinTree
  * @param {DaemonCore['formulateMount']} args.formulateMount
  * @param {DaemonCore['formulateScratchMount']} args.formulateScratchMount
+ * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
  * @param {DaemonCore['formulateGit']} args.formulateGit
  * @param {DaemonCore['formulateShell']} args.formulateShell
+ * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
+ * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
+ *   Host-private resolver from a daemon-minted `HttpClient` cap to its
+ *   retained `HttpClientControl`, populated by the `http-client` maker.
  * @param {DaemonCore['formulateGitCredential']} args.formulateGitCredential
  * @param {DaemonCore['formulateGitRemote']} args.formulateGitRemote
  * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
@@ -190,6 +324,8 @@ harden(normalizeShellPolicy);
  * @param {DaemonCore['formulateChannel']} args.formulateChannel
  * @param {DaemonCore['formulateTimer']} args.formulateTimer
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
+ * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
+ * @param {ContentLoadable['loadContent']} args.loadContent
  * @param {DaemonCore['getTypeForId']} args.getTypeForId
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {MakeMailbox} args.makeMailbox
@@ -207,6 +343,8 @@ harden(normalizeShellPolicy);
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
+ * @param {ReturnType<typeof makeSecretManager>} args.secretManager
+ * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
  */
 export const makeHostMaker = ({
   provide,
@@ -225,8 +363,11 @@ export const makeHostMaker = ({
   checkinTree,
   formulateMount,
   formulateScratchMount,
+  formulateSubMount,
   formulateGit,
   formulateShell,
+  formulateHttpClient,
+  getHttpClientControlForClient,
   formulateGitCredential,
   formulateGitRemote,
   formulateInvitation,
@@ -235,6 +376,8 @@ export const makeHostMaker = ({
   formulateChannel,
   formulateTimer,
   getAllNetworkAddresses,
+  getAllContentSources,
+  loadContent,
   getTypeForId,
   getFormulaForId,
   makeMailbox,
@@ -244,6 +387,13 @@ export const makeHostMaker = ({
   getAgentIdForHandleId,
   getMountHostPath = /** @param {FormulaIdentifier} _id */ _id => {
     throw makeError(X`getMountHostPath not wired into makeHostMaker`);
+  },
+  // Cloning a remote runs the host's `git`, so the implementation is
+  // injected from the daemon core's host tool powers rather than
+  // imported here: a static `@endo/git` import would put nine `node:`
+  // builtins on the XS daemon bundle's compartment graph.
+  gitClone = /** @param {...any} _args */ (..._args) => {
+    throw makeError(X`gitClone not wired into makeHostMaker`);
   },
   getIdForRef = /** @param {unknown} _ref */ _ref => undefined,
   writeRemoteAgentKey = /** @param {string} _pk @param {string} _dn */ (
@@ -277,6 +427,8 @@ export const makeHostMaker = ({
     return undefined;
   },
   traceAggregator = undefined,
+  secretManager,
+  formulateSecretLookup,
 }) => {
   /**
    * @param {FormulaIdentifier} hostId
@@ -290,8 +442,10 @@ export const makeHostMaker = ({
    * @param {FormulaIdentifier} inspectorId
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} nodeWorkerId
+   * @param {FormulaIdentifier} registryId
    * @param {FormulaIdentifier} endoId
    * @param {FormulaIdentifier} networksDirectoryId
+   * @param {FormulaIdentifier} planesDirectoryId
    * @param {FormulaIdentifier} pinsDirectoryId
    * @param {FormulaIdentifier} leastAuthorityId
    * @param {{[name: string]: FormulaIdentifier}} platformNames
@@ -309,8 +463,10 @@ export const makeHostMaker = ({
     inspectorId,
     mainWorkerId,
     nodeWorkerId,
+    registryId,
     endoId,
     networksDirectoryId,
+    planesDirectoryId,
     pinsDirectoryId,
     leastAuthorityId,
     platformNames,
@@ -319,7 +475,9 @@ export const makeHostMaker = ({
     context.thisDiesIfThatDies(storeId);
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(nodeWorkerId);
+    context.thisDiesIfThatDies(registryId);
     context.thisDiesIfThatDies(mailboxStoreId);
+    context.thisDiesIfThatDies(planesDirectoryId);
     if (mailHubId !== undefined) {
       context.thisDiesIfThatDies(mailHubId);
     }
@@ -333,6 +491,15 @@ export const makeHostMaker = ({
     // The id no longer participates in any special-name lookup;
     // `getFormula(identifier)` is the user-facing replacement.
     // See `designs/formula-inspector.md` "Removing the `@info` name hub".
+    // Only the daemon's root host manages secrets. `formulateEndo` omits
+    // `hostHandleId`, which `formulateNumberedHost` then defaults to the
+    // host's own handle, while `makeChildHost` always passes the parent's —
+    // so this is exhaustive. Withholding `@secrets` from a child host is
+    // namespace hygiene, not containment: a child already reaches the root
+    // host through its ambient `@endo`, so it is a full-authority peer.
+    // See designs/daemon-secret-manager.md § Summary.
+    const isRootHost = hostHandleId === undefined || hostHandleId === handleId;
+
     /** @type {Record<string, FormulaIdentifier>} */
     const specialNames = {
       ...platformNames,
@@ -341,11 +508,16 @@ export const makeHostMaker = ({
       '@host': hostHandleId ?? handleId,
       '@main': mainWorkerId,
       '@node': nodeWorkerId,
+      '@registry': registryId,
       '@endo': endoId,
       '@nets': networksDirectoryId,
+      '@planes': planesDirectoryId,
       '@pins': pinsDirectoryId,
       '@none': leastAuthorityId,
     };
+    if (isRootHost) {
+      specialNames['@secrets'] = hostId;
+    }
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
     }
@@ -353,12 +525,97 @@ export const makeHostMaker = ({
 
     const getNetworkAddresses = () =>
       getAllNetworkAddresses(networksDirectoryId);
+    const getContentSources = identity =>
+      getAllContentSources(planesDirectoryId, identity);
     const directory = makeDirectoryNode(
       specialStore,
       agentNodeNumber,
       isLocalKey,
       getNetworkAddresses,
+      getContentSources,
     );
+    /**
+     * Inspect one inventory path without resolving its value.
+     * @param {Name[]} path
+     * @returns {Promise<{ grantId: string, path: Name[] } | undefined>}
+     */
+    const identifySecretGrantPath = async path => {
+      const id = await E(directory).identify(...path);
+      if (id === undefined) return undefined;
+      try {
+        const formula = await getFormulaForId(
+          /** @type {FormulaIdentifier} */ (id),
+        );
+        if (
+          formula.type === 'lookup' &&
+          formula.hub === hostId &&
+          formula.path.length === 3 &&
+          formula.path[0] === '@secrets' &&
+          formula.path[1] === 'use'
+        ) {
+          return harden({ grantId: formula.path[2], path: [...path] });
+        }
+      } catch {
+        // A foreign or collected formula is not a locally known secret grant.
+      }
+      return undefined;
+    };
+
+    const listKnownGrantPaths = async () => {
+      await null;
+      const rootNames = (await E(directory).list()).filter(
+        name => !name.startsWith('@'),
+      );
+      /** @type {Name[][]} */
+      const paths = rootNames.map(name => [name]);
+      if (await E(directory).has('secrets')) {
+        try {
+          const secretNames = await E(directory).list('secrets');
+          paths.push(
+            ...secretNames.map(name => namePathFrom(['secrets', name])),
+          );
+        } catch {
+          // `secrets` is an ordinary mutable pet name and may no longer name a
+          // directory. Direct host aliases remain discoverable in that case.
+        }
+      }
+      const entries = await Promise.all(paths.map(identifySecretGrantPath));
+      return harden(entries.filter(entry => entry !== undefined));
+    };
+
+    const removeKnownGrantPaths = async entries => {
+      await null;
+      for (const entry of entries) {
+        // Re-check immediately before removal so a concurrent rename or
+        // overwrite cannot turn catalog cleanup into deletion of another cap.
+        // eslint-disable-next-line no-await-in-loop
+        const current = await identifySecretGrantPath(entry.path);
+        if (current?.grantId === entry.grantId) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(directory).remove(...entry.path);
+        }
+      }
+    };
+
+    // Undefined on a non-root host, which is what the `@secrets` routing
+    // below tests before intercepting a path.
+    const secretManagerDirectory = !isRootHost
+      ? undefined
+      : secretManager.makeHostDirectory({
+          bindGrant: async (grantId, name) => {
+            await null;
+            if (!(await directory.has('secrets'))) {
+              await directory.makeDirectory(['secrets']);
+            }
+            await formulateSecretLookup(
+              hostId,
+              /** @type {NamePath} */ (['@secrets', 'use', grantId]),
+              id => directory.storeIdentifier(['secrets', name], id),
+            );
+          },
+          listKnownGrantPaths,
+          removeKnownGrantPaths,
+        });
     const mailbox = await makeMailbox({
       petStore: specialStore,
       agentNodeNumber,
@@ -412,9 +669,11 @@ export const makeHostMaker = ({
      * @param {NameOrPath} petName
      * @param {object} [options]
      * @param {boolean} [options.readOnly]
+     * @param {string[]} [options.deniedSegments] - Restricted-segment set that
+     *   replaces the mount's default (an empty array disables denial).
      */
     const provideMount = async (mountPath, petName, options = {}) => {
-      const { readOnly = false } = options;
+      const { readOnly = false, deniedSegments } = options;
       const { namePath } = petNamePathFrom(petName);
 
       /** @type {DeferredTasks<MountDeferredTaskParams>} */
@@ -423,7 +682,12 @@ export const makeHostMaker = ({
         E(directory).storeIdentifier(namePath, identifiers.mountId),
       );
 
-      const { value } = await formulateMount(mountPath, readOnly, tasks);
+      const { value } = await formulateMount(
+        mountPath,
+        readOnly,
+        tasks,
+        deniedSegments,
+      );
       return value;
     };
 
@@ -475,9 +739,11 @@ export const makeHostMaker = ({
      * @param {NameOrPath} petName
      * @param {object} [options]
      * @param {boolean} [options.readOnly]
+     * @param {string[]} [options.deniedSegments] - Restricted-segment set that
+     *   replaces the mount's default (an empty array disables denial).
      */
     const provideScratchMount = async (petName, options = {}) => {
-      const { readOnly = false } = options;
+      const { readOnly = false, deniedSegments } = options;
       const { namePath } = petNamePathFrom(petName);
 
       /** @type {DeferredTasks<ScratchMountDeferredTaskParams>} */
@@ -486,7 +752,68 @@ export const makeHostMaker = ({
         E(directory).storeIdentifier(namePath, identifiers.scratchMountId),
       );
 
-      const { value } = await formulateScratchMount(readOnly, tasks);
+      const { value } = await formulateScratchMount(
+        readOnly,
+        tasks,
+        deniedSegments,
+      );
+      return value;
+    };
+
+    /**
+     * Mint a sub-mount rooted at a subdirectory of an existing mount.
+     *
+     * The child mount gets its own confinement root, so a sub-mount at
+     * `/project/src` cannot reach `/project/.env` via `..`.  The
+     * `subpath` is clamped at the parent root by `formulateSubMount`, so
+     * it can never escape the parent; the parent mount is recorded in
+     * the child formula for dependency tracking.
+     *
+     * Read-only attenuation is monotonic: a sub-mount of a read-only
+     * parent is read-only regardless of `options.readOnly`, so read-only
+     * access cannot be escaped by re-mounting a subtree.  A read-write
+     * parent may still be narrowed to a read-only child.
+     *
+     * Sub-mount creation is a host method (not a `Mount` exo method)
+     * because it mints a new formula: creating a formula in the JS heap
+     * without atomically naming it in a pet store is vulnerable to a GC
+     * race.  The deferred task names the child under `newName` in the
+     * same critical section that formulates it.
+     *
+     * @param {NameOrPath} mountName - Pet name of the parent mount.
+     * @param {string[]} subpath - Segments beneath the parent root.
+     * @param {NameOrPath} newName - Pet name for the new sub-mount.
+     * @param {object} [options]
+     * @param {boolean} [options.readOnly]
+     */
+    const provideSubMount = async (
+      mountName,
+      subpath,
+      newName,
+      options = {},
+    ) => {
+      const { readOnly = false } = options;
+      const parentNamePath = namePathFrom(mountName);
+      const mountId = await E(directory).identify(...parentNamePath);
+      if (mountId === undefined) {
+        throw makeError(
+          X`provideSubMount: unknown parent mount ${q(mountName)}`,
+        );
+      }
+      const { namePath } = petNamePathFrom(newName);
+
+      /** @type {DeferredTasks<MountDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.mountId),
+      );
+
+      const { value } = await formulateSubMount(
+        /** @type {FormulaIdentifier} */ (mountId),
+        harden([...subpath]),
+        readOnly,
+        tasks,
+      );
       return value;
     };
 
@@ -505,8 +832,124 @@ export const makeHostMaker = ({
       return value;
     };
 
-    /** @type {EndoHost['provideGit']} */
-    const provideGit = async (mountCap, petName) => {
+    /**
+     * Validate one commit-identity field.  Beyond the credential-string rules
+     * (non-empty, no NUL), git's commit-ident sanitizer strips control
+     * characters and surrounding whitespace and then refuses an ident that
+     * reduces to empty, so a control-character or blank value would abort every
+     * commit late rather than fail here.  Rejecting them at construction keeps
+     * the identity option strictly additive, and mirrors the backend-side
+     * `commitIdentityEnvOverrides` check so the two boundaries agree.
+     *
+     * The field name is a caller-facing diagnostic label, not a secret, so it
+     * is `q()`-quoted into the error and survives the daemon marshal boundary
+     * (an unquoted `X` substitution would be redacted to `(a string)`, masking
+     * which field was rejected).  The value is never disclosed.
+     *
+     * @param {unknown} value
+     * @param {string} fieldName
+     * @returns {string}
+     */
+    const requireGitIdentityField = (value, fieldName) => {
+      if (typeof value !== 'string' || value.length === 0) {
+        throw makeError(X`${q(fieldName)} must be a non-empty string`);
+      }
+      if (value.includes('\0')) {
+        throw makeError(X`${q(fieldName)} must not contain NUL bytes`);
+      }
+      for (let i = 0; i < value.length; i += 1) {
+        const code = value.charCodeAt(i);
+        if (code <= 0x1f || code === 0x7f) {
+          throw makeError(
+            X`${q(fieldName)} must not contain control characters`,
+          );
+        }
+      }
+      if (value.trim() === '') {
+        throw makeError(X`${q(fieldName)} must not be blank`);
+      }
+      return value;
+    };
+
+    /**
+     * Validate a caller-supplied commit-identity policy for `provideGit` /
+     * `provideGitClone` and normalize it into the formula-owned shape the
+     * `git` formula persists.  The identity is captured at construction and is
+     * never reachable by the guest; omitting it retains the backend's default
+     * `Endo <endo@invalid.local>` attribution, so the option is additive.
+     *
+     * The optional `committerName` / `committerEmail` are passed through when
+     * supplied and omitted otherwise; the native backend defaults an absent
+     * committer to the author, so the default lives in one place.
+     *
+     * @param {unknown} identity
+     * @param {string} label
+     * @returns {import('./types.js').GitCommitIdentity | undefined}
+     */
+    const normalizeGitIdentity = (identity, label) => {
+      if (identity === undefined) {
+        return undefined;
+      }
+      if (typeof identity !== 'object' || identity === null) {
+        throw makeError(
+          X`${q(label)}: identity must be an object with authorName and authorEmail`,
+        );
+      }
+      const { authorName, authorEmail, committerName, committerEmail } =
+        /** @type {Record<string, unknown>} */ (identity);
+      const normalized = {
+        authorName: requireGitIdentityField(
+          authorName,
+          `${label}: identity.authorName`,
+        ),
+        authorEmail: requireGitIdentityField(
+          authorEmail,
+          `${label}: identity.authorEmail`,
+        ),
+      };
+      if (committerName !== undefined) {
+        normalized.committerName = requireGitIdentityField(
+          committerName,
+          `${label}: identity.committerName`,
+        );
+      }
+      if (committerEmail !== undefined) {
+        normalized.committerEmail = requireGitIdentityField(
+          committerEmail,
+          `${label}: identity.committerEmail`,
+        );
+      }
+      return harden(normalized);
+    };
+
+    /**
+     * @overload
+     * @param {EndoMount} mountCap
+     * @param {string | string[]} petName
+     * @param {GitProvisionOptions & {allowHistoryRewrite: true}} options
+     * @returns {Promise<HistoryRewriteEndoGit>}
+     */
+    /**
+     * @overload
+     * @param {EndoMount} mountCap
+     * @param {string | string[]} petName
+     * @param {GitProvisionOptions & {allowHistoryRewrite?: false}} [options]
+     * @returns {Promise<ReadWriteEndoGit>}
+     */
+    /**
+     * @overload
+     * @param {EndoMount} mountCap
+     * @param {string | string[]} petName
+     * @param {GitProvisionOptions & {allowHistoryRewrite: boolean}} options
+     * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
+     */
+    /**
+     * @param {EndoMount} mountCap
+     * @param {string | string[]} petName
+     * @param {GitProvisionOptions} [options]
+     * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
+     */
+    const provideGit = async (mountCap, petName, options = {}) => {
       const { namePath } = petNamePathFrom(petName);
       const mountId = getIdForRef(mountCap);
       if (mountId === undefined) {
@@ -521,8 +964,31 @@ export const makeHostMaker = ({
         E(directory).storeIdentifier(namePath, identifiers.gitId),
       );
 
-      const { value } = await formulateGit(mountId, tasks);
-      return /** @type {EndoGit} */ (value);
+      const { allowHistoryRewrite = false, readOnly = false } = options;
+      // The `git` formula maker derives the returned capability's own
+      // read-only attenuation from the mount's backing (`backing.readOnly`),
+      // so a writable request handed a read-only mount would otherwise
+      // silently downgrade to a read-only Git capability rather than fail —
+      // misrepresenting the authority actually granted, the same rationale as
+      // provideShell's read-only-mount rejection.  A caller that intends a
+      // read-only Git capability opts in with `readOnly: true` to skip this
+      // gate.
+      if (!readOnly) {
+        const backing = getMountBacking(mountCap);
+        if (backing !== undefined && backing.readOnly) {
+          throw makeError(
+            X`provideGit: cannot construct writable Git over a read-only mount`,
+          );
+        }
+      }
+      const identity = normalizeGitIdentity(options.identity, 'provideGit');
+      const { value } = await formulateGit(
+        mountId,
+        allowHistoryRewrite,
+        identity,
+        tasks,
+      );
+      return /** @type {ReadWriteEndoGit | HistoryRewriteEndoGit} */ (value);
     };
 
     /** @type {EndoHost['provideShell']} */
@@ -554,6 +1020,39 @@ export const makeHostMaker = ({
 
       const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
       return value;
+    };
+
+    /** @type {EndoHost['provideHttpClient']} */
+    const provideHttpClient = async (petName, policy) => {
+      const { namePath } = petNamePathFrom(petName);
+      // Unlike provideShell / provideGit, the HTTP client takes no mount cap:
+      // the Network tier is rooted in a host-owned `fetch` seam, not the mount
+      // (design § Network (HTTP) tier).  The only argument is the policy, which
+      // is normalized (and a bad policyMode rejected) before a formula persists.
+      const normalizedPolicy = normalizeHttpClientPolicy(policy);
+
+      /** @type {DeferredTasks<HttpClientDeferredTaskParams>} */
+      const tasks = makeDeferredTasks();
+      tasks.push(identifiers =>
+        E(directory).storeIdentifier(namePath, identifiers.httpClientId),
+      );
+
+      const { value } = await formulateHttpClient(normalizedPolicy, tasks);
+      return value;
+    };
+
+    /** @type {EndoHost['getHttpClientControl']} */
+    const getHttpClientControl = async clientCap => {
+      await null;
+      const control = getHttpClientControlForClient(clientCap);
+      if (control === undefined) {
+        throw makeError(
+          X`getHttpClientControl: argument must be a daemon-minted HttpClient cap`,
+        );
+      }
+      return /** @type {import('@endo/exo-http-client').HttpClientControl} */ (
+        control
+      );
     };
 
     /** @type {EndoHost['provideBearerCredential']} */
@@ -687,6 +1186,9 @@ export const makeHostMaker = ({
         allowedDirections: harden([...(opts.allowedDirections || ['fetch'])]),
         fetchRefspecs: harden([...(opts.fetchRefspecs || [])]),
         pushRefspecs: harden([...(opts.pushRefspecs || [])]),
+        ...(opts.defaultPullRef !== undefined
+          ? { defaultPullRef: opts.defaultPullRef }
+          : {}),
         ...(opts.allowedBranches !== undefined
           ? { allowedBranches: harden([...opts.allowedBranches]) }
           : {}),
@@ -727,6 +1229,7 @@ export const makeHostMaker = ({
         throw makeError(X`provideGitClone: endpoint must be an object`);
       }
       const { destMount, endpoint: endpointOptions } = opts;
+      const identity = normalizeGitIdentity(opts.identity, 'provideGitClone');
       const destMountId = getIdForRef(destMount);
       if (destMountId === undefined) {
         throw makeError(
@@ -791,7 +1294,12 @@ export const makeHostMaker = ({
         makeGit: async () => {
           /** @type {DeferredTasks<GitDeferredTaskParams>} */
           const tasks = makeDeferredTasks();
-          const { value, id } = await formulateGit(destMountId, tasks);
+          const { value, id } = await formulateGit(
+            destMountId,
+            false,
+            identity,
+            tasks,
+          );
           clonedGitId = id;
           return value;
         },
@@ -825,7 +1333,7 @@ export const makeHostMaker = ({
         destMount,
         destPath,
       });
-      const gitCap = /** @type {EndoGit} */ (git);
+      const gitCap = /** @type {ReadWriteEndoGit} */ (git);
       return harden({
         git: gitCap,
         remote,
@@ -1074,7 +1582,6 @@ export const makeHostMaker = ({
           : `unconfined:${specifier}`);
 
       // Behold, recursion:
-      // eslint-disable-next-line no-use-before-define
       const { value } = await formulateUnconfined(
         hostId,
         handleId,
@@ -1136,10 +1643,10 @@ export const makeHostMaker = ({
     /**
      * Walk a ReadableTree or Mount and materialise every entry into the
      * destination Mount via `write()`, preserving blob bytes instead
-     * of passing through text decoding. Children are identified by
-     * their advertised method names: anything with `streamBase64` is a
-     * blob/file; anything with `list` is a subtree. Both Mount and
-     * ReadableTree surfaces participate.
+     * of passing through text decoding. Children are identified by their
+     * explicit `kind()` discriminator when available, with the historical
+     * method-name shape as a fallback. Both Mount and ReadableTree surfaces
+     * participate.
      *
      * Why not just `E(dst).write([], src)`? `EndoMount.write()` performs
      * the same discovery shape internally, so the walker reads as
@@ -1157,17 +1664,39 @@ export const makeHostMaker = ({
      * @param {string[]} [pathSegments]
      */
     const materializeTree = async (src, dst, pathSegments = []) => {
+      // A daemon mount carries `kind()` on every lookup result. Discover that
+      // protocol once; older readable trees keep the per-child fallback.
+      // eslint-disable-next-line no-underscore-dangle
+      const sourceMethods = await E(src).__getMethodNames__();
+      const kindProtocol = sourceMethods.includes('kind');
       const names = await E(src).list(...pathSegments);
       for (const name of names) {
         assertValidTreeEntryName(name);
         const subPath = [...pathSegments, name];
         // eslint-disable-next-line no-await-in-loop
         const child = await E(src).lookup(subPath);
-        const methodNames =
-          // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
-          await E(child).__getMethodNames__();
-        const looksLikeBlob = methodNames.includes('streamBase64');
-        const looksLikeTree = methodNames.includes('list');
+        let methodNames = [];
+        let kind;
+        if (kindProtocol) {
+          // eslint-disable-next-line no-await-in-loop
+          kind = await E(child).kind();
+        } else {
+          methodNames =
+            // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+            await E(child).__getMethodNames__();
+          if (methodNames.includes('kind')) {
+            // eslint-disable-next-line no-await-in-loop
+            kind = await E(child).kind();
+          }
+        }
+        const looksLikeBlob =
+          kind === undefined
+            ? methodNames.includes('streamBase64')
+            : kind === 'file';
+        const looksLikeTree =
+          kind === undefined
+            ? methodNames.includes('list')
+            : kind === 'directory';
         if (looksLikeBlob && looksLikeTree) {
           throw makeError(
             X`Tree entry ${q(subPath)} has both streamBase64 and list — ambiguous shape`,
@@ -1830,15 +2359,20 @@ export const makeHostMaker = ({
 
     const { reverseIdentify } = specialStore;
     const {
-      has,
+      has: directoryHas,
       identify,
-      lookup,
-      maybeLookup,
+      lookup: directoryLookup,
+      maybeLookup: directoryMaybeLookup,
       locate,
       reverseLocate,
-      list,
+      list: directoryList,
       listIdentifiers,
       listLocators,
+      locateContent,
+      listContent,
+      storeContent,
+      reverseLocateContent,
+      internalizeContentLocator,
       followNameChanges,
       followLocatorNameChanges,
       reverseLookup,
@@ -1852,6 +2386,48 @@ export const makeHostMaker = ({
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
     } = directory;
+
+    /** @type {EndoHost['has']} */
+    const has = async (...petNamePath) => {
+      if (petNamePath[0] === '@secrets' && secretManagerDirectory) {
+        if (petNamePath.length === 1) return true;
+        return E(secretManagerDirectory).has(petNamePath[1]);
+      }
+      return directoryHas(...petNamePath);
+    };
+
+    /** @type {EndoHost['lookup']} */
+    const lookup = petNameOrPath => {
+      const path = namePathFrom(petNameOrPath);
+      if (path[0] === '@secrets' && secretManagerDirectory) {
+        if (path.length === 1) return Promise.resolve(secretManagerDirectory);
+        return E(secretManagerDirectory).lookup(path.slice(1));
+      }
+      return directoryLookup(petNameOrPath);
+    };
+
+    /** @type {EndoHost['maybeLookup']} */
+    const maybeLookup = petNameOrPath => {
+      const path = namePathFrom(petNameOrPath);
+      if (path[0] === '@secrets' && secretManagerDirectory) {
+        if (path.length === 1) return Promise.resolve(secretManagerDirectory);
+        return E(secretManagerDirectory)
+          .lookup(path.slice(1))
+          .catch(() => undefined);
+      }
+      return directoryMaybeLookup(petNameOrPath);
+    };
+
+    /** @type {EndoHost['list']} */
+    const list = async (...petNamePath) => {
+      if (petNamePath[0] === '@secrets' && secretManagerDirectory) {
+        if (petNamePath.length !== 1) throw new TypeError('Unknown path');
+        return /** @type {Promise<Name[]>} */ (
+          E(secretManagerDirectory).list()
+        );
+      }
+      return directoryList(...petNamePath);
+    };
 
     const makeDirectory = async petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);
@@ -2083,6 +2659,12 @@ export const makeHostMaker = ({
       list,
       listIdentifiers,
       listLocators,
+      locateContent,
+      listContent,
+      storeContent,
+      reverseLocateContent,
+      internalizeContentLocator,
+      loadContent,
       followLocatorNameChanges,
       followNameChanges,
       lookup,
@@ -2118,8 +2700,11 @@ export const makeHostMaker = ({
       storeTree,
       provideMount,
       provideScratchMount,
+      provideSubMount,
       provideGit,
       provideShell,
+      provideHttpClient,
+      getHttpClientControl,
       provideGitRemote,
       provideGitClone,
       provideBearerCredential,

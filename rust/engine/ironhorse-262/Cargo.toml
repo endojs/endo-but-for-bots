@@ -1,0 +1,47 @@
+[package]
+name = "ironhorse-262"
+description = "Dual-run harness: executes each corpus program on ironhorse-vm and on the XS oracle, recording four-valued agreement plus computron agreement (design § test262 conformance). #![forbid(unsafe_code)]."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ironhorse_262"
+path = "src/lib.rs"
+
+[dependencies]
+ironhorse-vm = { path = "../ironhorse-vm" }
+xs-oracle = { path = "../xs-oracle" }
+ironhorse-compile = { path = "../ironhorse-compile" }
+# Full test262 YAML frontmatter parse (design § Part 2: a real YAML
+# dependency replaces test262.rs's three-field hand parser). yaml-rust2 is
+# pure Rust, so the crate's #![forbid(unsafe_code)] holds; default features
+# (encoding_rs BOM detection) are off — test262 files are UTF-8.
+yaml-rust2 = { version = "0.11", default-features = false }
+
+[[bin]]
+name = "compile-diff"
+path = "src/bin/compile_diff.rs"
+
+# endot-ih: the xst-analogue test262 runner (design § Part 2). Subsumes the
+# dual-run harness and the `test262-language` subtree walker.
+[[bin]]
+name = "endot-ih"
+path = "src/bin/endot_ih.rs"
+
+# corpus-to-262: the mechanical corpus -> test262-style case converter
+# (design § Part 1). Dual-runs each corpus line against the oracle once and
+# emits one standard test262 case under `cases/`.
+[[bin]]
+name = "corpus-to-262"
+path = "src/bin/corpus_to_262.rs"
+
+# ironhorse-262-report: the whole-tree sweep's orchestration + reporting CLI
+# described in designs/ironhorse-test262-convergence.md. Discovery, resume
+# planning, and deterministic aggregation of per-batch JSON into stable
+# report.json + static HTML. Runs no
+# oracle — the per-case execution is `endot-ih --direct-only --json`.
+[[bin]]
+name = "ironhorse-262-report"
+path = "src/bin/ironhorse_262_report.rs"

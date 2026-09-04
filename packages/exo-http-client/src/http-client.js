@@ -1,5 +1,5 @@
 // @ts-check
-/* global clearTimeout, globalThis, setTimeout */
+/* global clearTimeout, setTimeout */
 
 /**
  * HttpClient capability with structural origin confinement.
@@ -19,6 +19,7 @@ import harden from '@endo/harden';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makeError, q, X } from '@endo/errors';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import {
   makeHttpConfinement,
   normalizeMethod,
@@ -39,6 +40,7 @@ import {
  *   NormalizedDecision,
  *   PolicyAuthority,
  *   PolicyMode,
+ *   PolicySnapshot,
  * } from './types.js'
  */
 
@@ -49,7 +51,21 @@ const DEFAULT_POLICY_PROMPT_TIMEOUT_MS = 30_000;
 const DEFAULT_AUDIT_LIMIT = 1024;
 const DEFAULT_BINDING_LIMIT = 1024;
 
-const FetchOptionsShape = M.splitRecord(
+/**
+ * Chunk size for `HttpResponse.stream()`. The already-bounded body is hauled
+ * over CapTP in fixed-size frames rather than as one string; the value trades
+ * per-frame overhead against memory residency and is not security-relevant
+ * (the response byte cap is enforced upstream by the confinement).
+ */
+const RESPONSE_STREAM_CHUNK_BYTES = 16 * 1024;
+
+/**
+ * The optional second argument of `HttpClient.fetch`.  Exported so tool
+ * adapters (`@endo/agent-tools`' `makeHttpTool`) can pin their hand-authored
+ * wire schema against the very guard the exo enforces, rather than a hand-typed
+ * copy that could drift.
+ */
+export const FetchOptionsShape = M.splitRecord(
   {},
   {
     method: M.string(),
@@ -98,7 +114,7 @@ const PolicyShape = M.splitRecord(
   {},
 );
 
-const HttpResponseInterface = M.interface('HttpResponse', {
+export const HttpResponseInterface = M.interface('HttpResponse', {
   status: M.call().returns(M.number()),
   statusText: M.call().returns(M.string()),
   ok: M.call().returns(M.boolean()),
@@ -108,10 +124,11 @@ const HttpResponseInterface = M.interface('HttpResponse', {
   maxResponseBytes: M.call().returns(M.number()),
   text: M.callWhen().returns(M.string()),
   json: M.callWhen().returns(M.any()),
+  stream: M.call().returns(M.remotable('PassableBytesReader')),
   help: M.call().returns(M.string()),
 });
 
-const HttpClientInterface = M.interface('HttpClient', {
+export const HttpClientInterface = M.interface('HttpClient', {
   fetch: M.callWhen(M.string())
     .optional(FetchOptionsShape)
     .returns(M.remotable()),
@@ -119,7 +136,7 @@ const HttpClientInterface = M.interface('HttpClient', {
   help: M.call().returns(M.string()),
 });
 
-const HttpClientControlInterface = M.interface('HttpClientControl', {
+export const HttpClientControlInterface = M.interface('HttpClientControl', {
   inspect: M.call().returns(PolicyShape),
   setAllowedOrigins: M.call(M.arrayOf(M.string())).returns(),
   addAllowedOrigin: M.call(M.string()).returns(),
@@ -149,7 +166,10 @@ const httpResponseHelp = `\
 HttpResponse - A bounded HTTP response.
 
 Use status(), headers(), text(), json(), and truncated() to inspect the response.
-The body is already capped by the HttpClient's maxResponseBytes setting.`;
+Use stream() to consume the body incrementally as an @endo/exo-stream bytes
+reader (haul it with iterateBytesReader) instead of buffering the whole body as
+one string. The body is already capped by the HttpClient's maxResponseBytes
+setting, so a stream cannot exceed that bound.`;
 
 const httpClientControlHelp = `\
 HttpClientControl - The host-side companion to an HttpClient.
@@ -278,6 +298,12 @@ const normalizeDecision = decision => {
  * @param {number} [args.policyPromptTimeoutMs]
  * @param {number} [args.auditLimit]
  * @param {number} [args.bindingLimit]
+ * @param {ReadonlyArray<Binding>} [args.initialBindings] - persisted bindings to
+ *   reconstitute the table with on restart (no audit event is recorded; these are
+ *   reloads, not fresh decisions).
+ * @param {() => void} [args.onChange] - invoked after any durable binding-table
+ *   mutation (a request-time pin, an unpin, or a binding revocation), so a
+ *   provisioning plugin can persist bindings exactly when they change.
  */
 export const makeTrustOnFirstBindPolicyAdapter = ({
   policyMode = 'strict',
@@ -286,6 +312,8 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
   policyPromptTimeoutMs = DEFAULT_POLICY_PROMPT_TIMEOUT_MS,
   auditLimit = DEFAULT_AUDIT_LIMIT,
   bindingLimit = DEFAULT_BINDING_LIMIT,
+  initialBindings = [],
+  onChange = () => {},
 } = {}) => {
   /** @type {PolicyMode} */
   let mode = validatePolicyMode(policyMode);
@@ -298,6 +326,12 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
 
   /** @type {Map<string, Binding>} */
   const bindings = new Map();
+  // Reconstitute persisted bindings before any mutation wires up `onChange`, so
+  // a reload does not itself trigger a persist. These are trusted store reads,
+  // so they bypass audit and the binding-limit gate that guards live decisions.
+  for (const binding of initialBindings) {
+    bindings.set(binding.target, harden({ ...binding }));
+  }
   /** @type {Map<string, Promise<Binding>>} */
   const pending = new Map();
   /** @type {AuditEntry[]} */
@@ -337,6 +371,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
         context: harden({ ...context }),
       }),
     );
+    onChange();
   };
 
   /**
@@ -528,6 +563,7 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
           decidedBy: 'controller',
         }),
       );
+      onChange();
     },
     /**
      * @param {PolicyMode} nextMode
@@ -614,6 +650,24 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
   const statusText = String(response.statusText || '');
   const ok = Boolean(response.ok);
 
+  /**
+   * Yield the already-bounded body in fixed-size chunks so `stream()` hauls it
+   * over CapTP incrementally (base64-framed with flow control) instead of
+   * returning the whole body as one string. A fresh generator per `stream()`
+   * call keeps each reader independent of `text()`/`json()` and of any other
+   * concurrent `stream()` reader over the same response.
+   */
+  const chunkBody = async function* chunkBody() {
+    await null;
+    for (
+      let offset = 0;
+      offset < bytes.length;
+      offset += RESPONSE_STREAM_CHUNK_BYTES
+    ) {
+      yield bytes.slice(offset, offset + RESPONSE_STREAM_CHUNK_BYTES);
+    }
+  };
+
   return makeExo('HttpResponse', HttpResponseInterface, {
     status: () => status,
     statusText: () => statusText,
@@ -635,6 +689,7 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
         throw err;
       }
     },
+    stream: () => bytesReaderFromIterator(chunkBody()),
     help: () => httpResponseHelp,
   });
 };
@@ -653,6 +708,13 @@ const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
  * @param {number} [args.auditLimit]
  * @param {number} [args.bindingLimit]
  * @param {() => number} [args.now]
+ * @param {ReadonlyArray<Binding>} [args.initialBindings] - persisted bindings to
+ *   reconstitute the trust-on-first-bind table with on restart, so a request-time
+ *   pin made before a shutdown survives it.
+ * @param {(snapshot: PolicySnapshot) => void} [args.onPolicyChange] - invoked
+ *   synchronously after any durable policy or binding mutation, with a hardened
+ *   snapshot of the persistable state. A provisioning plugin wires this to its
+ *   durable store; the callback stays platform-pure (it never sees the store).
  * @returns {{ client: HttpClient, control: HttpClientControl }}
  *
  * Rate accounting is delegated to the underlying HTTP confinement and occurs
@@ -671,6 +733,8 @@ export const makeHttpClientAndControl = ({
   auditLimit = DEFAULT_AUDIT_LIMIT,
   bindingLimit = DEFAULT_BINDING_LIMIT,
   now = Date.now,
+  initialBindings = [],
+  onPolicyChange,
 } = {}) => {
   if (typeof fetch !== 'function') {
     throw makeError(X`fetch is required`);
@@ -686,6 +750,13 @@ export const makeHttpClientAndControl = ({
     maxResponseBytes,
     'maxResponseBytes',
   );
+
+  // Until construction finishes, binding mutations must not persist (a reload is
+  // not a change). `notifyPolicyChange` starts as a no-op and is replaced with
+  // the real notifier once `confinement` exists; the constructor pin loop and
+  // the adapter's initial-binding seeding therefore fire only the no-op.
+  /** @type {() => void} */
+  let notifyPolicyChange = () => {};
   const policy = makeTrustOnFirstBindPolicyAdapter({
     policyMode,
     policyAuthority,
@@ -693,6 +764,8 @@ export const makeHttpClientAndControl = ({
     policyPromptTimeoutMs,
     auditLimit,
     bindingLimit,
+    initialBindings,
+    onChange: () => notifyPolicyChange(),
   });
 
   for (const origin of allowed) {
@@ -720,6 +793,40 @@ export const makeHttpClientAndControl = ({
     },
     { fetch, now },
   );
+
+  // Construction is complete; wire the real notifier. A snapshot captures the
+  // STATIC allowlist (not the effective set) plus the byte/rate/mode/revoked
+  // fields and the full binding table — exactly the persistable state, and
+  // exactly what reconstitutes an identical pair on the next boot. It is built
+  // synchronously so a later mutation cannot race the persist that reads it.
+  notifyPolicyChange = () => {
+    if (onPolicyChange === undefined) {
+      return;
+    }
+    const confinementPolicy = confinement.inspect();
+    const snapshot = harden({
+      policy: {
+        allowedOrigins: [...allowed],
+        maxRequestsPerMinute: confinementPolicy.maxRequestsPerMinute,
+        maxResponseBytes: confinementPolicy.maxResponseBytes,
+        policyMode: policy.getPolicyMode(),
+        revoked: confinementPolicy.revoked,
+      },
+      bindings: policy.listBindings(),
+    });
+    // A persistence callback can run arbitrary integration code. Dispatch it
+    // in a later event so it cannot reenter the mutation that produced this
+    // immutable snapshot.
+    void Promise.resolve().then(() => {
+      try {
+        onPolicyChange(snapshot);
+      } catch (error) {
+        // Persistence is best-effort and must never break a request or a
+        // control operation; a plugin's callback is expected to log failures.
+        console.error('[exo-http-client] onPolicyChange threw:', error);
+      }
+    });
+  };
 
   const assertNotRevoked = () => {
     if (confinement.isRevoked()) {
@@ -788,6 +895,10 @@ export const makeHttpClientAndControl = ({
       for (const origin of allowed) {
         policy.pinAllowed(origin, 'controller');
       }
+      // The pin loop already notifies, but an empty allowlist runs no pin and
+      // leaves the last notify carrying a stale `allowed`; a final notify with
+      // the settled state makes every path persist the correct snapshot.
+      notifyPolicyChange();
     },
     addAllowedOrigin: origin => {
       assertNotRevoked();
@@ -796,27 +907,32 @@ export const makeHttpClientAndControl = ({
         allowed = harden([...allowed, validated]);
       }
       policy.pinAllowed(validated, 'controller');
+      notifyPolicyChange();
     },
     removeAllowedOrigin: origin => {
       assertNotRevoked();
       const validated = validateOrigin(origin);
       allowed = harden(allowed.filter(item => item !== validated));
       policy.revokeBinding(validated);
+      notifyPolicyChange();
     },
     setMaxRequestsPerMinute: n => {
       assertNotRevoked();
       confinement.setMaxRequestsPerMinute(
         validatePositiveInteger(n, 'maxRequestsPerMinute'),
       );
+      notifyPolicyChange();
     },
     setMaxResponseBytes: n => {
       assertNotRevoked();
       confinement.setMaxResponseBytes(
         validatePositiveInteger(n, 'maxResponseBytes'),
       );
+      notifyPolicyChange();
     },
     revoke: () => {
       confinement.revoke();
+      notifyPolicyChange();
     },
     isRevoked: () => confinement.isRevoked(),
     listBindings: () => policy.listBindings(),
@@ -824,15 +940,18 @@ export const makeHttpClientAndControl = ({
       assertNotRevoked();
       policy.revokeBinding(origin);
       allowed = harden(allowed.filter(item => item !== validateOrigin(origin)));
+      notifyPolicyChange();
     },
     unpin: origin => {
       assertNotRevoked();
       policy.unpin(origin);
       allowed = harden(allowed.filter(item => item !== validateOrigin(origin)));
+      notifyPolicyChange();
     },
     setPolicyMode: mode => {
       assertNotRevoked();
       policy.setPolicyMode(validatePolicyMode(mode));
+      notifyPolicyChange();
     },
     listAuditEntries: options => policy.listAuditEntries(options),
     help: () => httpClientControlHelp,

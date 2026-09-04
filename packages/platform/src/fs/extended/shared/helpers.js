@@ -14,7 +14,7 @@ export const EMPTY_BYTES = harden(new Uint8Array(0));
 
 /**
  * Wrap a `Uint8Array` snapshot as a `PassableBytesReader` that
- * yields its bytes in one chunk. Used by `shared/blobref.js` for
+ * yields its bytes in one chunk. Used by `shared/blob-ref.js` for
  * `BlobRef.fetch`.
  *
  * @param {Uint8Array} bytes
@@ -77,11 +77,11 @@ export const assertChildName = name => {
  * daemon's `EndoDirectory` use, so a viewer can call `lookup`
  * identically on every backing.
  *
- * @param {string | string[]} nameOrPath
- * @returns {string[]}
+ * @param {string | readonly string[]} nameOrPath
+ * @returns {readonly string[]}
  */
 export const toSegments = nameOrPath =>
-  Array.isArray(nameOrPath) ? nameOrPath : [nameOrPath];
+  typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
 harden(toSegments);
 
 /**
@@ -91,8 +91,8 @@ harden(toSegments);
  * created before the live source listing is enumerated, so the fresh
  * child re-enters the walk). Mirrors the daemon `Mount.copy` guard.
  *
- * @param {string[]} fromSegs
- * @param {string[]} toSegs
+ * @param {readonly string[]} fromSegs
+ * @param {readonly string[]} toSegs
  * @returns {boolean}
  */
 export const isStrictDescendantPath = (fromSegs, toSegs) =>
@@ -109,8 +109,8 @@ harden(isStrictDescendantPath);
  * uniformly. Both paths are resolved relative to `selfDir`.
  *
  * @param {any} selfDir  the Directory exo `move` was invoked on
- * @param {string | string[]} fromPath
- * @param {string | string[]} toPath
+ * @param {string | readonly string[]} fromPath
+ * @param {string | readonly string[]} toPath
  * @returns {Promise<void>}
  */
 export const movePathToPath = async (selfDir, fromPath, toPath) => {
@@ -204,7 +204,7 @@ harden(mintBrand);
  * single backing path to push the walk down to.
  *
  * @param {object} startDir  starting Directory cap
- * @param {string[]} path
+ * @param {readonly string[]} path
  * @param {any} opts
  */
 export const materialiseViaWalk = async (startDir, path, opts) => {

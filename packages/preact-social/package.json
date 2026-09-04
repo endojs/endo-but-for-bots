@@ -1,0 +1,81 @@
+{
+  "name": "@endo/preact-social",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trusted-in-untrusted social UI for @endo/preact-container: render your own meaning of a party a confined guest designates (petnames, an unspoofable trust badge) without the guest reading or forging it",
+  "keywords": [
+    "preact",
+    "petname",
+    "ocap",
+    "secure-ui",
+    "confine",
+    "ses",
+    "endo"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/preact-social"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "exports": {
+    "./modifiers": {
+      "types": "./src/modifiers.d.ts",
+      "default": "./src/modifiers.js"
+    },
+    "./party-mark": {
+      "types": "./src/party-mark.d.ts",
+      "default": "./src/party-mark.js"
+    },
+    "./composition": {
+      "types": "./src/composition.d.ts",
+      "default": "./src/composition.js"
+    },
+    "./petname": {
+      "types": "./src/petname.d.ts",
+      "default": "./src/petname.js"
+    },
+    "./pattern-badge": {
+      "types": "./src/pattern-badge.d.ts",
+      "default": "./src/pattern-badge.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "lint": "yarn lint:eslint",
+    "lint-fix": "yarn lint:eslint --fix",
+    "lint:eslint": "eslint .",
+    "test": "playwright install chromium && vitest run",
+    "test:browser": "vitest run"
+  },
+  "dependencies": {
+    "@endo/preact-container": "workspace:^"
+  },
+  "peerDependencies": {
+    "preact": "^10.0.0 || ^11.0.0"
+  },
+  "devDependencies": {
+    "@vitest/browser": "^4.1.11",
+    "@vitest/browser-playwright": "^4.1.11",
+    "eslint": "catalog:dev",
+    "playwright": "^1.62.1",
+    "preact": "^10.29.8",
+    "ses": "workspace:^",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.11"
+  },
+  "files": [
+    "src",
+    "examples",
+    "LICENSE*",
+    "NOTICE*",
+    "SECURITY*",
+    "PATTERNS*"
+  ]
+}

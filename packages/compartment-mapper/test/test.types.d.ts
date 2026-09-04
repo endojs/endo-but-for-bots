@@ -6,11 +6,13 @@
  */
 
 import type { ExecutionContext } from 'ava';
-import type { inspect as nodeInspect, InspectOptionsStylized } from 'util';
+import type { InspectContext, inspect as nodeInspect } from 'util';
 import type { makeReadPowers } from '../src/node-powers.js';
 import type {
+  ArchiveOptions,
   FileUrlString,
   LoadLocationOptions,
+  MapNodeModulesOptions,
   Simplify,
   SomePolicy,
 } from '../src/types.js';
@@ -92,7 +94,7 @@ export type MakeProjectFixtureReadPowersOptions = Simplify<
  */
 export type FixedCustomInspectFunction = (
   depth: number,
-  options: InspectOptionsStylized,
+  options: InspectContext,
   inspect: typeof nodeInspect,
 ) => any;
 
@@ -111,10 +113,10 @@ export type CustomInspectStyles = Simplify<
 
 declare module 'node:util' {
   /**
-   * Augments the `stylize` method of `InspectOptionsStylized` to allow
+   * Augments the `stylize` method of `InspectContext` to allow
    * {@link CustomInspectStyles} to be applied.
    */
-  interface InspectOptionsStylized {
+  interface InspectContext {
     stylize(text: string, styleType: keyof CustomInspectStyles): string;
   }
 }
@@ -189,7 +191,9 @@ export interface ScaffoldOptions extends LoadLocationOptions {
   knownArchiveFailure?: boolean;
   onError?: ScaffoldOnErrorFn;
   addGlobals?: object;
-  additionalOptions?: object;
+  additionalOptions?: LoadLocationOptions &
+    MapNodeModulesOptions &
+    ArchiveOptions;
 }
 
 export type WrappedTestFn = (

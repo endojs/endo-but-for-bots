@@ -1,0 +1,193 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./main.js": {
+          "language": "js"
+        },
+        "app": {
+          "link": "app"
+        },
+        "app/main.js": {
+          "link": "app"
+        },
+        "avery": {
+          "link": "avery"
+        },
+        "brooke": {
+          "link": "brooke"
+        },
+        "clarke": {
+          "link": "clarke"
+        },
+        "danny": {
+          "link": "danny"
+        },
+        "esmcjs": {
+          "link": "esmcjs"
+        },
+        "typecommon": {
+          "link": "typecommon"
+        },
+        "typemodule": {
+          "link": "typemodule"
+        },
+        "typemodule-implied": {
+          "link": "typemodule-implied"
+        },
+        "typeparsers": {
+          "link": "typeparsers"
+        }
+      }
+    },
+    "avery": {
+      "modules": {
+        "./avery.js": {
+          "language": "js"
+        }
+      }
+    },
+    "brooke": {
+      "modules": {
+        "./brooke.js": {
+          "language": "js"
+        },
+        "clarke": {
+          "link": "clarke"
+        }
+      }
+    },
+    "clarke": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    },
+    "danny": {
+      "modules": {
+        "./src/danny.js": {
+          "language": "js"
+        },
+        "./src/index.js": {
+          "language": "js"
+        }
+      }
+    },
+    "esmcjs": {
+      "modules": {
+        "./index.mjs": {
+          "language": "mjs"
+        },
+        "./module-exports-assigned-object.cjs": {
+          "language": "cjs"
+        },
+        "./require-no-implicit-default.cjs": {
+          "language": "cjs"
+        },
+        "./set-explicit-default.cjs": {
+          "language": "cjs"
+        }
+      }
+    },
+    "typecommon": {
+      "modules": {
+        "./cjs.cjs": {
+          "language": "cjs"
+        },
+        "./cjs.default.cjs": {
+          "language": "cjs"
+        },
+        "./js.js": {
+          "language": "js"
+        },
+        "./json.json": {
+          "language": "json"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./mjs.mjs": {
+          "language": "mjs"
+        }
+      }
+    },
+    "typemodule": {
+      "modules": {
+        "./cjs.cjs": {
+          "language": "cjs"
+        },
+        "./cjs.default.cjs": {
+          "language": "cjs"
+        },
+        "./js.js": {
+          "language": "js"
+        },
+        "./json.json": {
+          "language": "json"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./mjs.mjs": {
+          "language": "mjs"
+        }
+      }
+    },
+    "typemodule-implied": {
+      "modules": {
+        "./cjs.cjs": {
+          "language": "cjs"
+        },
+        "./cjs.default.cjs": {
+          "language": "cjs"
+        },
+        "./js.js": {
+          "language": "js"
+        },
+        "./json.json": {
+          "language": "json"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./mjs.mjs": {
+          "language": "mjs"
+        }
+      }
+    },
+    "typeparsers": {
+      "modules": {
+        "./cjs.cjs": {
+          "language": "cjs"
+        },
+        "./cjs.default.cjs": {
+          "language": "cjs"
+        },
+        "./js.js": {
+          "language": "js"
+        },
+        "./json.json": {
+          "language": "json"
+        },
+        "./main.js": {
+          "language": "js"
+        },
+        "./mjs.mjs": {
+          "language": "mjs"
+        }
+      }
+    }
+  },
+  "conditions": [
+    "development"
+  ],
+  "entry": "node_modules/app/main.js",
+  "entryCompartment": "app",
+  "entryModule": "./main.js",
+  "exitModules": [
+    "builtin"
+  ],
+  "fixture": "fixtures-0",
+  "oracle": "node"
+}

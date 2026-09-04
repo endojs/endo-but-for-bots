@@ -2,9 +2,12 @@
 /// <reference types="ses"/>
 
 /** @import { Model } from '@earendil-works/pi-ai' */
-/** @import { Credentials } from './credentials.js' */
+/** @import { Credentials, ModelBudget, ModelCost, ModelProfileConfig, ModelProfileDefinition, ResolvedModelProfile, ThinkingLevel } from './types.js' */
 
-import { getModel, registerBuiltInApiProviders } from '@earendil-works/pi-ai';
+import {
+  getModel,
+  registerBuiltInApiProviders,
+} from '@earendil-works/pi-ai/compat';
 
 import { getAmbientEnv, makeEnvCredentials } from './credentials.js';
 
@@ -41,43 +44,6 @@ const normalizeOpenAIBaseUrl = baseUrl => {
   const trimmed = trimTrailingSlashes(baseUrl);
   return trimmed.match(/\/v1(?:\/.*)?$/) ? trimmed : `${trimmed}/v1`;
 };
-
-/**
- * @typedef {object} ModelCost The per-token budget pi-ai bills an
- *   accounting surface against. All four fields default to zero for an
- *   OpenAI-compatible / ollama endpoint, which has no known cost table.
- * @property {number} input
- * @property {number} output
- * @property {number} cacheRead
- * @property {number} cacheWrite
- *
- * @typedef {object} ModelBudget The caller-configurable budget fields a built
- *   OpenAI-compatible / ollama `Model` carries. Each is optional; an omitted
- *   field falls back to the conservative default below.
- * @property {ModelCost} [cost]
- * @property {number} [contextWindow]
- * @property {number} [maxTokens]
- *
- * @typedef {object} ModelProfileConfig
- * @property {string} [provider]
- * @property {string} [model]
- * @property {string} [baseUrl]
- * @property {'openai-completions' | string} [api]
- * @property {boolean} [reasoning]
- * @property {ModelCost} [cost]
- * @property {number} [contextWindow]
- * @property {number} [maxTokens]
- */
-
-/**
- * The reasoning-effort budget a caller can request of a thinking-capable model.
- * Universal across providers: pi-agent-core maps the level onto each provider's
- * own reasoning control. `'off'` disables thinking; the remaining levels scale
- * effort from `'minimal'` to `'xhigh'`. The harness default is
- * `reasoning ? 'medium' : 'off'` (see {@link makePiAgent}).
- *
- * @typedef {'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'} ThinkingLevel
- */
 
 /**
  * Conservative defaults for the budget fields of a built OpenAI-compatible /
@@ -325,31 +291,6 @@ export const resolveModel = async (modelString, credentials) => {
   return getModel(provider, modelId);
 };
 harden(resolveModel);
-
-/**
- * @typedef {object} ModelProfileDefinition
- * @property {string} id A short profile name (e.g. 'sonnet') callers resolve by.
- * @property {string} provider The pi-ai provider (e.g. 'anthropic', 'ollama').
- * @property {string} model The provider's model id.
- * @property {string} [baseUrl]
- * @property {boolean} [reasoning]
- * @property {ModelCost} [cost] Override the per-token budget for a built
- *   OpenAI-compatible / ollama model (ignored for a registry-resolved model,
- *   which carries pi-ai's own cost table).
- * @property {number} [contextWindow] Override the context window for a built
- *   OpenAI-compatible / ollama model.
- * @property {number} [maxTokens] Override the max output tokens for a built
- *   OpenAI-compatible / ollama model.
- * @property {string | ((credentials: Credentials) => string | undefined)} [credential]
- *   The secret this profile pairs with the model: a key-name resolved through
- *   the credential seam, or a callback given the seam. Ollama profiles need
- *   none.
- *
- * @typedef {object} ResolvedModelProfile
- * @property {Model<string>} model
- * @property {(credentials: Credentials) => string | undefined} resolveCredential
- *   Resolve this profile's credential against a (possibly swapped) seam.
- */
 
 /**
  * Build a registry of provider/model profiles, each pairing a concrete pi-ai

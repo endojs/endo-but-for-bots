@@ -1,9 +1,8 @@
-/* eslint-disable @endo/no-polymorphic-call, import/no-extraneous-dependencies, no-restricted-globals */
-import { expectType } from 'tsd';
+import { expectTypeOf } from 'expect-type';
 
 import '@endo/immutable-arraybuffer/shim.js';
 
 const arr = new ArrayBuffer(10);
-expectType<ArrayBuffer>(arr.sliceToImmutable());
-expectType<ArrayBuffer>(arr.transferToImmutable());
-expectType<boolean>(arr.immutable);
+expectTypeOf(arr.sliceToImmutable()).toEqualTypeOf<ArrayBuffer>();
+expectTypeOf(arr.transferToImmutable()).toEqualTypeOf<ArrayBuffer>();
+expectTypeOf(arr.immutable).toEqualTypeOf<boolean>();

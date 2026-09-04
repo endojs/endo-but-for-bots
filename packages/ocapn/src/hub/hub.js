@@ -1,0 +1,2168 @@
+// @ts-check
+import harden from '@endo/harden';
+import { Far } from '@endo/marshal';
+
+import {
+  DescHandoffGiveSigEnvelopeCodec,
+  makeDescCodecs,
+  makeHandoffReceiveDescriptor,
+  makeHandoffReceiveSigEnvelope,
+} from '../codecs/descriptors.js';
+import { makePassableCodecs } from '../codecs/passable.js';
+import { makeOcapnOperationsCodecs } from '../codecs/operations.js';
+import { getSelectorName, makeSelector } from '../selector.js';
+import { makeSturdyRef } from '../client/sturdyrefs.js';
+
+/**
+ * An OCapN hub: a comms-vat-style forwarding node that is NOT a
+ * client. The hub holds no presences, no promises, no locator of live
+ * values — only per-session c-lists (position ↔ hub reference row) and
+ * answer routes, all plain persistable tables. Every inbound message
+ * is structurally transcoded: decoded with the ordinary wire codecs
+ * against a table-backed reference kit that materializes descriptors
+ * as inert tokens, routed by its target's origin, and re-encoded
+ * toward the destination session with that session's kit — which
+ * rewrites every embedded reference through the c-lists, allocating
+ * rows on first sight. Nothing is reified, so nothing promise-shaped
+ * (or object-shaped) ever lives in hub memory: subscriptions,
+ * resolutions, pipelined answers, and gc hints are all just messages
+ * whose slots get rewritten.
+ *
+ * The hub's only endpoint behavior is its bootstrap (export position 0
+ * toward every session): `fetch(swissnum)` answers from the
+ * publications table with a reference row. Everything else — including
+ * the resolution of that fetch — is forwarding.
+ *
+ * Sessions are namespaced by an epoch that bumps on `retireSession`,
+ * so a successor peer reattaching under the same key can never collide
+ * with (or resurrect) the retired incarnation's rows: retired rows
+ * become dead tombstones that keep holders' positions resolving —
+ * loudly, as breaks — until the holders release them, at which point
+ * the tombstones are pruned.
+ *
+ * Answers are re-exported as promises: when a forwarded delivery asks
+ * for an answer, the hub allocates the answer position at the
+ * destination and backs it with an ordinary promise-flavored reference
+ * row, so the answer can be mentioned toward ANY session (toward its
+ * owner as `desc:answer`, toward everyone else as a promise import),
+ * listened on, pipelined through, and garbage-collected exactly like
+ * any other reference.
+ *
+ * Durability: the entire hub state (rows, counters, publications,
+ * queued frames, inbound watermarks) serializes to JSON and is written
+ * through the injected store after every mutating frame, BEFORE the
+ * resulting frames are sent — so the tables can never lag the wire. A
+ * successor process reconstructs the hub from the store alone and
+ * reattaches its sessions; positions are stable because they are rows,
+ * not objects. Frames toward a detached durable session queue in the
+ * tables and drain on reattach (at-least-once across a crash mid
+ * drain); frames toward a detached ephemeral session break to the
+ * sender.
+ *
+ * Sessions attach pre-authenticated: the embedder owns transports,
+ * identity, and lifecycle (thixotrope's durable worker transports and
+ * netlayer sessions), and hands the hub ordered plaintext frames. An
+ * undecodable or unroutable frame from a `remote` session aborts that
+ * session (op:abort, detach, `onAbort`); from a local session (a
+ * worker or an in-process endpoint, where it should never occur) it is
+ * dropped loudly.
+ *
+ * Third-party gifts THROUGH the hub work in the exporter role: a peer
+ * that hands a hub-fronted reference to another peer deposits the gift
+ * on the hub bootstrap (`deposit-gift`) and the receiver withdraws it
+ * (`withdraw-gift`), the hub verifying the handoff signature chain
+ * against the identities its embedder recorded at each session's
+ * handshake. Gifts and their waiters are rows like everything else.
+ *
+ * In the receiver role — an inbound desc:handoff-give naming an
+ * exporter elsewhere — the hub redeems the gift itself (the sessions
+ * behind it, like workers, cannot dial): the gift becomes an
+ * answer-backed promise row at an outbound session with the exporter,
+ * the embedder's `handoffs.connect` power dials and attaches that
+ * session, and the hub signs and sends the withdrawal using the
+ * session keys its embedder recorded. No hub subscription: listens on
+ * the gift forward to the exporter's answer like any other promise.
+ *
+ * Known limits (loud, not silent): a message routed at the sender's
+ * own export cannot carry a resolveMeDesc (the wire format has no way
+ * to hand a session its own resolver back), so such listens break to
+ * the sender.
+ *
+ * @typedef {object} HubStore
+ * @property {() => any} getState previously persisted state, or
+ *   undefined
+ * @property {(state: any) => void} setState atomic write-through
+ */
+
+const BOOTSTRAP_POSITION = '0';
+const STATE_VERSION = 2;
+
+const { isView } = ArrayBuffer;
+
+/**
+ * Hex-encode a byteArray `Uint8Array`. A byteArray passable is always a
+ * whole-buffer-spanning `Uint8Array` (issue #573), never a bare
+ * `ArrayBufferLike` nor some other `ArrayBufferView`, so this is typed
+ * `Uint8Array`. The runtime `isView` branch is *not* buffer-vs-view type
+ * generality — it is tolerance for the single emulation infidelity of the
+ * `@endo/immutable-arraybuffer` shim: an emulated frozen wrapper (as
+ * `makeSessionId`/`frozenBytes` yield) is *typed* `Uint8Array` yet is a plain
+ * object that reports `ArrayBuffer.isView === false` and is not
+ * integer-indexable, so it must first be copied into a fresh mutable
+ * `Uint8Array`. A genuine view — including one over a native immutable buffer
+ * — is read in place. This mirrors `@endo/bytes`' `toIndexableUint8Array`.
+ *
+ * @param {Uint8Array} bytes
+ */
+const hexFromBytes = bytes => {
+  const view = isView(bytes)
+    ? bytes
+    : new Uint8Array(/** @type {Uint8Array} */ (bytes).slice(0));
+  return Array.from(view, byte => byte.toString(16).padStart(2, '0')).join('');
+};
+
+/** @param {string} hex */
+const bytesFromHex = hex => {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i += 1) {
+    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+};
+
+/**
+ * The publications table key for a swissnum in either of its accepted
+ * forms.
+ *
+ * @param {string | Uint8Array} swissnum
+ */
+const swissnumHex = swissnum =>
+  typeof swissnum === 'string'
+    ? hexFromBytes(new TextEncoder().encode(swissnum))
+    : hexFromBytes(swissnum);
+
+const makeMemoryHubStore = () => {
+  /** @type {any} */
+  let state;
+  return harden({
+    getState: () => state,
+    setState: (/** @type {any} */ next) => {
+      state = next;
+    },
+  });
+};
+
+/**
+ * @param {object} options
+ * @param {any} options.codec an OCapN codec (syrup or cbor); every
+ *   attached session must speak it
+ * @param {HubStore} [options.store]
+ * @param {any} [options.cryptography] a `makeCryptography(codec)`
+ *   instance; required for third-party gift handling (deposit-gift /
+ *   withdraw-gift on the hub bootstrap), whose signatures the hub
+ *   verifies against attached sessions' identities
+ * @param {{ connect: (location: any, sessionKey: string) => void }} [options.handoffs]
+ *   the outbound-redemption power: asked to dial an exporter location
+ *   and attach it to the hub under the given session key (with its
+ *   handshake identity); required for the hub to RECEIVE third-party
+ *   gifts on behalf of its sessions
+ * @param {(...args: Array<unknown>) => void} [options.logError]
+ */
+export const makeOcapnHub = ({
+  codec,
+  store = makeMemoryHubStore(),
+  cryptography = undefined,
+  handoffs = undefined,
+  // eslint-disable-next-line no-console
+  logError = (...args) => console.error('ocapn hub:', ...args),
+}) => {
+  /**
+   * One reference row, namespaced by its origin session's epoch. A row
+   * either backs an export (`backing: 'export'` — the object or
+   * promise the origin exported at `position` there) or an answer
+   * (`backing: 'answer'` — the promise for the answer the origin owes
+   * the hub at `position` in its answer table). `facing` maps every
+   * other session to the hub's export position toward it; `refcounts`
+   * counts wire mentions per facing session; `mentionsIn` counts how
+   * many times the origin sent it (the delta owed back to the origin
+   * when the row dies); `listeners` records the resolver rows of
+   * pending op:listen subscriptions so retirement can break them.
+   *
+   * @typedef {{
+   *   refId: string,
+   *   origin: string,
+   *   epoch: number,
+   *   position: string,
+   *   backing: 'export' | 'answer',
+   *   flavor: 'object' | 'promise',
+   *   resolver: boolean,
+   *   dead: boolean,
+   *   mentionsIn: number,
+   *   listeners: Array<string>,
+   *   facing: Map<string, string>,
+   *   refcounts: Map<string, number>,
+   * }} RefRow
+   */
+
+  /** @type {Map<string, RefRow>} */
+  const refs = new Map();
+
+  /**
+   * An answer route: what the hub owes a session at one of that
+   * session's answer positions. `{ ref }` is a pending answer backed
+   * by a reference row (usually answer-backed at the destination);
+   * `{ local }` is a locally settled answer — the bootstrap's fetch
+   * result, or `null` for a break with `reason`; `{ done }` fulfilled
+   * with no reference value (a deposit acknowledgment); `{ gift }` is
+   * a withdrawal awaiting its deposit under that gift key.
+   *
+   * @typedef {{ ref: string }
+   *   | { local: string | null, reason?: string }
+   *   | { done: true }
+   *   | { gift: string }} AnswerRoute
+   */
+
+  /**
+   * The wire identity of a session, when the embedder's handshake (or
+   * derivation) provides one: the OCapN session id and the peer's
+   * public key bytes, both hex. Gift signatures verify against these.
+   *
+   * @typedef {{ sessionId: string, peerPublicKeyQ: string, selfPrivateKey?: string }} SessionIdentity
+   */
+
+  /**
+   * A gift the hub has been given but not yet withdrawn from its
+   * exporter: the give envelope (hex bytes), the session the give
+   * arrived on (whose keys sign the receive), and the answer position
+   * the withdrawal will use at the exporter session.
+   *
+   * @typedef {{ position: string, giveHex: string, gifterSession: string }} PendingWithdraw
+   */
+
+  /**
+   * @typedef {{
+   *   epoch: number,
+   *   ourExports: Map<string, string>,
+   *   nextExport: bigint,
+   *   nextAnswer: bigint,
+   *   answersOwed: Map<string, AnswerRoute>,
+   *   processedUpTo: number,
+   *   durable: boolean,
+   *   queue: Array<string>,
+   *   identity: SessionIdentity | undefined,
+   *   usedGiftHandoffs: Array<string>,
+   *   pendingWithdraws: Array<PendingWithdraw>,
+   *   nextHandoffCount: bigint,
+   *   dialLocation: any,
+   *   send: (bytes: Uint8Array) => void,
+   *   attached: boolean,
+   *   remote: boolean,
+   *   onAbort: ((error: unknown) => void) | undefined,
+   * }} SessionState
+   */
+
+  /** @type {Map<string, SessionState>} */
+  const sessions = new Map();
+
+  /** @type {Map<string, string>} swissnum hex -> refId */
+  const publications = new Map();
+
+  /**
+   * Deposited third-party gifts:
+   * `${gifterSessionId}:${giftId}` (hex) -> refId. A gift pins its row
+   * like a publication until withdrawn.
+   *
+   * @type {Map<string, string>}
+   */
+  const gifts = new Map();
+
+  /**
+   * Resolver rows awaiting a gift's deposit (withdrawals that arrived
+   * first): gift key -> resolver refIds to fulfill on deposit. The
+   * withdrawers' answer routes carry the same key as `{ gift }`.
+   *
+   * @type {Map<string, Array<string>>}
+   */
+  const giftWaiters = new Map();
+
+  let dirty = false;
+
+  // --- the mutation ledger: undo journal for encode-scope rollback ---
+
+  /** @type {Array<() => void> | null} */
+  let ledger = null;
+
+  /** @param {() => void} undo */
+  const noteUndo = undo => {
+    if (ledger !== null) {
+      ledger.push(undo);
+    }
+  };
+
+  /**
+   * Run `fn` with table mutations journaled; on throw, undo them all
+   * (in reverse) before rethrowing, so a failed decode or encode
+   * leaves no phantom rows, refcounts, or routes behind. Nested scopes
+   * merge into the enclosing one.
+   *
+   * @template T
+   * @param {() => T} fn
+   * @returns {T}
+   */
+  const withRollback = fn => {
+    const outer = ledger;
+    /** @type {Array<() => void>} */
+    const scope = [];
+    ledger = scope;
+    try {
+      const result = fn();
+      ledger = outer;
+      if (outer !== null) {
+        outer.push(...scope);
+      }
+      return result;
+    } catch (error) {
+      ledger = outer;
+      for (let i = scope.length - 1; i >= 0; i -= 1) {
+        scope[i]();
+      }
+      throw error;
+    }
+  };
+
+  // --- persistence ---
+
+  const persist = () => {
+    if (!dirty) {
+      return;
+    }
+    dirty = false;
+    /** @type {any} */
+    const state = {
+      version: STATE_VERSION,
+      refs: {},
+      sessions: {},
+      publications: {},
+    };
+    for (const [refId, row] of refs.entries()) {
+      state.refs[refId] = {
+        origin: row.origin,
+        epoch: row.epoch,
+        position: row.position,
+        backing: row.backing,
+        flavor: row.flavor,
+        resolver: row.resolver,
+        dead: row.dead,
+        mentionsIn: row.mentionsIn,
+        listeners: [...row.listeners],
+        refcounts: Object.fromEntries(row.refcounts),
+      };
+    }
+    for (const [sessionKey, session] of sessions.entries()) {
+      state.sessions[sessionKey] = {
+        epoch: session.epoch,
+        ourExports: Object.fromEntries(session.ourExports),
+        nextExport: String(session.nextExport),
+        nextAnswer: String(session.nextAnswer),
+        answersOwed: Object.fromEntries(session.answersOwed),
+        processedUpTo: session.processedUpTo,
+        durable: session.durable,
+        queue: [...session.queue],
+        identity: session.identity,
+        usedGiftHandoffs: [...session.usedGiftHandoffs],
+        pendingWithdraws: session.pendingWithdraws.map(pending => ({
+          ...pending,
+        })),
+        nextHandoffCount: String(session.nextHandoffCount),
+        dialLocation: session.dialLocation,
+      };
+    }
+    state.publications = Object.fromEntries(publications);
+    state.gifts = Object.fromEntries(gifts);
+    state.giftWaiters = Object.fromEntries(
+      [...giftWaiters.entries()].map(([key, list]) => [key, [...list]]),
+    );
+    store.setState(state);
+  };
+
+  /** @param {string} sessionKey */
+  const provideSessionState = sessionKey => {
+    let session = sessions.get(sessionKey);
+    if (session === undefined) {
+      session = {
+        epoch: 0,
+        ourExports: new Map(),
+        nextExport: 1n,
+        // Starts at 1: op:get/op:index/op:untag carry their answer as
+        // a PositiveInteger, which cannot encode 0.
+        nextAnswer: 1n,
+        answersOwed: new Map(),
+        processedUpTo: 0,
+        durable: false,
+        queue: [],
+        identity: undefined,
+        usedGiftHandoffs: [],
+        pendingWithdraws: [],
+        nextHandoffCount: 1n,
+        dialLocation: undefined,
+        send: () => {
+          throw Error(`ocapn hub: session ${sessionKey} is not attached`);
+        },
+        attached: false,
+        remote: false,
+        onAbort: undefined,
+      };
+      sessions.set(sessionKey, session);
+      dirty = true;
+    }
+    return session;
+  };
+
+  const restore = () => {
+    const state = store.getState();
+    if (state === undefined) {
+      return;
+    }
+    if (state.version !== STATE_VERSION) {
+      throw Error(
+        `ocapn hub: unsupported persisted state version ${state.version}`,
+      );
+    }
+    for (const [refId, row] of Object.entries(state.refs ?? {})) {
+      const r = /** @type {any} */ (row);
+      refs.set(refId, {
+        refId,
+        origin: r.origin,
+        epoch: Number(r.epoch ?? 0),
+        position: r.position,
+        backing: r.backing === 'answer' ? 'answer' : 'export',
+        flavor: r.flavor,
+        resolver: Boolean(r.resolver),
+        dead: Boolean(r.dead),
+        mentionsIn: Number(r.mentionsIn ?? 0),
+        listeners: [...(r.listeners ?? [])],
+        facing: new Map(),
+        refcounts: new Map(
+          Object.entries(r.refcounts ?? {}).map(([k, v]) => [k, Number(v)]),
+        ),
+      });
+    }
+    for (const [sessionKey, s] of Object.entries(state.sessions ?? {})) {
+      const sd = /** @type {any} */ (s);
+      const session = provideSessionState(sessionKey);
+      session.epoch = Number(sd.epoch ?? 0);
+      session.ourExports = new Map(Object.entries(sd.ourExports ?? {}));
+      session.nextExport = BigInt(sd.nextExport ?? '1');
+      session.nextAnswer = BigInt(sd.nextAnswer ?? '1');
+      session.answersOwed = new Map(Object.entries(sd.answersOwed ?? {}));
+      session.processedUpTo = Number(sd.processedUpTo ?? 0);
+      session.durable = Boolean(sd.durable);
+      session.queue = [...(sd.queue ?? [])];
+      session.identity = sd.identity;
+      session.usedGiftHandoffs = [...(sd.usedGiftHandoffs ?? [])];
+      session.pendingWithdraws = (sd.pendingWithdraws ?? []).map(
+        (/** @type {any} */ pending) => ({ ...pending }),
+      );
+      session.nextHandoffCount = BigInt(sd.nextHandoffCount ?? '1');
+      session.dialLocation = sd.dialLocation;
+      for (const [position, refId] of session.ourExports.entries()) {
+        const row = refs.get(refId);
+        if (row !== undefined) {
+          row.facing.set(sessionKey, position);
+        }
+      }
+    }
+    for (const [swissnum, refId] of Object.entries(state.publications ?? {})) {
+      publications.set(swissnum, /** @type {string} */ (refId));
+    }
+    for (const [giftKey, refId] of Object.entries(state.gifts ?? {})) {
+      gifts.set(giftKey, /** @type {string} */ (refId));
+    }
+    for (const [giftKey, list] of Object.entries(state.giftWaiters ?? {})) {
+      giftWaiters.set(giftKey, [.../** @type {Array<string>} */ (list)]);
+    }
+    dirty = false;
+  };
+  restore();
+
+  // --- reference rows ---
+
+  /**
+   * @param {string} origin
+   * @param {bigint | string} position
+   * @param {'object' | 'promise'} flavor
+   * @param {object} [options]
+   * @param {boolean} [options.resolver]
+   * @param {'export' | 'answer'} [options.backing]
+   * @param {boolean} [options.mention] count this as a wire mention by
+   *   the origin (a decode of desc:import-*), owed back through
+   *   op:gc-exports when the row dies
+   */
+  const provideRef = (
+    origin,
+    position,
+    flavor,
+    { resolver = false, backing = 'export', mention = false } = {},
+  ) => {
+    const { epoch } = provideSessionState(origin);
+    const positionKey = String(position);
+    const refId = `${origin}#${epoch}:${
+      backing === 'answer' ? 'a' : ''
+    }${positionKey}`;
+    let existing = refs.get(refId);
+    if (existing === undefined) {
+      /** @type {RefRow} */
+      const created = {
+        refId,
+        origin,
+        epoch,
+        position: positionKey,
+        backing,
+        flavor,
+        resolver,
+        dead: false,
+        mentionsIn: 0,
+        listeners: [],
+        facing: new Map(),
+        refcounts: new Map(),
+      };
+      refs.set(refId, created);
+      noteUndo(() => refs.delete(refId));
+      existing = created;
+      dirty = true;
+    }
+    const row = existing;
+    if (row.resolver && !resolver) {
+      // Re-introduced as an ordinary reference: it retains after all.
+      row.resolver = false;
+      noteUndo(() => {
+        row.resolver = true;
+      });
+      dirty = true;
+    }
+    if (mention) {
+      row.mentionsIn += 1;
+      noteUndo(() => {
+        row.mentionsIn -= 1;
+      });
+      dirty = true;
+    }
+    return row;
+  };
+
+  /**
+   * The promise row backing the answer `owner` owes the hub at
+   * `position` in its answer table.
+   *
+   * @param {string} owner
+   * @param {bigint | string} position
+   */
+  const provideAnswerRef = (owner, position) =>
+    provideRef(owner, position, 'promise', { backing: 'answer' });
+
+  // --- tokens: the inert stand-ins the codecs traffic in ---
+
+  /** @type {WeakMap<object, any>} */
+  const tokenInfo = new WeakMap();
+
+  /** @param {any} info */
+  const makeToken = info => {
+    const token = Far('HubRef', {});
+    tokenInfo.set(token, harden(info));
+    return token;
+  };
+
+  /** @param {any} value */
+  const infoOf = value => {
+    const info = tokenInfo.get(value);
+    if (info === undefined) {
+      throw Error('ocapn hub: message value is not a hub reference');
+    }
+    return info;
+  };
+
+  /** @param {string} refId */
+  const refTokenFor = refId => makeToken({ kind: 'ref', refId });
+
+  /**
+   * The reference row behind a token's info, for the kinds that carry
+   * one (`ref`, `resolver`, and settled `localAnswer`).
+   *
+   * @param {any} info
+   */
+  const rowOfInfo = info => {
+    if (info.kind === 'bootstrap') {
+      throw Error('ocapn hub: cannot forward a bootstrap reference');
+    }
+    if (info.kind === 'localAnswer' && info.refId === null) {
+      throw Error(
+        info.reason ?? 'ocapn hub: cannot forward a broken local answer',
+      );
+    }
+    const row = refs.get(info.refId);
+    if (row === undefined) {
+      throw Error(`ocapn hub: dangling reference ${info.refId}`);
+    }
+    return row;
+  };
+
+  // --- gc ---
+
+  /**
+   * Whether a row is rooted by something other than facing positions:
+   * a publication, or an answer route that names it.
+   *
+   * @param {string} refId
+   */
+  const isPinned = refId => {
+    for (const published of publications.values()) {
+      if (published === refId) {
+        return true;
+      }
+    }
+    for (const deposited of gifts.values()) {
+      if (deposited === refId) {
+        return true;
+      }
+    }
+    for (const waiters of giftWaiters.values()) {
+      if (waiters.includes(refId)) {
+        return true;
+      }
+    }
+    for (const session of sessions.values()) {
+      for (const route of session.answersOwed.values()) {
+        if ('ref' in route && route.ref === refId) {
+          return true;
+        }
+        if ('local' in route && route.local === refId) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  /**
+   * Remove a settled or released resolver from every row's pending
+   * listener registrations.
+   *
+   * @param {string} resolverRefId
+   */
+  const clearListenerEntries = resolverRefId => {
+    for (const row of refs.values()) {
+      const index = row.listeners.indexOf(resolverRefId);
+      if (index >= 0) {
+        row.listeners.splice(index, 1);
+        dirty = true;
+      }
+    }
+  };
+
+  /** @param {RefRow} row */
+  const maybeReleaseRef = row => {
+    if (row.facing.size > 0 || isPinned(row.refId)) {
+      return;
+    }
+    refs.delete(row.refId);
+    dirty = true;
+    if (row.resolver) {
+      clearListenerEntries(row.refId);
+    }
+    if (row.dead) {
+      // A tombstone whose last holder let go: prune silently.
+      return;
+    }
+    if (row.backing === 'answer') {
+      // eslint-disable-next-line no-use-before-define
+      sendMessage(row.origin, {
+        type: 'op:gc-answers',
+        answerPositions: [BigInt(row.position)],
+      });
+    } else if (row.mentionsIn > 0) {
+      // eslint-disable-next-line no-use-before-define
+      sendMessage(row.origin, {
+        type: 'op:gc-exports',
+        exportPositions: [BigInt(row.position)],
+        wireDeltas: [BigInt(row.mentionsIn)],
+      });
+    }
+  };
+
+  // --- per-session wire kits and codecs ---
+
+  /** @type {Map<string, { readOcapnMessage: any, writeOcapnMessage: any }>} */
+  const codecKits = new Map();
+
+  /** @param {string} sessionKey */
+  const provideCodecKit = sessionKey => {
+    let kit = codecKits.get(sessionKey);
+    if (kit !== undefined) {
+      return kit;
+    }
+    const session = provideSessionState(sessionKey);
+
+    // The table-backed "reference kit": reads materialize descriptors
+    // as tokens against the c-lists; writes translate tokens back to
+    // positions, allocating hub export rows toward this session on
+    // first mention. The shape mirrors exactly the referenceKit
+    // surface the codecs consume.
+    const tableKit = {
+      // -- read side (message FROM this session) --
+      /** @param {bigint} position */
+      provideRemoteObjectValue: position =>
+        refTokenFor(
+          provideRef(sessionKey, position, 'object', { mention: true }).refId,
+        ),
+      /** @param {bigint} position */
+      provideRemotePromiseValue: position =>
+        refTokenFor(
+          provideRef(sessionKey, position, 'promise', { mention: true }).refId,
+        ),
+      /** @param {bigint} position */
+      provideLocalExportValue: position => {
+        const key = String(position);
+        if (key === BOOTSTRAP_POSITION) {
+          return makeToken({ kind: 'bootstrap', sessionKey });
+        }
+        const refId = session.ourExports.get(key);
+        if (refId === undefined) {
+          throw Error(
+            `ocapn hub: session ${sessionKey} referenced unknown export ${key}`,
+          );
+        }
+        return refTokenFor(refId);
+      },
+      /** @param {bigint} position */
+      getLocalAnswerValue: position => {
+        const route = session.answersOwed.get(String(position));
+        if (route === undefined) {
+          throw Error(
+            `ocapn hub: session ${sessionKey} referenced unknown answer ${position}`,
+          );
+        }
+        if ('ref' in route) {
+          return refTokenFor(route.ref);
+        }
+        if ('done' in route) {
+          return makeToken({ kind: 'doneAnswer' });
+        }
+        if ('gift' in route) {
+          return makeToken({ kind: 'pendingGift', giftKey: route.gift });
+        }
+        return makeToken({
+          kind: 'localAnswer',
+          refId: route.local,
+          reason: route.reason,
+        });
+      },
+      /**
+       * A resolveMeDesc from this session: the sender's resolver
+       * export. Resolver rows are one-shot protocol plumbing: they
+       * route like any reference but do not retain their origin for
+       * vat-level GC (`inspect` omits them), and they anchor pending
+       * listen registrations.
+       *
+       * @param {bigint} position
+       */
+      provideRemoteResolverValue: position =>
+        refTokenFor(
+          provideRef(sessionKey, position, 'object', {
+            resolver: true,
+            mention: true,
+          }).refId,
+        ),
+      /**
+       * An inbound gift give: the hub redeems it on behalf of the
+       * destination. The withdrawal is an ordinary answer at an
+       * outbound session with the exporter — allocated now, encoded
+       * and sent once the embedder's dial completes — so the gift is
+       * an answer-backed promise row like any other, listened on and
+       * pipelined through with no hub subscription.
+       *
+       * @param {any} signedGive
+       */
+      provideHandoff: signedGive => {
+        if (handoffs === undefined || cryptography === undefined) {
+          throw Error(
+            'ocapn hub: third-party handoffs require the handoffs power',
+          );
+        }
+        const { exporterLocation } = signedGive.object;
+        const outKey = `handoff:${swissnumHex(
+          JSON.stringify(exporterLocation),
+        )}`;
+        const outSession = provideSessionState(outKey);
+        // Frames toward the exporter queue until the dial completes;
+        // the location persists so a successor process (or a later
+        // frame toward a dropped connection) can redial.
+        outSession.durable = true;
+        outSession.dialLocation = exporterLocation;
+        const position = outSession.nextAnswer;
+        outSession.nextAnswer += 1n;
+        const row = provideAnswerRef(outKey, position);
+        const writer = codec.makeWriter();
+        DescHandoffGiveSigEnvelopeCodec.write(signedGive, writer);
+        const pending = {
+          position: String(position),
+          giveHex: hexFromBytes(writer.getBytes()),
+          gifterSession: sessionKey,
+        };
+        outSession.pendingWithdraws.push(pending);
+        noteUndo(() => {
+          const index = outSession.pendingWithdraws.indexOf(pending);
+          if (index >= 0) {
+            outSession.pendingWithdraws.splice(index, 1);
+          }
+        });
+        dirty = true;
+        if (outSession.attached && outSession.identity !== undefined) {
+          // Already connected to this exporter: withdraw right away.
+          // eslint-disable-next-line no-use-before-define
+          queueMicrotaskFlush(outKey);
+        } else {
+          handoffs.connect(exporterLocation, outKey);
+        }
+        return refTokenFor(row.refId);
+      },
+      /**
+       * Sturdyrefs are opaque pointers: they transit the hub as plain
+       * values, re-encoded verbatim toward the destination.
+       *
+       * @param {any} location
+       * @param {string | Uint8Array} secret
+       */
+      makeSturdyRef: (location, secret) => makeSturdyRef(location, secret),
+
+      // -- write side (message TOWARD this session) --
+      /** @param {any} value */
+      getInfoForVal: value => {
+        const info = infoOf(value);
+        const row = rowOfInfo(info);
+        if (row.backing === 'answer' && row.origin === sessionKey) {
+          // The destination's own answer: reference it as desc:answer.
+          return { type: 'answer', isLocal: false, isThirdParty: false };
+        }
+        return {
+          type: row.flavor,
+          isLocal: row.origin !== sessionKey,
+          isThirdParty: false,
+        };
+      },
+      /** @param {any} value */
+      provideRemoteExportPosition: value => {
+        // The receiver's own export comes back to it by its own
+        // position.
+        const row = rowOfInfo(infoOf(value));
+        if (row.origin !== sessionKey || row.backing !== 'export') {
+          throw Error('ocapn hub: not an export of this session');
+        }
+        return BigInt(row.position);
+      },
+      /** @param {any} value */
+      provideRemoteAnswerPosition: value => {
+        const row = rowOfInfo(infoOf(value));
+        if (row.origin !== sessionKey || row.backing !== 'answer') {
+          throw Error('ocapn hub: not an answer of this session');
+        }
+        return BigInt(row.position);
+      },
+      /** @param {any} value */
+      provideLocalObjectPosition: value => {
+        // eslint-disable-next-line no-use-before-define
+        return provideFacingPosition(sessionKey, value);
+      },
+      /** @param {any} value */
+      provideLocalPromisePosition: value => {
+        // eslint-disable-next-line no-use-before-define
+        return provideFacingPosition(sessionKey, value);
+      },
+    };
+
+    const descCodecs = makeDescCodecs(/** @type {any} */ (tableKit));
+    const passableCodecs = makePassableCodecs(descCodecs);
+    kit = makeOcapnOperationsCodecs(descCodecs, passableCodecs, codec);
+    codecKits.set(sessionKey, kit);
+    return kit;
+  };
+
+  /**
+   * The hub's export position toward `sessionKey` for a reference row,
+   * allocating (and persisting) on first mention; every mention
+   * increments the wire refcount the peer will eventually return
+   * through op:gc-exports.
+   *
+   * @param {string} sessionKey
+   * @param {any} value
+   */
+  const provideFacingPosition = (sessionKey, value) => {
+    const row = rowOfInfo(infoOf(value));
+    const session = provideSessionState(sessionKey);
+    let position = row.facing.get(sessionKey);
+    if (position === undefined) {
+      const fresh = String(session.nextExport);
+      session.nextExport += 1n;
+      row.facing.set(sessionKey, fresh);
+      session.ourExports.set(fresh, row.refId);
+      noteUndo(() => {
+        row.facing.delete(sessionKey);
+        session.ourExports.delete(fresh);
+      });
+      position = fresh;
+    }
+    const previous = row.refcounts.get(sessionKey);
+    row.refcounts.set(sessionKey, (previous ?? 0) + 1);
+    noteUndo(() => {
+      if (previous === undefined) {
+        row.refcounts.delete(sessionKey);
+      } else {
+        row.refcounts.set(sessionKey, previous);
+      }
+    });
+    dirty = true;
+    return BigInt(position);
+  };
+
+  // --- outbound ---
+
+  /**
+   * Hand committed frame bytes to a session: send if attached, queue
+   * durably if the session will return, drop loudly otherwise. Tables
+   * before wire: persists before the frame reaches the transport.
+   *
+   * @param {string} sessionKey
+   * @param {Uint8Array} bytes
+   */
+  const dispatchBytes = (sessionKey, bytes) => {
+    const session = provideSessionState(sessionKey);
+    if (session.attached) {
+      persist();
+      session.send(bytes);
+      return;
+    }
+    if (session.durable) {
+      session.queue.push(hexFromBytes(bytes));
+      dirty = true;
+      persist();
+      if (session.dialLocation !== undefined && handoffs !== undefined) {
+        // An outbound exporter session with traffic waiting: ask the
+        // embedder to (re)dial. Idempotent at the embedder while a
+        // dial or connection is live.
+        handoffs.connect(session.dialLocation, sessionKey);
+      }
+      return;
+    }
+    logError(`dropping message toward detached session ${sessionKey}`);
+    persist();
+  };
+
+  /**
+   * Encode and dispatch a hub-synthesized message (a gc hint, a
+   * settlement); encode failures roll their allocations back and log.
+   *
+   * @param {string} sessionKey
+   * @param {any} message a message object in codec shape, with hub
+   *   tokens for references
+   */
+  const sendMessage = (sessionKey, message) => {
+    /** @type {Uint8Array} */
+    let bytes;
+    try {
+      bytes = withRollback(() => {
+        const { writeOcapnMessage } = provideCodecKit(sessionKey);
+        return writeOcapnMessage(message);
+      });
+    } catch (error) {
+      logError(`failed to encode message toward ${sessionKey}:`, error);
+      persist();
+      return;
+    }
+    dispatchBytes(sessionKey, bytes);
+  };
+
+  /**
+   * Settle a resolver: the synthesized op:deliver carrying `fulfill`
+   * or `break` toward the session that sent `resolveMeDesc`.
+   *
+   * @param {string} sessionKey
+   * @param {any} resolveMeDesc the resolver token
+   * @param {'fulfill' | 'break'} verb
+   * @param {any} [value] a hub token or a hardened Error
+   */
+  const settleToResolver = (sessionKey, resolveMeDesc, verb, value) => {
+    sendMessage(sessionKey, {
+      type: 'op:deliver',
+      to: resolveMeDesc,
+      args:
+        value === undefined
+          ? [makeSelector(verb)]
+          : [makeSelector(verb), value],
+      answerPosition: false,
+      resolveMeDesc: false,
+    });
+  };
+
+  /**
+   * The loud end of a message routed at something dead, broken, or
+   * unreachable: record the broken answer (so a later reference or
+   * listen on it breaks with the same reason) and, when the message
+   * carried a resolver, break it immediately.
+   *
+   * @param {string} sessionKey
+   * @param {any} message the original op:deliver/op:listen/op:get/…
+   * @param {string} reason
+   */
+  const breakToSender = (sessionKey, message, reason) => {
+    const session = provideSessionState(sessionKey);
+    const { answerPosition, resolveMeDesc } = message;
+    if (answerPosition !== undefined && answerPosition !== false) {
+      session.answersOwed.set(String(answerPosition), { local: null, reason });
+      dirty = true;
+    }
+    if (resolveMeDesc !== undefined && resolveMeDesc !== false) {
+      settleToResolver(
+        sessionKey,
+        resolveMeDesc,
+        'break',
+        harden(Error(reason)),
+      );
+    } else {
+      persist();
+    }
+  };
+
+  /**
+   * Send the withdrawals parked on an exporter session, now that its
+   * identity is known: for each pending give, construct and sign the
+   * handoff-receive (with the gifter session's key, which the give
+   * names) and deliver `withdraw-gift` to the exporter's bootstrap at
+   * the answer position the gift row already occupies. A withdrawal
+   * that cannot be constructed kills its gift row loudly.
+   *
+   * @param {string} sessionKey the outbound exporter session
+   */
+  const flushPendingWithdraws = sessionKey => {
+    const session = provideSessionState(sessionKey);
+    if (
+      session.identity === undefined ||
+      session.pendingWithdraws.length === 0
+    ) {
+      return;
+    }
+    const pendings = session.pendingWithdraws.splice(0);
+    dirty = true;
+    for (const pending of pendings) {
+      try {
+        const gifter = sessions.get(pending.gifterSession);
+        if (gifter?.identity?.selfPrivateKey === undefined) {
+          throw Error('ocapn hub: the gifter session has no signing identity');
+        }
+        if (session.identity.selfPrivateKey === undefined) {
+          throw Error('ocapn hub: the exporter session has no self identity');
+        }
+        const signedGive = DescHandoffGiveSigEnvelopeCodec.read(
+          codec.makeReader(bytesFromHex(pending.giveHex)),
+        );
+        const gifterKeyPair = cryptography.makeOcapnKeyPairFromPrivateKey(
+          bytesFromHex(gifter.identity.selfPrivateKey),
+        );
+        const selfAtExporter = cryptography.makeOcapnKeyPairFromPrivateKey(
+          bytesFromHex(session.identity.selfPrivateKey),
+        );
+        const handoffCount = session.nextHandoffCount;
+        session.nextHandoffCount += 1n;
+        const handoffReceive = makeHandoffReceiveDescriptor(
+          signedGive,
+          handoffCount,
+          /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
+          selfAtExporter.publicKey.id,
+        );
+        const signature = cryptography.signHandoffReceive(
+          handoffReceive,
+          gifterKeyPair,
+        );
+        const signedReceive = makeHandoffReceiveSigEnvelope(
+          handoffReceive,
+          signature,
+        );
+        const bootstrapRow = provideRef(sessionKey, 0n, 'object');
+        sendMessage(sessionKey, {
+          type: 'op:deliver',
+          to: refTokenFor(bootstrapRow.refId),
+          args: [makeSelector('withdraw-gift'), signedReceive],
+          answerPosition: BigInt(pending.position),
+          resolveMeDesc: false,
+        });
+      } catch (error) {
+        logError(
+          `withdraw of a pending gift toward ${sessionKey} failed:`,
+          error,
+        );
+        const answerRefId = `${sessionKey}#${session.epoch}:a${pending.position}`;
+        const row = refs.get(answerRefId);
+        if (row !== undefined && !row.dead) {
+          row.dead = true;
+          const orphans = row.listeners.splice(0);
+          dirty = true;
+          for (const resolverRefId of orphans) {
+            const resolverRow = refs.get(resolverRefId);
+            if (resolverRow === undefined || resolverRow.dead) {
+              // eslint-disable-next-line no-continue
+              continue;
+            }
+            settleToResolver(
+              resolverRow.origin,
+              refTokenFor(resolverRefId),
+              'break',
+              harden(Error('ocapn hub: the gift withdrawal failed')),
+            );
+          }
+        }
+      }
+    }
+    persist();
+  };
+
+  /**
+   * Flush after the current frame finishes: `provideHandoff` runs
+   * inside a decode's rollback scope, where sending would interleave.
+   *
+   * @param {string} sessionKey
+   */
+  const queueMicrotaskFlush = sessionKey => {
+    Promise.resolve()
+      .then(() => flushPendingWithdraws(sessionKey))
+      .catch(error =>
+        logError(`pending withdraw flush for ${sessionKey} failed:`, error),
+      );
+  };
+
+  // --- the hub's one piece of endpoint behavior: bootstrap fetch ---
+
+  /**
+   * Whether any session's answer route is waiting on this gift key.
+   *
+   * @param {string} giftKey
+   */
+  const hasGiftRoute = giftKey => {
+    for (const session of sessions.values()) {
+      for (const route of session.answersOwed.values()) {
+        if ('gift' in route && route.gift === giftKey) {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  /**
+   * Fulfill everyone waiting on a gift's deposit: withdrawers' answer
+   * routes settle to the gift, and their resolvers hear the
+   * fulfillment.
+   *
+   * @param {string} giftKey
+   * @param {string} refId the deposited gift's row
+   */
+  const settleGiftWaiters = (giftKey, refId) => {
+    for (const waiting of sessions.values()) {
+      for (const [position, route] of waiting.answersOwed.entries()) {
+        if ('gift' in route && route.gift === giftKey) {
+          waiting.answersOwed.set(position, { local: refId });
+          dirty = true;
+        }
+      }
+    }
+    const waiters = giftWaiters.get(giftKey);
+    if (waiters !== undefined) {
+      giftWaiters.delete(giftKey);
+      dirty = true;
+      for (const resolverRefId of waiters) {
+        const resolverRow = refs.get(resolverRefId);
+        if (resolverRow === undefined || resolverRow.dead) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        settleToResolver(
+          resolverRow.origin,
+          refTokenFor(resolverRefId),
+          'fulfill',
+          refTokenFor(refId),
+        );
+      }
+    }
+  };
+
+  /**
+   * The hub bootstrap's gift half: verify a withdrawal's signature
+   * chain against the attached sessions' identities and return the
+   * gift's row, the key to wait on, or throw the verification error.
+   *
+   * @param {SessionState} session the withdrawing session
+   * @param {any} signedHandoffReceive
+   * @returns {{ giftKey: string }}
+   */
+  const verifyWithdrawal = (session, signedHandoffReceive) => {
+    if (cryptography === undefined) {
+      throw Error('ocapn hub: gift handling requires cryptography');
+    }
+    const { identity } = session;
+    if (identity === undefined) {
+      throw Error('ocapn hub: the withdrawing session has no wire identity');
+    }
+    const { object: handoffReceive, signature: handoffReceiveSig } =
+      signedHandoffReceive;
+    const { signedGive, receivingSession, receivingSide, handoffCount } =
+      handoffReceive;
+    const { object: handoffGive, signature: handoffGiveSig } = signedGive;
+    const {
+      giftId,
+      receiverKey,
+      exporterSessionId: gifterSessionId,
+    } = handoffGive;
+
+    // Our peer must be the authorized receiver, on this same session.
+    const peerPublicKey = cryptography.makeOcapnPublicKey(
+      bytesFromHex(identity.peerPublicKeyQ),
+    );
+    if (hexFromBytes(receivingSide) !== hexFromBytes(peerPublicKey.id)) {
+      throw Error('ocapn hub: withdraw-gift: receiver key mismatch');
+    }
+    if (hexFromBytes(receivingSession) !== identity.sessionId) {
+      throw Error('ocapn hub: withdraw-gift: session id mismatch');
+    }
+
+    // The give must be signed by the gifter's key in ITS session with
+    // the hub.
+    const gifterSessionIdHex = hexFromBytes(gifterSessionId);
+    /** @type {SessionState | undefined} */
+    let gifterSession;
+    for (const candidate of sessions.values()) {
+      if (candidate.identity?.sessionId === gifterSessionIdHex) {
+        gifterSession = candidate;
+        break;
+      }
+    }
+    if (gifterSession === undefined || gifterSession.identity === undefined) {
+      throw Error('ocapn hub: withdraw-gift: unknown gifter session');
+    }
+    const gifterPublicKey = cryptography.makeOcapnPublicKey(
+      bytesFromHex(gifterSession.identity.peerPublicKeyQ),
+    );
+    cryptography.assertHandoffGiveSignatureValid(
+      handoffGive,
+      handoffGiveSig,
+      gifterPublicKey,
+    );
+
+    // The receive must be signed by the receiver key named in the give.
+    const receiverKeyForGifter =
+      cryptography.publicKeyDescriptorToPublicKey(receiverKey);
+    cryptography.assertHandoffReceiveSignatureValid(
+      handoffReceive,
+      handoffReceiveSig,
+      receiverKeyForGifter,
+    );
+
+    const countKey = String(handoffCount);
+    if (session.usedGiftHandoffs.includes(countKey)) {
+      throw Error('ocapn hub: withdraw-gift: gift handoff already used');
+    }
+    session.usedGiftHandoffs.push(countKey);
+    dirty = true;
+    return { giftKey: `${gifterSessionIdHex}:${hexFromBytes(giftId)}` };
+  };
+
+  /**
+   * @param {string} sessionKey
+   * @param {any} message the op:deliver targeting this session's hub
+   *   bootstrap
+   */
+  const handleBootstrapDeliver = (sessionKey, message) => {
+    const session = provideSessionState(sessionKey);
+    const { args, answerPosition, resolveMeDesc } = message;
+    /**
+     * @param {any} outcome ['fulfill', ref], ['fulfill'] (no value), or
+     *   ['break', error]
+     */
+    const respond = outcome => {
+      const [verb, value] = outcome;
+      /** @type {AnswerRoute} */
+      let route;
+      if (verb === 'fulfill') {
+        route =
+          value === undefined ? { done: true } : { local: infoOf(value).refId };
+      } else {
+        route = {
+          local: null,
+          reason:
+            value === undefined
+              ? 'ocapn hub: the answer is broken'
+              : String(/** @type {Error} */ (value).message ?? value),
+        };
+      }
+      if (answerPosition !== false && answerPosition !== undefined) {
+        session.answersOwed.set(String(answerPosition), route);
+        dirty = true;
+      }
+      if (resolveMeDesc !== false && resolveMeDesc !== undefined) {
+        settleToResolver(sessionKey, resolveMeDesc, verb, value);
+      } else {
+        persist();
+      }
+    };
+    const methodName = getSelectorName(args[0]);
+    switch (methodName) {
+      case 'fetch': {
+        const swissnum = hexFromBytes(args[1]);
+        const refId = publications.get(swissnum);
+        const row = refId === undefined ? undefined : refs.get(refId);
+        if (row === undefined || row.dead) {
+          respond([
+            'break',
+            harden(Error('ocapn hub: fetch: secret not found')),
+          ]);
+          return;
+        }
+        respond(['fulfill', refTokenFor(row.refId)]);
+        return;
+      }
+      case 'deposit-gift': {
+        // The gifter parks a reference for a receiver to withdraw
+        // (the hub is the "exporter" of everything it fronts).
+        const { identity } = session;
+        if (identity === undefined) {
+          respond([
+            'break',
+            harden(
+              Error('ocapn hub: deposit-gift: session has no wire identity'),
+            ),
+          ]);
+          return;
+        }
+        /** @type {string} */
+        let refId;
+        try {
+          refId = rowOfInfo(infoOf(args[2])).refId;
+        } catch {
+          respond([
+            'break',
+            harden(Error('ocapn hub: deposit-gift: gift must be a reference')),
+          ]);
+          return;
+        }
+        const giftKey = `${identity.sessionId}:${hexFromBytes(args[1])}`;
+        if (giftWaiters.has(giftKey) || hasGiftRoute(giftKey)) {
+          settleGiftWaiters(giftKey, refId);
+          respond(['fulfill']);
+          return;
+        }
+        if (gifts.has(giftKey)) {
+          respond([
+            'break',
+            harden(Error('ocapn hub: deposit-gift: gift already exists')),
+          ]);
+          return;
+        }
+        gifts.set(giftKey, refId);
+        dirty = true;
+        respond(['fulfill']);
+        return;
+      }
+      case 'withdraw-gift': {
+        /** @type {string} */
+        let giftKey;
+        try {
+          ({ giftKey } = verifyWithdrawal(session, args[1]));
+        } catch (error) {
+          respond([
+            'break',
+            harden(Error(String(/** @type {Error} */ (error).message))),
+          ]);
+          return;
+        }
+        const refId = gifts.get(giftKey);
+        if (refId !== undefined) {
+          gifts.delete(giftKey);
+          dirty = true;
+          const row = refs.get(refId);
+          if (row === undefined || row.dead) {
+            respond([
+              'break',
+              harden(Error('ocapn hub: withdraw-gift: the gift has died')),
+            ]);
+            return;
+          }
+          respond(['fulfill', refTokenFor(refId)]);
+          return;
+        }
+        // Withdrawn before deposited: the answer waits on the gift
+        // key, and any resolver hears the eventual deposit.
+        if (answerPosition !== false && answerPosition !== undefined) {
+          session.answersOwed.set(String(answerPosition), { gift: giftKey });
+          dirty = true;
+        }
+        if (resolveMeDesc !== false && resolveMeDesc !== undefined) {
+          const resolverRefId = infoOf(resolveMeDesc).refId;
+          const waiters = giftWaiters.get(giftKey) ?? [];
+          if (!waiters.includes(resolverRefId)) {
+            waiters.push(resolverRefId);
+            giftWaiters.set(giftKey, waiters);
+            dirty = true;
+          }
+        }
+        persist();
+        return;
+      }
+      default:
+        respond([
+          'break',
+          harden(Error(`ocapn hub: bootstrap has no method ${methodName}`)),
+        ]);
+    }
+  };
+
+  // --- routing ---
+
+  /**
+   * Classify a deliver/listen/get target token.
+   *
+   * @param {any} target
+   * @returns {{ kind: 'bootstrap' }
+   *   | { kind: 'broken', reason: string }
+   *   | { kind: 'done' }
+   *   | { kind: 'pendingGift', giftKey: string }
+   *   | { kind: 'row', row: RefRow, settled: boolean }}
+   */
+  const resolveTarget = target => {
+    const info = infoOf(target);
+    if (info.kind === 'bootstrap') {
+      return { kind: 'bootstrap' };
+    }
+    if (info.kind === 'doneAnswer') {
+      return { kind: 'done' };
+    }
+    if (info.kind === 'pendingGift') {
+      return { kind: 'pendingGift', giftKey: info.giftKey };
+    }
+    if (info.kind === 'localAnswer') {
+      if (info.refId === null) {
+        return {
+          kind: 'broken',
+          reason: info.reason ?? 'ocapn hub: the answer is broken',
+        };
+      }
+      const row = refs.get(info.refId);
+      if (row === undefined) {
+        return {
+          kind: 'broken',
+          reason: 'ocapn hub: the answer value has been released',
+        };
+      }
+      return { kind: 'row', row, settled: true };
+    }
+    const row = refs.get(info.refId);
+    if (row === undefined) {
+      return { kind: 'broken', reason: `ocapn hub: dangling ${info.refId}` };
+    }
+    return { kind: 'row', row, settled: false };
+  };
+
+  /**
+   * The liveness gate before forwarding at a row: `undefined` when the
+   * message can proceed to `row.origin`, otherwise the break reason.
+   *
+   * @param {RefRow} row
+   */
+  const unreachableReason = row => {
+    if (row.dead) {
+      return 'ocapn hub: the target session has been retired';
+    }
+    const destination = provideSessionState(row.origin);
+    if (!destination.attached && !destination.durable) {
+      return 'ocapn hub: the target session is disconnected';
+    }
+    return undefined;
+  };
+
+  /**
+   * Allocate the forwarded answer: the destination owes the hub an
+   * answer at a fresh position, backed by a promise row, and the
+   * sender's answer route points at that row — so the answer is
+   * re-exported as a promise, mentionable toward any session.
+   *
+   * @param {SessionState} senderSession
+   * @param {string} answerKey the sender's answer position
+   * @param {string} destination
+   * @returns {bigint} the answer position at the destination
+   */
+  const allocateAnswerRoute = (senderSession, answerKey, destination) => {
+    const destinationState = provideSessionState(destination);
+    const position = destinationState.nextAnswer;
+    destinationState.nextAnswer += 1n;
+    const answerRow = provideAnswerRef(destination, position);
+    senderSession.answersOwed.set(answerKey, { ref: answerRow.refId });
+    noteUndo(() => senderSession.answersOwed.delete(answerKey));
+    dirty = true;
+    return position;
+  };
+
+  /**
+   * @param {string} sessionKey
+   * @param {any} message
+   */
+  const handleMessage = (sessionKey, message) => {
+    const session = provideSessionState(sessionKey);
+    switch (message.type) {
+      case 'op:deliver': {
+        const target = resolveTarget(message.to);
+        if (target.kind === 'bootstrap') {
+          handleBootstrapDeliver(sessionKey, message);
+          return;
+        }
+        if (target.kind === 'broken') {
+          breakToSender(sessionKey, message, target.reason);
+          return;
+        }
+        if (target.kind === 'done') {
+          breakToSender(
+            sessionKey,
+            message,
+            'ocapn hub: the answer settled to a non-reference value',
+          );
+          return;
+        }
+        if (target.kind === 'pendingGift') {
+          breakToSender(
+            sessionKey,
+            message,
+            'ocapn hub: cannot pipeline onto an undeposited gift',
+          );
+          return;
+        }
+        const { row } = target;
+        const unreachable = unreachableReason(row);
+        if (unreachable !== undefined) {
+          breakToSender(sessionKey, message, unreachable);
+          return;
+        }
+        const destination = row.origin;
+        /** @type {Uint8Array} */
+        let bytes;
+        try {
+          bytes = withRollback(() => {
+            /** @type {bigint | false} */
+            let forwardedAnswer = false;
+            const { answerPosition } = message;
+            if (answerPosition !== false && answerPosition !== undefined) {
+              forwardedAnswer = allocateAnswerRoute(
+                session,
+                String(answerPosition),
+                destination,
+              );
+            }
+            const { writeOcapnMessage } = provideCodecKit(destination);
+            return writeOcapnMessage({
+              ...message,
+              answerPosition: forwardedAnswer,
+            });
+          });
+        } catch (error) {
+          logError(
+            `forwarding op:deliver from ${sessionKey} toward ${destination} failed:`,
+            error,
+          );
+          breakToSender(
+            sessionKey,
+            message,
+            'ocapn hub: the delivery could not be forwarded',
+          );
+          return;
+        }
+        if (row.resolver) {
+          // The one-shot settlement of a listen: whatever this
+          // resolver was pending on is settled by this delivery.
+          clearListenerEntries(row.refId);
+        }
+        dispatchBytes(destination, bytes);
+        return;
+      }
+      case 'op:get':
+      case 'op:index':
+      case 'op:untag': {
+        const target = resolveTarget(message.receiverDesc);
+        if (target.kind === 'bootstrap' || target.kind === 'pendingGift') {
+          breakToSender(
+            sessionKey,
+            message,
+            `ocapn hub: ${message.type} is not supported on this target`,
+          );
+          return;
+        }
+        if (target.kind === 'broken') {
+          breakToSender(sessionKey, message, target.reason);
+          return;
+        }
+        if (target.kind === 'done') {
+          breakToSender(
+            sessionKey,
+            message,
+            'ocapn hub: the answer settled to a non-reference value',
+          );
+          return;
+        }
+        const { row } = target;
+        const unreachable = unreachableReason(row);
+        if (unreachable !== undefined) {
+          breakToSender(sessionKey, message, unreachable);
+          return;
+        }
+        const destination = row.origin;
+        /** @type {Uint8Array} */
+        let bytes;
+        try {
+          bytes = withRollback(() => {
+            const forwardedAnswer = allocateAnswerRoute(
+              session,
+              String(message.answerPosition),
+              destination,
+            );
+            const { writeOcapnMessage } = provideCodecKit(destination);
+            return writeOcapnMessage({
+              ...message,
+              answerPosition: forwardedAnswer,
+            });
+          });
+        } catch (error) {
+          logError(
+            `forwarding ${message.type} from ${sessionKey} toward ${destination} failed:`,
+            error,
+          );
+          breakToSender(
+            sessionKey,
+            message,
+            `ocapn hub: the ${message.type} could not be forwarded`,
+          );
+          return;
+        }
+        dispatchBytes(destination, bytes);
+        return;
+      }
+      case 'op:listen': {
+        const target = resolveTarget(message.to);
+        if (target.kind === 'bootstrap') {
+          breakToSender(
+            sessionKey,
+            message,
+            'ocapn hub: cannot listen on the hub bootstrap',
+          );
+          return;
+        }
+        if (target.kind === 'broken') {
+          breakToSender(sessionKey, message, target.reason);
+          return;
+        }
+        if (target.kind === 'done') {
+          // The answer fulfilled with no reference value.
+          settleToResolver(sessionKey, message.resolveMeDesc, 'fulfill');
+          return;
+        }
+        if (target.kind === 'pendingGift') {
+          // Hear the deposit when it lands.
+          const resolverRefId = infoOf(message.resolveMeDesc).refId;
+          const waiters = giftWaiters.get(target.giftKey) ?? [];
+          if (!waiters.includes(resolverRefId)) {
+            waiters.push(resolverRefId);
+            giftWaiters.set(target.giftKey, waiters);
+            dirty = true;
+          }
+          persist();
+          return;
+        }
+        const { row, settled } = target;
+        if (settled) {
+          // A listen on a locally settled answer (a bootstrap fetch):
+          // synthesize the fulfillment.
+          settleToResolver(
+            sessionKey,
+            message.resolveMeDesc,
+            'fulfill',
+            refTokenFor(row.refId),
+          );
+          return;
+        }
+        const unreachable = unreachableReason(row);
+        if (unreachable !== undefined) {
+          breakToSender(sessionKey, message, unreachable);
+          return;
+        }
+        const destination = row.origin;
+        /** @type {Uint8Array} */
+        let bytes;
+        try {
+          bytes = withRollback(() => {
+            const resolverInfo = infoOf(message.resolveMeDesc);
+            if (!row.listeners.includes(resolverInfo.refId)) {
+              row.listeners.push(resolverInfo.refId);
+              noteUndo(() => {
+                const index = row.listeners.indexOf(resolverInfo.refId);
+                if (index >= 0) {
+                  row.listeners.splice(index, 1);
+                }
+              });
+              dirty = true;
+            }
+            const { writeOcapnMessage } = provideCodecKit(destination);
+            return writeOcapnMessage(message);
+          });
+        } catch (error) {
+          logError(
+            `forwarding op:listen from ${sessionKey} toward ${destination} failed:`,
+            error,
+          );
+          breakToSender(
+            sessionKey,
+            message,
+            'ocapn hub: the listen could not be forwarded',
+          );
+          return;
+        }
+        dispatchBytes(destination, bytes);
+        return;
+      }
+      case 'op:gc-exports': {
+        const exportPositions = /** @type {Array<bigint>} */ (
+          message.exportPositions
+        );
+        const wireDeltas = /** @type {Array<bigint>} */ (message.wireDeltas);
+        for (let i = 0; i < exportPositions.length; i += 1) {
+          const key = String(exportPositions[i]);
+          const delta = Number(wireDeltas[i] ?? 1n);
+          const refId = session.ourExports.get(key);
+          if (refId === undefined) {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          const row = refs.get(refId);
+          if (row === undefined) {
+            session.ourExports.delete(key);
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          const count = (row.refcounts.get(sessionKey) ?? 0) - delta;
+          if (count > 0) {
+            row.refcounts.set(sessionKey, count);
+          } else {
+            row.refcounts.delete(sessionKey);
+            row.facing.delete(sessionKey);
+            session.ourExports.delete(key);
+            maybeReleaseRef(row);
+          }
+          dirty = true;
+        }
+        persist();
+        return;
+      }
+      case 'op:gc-answers': {
+        for (const position of message.answerPositions) {
+          const key = String(position);
+          const route = session.answersOwed.get(key);
+          if (route === undefined) {
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          session.answersOwed.delete(key);
+          dirty = true;
+          /** @type {string | null | undefined} */
+          let refId;
+          if ('ref' in route) {
+            refId = route.ref;
+          } else if ('local' in route) {
+            refId = route.local;
+          }
+          if (refId !== null && refId !== undefined) {
+            const row = refs.get(refId);
+            if (row !== undefined) {
+              // The route's pin is gone; if that was the last root,
+              // the release propagates (gc-answers toward an answer's
+              // owner, gc-exports toward an export's origin).
+              maybeReleaseRef(row);
+            }
+          }
+        }
+        persist();
+        return;
+      }
+      case 'op:abort': {
+        logError(`session ${sessionKey} aborted:`, message.reason);
+        session.attached = false;
+        return;
+      }
+      default:
+        throw Error(`ocapn hub: unsupported operation ${message.type}`);
+    }
+  };
+
+  /**
+   * The per-session frame-error policy: an undecodable or unroutable
+   * frame from a remote session aborts the session; from a local one
+   * (worker or in-process endpoint, where it should never happen) it
+   * is dropped loudly.
+   *
+   * @param {string} sessionKey
+   * @param {unknown} error
+   */
+  const frameError = (sessionKey, error) => {
+    const session = provideSessionState(sessionKey);
+    if (!session.remote) {
+      logError(`frame from local session ${sessionKey} dropped:`, error);
+      return;
+    }
+    logError(`aborting remote session ${sessionKey} on bad frame:`, error);
+    try {
+      const { writeOcapnMessage } = provideCodecKit(sessionKey);
+      const reason = String(
+        /** @type {Error} */ (error)?.message ?? error,
+      ).slice(0, 200);
+      const bytes = writeOcapnMessage({ type: 'op:abort', reason });
+      if (session.attached) {
+        session.send(bytes);
+      }
+    } catch (abortError) {
+      logError(`failed to send op:abort toward ${sessionKey}:`, abortError);
+    }
+    session.attached = false;
+    const { onAbort } = session;
+    if (onAbort !== undefined) {
+      try {
+        onAbort(error);
+      } catch (hookError) {
+        logError(`onAbort for ${sessionKey} threw:`, hookError);
+      }
+    }
+  };
+
+  /**
+   * Permanently drop a session's incarnation: its epoch bumps (so a
+   * successor under the same key allocates in a fresh namespace), its
+   * tables reset, its origin rows become dead tombstones (other
+   * sessions' calls on them break loudly and the tombstones prune as
+   * holders let go), pending listens on its promises break, and
+   * publications of its objects are withdrawn.
+   *
+   * @param {string} sessionKey
+   */
+  const retireSessionInternal = sessionKey => {
+    const session = provideSessionState(sessionKey);
+    session.attached = false;
+    session.durable = false;
+    session.remote = false;
+    session.onAbort = undefined;
+    session.epoch += 1;
+    session.ourExports.clear();
+    session.answersOwed.clear();
+    session.nextExport = 1n;
+    session.nextAnswer = 1n;
+    session.processedUpTo = 0;
+    session.queue.length = 0;
+    session.identity = undefined;
+    session.usedGiftHandoffs.length = 0;
+    session.pendingWithdraws.length = 0;
+    session.nextHandoffCount = 1n;
+    session.dialLocation = undefined;
+    for (const [swissnum, refId] of [...publications.entries()]) {
+      const row = refs.get(refId);
+      if (row !== undefined && row.origin === sessionKey) {
+        publications.delete(swissnum);
+      }
+    }
+    /** @type {Array<string>} */
+    const orphanedListeners = [];
+    for (const row of refs.values()) {
+      if (row.origin === sessionKey && !row.dead) {
+        // Tombstone, don't delete: holders' positions must keep
+        // resolving so their calls break loudly instead of jamming.
+        row.dead = true;
+        orphanedListeners.push(...row.listeners);
+        row.listeners.length = 0;
+      }
+    }
+    dirty = true;
+    // The retiring session held the resolvers for these pending
+    // listens in its heap; they will never settle. Break them BEFORE
+    // dropping the retiree as a holder: the resolver rows it held
+    // must still exist to carry their own break.
+    for (const resolverRefId of orphanedListeners) {
+      const resolverRow = refs.get(resolverRefId);
+      if (resolverRow === undefined || resolverRow.dead) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+      settleToResolver(
+        resolverRow.origin,
+        refTokenFor(resolverRefId),
+        'break',
+        harden(Error('ocapn hub: the target session has been retired')),
+      );
+    }
+    for (const row of [...refs.values()]) {
+      if (row.facing.has(sessionKey) || row.refcounts.has(sessionKey)) {
+        row.facing.delete(sessionKey);
+        row.refcounts.delete(sessionKey);
+        maybeReleaseRef(row);
+      }
+    }
+    dirty = true;
+    persist();
+  };
+
+  return harden({
+    /**
+     * Attach a pre-authenticated session: the embedder owns identity
+     * and transport. Returns the inbound frame sink. Reattaching the
+     * same key (a successor process, a reconnect) rebinds `send`; the
+     * tables carry over, and frames queued while a durable session was
+     * detached drain in order.
+     *
+     * @param {string} sessionKey
+     * @param {object} powers
+     * @param {(bytes: Uint8Array) => void} powers.send
+     * @param {boolean} [powers.durable] frames toward this session
+     *   queue in the tables while it is detached, instead of breaking
+     *   to their senders
+     * @param {boolean} [powers.remote] a bad frame aborts this session
+     *   instead of being dropped (the policy for sessions from beyond
+     *   the process boundary)
+     * @param {(error: unknown) => void} [powers.onAbort]
+     * @param {{ sessionId: Uint8Array, peerPublicKeyQ: Uint8Array, selfPrivateKeyBytes?: Uint8Array }} [powers.identity]
+     *   the session's wire identity from the embedder's handshake
+     *   (including the hub side's session private key, which signs
+     *   gift handoff receives); omitted on reattach, the persisted
+     *   identity carries over (a resumed session keeps its keys)
+     */
+    attachSession: (
+      sessionKey,
+      {
+        send,
+        durable = false,
+        remote = false,
+        onAbort = undefined,
+        identity = undefined,
+      },
+    ) => {
+      const session = provideSessionState(sessionKey);
+      session.send = send;
+      session.attached = true;
+      session.durable = durable;
+      session.remote = remote;
+      session.onAbort = onAbort;
+      if (identity !== undefined) {
+        session.identity = {
+          sessionId: hexFromBytes(identity.sessionId),
+          peerPublicKeyQ: hexFromBytes(identity.peerPublicKeyQ),
+          ...(identity.selfPrivateKeyBytes === undefined
+            ? {}
+            : { selfPrivateKey: hexFromBytes(identity.selfPrivateKeyBytes) }),
+        };
+      }
+      dirty = true;
+      persist();
+      // Withdrawals parked on this session can be constructed now
+      // that its wire identity is known. They go out BEFORE the
+      // queued frames: a queued listen on a gift's answer must reach
+      // the exporter after the withdrawal that creates the answer.
+      flushPendingWithdraws(sessionKey);
+      while (session.queue.length > 0) {
+        // At-least-once: send, then drop from the queue — a crash
+        // between the two re-sends on the next attach rather than
+        // losing a settlement.
+        const frame = session.queue[0];
+        session.send(bytesFromHex(frame));
+        session.queue.shift();
+        dirty = true;
+        persist();
+      }
+      return harden({
+        /**
+         * @param {Uint8Array} bytes one inbound OCapN frame
+         * @param {number} [sequenceNumber] the frame's position in the
+         *   session's inbound order; frames at or below the recorded
+         *   watermark are duplicates from a transport replay and are
+         *   skipped, making processing exactly-once — the watermark
+         *   commits atomically with the frame's effects
+         */
+        deliver: (bytes, sequenceNumber = undefined) => {
+          if (
+            sequenceNumber !== undefined &&
+            sequenceNumber <= session.processedUpTo
+          ) {
+            return;
+          }
+          try {
+            const parsed = withRollback(() => {
+              const { readOcapnMessage } = provideCodecKit(sessionKey);
+              return readOcapnMessage(codec.makeReader(bytes));
+            });
+            handleMessage(sessionKey, parsed);
+          } catch (error) {
+            frameError(sessionKey, error);
+          }
+          if (sequenceNumber !== undefined) {
+            session.processedUpTo = sequenceNumber;
+            dirty = true;
+          }
+          persist();
+        },
+        detach: () => {
+          session.attached = false;
+        },
+      });
+    },
+    /**
+     * Publish a reference row under a swissnum: `(origin session,
+     * position there, flavor)`. Position 0 is the origin's bootstrap.
+     *
+     * @param {string | Uint8Array} swissnum
+     * @param {{ session: string, position: bigint, flavor?: 'object' | 'promise' }} at
+     */
+    publish: (swissnum, { session, position, flavor = 'object' }) => {
+      const row = provideRef(session, position, flavor);
+      publications.set(swissnumHex(swissnum), row.refId);
+      dirty = true;
+      persist();
+    },
+    /**
+     * Introduce a reference into a session out of band: allocate (or
+     * find) the hub's export position toward `to` for the reference
+     * `(session, position)`, as if it had been mentioned in a
+     * forwarded message. The embedder's endpoint uses this to reach
+     * worker bootstraps without rooting them in the publications
+     * table.
+     *
+     * @param {string} to
+     * @param {{ session: string, position: bigint, flavor?: 'object' | 'promise' }} at
+     * @returns {bigint} the hub's export position toward `to`
+     */
+    introduce: (to, { session, position, flavor = 'object' }) => {
+      const row = provideRef(session, position, flavor);
+      const facing = provideFacingPosition(to, refTokenFor(row.refId));
+      persist();
+      return facing;
+    },
+    /**
+     * Publish the reference a session HOLDS at one of the hub's export
+     * positions toward it — the natural form for an embedder endpoint
+     * that knows its own import positions.
+     *
+     * @param {string | Uint8Array} swissnum
+     * @param {{ session: string, position: bigint }} at
+     */
+    publishHeld: (swissnum, { session, position }) => {
+      const sessionState = provideSessionState(session);
+      const refId = sessionState.ourExports.get(String(position));
+      if (refId === undefined) {
+        throw Error(
+          `ocapn hub: session ${session} holds nothing at ${position}`,
+        );
+      }
+      publications.set(swissnumHex(swissnum), refId);
+      dirty = true;
+      persist();
+    },
+    /**
+     * Permanently drop a session's incarnation: its epoch bumps (so a
+     * successor under the same key allocates in a fresh namespace),
+     * its tables reset, its origin rows become dead tombstones (other
+     * sessions' calls on them break loudly and the tombstones prune as
+     * holders let go), pending listens on its promises break, and
+     * publications of its objects are withdrawn.
+     *
+     * @param {string} sessionKey
+     */
+    retireSession: sessionKey => retireSessionInternal(sessionKey),
+    /**
+     * Retire a session whose key will NEVER be reused (an ephemeral
+     * connection, a deleted worker): same as `retireSession`, then the
+     * session's table entry itself is dropped so the persisted state
+     * does not accumulate one row per short-lived connection. Dead
+     * tombstones for its exports still prune as holders let go.
+     *
+     * @param {string} sessionKey
+     */
+    forgetSession: sessionKey => {
+      retireSessionInternal(sessionKey);
+      sessions.delete(sessionKey);
+      codecKits.delete(sessionKey);
+      dirty = true;
+      persist();
+    },
+    /**
+     * The highest inbound sequence number whose effects this hub has
+     * committed for a session (0 for none). An embedder that resumes
+     * a durable transport reports THIS as its receive watermark, so
+     * the peer retransmits exactly what the hub has not absorbed and
+     * the hub's own watermark drops any overlap: exactly once.
+     *
+     * @param {string} sessionKey
+     */
+    inboundWatermark: sessionKey =>
+      sessions.get(sessionKey)?.processedUpTo ?? 0,
+    /**
+     * Outbound sessions with work waiting on a connection: pending
+     * gift withdrawals or queued frames toward a dialable, detached
+     * session. A restarted embedder redials each of these at boot
+     * (`handoffs.connect`), since the dial in flight died with the
+     * previous process.
+     */
+    pendingDials: () => {
+      /** @type {Array<{ sessionKey: string, location: any }>} */
+      const dials = [];
+      for (const [sessionKey, session] of sessions.entries()) {
+        if (
+          session.dialLocation !== undefined &&
+          !session.attached &&
+          (session.pendingWithdraws.length > 0 || session.queue.length > 0)
+        ) {
+          dials.push({ sessionKey, location: session.dialLocation });
+        }
+      }
+      return harden(dials);
+    },
+    /** @param {string | Uint8Array} swissnum */
+    unpublish: swissnum => {
+      const key = swissnumHex(swissnum);
+      const refId = publications.get(key);
+      publications.delete(key);
+      dirty = true;
+      if (refId !== undefined) {
+        const row = refs.get(refId);
+        if (row !== undefined) {
+          maybeReleaseRef(row);
+        }
+      }
+      persist();
+    },
+    /**
+     * The reachability graph for vat-level GC: which origin sessions
+     * are referenced by publications, and which sessions hold
+     * references into which origins. Resolver plumbing and dead
+     * tombstones do not retain anyone.
+     */
+    inspect: () =>
+      harden({
+        publishedOrigins: [
+          ...new Set(
+            [...publications.values()]
+              .map(refId => refs.get(refId)?.origin)
+              .filter(origin => origin !== undefined),
+          ),
+        ],
+        holdings: [...refs.values()]
+          .filter(row => !row.resolver && !row.dead)
+          .map(row => ({
+            origin: row.origin,
+            holders: [...row.facing.keys()],
+          })),
+      }),
+  });
+};
+harden(makeOcapnHub);

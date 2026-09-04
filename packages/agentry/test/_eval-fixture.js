@@ -20,7 +20,9 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { makeGit } from '@endo/exo-git';
 import { makeNativeGitBackend } from '@endo/git';
 import { makeMount, lineageOf } from '@endo/daemon/src/mount.js';
-import { makeFilePowers } from '@endo/daemon/src/daemon-node-powers.js';
+import { makeFilePowers } from '@endo/daemon/src/manager-node-powers.js';
+
+/** @import { CodeModePower } from '@endo/agent-tools/code-mode/types.js' */
 
 const execFileAsync = nodePromisify(execFile);
 
@@ -72,14 +74,19 @@ harden(readText);
  * disk. Shared by every per-eval provisioning helper.
  *
  * @param {string} repoRoot
- * @returns {{ workspace: unknown, git: unknown }}
+ * @param {object} [options]
+ * @param {boolean} [options.allowHistoryRewrite]
+ * @returns {{ workspace: CodeModePower, git: CodeModePower }}
  */
-export const makePowersOver = repoRoot => {
+export const makePowersOver = (
+  repoRoot,
+  { allowHistoryRewrite = false } = {},
+) => {
   const workspace = makeNodeFilesystem({ rootPath: repoRoot });
   const filePowers = makeFilePowers({ fs, path });
   const mount = makeMount({ rootPath: repoRoot, readOnly: false, filePowers });
   const backend = makeNativeGitBackend({ repoRoot });
-  const git = makeGit({ mount, backend, lineageOf });
+  const git = makeGit({ mount, backend, lineageOf }, { allowHistoryRewrite });
   return harden({ workspace, git });
 };
 harden(makePowersOver);

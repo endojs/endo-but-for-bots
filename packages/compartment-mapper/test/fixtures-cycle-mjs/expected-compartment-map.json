@@ -1,0 +1,19 @@
+{
+  "compartments": {
+    "app": {
+      "modules": {
+        "./index.js": {
+          "language": "js"
+        },
+        "app": {
+          "link": "app"
+        }
+      }
+    }
+  },
+  "entry": "node_modules/app/index.js",
+  "entryCompartment": "app",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-cycle-mjs",
+  "oracle": "node"
+}

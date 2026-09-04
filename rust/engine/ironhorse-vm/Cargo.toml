@@ -1,0 +1,39 @@
+[package]
+name = "ironhorse-vm"
+description = "Safe, index-arena transliteration of the XS interpreter core: value/heap model, slot stack, match-dispatch interpreter, and the 16.16 fixed-point meter. #![forbid(unsafe_code)]."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "ironhorse_vm"
+path = "src/lib.rs"
+
+[dependencies]
+# The engine-internal XSRE matcher (child 8). ironhorse-vm links it as the
+# JavaScript `RegExp` surface (child 9): construction compiles a pattern
+# with `compile`, and `exec`/`test`/the String regex methods drive
+# `match_regexp`. Both halves are `#![forbid(unsafe_code)]`.
+ironhorse-regexp = { path = "../ironhorse-regexp" }
+icu_normalizer = "=2.2.0"
+icu_segmenter = "=2.2.0"
+
+[dev-dependencies]
+# Source-level regression locks (`tests/`) need guest JS turned into
+# bytecode + a symbols atom, and the portable fuzz regressions compile
+# their generated source the same way. `ironhorse-compile` is the
+# pure-Rust half of the pipeline `dual_run` rides, so both need neither
+# XS nor c/moddable nor libclang; it does not depend on this crate, so
+# the edge is not a cycle.
+ironhorse-compile = { path = "../ironhorse-compile" }
+
+[features]
+# Off by default. The determinism firewall (design
+# `designs/ironhorse-meter-opcode-cost-instrumentation.md` § firewall):
+# no default/release/snapshot/consensus build enables this; only the
+# dev-only calibration binary and the calibration CI job turn it on. With
+# the feature off the `CostRecorder` is a zero-sized no-op and the metered
+# hot loop is instruction-identical to the pre-instrumentation build.
+default = []
+cost-calibration = []

@@ -47,7 +47,8 @@ export {};
  *           } |
  *           EncodingClass<'tagged'> & { tag: string,
  *                                       payload: Encoding
- *           }
+ *           } |
+ *           EncodingClass<'byteArray'> & { data: string }
  * } EncodingUnion
  *
  * Note that the '@@asyncIterator' encoding is deprecated. Use 'symbol' instead.
@@ -98,7 +99,8 @@ export {};
  * @template Slot
  * @callback FromCapData
  * @param {CapData<Slot>} data
- * @returns {any} a Passable
+ * @returns {unknown} a decoded root whose more specific type is not encoded
+ * in CapData
  */
 
 /**

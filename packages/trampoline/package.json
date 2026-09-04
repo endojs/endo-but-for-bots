@@ -34,23 +34,21 @@
   "scripts": {
     "build": "exit 0",
     "build:types": "tsc --build tsconfig.build.json",
-    "prepack": "git clean -fX -e node_modules/ && yarn build:types",
     "clean:types": "git clean -fX -e node_modules/",
-    "postpack": "yarn clean:types",
     "cover": "c8 ava --config test/_ava-ses.config.js",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "eslint --fix .",
     "lint:eslint": "eslint .",
     "lint:types": "tsc",
-    "test:types": "yarn build:types && tsd -f \"test/*.test-d.ts\"; yarn clean:types",
+    "test:types": "tsc --project tsconfig.test-types.json",
     "test:ava": "ava",
-    "test": "yarn test:types && yarn test:ava"
+    "test": "yarn test:ava"
   },
   "devDependencies": {
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
-    "tsd": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -60,11 +58,6 @@
     "*.js",
     "*.ts"
   ],
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
-  },
   "ava": {
     "files": [
       "test/**/*.test.js"

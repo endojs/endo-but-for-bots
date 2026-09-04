@@ -1,0 +1,22 @@
+{
+  "compartments": {
+    "order": {
+      "modules": {
+        "./a.js": {
+          "language": "js"
+        },
+        "./b.js": {
+          "language": "js"
+        },
+        "./index.js": {
+          "language": "js"
+        }
+      }
+    }
+  },
+  "entry": "index.js",
+  "entryCompartment": "order",
+  "entryModule": "./index.js",
+  "fixture": "fixtures-order",
+  "oracle": "node"
+}

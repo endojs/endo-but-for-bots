@@ -3,10 +3,9 @@
 import test from '@endo/ses-ava/test.js';
 import path from 'path';
 import fs from 'fs';
-import { bytesToImmutable } from '@endo/bytes/to-immutable.js';
-import { bytesFromImmutable } from '@endo/bytes/from-immutable.js';
-import { bytesFromText } from '@endo/bytes/from-string.js';
-import { bytesToText } from '@endo/bytes/to-string.js';
+import { frozenBytes, thawedBytes } from '@endo/immutable-arraybuffer';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
+import { strictDecodeUtf8 } from '@endo/utf8/strict-decode.js';
 import { makeSyrupReader } from '../../src/syrup/decode.js';
 import { makeSyrupWriter } from '../../src/syrup/encode.js';
 import {
@@ -21,7 +20,7 @@ import {
  */
 
 // zoo.bin from https://github.com/ocapn/syrup/tree/2214cbb7c0ee081699fdef64edbc2444af2bb1d2/test-data
-// eslint-disable-next-line no-underscore-dangle
+
 const __dirname = path.dirname(new URL(import.meta.url).pathname);
 const zooBinRaw = fs.readFileSync(path.resolve(__dirname, '_zoo.bin'));
 // nodejs can provide a buffer with a non-zero byteOffset, which confuses the buffer reader
@@ -97,9 +96,7 @@ test('zoo.bin', t => {
       syrupReader.enterSet();
       while (!syrupReader.peekSetEnd()) {
         result.eats.push(
-          bytesToText(bytesFromImmutable(syrupReader.readBytestring()), {
-            fatal: true,
-          }),
+          strictDecodeUtf8(thawedBytes(syrupReader.readBytestring())),
         );
       }
       syrupReader.exitSet();
@@ -110,9 +107,8 @@ test('zoo.bin', t => {
       t.is(syrupReader.readSelectorAsString(), 'weight');
       result.weight = syrupReader.readFloat64();
       t.is(syrupReader.readSelectorAsString(), 'species');
-      result.species = bytesToText(
-        bytesFromImmutable(syrupReader.readBytestring()),
-        { fatal: true },
+      result.species = strictDecodeUtf8(
+        thawedBytes(syrupReader.readBytestring()),
       );
       syrupReader.exitDictionary();
       return result;
@@ -124,7 +120,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('eats');
       syrupWriter.enterSet(value.eats.length);
       for (const eat of value.eats) {
-        syrupWriter.writeBytestring(bytesToImmutable(bytesFromText(eat)));
+        syrupWriter.writeBytestring(frozenBytes(encodeUtf8(eat)));
       }
       syrupWriter.exitSet();
       syrupWriter.writeSelectorFromString('name');
@@ -134,9 +130,7 @@ test('zoo.bin', t => {
       syrupWriter.writeSelectorFromString('weight');
       syrupWriter.writeFloat64(value.weight);
       syrupWriter.writeSelectorFromString('species');
-      syrupWriter.writeBytestring(
-        bytesToImmutable(bytesFromText(value.species)),
-      );
+      syrupWriter.writeBytestring(frozenBytes(encodeUtf8(value.species)));
       syrupWriter.exitDictionary();
     },
   };

@@ -1,7 +1,6 @@
 {
   "name": "@endo/exo-shell",
   "version": "0.0.0",
-  "private": true,
   "description": "Remotable exo glue and interface guard for an EndoShell capability — a writable-mount-scoped, allowlisted, argv-only command executor. Portable across SES realms; pair with @endo/host-spawner (or a sandbox spawner) for the process-execution engine.",
   "keywords": [
     "endo",
@@ -20,10 +19,10 @@
   },
   "type": "module",
   "main": "./src/index.js",
-  "types": "./types-index.d.ts",
+  "types": "./types-index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./src/index.js"
     },
     "./src/shell.js": {
@@ -35,7 +34,7 @@
       "default": "./src/interfaces.js"
     },
     "./types-index.js": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./types-index.js"
     },
     "./package.json": "./package.json"
@@ -61,15 +60,13 @@
     "eslint": "catalog:dev",
     "typescript": "catalog:dev"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "ava": {
     "files": [
       "test/**/*.test.js"
     ],
     "timeout": "60s"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   }
 }

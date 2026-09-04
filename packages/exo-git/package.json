@@ -1,7 +1,6 @@
 {
   "name": "@endo/exo-git",
   "version": "0.0.0",
-  "private": true,
   "description": "Remotable exo glue and interface guards for an EndoGit capability — portable across SES realms; pair with @endo/git for the Node-side GitBackend.",
   "keywords": [
     "endo",
@@ -20,10 +19,10 @@
   },
   "type": "module",
   "main": "./src/index.js",
-  "types": "./types-index.d.ts",
+  "types": "./types-index.types.d.ts",
   "exports": {
     ".": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./src/index.js"
     },
     "./src/git.js": {
@@ -51,45 +50,51 @@
       "default": "./src/interfaces.js"
     },
     "./types-index.js": {
-      "types": "./types-index.d.ts",
+      "types": "./types-index.types.d.ts",
       "default": "./types-index.js"
     },
     "./package.json": "./package.json"
   },
   "scripts": {
     "build": "exit 0",
+    "generate:help": "node scripts/generate-help-text-data.mjs",
     "test": "ava",
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
-    "lint:types": "tsc"
+    "lint:types": "tsc",
+    "test:types": "tsc --project tsconfig.test-types.json"
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
+    "@endo/helpdown": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
+    "@endo/pubsub": "workspace:^",
     "@endo/stream": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "ava": "catalog:dev",
     "eslint": "catalog:dev",
+    "expect-type": "^1.4.0",
     "typescript": "catalog:dev"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "ava": {
     "files": [
       "test/**/*.test.js"
     ],
     "timeout": "60s"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   }
 }

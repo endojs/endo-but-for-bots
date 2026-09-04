@@ -3,11 +3,23 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { E } from '@endo/eventual-send';
+
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { gitClone } from '../src/index.js';
+import { promisify } from 'node:util';
+import { execFile, execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+
+import {
+  gitClone,
+  internalHelpers,
+  makeNativeGitBackend,
+} from '../src/index.js';
+
+const execFileAsync = promisify(execFile);
 
 test('gitClone rejects unsafe clone boundaries before transport', async t => {
   const nonEmptyDestination = await fs.promises.mkdtemp(
@@ -55,5 +67,547 @@ test('gitClone rejects unsafe clone boundaries before transport', async t => {
       allowLocalFileTransport: true,
     }),
     { message: /destination mount must be empty/ },
+  );
+});
+
+test('NativeGitBackend.tree documents every method GitTree advertises', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'README.md'), 'hello\n');
+  await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'init'],
+    { cwd: repoRoot },
+  );
+
+  const tree = await backend.tree('HEAD');
+  /** @type {string[]} */
+  const advertised =
+    // eslint-disable-next-line no-underscore-dangle
+    await E(/** @type {any} */ (tree)).__getMethodNames__();
+  const methods = advertised.filter(name => !name.startsWith('__'));
+  /** @type {string[]} */
+  const [overview, unknown, ...docs] = await Promise.all([
+    E(tree).help(),
+    E(tree).help('unknownMethod'),
+    ...methods.map(method => E(tree).help(method)),
+  ]);
+  t.true(overview.startsWith('GitTree - '));
+  methods.forEach((method, index) => {
+    const doc = docs[index];
+    t.not(doc, '', `GitTree.${method} must have documentation`);
+    t.true(
+      doc.startsWith(`${method}(`),
+      `GitTree.${method} documentation must open with its signature`,
+    );
+  });
+  // The fallback wording is spelled out rather than imported so the test
+  // pins what a caller actually sees.
+  t.is(unknown, 'No documentation available for method "unknownMethod".');
+});
+
+test('NativeGitBackend.tree exposes GitBlob help through eventual send', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.writeFile(path.join(repoRoot, 'README.md'), 'hello\n');
+  await execFileAsync('git', ['add', 'README.md'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'init'],
+    { cwd: repoRoot },
+  );
+
+  const tree = await backend.tree('HEAD');
+  const blob = await tree.lookup('README.md');
+  const blobRef = E(/** @type {any} */ (blob));
+  /** @type {string[]} */
+  const advertised =
+    // eslint-disable-next-line no-underscore-dangle
+    await E(/** @type {any} */ (blob)).__getMethodNames__();
+  const methods = advertised.filter(name => !name.startsWith('__'));
+  /** @type {string[]} */
+  const [overview, unknown, ...docs] = await Promise.all([
+    blobRef.help(),
+    blobRef.help('unknownMethod'),
+    ...methods.map(method => blobRef.help(method)),
+  ]);
+  t.true(overview.startsWith('GitBlob - '));
+  methods.forEach((method, index) => {
+    const doc = docs[index];
+    t.not(doc, '', `GitBlob.${method} must have documentation`);
+    t.true(
+      doc.startsWith(`${method}(`),
+      `GitBlob.${method} documentation must open with its signature`,
+    );
+  });
+  t.is(unknown, 'No documentation available for method "unknownMethod".');
+});
+
+/**
+ * A repository root the backend accepts, so `remotePush` reaches its argv
+ * construction. Every assertion below rejects before any transport runs.
+ *
+ * @param {import('ava').ExecutionContext} t
+ */
+const provisionRepoRoot = async t => {
+  const root = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-backend-'),
+  );
+  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  const backend = makeNativeGitBackend({ repoRoot: root });
+  await backend.assertRepositoryRoot();
+  return backend;
+};
+
+const provisionRepo = async t => {
+  const repoRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-status-'),
+  );
+  t.teardown(() => fs.promises.rm(repoRoot, { recursive: true, force: true }));
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+  return { backend: makeNativeGitBackend({ repoRoot }), repoRoot };
+};
+
+test('NativeGitBackend.status reads large output and preserves status columns', async t => {
+  t.timeout(60_000);
+  const { backend, repoRoot } = await provisionRepo(t);
+
+  await fs.promises.writeFile(path.join(repoRoot, 'deleted.txt'), 'tracked');
+  await execFileAsync('git', ['add', 'deleted.txt'], { cwd: repoRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-m', 'tracked'],
+    { cwd: repoRoot },
+  );
+  await fs.promises.rm(path.join(repoRoot, 'deleted.txt'));
+
+  const untrackedDir = path.join(repoRoot, 'untracked');
+  await fs.promises.mkdir(untrackedDir);
+  const fileCount = 30_000;
+  const fileSuffix = 'x'.repeat(48);
+  for (let start = 0; start < fileCount; start += 500) {
+    const writes = [];
+    for (let i = start; i < Math.min(start + 500, fileCount); i += 1) {
+      writes.push(
+        fs.promises.writeFile(
+          path.join(untrackedDir, `file-${i}-${fileSuffix}.txt`),
+          '',
+        ),
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.all(writes);
+  }
+
+  const entries = await backend.status();
+  t.is(entries.length, fileCount + 1);
+  // The porcelain record for this path begins with a leading space (` D`),
+  // so this asserts the streaming read did not trim its status columns.
+  t.like(
+    entries.find(entry => entry.path === 'deleted.txt'),
+    {
+      path: 'deleted.txt',
+      index: 'clean',
+      worktree: 'deleted',
+    },
+  );
+});
+
+test('NativeGitBackend.status filters untracked files according to options', async t => {
+  const { backend, repoRoot } = await provisionRepo(t);
+  await fs.promises.mkdir(path.join(repoRoot, 'tree', 'deeper'), {
+    recursive: true,
+  });
+  await fs.promises.writeFile(path.join(repoRoot, 'tree', 'deeper', 'a'), '');
+  await fs.promises.writeFile(path.join(repoRoot, 'one'), '');
+
+  const pathsFor = async options =>
+    (await backend.status(options)).map(entry => entry.path).sort();
+  t.deepEqual(await pathsFor(), ['one', 'tree/deeper/a']);
+  t.deepEqual(await pathsFor({ untracked: 'normal' }), ['one', 'tree/']);
+  t.deepEqual(await pathsFor({ untracked: 'no' }), []);
+  await t.throwsAsync(
+    backend.status(/** @type {any} */ ({ untracked: 'invalid' })),
+    { message: /status\.untracked/ },
+  );
+});
+
+test('remoteFetch keeps above-ceiling transport output within TOOL_OUTPUT_LIMIT', async t => {
+  t.timeout(120_000);
+  const { TOOL_OUTPUT_LIMIT } = internalHelpers;
+
+  const sourceRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-remote-source-'),
+  );
+  t.teardown(() =>
+    fs.promises.rm(sourceRoot, { recursive: true, force: true }),
+  );
+  await execFileAsync('git', ['init', '-q', '-b', 'main'], { cwd: sourceRoot });
+  await fs.promises.writeFile(path.join(sourceRoot, 'seed.txt'), 'seed\n');
+  await execFileAsync('git', ['add', 'seed.txt'], { cwd: sourceRoot });
+  await execFileAsync(
+    'git',
+    ['-c', 'user.email=t@t', '-c', 'user.name=T', 'commit', '-q', '-m', 'seed'],
+    { cwd: sourceRoot },
+  );
+  const { stdout: revParseOut } = await execFileAsync(
+    'git',
+    ['rev-parse', 'HEAD'],
+    { cwd: sourceRoot },
+  );
+  const oid = revParseOut.trim();
+  // Enough long-named branches that fetch's per-ref summary (one
+  // ` * [new branch] <name> -> origin/<name>` line each, naming the branch
+  // twice) comfortably exceeds TOOL_OUTPUT_LIMIT on its own.
+  const branchCount = 400;
+  const branchPad = 'x'.repeat(120);
+  execFileSync('git', ['update-ref', '--stdin'], {
+    cwd: sourceRoot,
+    input: Array.from(
+      { length: branchCount },
+      (_, i) => `create refs/heads/branch-${i}-${branchPad} ${oid}\n`,
+    ).join(''),
+  });
+
+  const { backend } = await provisionRepo(t);
+  const result = await backend.remoteFetch({
+    url: pathToFileURL(sourceRoot).href,
+    refspecs: ['+refs/heads/*:refs/remotes/origin/*'],
+  });
+  // The long-named branches plus the seed `main` branch.
+  t.is(result.updatedRefs.length, branchCount + 1);
+  // The bounded text, marker included, fits under TOOL_OUTPUT_LIMIT — the
+  // same 50,000-character ceiling `@endo/exo-git` enforces structurally on
+  // `GitRemote` results — so the exo layer passes it through untouched
+  // instead of re-truncating and replacing the total below with the length
+  // of an intermediate already-truncated string.
+  t.true(result.text.length <= TOOL_OUTPUT_LIMIT);
+  const marker = /\.\.\. \(truncated, (\d+) chars total\)$/.exec(result.text);
+  t.truthy(marker);
+  // The reported total sizes the original transport output.
+  t.true(
+    Number(/** @type {RegExpExecArray} */ (marker)[1]) > TOOL_OUTPUT_LIMIT,
+  );
+});
+
+const LEASE_URL = 'https://github.com/example/repo.git';
+const LEASE_OID = '0123456789abcdef0123456789abcdef01234567';
+
+const provisionCommittedRepo = async t => {
+  const root = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-worktree-'),
+  );
+  t.teardown(() => fs.promises.rm(root, { recursive: true, force: true }));
+  await execFileAsync('git', ['init', '-q', '-b', 'main', root]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.invalid',
+    'commit',
+    '--allow-empty',
+    '-qm',
+    'root',
+  ]);
+  return fs.promises.realpath(root);
+};
+
+test('worktreeList parses locked, detached, prunable, and bare records', async t => {
+  const root = await provisionCommittedRepo(t);
+  const parent = path.dirname(root);
+  const detached = path.join(parent, 'native-git-worktree-detached');
+  const locked = path.join(parent, 'native-git-worktree-locked');
+  const prunable = path.join(parent, 'native-git-worktree-prunable');
+  t.teardown(() =>
+    Promise.all(
+      [detached, locked, prunable].map(worktree =>
+        fs.promises.rm(worktree, { recursive: true, force: true }),
+      ),
+    ),
+  );
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '--detach',
+    detached,
+    'HEAD',
+  ]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'locked-branch',
+    locked,
+    'HEAD',
+  ]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'lock',
+    '--reason',
+    'test lock',
+    locked,
+  ]);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '-b',
+    'prunable-branch',
+    prunable,
+    'HEAD',
+  ]);
+  await fs.promises.rm(prunable, { recursive: true, force: true });
+
+  const backend = makeNativeGitBackend({ repoRoot: root });
+  const records = await backend.worktreeList();
+  t.deepEqual(
+    records.map(({ path: recordPath }) => recordPath),
+    ['.'],
+  );
+  t.like(records[0], {
+    branch: 'refs/heads/main',
+    bare: false,
+    detached: false,
+    locked: false,
+    prunable: false,
+  });
+  const parsed = internalHelpers.parseWorktreeList(
+    [
+      `worktree ${root}`,
+      `HEAD ${'0'.repeat(40)}`,
+      'branch refs/heads/main',
+      '',
+      'worktree /outside/detached',
+      `HEAD ${'1'.repeat(40)}`,
+      'detached',
+      '',
+      'worktree /outside/locked',
+      `HEAD ${'2'.repeat(40)}`,
+      'branch refs/heads/locked-branch',
+      'locked test lock',
+      '',
+      'worktree /outside/prunable',
+      `HEAD ${'3'.repeat(40)}`,
+      'branch refs/heads/prunable-branch',
+      'prunable missing',
+      '',
+      'worktree /outside/bare',
+      'bare',
+      '',
+    ].join('\0'),
+  );
+  t.like(parsed[1], { detached: true, locked: false, prunable: false });
+  t.like(parsed[2], { locked: true, prunable: false });
+  t.like(parsed[3], { locked: false, prunable: true });
+  t.like(parsed[4], { bare: true, detached: false });
+
+  const bare = await fs.promises.realpath(
+    await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'native-git-worktree-bare-'),
+    ),
+  );
+  t.teardown(() => fs.promises.rm(bare, { recursive: true, force: true }));
+  await execFileAsync('git', ['clone', '-q', '--bare', root, bare]);
+  const bareCheckout = path.join(parent, 'native-git-worktree-bare-checkout');
+  t.teardown(() =>
+    fs.promises.rm(bareCheckout, { recursive: true, force: true }),
+  );
+  await execFileAsync('git', [
+    '--git-dir',
+    bare,
+    'worktree',
+    'add',
+    '-q',
+    '--detach',
+    bareCheckout,
+    'main',
+  ]);
+  const bareBackend = makeNativeGitBackend({ repoRoot: bare });
+  const bareRecords = await bareBackend.worktreeList();
+  t.deepEqual(
+    bareRecords.map(({ path: recordPath }) => recordPath),
+    ['.'],
+  );
+  t.like(bareRecords[0], {
+    bare: true,
+    detached: false,
+    locked: false,
+    prunable: false,
+  });
+});
+
+test('worktreeAdd creates a derived checkout and rejects escaped destinations', async t => {
+  const root = await provisionCommittedRepo(t);
+  const backend = makeNativeGitBackend({ repoRoot: root });
+  await fs.promises.mkdir(path.join(root, 'checkouts'));
+  const derived = await backend.worktreeAdd(['checkouts', 'feature'], {
+    ref: 'HEAD',
+    newBranch: 'feature',
+  });
+  t.deepEqual(await derived.currentBranch(), {
+    name: 'feature',
+    kind: 'branch',
+  });
+  t.deepEqual(await derived.status(), []);
+  const listed = await backend.worktreeList();
+  t.true(listed.some(({ path: recordPath }) => recordPath === '.'));
+  t.true(
+    listed.some(({ path: recordPath }) => recordPath === 'checkouts/feature'),
+  );
+  t.false(listed.some(({ path: recordPath }) => path.isAbsolute(recordPath)));
+
+  const outside = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'native-git-worktree-outside-'),
+  );
+  t.teardown(() => fs.promises.rm(outside, { recursive: true, force: true }));
+  await fs.promises.symlink(outside, path.join(root, 'escape'));
+  await t.throwsAsync(
+    backend.worktreeAdd(['escape', 'feature'], { ref: 'HEAD' }),
+    { message: /outside the repository mount/ },
+  );
+  await t.throwsAsync(backend.worktreeAdd(['..', 'outside'], { ref: 'HEAD' }), {
+    message: /single non-admin mount-relative segment/,
+  });
+  await t.throwsAsync(backend.worktreeAdd([], { ref: 'HEAD' }), {
+    message: /must not be empty/,
+  });
+  for (const segment of ['.git', '.GIT', 'git~1']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(backend.worktreeAdd([segment], { ref: 'HEAD' }), {
+      message: /single non-admin mount-relative segment/,
+    });
+  }
+});
+
+test('worktreeAdd refuses a linked checkout whose administrative directory is outside its mount', async t => {
+  const root = await provisionCommittedRepo(t);
+  const linked = path.join(path.dirname(root), 'native-git-worktree-linked');
+  t.teardown(() => fs.promises.rm(linked, { recursive: true, force: true }));
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'worktree',
+    'add',
+    '-q',
+    '--detach',
+    linked,
+    'HEAD',
+  ]);
+  const backend = makeNativeGitBackend({ repoRoot: linked });
+  await backend.assertRepositoryRoot();
+  await t.throwsAsync(backend.worktreeAdd(['new-checkout'], { ref: 'HEAD' }), {
+    message: /outside the repository mount/,
+  });
+});
+
+test('remotePush rejects a malformed force-with-lease before transport', async t => {
+  const backend = await provisionRepoRoot(t);
+  const push = forceWithLease =>
+    backend.remotePush({
+      url: LEASE_URL,
+      refspecs: ['refs/heads/topic:refs/heads/topic'],
+      forceWithLease,
+    });
+
+  // The exo never emits a malformed record, but `@endo/git` is importable
+  // without the policy layer above it, so these branches are the boundary a
+  // direct caller meets. Each is unreachable from the exo and therefore has no
+  // other test standing behind it.
+  await Promise.all(
+    ['a string', 42, true, [], [LEASE_OID]].map(notARecord =>
+      t.throwsAsync(push(notARecord), {
+        message: /forceWithLease must be a record/,
+      }),
+    ),
+  );
+  await t.throwsAsync(push(null), {
+    message: /forceWithLease must be a record/,
+  });
+
+  await t.throwsAsync(push({ expectedOid: LEASE_OID }), {
+    message: /forceWithLease\.ref/,
+  });
+  await t.throwsAsync(
+    push({ ref: '--upload-pack=evil', expectedOid: LEASE_OID }),
+    { message: /forceWithLease\.ref/ },
+  );
+  await t.throwsAsync(push({ ref: 'refs/heads/topic' }), {
+    message: /forceWithLease\.expectedOid/,
+  });
+
+  // The OID length boundary, either side, plus a non-hex digit.
+  await Promise.all(
+    [
+      LEASE_OID.slice(0, 39),
+      `${LEASE_OID}0`,
+      LEASE_OID.replace(/.$/u, 'g'),
+    ].map(badOid =>
+      t.throwsAsync(push({ ref: 'refs/heads/topic', expectedOid: badOid }), {
+        message: /40-character hexadecimal object ID/,
+      }),
+    ),
+  );
+
+  // Git reads a null-OID lease as "expect this ref NOT to exist" — create-only,
+  // the inverse of the option's meaning. The schema, the exo, and this backend
+  // must accept exactly the same domain, so this layer rejects it too.
+  await t.throwsAsync(
+    push({ ref: 'refs/heads/topic', expectedOid: '0'.repeat(40) }),
+    { message: /must not be the null object ID/ },
+  );
+
+  // `--force-with-lease=<ref>:<oid>` is split at the LAST colon, so a ref
+  // carrying its own colon does not round-trip and the lease binds to a ref
+  // nobody named. `requireRevision` permits a colon, and the policy layer that
+  // rejects one is not in a direct caller's path.
+  await t.throwsAsync(push({ ref: 'refs/heads/a:b', expectedOid: LEASE_OID }), {
+    message: /must not contain a colon/,
+  });
+});
+
+test('remotePush refuses a force refspec alongside a force-with-lease', async t => {
+  const backend = await provisionRepoRoot(t);
+
+  // A `+` refspec carries its own force, and git lets that force turn a
+  // stale-lease rejection into a forced update — so the pair does not error,
+  // it silently VOIDS the lease. That is the one lease precondition whose
+  // breach is an authority escalation rather than a diagnostic, which is why
+  // it is re-asserted here rather than only at the policy layer.
+  await t.throwsAsync(
+    backend.remotePush({
+      url: LEASE_URL,
+      refspecs: ['+refs/heads/alt:refs/heads/topic'],
+      forceWithLease: { ref: 'refs/heads/topic', expectedOid: LEASE_OID },
+    }),
+    { message: /must not accompany a force refspec/ },
+  );
+
+  // The same refspec without a lease is untouched by the new guard.
+  await t.notThrowsAsync(
+    backend
+      .remotePush({
+        url: LEASE_URL,
+        refspecs: ['+refs/heads/alt:refs/heads/topic'],
+      })
+      .then(
+        () => undefined,
+        error => {
+          // Transport is expected to fail (there is no such remote); the guard
+          // must not be what rejected it.
+          t.notRegex(String(error.message), /force refspec/u);
+        },
+      ),
   );
 });

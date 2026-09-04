@@ -21,6 +21,10 @@
     ".": "./index.js",
     "./netlayer/tcp-testing": "./src/netlayers/tcp-test-only.js",
     "./netlayer/ws": "./src/netlayers/websocket.js",
+    "./client/types": {
+      "types": "./src/client/types.js"
+    },
+    "./client/util": "./src/client/util.js",
     "./syrup": "./src/syrup/index.js",
     "./cbor": "./src/cbor/index.js",
     "./cryptography": "./src/cryptography.js",
@@ -29,7 +33,8 @@
     "./codec-interface": {
       "types": "./src/codec-interface.d.ts"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./hub": "./src/hub/hub.js"
   },
   "scripts": {
     "build": "exit 0",
@@ -44,10 +49,13 @@
     "test:update-snapshots": "ses-ava --update-snapshots"
   },
   "dependencies": {
+    "@endo/ascii": "workspace:^",
     "@endo/bytes": "workspace:^",
+    "@endo/cbor": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/nat": "workspace:^",
@@ -55,9 +63,10 @@
     "@endo/promise-kit": "workspace:^",
     "@endo/stream": "workspace:^",
     "@endo/syrup-frame": "workspace:^",
-    "@noble/curves": "^1.9.0",
-    "@noble/hashes": "^2.0.1",
-    "ws": "^8.20.0"
+    "@endo/utf8": "workspace:^",
+    "@noble/curves": "^2.3.0",
+    "@noble/hashes": "^2.3.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@endo/chacha12": "workspace:^",
@@ -70,7 +79,6 @@
     "cbor": "^10.0.12",
     "eslint": "catalog:dev",
     "ses": "workspace:^",
-    "tsd": "catalog:dev",
     "typescript": "catalog:dev"
   },
   "files": [
@@ -86,11 +94,6 @@
   ],
   "publishConfig": {
     "access": "public"
-  },
-  "eslintConfig": {
-    "extends": [
-      "plugin:@endo/internal"
-    ]
   },
   "sesAvaConfigs": {
     "lockdown": "../../ava-endo-lockdown.config.mjs",

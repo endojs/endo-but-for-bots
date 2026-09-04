@@ -1,1 +1,1 @@
-export * from './src/immutable-arraybuffer-pony.js';
+export { frozenBytes, thawedBytes } from './src/bytes.js';

@@ -171,6 +171,41 @@ If the composite build complains about `TS5055` "would overwrite input file"
 errors, you have stale `.d.ts` outputs from a previous per-package build.
 Run `yarn build:types --clean` once to reset, then build normally.
 
+## TypeScript contract tests
+
+Packages opt into public type-contract tests by owning `.test-d.ts` fixtures and
+providing a `test:types` package script.
+The repository task runs only those opted-in package scripts through Turbo.
+
+All type-contract suites now use `expect-type` assertions compiled by
+checked-in `tsconfig.test-types.json` projects.
+Their scripts invoke `tsc --project tsconfig.test-types.json` with checked-in
+fixture lists.
+Their `expect-type` assertions supply exact and assignability contract checks
+while the TypeScript compiler supplies diagnostics and the failing exit status.
+
+Generate declarations before running the contract tests:
+
+```sh
+yarn build:types
+yarn test:types
+```
+
+For migrated fixtures, use `expect-type` assertions according to the property
+being tested:
+
+- `expectTypeOf(value).toEqualTypeOf<T>()` requires exact type identity.
+- `expectTypeOf(value).toExtend<T>()` checks that the expression is assignable
+  to `T`.
+- `expectTypeOf(value).not.toEqualTypeOf<T>()` records a negative exact-type
+  contract that ordinary `tsc` checking may not express.
+- `// @ts-expect-error` records an expression that must produce a diagnostic.
+
+When adding a fixture to a package, keep its contract tool, checked-in project,
+and `test:types` script aligned with the migration tranche that owns it.
+Do not add a package merely to increase coverage counts; type-contract testing
+remains opt-in.
+
 
 ## Rebuilding `ses`
 
