@@ -4022,6 +4022,92 @@ mod tests {
         ));
     }
 
+    /// A `DualRun` where ironhorse aborted with `halt` and the oracle
+    /// completed — the `OracleOnlyComplete` split's input shape.
+    fn synthetic_oracle_only(halt: Halt) -> DualRun {
+        let mut run = synthetic_abort(halt, "");
+        run.agreement = Agreement::OracleOnlyComplete;
+        run
+    }
+
+    /// Assert that ironhorse-aborting with `halt` (oracle completed) yields
+    /// exactly `reason`, and that the reason still classifies as an Ironhorse
+    /// coverage gap (`Unsupported`) — a dropped/typo'd `ironhorse-aborted`
+    /// prefix would silently re-bucket it as `Infrastructure`, understating the
+    /// backlog.
+    fn assert_oracle_only_reason(halt: Halt, reason: &str) {
+        assert_eq!(
+            evaluate_positive(&Config::default(), &synthetic_oracle_only(halt), false),
+            Verdict::RunSkip(reason.to_string()),
+        );
+        assert_eq!(
+            crate::report::classify(crate::report::Verdict::RunSkip, reason),
+            crate::report::Category::Unsupported,
+            "`{reason}` must classify as an Ironhorse coverage gap",
+        );
+    }
+
+    #[test]
+    fn oracle_only_wrong_throw_names_the_constructor() {
+        assert_oracle_only_reason(
+            Halt::Throw("TypeError: not a function".into()),
+            "ironhorse-aborted:wrong-throw:TypeError",
+        );
+    }
+
+    #[test]
+    fn oracle_only_stack_overflow_is_named() {
+        assert_oracle_only_reason(Halt::StackOverflow(7), "ironhorse-aborted:stack-overflow");
+    }
+
+    #[test]
+    fn oracle_only_meter_abort_is_named() {
+        assert_oracle_only_reason(Halt::MeterAbort, "ironhorse-aborted:meter");
+    }
+
+    #[test]
+    fn oracle_only_escaped_resume_is_a_named_internal_canary() {
+        // A `Halt::Resume` escaping to the classifier is the very corruption
+        // this round's `run_callback` fence exists to prevent; it must surface
+        // as its own reason, not hide in the honest `ironhorse-aborted` bucket.
+        assert_oracle_only_reason(Halt::Resume(0), "ironhorse-aborted:internal:resume");
+    }
+
+    #[test]
+    fn oracle_only_escaped_suspension_is_a_named_internal_canary() {
+        assert_oracle_only_reason(Halt::Yield(ironhorse_vm::Slot::undefined()), "ironhorse-aborted:internal:yield");
+        assert_oracle_only_reason(
+            Halt::AsyncYield(ironhorse_vm::Slot::undefined()),
+            "ironhorse-aborted:internal:yield",
+        );
+        assert_oracle_only_reason(Halt::Await(ironhorse_vm::Slot::undefined()), "ironhorse-aborted:internal:await");
+        assert_oracle_only_reason(Halt::StepLimit(9), "ironhorse-aborted:internal:step-limit");
+    }
+
+    #[test]
+    fn oracle_only_unsupported_and_decode_never_reach_the_split() {
+        // These halts return at the top of `evaluate_positive` as
+        // `unsupported-opcode:{op}` / `parse-or-decode` regardless of
+        // agreement, so no `ironhorse-aborted:unsupported`/`:decode` token is
+        // emittable — the documented family must match this reality.
+        assert_eq!(
+            evaluate_positive(
+                &Config::default(),
+                &synthetic_oracle_only(Halt::Unsupported("defineProperty")),
+                false,
+            ),
+            Verdict::RunSkip("unsupported-opcode:defineProperty".to_string()),
+        );
+        assert_eq!(
+            evaluate_positive(
+                &Config::default(),
+                &synthetic_oracle_only(Halt::Decode("truncated".into())),
+                false,
+            ),
+            Verdict::RunSkip("parse-or-decode".to_string()),
+        );
+    }
+
     /// An `AsyncDualRun` wrapping a trivially-agreeing dual-run with a chosen
     /// completion signal and rejection latch — for the pure `refine_async`
     /// trichotomy without an oracle machine.
