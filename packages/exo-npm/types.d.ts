@@ -428,8 +428,11 @@ export const RegistryDirectoryInterface: typeof import('./src/type-guards.js').R
 export const RegistryHubInterface: typeof import('./src/type-guards.js').RegistryHubInterface;
 export const RegistrySnapshotTreeInterface: typeof import('./src/type-guards.js').RegistrySnapshotTreeInterface;
 
-// Reachable via the `./registry-tree.js` subpath export.
-export const comparePublishedVersions: typeof import('./src/registry-tree.js').comparePublishedVersions;
+// `comparePublishedVersions` is intentionally NOT declared here: `index.js`
+// does not re-export it, so declaring it in this root-shadowing `.d.ts` would
+// let `import { comparePublishedVersions } from '@endo/exo-npm'` typecheck and
+// then fail at runtime. It is reachable through the `./registry-tree.js` subpath
+// export, whose own declarations cover it.
 
 export const makeNpmReferenceRegistry: typeof import('./src/reference-backend.js').makeNpmReferenceRegistry;
 export const makeMemoryPackageCacheTable: typeof import('./src/reference-backend.js').makeMemoryPackageCacheTable;

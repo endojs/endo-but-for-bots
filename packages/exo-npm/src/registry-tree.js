@@ -401,7 +401,22 @@ export const makeNpmRegistryTree = (operations, options = {}) => {
     async has(...path) {
       try {
         if (path.length === 0) return true;
-        const normalized = path.flatMap(scopedPackageSegments);
+        // Normalize only the leading segment through `scopedPackageSegments`,
+        // exactly as `lookup` does. Trailing version and in-tree file segments
+        // are ordinary published names (spaces, `+build`, non-ASCII) that npm's
+        // package-name charset does not admit; running them through
+        // `scopedPackageSegments` here made `has` report absent for content
+        // `lookup` resolves, breaking the has⇒lookup agreement invariant. Only
+        // an embedded slash is rejected past the head, since a slash is
+        // meaningful only in the leading package name.
+        const [head, ...tail] = path;
+        const normalized = [
+          ...scopedPackageSegments(head),
+          ...tail.map(segment => {
+            if (segment.includes('/')) throw RegistryPathSyntaxError(segment);
+            return segment;
+          }),
+        ];
         // Resolve the package name (and any trailing version/path) without
         // materializing a version leaf: `has` is the platform-wide no-throw
         // predicate and must not download a tarball or write to the CAS the way
