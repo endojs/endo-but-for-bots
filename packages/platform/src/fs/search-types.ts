@@ -79,7 +79,7 @@ export type Search = {
    * enumerate-and-scan walk substitutes; the JS reference composes `globPaths`
    * into `grepFiles`. Honors the same deny/confinement/`maxResults` rules.
    */
-  glorpFiles: (
+  glorp: (
     root: string,
     globPattern: string,
     regexSource: string,

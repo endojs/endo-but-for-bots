@@ -903,7 +903,7 @@ const makeMountExo = ctx => {
   // enumerate-and-scan pass — no glob result set round-trips through JS. The
   // reference implementation composes the lexical `glob` then `grep` (the same
   // `grep(pattern, glob(g))` seam), or dispatches to a native
-  // `search.glorpFiles` when the file powers supply one.
+  // `search.glorp` when the file powers supply one.
   /**
    * @param {string} globPattern
    * @param {string} grepPattern
@@ -913,17 +913,17 @@ const makeMountExo = ctx => {
     await null;
     assertLive();
     const maxResults = clampMaxResults(options.maxResults, GREP_MAX_RESULTS);
-    // A native powers layer may expose a fused `glorpFiles` on its `search`
+    // A native powers layer may expose a fused `glorp` on its `search`
     // engine; when present, dispatch to it so the whole enumerate-and-scan pass
     // runs in one native walk with no glob result-set round-trip through JS.
     // Otherwise compose the lexical `glob` then `grep` (the same
     // `grep(pattern, glob(g))` seam), which `provideSearch` resolves through
     // `filePowers.search` when a native `globPaths`/`grepFiles` is present.
     const search = provideSearch(filePowers);
-    if (search.glorpFiles !== undefined) {
+    if (search.glorp !== undefined) {
       /** @type {Array<{ file: string, line: number, text: string }>} */
       const matches = [];
-      for await (const batch of search.glorpFiles(
+      for await (const batch of search.glorp(
         currentDir,
         globPattern,
         grepPattern,

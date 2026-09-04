@@ -2190,8 +2190,9 @@ export type FilePowers = {
   /**
    * Optional platform-native search engine. When present, `provideSearch`
    * (`@endo/platform/fs/search`) uses it verbatim in place of the normative JS
-   * engine, and `glorp` dispatches to its `glorpFiles` for a single fused
-   * enumerate-and-scan pass. Structurally optional so the Node powers (which
+   * engine, and the mount's `glorp` dispatches to the engine's own `glorp`
+   * member for a single fused enumerate-and-scan pass. Structurally optional so
+   * the Node powers (which
    * rely on the JS engine) satisfy `FilePowers` without it.
    */
   search?: import('@endo/platform/fs/search.types').Search;

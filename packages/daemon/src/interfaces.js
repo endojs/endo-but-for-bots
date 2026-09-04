@@ -694,7 +694,7 @@ export const MountInterface = M.interface('EndoMount', {
   // grep's optional `paths`), so the operation can be pushed down to native code
   // as a single fused enumerate-and-scan call. The reference implementation
   // composes the delegated surface: `grep(grepPattern, glob(globPattern))`, or
-  // dispatches to a native `search.glorpFiles` when the file powers supply one.
+  // dispatches to a native `search.glorp` when the file powers supply one.
   // ReDoS hazard: `pattern` is a caller-supplied ECMAScript RegExp source
   // compiled with `new RegExp(pattern)` and tested per line on the daemon's
   // single event loop — a catastrophic backtracking source can stall the

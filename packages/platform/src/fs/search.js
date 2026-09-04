@@ -584,7 +584,7 @@ export const makeSearch = powers => {
    * @param {GrepOptions} [options]
    * @returns {AsyncGenerator<GrepMatch[]>}
    */
-  async function* glorpFiles(root, globPattern, regexSource, options = {}) {
+  async function* glorp(root, globPattern, regexSource, options = {}) {
     await null;
     const paths = globPaths(root, globPattern, {
       deniedSegments: options.deniedSegments,
@@ -594,9 +594,9 @@ export const makeSearch = powers => {
     });
     yield* grepFiles(root, regexSource, paths, options);
   }
-  harden(glorpFiles);
+  harden(glorp);
 
-  return harden({ globPaths, grepFiles, glorpFiles });
+  return harden({ globPaths, grepFiles, glorp });
 };
 harden(makeSearch);
 
