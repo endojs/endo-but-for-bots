@@ -952,8 +952,11 @@ export const make = async (_powers, _context, options = {}) => {
       const start = size > maxBytes ? size - maxBytes : 0;
       const length = size - start;
       const bytes = new Uint8Array(length);
-      await handle.read(bytes, 0, length, start);
-      return new TextDecoder().decode(bytes);
+      // The applier appends to and rotates this log, so it can shrink between
+      // the stat and the read. Decoding the whole buffer would pad a failure
+      // diagnostic with the NUL bytes the short read left behind.
+      const { bytesRead } = await handle.read(bytes, 0, length, start);
+      return new TextDecoder().decode(bytes.subarray(0, bytesRead));
     } catch {
       return '';
     } finally {
@@ -993,6 +996,11 @@ export const make = async (_powers, _context, options = {}) => {
    * @param {string} protocolFingerprint
    */
   const assertApplyRequest = (request, protocolFingerprint) => {
+    const malformed = () =>
+      new Error(
+        'Malformed or foreign apply request occupies the spool; refusing to ' +
+          'overwrite ambiguous privileged work.',
+      );
     if (
       request === null ||
       typeof request !== 'object' ||
@@ -1004,20 +1012,31 @@ export const make = async (_powers, _context, options = {}) => {
       typeof request.message !== 'string' ||
       typeof request.nonce !== 'string' ||
       request.nonce === '' ||
-      request.protocolFingerprint !== protocolFingerprint ||
-      !isConfigFingerprint(request.action, request.configFingerprint) ||
-      request.fingerprint !==
-        operationFingerprint(
-          request.action,
-          request.message,
-          request.configFingerprint,
-          protocolFingerprint,
-        )
+      !isConfigFingerprint(request.action, request.configFingerprint)
     ) {
+      throw malformed();
+    }
+    // A well-formed request under a different marker is a reconfigured host,
+    // not a corrupt spool — and it says so, because the operator's next move
+    // differs. Checked before the operation fingerprint, which is computed
+    // against the CURRENT marker and would otherwise report every such
+    // request as malformed.
+    if (request.protocolFingerprint !== protocolFingerprint) {
       throw new Error(
-        'Malformed or foreign apply request occupies the spool; refusing to ' +
-          'overwrite ambiguous privileged work.',
+        'The pending request belongs to another host configuration; ' +
+          'refusing to infer settlement under the current marker.',
       );
+    }
+    if (
+      request.fingerprint !==
+      operationFingerprint(
+        request.action,
+        request.message,
+        request.configFingerprint,
+        protocolFingerprint,
+      )
+    ) {
+      throw malformed();
     }
     sanitizeId(request.id);
   };
@@ -1549,12 +1568,6 @@ export const make = async (_powers, _context, options = {}) => {
             pending.id !== '' &&
             pending.id !== id
           ) {
-            if (pending.protocolFingerprint !== protocolFingerprint) {
-              throw new Error(
-                'The pending request belongs to another host configuration; ' +
-                  'refusing to infer settlement under the current marker.',
-              );
-            }
             const foreign = await readDecisive(outcomePathFor(pending.id));
             if (foreign === undefined) {
               return { kind: 'wait' };
@@ -1562,6 +1575,26 @@ export const make = async (_powers, _context, options = {}) => {
             // A sanitized-name collision is not evidence that the foreign
             // operation settled and must never free the single request slot.
             assertOutcomeRecord(foreign, pending.id, protocolFingerprint);
+          }
+          // An EMPTY request slot is not evidence of an idle applier. The
+          // service may consume `apply-request.json` once its status echoes
+          // the id, so from that moment until the terminal record the status
+          // is the ONLY evidence that the machine is mid-operation. Treating
+          // the gap as free stacks a second operation onto a switch that is
+          // still being health-checked — and if that switch fails and
+          // auto-rolls back, the queued one activates over the rollback.
+          // Only a TERMINAL foreign status frees the slot: requiring an
+          // outcome file here instead would wedge every later submission if
+          // an operator ever pruned `outcomes/`.
+          if (
+            status !== undefined &&
+            typeof status.id === 'string' &&
+            status.id !== '' &&
+            status.id !== id &&
+            status.phase !== 'ok' &&
+            status.phase !== 'error'
+          ) {
+            return { kind: 'wait' };
           }
           const configFingerprint =
             action === 'rollback'
@@ -2230,6 +2263,15 @@ export const make = async (_powers, _context, options = {}) => {
      * failed apply). Does not touch the staged edits. Like `apply`, a
      * successful rollback restarts the daemon.
      *
+     * NOT a way around a stuck applier. The spool has one request slot, so a
+     * rollback queues behind whatever occupies it and gives up only at the
+     * watch limit (`ENDO_NIXOS_WATCH_LIMIT_MS`, a day by default) — an
+     * applier that died mid-operation holds the slot for that long. This verb
+     * is the undo for an apply that COMPLETED and left the host wrong; when
+     * the privileged service itself is wedged, the escape hatch is the
+     * privileged side directly (`nixos-rebuild --rollback` as root), which is
+     * the authority this caplet deliberately does not hold.
+     *
      * @param {string} [key] - workflow idempotency key
      */
     async rollback(key) {
@@ -2361,7 +2403,9 @@ export const make = async (_powers, _context, options = {}) => {
           'restart the daemon, so the call may not return — check afterward.',
         rollback:
           'rollback(key?) -> reactivate the last system generation that ' +
-          'passed its health check; waits for the terminal outcome.',
+          'passed its health check; waits for the terminal outcome. It ' +
+          'queues behind any operation already in the spool, so it undoes a ' +
+          'COMPLETED apply rather than rescuing a stuck applier.',
         verify:
           'verify(rev, key?) -> { ok, runningRev, phase? }: is the checkout ' +
           'pinned to rev? A pure read.',

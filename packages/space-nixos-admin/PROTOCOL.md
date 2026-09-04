@@ -167,12 +167,20 @@ at all and lets the next publication replace it.
 This is a MUST rather than a nicety because it is the only thing that closes
 the last double-apply hole.
 The capability decides a slot is free to claim when it sees no request and no
-status for its ID, and it holds `submit.lock` while deciding — but the service
-does not take that lock, so a sample inside such a window would let an
+status for its own ID, and it holds `submit.lock` while deciding — but the
+service does not take that lock, so a sample inside such a window would let an
 at-least-once re-dispatch of an already-running key publish a second request.
 For a `switch`, that means activating the host twice.
 The capability cannot close this from its side; the service's ordering is what
 makes the guarantee.
+
+A status naming a *different* ID is already handled without help: while its
+`phase` is nonterminal the capability treats the slot as busy even with no
+request file present, so a consumed request does not let an unrelated operation
+stack onto one that is still being health-checked.
+That is why `phase` must reach `ok` or `error` on every operation, including
+those that fail early — a status left nonterminal forever blocks later
+submissions until they time out.
 
 On completion, atomically write
 `outcomes/<sanitizeId(id)>.json` with at least `id`, `action`, `fingerprint`,
