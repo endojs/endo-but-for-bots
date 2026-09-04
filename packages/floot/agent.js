@@ -50,6 +50,14 @@ import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply.
 const MAX_TOOL_ROUNDS = 8;
+
+/**
+ * Mail-triggered turns that may be waiting for their reply at once.
+ *
+ * The inbox loop hands a turn to a serial chain instead of awaiting it, so
+ * nothing else bounds how far that chain can grow under a flood of mail.
+ */
+const MAX_QUEUED_MAIL_TURNS = 16;
 const AGENT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
@@ -1063,92 +1071,166 @@ export const makeStreamingAgent = async (
       // to the topic the drain later consumes. Process each number once, or the
       // second dismiss() of an already-removed message throws and kills the loop.
       const handled = new Set();
+      // A mail turn is handed to this chain rather than awaited in the loop.
+      //
+      // `askSubagent` blocks inside a turn until `delegations.claim` observes
+      // the subagent's reply, and the only reader that feeds `claim` is this
+      // loop. Awaiting the turn here therefore waits on a message the loop can
+      // no longer read: every ask from a mail-triggered turn times out. The
+      // chain keeps replies in message order — turns themselves are already
+      // serialized by `turnChain` — while leaving the pump free to run.
+      /** @type {Promise<void>} */
+      let mailChain = Promise.resolve();
+      let queuedMailTurns = 0;
       for (;;) {
         const { value: message, done } = await messages.next();
         if (done) break;
-        const { from: fromId, number, type, strings, names } = message;
-        if (!handled.has(number)) {
-          handled.add(number);
-          // Offer every message — this session's own outbound mail included —
-          // to the delegation registry first. It learns a delegation's identity
-          // from the echo of the send and consumes the matching reply, which
-          // the awaiting `askSubagent` call returns instead of this loop
-          // turning it into a conversation (and replying to it, which with a
-          // subagent would be an unbounded exchange).
-          if (delegations.claim(message).claimed) {
-            // Dismissed like every other message this loop handles. Leaving it
-            // would mean that after a restart — when no ask is pending — the
-            // reply replays as an ordinary message, this session answers it,
-            // and the subagent answers back: two models in an unbounded
-            // exchange. The cost is that a reply's attachments are not
-            // retained, which `askSubagent` says plainly.
-            await E(powers).dismiss(number);
-            // eslint-disable-next-line no-continue
-            continue;
+        const {
+          from: fromId,
+          number,
+          type,
+          strings,
+          names,
+          done: messageDone = true,
+        } = message;
+        if (handled.has(number)) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // A sender may reveal a message progressively and settle it later with
+        // `editMessage`; the daemon re-emits the settled revision under the
+        // same number. Marking the partial handled would swallow that revision
+        // — including a subagent's reply, which `claim` deliberately refuses
+        // while it is still partial — and would answer a half-written message.
+        if (messageDone === false) {
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        handled.add(number);
+        // Offer every message — this session's own outbound mail included —
+        // to the delegation registry first. It learns a delegation's identity
+        // from the echo of the send and consumes the matching reply, which
+        // the awaiting `askSubagent` call returns instead of this loop
+        // turning it into a conversation (and replying to it, which with a
+        // subagent would be an unbounded exchange).
+        if (delegations.claim(message).claimed) {
+          // Dismissed like every other message this loop handles. Leaving it
+          // would mean that after a restart — when no ask is pending — the
+          // reply replays as an ordinary message, this session answers it,
+          // and the subagent answers back: two models in an unbounded
+          // exchange. The cost is that a reply's attachments are not
+          // retained, which `askSubagent` says plainly.
+          await E(powers).dismiss(number);
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        // Skip our own outbound messages echoed back into the inbox.
+        // Compare formulas, not locator strings: `locate` decorates with the
+        // transport hints currently published by `@nets` while a message's
+        // `from` is always hint-free, so a daemon with network addresses
+        // would fail string equality and answer its own mail.
+        if (isSameFormula(fromId, selfLocator)) {
+          await E(powers).dismiss(number);
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+
+        let text;
+        if (type === 'package' && Array.isArray(strings)) {
+          const parts = [];
+          const namesArray = Array.isArray(names) ? names : [];
+          for (let i = 0; i < strings.length; i += 1) {
+            parts.push(strings[i]);
+            if (i < namesArray.length) parts.push(`@${namesArray[i]}`);
           }
-          // Skip our own outbound messages echoed back into the inbox.
-          // Compare formulas, not locator strings: `locate` decorates with the
-          // transport hints currently published by `@nets` while a message's
-          // `from` is always hint-free, so a daemon with network addresses
-          // would fail string equality and answer its own mail.
-          if (!isSameFormula(fromId, selfLocator)) {
-            let text;
-            if (type === 'package' && Array.isArray(strings)) {
-              const parts = [];
-              const namesArray = Array.isArray(names) ? names : [];
-              for (let i = 0; i < strings.length; i += 1) {
-                parts.push(strings[i]);
-                if (i < namesArray.length) parts.push(`@${namesArray[i]}`);
-              }
-              text = parts.join('').trim();
-              // This message is dismissed once this turn ends, so any attached
-              // object must be adopted now. Tell the model the message number
-              // and edge names so it can call adopt within this same turn.
-              if (namesArray.length) {
-                const edges = namesArray.map(n => `"${n}"`).join(', ');
-                text += `\n\n(System: message #${number} attaches object(s) with edge name(s) ${edges}. To keep any of them, call the adopt tool with message number ${number} and the edge name during this turn — the message is dismissed afterward.)`;
-              }
-            } else {
-              text = `(${type || 'unknown'} message)`;
-            }
+          text = parts.join('').trim();
+          // This message is dismissed once this turn ends, so any attached
+          // object must be adopted now. Tell the model the message number
+          // and edge names so it can call adopt within this same turn.
+          if (namesArray.length) {
+            const edges = namesArray.map(n => `"${n}"`).join(', ');
+            text += `\n\n(System: message #${number} attaches object(s) with edge name(s) ${edges}. To keep any of them, call the adopt tool with message number ${number} and the edge name during this turn — the message is dismissed afterward.)`;
+          }
+        } else {
+          text = `(${type || 'unknown'} message)`;
+        }
 
-            // Resolve a friendly sender name for the history entry: the
-            // petname(s) this guest has for the sender, falling back to the
-            // locator. The reply is sent to the same sender by message number.
-            let fromName;
-            try {
-              const senderNames = await E(powers).reverseLocate(fromId);
-              fromName =
-                Array.isArray(senderNames) && senderNames.length
-                  ? senderNames[0]
-                  : fromId;
-            } catch {
-              fromName = fromId;
-            }
+        // Resolve a friendly sender name for the history entry: the
+        // petname(s) this guest has for the sender, falling back to the
+        // locator. The reply is sent to the same sender by message number.
+        let fromName;
+        try {
+          const senderNames = await E(powers).reverseLocate(fromId);
+          fromName =
+            Array.isArray(senderNames) && senderNames.length
+              ? senderNames[0]
+              : fromId;
+        } catch {
+          fromName = fromId;
+        }
 
-            if (stopped || quarantineError) break;
-            const { writer, done: turnDone } = makeBufferingWriter();
-            // Route through converse so the turn joins turnChain and shares
-            // context. Tag the turn as mail so getHistory can mark it (and the
-            // UI can show the sender) rather than render it like local input.
-            // The turn's outcome is read from the writer below, so the promise
-            // itself is deliberately unused — but it must still be observed,
-            // or a turn that rejects before reaching the writer becomes an
-            // unhandled rejection in the daemon worker.
-            void converse(text, writer, { mail: { from: fromName } }).catch(
-              () => undefined,
-            );
+        if (stopped || quarantineError) break;
+
+        // Awaiting the turn used to be this loop's backpressure. Bound the
+        // queue that replaced it, and tell the sender rather than growing an
+        // unbounded chain of pending turns under a flood of mail.
+        if (queuedMailTurns >= MAX_QUEUED_MAIL_TURNS) {
+          console.error(
+            `[floot] ${queuedMailTurns} mail turns already queued; declining message #${number}`,
+          );
+          await E(powers).reply(
+            number,
+            [
+              `This session already has ${queuedMailTurns} messages waiting. Please resend once it has caught up.`,
+            ],
+            [],
+            [],
+          );
+          await E(powers).dismiss(number);
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+
+        const { writer, done: turnDone } = makeBufferingWriter();
+        // Route through converse so the turn joins turnChain and shares
+        // context. Tag the turn as mail so getHistory can mark it (and the
+        // UI can show the sender) rather than render it like local input.
+        // The turn's outcome is read from the writer below, so the promise
+        // itself is deliberately unused — but it must still be observed,
+        // or a turn that rejects before reaching the writer becomes an
+        // unhandled rejection in the daemon worker.
+        void converse(text, writer, { mail: { from: fromName } }).catch(
+          () => undefined,
+        );
+        queuedMailTurns += 1;
+        mailChain = mailChain.then(async () => {
+          try {
             const result = await turnDone;
+            // A shutting-down session neither answers nor dismisses: the turn
+            // commits its history as a unit, so an aborted one committed
+            // nothing, and leaving the message in the inbox lets the next
+            // incarnation handle it instead of losing it behind an error.
+            if (stopped) return;
             const replyText = result.ok
               ? result.text || ''
               : `Error: ${result.error}`;
             await E(powers).reply(number, [replyText], [], []);
+            // Dismiss after handling so the message leaves the inbox and is not
+            // reprocessed when followMessages replays on the next daemon restart.
+            await E(powers).dismiss(number);
+          } catch (error) {
+            console.error(
+              `[floot] could not complete mail turn #${number}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          } finally {
+            queuedMailTurns -= 1;
           }
-          // Dismiss after handling so the message leaves the inbox and is not
-          // reprocessed when followMessages replays on the next daemon restart.
-          await E(powers).dismiss(number);
-        }
+        });
       }
+      // Let queued replies finish before the loop resolves, so a shutdown that
+      // awaits `inboxLoop` waits for mail this session already answered.
+      await mailChain;
     })().catch(error => {
       inboxStarted = false;
       if (stopped) return;
