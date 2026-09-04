@@ -486,12 +486,7 @@ LLM-agent stack).*
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Current totals (2026-09-04, reconciliation refresh):** 50 Complete/Implemented, 38 In Progress, 49 Not Started, 39 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* — **202 indexed designs** (summary-table rows, re-derived on rebase onto current `llm`). The buckets are reproducible by tallying the Status column of the 202-row summary table, folding each cell to its head status word (so `**Complete** (on \`llm\`)`, `Implemented (local backend)`, and `Implemented (PR #288)` all count Complete/Implemented, and `Superseded by [x]` counts Superseded). "Indexed" is exact: five Status-bearing design files are not yet table rows; they, and the drift this pass corrected, are named in the 2026-09-04 groom note in [`ARCHIVE.md`](ARCHIVE.md), which also holds the superseded 2026-08-29 block and its folded delta lineage. This supersedes every earlier count.
-
-This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
-from In Progress to **Complete** (finish line reverified 2026-08-01), so
-Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
-unchanged.
+**Current totals (2026-09-04, reconciliation refresh):** 50 Complete/Implemented, 38 In Progress, 49 Not Started, 39 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (202 indexed designs: summary-table rows, re-derived on rebase onto current `llm`). The buckets are reproducible by tallying the Status column of the 202-row summary table, folding each cell to its head status word (so ``**Complete** (on `llm`)``, `Implemented (local backend)`, and `Implemented (PR #288)` all count Complete/Implemented, and `Superseded by [x]` counts Superseded). "Indexed" is exact: five Status-bearing design files are not yet table rows; they, and the drift this pass corrected, are named in the 2026-09-04 groom note in [`ARCHIVE.md`](ARCHIVE.md), which also holds the superseded 2026-08-29 block and its folded delta lineage. This supersedes every earlier count.
 
 ## Roadmap
 
