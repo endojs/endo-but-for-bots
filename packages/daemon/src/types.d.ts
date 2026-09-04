@@ -1618,7 +1618,7 @@ export type SecretAuditEvent = {
   eventId: string;
   secretId: string;
   operation:
-    'create' | 'release' | 'replace' | 'set-description' | 'revoke' | 'delete';
+    'create' | 'read' | 'replace' | 'set-description' | 'revoke' | 'delete';
   outcome: 'attempted' | 'succeeded' | 'failed';
   generation: bigint;
   occurredAt: string;

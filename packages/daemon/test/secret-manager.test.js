@@ -174,7 +174,7 @@ test('secret facets remain separated and durable across manager restart', async 
   t.false(persisted.includes('replacement'));
 });
 
-test('a revoke racing a backend read fails the release closed', async t => {
+test('a revoke racing a backend read fails the read closed', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
   const importer = await E(directory).lookup('create');
@@ -358,12 +358,12 @@ const makeRacingManager = (
   });
 };
 
-test('a release racing an uncommitted replacement fails closed', async t => {
+test('a read racing an uncommitted replacement fails closed', async t => {
   const harness = makeHarness();
   const seedDirectory = harness.makeDirectory(harness.makeManager());
   await E(await E(seedDirectory).lookup('create')).createBase64(
     'racing',
-    'Fence releases against uncommitted replacements',
+    'Fence reads against uncommitted replacements',
     encodeBase64(new TextEncoder().encode(canary)),
   );
   const [record] = harness.records.values();
@@ -399,24 +399,24 @@ test('a release racing an uncommitted replacement fails closed', async t => {
   finishReplace.resolve(undefined);
   await replacing;
 
-  // The release must not have been recorded as a successful read of the
+  // The read must not have been recorded as a successful read of the
   // pre-replacement generation.
   t.false(
     harness.events.some(
       event =>
-        event.operation === 'release' &&
+        event.operation === 'read' &&
         event.outcome === 'succeeded' &&
         event.generation === 1n,
     ),
   );
 });
 
-test('a release starting after a committed replacement still succeeds', async t => {
+test('a read starting after a committed replacement still succeeds', async t => {
   const harness = makeHarness();
   const seedDirectory = harness.makeDirectory(harness.makeManager());
   await E(await E(seedDirectory).lookup('create')).createBase64(
     'committed',
-    'Do not fail releases that follow a commit',
+    'Do not fail reads that follow a commit',
     encodeBase64(new TextEncoder().encode(canary)),
   );
   const [record] = harness.records.values();
@@ -440,7 +440,7 @@ test('a release starting after a committed replacement still succeeds', async t 
       if (next.generation === 2n) committed = true;
     },
     // Park the replacement inside its success-audit turn, after the generation
-    // has been committed. A release issued here is provably current, so an
+    // has been committed. A read issued here is provably current, so an
     // in-flight marker cleared only when the mutation returns would reject it.
     beforeRandom: async () => {
       await null;
@@ -471,7 +471,7 @@ test('a release starting after a committed replacement still succeeds', async t 
   t.true(
     harness.events.some(
       event =>
-        event.operation === 'release' &&
+        event.operation === 'read' &&
         event.outcome === 'succeeded' &&
         event.generation === 2n,
     ),

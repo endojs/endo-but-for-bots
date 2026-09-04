@@ -80,7 +80,7 @@ test('audit events never carry a redeemable grant identifier', async t => {
     harden({
       eventId: 'event-id',
       secretId: 'secret-id',
-      operation: /** @type {'release'} */ ('release'),
+      operation: /** @type {'read'} */ ('read'),
       outcome: /** @type {'succeeded'} */ ('succeeded'),
       generation: 1n,
       occurredAt: '2026-09-03T00:00:00.000Z',
@@ -100,5 +100,49 @@ test('audit events never carry a redeemable grant identifier', async t => {
     JSON.stringify({ ...event, generation: String(event.generation) }).includes(
       grantId,
     ),
+  );
+});
+
+test('audit events are ordered by insertion, not by timestamp', async t => {
+  const statePath = await mkdtemp(path.join(os.tmpdir(), 'endo-secret-seq-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  const database = makeDaemonDatabase(
+    /** @type {import('../src/types.js').Config} */ ({
+      statePath,
+      ephemeralStatePath: statePath,
+      cachePath: statePath,
+      sockPath: path.join(statePath, 'endo.sock'),
+      registryUrl: 'https://invalid.example',
+    }),
+  );
+  t.teardown(() => database.close());
+
+  // Same `occurredAt` to the millisecond, and event ids that sort opposite to
+  // insertion order: exactly the shape a real attempted/succeeded pair takes,
+  // since event ids are random and the clock has millisecond resolution.
+  const occurredAt = '2026-09-03T00:00:00.000Z';
+  /** @type {Array<{eventId: string, outcome: 'attempted' | 'succeeded'}>} */
+  const pair = [
+    { eventId: 'zzz-first', outcome: 'attempted' },
+    { eventId: 'aaa-second', outcome: 'succeeded' },
+  ];
+  for (const { eventId, outcome } of pair) {
+    database.writeSecretAuditEvent(
+      harden({
+        eventId,
+        secretId: 'secret-id',
+        operation: /** @type {'read'} */ ('read'),
+        outcome,
+        generation: 1n,
+        occurredAt,
+        operationId: 'operation-id',
+      }),
+    );
+  }
+
+  // Newest first, so the later insertion leads regardless of its event id.
+  t.deepEqual(
+    database.listSecretAuditEvents(10).map(event => event.eventId),
+    ['aaa-second', 'zzz-first'],
   );
 });

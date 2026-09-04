@@ -187,8 +187,8 @@ export const makeSecretManager = ({
 
   /**
    * Secrets whose backing bytes are mid-replacement. `serializeMutation`
-   * admits at most one replacement per secret, so a Set suffices. A release
-   * that samples the record while a replacement is in flight may have read
+   * admits at most one replacement per secret, so a Set suffices. A read that
+   * samples the record while a replacement is in flight may have fetched
    * post-write bytes that the pre-replacement generation does not describe.
    *
    * @type {Set<string>}
@@ -237,19 +237,26 @@ export const makeSecretManager = ({
       getDescription: async () => requireRecord(secretId).description,
       readBase64: async () => {
         const before = requireRecord(secretId);
-        if (before.state !== 'active') throw fixedError('REVOKED');
         const operationId = await randomHex256();
+        // Recorded before the state is checked, so exercising a revoked
+        // capability leaves a trace. A holder repeatedly retrying a revoked
+        // secret is precisely what an audit trail exists to show.
         await audit(
           secretId,
-          'release',
+          'read',
           'attempted',
           before.generation,
           operationId,
         );
         let bytes;
+        // Carries the specific fixed code out of the try so the audit event
+        // and the caller both learn why the read failed. Every value is a
+        // fixed code that never reflects secret material.
+        let reasonCode = 'READ_FAILED';
         try {
           // This state check is intentionally adjacent to the backend call.
           if (requireRecord(secretId).state !== 'active') {
+            reasonCode = 'REVOKED';
             throw fixedError('REVOKED');
           }
           bytes = await backend.read(before.backendRef);
@@ -258,17 +265,18 @@ export const makeSecretManager = ({
             after.state !== 'active' ||
             after.generation !== before.generation ||
             // A replacement whose bytes have physically landed but whose
-            // generation is not yet committed would otherwise release the new
+            // generation is not yet committed would otherwise return the new
             // bytes under the old generation, so the audit trail would name a
-            // version that was never the one released.
+            // version that was never the one read.
             replacementsInFlight.has(secretId)
           ) {
             bytes.fill(0);
-            throw fixedError('STALE_RELEASE');
+            reasonCode = 'STALE_READ';
+            throw fixedError('STALE_READ');
           }
           await audit(
             secretId,
-            'release',
+            'read',
             'succeeded',
             after.generation,
             operationId,
@@ -280,13 +288,13 @@ export const makeSecretManager = ({
           if (bytes !== undefined) bytes.fill(0);
           await audit(
             secretId,
-            'release',
+            'read',
             'failed',
             before.generation,
             operationId,
-            { reasonCode: 'RELEASE_FAILED' },
+            { reasonCode },
           );
-          throw fixedError('RELEASE_FAILED');
+          throw fixedError(reasonCode);
         }
       },
     });
@@ -329,8 +337,8 @@ export const makeSecretManager = ({
               });
               persistence.writeSecretRecord(updated);
               // Synchronously adjacent to the commit: no reader turn can
-              // interleave, so no release observes post-write bytes under the
-              // pre-replacement generation, and a release starting after the
+              // interleave, so no read observes post-write bytes under the
+              // pre-replacement generation, and a read starting after the
               // commit is not spuriously failed by a stale marker.
               replacementsInFlight.delete(secretId);
               await audit(
