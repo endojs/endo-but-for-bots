@@ -19,8 +19,8 @@ its own path type:
   canonical path is an array of segments.
 
 On both surfaces a path is conceptually an **array of segments** (for example
-`["src", "foo.js"]`), and on both surfaces we also accept a **bare string** as a
-path, treating the string as a **single, literal segment**. The maintainer's
+`["src", "foo.js"]`), and on both surfaces a **bare string** is also accepted as a
+path, treated as a **single, literal segment**. The maintainer's
 review on PR #897 asks us to reconsider that convenience:
 
 > It may be noted that the "glob" expression for glob, glorp is an explicit
@@ -41,8 +41,8 @@ parts:
 1. The **non-slash single string** (`readText("foo")`, `lookup("foo")`) still
    silently coerces to `["foo"]`. That keeps two spellings of one path alive.
 2. The **type** still carries a bare-`M.string()` arm, so the surface advertises
-   "a string is a path here" even though a string is a path *nowhere* the review
-   wants it to be.
+   "a string is a path here" even though a string is not a path anywhere the
+   review wants one to be treated as a path.
 
 The residual tension is that **two different arguments are string-shaped but mean
 opposite things**:
@@ -68,9 +68,14 @@ sanctioned seam rather than a silent survival (see
 Beyond ergonomics, `"foo"` and `["foo"]` are two spellings of **one value**. As
 long as both spellings are legal, a path cannot be compared, keyed, memoized, or
 logged canonically without first normalizing it, and any code that skips the
-normalization step has a latent bug. Reducing a path to a single representation is
-therefore a value-representation fix, not only a teachability fix, and that is the
-strongest argument for the change.
+normalization step has a latent bug. This is stated as a **preventive,
+value-representation argument**, not a catalogued defect: the design does not
+claim a specific site that keys or memoizes an un-normalized path today (no such
+instance was found by grep), so the argument is that the current shape *permits*
+that bug class rather than that it has already been hit. Even as a hygiene
+concern, reducing a path to a single representation is a value-representation fix,
+not only a teachability fix, and it is the change's most durable justification
+alongside the legibility one.
 
 ## Current Behavior
 
@@ -107,10 +112,23 @@ matters for [Registry Symmetry](#open-questions) and is given there.
 
 ### The Coercion Sites
 
-A bare string is turned into a one-element array in **at least eleven** places, not
-three as an earlier draft claimed. The grep that produces this count is
-`rg "typeof .* === 'string' \? \[.*\] : "` across `packages/`, plus the one
-literal-wrap site in `segmentsFromPathArg`:
+A bare string is turned into a one-element array in **at least eleven**
+*production* places, not three as an earlier draft claimed. The grep that
+produces this count is `rg "typeof .* === 'string' \? \[.*\] : "` across
+`packages/`, plus the one literal-wrap site in `segmentsFromPathArg`. That raw
+grep returns **sixteen** hits; the filter applied to reach eleven is
+"non-test": four of the sixteen are **test-harness coercion helpers**
+(`packages/workflow/test/fake-agent.js:22`,
+`packages/platform/test/from-mount.test.js:81`, and
+`packages/daemon/test/mount-platform-fs-conformance.test.js:366,385`), and one
+is the `agentry` code-mode variant listed as item 11 below. The four test
+helpers are **not** production coercion sites, so they are excluded from this
+catalog; they are not free, however. `mount-platform-fs-conformance.test.js:366`
+builds `segments = typeof pathArg === 'string' ? [pathArg] : pathArg`
+specifically to assert the string and array forms against one expected result,
+so it (and its siblings) must be **rewritten** to assert the string form now
+*errors*. They are accounted for under
+[Test impact](#migration-and-backward-compatibility), not dropped:
 
 1. `packages/daemon/src/mount.js:638` (`segmentsFromPathArg`), the literal-wrap
    form `normalizeSegments(currentSegments, [pathArg], deniedSegments)`. Every
@@ -164,13 +182,13 @@ and `assertValidSegment` throws; `lookup` even re-throws with a friendlier hint
 What is *not* yet an error is the **non-slash single string**: `readText("foo")`,
 `lookup("foo")`, and `remove("foo")` all silently coerce to `["foo"]`. That residue
 keeps two spellings of a one-segment path in the surface. This design removes the
-**coercion** — the silent treatment of a bare string as a one-segment path — at
+**coercion** (the silent treatment of a bare string as a one-segment path) at
 every path-method boundary. It deliberately does **not** remove the runtime guard's
 `M.string()` arm: as [The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments)
 explains, that arm is retained as a *routing affordance* so the method body can throw
 a legible directive rather than an unreadable union pattern dump. What *is* narrowed
-to array-only is the **declared** path type — the hand-authored `types.d.ts` union and
-the generated code-mode declarations — so the surface no longer *advertises* "a string
+to array-only is the **declared** path type (the hand-authored `types.d.ts` union and
+the generated code-mode declarations), so the surface no longer *advertises* "a string
 is a path here" even though the runtime guard still structurally admits a string in
 order to reject it with a good message. The guard shape and the declared type
 therefore diverge on purpose; where that divergence is compensated for each consumer
@@ -206,13 +224,15 @@ carries path *strings*, in two places:
 So after this change, paths are arrays inbound to path methods but strings
 outbound from `glob` and inbound to `grep`. A caller who does
 `readText(globResult[0])` today would, under a naive change, be handed a string
-that a path method now rejects, and the common round trip breaks.
+that a path method then rejects, and the common round trip breaks.
 
 **The sanctioned seam.** A glob result and a grep `paths` entry are **display path
 strings** in the search / pattern domain, explicitly *not* petname-path arguments.
 To bring a search result back into a path method, a caller passes it through the
-one canonical string-to-segments adapter this design introduces
-(`pathFromSlashString`, see [The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments)):
+one canonical string-to-segments adapter this design introduces,
+`pathFromSlashString(s: string): string[]` (a pure value function that splits a
+slash-joined string into a segment array, defined fully under
+[The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments)):
 
 ```
 readText(pathFromSlashString(globResult[0]))
@@ -253,19 +273,28 @@ Concretely:
    `M.string()` arm purely as a routing affordance, and the **method body** is the
    single normative rejection site: it throws the directive message for any string.
    Array and `EndoMountEntry` inputs are validated by the guard exactly as today.
-   This is one rule at one enforcement point, tested at that point.
+   This is one rule at one enforcement point, tested at that point. To keep that
+   "one enforcement point" literal across the twelve-plus path-bearing methods
+   rather than twelve hand-copied throws that can drift, the rejection lives in a
+   **single shared assertion**, `assertPathIsSegments(arg)`, that every method body
+   (or the shared `segmentsFromPathArg` funnel they already route through) calls, so
+   the directive message and its wording live in exactly one place. This is the same
+   centralize-one-policy-in-one-named-function move the design applies to the
+   translation direction with `pathFromSlashString` (see
+   [Reconciling the Three Splitters](#reconciling-the-three-splitters)), applied
+   symmetrically to the reject direction.
 2. **The mount-side coercion sites delete their string branch.** `segmentsFromPathArg`
    (`mount.js:638`) stops wrapping a string as `[pathArg]` and throws the directive;
    the readable-tree wrapper (`mount.js:1397`) and the platform-fs / exo-unzip /
    space-chat sites enumerated above drop theirs. Because the mount methods now reject
    strings in the body, the `segmentsFromPathArg` throw *is* that body throw for the
    mount surface; the other sites become defense in depth behind their own boundaries.
-   The registry-side coercion — `namePathFrom` (`pet-name.js:149`) dropping its
-   ternary — is **not** committed here: whether the petname registry migrates in
+   The registry-side coercion, `namePathFrom` (`pet-name.js:149`) dropping its
+   ternary, is **not** committed here: whether the petname registry migrates in
    lockstep with the mount is
    [open question 4 (Registry Symmetry)](#open-questions), and this step touches
-   `namePathFrom` **only if OQ4 resolves the registry into scope**. Scoping §2 to the
-   mount keeps that decision genuinely open rather than pre-empting it.
+   `namePathFrom` **only if OQ4 resolves the registry into scope**. Scoping item 2
+   to the mount keeps that decision genuinely open rather than pre-empting it.
 3. **Variadic-segment methods are unaffected, and here is why.** `has("dir", "file")`,
    `list("subdir")`, and the `...petNamePath` registry forms already take one
    *segment* per argument, not a joined path. A single variadic argument like
@@ -328,14 +357,14 @@ readable and testable, which is why it is the normative site.
 
 Retaining the guard's `M.string()` arm for routing (above) creates a deliberate
 divergence: the guard's **declared shape** structurally admits a string, but the
-**value set the method actually honors** is array-or-`EndoMountEntry` only — a string
+**value set the method actually honors** is array-or-`EndoMountEntry` only. A string
 is always thrown back. A design that widens a declared shape past what it accepts must
 say where that gap is compensated for **every** consumer of the guard, or the "string
 is never a path" invariant leaks back in through the type surfaces the very audience
 this design serves reads. The three consumers and their treatment:
 
 - **Hand-authored TypeScript (`types.d.ts:1342-1428`).** Narrowed to
-  `readonly string[] | EndoMountEntry` — the `string` arm is **dropped**. This is the
+  `readonly string[] | EndoMountEntry`, dropping the `string` arm. This is the
   edit that closes the second residual defect named in
   [What Is the Problem Being Solved?](#what-is-the-problem-being-solved) item 2: a
   typed caller now gets a compile-time signal that a bare string is not a path,
@@ -348,12 +377,17 @@ this design serves reads. The three consumers and their treatment:
   MountEndoMountEntry` with no `string` arm; see
   [Help-Text Requirements](#help-text-requirements) item 5, which is worded to match.
 - **CapTP / `M.interface()` introspection.** This reflects the live guard, so it will
-  continue to show the `M.string()` arm — a consumer introspecting the interface sees
+  continue to show the `M.string()` arm: a consumer introspecting the interface sees
   a shape that accepts a string the method then rejects. This design accepts that
-  residual as the cost of the readable-error mechanism. The cleaner alternative —
+  residual as the cost of the readable-error mechanism. **The exposed consumer is
+  not only human**: in this bots-first repo an LLM that introspects the *live*
+  interface (rather than the separately-narrowed generated declarations) sees a
+  shape advertising string-as-valid with no structural signal it will be rejected
+  until it tries, so the gap is a real automated-consumer hazard, not a cosmetic
+  one, and OQ7 below weighs it as such. The cleaner alternative,
   a guard-level combinator that keeps the declared shape array-only *and* intercepts
   the `M.or` rejection to substitute the directive message, collapsing the divergence
-  entirely — is recorded as [open question 7](#open-questions); it is preferable in
+  entirely, is recorded as [open question 7](#open-questions); it is preferable in
   principle but out of scope for this design's recommended (B).
 
 The net rule: the runtime guard is wide-and-rejecting for the sake of a good error;
@@ -440,6 +474,28 @@ string-splitting in the Exo interface" (an exo method no longer splits), keeps G
 lineage capability alive, and gives option (B) its home in the free function rather
 than back inside `entry()`.
 
+**`entry()` is guarded separately from the other path methods, and that guard is
+its own edit location.** Unlike the twelve path methods above, `entry()` is not
+guarded by `PathArgShape` in `packages/daemon/src/interfaces.js`. Its guard is
+`pathEntryIssuerMethodGuards.entry = M.call(M.or(M.string(),
+M.arrayOf(M.string()))).returns(M.remotable('PathEntry'))` in
+`packages/platform/src/fs/interfaces.js:223-225`, a **two-arm** union in the
+platform package, spread into `MountInterface` via `...pathEntryIssuerMethodGuards`
+(`daemon/src/interfaces.js:717`). The same guard-keeps-string-arm, body-rejects
+pattern applies here and *especially* here: `entry()` is precisely the method whose
+whole prior purpose was slash-string convenience, so it is the single most likely
+site for a caller to reflexively pass a string post-migration. If its guard were
+narrowed to a bare `M.arrayOf(M.string())` arm, that caller would get the plain
+guard-level "Must be a copyArray" message (see [The Exact Error](#the-exact-error))
+instead of the rich directive that names `entry(pathFromSlashString(...))` and
+points at glob/grep, the least helpful error at exactly the site that most needs
+the most helpful one. So `pathEntryIssuerMethodGuards.entry` **keeps** its
+`M.string()` arm as the same routing affordance, and `segmentsFromEntryPathArg`'s
+body throws the shared `assertPathIsSegments` directive (worded for `entry()`,
+naming `entry(pathFromSlashString(...))`). This makes
+`packages/platform/src/fs/interfaces.js` an explicit edit location alongside
+`daemon/src/interfaces.js` and `types.d.ts`.
+
 The larger alternative the maintainer named in
 [3931325779](https://github.com/endojs/endo-but-for-bots/pull/897#discussion_r3931325779)
 is to **retire `EndoMountEntry` / `PathEntry` entirely** and have Git switch to
@@ -460,7 +516,14 @@ directly and which no amount of `help.md` editing reaches on its own:
    path (even a single name is `["config.json"]`), so `readText("src/foo.js")` and
    `readText("config.json")` both error; to search by pattern use `glob` / `grep` /
    `glorp`, whose string argument is a glob or RegExp; to translate a slash string,
-   call `pathFromSlashString`.
+   call `pathFromSlashString`. The header must also **name the exemption
+   explicitly**, so the split reads as documented contrast rather than a
+   rediscovered inconsistency (OQ5): the variadic-segment methods `has`, `list`,
+   and `followNameChanges` (and the registry's `...petNamePath` forms) take one
+   *segment* per argument, so `list("subdir")` still accepts the exact
+   single-segment string that `readText("subdir")` / `lookup("subdir")` /
+   `remove("subdir")` now reject. `list`'s own help entry gains the same contrast
+   line.
 2. **Each `glob` / `grep` / `glorp` entry** (`help.md:773-813`), each gaining a
    one-line banner that its string argument is a glob pattern or RegExp source, not a
    path, **and** that its result / `paths` entries are display path strings that
@@ -521,15 +584,26 @@ unaffected.
   `pathFromSlashString` plus Git's `'.'`-dropping normalization, not by the mount.
 
 **Test impact.** The tests that build paths via `mount.entry("a/b")` or a bare
-string path (an earlier draft estimated about 60; the true count depends on how much
+string path (an earlier draft estimated about sixty; the true count depends on how much
 of the registry [open question 4 (Registry Symmetry)](#open-questions) pulls in, and
 the implementation PR should report the grep)
-re-express as arrays or `entry(["a", "b"])`. Add tests that a string argument to each
-path method throws the directive message (these assert the *break* is enforced), and
-tests that variadic, array, and `entry` forms still succeed (these assert valid forms
-still work). The existing `assertValidSegment` slash tests remain valid, since a slash
-inside an array segment is still illegal. `helpdown.test.js` re-baselines against the
-reworded help.
+re-express as arrays or `entry(["a", "b"])`. This includes the **four test-harness
+coercion helpers** disclosed under [The Coercion Sites](#the-coercion-sites)
+(`packages/workflow/test/fake-agent.js:22`,
+`packages/platform/test/from-mount.test.js:81`, and
+`packages/daemon/test/mount-platform-fs-conformance.test.js:366,385`): they hard-code
+the `typeof x === 'string' ? [x] : x` coercion in order to assert bare-string and
+array inputs against one expected result, so they must be **rewritten** to assert the
+string form *errors* rather than merely re-expressing inputs as arrays. Add tests that
+a string argument to each path method throws the directive message (these assert the
+*break* is enforced), and tests that variadic, array, and `entry` forms still succeed
+(these assert valid forms still work). Add a dedicated test for `pathFromSlashString`
+itself (the design's one sanctioned string-to-path seam), covering its chosen
+error-on-empty policy (empty-segment rejection), leading-slash handling, and the
+glob-result round trip, so the function's reconciliation of the three divergent
+splitters is pinned at its own boundary rather than only implied by the callers. The
+existing `assertValidSegment` slash tests remain valid, since a slash inside an array
+segment is still illegal. `helpdown.test.js` re-baselines against the reworded help.
 
 ## Design Decisions
 
@@ -623,7 +697,7 @@ reworded help.
    accepting that CapTP / `M.interface()` introspection still shows a string arm the
    method rejects. The cleaner alternative is a custom guard combinator that declares an
    array-only shape *and* intercepts the underlying `M.or` rejection to substitute the
-   directive message — collapsing the guard-vs-declaration divergence at every consumer
+   directive message, collapsing the guard-vs-declaration divergence at every consumer
    at once, at the cost of a new pattern-combinator primitive. Is that primitive worth
    building now, or is the wide-guard/narrow-declaration split an acceptable interim?
 
