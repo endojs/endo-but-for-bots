@@ -486,31 +486,7 @@ LLM-agent stack).*
 | [familiar-app-ui-hosting](familiar-app-ui-hosting.md) | 2026-06-01 | 2026-06-01 | Proposed |
 | [ses-import-attributes](ses-import-attributes.md) | 2026-05-14 | 2026-05-15 | Draft |
 
-**Current totals (2026-08-29, rolling index refresh):** 48 Complete/Implemented, 36 In Progress, 49 Not Started, 37 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (196 designs). This supersedes every count above, including the running **Totals:** line; the buckets are reproducible by tallying the Status column of the summary table. This pass added six previously-unindexed design files to the summary table: the Ironhorse trio [ironhorse-engine](ironhorse-engine.md) (Approved), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) (Not Started), and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (In Progress) — also folded into the M11 (Rust Daemon `endor`) table alongside their `ironhorse-snapshot-store-seam` / `ironhorse-debugger-recovery-and-uncaught` siblings — plus [platform-neutral-hash](platform-neutral-hash.md) (In Progress), [conservative-regexp-subset](conservative-regexp-subset.md) (Not Started), and [readableblob-range-attenuation](readableblob-range-attenuation.md) (Proposed). It also reconciled stale Status cells against each design file's own Status field: the four-layer importLocation stack ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md), [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md)) Proposed -> Not Started (applying the 2026-07-10 flip the prose above already recorded but the table never carried); the git trio ([daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [daemon-git-next-steps](daemon-git-next-steps.md)) Proposed -> In Progress (accepted 2026-07-11, phases landed); [daemon-agent-network-identity](daemon-agent-network-identity.md) and [daemon-locator-terminology](daemon-locator-terminology.md) Not Started -> In Progress; [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and [endopi-edit-tool](endopi-edit-tool.md) Proposed -> In Progress; and [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) Proposed -> **Complete**. The 2026-08-23 pass flips [cli-edit-verb](cli-edit-verb.md) from Proposed to In Progress because its daemon-side pure core landed in #796.
-
-The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
-
-**2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design -> 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
-
-The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
-
-The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
-
-The 2026-09-01 rebase adds [endo-workflow](endo-workflow.md) (Proposed) to M3, increasing Proposed from 39 to 40 and the design count from 194 to 195.
-
-The same 2026-09-01 pass flips [endo-workflow](endo-workflow.md) from Proposed to **In Progress** (implementation landed as `packages/workflow`), so Proposed returns 40 -> 39.
-
-The 2026-09-03 update adds
-[daemon-secret-manager](daemon-secret-manager.md) to M10.
-Its local backend and Secret Blobs Space are implemented; operation-journal,
-XS encryption-power, and production KMS/HSM hardening remain.
-Its estimate decomposes the existing `daemon-capability-bank` secret-storage
-slice and does not increase the milestone aggregate.
-
-This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
-from In Progress to **Complete** (finish line reverified 2026-08-01), so
-Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
-unchanged.
+**Current totals (2026-09-04, reconciliation refresh):** 50 Complete/Implemented, 38 In Progress, 49 Not Started, 39 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (202 indexed designs: summary-table rows, re-derived on rebase onto current `llm`). The buckets are reproducible by tallying the Status column of the 202-row summary table, folding each cell to its head status word (so ``**Complete** (on `llm`)``, `Implemented (local backend)`, and `Implemented (PR #288)` all count Complete/Implemented, and `Superseded by [x]` counts Superseded). "Indexed" is exact: five Status-bearing design files are not yet table rows; they, and the drift this pass corrected, are named in the 2026-09-04 groom note in [`ARCHIVE.md`](ARCHIVE.md), which also holds the superseded 2026-08-29 block and its folded delta lineage. This supersedes every earlier count.
 
 ## Roadmap
 
