@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-02-14 |
-| **Updated** | 2026-05-18 |
+| **Updated** | 2026-08-28 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 
@@ -65,12 +65,30 @@ interface (from the network-transport-separation work item).
 
 ### Network Identifier
 
-OCapN-Noise is designated by `"np"` in locators:
+OCapN-Noise is designated by `"np"` in locators. Connection hints are
+`@`-delimited path components of the form
+`<transport>+<codec>:<host>:<port>[<path>]` — **not** query parameters.
+The query string is reserved for alleged attributes such as `type`. The
+hints are a **priority-ordered list**, most-preferred first, and a node
+may advertise **several hints per transport-and-codec pair** — one per
+link-layer address it is reachable on — so a peer can dial whichever it
+can reach (the hints are shown wrapped across lines here for clarity):
 
 ```
-ocapn://<designator>.np?ws:host=example.com&ws:port=443
-ocapn://<designator>.np?tcp:host=127.0.0.1&tcp:port=9000
+endo://<designator>.np/
+  @wss+cbor:gateway.example.com:443/ocapn-cbor-np
+  @wss+syrup:gateway.example.com:443/ocapn-cbor-np
+  @tcp+cbor:[2001:db8::1]:3469
+  @tcp+cbor:198.51.100.7:3469
+  @tcp+syrup:[2001:db8::1]:8920
 ```
+
+The URL scheme shown here is the illustrative `endo:` scheme, **not**
+`ocapn:` — we do not front-run consensus on a registered `ocapn:` URL
+scheme. The protocol family is still OCapN and the network is still
+designated `np`; only the example locator's scheme is `endo:`. Note the
+**two** `tcp+cbor` hints above: an IPv6 and an IPv4 address for the same
+transport-and-codec pair, IPv6 first (§ Transport Hint Format).
 
 The `designator` is derived from the node's Ed25519 public key (as it is
 today — double-SHA256 hash of the serialized public key descriptor).
@@ -84,11 +102,16 @@ subsequent encrypted messaging.
 ```js
 /**
  * @typedef {object} OcapnNoiseTransport
- * @property {string} scheme - Transport scheme (e.g., 'ws', 'tcp')
- * @property {(hints: Record<string, string>) => Promise<ByteStream>} connect
- *   Open an outgoing byte stream to a peer using transport-specific hints.
- * @property {(options: ListenOptions) => Promise<TransportListener>} listen
- *   Start listening for incoming byte stream connections.
+ * @property {string} scheme - Transport scheme (e.g., 'ws', 'tcp'),
+ *   matched against a dial URL's scheme to select this transport.
+ * @property {(hint: string) => Promise<ByteStream>} connect
+ *   Open an outgoing byte stream, given a single self-describing dial-URL
+ *   hint (one entry from a peer's ordered hint list, already matched to
+ *   this transport's scheme).
+ * @property {(handler) => Promise<TransportListener>} listen
+ *   Start listening for incoming byte stream connections. The returned
+ *   `TransportListener.hints` is a **priority-ordered list** of
+ *   self-describing dial-URL strings (empty = advertise nothing).
  * @property {() => void} shutdown
  */
 
@@ -102,18 +125,86 @@ subsequent encrypted messaging.
 
 ### Transport Hint Format
 
-Connection hints encode transport information with a scheme prefix:
+Each connection hint is an `@`-delimited path component of the form
+`<transport>+<codec>:<host>:<port>[<path>]` — **not** a query parameter (the
+query string is reserved for alleged attributes such as `type`). The
+`<transport>+<codec>` **prefix** encodes both the transport protocol and the
+message codec, joined with `+`, and the `<host>:<port>` authority to dial (with
+an optional trailing `<path>` for endpoints that need one — see WebSocket
+below) follows the first `:` separator. `<transport>` names a byte-stream
+carrier (`wss`, `ws`, `tcp`) and `<codec>` the OCapN message serialization
+(`cbor`, `syrup`), so a peer can pick both a transport it can dial and a codec
+it can speak:
 
-| Hint Key | Example Value | Meaning |
-|----------|---------------|---------|
-| `ws:host` | `example.com` | WebSocket host |
-| `ws:port` | `443` | WebSocket port |
-| `tcp:host` | `127.0.0.1` | TCP host |
-| `tcp:port` | `9000` | TCP port |
+| Hint | Example | Meaning |
+|------|---------|---------|
+| `wss+cbor:<host>:<port><path>` | `wss+cbor:gateway.example.com:443/ocapn-cbor-np` | WebSocket-Secure endpoint at `<path>`, CBOR-framed messages |
+| `wss+syrup:<host>:<port><path>` | `wss+syrup:gateway.example.com:443/ocapn-cbor-np` | WebSocket-Secure endpoint at `<path>`, Syrup-framed messages |
+| `tcp+cbor:<host>:<port>` | `tcp+cbor:[2001:db8::1]:3469` | TCP endpoint, CBOR-framed messages |
+| `tcp+syrup:<host>:<port>` | `tcp+syrup:198.51.100.7:8920` | TCP endpoint, Syrup-framed messages |
 
-When connecting, the network iterates available transports and selects one
-matching the hint prefixes. If multiple transports match, try them in order
-(preference configurable).
+**WebSocket hints carry a path.** A WebSocket endpoint is
+`wss://host:port/<path>`, so the `wss`/`ws` hint forms include a trailing
+`<path>` component after the authority. The canonical path is
+**`/ocapn-cbor-np`** — the OCapN-over-CBOR-on-`np` endpoint the gateway serves
+(`designs/gateway-package.md` § Feature 8), so a `*.minion.town` weblet
+gateway and a directly-advertised node speak the same URL. IPv6 literals in a
+hint are bracketed (`[2001:db8::1]`) so the dial URL round-trips through
+`new URL()`.
+
+The same endpoint may appear under several codecs (as `wss+cbor` and
+`wss+syrup` do above); the transport carries whichever codec both peers
+support. **Multiple hints per protocol are allowed:** one host may advertise a
+`tcp+cbor` for each of its link-layer addresses (an IPv6 *and* an IPv4). When
+connecting, the network walks the advertised hints **in priority order**,
+skipping any whose transport it cannot dial or codec it cannot speak, and
+connects with the first it can — trying the next if that one fails.
+
+#### Why a location carries multiple hints
+
+A location advertises **multiple hints**, for two independent reasons:
+
+1. **One hint per transport-and-codec combination** (a `wss+cbor` *and* a
+   `tcp+cbor`, for example) so a connecting daemon can **filter the list down
+   to the transports it can actually implement on its platform** (and the
+   codecs it can speak). These are not redundant addresses for the same door;
+   they are distinct doors, and different peers can open different ones.
+2. **Several hints for the same transport-and-codec pair**, one per **link-layer
+   address** the node is reachable on. A host with both an IPv6 and an IPv4
+   address advertises a `tcp+cbor` hint for each, **IPv6 first**: a global IPv6
+   address is unlikely to collide across networks and is relay-free on a
+   partitioned LAN, so it is preferred, with the IPv4 address as a fallback for
+   peers that cannot route IPv6.
+
+**Prefer omitting a hint to advertising loopback.** A node bound to a wildcard
+address (`0.0.0.0` / `::`) enumerates its **routable** interface addresses
+(non-internal), advertises them IPv6-first, and — if it has none — advertises
+**nothing** for that transport rather than a `127.0.0.1` / `::1` address a peer
+cannot dial. A node bound to a specific host advertises that host as chosen.
+
+**Public-IP discovery is pluggable.** The default advertised set is interface
+enumeration as above; a node behind NAT can inject a discovery seam (e.g. a
+STUN probe or a reflector) whose results are folded into the priority list.
+The transports ship only the plug point, not any discovery mechanism.
+
+The web platform is the motivating constraint for reason (1):
+
+- It **cannot** open a direct TCP connection — the lightest of the transports,
+  with the least redundant cryptography (the Noise handshake already
+  authenticates and encrypts, so a raw TCP hint carries no TLS overhead).
+- It **cannot** open a raw HTTP WebSocket; it needs the secured (`wss:`) path.
+- For TLS it depends on **both** DNS **and** a certificate authority.
+- A raw IPv6 literal is **not viable** from the web at all.
+
+By contrast, a raw IPv6 TCP hint is valuable to peers that *can* dial it: it
+**does not require a relay** when the two peers are on the same LAN, **even if
+that LAN is partitioned from the internet**. Advertising it alongside a
+web-reachable hint lets a LAN-local peer take the direct, relay-free path while
+a browser peer falls back to a transport it supports.
+
+We expect to introduce **relay hints** as a further transport kind, so that
+transports can **race to connect** — speculative connection, opening several
+candidate paths at once and keeping whichever completes first.
 
 ### Concrete Transport Implementations
 
