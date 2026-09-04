@@ -1961,6 +1961,9 @@ test('GitRemoteController.revoke makes all remote ops refuse', async t => {
   // Every guest-visible operation now refuses.  The controller still
   // works so the host can inspect after revocation.
   await t.throwsAsync(E(remote).inspect(), { message: /has been revoked/ });
+  await t.throwsAsync(E(remote).credentialHealth(), {
+    message: /has been revoked/,
+  });
   await t.throwsAsync(E(remote).fetch({}), { message: /has been revoked/ });
   const view = await E(controller).inspect();
   t.true(view.revoked);
