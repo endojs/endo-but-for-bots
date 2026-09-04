@@ -2,6 +2,7 @@
 import '@endo/init';
 
 import test from 'ava';
+import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import {
   HostedToolSetInterface,
@@ -556,4 +557,149 @@ test('resource disposal retries only unfinished cleanup stages', async t => {
   });
   await resources.dispose();
   t.deepEqual(calls, { slice: 1, broker: 2, mount: 1, workspace: 1 });
+});
+
+test('an unsettled tool call blocks teardown without destroying the session', async t => {
+  let disposed = 0;
+  /** @type {(value: string) => void} */
+  let releaseTool = () => {};
+  const toolRunning = new Promise(resolve => {
+    releaseTool = resolve;
+  });
+  /** @type {() => void} */
+  let toolStarted = () => {};
+  const started = new Promise(resolve => {
+    toolStarted = resolve;
+  });
+  // Never leave the tool pending: a failing assertion below would otherwise
+  // strand the client's message pump and keep the worker alive.
+  t.teardown(() => releaseTool('torn down'));
+
+  // A transport that answers enough of the protocol to reach a live tool call.
+  const outbound = [];
+  const inbound = [];
+  const waiters = [];
+  let closed = false;
+  const push = message => {
+    inbound.push(message);
+    while (waiters.length) waiters.shift()();
+  };
+  const transport = {
+    messages: {
+      async *[Symbol.asyncIterator]() {
+        for (;;) {
+          if (inbound.length) yield inbound.shift();
+          else if (closed) return;
+          // eslint-disable-next-line no-await-in-loop
+          else await new Promise(resolve => waiters.push(resolve));
+        }
+      },
+    },
+    send: async message => {
+      outbound.push(message);
+      if (!('id' in message) || !('method' in message)) return;
+      if (message.method === 'initialize') {
+        push({
+          id: message.id,
+          result: {
+            codexHome: '/codex-home',
+            platformFamily: 'unix',
+            platformOs: 'linux',
+            userAgent: 'codex-test',
+          },
+        });
+      } else if (message.method === 'thread/start') {
+        push({ id: message.id, result: { thread: { id: 'thread-1' } } });
+      } else if (message.method === 'turn/start') {
+        push({
+          id: message.id,
+          result: { turn: { id: 'turn-1', status: 'inProgress' } },
+        });
+      }
+    },
+    close: async () => {
+      closed = true;
+      while (waiters.length) waiters.shift()();
+    },
+  };
+
+  const toolSet = makeExo('TestHostedToolSet', HostedToolSetInterface, {
+    async describe() {
+      return harden({
+        dynamicTools: harden([
+          harden({
+            type: 'function',
+            name: 'slow',
+            description: 'A tool that takes a while.',
+            inputSchema: harden({
+              type: 'object',
+              properties: harden({}),
+              required: harden([]),
+            }),
+          }),
+        ]),
+        toolSetId: 'tools-v1',
+      });
+    },
+    async execute() {
+      toolStarted();
+      return toolRunning;
+    },
+    help() {
+      return 'Test hosted tool set.';
+    },
+  });
+
+  const factory = makeCodexBackendFactory({
+    imageDigest,
+    destroy: async () => undefined,
+    listModels: async () => [],
+    provision: async () => ({
+      start: async () => transport,
+      dispose: async () => {
+        disposed += 1;
+      },
+      policy: validPolicy(),
+      auditWriter: harden({ append: async () => undefined }),
+    }),
+  });
+  const session = await factory.create({ sessionId: 'session-1' }, toolSet);
+  await E(session.run).send('do the slow thing');
+  // Pushed after the turn is bound, so the request correlates to it.
+  push({
+    id: 7,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      callId: 'call-1',
+      namespace: null,
+      tool: 'slow',
+      arguments: {},
+    },
+  });
+  await started;
+
+  // Teardown must refuse while an Endo tool call is unsettled — and, crucially,
+  // must not have destroyed the slice, the workspace, or the broker lease on
+  // the way to refusing.
+  const refusal = /** @type {AggregateError} */ (
+    await t.throwsAsync(session.admin.terminate())
+  );
+  t.regex(
+    refusal.errors.map(error => `${error.message}`).join('\n'),
+    /unsettled Endo tool call/,
+  );
+  t.is(disposed, 0, 'the session was left intact for a lifecycle retry');
+
+  releaseTool('done');
+  for (let tries = 0; tries < 200; tries += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const status = await E(session.run).status();
+    if (status.pendingToolCalls === 0) break;
+    // eslint-disable-next-line no-await-in-loop
+    await Promise.resolve();
+  }
+  await session.admin.terminate();
+  t.is(disposed, 1, 'and the retry tears it down');
 });
