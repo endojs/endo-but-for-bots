@@ -197,12 +197,23 @@ export const spawnWorkerLoop = async (
   /**
    * The agent's cancellation promise, boxed.
    *
-   * Boxed because an async function *adopts* a promise it returns: handing
-   * back `whenCancelled()` directly meant `await getCancelled()` did not
-   * settle until the agent was cancelled, so `runAgent` never reached its
-   * inbox loop at all under a real daemon context — which is exactly the shape
-   * `makeFarContext` supplies to every unconfined caplet. The tests pass no
-   * context, so the loop started and nothing showed it.
+   * Called, never duck-typed. A caplet's context arrives over CapTP as a
+   * *presence* — an empty Far object whose methods are reachable only through
+   * `E()` — so `typeof resolvedContext.whenCancelled` is `'undefined'` there
+   * however the daemon defined it. Testing for the property answered "this
+   * agent has no cancellation signal" for every agent that had one, and the
+   * loop could not be stopped short of a daemon restart.
+   *
+   * Boxed because an async function *adopts* a promise it returns, and
+   * `whenCancelled` is typed `() => Promise<never>`: returning it directly
+   * would mean `await getCancelled()` never settled.
+   *
+   * Three events reach the handler and all three mean stop: the agent was
+   * cancelled; the connection to the daemon dropped, so the promise rejects
+   * as disconnected; or the context does not implement the method, which is a
+   * construction bug better surfaced as a stopped loop than as a loop nothing
+   * can stop. `packages/sandbox/src/factory.js` makes the same collapse and
+   * explains it at length.
    *
    * @returns {Promise<{ promise: Promise<unknown> } | null>}
    */
@@ -210,13 +221,7 @@ export const spawnWorkerLoop = async (
     if (!context) return null;
     const resolvedContext = await context;
     if (!resolvedContext) return null;
-    if (typeof resolvedContext.whenCancelled === 'function') {
-      return harden({ promise: E(resolvedContext).whenCancelled() });
-    }
-    if (resolvedContext.cancelled) {
-      return harden({ promise: Promise.resolve(resolvedContext.cancelled) });
-    }
-    return null;
+    return harden({ promise: E(resolvedContext).whenCancelled() });
   };
 
   // Resolved per turn rather than captured when the loop starts, so a rotated
