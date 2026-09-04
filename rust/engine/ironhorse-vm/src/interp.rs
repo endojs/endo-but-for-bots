@@ -21160,25 +21160,37 @@ impl Interp {
                         // value BEFORE any element coercion — but the spec
                         // selects it ONLY when `GetMethod(source, @@iterator)`
                         // is the intact default array iterator. A guest
-                        // @@iterator override — an own property (INCLUDING
-                        // `source[Symbol.iterator] = undefined`) or a reassigned
-                        // `Array.prototype[@@iterator]` — instead selects
-                        // `InitializeTypedArrayFromArrayLike` (23.2.5.1.6),
-                        // whose step 5 INTERLEAVES `Get(source, ToString(k))`
-                        // with `Set`, so an element `valueOf` that mutates the
-                        // source mid-copy is observable, which a snapshot taken
-                        // up front cannot reproduce. The intrinsic default array
-                        // iterator is special-cased and never stored as an
-                        // ordinary property (unlike
-                        // `%Iterator/String/Map/Set.prototype%[@@iterator]`), so
-                        // any override is visible as an ordinary property on the
-                        // receiver's chain; a program that never references
-                        // `Symbol.iterator` cannot express one. Skip the
-                        // array-like interleaving path honestly rather than
-                        // snapshot the wrong semantics.
+                        // @@iterator override that is an OWN property on the
+                        // receiver — INCLUDING `source[Symbol.iterator] =
+                        // undefined`, which makes `GetMethod` undefined — instead
+                        // selects `InitializeTypedArrayFromArrayLike`
+                        // (23.2.5.1.6), whose step 5 INTERLEAVES
+                        // `Get(source, ToString(k))` with `Set`, so an element
+                        // `valueOf` that mutates the source mid-copy is
+                        // observable, which a snapshot taken up front cannot
+                        // reproduce. Skip THAT honestly rather than snapshot the
+                        // wrong semantics.
+                        //
+                        // Detect the override with an OWN-property test on the
+                        // receiver, not a whole-chain `has`: the default
+                        // `Array.prototype[@@iterator]` is boot-installed as an
+                        // ordinary property (aliased to `Array.prototype.values`,
+                        // see `install_well_known_symbol_property`), so a
+                        // chain-walking `instance_has` matches EVERY array and
+                        // would wrongly skip the intrinsic path. This mirrors the
+                        // engine's single iteration model: `IterableToList`
+                        // (the `list_from` array arm below near the `for..of`
+                        // dispatch) treats an array as the intrinsic iterator
+                        // exactly when it carries no own `@@iterator`, reading
+                        // its elements directly; a reassigned
+                        // `Array.prototype[@@iterator]` is not honored for arrays
+                        // there either, so taking the snapshot path here is
+                        // consistent with `for..of`, not a fresh divergence. A
+                        // program that never references `Symbol.iterator` cannot
+                        // express an own override at all.
                         if source_ta.is_none() {
                             if let Some(iter_id) = self.well_known_symbol_property_id("iterator") {
-                                if self.instance_has(r, iter_id).0 {
+                                if self.ordinary_get_own_descriptor(r, iter_id).is_some() {
                                     return Err(Halt::Unsupported(
                                         "native-call:TypedArray:from-array-like",
                                     ));
