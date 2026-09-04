@@ -340,13 +340,16 @@ export type RegistryErrorName =
   | 'RegistryNotFoundError'
   | 'RegistryPathSyntaxError';
 
-export type PackageRegistryError = Error & {
-  errorName: 'PackageRegistryError';
-  registryErrorName: Extract<
-    RegistryErrorName,
-    'RegistryOfflineError' | 'RegistryNotFoundError' | 'RegistryPathSyntaxError'
-  >;
-};
+// The registry directory-tree failures — not-found, path-syntax, and offline —
+// carry no own discriminant property at runtime. Their class is recorded
+// out-of-band by SES `tagError` and recovered through the `registryErrorName()`
+// function; an own property outside `{message, stack, cause, errors}` would make
+// the error non-passable (see `src/errors.js`), so neither `errorName` nor
+// `registryErrorName` is ever installed on the value. The family is therefore
+// the plain union of the three native error shapes the factories return;
+// interrogate membership with `registryErrorName(error)` /
+// `isPackageRegistryError(error)`, never by reading a property off the error.
+export type PackageRegistryError = RangeError | SyntaxError | Error;
 
 /** Construct a registry family root with a non-enumerable npm hub. */
 export function makePackageRegistryTree(
@@ -390,23 +393,21 @@ export function makeDeprecatedEndoRegistryAdapter(
   options?: { resolve?: EndoRegistry['resolve'] },
 ): EndoRegistry;
 
-export function RegistryNotFoundError(
-  path: string,
-): RangeError & PackageRegistryError;
+export function RegistryNotFoundError(path: string): RangeError;
 export function RegistryTamperedError(
   nameOrReason: string,
   version?: string,
   expectedIntegrity?: string,
   actualHash?: string,
 ): Error;
-export function RegistryPathSyntaxError(
-  segment: string,
-): SyntaxError & PackageRegistryError;
+export function RegistryPathSyntaxError(segment: string): SyntaxError;
 export function RegistryOfflineError(
   nameOrReason: string,
   version?: string,
-): PackageRegistryError;
-export function isPackageRegistryError(error: unknown): boolean;
+): Error;
+export function isPackageRegistryError(
+  error: unknown,
+): error is PackageRegistryError;
 export function registryErrorName(
   error: unknown,
 ): RegistryErrorName | undefined;

@@ -57,15 +57,13 @@ export const enumerableTreeMethodGuards = harden({
   list: M.call().rest(NamePathShape).returns(M.promise()),
 });
 
-// Compatibility export for existing implementations. Keeping this alias
-// source-compatible lets directory, mount, Git, and zip trees continue to
-// implement the same superset while new lookup-only caps use the narrower
-// record above.
+// Compatibility export for existing implementations. This is a real alias of
+// the one canonical declaration above — derived by spread, not a second literal
+// — so the two surfaces cannot silently drift (a guard added to one but not the
+// other). It lets directory, mount, Git, and zip trees keep implementing the
+// same superset while new lookup-only caps use the narrower record above.
 export const readableTreeMethodGuards = harden({
-  help: HelpMethod,
-  has: M.call().rest(NamePathShape).returns(M.promise()),
-  lookup: M.call(NameOrPathShape).returns(M.promise()),
-  list: M.call().rest(NamePathShape).returns(M.promise()),
+  ...enumerableTreeMethodGuards,
 });
 
 // `readableNameHubMethodGuards` is the read surface of a *mutable* name hub /
