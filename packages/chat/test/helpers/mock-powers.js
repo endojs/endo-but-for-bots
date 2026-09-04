@@ -189,6 +189,15 @@ export const makeMockPowers = ({
      */
     locate(...path) {
       calls.push({ method: 'locate', args: path });
+      // The daemon's `locate` is variadic over name-path SEGMENTS and runs
+      // `assertNames`, which rejects a segment containing "/". Joining here
+      // without that check would make `locate('a/b')` and `locate('a', 'b')`
+      // indistinguishable and hide the caller bug the daemon would reject.
+      for (const segment of path) {
+        if (segment.includes('/')) {
+          throw new Error(`Invalid name ${JSON.stringify(segment)}`);
+        }
+      }
       const key = path.join('/');
       return locators.get(key);
     },
