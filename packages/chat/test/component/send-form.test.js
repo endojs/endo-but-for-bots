@@ -235,6 +235,55 @@ test.serial(
 );
 
 test.serial(
+  'a conversation path is remembered as a string for the next send',
+  async t => {
+    /** @type {string | string[] | null} */
+    let conversation = ['floot', 'controller-profile'];
+    const ctx = setup({
+      getConversationPetName: () => conversation,
+    });
+
+    typeText(ctx.$input, 'first');
+    await waitFor(() => ctx.component.getState().hasText);
+    ctx.$sendButton.click();
+    await waitFor(() => ctx.sentMessages.length > 0);
+
+    t.deepEqual(
+      ctx.sentMessages[0].to,
+      ['floot', 'controller-profile'],
+      'a path recipient is forwarded as a path',
+    );
+    // `lastRecipient` is a string everywhere downstream, so a path recipient
+    // has to be joined back rather than stored as the array.
+    await waitFor(() => ctx.component.getLastRecipient() !== null);
+    t.is(
+      ctx.component.getLastRecipient(),
+      'floot/controller-profile',
+      'the path is remembered joined, not as an array',
+    );
+
+    // Leaving the conversation falls back to `lastRecipient`, which the plain
+    // send path splits again. If an array had been stored, this would throw
+    // `to.split is not a function`.
+    conversation = null;
+    await waitFor(() => !ctx.component.isSubmitting());
+    typeText(ctx.$input, 'second');
+    await waitFor(() => ctx.component.getState().hasText);
+    ctx.$sendButton.click();
+    await waitFor(() => ctx.sentMessages.length > 1);
+
+    t.deepEqual(
+      ctx.sentMessages[1].to,
+      ['floot', 'controller-profile'],
+      'the remembered recipient round-trips back to a path',
+    );
+    t.is(ctx.$error.textContent, '', 'no error surfaced');
+
+    t.teardown(() => ctx.component.dispose());
+  },
+);
+
+test.serial(
   'channel mode submit calls channel.post (eventual-send)',
   async t => {
     /** @type {unknown[][]} */

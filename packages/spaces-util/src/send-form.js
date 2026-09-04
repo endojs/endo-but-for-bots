@@ -697,10 +697,11 @@ export const sendFormComponent = ({
         .send(conversationRecipient, messageStrings, edgeNames, petNames)
         .then(
           () => {
-            // `lastRecipient` is consumed downstream as a string (token
-            // insertion, navigation); the wired caller always supplies a
-            // string pet name here, never a path array.
-            lastRecipient = /** @type {string} */ (conversationPetName);
+            // `lastRecipient` is consumed downstream as a string — token
+            // insertion, navigation, and the `to.split('/')` on the plain-send
+            // path below. `getConversationPetName` may return a path array, so
+            // join the path back rather than storing the array form.
+            lastRecipient = conversationRecipient.join('/');
             tokenComponent.clear();
             clearError();
           },
