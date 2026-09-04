@@ -598,6 +598,51 @@ test('config fingerprint matches the published known-answer vector', async t => 
   t.true((await settled).ok);
 });
 
+test('the config fingerprint walks in pre-order, not by sorted path', async t => {
+  // The first known-answer vector cannot catch this: its only directory is
+  // empty, so a pre-order walk and a global sort of relative paths emit the
+  // same stream. They diverge as soon as a directory sits beside a file
+  // sharing its prefix, because `.` (U+002E) sorts before `/` (U+002F): this
+  // walk emits `a`, `a/z`, `a.nix` while a path sort emits `a`, `a.nix`,
+  // `a/z`. A privileged service that reads the spec the other way recomputes
+  // a different digest and rejects every apply of an ordinary flake checkout
+  // — `hosts/` beside `hosts.nix` is enough. PROTOCOL.md publishes both
+  // digests so an independent implementation fails here rather than in
+  // production.
+  const { admin, configDir, readRequest, processNext } = await makeHarness(t);
+  await mkdir(join(configDir, 'a'));
+  await writeFile(join(configDir, 'a', 'z'), 'Z\n');
+  await writeFile(join(configDir, 'a.nix'), 'N\n');
+  await chmod(join(configDir, 'a'), 0o755);
+  await chmod(join(configDir, 'a', 'z'), 0o644);
+  await chmod(join(configDir, 'a.nix'), 0o644);
+
+  const settled = admin.build('pre-order', 'r-5:6-0');
+  let request;
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      request = await readRequest();
+      break;
+    } catch {
+      // eslint-disable-next-line no-await-in-loop
+      await delay(5);
+    }
+  }
+  t.is(
+    request.configFingerprint,
+    '3f59551861a24694d5db058011466041f8d26bbc57092be96079c576ae2cdc1d',
+    'the pre-order known-answer vector published in PROTOCOL.md',
+  );
+  t.not(
+    request.configFingerprint,
+    'a2782dc546b206b1a40ad66a85723d4b06502fc1886c78db21514bba705c5235',
+    'that digest is the global-path-sort reading PROTOCOL.md warns against',
+  );
+  await processNext();
+  t.true((await settled).ok);
+});
+
 test('an outcome from another protocol binding cannot settle a key', async t => {
   const { admin, readRequest, outcomesDir } = await makeHarness(t);
   const settled = admin.build('bound outcome', 'r-5:6-0');
