@@ -191,8 +191,9 @@ const makeSessionManager = () => {
  *   `bootstrap.fetch` calls by invoking this factory with the remote
  *   designator (the peer's *claimed* designator — transport-authenticated
  *   only when the netlayer supplies `verifyPeerLocation`, otherwise
- *   self-asserted; durable per-peer accounting should prefer the verified
- *   public key) and an `abortSession` callback, instead of sharing the
+ *   self-asserted; durable per-peer accounting should prefer the
+ *   handshake-verified `peerPublicKey` the same context carries) and an
+ *   `abortSession` callback, instead of sharing the
  *   single `locator`. This is the seam an
  *   embedder uses to scope miss counters and rate limits to one
  *   authenticated peer/connection: a session that abuses `fetch` can be
@@ -408,6 +409,7 @@ export const makeOcapn = async ({
       connection,
       networkSession.sessionId,
       peerLocation,
+      peerPublicKey,
     );
 
     const internalSession = makeSession({
@@ -606,7 +608,7 @@ export const makeOcapn = async ({
     return newSessionPromise;
   };
 
-  const prepareOcapn = (connection, sessionId, peerLocation) => {
+  const prepareOcapn = (connection, sessionId, peerLocation, peerPublicKey) => {
     const endSession = () => {
       const activeSession = sessionManager.getActiveSession(
         locationToLocationId(peerLocation),
@@ -662,6 +664,7 @@ export const makeOcapn = async ({
       ? makeSturdyRefTracker(
           makeLocatorForSession({
             remoteDesignator: peerLocation.designator,
+            peerPublicKey,
             abortSession,
           }),
         )
@@ -863,6 +866,7 @@ export const makeOcapn = async ({
       connection,
       /** @type {import('./types.js').SessionId} */ (sessionId),
       peerLocation,
+      peerPublicKey,
     );
     const session = makeSession({
       id: /** @type {import('./types.js').SessionId} */ (sessionId),

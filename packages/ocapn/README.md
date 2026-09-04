@@ -74,17 +74,18 @@ const ocapn = await makeOcapn({
   codec: syrupCodec,
   network,
   locator, // still used for the daemon's own outgoing SturdyRef resolution
-  makeLocatorForSession: ({ remoteDesignator, abortSession }) => {
+  makeLocatorForSession: ({ remoteDesignator, peerPublicKey, abortSession }) => {
     // Return a fresh `NonceLocator` for this session. `remoteDesignator`
     // is the peer's *claimed* designator; it is transport-authenticated
     // only when the netlayer supplies `verifyPeerLocation` (e.g. iroh's
     // QUIC-verified EndpointId), and is otherwise self-asserted and
     // therefore spoofable — so durable per-peer accounting should key on
-    // the session's verified public key (`getPeerPublicKeyForSessionId`),
-    // not on `remoteDesignator`. `abortSession()` severs this session — a
+    // `peerPublicKey`, the session's handshake-verified public key (its
+    // stable `peerPublicKey.id`), not on `remoteDesignator`.
+    // `abortSession()` severs this session — a
     // locator that has seen too many misses can call it to enforce a
     // per-session bound without revealing which presentation crossed it.
-    return makeMyPerSessionLocator({ remoteDesignator, abortSession });
+    return makeMyPerSessionLocator({ peerPublicKey, abortSession });
   },
 });
 ```

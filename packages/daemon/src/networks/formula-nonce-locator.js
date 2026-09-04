@@ -239,8 +239,9 @@ export const makeFormulaNonceLocator = ({
   // carries `remoteDesignator`, but that is only the peer's *claimed*
   // designator unless the netlayer authenticates it, so an embedder that
   // wants to aggregate misses across a peer's reconnections should key on
-  // the session's verified public key rather than on `remoteDesignator`
-  // (see `SessionLocatorContext`). The shared formula lookup stays common;
+  // the session's handshake-verified `context.peerPublicKey` rather than on
+  // `remoteDesignator` (see `SessionLocatorContext`). The shared formula
+  // lookup stays common;
   // only the counter and the abort decision are session-scoped.
   /** @type {MakeSessionFormulaLocator} */
   const makeLocatorForSession = context => {

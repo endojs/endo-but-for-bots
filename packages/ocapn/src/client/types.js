@@ -379,13 +379,15 @@
  * {@link NetLayer.verifyPeerLocation} (e.g. iroh's QUIC-verified
  * EndpointId); on a netlayer without transport authentication it is
  * self-asserted and therefore spoofable, so an embedder keying durable
- * per-peer accounting on it should prefer the session's verified public
- * key (`getPeerPublicKeyForSessionId`). `abortSession` tears this session
+ * per-peer accounting should prefer `peerPublicKey`, the session's
+ * handshake-verified public key (key on its stable `peerPublicKey.id`).
+ * `abortSession` tears this session
  * down; a locator that has seen too many misses can call it to enforce a
  * per-session bound.
  *
  * @typedef {object} SessionLocatorContext
  * @property {string} remoteDesignator
+ * @property {OcapnPublicKey} peerPublicKey
  * @property {() => void} abortSession
  */
 
