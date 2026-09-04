@@ -3994,10 +3994,16 @@ impl Halt {
     /// termination whose crank the supervisor must *discard, not commit*
     /// (design `ironhorse-panic.md` § The Formal `Panic` Category, item 2).
     ///
-    /// This is the single place the "terminate, do not commit" set is
-    /// defined. The `ExecutionOutcome` classifier delegates its `Panicked`
-    /// arm here rather than re-listing panic shapes, so adding a new panic
-    /// variant updates this predicate alone.
+    /// This is the single place the **panic** set is defined. The
+    /// `ExecutionOutcome` classifier delegates its `Panicked` arm here for
+    /// every genuine panic rather than re-listing panic shapes, so adding a
+    /// new panic variant updates this predicate alone. That classifier's
+    /// `Panicked` outcome is a strict *superset* of this predicate, though:
+    /// it also absorbs `Halt::Unsupported` and a fail-closed catch-all, which
+    /// terminate-without-commit but are **not** panics. Those extra cases
+    /// live in `ExecutionOutcome::classify`, never here — so this predicate is
+    /// still the sole definition of "is a panic," not of "must discard the
+    /// crank" (a strictly larger set).
     ///
     /// The settled core is `StackOverflow | MeterAbort | Panic(_)`.
     /// `Decode` and the harness-only `StepLimit` are **provisional**

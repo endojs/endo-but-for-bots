@@ -136,12 +136,23 @@ pub mod engine {
         /// The seam's canonical constructor: classify a top-level [`Halt`]
         /// into the three-way outcome.
         ///
-        /// The `Panicked` arm is defined **by delegation** to
-        /// [`Halt::is_panic`], never by re-listing panic variant shapes
-        /// here, so the "one place the terminate-do-not-commit set is
-        /// defined" invariant survives this architecture: adding a new
-        /// panic variant updates `is_panic()` alone and this classifier
-        /// follows for free (design § The Formal `Panic` Category, item 4).
+        /// The `Panicked` arm delegates to [`Halt::is_panic`] for every
+        /// genuine *panic* variant, never re-listing panic shapes here:
+        /// adding a new panic variant updates `is_panic()` alone and this
+        /// classifier follows for free (design § The Formal `Panic`
+        /// Category, item 4).
+        ///
+        /// `ExecutionOutcome::Panicked` is deliberately a **strict
+        /// superset** of `is_panic()`, not equal to it. Two non-panic halts
+        /// also classify as `Panicked` because they likewise must
+        /// terminate-without-commit: `Halt::Unsupported` (a named, unlanded
+        /// engine gap) and the fail-closed catch-all for any control-state
+        /// or future `#[non_exhaustive]` variant that should never reach
+        /// this seam. Those two arms below are the *only* places `Panicked`
+        /// is produced without `is_panic()`; every genuine panic still flows
+        /// through that single gate, so `is_panic()` stays the one place the
+        /// panic set is defined (the superset only adds "did not run to
+        /// quiescence" cases that are not themselves panics).
         /// Spelled as an associated function (not a free `classify_halt`)
         /// because it is the sanctioned way to build an `ExecutionOutcome`
         /// from a `Halt`, discoverable at the type it produces.
@@ -1049,10 +1060,13 @@ pub mod engine {
         }
 
         #[test]
-        fn panicked_arm_delegates_to_is_panic() {
-            // The classifier's `Panicked` arm must fire *exactly when*
-            // `is_panic()` is true — never re-listing panic shapes. Assert
-            // the two agree across the whole surface a delivery seam sees.
+        fn panicked_delegates_to_is_panic_for_every_panic() {
+            // For every genuine panic variant the classifier's `Panicked`
+            // arm fires *exactly when* `is_panic()` is true — never
+            // re-listing panic shapes. `Unsupported` is deliberately
+            // excluded here: it is not a panic (see the superset test
+            // below), so it would break a strict-agreement claim — the very
+            // contradiction the delegation invariant must not hide.
             for halt in [
                 Halt::Return,
                 Halt::Throw("x".to_string()),
@@ -1072,6 +1086,66 @@ pub mod engine {
                     "classify/is_panic disagree for {halt:?}",
                 );
             }
+        }
+
+        #[test]
+        fn panicked_is_a_strict_superset_of_is_panic() {
+            // `ExecutionOutcome::Panicked` is documented as a strict
+            // superset of `is_panic()`: `Halt::Unsupported` is NOT a panic,
+            // yet must classify as `Panicked` (discard the crank, never
+            // commit). This pins the deliberate, doc-stated exception to
+            // strict delegation so a future reader cannot mistake
+            // `is_panic()` for the sole gate on `Panicked`.
+            let gap = Halt::Unsupported("STAGE8_GAP");
+            assert!(!gap.is_panic(), "an engine gap is not a panic");
+            assert!(
+                matches!(
+                    ExecutionOutcome::classify(gap),
+                    ExecutionOutcome::Panicked(_)
+                ),
+                "an engine gap must still classify as Panicked (discard)",
+            );
+        }
+
+        #[test]
+        fn control_state_halt_fails_closed_at_the_seam() {
+            // Yield/Await/AsyncYield/Resume are caught below the top-level
+            // run and must never reach this seam. If one does, the
+            // classifier fails **closed**: a debug build trips the
+            // `debug_assert!`; a release build still returns `Panicked`
+            // (discard), never `Quiesced` (commit). Pins both halves of the
+            // catch-all's contract, which no other test exercises.
+            let classify_resume =
+                || ExecutionOutcome::classify(Halt::Resume(0));
+            if cfg!(debug_assertions) {
+                let caught = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(classify_resume),
+                );
+                assert!(
+                    caught.is_err(),
+                    "a control-state halt must trip the fail-closed \
+                     debug_assert in a debug build",
+                );
+            } else {
+                assert!(
+                    matches!(classify_resume(), ExecutionOutcome::Panicked(_)),
+                    "a control-state halt must fail closed to Panicked in \
+                     a release build",
+                );
+            }
+        }
+
+        #[test]
+        fn engine_fault_without_location_renders_without_a_site() {
+            // The `None` location arm of `describe_halt`'s `EngineFault`
+            // rendering (a panic hook that could not recover `file:line:col`)
+            // is otherwise unexercised — every other fixture carries a
+            // `Some(..)` location.
+            let halt = Halt::Panic(PanicKind::EngineFault {
+                message: "kind check failed".to_string(),
+                location: None,
+            });
+            assert_eq!(describe_halt(&halt), "engine fault: kind check failed");
         }
 
         #[test]

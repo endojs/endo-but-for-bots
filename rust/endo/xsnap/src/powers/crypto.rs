@@ -36,27 +36,31 @@ fn get_hasher_map() -> std::sync::MutexGuard<'static, Option<HashMap<u32, Sha256
 /// Computes SHA-256 of the UTF-8 encoded input string.
 /// Returns the hash as a lowercase hex string.
 pub unsafe extern "C" fn host_sha256(the: *mut XsMachine) {
-    let data = arg_str(the, 0);
-    let hash = Sha256::digest(data.as_bytes());
-    set_result_string(the, &hex::encode(hash));
+    crate::worker_io::guard_ffi(|| unsafe {
+        let data = arg_str(the, 0);
+        let hash = Sha256::digest(data.as_bytes());
+        set_result_string(the, &hex::encode(hash));
+    });
 }
 
 /// `sha256Bytes(uint8Array) -> ArrayBuffer`
 ///
 /// Computes SHA-256 over binary input and returns the 32 raw digest bytes.
 pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
-    let data_slot = (*the).frame.sub(1);
-    let data = crate::worker_io::read_typed_array_bytes(the, data_slot).unwrap_or_default();
-    let hash = Sha256::digest(&data);
-    let len = hash.len() as i32;
-    fxArrayBuffer(
-        the,
-        &mut (*the).scratch,
-        hash.as_ptr() as *mut std::os::raw::c_void,
-        len,
-        len,
-    );
-    *(*the).frame.add(1) = (*the).scratch;
+    crate::worker_io::guard_ffi(|| unsafe {
+        let data_slot = (*the).frame.sub(1);
+        let data = crate::worker_io::read_typed_array_bytes(the, data_slot).unwrap_or_default();
+        let hash = Sha256::digest(&data);
+        let len = hash.len() as i32;
+        fxArrayBuffer(
+            the,
+            &mut (*the).scratch,
+            hash.as_ptr() as *mut std::os::raw::c_void,
+            len,
+            len,
+        );
+        *(*the).frame.add(1) = (*the).scratch;
+    });
 }
 
 /// `randomHex256() -> string`
@@ -64,9 +68,11 @@ pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
 /// Returns 256 bits of cryptographically secure random data
 /// as a 64-character hex string.
 pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
-    let mut buf = [0u8; 32];
-    rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
-    set_result_string(the, &hex::encode(buf));
+    crate::worker_io::guard_ffi(|| unsafe {
+        let mut buf = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
+        set_result_string(the, &hex::encode(buf));
+    });
 }
 
 /// `randomFillBytes(view) -> undefined`
@@ -76,14 +82,16 @@ pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
 /// under the archive `crypto.getRandomValues` veneer, so it populates
 /// the caller's view directly with no hexadecimal round-trip.
 pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
-    let slot = (*the).frame.sub(1);
-    let byte_length = crate::worker_io::typed_array_byte_length(the, slot);
-    if byte_length == 0 {
-        return;
-    }
-    let mut buf = vec![0u8; byte_length];
-    rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
-    crate::worker_io::write_typed_array_bytes(the, slot, &buf);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let slot = (*the).frame.sub(1);
+        let byte_length = crate::worker_io::typed_array_byte_length(the, slot);
+        if byte_length == 0 {
+            return;
+        }
+        let mut buf = vec![0u8; byte_length];
+        rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
+        crate::worker_io::write_typed_array_bytes(the, slot, &buf);
+    });
 }
 
 /// `ed25519Keygen() -> string`
@@ -91,15 +99,17 @@ pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
 /// Generates an Ed25519 keypair. Returns JSON:
 /// `{"publicKey":"<hex>","privateKey":"<hex>"}`
 pub unsafe extern "C" fn host_ed25519_keygen(the: *mut XsMachine) {
-    let signing_key = SigningKey::generate(&mut OsRng);
-    let verifying_key = signing_key.verifying_key();
+    crate::worker_io::guard_ffi(|| unsafe {
+        let signing_key = SigningKey::generate(&mut OsRng);
+        let verifying_key = signing_key.verifying_key();
 
-    let json = format!(
-        "{{\"publicKey\":\"{}\",\"privateKey\":\"{}\"}}",
-        hex::encode(verifying_key.as_bytes()),
-        hex::encode(signing_key.as_bytes()),
-    );
-    set_result_string(the, &json);
+        let json = format!(
+            "{{\"publicKey\":\"{}\",\"privateKey\":\"{}\"}}",
+            hex::encode(verifying_key.as_bytes()),
+            hex::encode(signing_key.as_bytes()),
+        );
+        set_result_string(the, &json);
+    });
 }
 
 /// `ed25519Sign(privateKeyHex, messageHex) -> string`
@@ -107,59 +117,65 @@ pub unsafe extern "C" fn host_ed25519_keygen(the: *mut XsMachine) {
 /// Signs a message with an Ed25519 private key.
 /// Both inputs are hex-encoded. Returns the signature as hex.
 pub unsafe extern "C" fn host_ed25519_sign(the: *mut XsMachine) {
-    let private_key_hex = arg_str(the, 0);
-    let message_hex = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let private_key_hex = arg_str(the, 0);
+        let message_hex = arg_str(the, 1);
 
-    let private_key_bytes = match hex::decode(private_key_hex) {
-        Ok(b) => b,
-        Err(_) => {
-            set_result_string(the, "Error: invalid private key hex");
+        let private_key_bytes = match hex::decode(private_key_hex) {
+            Ok(b) => b,
+            Err(_) => {
+                set_result_string(the, "Error: invalid private key hex");
+                return;
+            }
+        };
+        let message_bytes = match hex::decode(message_hex) {
+            Ok(b) => b,
+            Err(_) => {
+                set_result_string(the, "Error: invalid message hex");
+                return;
+            }
+        };
+
+        if private_key_bytes.len() != 32 {
+            set_result_string(the, "Error: private key must be 32 bytes");
             return;
         }
-    };
-    let message_bytes = match hex::decode(message_hex) {
-        Ok(b) => b,
-        Err(_) => {
-            set_result_string(the, "Error: invalid message hex");
-            return;
-        }
-    };
 
-    if private_key_bytes.len() != 32 {
-        set_result_string(the, "Error: private key must be 32 bytes");
-        return;
-    }
-
-    let mut key_array = [0u8; 32];
-    key_array.copy_from_slice(&private_key_bytes);
-    let signing_key = SigningKey::from_bytes(&key_array);
-    let signature = signing_key.sign(&message_bytes);
-    set_result_string(the, &hex::encode(signature.to_bytes()));
+        let mut key_array = [0u8; 32];
+        key_array.copy_from_slice(&private_key_bytes);
+        let signing_key = SigningKey::from_bytes(&key_array);
+        let signature = signing_key.sign(&message_bytes);
+        set_result_string(the, &hex::encode(signature.to_bytes()));
+    });
 }
 
 /// `sha256Init() -> number`
 ///
 /// Creates a new incremental SHA-256 hasher and returns its handle.
 pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
-    let handle = NEXT_HASHER_HANDLE.fetch_add(1, Ordering::SeqCst);
-    let mut map = get_hasher_map();
-    map.as_mut().unwrap().insert(handle, Sha256::new());
-    fxInteger(the, &mut (*the).scratch, handle as i32);
-    *(*the).frame.add(1) = (*the).scratch;
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle = NEXT_HASHER_HANDLE.fetch_add(1, Ordering::SeqCst);
+        let mut map = get_hasher_map();
+        map.as_mut().unwrap().insert(handle, Sha256::new());
+        fxInteger(the, &mut (*the).scratch, handle as i32);
+        *(*the).frame.add(1) = (*the).scratch;
+    });
 }
 
 /// `sha256Update(handle, data) -> undefined`
 ///
 /// Feeds data into an incremental SHA-256 hasher.
 pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let handle = fxToInteger(the, handle_slot) as u32;
-    let data = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        let data = arg_str(the, 1);
 
-    let mut map = get_hasher_map();
-    if let Some(hasher) = map.as_mut().unwrap().get_mut(&handle) {
-        hasher.update(data.as_bytes());
-    }
+        let mut map = get_hasher_map();
+        if let Some(hasher) = map.as_mut().unwrap().get_mut(&handle) {
+            hasher.update(data.as_bytes());
+        }
+    });
 }
 
 /// `sha256UpdateBytes(handle, uint8Array) -> undefined`
@@ -167,15 +183,17 @@ pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
 /// Feeds binary data (Uint8Array) into an incremental SHA-256 hasher.
 /// This bypasses the slow TextDecoder path used by `sha256Update`.
 pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let handle = fxToInteger(the, handle_slot) as u32;
-    let data_slot = (*the).frame.sub(2);
-    if let Some(buf) = crate::worker_io::read_typed_array_bytes(the, data_slot) {
-        let mut map = get_hasher_map();
-        if let Some(hasher) = map.as_mut().unwrap().get_mut(&handle) {
-            hasher.update(&buf);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        let data_slot = (*the).frame.sub(2);
+        if let Some(buf) = crate::worker_io::read_typed_array_bytes(the, data_slot) {
+            let mut map = get_hasher_map();
+            if let Some(hasher) = map.as_mut().unwrap().get_mut(&handle) {
+                hasher.update(&buf);
+            }
         }
-    }
+    });
 }
 
 /// `sha256Finish(handle) -> string`
@@ -183,19 +201,21 @@ pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
 /// Finalizes the incremental SHA-256 hasher and returns the hex digest.
 /// The handle is consumed and cannot be reused.
 pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let handle = fxToInteger(the, handle_slot) as u32;
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
 
-    let mut map = get_hasher_map();
-    match map.as_mut().unwrap().remove(&handle) {
-        Some(hasher) => {
-            let hash = hasher.finalize();
-            set_result_string(the, &hex::encode(hash));
+        let mut map = get_hasher_map();
+        match map.as_mut().unwrap().remove(&handle) {
+            Some(hasher) => {
+                let hash = hasher.finalize();
+                set_result_string(the, &hex::encode(hash));
+            }
+            None => {
+                set_result_string(the, "Error: invalid hasher handle");
+            }
         }
-        None => {
-            set_result_string(the, "Error: invalid hasher handle");
-        }
-    }
+    });
 }
 
 /// All host callbacks in registration order for snapshot tables.

@@ -262,297 +262,315 @@ fn query_all(
 
 /// `sqliteOpen(path) -> number | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
-    let path = arg_str(the, 0);
-    let conn = if path == ":memory:" {
-        Connection::open_in_memory()
-    } else {
-        Connection::open(path)
-    };
+    crate::worker_io::guard_ffi(|| unsafe {
+        let path = arg_str(the, 0);
+        let conn = if path == ":memory:" {
+            Connection::open_in_memory()
+        } else {
+            Connection::open(path)
+        };
 
-    match conn {
-        Ok(c) => {
-            // Apply default pragmas.
-            if let Err(e) = c.execute_batch(
-                "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;",
-            ) {
-                set_result_string(the, &format!("Error: {}", e));
-                return;
+        match conn {
+            Ok(c) => {
+                // Apply default pragmas.
+                if let Err(e) = c.execute_batch(
+                    "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;",
+                ) {
+                    set_result_string(the, &format!("Error: {}", e));
+                    return;
+                }
+                if let Err(e) = c.busy_timeout(std::time::Duration::from_millis(5000)) {
+                    set_result_string(the, &format!("Error: {}", e));
+                    return;
+                }
+                let handle = NEXT_DB_HANDLE.fetch_add(1, Ordering::SeqCst);
+                let mut map = get_db_map();
+                map.as_mut().unwrap().insert(handle, c);
+                fxInteger(the, &mut (*the).scratch, handle as i32);
+                *(*the).frame.add(1) = (*the).scratch;
             }
-            if let Err(e) = c.busy_timeout(std::time::Duration::from_millis(5000)) {
+            Err(e) => {
                 set_result_string(the, &format!("Error: {}", e));
-                return;
             }
-            let handle = NEXT_DB_HANDLE.fetch_add(1, Ordering::SeqCst);
-            let mut map = get_db_map();
-            map.as_mut().unwrap().insert(handle, c);
-            fxInteger(the, &mut (*the).scratch, handle as i32);
-            *(*the).frame.add(1) = (*the).scratch;
         }
-        Err(e) => {
-            set_result_string(the, &format!("Error: {}", e));
-        }
-    }
+    });
 }
 
 /// `sqliteClose(dbH) -> undefined`
 pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let handle = fxToInteger(the, handle_slot) as u32;
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
 
-    // Remove associated statements first.
-    {
-        let mut stmts = get_stmt_map();
-        stmts.as_mut().unwrap().retain(|_, s| s.db_handle != handle);
-    }
-    // Then remove the connection.
-    let mut dbs = get_db_map();
-    dbs.as_mut().unwrap().remove(&handle);
+        // Remove associated statements first.
+        {
+            let mut stmts = get_stmt_map();
+            stmts.as_mut().unwrap().retain(|_, s| s.db_handle != handle);
+        }
+        // Then remove the connection.
+        let mut dbs = get_db_map();
+        dbs.as_mut().unwrap().remove(&handle);
+    });
 }
 
 /// `sqliteExec(dbH, sql) -> undefined | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_exec(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let handle = fxToInteger(the, handle_slot) as u32;
-    let sql = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        let sql = arg_str(the, 1);
 
-    let map = get_db_map();
-    match map.as_ref().unwrap().get(&handle) {
-        Some(conn) => {
-            if let Err(e) = conn.execute_batch(&sql) {
-                set_result_string(the, &format!("Error: {}", e));
+        let map = get_db_map();
+        match map.as_ref().unwrap().get(&handle) {
+            Some(conn) => {
+                if let Err(e) = conn.execute_batch(&sql) {
+                    set_result_string(the, &format!("Error: {}", e));
+                }
+            }
+            None => {
+                set_result_string(the, &format!("Error: invalid database handle {}", handle));
             }
         }
-        None => {
-            set_result_string(the, &format!("Error: invalid database handle {}", handle));
-        }
-    }
+    });
 }
 
 /// `sqlitePrepare(dbH, sql) -> number | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_prepare(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let db_handle = fxToInteger(the, handle_slot) as u32;
-    let sql = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let db_handle = fxToInteger(the, handle_slot) as u32;
+        let sql = arg_str(the, 1);
 
-    // Validate that the db handle exists.
-    {
-        let map = get_db_map();
-        if !map.as_ref().unwrap().contains_key(&db_handle) {
-            set_result_string(
-                the,
-                &format!("Error: invalid database handle {}", db_handle),
-            );
-            return;
+        // Validate that the db handle exists.
+        {
+            let map = get_db_map();
+            if !map.as_ref().unwrap().contains_key(&db_handle) {
+                set_result_string(
+                    the,
+                    &format!("Error: invalid database handle {}", db_handle),
+                );
+                return;
+            }
         }
-    }
 
-    let stmt_handle = NEXT_STMT_HANDLE.fetch_add(1, Ordering::SeqCst);
-    let mut stmts = get_stmt_map();
-    stmts.as_mut().unwrap().insert(
-        stmt_handle,
-        PreparedStmt {
-            db_handle,
-            sql,
-        },
-    );
-    fxInteger(the, &mut (*the).scratch, stmt_handle as i32);
-    *(*the).frame.add(1) = (*the).scratch;
+        let stmt_handle = NEXT_STMT_HANDLE.fetch_add(1, Ordering::SeqCst);
+        let mut stmts = get_stmt_map();
+        stmts.as_mut().unwrap().insert(
+            stmt_handle,
+            PreparedStmt {
+                db_handle,
+                sql,
+            },
+        );
+        fxInteger(the, &mut (*the).scratch, stmt_handle as i32);
+        *(*the).frame.add(1) = (*the).scratch;
+    });
 }
 
 /// `sqliteStmtRun(stmtH, paramsJson) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_run(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let stmt_handle = fxToInteger(the, handle_slot) as u32;
-    let params_json = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let stmt_handle = fxToInteger(the, handle_slot) as u32;
+        let params_json = arg_str(the, 1);
 
-    // Look up statement info.
-    let (db_handle, sql) = {
-        let stmts = get_stmt_map();
-        match stmts.as_ref().unwrap().get(&stmt_handle) {
-            Some(s) => (s.db_handle, s.sql.clone()),
-            None => {
-                set_result_string(
-                    the,
-                    &format!("Error: invalid statement handle {}", stmt_handle),
-                );
+        // Look up statement info.
+        let (db_handle, sql) = {
+            let stmts = get_stmt_map();
+            match stmts.as_ref().unwrap().get(&stmt_handle) {
+                Some(s) => (s.db_handle, s.sql.clone()),
+                None => {
+                    set_result_string(
+                        the,
+                        &format!("Error: invalid statement handle {}", stmt_handle),
+                    );
+                    return;
+                }
+            }
+        };
+
+        let params = match parse_params(&params_json) {
+            Ok(p) => p,
+            Err(e) => {
+                set_result_string(the, &e);
                 return;
             }
-        }
-    };
+        };
 
-    let params = match parse_params(&params_json) {
-        Ok(p) => p,
-        Err(e) => {
-            set_result_string(the, &e);
-            return;
-        }
-    };
-
-    let map = get_db_map();
-    match map.as_ref().unwrap().get(&db_handle) {
-        Some(conn) => match execute_stmt(conn, &sql, &params) {
-            Ok(changes) => {
-                let rowid = conn.last_insert_rowid();
-                let result = format!(
-                    "{{\"changes\":\"{}\",\"lastInsertRowid\":\"{}\"}}",
-                    changes, rowid
-                );
-                set_result_string(the, &result);
+        let map = get_db_map();
+        match map.as_ref().unwrap().get(&db_handle) {
+            Some(conn) => match execute_stmt(conn, &sql, &params) {
+                Ok(changes) => {
+                    let rowid = conn.last_insert_rowid();
+                    let result = format!(
+                        "{{\"changes\":\"{}\",\"lastInsertRowid\":\"{}\"}}",
+                        changes, rowid
+                    );
+                    set_result_string(the, &result);
+                }
+                Err(e) => {
+                    set_result_string(the, &format!("Error: {}", e));
+                }
+            },
+            None => {
+                set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
             }
-            Err(e) => {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-        },
-        None => {
-            set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
         }
-    }
+    });
 }
 
 /// `sqliteStmtGet(stmtH, paramsJson) -> JSON | "null" | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_get(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let stmt_handle = fxToInteger(the, handle_slot) as u32;
-    let params_json = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let stmt_handle = fxToInteger(the, handle_slot) as u32;
+        let params_json = arg_str(the, 1);
 
-    let (db_handle, sql) = {
-        let stmts = get_stmt_map();
-        match stmts.as_ref().unwrap().get(&stmt_handle) {
-            Some(s) => (s.db_handle, s.sql.clone()),
-            None => {
-                set_result_string(
-                    the,
-                    &format!("Error: invalid statement handle {}", stmt_handle),
-                );
-                return;
+        let (db_handle, sql) = {
+            let stmts = get_stmt_map();
+            match stmts.as_ref().unwrap().get(&stmt_handle) {
+                Some(s) => (s.db_handle, s.sql.clone()),
+                None => {
+                    set_result_string(
+                        the,
+                        &format!("Error: invalid statement handle {}", stmt_handle),
+                    );
+                    return;
+                }
             }
-        }
-    };
+        };
 
-    let params = match parse_params(&params_json) {
-        Ok(p) => p,
-        Err(e) => {
-            set_result_string(the, &e);
-            return;
-        }
-    };
-
-    let map = get_db_map();
-    match map.as_ref().unwrap().get(&db_handle) {
-        Some(conn) => match query_get(conn, &sql, &params) {
-            Ok(Some(row)) => {
-                set_result_string(the, &row.to_string());
-            }
-            Ok(None) => {
-                set_result_string(the, "null");
-            }
+        let params = match parse_params(&params_json) {
+            Ok(p) => p,
             Err(e) => {
                 set_result_string(the, &e);
+                return;
             }
-        },
-        None => {
-            set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
+        };
+
+        let map = get_db_map();
+        match map.as_ref().unwrap().get(&db_handle) {
+            Some(conn) => match query_get(conn, &sql, &params) {
+                Ok(Some(row)) => {
+                    set_result_string(the, &row.to_string());
+                }
+                Ok(None) => {
+                    set_result_string(the, "null");
+                }
+                Err(e) => {
+                    set_result_string(the, &e);
+                }
+            },
+            None => {
+                set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
+            }
         }
-    }
+    });
 }
 
 /// `sqliteStmtAll(stmtH, paramsJson) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_all(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let stmt_handle = fxToInteger(the, handle_slot) as u32;
-    let params_json = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let stmt_handle = fxToInteger(the, handle_slot) as u32;
+        let params_json = arg_str(the, 1);
 
-    let (db_handle, sql) = {
-        let stmts = get_stmt_map();
-        match stmts.as_ref().unwrap().get(&stmt_handle) {
-            Some(s) => (s.db_handle, s.sql.clone()),
-            None => {
-                set_result_string(
-                    the,
-                    &format!("Error: invalid statement handle {}", stmt_handle),
-                );
-                return;
+        let (db_handle, sql) = {
+            let stmts = get_stmt_map();
+            match stmts.as_ref().unwrap().get(&stmt_handle) {
+                Some(s) => (s.db_handle, s.sql.clone()),
+                None => {
+                    set_result_string(
+                        the,
+                        &format!("Error: invalid statement handle {}", stmt_handle),
+                    );
+                    return;
+                }
             }
-        }
-    };
+        };
 
-    let params = match parse_params(&params_json) {
-        Ok(p) => p,
-        Err(e) => {
-            set_result_string(the, &e);
-            return;
-        }
-    };
-
-    let map = get_db_map();
-    match map.as_ref().unwrap().get(&db_handle) {
-        Some(conn) => match query_all(conn, &sql, &params) {
-            Ok(rows) => {
-                set_result_string(the, &rows.to_string());
-            }
+        let params = match parse_params(&params_json) {
+            Ok(p) => p,
             Err(e) => {
                 set_result_string(the, &e);
+                return;
             }
-        },
-        None => {
-            set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
+        };
+
+        let map = get_db_map();
+        match map.as_ref().unwrap().get(&db_handle) {
+            Some(conn) => match query_all(conn, &sql, &params) {
+                Ok(rows) => {
+                    set_result_string(the, &rows.to_string());
+                }
+                Err(e) => {
+                    set_result_string(the, &e);
+                }
+            },
+            None => {
+                set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
+            }
         }
-    }
+    });
 }
 
 /// `sqliteStmtColumns(stmtH) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_columns(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let stmt_handle = fxToInteger(the, handle_slot) as u32;
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let stmt_handle = fxToInteger(the, handle_slot) as u32;
 
-    let (db_handle, sql) = {
-        let stmts = get_stmt_map();
-        match stmts.as_ref().unwrap().get(&stmt_handle) {
-            Some(s) => (s.db_handle, s.sql.clone()),
-            None => {
-                set_result_string(
-                    the,
-                    &format!("Error: invalid statement handle {}", stmt_handle),
-                );
-                return;
-            }
-        }
-    };
-
-    let map = get_db_map();
-    match map.as_ref().unwrap().get(&db_handle) {
-        Some(conn) => match conn.prepare(&sql) {
-            Ok(stmt) => {
-                let mut cols = Vec::new();
-                for i in 0..stmt.column_count() {
-                    let name = stmt.column_name(i).unwrap_or("?");
-                    // column_type() requires an executed statement;
-                    // use the SQL-declared type via statement introspection.
-                    // column_names() / column_name() are available pre-execution,
-                    // but declared type requires iterating column metadata.
-                    // For now, return null for type — the JS side doesn't
-                    // strictly need it.
-                    cols.push(json!({"name": name, "type": null}));
+        let (db_handle, sql) = {
+            let stmts = get_stmt_map();
+            match stmts.as_ref().unwrap().get(&stmt_handle) {
+                Some(s) => (s.db_handle, s.sql.clone()),
+                None => {
+                    set_result_string(
+                        the,
+                        &format!("Error: invalid statement handle {}", stmt_handle),
+                    );
+                    return;
                 }
-                set_result_string(the, &JsonValue::Array(cols).to_string());
             }
-            Err(e) => {
-                set_result_string(the, &format!("Error: {}", e));
+        };
+
+        let map = get_db_map();
+        match map.as_ref().unwrap().get(&db_handle) {
+            Some(conn) => match conn.prepare(&sql) {
+                Ok(stmt) => {
+                    let mut cols = Vec::new();
+                    for i in 0..stmt.column_count() {
+                        let name = stmt.column_name(i).unwrap_or("?");
+                        // column_type() requires an executed statement;
+                        // use the SQL-declared type via statement introspection.
+                        // column_names() / column_name() are available pre-execution,
+                        // but declared type requires iterating column metadata.
+                        // For now, return null for type — the JS side doesn't
+                        // strictly need it.
+                        cols.push(json!({"name": name, "type": null}));
+                    }
+                    set_result_string(the, &JsonValue::Array(cols).to_string());
+                }
+                Err(e) => {
+                    set_result_string(the, &format!("Error: {}", e));
+                }
+            },
+            None => {
+                set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
             }
-        },
-        None => {
-            set_result_string(the, &format!("Error: invalid database handle {}", db_handle));
         }
-    }
+    });
 }
 
 /// `sqliteStmtFinalize(stmtH) -> undefined`
 pub unsafe extern "C" fn host_sqlite_stmt_finalize(the: *mut XsMachine) {
-    let handle_slot = (*the).frame.sub(1);
-    let stmt_handle = fxToInteger(the, handle_slot) as u32;
+    crate::worker_io::guard_ffi(|| unsafe {
+        let handle_slot = (*the).frame.sub(1);
+        let stmt_handle = fxToInteger(the, handle_slot) as u32;
 
-    let mut stmts = get_stmt_map();
-    stmts.as_mut().unwrap().remove(&stmt_handle);
+        let mut stmts = get_stmt_map();
+        stmts.as_mut().unwrap().remove(&stmt_handle);
+    });
 }
 
 /// All host callbacks in registration order for snapshot tables.
