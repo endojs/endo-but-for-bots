@@ -783,6 +783,11 @@ pub const CALL_TRAMPOLINE_PER_ARG: u64 = 1 << 14;
 /// error, mistaken for chunk-alignment noise.
 pub const APPLY_ARRAY_BASE_METERING: u64 = 98304;
 pub const APPLY_ARRAY_PER_ELEMENT_METERING: u64 = 3 << 14;
+/// Observable reads on an ordinary array-like already carry part of the
+/// dense-array host residual. Arguments objects take the same semantic path
+/// but use a smaller resident-storage frame in XS.
+pub const APPLY_GENERIC_ARRAYLIKE_CREDIT: u64 = 34_240;
+pub const APPLY_ARGUMENTS_ARRAYLIKE_CREDIT: u64 = 48_576;
 
 /// `Function.prototype.bind` creation (`fx_Function_prototype_bind`): the
 /// bound-function instance + its CODE/HOME slots + the `_boundFunction`/
@@ -28770,7 +28775,10 @@ impl Interp {
         errors: Slot,
     ) -> Result<Vec<Slot>, Halt> {
         if let Payload::Reference(array) = errors.value {
-            if errors.kind == Kind::Reference && self.arrays.contains_key(&array) {
+            if errors.kind == Kind::Reference
+                && self.arrays.contains_key(&array)
+                && !self.arguments_objects.contains(&array)
+            {
                 let iterator_id = self
                     .well_known_symbol_property_id("iterator")
                     .expect("well-known iterator symbol");
@@ -29164,14 +29172,19 @@ impl Interp {
         let arg_array = self.stack.get(base + 5).copied();
         let (forwarded, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
-            Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
+            Some((Kind::Reference, Payload::Reference(arr)))
+                if self.arrays.contains_key(&arr)
+                    && !self.arguments_objects.contains(&arr) =>
+            {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 // Reads route through the counted-accessor view (the
                 // seam's bulk-table discipline); no counts move.
                 if (0..len).any(|i| !data.items().contains_key(&i)) {
                     let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
-                    (args, 0)
+                    let meter = APPLY_ARRAY_BASE_METERING
+                        + args.len() as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                    (args, meter)
                 } else {
                     let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                     let meter =
@@ -29180,7 +29193,10 @@ impl Interp {
                 }
             }
             Some((Kind::Reference, _)) | Some((Kind::Instance, _)) => {
-                (self.arraylike_to_vec(code, arg_array.unwrap())?, 0)
+                let arg_slot = arg_array.unwrap();
+                let args = self.arraylike_to_vec(code, arg_slot)?;
+                let meter = self.apply_arraylike_metering(arg_slot, args.len());
+                (args, meter)
             }
             Some(_) => return Err(self.catchable_type_error()),
         };
@@ -29329,14 +29345,20 @@ impl Interp {
         let arg_array = self.stack.get(base + 5).copied();
         let (real_args, array_read_meter) = match arg_array.map(|s| (s.kind, s.value)) {
             None | Some((Kind::Undefined, _)) | Some((Kind::Null, _)) => (Vec::new(), 0),
-            Some((Kind::Reference, Payload::Reference(arr))) if self.arrays.contains_key(&arr) => {
+            Some((Kind::Reference, Payload::Reference(arr)))
+                if self.arrays.contains_key(&arr)
+                    && !self.arguments_objects.contains(&arr) =>
+            {
                 let data = &self.arrays[&arr];
                 let len = data.length;
                 // Dense only: every index in `[0, length)` must be a present
                 // compact element. A hole or materialized accessor needs the
                 // observable property path.
                 if (0..len).any(|i| !data.items().contains_key(&i)) {
-                    (self.arraylike_to_vec(code, arg_array.unwrap())?, 0)
+                    let args = self.arraylike_to_vec(code, arg_array.unwrap())?;
+                    let meter = APPLY_ARRAY_BASE_METERING
+                        + args.len() as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+                    (args, meter)
                 } else {
                     let args: Vec<Slot> = (0..len).map(|i| data.items()[&i]).collect();
                     // The array path's fixed setup plus the per-element read +
@@ -29349,12 +29371,13 @@ impl Interp {
             // A non-dense-array **object** argArray (array-like / `arguments` /
             // sparse array): `CreateListFromArrayLike` (ECMA-262 7.3.18) reads
             // `length` (`ToLength`) then each indexed element, with any getter
-            // throw propagated. The per-property reads meter themselves, so no
-            // extra array meter is added here.
+            // throw propagated. The shared helper below splits the residual
+            // from the metering already paid by those property reads.
             Some((Kind::Reference, _)) | Some((Kind::Instance, _)) => {
                 let arg_slot = arg_array.unwrap_or_else(Slot::undefined);
                 let args = self.arraylike_to_vec(code, arg_slot)?;
-                (args, 0)
+                let meter = self.apply_arraylike_metering(arg_slot, args.len());
+                (args, meter)
             }
             // A non-object, non-nullish argArray (a Boolean/Number/String/
             // Symbol/BigInt primitive): `CreateListFromArrayLike` step 2
@@ -35276,6 +35299,25 @@ impl Interp {
             out.push(self.arraylike_index(code, inst, i, value)?);
         }
         Ok(out)
+    }
+
+    /// Residual for `Function.prototype.apply` after an observable
+    /// CreateListFromArrayLike walk. Dense and sparse Arrays use XS's full
+    /// array schedule. Ordinary objects and arguments objects have already
+    /// paid part of that schedule through their property MOP paths.
+    fn apply_arraylike_metering(&self, value: Slot, len: usize) -> u64 {
+        let full = APPLY_ARRAY_BASE_METERING
+            + len as u64 * APPLY_ARRAY_PER_ELEMENT_METERING;
+        let Payload::Reference(inst) = value.value else {
+            return full;
+        };
+        if self.arguments_objects.contains(&inst) {
+            return full.saturating_sub(APPLY_ARGUMENTS_ARRAYLIKE_CREDIT);
+        }
+        if self.arrays.contains_key(&inst) || self.proxies.contains_key(&inst) {
+            return full;
+        }
+        full.saturating_sub(APPLY_GENERIC_ARRAYLIKE_CREDIT)
     }
 
     /// `IterableToList(items)` (ECMA-262 7.4.19): acquire the iterator and its
@@ -47767,12 +47809,17 @@ impl Interp {
             }
             let this_arg = args.first().copied().unwrap_or_else(Slot::undefined);
             let arg_array = args.get(1).copied().unwrap_or_else(Slot::undefined);
-            let forwarded = if arg_array.kind == Kind::Undefined || arg_array.kind == Kind::Null {
-                Vec::new()
+            let (forwarded, array_read_meter) = if arg_array.kind == Kind::Undefined
+                || arg_array.kind == Kind::Null
+            {
+                (Vec::new(), 0)
             } else {
-                self.arraylike_to_vec(code, arg_array)?
+                let forwarded = self.arraylike_to_vec(code, arg_array)?;
+                let meter = self.apply_arraylike_metering(arg_array, forwarded.len());
+                (forwarded, meter)
             };
-            self.meter.tick_raw(CALL_TRAMPOLINE_METERING);
+            self.meter
+                .tick_raw(CALL_TRAMPOLINE_METERING + array_read_meter);
             return self.invoke_value(code, this, this_arg, &forwarded);
         }
         if native.is_some() || method.is_some() {
@@ -47939,7 +47986,11 @@ impl Interp {
         inst: crate::value::SlotIndex,
         receiver: Slot,
     ) -> Result<Slot, Halt> {
-        if let Some(a) = self.arrays.get(&inst) {
+        if let Some(a) = self
+            .arrays
+            .get(&inst)
+            .filter(|_| !self.arguments_objects.contains(&inst))
+        {
             return Ok(Self::array_index_number(u64::from(a.length)));
         }
         if let Some(Slot {
