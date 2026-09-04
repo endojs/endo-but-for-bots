@@ -277,20 +277,31 @@ flowchart TD
    `strict` mode, `fetch` to an off-allowlist origin fails closed and the composer
    adds no authority: every request is re-parsed, exact-origin-matched,
    rate-limited, size-capped, and run with redirects disabled by the exo. But in a
-   `tofu-auto` mode a `fetch` to an unlisted origin runs the exo's `decide()` path
-   and **durably pins** a `Pinned-Allow` binding (`http-client.js` `decide()` ->
-   `setBinding()`), permanently widening the guest's reach, from the *same*
-   `client()` the guest holds, and against the *same* shared
+   `tofu-auto` mode a `fetch` to an origin with **no existing binding** runs the
+   exo's `decide()` path and **durably pins** a `Pinned-Allow` binding
+   (`http-client.js` `decide()` -> `setBinding()`), durably widening the guest's
+   reach, from the *same* `client()` the guest holds, and against the *same* shared
    `maxRequestsPerMinute` budget. So the composer is not authority-neutral in a
-   TOFU mode. The surface therefore treats a composer send to an origin **not in
-   the effective allowlist** as an authority-widening act while the mode is
-   `tofu-*`: it is confirmed ("This origin is not yet allowed; sending will
-   durably pin it") exactly as an allowlist edit is (Boundary 4). In `strict` mode
-   no confirm is needed because the send cannot mutate policy. A control viewer
-   reads the mode through `inspect()` and gates the confirm on it; a **read-only
-   viewer** (a bare `HttpClient`) cannot read the mode at all (Boundary 2), so it
-   cannot know whether a send will pin, and therefore confirms *every*
-   off-`allowedOrigins()` send. See § Design Decisions 3 and § Open Questions 3.
+   TOFU mode. The pin happens only for an origin with no binding, though: an origin
+   already carrying a `Revoked` or `Pinned-Deny` binding is rejected by
+   `assertAllowed` *before* `decide()` is reached (`http-client.js:451-456`), in
+   every mode, so such a send fails closed and pins nothing. The surface therefore
+   treats a composer send as authority-widening, and confirms it ("This origin is
+   not yet allowed; sending will durably pin it") exactly as an allowlist edit is
+   (Boundary 4), only when the target has **no existing binding** *and* the mode is
+   `tofu-*`. For a target that already carries a `Revoked` / `Pinned-Deny` binding,
+   or in `strict` mode, no widening confirm fires because the send cannot mutate
+   policy. A control viewer reads the mode through `inspect()`, **re-read
+   immediately before the send** (§ Keeping the view live) so a co-writer's
+   `strict` -> `tofu-auto` flip cannot let a widening send slip past the confirm,
+   and gates the confirm on it. A **read-only viewer** (a bare `HttpClient`) cannot
+   read the mode or the binding table at all (Boundary 2), so it cannot know whether
+   a send will pin; it therefore confirms every send to an origin absent from
+   `allowedOrigins()` with **hedged copy that states the uncertainty rather than
+   asserting an effect it cannot know**: "This origin is not yet allowed; sending
+   **may** durably pin it, depending on a policy mode this read-only view cannot
+   read" (under the default `strict` such a send simply fails closed and pins
+   nothing). See § Design Decisions 3 and § Open Questions 3.
 
 6. **Response and policy text is untrusted.** Response bodies and headers come off
    the network; `Binding.target` / `decidedBy` / `note` and `AuditEntry.decidedBy`
@@ -329,9 +340,12 @@ TOFU-pinning `fetch`, and this surface's own request composer (in `tofu-auto`). 
 panel rendered from a stale snapshot silently misreports policy. The surface
 therefore re-`inspect()`s (and re-reads `listBindings()` / `listAuditEntries()`
 for the expanded panels) on every event that can change policy *from this
-surface*: after any own edit commits, on panel expand, and **after a composer send
-resolves** (which may have pinned in `tofu-auto`). For writes by the other
-co-writers it cannot observe, the surface offers a manual refresh affordance and,
+surface*: after any own edit commits, on panel expand, **immediately before an
+off-allowlist composer send** (so the widening confirm in § Capability and
+Authority Boundaries 5 gates on the current `policyMode` and binding table, not a
+stale snapshot a co-writer's `strict` -> `tofu-auto` flip left behind), and
+**after a composer send resolves** (which may have pinned in `tofu-auto`). For
+writes by the other co-writers it cannot observe, the surface offers a manual refresh affordance and,
 if and when the integration surfaces the service's `onPolicyChange(snapshot)`
 notifier to Chat, subscribes to it instead. The surface never claims the view
 "cannot drift"; it names exactly what refreshes it.
@@ -341,7 +355,7 @@ notifier to Chat, subscribes to it instead. The surface never claims the view
 ### Detection
 
 `showValue`, in the same `inferredType === 'remotable'` branch that runs the
-blob/tree probes, identifies the two HTTP shapes. It prefers the **synchronous**
+blob/tree probes, identifies the three HTTP shapes. It prefers the **synchronous**
 interface tag (`inferType` / `INTERFACE_TO_TYPE`, `value-render.js`): a value
 whose `getInterfaceOf` tag is `Alleged: FetchService` or `Alleged: HttpClient` is
 classified with no async round trip and no probe flicker, and the tag survives
@@ -395,7 +409,7 @@ cleanly.
 ```mermaid
 flowchart TD
   subgraph Modal["Value modal: front face"]
-    H["Title chips: @petname, tier badge (Service control / Client read-only), policyMode, revoked?"]
+    H["Title chips: @petname, tier badge (Service control / Control policy-only / Client read-only), policyMode, revoked?"]
     P["Policy panel: allowedOrigins list, rate limit, size cap, policyMode"]
     RC["Request composer: method, URL, headers, body, to Response viewer"]
     B["Bindings panel (control): Binding table + block/reset/re-allow"]
@@ -409,10 +423,15 @@ flowchart TD
 **tier badge** and a compact status line. The tier badge is the explicit,
 header-level signal of *which cap the viewer is looking through* (the design's
 central thesis, § Capability and Authority Boundaries), so it is never left to be
-inferred from which fields are present: a control viewer (a `FetchService` or a
-standalone `HttpClientControl`) reads **"HTTP Service (control)"**, a read-only
-viewer (a bare `HttpClient`, guest or foreign) reads **"HTTP Client (read-only)"**.
-When `control()` is available, the status line additionally shows `policyMode`, the
+inferred from which fields are present: a `FetchService` viewer reads
+**"HTTP Service (control)"**, a standalone `HttpClientControl` viewer reads
+**"HTTP Control (policy only, no client)"** (steering, but no request composer to
+test through, per § Detection), and a read-only viewer (a bare `HttpClient`, guest
+or foreign) reads **"HTTP Client (read-only)"**. These are the three detected
+shapes' three distinct badges; the control-only badge deliberately does not reuse
+the service badge, so it never promises a composer that is absent.
+When a control facet is in reach (a `FetchService` or a standalone
+`HttpClientControl`), the status line additionally shows `policyMode`, the
 `allowedOrigins` count, and a **Revoked** pill when `inspect().revoked` is true. A
 read-only viewer has no revocation query, so its status line shows only the
 `allowedOrigins()` count and omits the mode and the Revoked pill. But the
@@ -483,10 +502,10 @@ remotable in a **Response viewer**: `status()` + `statusText()` + `ok()`
 "Parse JSON" toggle calling `json()`; `stream()` is available for incremental
 consumption of a large body). The URL input may autocomplete from the current
 `allowedOrigins` to steer the user toward in-policy requests (advisory only). In a
-`tofu-*` mode, a send to an origin outside the effective allowlist is confirmed
-first because it will durably pin (§ Capability and Authority Boundaries 5).
-Response text is
-confined vnodes.
+`tofu-*` mode, a send to an origin with no existing binding is confirmed first
+because it will durably pin (§ Capability and Authority Boundaries 5); a send to an
+origin already carrying a `Revoked` / `Pinned-Deny` binding fails closed and pins
+nothing, so no widening confirm fires. Response text is confined vnodes.
 
 **4. Bindings panel** (control). The binding table is the authoritative record of
 every policy *decision*, `Pinned-Allow` / `Pinned-Deny` / `Revoked`, and the
@@ -624,8 +643,9 @@ composer accelerator earns a composer-local modeline hint.
 - **Revoked client**: for a control viewer, `inspect().revoked` drives the Revoked
   pill, disables the composer's Send, and makes the policy panel read-only. It
   **also proactively disables the Bindings panel's per-row Block / Reset /
-  Re-allow** (`revokeBinding` / `unpin` / `addAllowedOrigin`): all eight
-  `HttpClientControl` mutators throw once `revoke()` has fired
+  Re-allow** (`revokeBinding` / `unpin` / `addAllowedOrigin`): the eight
+  `assertNotRevoked`-guarded mutators (every `HttpClientControl` mutator except
+  `revoke()` itself) throw once `revoke()` has fired
   (`assertNotRevoked()`, `http-client.js:887-953`), so leaving those buttons live
   would only route the user into the generic edit-rejection path. Proactively
   disabling them (the same treatment the Policy panel's controls get) keeps the
@@ -665,13 +685,15 @@ Plan; this surface's real risk area (client-side validation versus
 exo-authoritative rejection, TOFU binding transitions, the authority-widening composer
 send, revoke-then-composer, the read-only degradation path) earns the same.
 
-- **Unit: detection precedence.** `isFetchServiceLike` and `isHttpClientLike`
-  against fixtures for a `FetchService` (interface tag / `client`+`control`), a
-  bare `HttpClient` (`fetch`+`allowedOrigins`, no `control`), a blob, a tree, and a
-  look-alike remotable exposing `fetch`/`allowedOrigins` (and one exposing
-  `client`/`control`) without the interface tag. Assert the tagged service resolves
-  to the full surface, the bare client to read-only, the disjoint shapes to their
-  own specializations, and that the interface tag is preferred over the method-name
+- **Unit: detection precedence.** `isFetchServiceLike`, `isHttpClientLike`, and
+  `isHttpClientControlLike` against fixtures for a `FetchService` (interface tag /
+  `client`+`control`), a bare `HttpClient` (`fetch`+`allowedOrigins`, no `control`),
+  a standalone `HttpClientControl` (`inspect`+`revoke`, no `client` and no `fetch`),
+  a blob, a tree, and a look-alike remotable exposing `fetch`/`allowedOrigins` (and
+  one exposing `client`/`control`) without the interface tag. Assert the tagged
+  service resolves to the full surface, the bare client to read-only, the standalone
+  control to the control-only surface, the disjoint shapes to their own
+  specializations, and that the interface tag is preferred over the method-name
   fallback.
 - **Unit: client-side validators mirror the exo.** Origin-exactness and
   positive-safe-integer validators accept exactly what the exo accepts and reject
@@ -680,6 +702,11 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 - **Integration: read-only degradation.** With a bare `HttpClient` value, the
   surface renders header + composer + read-only origins list, shows the "read-only
   (no control authority)" note, and exposes no steering affordances.
+- **Integration: control-only surface.** With a standalone `HttpClientControl`
+  value (`inspect`+`revoke`, no `client()`), the surface renders the Policy,
+  Bindings, Audit, and Revoke sections but **omits the request composer entirely**,
+  and shows the "HTTP Control (policy only, no client)" tier badge (not the service
+  badge).
 - **Integration: control edits and durability framing.** With a `FetchService`, an
   added origin / raised limit (via Apply) / mode change (via Apply confirm)
   round-trips through `control()` and the re-read `inspect()` reflects it; assert the UI
@@ -714,8 +741,9 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 - **Integration: revoke disables all control mutators.** With a `FetchService`,
   after `revoke()` the re-read `inspect().revoked` proactively disables not only the
   composer's Send and the Policy panel's editors but also the Bindings panel's
-  per-row Block / Reset / Re-allow; assert none of the eight `HttpClientControl`
-  mutators is offered live post-revoke (rather than being left to throw into the
+  per-row Block / Reset / Re-allow; assert none of the eight
+  `assertNotRevoked`-guarded mutators (every `HttpClientControl` mutator except
+  `revoke()`) is offered live post-revoke (rather than being left to throw into the
   edit-rejection path).
 - **Manual checklist.** The "Revoked client" states for both viewer tiers (control
   viewer: Revoked pill, disabled Send, and disabled Bindings-panel Block/Reset/
@@ -741,18 +769,20 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 1. **Read-only client view.** Detection (bare `HttpClient`) + header badge/status
    + `allowedOrigins()` list + request composer + Response viewer, including the
    reactive revoked-client framing. Works for both host and guest/foreign clients
-   (no *control*-facet dependency, rests only on landed #566). Ships the majority of
-   the user value. **Provisioning prerequisite (not a UI gate, but a real
-   dependency):** for any of this to have a value to click on, a companion
+   (no *control*-facet dependency, rests only on landed #566). This is the majority
+   of the *UI* value, but it cannot ship *standalone* user value until the
+   Phase 0 provisioning prerequisite below lands, because until then there is no
+   value to click on. **Phase 0 provisioning prerequisite (outside this design, but
+   ordered ahead of it):** for any of this to have a value to click on, a companion
    daemon/CLI change must actually mint and retain a `FetchService`: run
    `E(host).makeUnconfined(worker, '@endo/fetch', ...)`, pin the result under
    `['@pins', 'fetch']`, and grant `client()` to the guest. That wiring is **not
    deployed today**: no call site outside `packages/fetch/` itself invokes the
    plugin (the `makeUnconfined` example in `packages/fetch/src/index.js` is a
-   docstring, not deployed daemon/CLI code). Phase 1 therefore cannot ship
-   standalone user value until that provisioning change lands; it is owned by
+   docstring, not deployed daemon/CLI code). It is owned by
    [endo-fetch](endo-fetch.md) and the maintainer (§ Open Questions 1), not by this
-   design, but this design depends on it and does not silently assume it.
+   design; this design depends on it, orders it first, and does not silently assume
+   it.
 2. **Control policy panel** (gated only on how a `FetchService` reaches Chat, per
    § Open Questions 1; the `@endo/fetch` package itself is landed). `control()`
    recovery, `inspect()` render, allowlist/limit/mode editors with client-side
@@ -776,11 +806,15 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    split (formula-inspector, 2026-06-13, "We only need one surface"); the Value
    modal is that surface.
 
-2. **The value is the client or the fetch service; the control is recovered
-   through the service.** A guest's value is the bare `HttpClient`; the host's
-   value is the `FetchService`, from which `control()` is recovered. The control
-   facet is never itself navigated to as a standalone value. This matches the
-   plugin's client/control split.
+2. **The value is the client, the fetch service, or a standalone control.** A
+   guest's value is the bare `HttpClient`; the host's value is usually the
+   `FetchService`, from which `control()` is recovered. But the client/control
+   split also contemplates retaining the `control()` facet *without* the service
+   wrapper, so a standalone `HttpClientControl` is a third navigable shape in its
+   own right (§ Detection, `isHttpClientControlLike`; § Capability and Authority
+   Boundaries 1): it renders the policy-steering surface but omits the request
+   composer, since a bare control holds no `client()` to test through. All three
+   shapes match the plugin's client/control split.
 
 3. **The composer's authority effect is faced, not asserted away.** An earlier
    draft claimed the composer "adds no authority". That is true only in `strict`
@@ -791,7 +825,9 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    composer and treats an off-allowlist send in a TOFU mode as the
    authority-widening act it is, with the same explicit confirm an allowlist edit gets. This
    is the decomplected resolution of § Open Questions 3: the composer does not
-   silently move the bound.
+   silently move the bound. Because the mode is re-read immediately before the send
+   (§ Keeping the view live), a concurrent `strict` -> `tofu-auto` flip by another
+   co-writer cannot let a widening send slip past that confirm.
 
 4. **Policy is durable; the front face is the authoritative view.** Because
    `@endo/fetch` persists policy to its state directory, the front face's
@@ -836,8 +872,11 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 1. **How does a `FetchService` (and thus `control()`) reach Chat?** The read-only
    Phase 1 needs only a `client()` value in a petstore, which #566 already
    supports. The control phases need the viewer to hold the `FetchService` or its
-   `control()` facet. The `@endo/fetch` plugin is landed and pins the service at
-   `['@pins', 'fetch']`, so the mechanism largely exists; the residual is whether
+   `control()` facet. The `@endo/fetch` plugin is landed, and the recommended
+   integration pins the service at `['@pins', 'fetch']` (the plugin itself pins
+   nothing; `index.js`'s docstring recommends the integrator pass
+   `resultName: ['@pins', 'fetch']`), so the mechanism largely exists; the residual
+   is whether
    that pinned service is reachable and clickable in Chat's inventory and how one
    confined service is provisioned per guest, a surfacing/integration call owned
    by [endo-fetch](endo-fetch.md) and the maintainer, not a package-landing gate.
