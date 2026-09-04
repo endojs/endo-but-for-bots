@@ -51,23 +51,6 @@ hub) (`packages/daemon/src/host.js:504-524`).
 These daemon-owned special names are currently the *only* special names, and none
 can be introduced from a providing host through the provisioning call.
 
-The scoped-account-facet driver above is one motivating case, and the general
-mechanism this design specifies solves it fully.
-Issue [#982](https://github.com/endojs/endo-but-for-bots/issues/982) records a
-second, related but distinct case, which this design addresses only in part.
-Both cases share the same underlying need, letting the provisioning party
-designate a guest's indelible special names, but #982 names an "alternative
-`@main`" as its specific motivating case.
-This design addresses the general requirement (provisioning-party-designated
-indelible names) but deliberately does *not* let a caller bind the bare name
-`@main`: as § The introduced sub-namespace explains, introduced names live under a
-reserved prefix that is statically disjoint from the daemon's own names, and
-`@main` is daemon-owned.
-A literal alternative `@main` (rebinding a name the daemon already owns) would
-need its own daemon carve-out and is out of scope here; #982 is therefore
-*partially* addressed, with the general mechanism specified here and the specific
-`@main`-override left as separate work.
-
 This design adds one generic mechanism.
 It defines an `introducedSpecialNames` option on the provisioning call that maps
 host-held source names to `@`-prefixed destination names bound indelibly in the
@@ -87,6 +70,25 @@ A scoped provisioner, an account-status facet, or a policy object are typical
 capabilities to endow.
 The policy of *which* names to introduce, and *what* capabilities sit behind
 them, belongs to the deployment, not to this daemon feature.
+
+## Relationship to #982
+
+The scoped-account-facet driver above is one motivating case, and the general
+mechanism this design specifies solves it fully.
+Issue [#982](https://github.com/endojs/endo-but-for-bots/issues/982) records a
+second, related but distinct case, which this design addresses only in part.
+Both cases share the same underlying need: letting the provisioning party
+designate a guest's indelible special names.
+But #982 names an "alternative `@main`" as its specific motivating case.
+This design addresses the general requirement (provisioning-party-designated
+indelible names) but deliberately does *not* let a caller bind the bare name
+`@main`: as § The introduced sub-namespace explains, introduced names live under a
+reserved prefix that is statically disjoint from the daemon's own names, and
+`@main` is daemon-owned.
+A literal alternative `@main` (rebinding a name the daemon already owns) would
+need its own daemon carve-out and is out of scope here; #982 is therefore
+*partially* addressed, with the general mechanism specified here and the specific
+`@main`-override left as separate work.
 
 ## The option
 
@@ -154,7 +156,7 @@ day, would silently break when a later daemon version, or a deployment's
 `specials` bag, claims a name an existing agent formula already binds.
 Because both the daemon-owned binding and the introduced binding are indelible,
 neither side could then be dropped to resolve the collision, and the merge order
-in the special-name store (assembled by literal-plus-assignment in
+in the assembled special-name set (built by literal-plus-assignment in
 `guest.js:94-104`, then spread over `platformNames` in `host.js:505`) would alone
 decide the winner.
 
@@ -183,33 +185,64 @@ special name uses the `@intro-` prefix, and nothing enforces that promise today,
 neither for the `specials` bag (its keys are unvalidated) nor for the daemon's own
 hardcoded literals (`@self`/`@host`/etc. are assembled inline in `guest.js:94-104`
 and `host.js:504-524`, read from no checkable source).
-These two sub-sides are structurally different.
+The daemon-owned side itself splits into two structurally different halves.
 The embedder-supplied half is a runtime input (`specials`) a startup check can read
-directly, while the daemon-owned half is hardcoded literals a startup check over
-`specials` alone cannot see, so the assertion must be placed where *both* are
-visible.
+directly, while the hardcoded half is the daemon's own inline literals a startup
+check over `specials` alone cannot see, so the assertion must be placed where
+*both* halves are visible.
 Phase 1 therefore asserts the prefix reservation over the **fully assembled**
 special-name set at agent construction: the daemon-owned literals from
 `guest.js`/`host.js` merged with the spread `platformNames` (`host.js:505`), the
-same assembled object the pet-sitter is handed.
+same assembled special-name object the daemon hands the agent's pet-sitter (the
+naming facet described in § Indelibility).
 Running the check at that assembly point, rather than only over the `specials`
 input at daemon startup, means a future release that adds an `@intro-`-prefixed
 key *directly to the `guest.js`/`host.js` literals* trips the same assertion, not
 only a deployment that registers one through `specials`.
-That single assertion over the assembled set is what makes the
-forward-compatibility guarantee of § Security invariants (invariant 2, below) true
-rather than a human promise: that introduced names stay statically disjoint from
-the daemon-owned and embedder-supplied sets in every future release, whichever
-source a future name is added through.
+
+Two consequences of anchoring the runtime check at the assembly point, rather than
+once at daemon boot, must be stated plainly, because the hardcoded literals do not
+exist as a single value the daemon could enumerate at startup. Each variant's set
+is assembled inline only when that variant is constructed (`guest.js:94-104`;
+`host.js:504-524`, whose literal set differs by `isRootHost` and mail-hub branch).
+
+- The runtime assertion fires **lazily, per agent-kind construction**, not once at
+  daemon boot. A daemon can boot and run for a long time before its first guest is
+  provisioned, and each structurally distinct construction site (a guest, a root
+  host, a child non-root host, and a host acting as a mail hub) assembles a
+  different literal set, so a runtime regression in one variant is caught only when
+  that variant is first constructed, possibly long after deploy. The runtime check
+  is therefore a per-construction *backstop*, not a boot-time gate. The
+  forward-compatibility guarantee itself is enforced at **build time** by the Phase
+  1 test plan, which constructs one fixture per daemon-owned-literal variant (guest,
+  root host, child host, host+mail-hub) so a future release that adds an
+  `@intro-`-prefixed literal to any variant fails CI regardless of which variants a
+  given deployment ever exercises at runtime.
+- "Agent construction" **includes reincarnation** (rebuilding a live agent from its
+  already-persisted formula), not only fresh provisioning, because reincarnation
+  runs the same special-name assembly. This is the case the guarantee most needs to
+  cover: an existing agent whose formula already persists an `@intro-` binding,
+  meeting a colliding daemon-owned literal a *later* release adds. Because the
+  assertion re-runs at every reincarnation over the freshly assembled set, such a
+  release fails that agent's reincarnation loudly at the assembly point rather than
+  silently letting the merge order in the assembled special-name set decide the winner
+  between the persisted introduced binding and the new daemon-owned literal.
+
+That per-construction assertion over the assembled set, backed by the per-variant
+build-time fixtures, is what makes the forward-compatibility guarantee of § Security
+invariants (invariant 2, below) true rather than a human promise: that introduced
+names stay statically disjoint from the daemon-owned and embedder-supplied sets in
+every future release, whichever source a future name is added through and whichever
+agent-kind variant it lands in.
 
 No in-tree caller passes a non-empty `specials` bag today (`manager.js:7578`
 defaults it to `{}`), and the eventual downstream deployment named here (Minion
 Town) supplies no `@intro-`-prefixed platform special, so the newly reserved prefix
 collides with no known or planned embedder set. An out-of-tree embedder that
 happens to already use an `@intro-`-prefixed `specials` key is the deliberate
-scope of the assertion: it fails that daemon's construction loudly at startup
-rather than silently letting a platform special and an introduced name contend by
-merge order.
+scope of the assertion: it fails loudly at the first agent construction that
+assembles that key, rather than silently letting a platform special and an
+introduced name contend by merge order.
 
 ## Resolution, validation, and rejection
 
@@ -241,6 +274,16 @@ believes it granted and that the agent can never acquire afterward, which is the
 exact failure this mechanism exists to prevent.
 An unresolvable source name therefore *fails the provisioning call loudly*, before
 the agent is created.
+
+These rejection causes are not interchangeable to a caller: a malformed or
+duplicate destination is a caller-side syntax error the caller can correct and
+retry, an unresolvable source is a provider-state error, and the
+resolved-set-differs case on a repeat provide (§ Provisioning against an existing
+agent) is *unrecoverable*: the agent already holds a different indelible grant and
+can never receive the requested one. Each cause should therefore carry a
+distinguishable error identity (a `code` or error subclass, not one generic
+rejection string), so a programmatic caller can branch on recoverable versus
+unrecoverable outcomes at the call site rather than parse a message.
 
 ## Provisioning against an existing agent
 
@@ -285,6 +328,21 @@ A repeat provide after a mere *rename* that preserves the identifier resolves th
 same identifier and is a clean no-op.
 A caller that intends to *change* an agent's introduced special names cannot: the
 grant is fixed for the agent's lifetime (see § Revocation).
+
+Because the comparison is over the *resolved identifier*, the reject fires not only
+on a caller-side rebind but also when the *providing host itself* legitimately
+recreates the source capability (re-minting a fresh scoped facet under the same
+stable source pet name across the provider's own reincarnations) and re-runs
+provisioning. That re-minted facet resolves to a *new* identifier, so a
+reassert-at-every-bring-up provisioning pattern would hit a spurious reject even
+though the caller changed nothing. This is an accepted operational constraint, not
+a gap: the persisted grant is anchored to the *identity* of the capability resolved
+at first provisioning, so a deployment must provision each indelible grant once and
+must not treat "reassert the grant on every provider restart" as its idempotent
+provisioning path. A deployment that needs the grant to survive provider-side
+recreation of what it points at introduces a *stable* forwarder (§ Revocation) as
+the source capability and re-mints only what sits behind that forwarder, leaving
+the resolved identifier (and therefore the idempotent repeat provide) unchanged.
 
 The reject-on-difference rule is deliberately stricter than indelibility alone
 requires, and the extra strictness is a scoping choice, not a security one.
@@ -353,10 +411,10 @@ free-form example string that each site reimplements would let them silently
 diverge, catchable only after the fact by a drift test.
 This keeps each identifier individually enumerated for reachability and matches the
 table's one-label-one-identifier shape rather than inventing a data-carrying label.
-A same-round test that the two tables agree on the introduced identifiers still
-backs the shared helper (the helper makes divergence structurally hard; the test
-guards against a site that forgets to call it) and caps the cost of the two
-hand-maintained enumerations.
+A dedicated drift test (Phase 3, § Phased implementation and tests) that the two
+tables agree on the introduced identifiers still backs the shared helper (the
+helper makes divergence structurally hard; the test guards against a site that
+forgets to call it) and caps the cost of the two hand-maintained enumerations.
 
 ## Indelibility
 
@@ -372,8 +430,10 @@ Those write paths are `storeIdentifier`
 (`packages/daemon/src/pet-store.js:183-184`, asserting both the from- and
 to-name); and `isValidName` (`packages/daemon/src/pet-name.js:15`) excludes
 `@`-prefixed names.
-`makePetSitter` passes `storeIdentifier`, `remove`, and `rename` straight through
-to the underlying controller (`packages/daemon/src/pet-sitter.js:110`) and rejects
+The pet-sitter (the facet the daemon exposes to an agent over its own pet store,
+through which the agent performs every naming operation, and which `makePetSitter`
+constructs) passes `storeIdentifier`, `remove`, and `rename` straight through to
+the underlying controller (`packages/daemon/src/pet-sitter.js:110`) and rejects
 nothing itself, so the guarantee is anchored in the grammar and its callers, not
 in the pet-sitter wrapper.
 An implementer must therefore assert indelibility against the *whole* write
@@ -480,20 +540,36 @@ revocation policy to the capability the name points at.
    assembled special-name set at agent construction, that no daemon-owned or
    embedder-supplied (`specials`) special name carries the reserved `@intro-`
    prefix.
+   Carry the reject-vs-skip asymmetry (§ Resolution) onto the type surface too: add
+   a one-line TSDoc note on the `introducedSpecialNames` field in `types.d.ts` that
+   an unresolvable source *rejects* the call, unlike the sibling `introducedNames`
+   field on the same bag, which silently skips, so a programmatic caller reading
+   the type (not only `help.md`) meets the divergence.
    Test malformed destinations (outside the reserved sub-namespace), duplicate
    destinations, and, distinctly, an *unresolvable source name that rejects* the
    call rather than skipping.
-   Test the reservation assertion directly, too, on *both* of its sub-sides, since
-   they are enforced from structurally different sources: constructing a daemon
-   whose `specials` bag carries an `@intro-`-prefixed key is rejected at
-   construction (embedder-supplied half), and a fixture whose assembled
-   daemon-owned literal set carries an `@intro-`-prefixed name is likewise rejected
-   at construction (hardcoded half), so a future release that adds such a literal to
-   `guest.js`/`host.js` fails the test rather than silently shadowing an introduced
-   name.
+   Because the option rides the shared bag for both `provideGuest` and
+   `provideHost`, run these tests on **both** call paths, not the guest path alone;
+   in particular name a host-path test that provisions a **root host**
+   (`isRootHost`) with an `introducedSpecialNames` entry and asserts the introduced
+   name binds indelibly with no interaction with the root-host-only `@secrets`
+   special (`host.js:504-524`), so the deliberate widening onto the host path
+   (§ The option) is covered rather than assumed sufficient by symmetry.
+   Test the reservation assertion directly, too, on *both* of its halves, since they
+   are enforced from structurally different sources: constructing a daemon whose
+   `specials` bag carries an `@intro-`-prefixed key is rejected at construction
+   (embedder-supplied half), and a fixture whose assembled daemon-owned literal set
+   carries an `@intro-`-prefixed name is likewise rejected at construction
+   (hardcoded half).
+   Because the hardcoded literals are assembled per agent-kind rather than once at
+   boot (§ The introduced sub-namespace), the hardcoded-half fixture is **one case
+   per structurally distinct construction site** (guest, root host, child non-root
+   host, and host acting as a mail hub), each of which assembles a different literal
+   set, so a future release that adds an `@intro-`-prefixed literal to *any* variant
+   fails CI regardless of which variants a deployment exercises at runtime.
    This assertion is the enforcement mechanism Security invariant 2's
-   forward-compatibility guarantee rides on, so it earns its own test rather than
-   riding on the destination-validation tests.
+   forward-compatibility guarantee rides on, so it earns its own per-variant tests
+   rather than riding on the destination-validation tests.
 2. **Provisioning and formula.**
    Resolve source names once, persist the resulting identifiers in the agent
    formula, and bind them as special (indelible) names in the new agent.
@@ -514,13 +590,13 @@ revocation policy to the capability the name points at.
 The `provideGuest` help entry documents its options as
 `{ introducedNames: { guestName: hostName } }` (`packages/daemon/src/help.md`),
 which spells the mapping direction *backwards*.
-`host.js:1863` maps `[parentName, childName]`, that is source->destination, and the
+`host.js:1863` maps `[parentName, childName]`, that is source -> destination, and the
 CLI spells the same direction `--introduce myPetname:theirPetname`
 (`packages/cli/src/endo.js:733,749`).
 Phase 1 therefore also:
 
 - documents `introducedSpecialNames` in the `provideHost` and `provideGuest` help
-  entries, stating the source->destination direction and that an unresolvable
+  entries, stating the source -> destination direction and that an unresolvable
   source rejects the call while `introducedNames` silently skips;
 - corrects the inverted existing `introducedNames` help entry to match the
   implementation and the CLI, and adds the same "silently skips" note there so a

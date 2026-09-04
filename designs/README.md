@@ -945,11 +945,12 @@ halves and their directly-dependent companions as its first-to-land work:
   inference engine, reaching only that one guest's facet as its whole tool
   surface. Confinement core in flight as PR
   [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open
-  draft). The `endo-claude` child-guest provisioning path needs a generic daemon seam,
-  supplied by [introduced-special-names](introduced-special-names.md), PR
-  [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft),
-  narrowed at maintainer request from a broader Claude-agent provisioning
-  proposal. That seam indelibly endows a provisioned guest with special names.
+  draft). The `endo-claude` child-guest provisioning path needs a generic daemon
+  seam that indelibly endows a provisioned guest with special names, supplied by the
+  [introduced-special-names](introduced-special-names.md) design, in flight as PR
+  [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft), which
+  was narrowed at maintainer request from a broader Claude-agent provisioning
+  proposal.
   The full Claude-backed child-guest factory over the seam is deferred
   to a deployment such as Minion Town.
 
