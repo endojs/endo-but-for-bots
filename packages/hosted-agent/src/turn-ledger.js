@@ -124,7 +124,10 @@ export const makeTurnLedger = ({
             /** @type {any} */ (outcome).type
           );
           OUTCOME_TYPES.includes(type) || Fail`Unknown turn outcome ${q(type)}`;
-          if (type === 'completed') {
+          // Narrow on `outcome.type`, not on the string extracted from it: a
+          // discriminant read into a local no longer discriminates the union,
+          // so `outcome.checkpoint` was an unchecked property access here.
+          if (outcome.type === 'completed') {
             (typeof outcome.checkpoint === 'string' &&
               outcome.checkpoint !== '') ||
               Fail`A completed turn must name its checkpoint`;

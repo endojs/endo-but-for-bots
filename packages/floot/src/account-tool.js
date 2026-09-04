@@ -36,8 +36,9 @@ const renderCount = count => (count === null ? 'unpublished' : `${count}`);
  * @param {{ plan: any, rateLimits: any, rateCard: any }} snapshot
  * @param {{ inputTokens: bigint, outputTokens: bigint } | undefined} [usage]
  * @param {any} [cost]
+ * @param {string} [modelId] - Named in the "cannot be priced" explanation.
  */
-export const renderAccountStatus = (snapshot, usage, cost) => {
+export const renderAccountStatus = (snapshot, usage, cost, modelId = '') => {
   const { plan, rateLimits, rateCard } = snapshot;
   const lines = [];
   lines.push(
@@ -80,6 +81,15 @@ export const renderAccountStatus = (snapshot, usage, cost) => {
       );
     } else if (rateCard.rates.length === 0) {
       lines.push(`No list price is configured, so the cost is unknown.`);
+    } else {
+      // A rate card exists but this session's model is not on it, or the
+      // session runs a model nobody named. Say which, rather than leaving the
+      // cost line silently absent.
+      lines.push(
+        modelId
+          ? `The rate card does not price "${modelId}", so the cost is unknown.`
+          : `This session's model is not identified, so the cost cannot be priced.`,
+      );
     }
   }
   return lines.join('\n');
@@ -140,6 +150,7 @@ export const makeAccountStatusTool = ({ oracle, getUsage, getModelId }) =>
       ]);
       let usage;
       let cost;
+      const modelId = getModelId ? getModelId() : '';
       if (getUsage) {
         const totals = await getUsage();
         usage = harden({
@@ -148,12 +159,16 @@ export const makeAccountStatusTool = ({ oracle, getUsage, getModelId }) =>
             Math.max(0, Math.trunc(totals.outputTokens || 0)),
           ),
         });
-        const modelId = getModelId ? getModelId() : '';
         if (modelId) {
           cost = await E(oracle).estimateCost(harden({ modelId, ...usage }));
         }
       }
-      return renderAccountStatus({ plan, rateLimits, rateCard }, usage, cost);
+      return renderAccountStatus(
+        { plan, rateLimits, rateCard },
+        usage,
+        cost,
+        modelId,
+      );
     },
     help: () =>
       'Report the subscription plan, remaining rate limits, and this session’s token cost.',

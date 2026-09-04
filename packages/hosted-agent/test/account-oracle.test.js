@@ -259,3 +259,140 @@ test('a source may be an eventual-send capability', async t => {
   t.is(plan.title, 'Team');
   t.is(plan.source, 'observed');
 });
+
+test('a declared section is never journalled beside an observed one', async t => {
+  const memory = makeMemoryJournal();
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    provideDeclared: async () => declaredProfile,
+    // The provider publishes rate limits but neither a plan nor a price list —
+    // the usual case.
+    provideObserved: async () =>
+      harden({
+        rateLimits: {
+          windows: [{ windowId: 'weekly', limit: 1000n, used: 400n }],
+        },
+      }),
+    journal: memory.journal,
+    now: () => T0,
+  });
+  t.is((await E(oracle).getRateLimits()).source, 'observed');
+  t.is((await E(oracle).getPlan()).source, 'declared');
+
+  // Journalling the *merged* answer would store the declared plan and the
+  // unavailable rate card, and the next incarnation would replay the operator's
+  // assertion as a past measurement.
+  const stored = memory.peek();
+  t.deepEqual(Object.keys(stored).sort(), ['rateLimits']);
+
+  // Revived without the declared profile — an operator who removed it — the
+  // plan must read as unavailable. Journalling the merged answer would have
+  // replayed their old assertion as a measurement nobody ever took.
+  const revived = makeAccountOracle({
+    providerId: 'anthropic',
+    journal: memory.journal,
+    now: () => T1,
+  });
+  t.is((await E(revived).getRateLimits()).source, 'remembered');
+  t.is((await E(revived).getPlan()).source, 'unavailable');
+  t.is((await E(revived).getRateCard()).source, 'unavailable');
+});
+
+test('a partial live read does not erase an earlier reading of another section', async t => {
+  const memory = makeMemoryJournal();
+  let payload = harden({
+    plan: { planId: 'max', title: 'Max', state: 'active', seats: 1n },
+    rateLimits: {
+      windows: [{ windowId: 'weekly', limit: 1000n, used: 100n }],
+    },
+  });
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    provideObserved: async () => payload,
+    journal: memory.journal,
+    now: () => T0,
+  });
+  await E(oracle).getPlan();
+  t.deepEqual(Object.keys(memory.peek()).sort(), ['plan', 'rateLimits']);
+
+  // The next reading answers only the plan. The stored rate-limit reading is
+  // still the last real one, so it must survive rather than be replaced by
+  // "unavailable".
+  payload = harden({
+    plan: { planId: 'max', title: 'Max', state: 'active', seats: 2n },
+  });
+  await E(oracle).refresh();
+  const stored = memory.peek();
+  t.deepEqual(Object.keys(stored).sort(), ['plan', 'rateLimits']);
+  t.is(stored.plan.seats, 2n);
+  t.is(stored.rateLimits.windows[0].used, 100n);
+});
+
+test('an unreadable journal is not overwritten from a partial view', async t => {
+  const memory = makeMemoryJournal();
+  memory.seed(
+    harden({
+      rateLimits: {
+        windows: [
+          {
+            windowId: 'weekly',
+            title: '',
+            limit: 1000n,
+            used: 100n,
+            remaining: 900n,
+            usedFraction: 0.1,
+            resetsAt: '',
+          },
+        ],
+        observedAt: T0,
+        source: 'observed',
+      },
+    }),
+  );
+  let failReads = true;
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    provideObserved: async () =>
+      harden({
+        plan: { planId: 'max', title: 'Max', state: 'active', seats: 1n },
+      }),
+    journal: {
+      read: async () => {
+        if (failReads) throw Error('journal briefly unavailable');
+        return memory.peek();
+      },
+      write: memory.journal.write,
+    },
+    now: () => T1,
+  });
+  await E(oracle).getPlan();
+  // With no idea what is already stored, writing would have replaced a real
+  // rate-limit reading with nothing.
+  t.deepEqual(Object.keys(memory.peek()).sort(), ['rateLimits']);
+  failReads = false;
+});
+
+test('a source cannot stamp its own provenance', async t => {
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    // A declared profile claiming to be a live reading, from a provider it
+    // does not describe, taken at a time it chose.
+    provideDeclared: async () =>
+      harden({
+        plan: {
+          planId: 'max',
+          title: 'Max',
+          state: 'active',
+          seats: 1n,
+          source: 'observed',
+          providerId: 'somebody-else',
+          observedAt: T1,
+        },
+      }),
+    now: () => T0,
+  });
+  const plan = await E(oracle).getPlan();
+  t.is(plan.source, 'declared');
+  t.is(plan.providerId, 'anthropic');
+  t.is(plan.observedAt, T0);
+});
