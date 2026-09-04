@@ -4,6 +4,13 @@ This directory is the **immutable starting snapshot** for the Ironhorse
 JavaScript-completion work. It is committed once, and every later change in that
 effort measures its regression invariant against it.
 
+> **Current ratchet floor: [`refresh-20260904/`](./refresh-20260904/)**
+> (round 2, endojs/endo-but-for-bots#1113). Successor chain, each a verified
+> superset of the last: this immutable snapshot →
+> [`refresh-20260829/`](./refresh-20260829/) → `refresh-20260904/`. The totals
+> and `covered.txt` below are the *starting* measurement, not the enforced
+> floor; enforce against the current floor's `covered.txt`.
+
 > **Provenance gap (read before trusting the totals as a HEAD measurement).**
 > The engine pin below (`14f26d0a6…`) is the head of the sibling reporting PR the
 > harness was cherry-picked from, **not** an ancestor of this branch, and it
