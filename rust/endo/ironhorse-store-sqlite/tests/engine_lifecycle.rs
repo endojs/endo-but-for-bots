@@ -692,6 +692,19 @@ fn apply_array_like_paths_survive_sqlite_sleep_cycles() {
 }
 
 #[test]
+fn mapped_arguments_length_survives_sqlite_sleep_cycles() {
+    let last = run_scenario(
+        "mapped-arguments-apply-length",
+        &[
+            "var args;(function(a){args=arguments;a=7})(3,9)",
+            "var args;args.length=1",
+            "var args;Math.max.apply(null,args)+':'+new AggregateError(args).errors.join(',')",
+        ],
+    );
+    assert_eq!(last, "7:7");
+}
+
+#[test]
 fn aggregate_error_iterables_survive_sqlite_sleep_cycles() {
     let last = run_scenario(
         "aggregate-error-iterable",

@@ -82,6 +82,7 @@ fn aggregate_error_consumes_general_iterables_in_specification_order() {
         "new AggregateError('ab').errors.join(',')",
         "var a=[];a.length=2;a[1]=3;var e=new AggregateError(a);e.errors.length+':'+String(e.errors[0])+':'+e.errors[1]",
         "(function(a){a=9;return new AggregateError(arguments).errors[0]})(3)",
+        "(function(){arguments.length=1;return new AggregateError(arguments).errors.join(',')})(1,2)",
         "var log=[];var source={n:0,[Symbol.iterator]:function(){log.push('i');return this},next:function(){log.push('n');return this.n++<1?{value:7,done:false}:{done:true}}};var message={toString:function(){log.push('m');return 'boom'}};var e=new AggregateError(source,message);e.message+':'+e.errors[0]+':'+log.join('')",
         "var log=[];var a=[1,2];a[Symbol.iterator]=function(){log.push('i');return [8][Symbol.iterator]()};var e=new AggregateError(a);e.errors.join(',')+':'+log.join('')",
         "var gets=0;var source={ [Symbol.iterator]:function(){var n=0;return {get next(){gets++;return function(){return n++<1?{value:6,done:false}:{done:true}}}}}};new AggregateError(source).errors[0]+':'+gets",
