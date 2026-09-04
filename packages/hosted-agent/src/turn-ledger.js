@@ -100,6 +100,7 @@ export const makeTurnLedger = ({
       /**
        * @typedef {object} TurnHandle
        * @property {(outcome: TurnOutcome) => Promise<{ accepted: boolean, outcome: TurnOutcome }>} settle
+       * @property {(checkpoint: string) => Promise<void>} observe
        * @property {() => TurnOutcome | undefined} settledOutcome
        */
       return harden({
