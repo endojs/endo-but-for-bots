@@ -76,11 +76,70 @@ test('addTransport picks up transport hints in subsequent locations()', async t 
   const { transportA } = makeMockTransportPair();
   await network.addTransport(transportA);
   const loc = network.locationFor(keyId);
-  t.deepEqual(loc.hints, { 'mock:to': 'default' });
+  t.deepEqual(loc.hints, { 0: 'mock:default' });
 
   network.removeTransport(transportA);
   t.is(network.locationFor(keyId).hints, false);
   network.shutdown();
+});
+
+test('a transport advertising multiple hints yields an ordered positional locator', async t => {
+  // The priority-ordered hint list survives the OCapN dictionary
+  // locator as a positional dictionary: decimal-index keys mapping to
+  // self-describing dial URLs, order recoverable from the keys.
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId } = addFreshKey(network);
+  /** @type {import('../src/types.js').OcapnNoiseTransport} */
+  const multiHint = harden({
+    scheme: 'multi',
+    connect: async () => {
+      throw Error('not used');
+    },
+    listen: async () =>
+      harden({
+        hints: ['multi:[2001:db8::9]:1', 'multi:198.51.100.4:1'],
+        close: () => {},
+      }),
+    shutdown: () => {},
+  });
+  await network.addTransport(multiHint);
+  const loc = network.locationFor(keyId);
+  t.deepEqual(loc.hints, {
+    0: 'multi:[2001:db8::9]:1',
+    1: 'multi:198.51.100.4:1',
+  });
+  network.shutdown();
+});
+
+test('selectOutgoingCandidates skips a leading hint with no registered transport', async t => {
+  // A location whose first hint names an unregistered transport must
+  // fall through to the next hint the network can actually dial.
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
+  const keyA = addFreshKey(netA).keyId;
+  const keyB = addFreshKey(netB).keyId;
+  await netA.addTransport(fabric.transportFor('A'));
+  await netB.addTransport(fabric.transportFor('B'));
+  // First hint is a scheme neither peer registered; second routes over
+  // the mesh fabric.
+  const locB = {
+    ...netB.locationFor(keyB),
+    hints: { 0: 'iroh://unreachable-peer', 1: 'mesh:B' },
+  };
+
+  const [sessionA, sessionB] = await Promise.all([
+    netA.provideSession(locB),
+    netB.waitForInboundSession(keyA),
+  ]);
+  t.is(sessionA.remoteLocation.designator, keyB);
+  t.is(sessionB.remoteLocation.designator, keyA);
+
+  sessionA.close();
+  sessionB.close();
+  netA.shutdown();
+  netB.shutdown();
+  fabric.shutdown();
 });
 
 test('two peers handshake and exchange encrypted messages via mock transport', async t => {
@@ -134,7 +193,7 @@ test('provideSession rejects without any registered signing keys', async t => {
         network: 'np',
         transport: 'np',
         designator: '00'.repeat(32),
-        hints: { 'mock:to': 'default' },
+        hints: { 0: 'mock:default' },
       }),
     { message: /requires at least one signing key/ },
   );
@@ -153,7 +212,7 @@ test('provideSession rejects locations with a short designator', async t => {
         network: 'np',
         transport: 'np',
         designator: 'abcd',
-        hints: { 'mock:to': 'default' },
+        hints: { 0: 'mock:default' },
       }),
     { message: /designator must be a 32-byte Ed25519 key/ },
   );
@@ -267,8 +326,8 @@ test('active session is preserved when a second inbound handshake arrives', asyn
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
   await netB.addTransport(fabric.transportFor('B'));
-  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
-  const locB = { ...netB.locationFor(keyB), hints: { 'mesh:to': 'B' } };
+  const locA = { ...netA.locationFor(keyA), hints: { 0: 'mesh:A' } };
+  const locB = { ...netB.locationFor(keyB), hints: { 0: 'mesh:B' } };
 
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(locB),
@@ -316,7 +375,7 @@ test('provideSession rejects after handshake timeout', async t => {
         network: 'np',
         transport: 'np',
         designator: peerKey,
-        hints: { 'stall:to': 'anywhere' },
+        hints: { 0: 'stall:anywhere' },
       }),
     { message: /timed out/ },
   );
@@ -336,7 +395,7 @@ test('provideSession with multiple keys demands an explicit localKeyId', async t
         network: 'np',
         transport: 'np',
         designator: '00'.repeat(32),
-        hints: { 'mock:to': 'default' },
+        hints: { 0: 'mock:default' },
       }),
     { message: /requires `localKeyId`/ },
   );
@@ -356,7 +415,7 @@ test('provideSession rejects an unknown localKeyId', async t => {
           network: 'np',
           transport: 'np',
           designator: '00'.repeat(32),
-          hints: { 'mock:to': 'default' },
+          hints: { 0: 'mock:default' },
         },
         { localKeyId: 'ff'.repeat(32) },
       ),
@@ -395,7 +454,7 @@ test('shutdown rejects pending provideSession waiters', async t => {
     network: 'np',
     transport: 'np',
     designator: '22'.repeat(32),
-    hints: { 'stall:to': 'x' },
+    hints: { 0: 'stall:x' },
   });
   const rejected = t.throwsAsync(pending, { message: /network shutdown/ });
   net.shutdown();
@@ -422,7 +481,7 @@ test('SYN addressed to an unknown local key is silently dropped', async t => {
   addFreshKey(netB);
   await netA.addTransport(fabric.transportFor('A'));
   await netB.addTransport(fabric.transportFor('B'));
-  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+  const locA = { ...netA.locationFor(keyA), hints: { 0: 'mesh:A' } };
 
   // Remove A's key before B dials. B's SYN will be addressed to a
   // designator that A no longer recognizes; A must drop the stream
@@ -503,7 +562,7 @@ test('inboundSessions.return closes queued sessions that nobody consumed', async
   addFreshKey(netB);
   await netA.addTransport(fabric.transportFor('A'));
   await netB.addTransport(fabric.transportFor('B'));
-  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+  const locA = { ...netA.locationFor(keyA), hints: { 0: 'mesh:A' } };
 
   // B initiates; A should buffer the session in its inboundSessions
   // queue because A hasn't started consuming.
@@ -531,7 +590,7 @@ test('active session is forgotten after close so a fresh dial starts new', async
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
   await netB.addTransport(fabric.transportFor('B'));
-  const locB = { ...netB.locationFor(keyB), hints: { 'mesh:to': 'B' } };
+  const locB = { ...netB.locationFor(keyB), hints: { 0: 'mesh:B' } };
 
   const first = await netA.provideSession(locB);
   // A second call before close returns the same session (cache hit).

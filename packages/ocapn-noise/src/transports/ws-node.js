@@ -16,6 +16,7 @@
 
 import harden from '@endo/harden';
 import { makeQueue } from '@endo/stream';
+import { bracketHost, computeAdvertisedHosts } from './advertised-hosts.js';
 
 /**
  * Adapt a `WebSocket`-shaped object (browser `WebSocket`, Node `ws`
@@ -131,6 +132,16 @@ const adaptWebSocket = ws => {
  * @param {{ new (options: { port?: number, host?: string }): any } | undefined} [options.WebSocketServer]
  * @param {number} [options.port]
  * @param {string} [options.host]
+ * @param {string[]} [options.hosts] - Explicit override for the hosts to
+ *   advertise (IPv6-first), bypassing interface enumeration. Mirrors the
+ *   tcp transport.
+ * @param {() => (string[] | Promise<string[]>)} [options.discoverHosts] -
+ *   Pluggable public-IP discovery seam, folded into the advertised hint
+ *   list. Mirrors the tcp transport; ships only the seam.
+ * @param {string} [options.path] - Path component of the advertised
+ *   `ws://host:port<path>` dial URLs. Default `'/ocapn-cbor-np'`, the
+ *   canonical OCapN-CBOR-on-`np` WebSocket endpoint the gateway serves
+ *   (`designs/gateway-package.md` § Feature 8).
  * @returns {OcapnNoiseTransport}
  */
 export const makeWebSocketTransport = ({
@@ -138,6 +149,9 @@ export const makeWebSocketTransport = ({
   WebSocketServer,
   port = 0,
   host = '127.0.0.1',
+  hosts,
+  discoverHosts,
+  path = '/ocapn-cbor-np',
 } = {}) => {
   if (!WebSocket) {
     throw Error('makeWebSocketTransport: no WebSocket constructor available');
@@ -145,20 +159,6 @@ export const makeWebSocketTransport = ({
 
   /** @type {any} */
   let server;
-
-  /**
-   * Substitute a routable address when the listener was bound to a
-   * wildcard host. The hint is what we advertise to peers; `0.0.0.0` /
-   * `::` / unspecified addresses are not connect targets.
-   *
-   * @param {string} addr
-   */
-  const advertisedHost = addr => {
-    if (addr === '0.0.0.0' || addr === '::' || addr === '::ffff:0.0.0.0') {
-      return '127.0.0.1';
-    }
-    return addr;
-  };
 
   /** @type {OcapnNoiseTransport['listen']} */
   const listen = WebSocketServer
@@ -177,9 +177,24 @@ export const makeWebSocketTransport = ({
           },
         );
         const addr = server.address();
+        // Advertise a priority-ordered list of dial URLs — one per
+        // routable link-layer address (IPv6 first), plus any pluggably-
+        // discovered public address, each carrying the WebSocket
+        // endpoint `path`. A wildcard bind that resolves to nothing
+        // routable advertises an empty list rather than a loopback URL.
+        // Mirrors the tcp transport.
+        const advHosts = await computeAdvertisedHosts({
+          bindHost: host,
+          boundAddress: addr.address,
+          hosts,
+          discoverHosts,
+        });
+        const hints = advHosts.map(
+          advHost => `ws://${bracketHost(advHost)}:${addr.port}${path}`,
+        );
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { url: `ws://${advertisedHost(addr.address)}:${addr.port}` },
+          hints,
           close: () => {
             try {
               server.close();
@@ -195,10 +210,12 @@ export const makeWebSocketTransport = ({
   /** @type {OcapnNoiseTransport} */
   const transport = harden({
     scheme: 'ws',
-    connect: async hints => {
-      const url = hints.url;
-      if (!url) throw Error(`ws transport: missing 'url' hint`);
-      const ws = new WebSocket(url);
+    connect: async hint => {
+      // A single self-describing `ws://host:port/path` dial URL — one
+      // entry from the peer's priority-ordered hint list, already
+      // matched to this transport's `ws` scheme by the network.
+      if (!hint) throw Error(`ws transport: missing dial hint`);
+      const ws = new WebSocket(hint);
       try {
         await new Promise((resolve, reject) => {
           ws.onopen = () => resolve(undefined);
