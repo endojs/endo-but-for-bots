@@ -217,6 +217,24 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         let cap = captures[e as usize];
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
+                            // Deliberately still `offset - (to - from)`, the
+                            // byte arithmetic `fxMatchRegExp` uses (xsre.c
+                            // `f = e - (to - from)`), even though the forward
+                            // step above had to stop doing this.
+                            //
+                            // Stepping back one character per captured
+                            // character instead looks more principled and is
+                            // wrong: XS's byte arithmetic can legitimately land
+                            // on a surrogate boundary *inside* a pair, which a
+                            // code-point walk skips over. It regresses plain
+                            // `u`/`v` mode with no folding at all --
+                            // `/(?<=\1(\uDC28))x/u.test("𐐨\uDC28x")`
+                            // is `true` on the pin and `false` under the walk.
+                            // The length asymmetry this arithmetic mishandles
+                            // is real but has no known reproducer that reaches
+                            // the code-unit assertion, and XS mishandles it the
+                            // same way, so faithfulness wins here. See
+                            // designs/ironhorse-known-defects.md.
                             let target = offset - (to - from);
                             if target < 0 {
                                 pop = true;
@@ -254,26 +272,36 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         let cap = captures[e as usize];
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
-                            let target = offset + (to - from);
-                            if target > stop {
-                                pop = true;
+                            // The matched text need not occupy the same number
+                            // of code units as the capture: under `iu`/`v`
+                            // case folding a one-unit `k` matches the
+                            // three-unit U+212A. So the endpoint is wherever
+                            // the comparison cursor actually lands, never
+                            // `offset + (to - from)` -- adopting that
+                            // arithmetic endpoint puts `offset` mid-character
+                            // and panics the code-unit boundary assertion on
+                            // the next capture read. `stop` bounds the walk
+                            // for the same reason: the arithmetic target could
+                            // not.
+                            let mut g = offset;
+                            let mut ok = true;
+                            while from < to {
+                                if g >= stop {
+                                    ok = false;
+                                    break;
+                                }
+                                if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
+                                    ok = false;
+                                    break;
+                                }
+                                g = find_character(subject, g as usize, 1, flags as u32) as i32;
+                                from = find_character(subject, from as usize, 1, flags as u32)
+                                    as i32;
+                            }
+                            if ok {
+                                offset = g;
                             } else {
-                                let mut g = offset;
-                                let mut ok = true;
-                                while from < to {
-                                    if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
-                                        ok = false;
-                                        break;
-                                    }
-                                    g = find_character(subject, g as usize, 1, flags as u32) as i32;
-                                    from = find_character(subject, from as usize, 1, flags as u32)
-                                        as i32;
-                                }
-                                if ok {
-                                    offset = target;
-                                } else {
-                                    pop = true;
-                                }
+                                pop = true;
                             }
                         }
                     }

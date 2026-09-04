@@ -98,6 +98,64 @@ construction.
 
 Logged as `F172`.
 
+## Status of the crash-class defects
+
+All three are fixed on this branch, with regression coverage in
+`rust/engine/ironhorse-262/tests/crash_class_defects.rs`.
+
+C1's forward step now adopts the character-walking cursor.
+Its *backward* (lookbehind) step deliberately keeps XS's byte arithmetic:
+rewriting it to step back one character per captured character looks more
+principled and regresses plain `u`/`v` mode with no folding at all, because XS's
+arithmetic can legitimately land on a surrogate boundary inside a pair that a
+code-point walk skips over.
+The length asymmetry that arithmetic mishandles is real, but it has no known
+reproducer that reaches the code-unit assertion, and XS mishandles it the same
+way, so faithfulness wins there.
+
+C2 is bounded on the existing native re-entry counter and degrades to
+`Halt::StackOverflow`.
+The recursion itself is specified -- `SetterThatIgnoresPrototypeProperties`
+step 5 is an ordinary `Set` -- and the pinned XS does not complete this program
+either, aborting at about 8,180 computrons.
+The fix is that IronHorse reports a halt the host can observe instead of
+overflowing the real thread stack.
+
+C3 folds bound chains iteratively, as construction already did, and now
+completes a 20,000-link chain exactly as the pinned XS does.
+The meter on deep chains drifts from the oracle, but by the same amount before
+and after the fold, so that drift is a separate pre-existing item.
+
+### Divergences the C1 fix introduces
+
+Fixing the forward step makes IronHorse *disagree* with the pinned oracle on
+folds whose encoded lengths differ, because XS leaves its cursor mid-character
+and then compares against a replacement character.
+IronHorse is right and the pin is wrong in these cases; a randomized
+cross-check against an independent reference put IronHorse at zero wrong
+answers and the pin at 112 of 356.
+
+Two are pinned explicitly as standards-beyond-the-oracle cases:
+`/(ſ)\1/iu.test("ſs")` and `/(ᲀ)\1/i.test("ᲀВ")`, both `true` under the
+language and `false` on the pin.
+Note the second takes plain `/i` with no `u` flag.
+
+## A harness caveat worth knowing
+
+The pinned oracle's answer for a program in this family can depend on which
+programs ran before it in the same process.
+Two runs of `/(k)\1/iu.test("kK")` immediately followed by
+`/(K)\1/iu.test("Kk")` make the oracle answer `false` for the third, where it
+answers `true` run alone or with any unrelated program in between.
+Both Rust crates are `#![forbid(unsafe_code)]`, so this is oracle-side rather
+than corruption from the engine.
+
+The practical consequence is that a divergence observed in a batch means
+nothing until the program is re-run in its own process.
+Several apparent divergences reported while reviewing the C1 fix evaporated
+under that check, so any count of oracle divergences taken from a batch run
+should be treated as an upper bound.
+
 ## Open findings
 
 111 of the 208 logged findings were still open or partial at `fa3ecfcfd`, 83 of

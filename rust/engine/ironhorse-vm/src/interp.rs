@@ -42723,7 +42723,22 @@ impl Interp {
             _ => unreachable!("only Iterator prototype setters dispatch here"),
         };
         let accepted = if self.mop_get_own_property(code, inst, id)?.is_some() {
-            self.mop_set(code, inst, id, value, this)?
+            // `SetterThatIgnoresPrototypeProperties` step 5 is an ordinary
+            // `Set`, so a receiver carrying its own copy of this very accessor
+            // re-enters this native unboundedly -- and does so without ever
+            // passing through `dispatch_at`, whose `DISPATCH_REENTRY_LIMIT` is
+            // the loop's only re-entry ceiling. Count it on the same counter.
+            // The pinned XS does not complete this program either (it aborts
+            // at ~8180 computrons); the point is to degrade to a
+            // `Halt::StackOverflow` the host can observe rather than
+            // overflowing the real thread stack and taking the process down.
+            if self.dispatch_depth >= DISPATCH_REENTRY_LIMIT {
+                return Err(Halt::StackOverflow(self.stack_slots_in_use()));
+            }
+            self.dispatch_depth += 1;
+            let accepted = self.mop_set(code, inst, id, value, this);
+            self.dispatch_depth -= 1;
+            accepted?
         } else {
             self.mop_define_own_property(
                 code,
@@ -47658,13 +47673,30 @@ impl Interp {
         // BoundFunctionExoticObject.[[Call]] prepends this level's arguments,
         // substitutes its bound this, and redispatches the target. Recursing
         // naturally supports bound chains and every callable target shape.
-        if let Some(data) = self.bound_functions.get(&f).cloned() {
-            let mut combined = data.args;
-            combined.extend_from_slice(args);
-            self.meter
-                .tick_raw(BIND_CALL_METERING + combined.len() as u64 * BIND_CALL_PER_ARG);
-            let target = Slot::of(Kind::Reference, Payload::Reference(data.target));
-            return self.invoke_value(code, target, data.this_arg, &combined);
+        if self.bound_functions.contains_key(&f) {
+            // Fold the whole chain iteratively rather than recursing once per
+            // wrapper: a 20,000-link chain overflowed the real thread stack and
+            // aborted the host, while the pinned XS completes the same program.
+            // `enter_construct_bound` already folds the construct side this
+            // way. Each level prepends its own bound arguments and replaces the
+            // receiver, and is charged exactly as the recursive form charged
+            // it, so the meter is unchanged. `bind` always allocates a fresh
+            // exotic whose target already exists, so the chain is acyclic and
+            // this terminates.
+            let mut current = f;
+            let mut this_arg = this;
+            let mut combined: Vec<Slot> = args.to_vec();
+            while let Some(data) = self.bound_functions.get(&current).cloned() {
+                let mut next = data.args;
+                next.extend_from_slice(&combined);
+                self.meter
+                    .tick_raw(BIND_CALL_METERING + next.len() as u64 * BIND_CALL_PER_ARG);
+                combined = next;
+                this_arg = data.this_arg;
+                current = data.target;
+            }
+            let target = Slot::of(Kind::Reference, Payload::Reference(current));
+            return self.invoke_value(code, target, this_arg, &combined);
         }
         let fi = match self.functions.get(&f) {
             Some(fi) => fi,
