@@ -921,8 +921,15 @@ export const make = async (_powers, _context, options = {}) => {
       } else {
         lastError = result.error;
       }
-      // eslint-disable-next-line no-await-in-loop
-      await delay(pollMs);
+      // Not after the LAST attempt: this runs inside a held `submit.lock`,
+      // and sleeping once more before throwing adds a whole `pollMs` — two
+      // seconds at the production default — of held lock that cannot change
+      // the answer. Matters most for a structurally invalid file, where
+      // re-parsing the same bytes is deterministic.
+      if (attempt < DECISIVE_READ_ATTEMPTS - 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await delay(pollMs);
+      }
     }
     throw new Error(
       `Refusing to decide against unreadable ${q(path)}: ${
@@ -1393,6 +1400,19 @@ export const make = async (_powers, _context, options = {}) => {
   const NO_ID_GRACE_POLLS = 30;
 
   /**
+   * Whether a status record carries no usable request id. `driveOperation`
+   * and `awaitOutcome` MUST agree on this: they used to disagree, one testing
+   * `typeof status.id !== 'string'` and the other `status.id === undefined`,
+   * so `{ id: '' }`, `{ id: 42 }`, and `{ id: null }` were "id-less" to the
+   * submit decision but "a foreign id" to the watch, which then diagnosed
+   * them as a supersession. Both fail closed; only the diagnosis differed.
+   *
+   * @param {Record<string, unknown>} status
+   */
+  const echoesNoRequestId = status =>
+    typeof status.id !== 'string' || status.id === '';
+
+  /**
    * Await the terminal outcome for `id`, without ever submitting anything.
    * A read that keeps failing is refused rather than guessed at
    * (`readDecisive` retries a few times, then throws); an id-less
@@ -1404,6 +1424,10 @@ export const make = async (_powers, _context, options = {}) => {
    * @param {string} message
    * @param {string} protocolFingerprint
    * @param {string | null} configFingerprint
+   * @param {string | undefined} priorStatusJson - `apply-status.json` as it
+   *   read at the submit decision, serialized. An id-less status matching it
+   *   byte for byte predates this operation and says nothing about the
+   *   applier now handling it.
    * @param {number} deadline - the caller's watch deadline. Inherited rather
    *   than restarted: an operation that waited for the slot has already spent
    *   part of the one watch limit its docstring advertises, and the queue is
@@ -1416,6 +1440,7 @@ export const make = async (_powers, _context, options = {}) => {
     message,
     protocolFingerprint,
     configFingerprint,
+    priorStatusJson,
     deadline,
   ) => {
     await null;
@@ -1437,17 +1462,32 @@ export const make = async (_powers, _context, options = {}) => {
       }
       // eslint-disable-next-line no-await-in-loop
       const status = await readDecisive(statusPath);
-      if (status !== undefined && status.id === undefined) {
+      if (status !== undefined && echoesNoRequestId(status)) {
         // Never guess against an id-less status: guessing wrong on an apply
         // means re-applying, and a re-apply restarts the machine again. A
         // bounded grace tolerates one stale pre-upgrade status file.
-        idlessPolls += 1;
-        if (idlessPolls > NO_ID_GRACE_POLLS) {
-          throw new Error(
-            'The nixos applier does not echo request ids; update ' +
-              'endo-nixos-admin.nix to the id-echo spool contract before ' +
-              'using the settlement-shaped verbs.',
-          );
+        //
+        // Only a status that CHANGED since this operation was submitted is
+        // evidence about the applier handling it. The identical bytes we
+        // already saw are the artifact we were submitted alongside — a
+        // pre-upgrade leftover — and counting those aborted the watch after
+        // NO_ID_GRACE_POLLS, about a minute at the production `pollMs`, on a
+        // watch documented as lasting a day, with an error accusing an
+        // `endo-nixos-admin.nix` that was in fact correct and merely slow to
+        // pick the request up. Note this cannot be inferred from the request
+        // slot instead: the contract expressly lets a compliant applier leave
+        // `apply-request.json` in place while it works.
+        if (JSON.stringify(status) === priorStatusJson) {
+          idlessPolls = 0;
+        } else {
+          idlessPolls += 1;
+          if (idlessPolls > NO_ID_GRACE_POLLS) {
+            throw new Error(
+              'The nixos applier does not echo request ids; update ' +
+                'endo-nixos-admin.nix to the id-echo spool contract before ' +
+                'using the settlement-shaped verbs.',
+            );
+          }
         }
       } else if (status !== undefined) {
         idlessPolls = 0;
@@ -1469,7 +1509,11 @@ export const make = async (_powers, _context, options = {}) => {
             'to attach to an ambiguous privileged operation.',
         );
       }
-      if (status !== undefined && status.id !== undefined && status.id !== id) {
+      if (
+        status !== undefined &&
+        !echoesNoRequestId(status) &&
+        status.id !== id
+      ) {
         // Conclude supersession only from DEFINITE reads: the request file
         // read must succeed (or be a true ENOENT) and not name us.
         // eslint-disable-next-line no-await-in-loop
@@ -1615,10 +1659,18 @@ export const make = async (_powers, _context, options = {}) => {
                   'refusing to attach with different arguments.',
               );
             }
+            // Read purely to snapshot it for the watch; no decision here
+            // depends on it, so the request-then-status sampling order the
+            // consumed-slot reasoning relies on is untouched.
+            const priorStatus = await readDecisive(statusPath);
             return {
               kind: 'watch',
               protocolFingerprint,
               configFingerprint: pending.configFingerprint,
+              priorStatusJson:
+                priorStatus === undefined
+                  ? undefined
+                  : JSON.stringify(priorStatus),
             };
           }
           const status = await readDecisive(statusPath);
@@ -1644,6 +1696,7 @@ export const make = async (_powers, _context, options = {}) => {
               kind: 'watch',
               protocolFingerprint,
               configFingerprint: status.configFingerprint,
+              priorStatusJson: JSON.stringify(status),
             };
           }
           if (
@@ -1672,7 +1725,7 @@ export const make = async (_powers, _context, options = {}) => {
           // silent wait to the cap.
           if (
             status !== undefined &&
-            (typeof status.id !== 'string' || status.id === '') &&
+            echoesNoRequestId(status) &&
             status.phase !== 'ok' &&
             status.phase !== 'error'
           ) {
@@ -1687,8 +1740,7 @@ export const make = async (_powers, _context, options = {}) => {
           // auto-rolls back, the queued one activates over the rollback.
           if (
             status !== undefined &&
-            typeof status.id === 'string' &&
-            status.id !== '' &&
+            !echoesNoRequestId(status) &&
             status.id !== id &&
             status.phase !== 'ok' &&
             status.phase !== 'error'
@@ -1728,14 +1780,21 @@ export const make = async (_powers, _context, options = {}) => {
             protocolFingerprint,
             nonce: nextNonce(),
           });
-          return { kind: 'watch', protocolFingerprint, configFingerprint };
+          return {
+            kind: 'watch',
+            protocolFingerprint,
+            configFingerprint,
+            priorStatusJson:
+              status === undefined ? undefined : JSON.stringify(status),
+          };
         },
       );
       if (decision.kind === 'settled') {
         return settle(decision.record);
       }
       if (decision.kind === 'watch') {
-        const { protocolFingerprint, configFingerprint } = decision;
+        const { protocolFingerprint, configFingerprint, priorStatusJson } =
+          decision;
         if (
           typeof protocolFingerprint !== 'string' ||
           (typeof configFingerprint !== 'string' && configFingerprint !== null)
@@ -1748,6 +1807,7 @@ export const make = async (_powers, _context, options = {}) => {
           message,
           protocolFingerprint,
           configFingerprint,
+          priorStatusJson,
           deadline,
         );
       }
@@ -2101,13 +2161,31 @@ export const make = async (_powers, _context, options = {}) => {
         configLockPath,
         Date.now() + watchLimitMs,
         async () => {
+          await null;
+          if (trimmed === '') {
+            // Un-pinning is a removal, and removals tolerate a symlink as the
+            // final component: `fingerprintConfig` refuses a checkout holding
+            // one, so a symlinked `endo.rev` would otherwise block every
+            // build with no way to clear it from here. `rm` deletes the link
+            // rather than following it. Such a link has no readable pin to
+            // report, so `previous` comes back empty.
+            const removalTarget =
+              await resolveConfigPathForRemoval(ENDO_REV_FILE);
+            const link = await lstat(removalTarget).catch(() => null);
+            const staleLink = link !== null && link.isSymbolicLink();
+            const before = staleLink
+              ? null
+              : await readConfigFileOrAbsent(ENDO_REV_FILE);
+            await rm(removalTarget, { force: true });
+            return harden({
+              path: ENDO_REV_FILE,
+              rev: '',
+              previous: before === null ? '' : before.trim(),
+            });
+          }
           const target = await resolveConfigPath(ENDO_REV_FILE);
           const before = await readConfigFileOrAbsent(ENDO_REV_FILE);
           const previous = before === null ? '' : before.trim();
-          if (trimmed === '') {
-            await rm(target, { force: true });
-            return harden({ path: ENDO_REV_FILE, rev: '', previous });
-          }
           await mkdir(configDir, { recursive: true });
           await assertNoSymlinkTraversal(configDir, target);
           // The trailing newline is load-bearing for readability, not parsing.
