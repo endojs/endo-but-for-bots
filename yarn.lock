@@ -2343,6 +2343,7 @@ __metadata:
   resolution: "@endo/fae@workspace:packages/fae"
   dependencies:
     "@endo/agentry": "workspace:^"
+    "@endo/base64": "workspace:^"
     "@endo/cli": "workspace:^"
     "@endo/conversation-tree": "workspace:^"
     "@endo/daemon": "workspace:^"
@@ -2358,6 +2359,8 @@ __metadata:
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
