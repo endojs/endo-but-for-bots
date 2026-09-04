@@ -95,6 +95,17 @@ source for the Windows, macOS, and Linux release matrix, while a shared
 `rust/endor-git` contract and fixture corpus keep Minion Town's smart-HTTP
 service aligned; summary table, M11 row, dependency graph, estimate, totals,
 and timeline synced),
+[promise-debug-view](promise-debug-view.md) (added 2026-07-12; the
+forward-looking follow-up to pass-style-promise, requested on that
+design's PR #169 review: an opt-in, bounded record of long-pending,
+forever-pending, and unlistened-rejection carriers, inspectable while
+debugging without a production log line per hop, with no background
+timer, weak carrier references keyed on a stable serial id, an eviction
+policy that protects the undelivered half of a rejection/finalization
+pair, a value-only reason projection, and a hardened snapshot that
+separates recorded entries from a derived long-pending query and reports
+its own bounds; layers on the parent's rejection-retention and
+first-listener contracts rather than restating them),
 [cbor-codec](cbor-codec.md) (added 2026-07-12; shared canonical-CBOR
 primitive codec `@endo/cbor` at `packages/cbor/`: hardened functional
 write/read primitives for the RFC 8949 subset that slot-machine
@@ -459,6 +470,7 @@ LLM-agent stack).*
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | Proposed |
+| [promise-debug-view](promise-debug-view.md) | 2026-07-12 | 2026-07-12 | Not Started |
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 | [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
@@ -511,6 +523,10 @@ This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
 from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
+
+The 2026-09-04 update adds [promise-debug-view](promise-debug-view.md) (Not
+Started), a 2026-07-12 design backfilled into the index, increasing Not Started
+from 49 to 50 and the design count from 195 to 196.
 
 ## Roadmap
 
