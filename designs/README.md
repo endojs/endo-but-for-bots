@@ -9,9 +9,10 @@ layer new groom notes at the top of this file.*
 [guest-native-invitations](guest-native-invitations.md) (added 2026-09-02;
 guest-native `invite`/`accept` so an `EndoGuest` onboards another guest with its
 own authority, accepting as its own handle with no minted replacement guest and
-reciprocal pet-name binding; daemon-node locator authority with daemon-sourced
-hints, narrow injected `registerPeer`/`writeRemoteAgentKey` daemon-core
-capabilities, the pet-store overwrite as the durable consume-once record, and a
+reciprocal pet-name binding; daemon-node locator authority with
+inviting-agent-sourced hints, narrow injected `acceptInvitation` / insert-only
+`registerPeer` / `formulateInvitation` daemon-core capabilities, the pet-store
+compare-and-set overwrite as the durable consume-once record, and a
 shared `EndoAgent` invitation vocabulary; closes the daemon gap named by
 [kriscendobot/minion.town#56](https://github.com/kriscendobot/minion.town/pull/56)),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
