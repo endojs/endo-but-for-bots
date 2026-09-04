@@ -56,7 +56,19 @@ export const MgmtView = ({ powers }) => {
 
   const getController = () => {
     if (!controllerRef.current) {
-      controllerRef.current = E(powers).lookup('controller-for-endo-mgmt');
+      const presence = E(powers).lookup('controller-for-endo-mgmt');
+      // Never memoize a failed lookup. Restarting the daemon is this Space's
+      // own headline action, and the controller is re-provisioned a moment
+      // after the daemon starts accepting connections again, so the first
+      // lookup after a restart can lose that race. Caching the rejection would
+      // strand the view on a stale error that even Refresh could not clear,
+      // short of reloading the page.
+      presence.catch(() => {
+        if (controllerRef.current === presence) {
+          controllerRef.current = null;
+        }
+      });
+      controllerRef.current = presence;
     }
     return controllerRef.current;
   };
