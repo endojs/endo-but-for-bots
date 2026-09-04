@@ -247,8 +247,8 @@ const RemoteControllerSnapshotShape = M.splitRecord(
 const GitCredentialKindShape = M.or('bearer', 'basic');
 
 // What can be said about a credential without saying any of its material.
-// `GitCredentialController.inspect()` returns exactly this; `RemoteCredentialHealth`
-// carries it under `required: true`.
+// `GitCredentialController.inspect()` returns exactly this, and
+// `RemoteCredentialHealth` carries it under `required: true`.
 const GitCredentialLivenessShape = harden({
   kind: GitCredentialKindShape,
   audience: M.string(),

@@ -329,6 +329,10 @@ first thing to say so.
 `required: false` is the whole answer for a remote that needs no
 credential; otherwise the result carries `kind`, `audience`, `available`,
 and `revoked`.
+`revoked: true` means "unusable until rotated", not "an operator
+deliberately revoked this": a credential rebuilt after a restart starts out
+revoked too, so this reports whether the credential works and never why it
+does not.
 This reports health only and never the credential material, which is why
 it is separate from inspect(), whose snapshot is policy alone.
 Throws once the remote has been revoked.
