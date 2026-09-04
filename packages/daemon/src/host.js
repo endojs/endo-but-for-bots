@@ -491,13 +491,21 @@ export const makeHostMaker = ({
     // The id no longer participates in any special-name lookup;
     // `getFormula(identifier)` is the user-facing replacement.
     // See `designs/formula-inspector.md` "Removing the `@info` name hub".
-    // Only the daemon's root host manages secrets. `formulateEndo` omits
-    // `hostHandleId`, which `formulateNumberedHost` then defaults to the
-    // host's own handle, while `makeChildHost` always passes the parent's —
-    // so this is exhaustive. Withholding `@secrets` from a child host is
-    // namespace hygiene, not containment: a child already reaches the root
-    // host through its ambient `@endo`, so it is a full-authority peer.
-    // See designs/daemon-secret-manager.md § Summary.
+    // Only the daemon's root host carries the root-only special names
+    // `@endo` and `@secrets`. `formulateEndo` omits `hostHandleId`, which
+    // `formulateNumberedHost` then defaults to the host's own handle, while
+    // `makeChildHost` always passes the parent's — so this test is exhaustive.
+    //
+    // Withholding `@endo` from a non-root (child) host IS a trust boundary:
+    // the `endo` facet's `host()` returns the root principal, so an ambient
+    // `@endo` on a child let `E(child).lookup('@endo')` then `E(endo).host()`
+    // act as the root — making `provideHost` children full-authority peers
+    // rather than lower-trust principals (issue #1128). Because `specialNames`
+    // is recomputed from the formula at every host realization and never
+    // persisted, this load-time guard also fixes already-persisted ("old")
+    // child host formulas — no migration needed. Withholding `@secrets` is by
+    // contrast namespace hygiene, not containment. See #1128 and
+    // designs/daemon-secret-manager.md § Summary.
     const isRootHost = hostHandleId === undefined || hostHandleId === handleId;
 
     /** @type {Record<string, FormulaIdentifier>} */
@@ -509,13 +517,13 @@ export const makeHostMaker = ({
       '@main': mainWorkerId,
       '@node': nodeWorkerId,
       '@registry': registryId,
-      '@endo': endoId,
       '@nets': networksDirectoryId,
       '@planes': planesDirectoryId,
       '@pins': pinsDirectoryId,
       '@none': leastAuthorityId,
     };
     if (isRootHost) {
+      specialNames['@endo'] = endoId;
       specialNames['@secrets'] = hostId;
     }
     if (mailHubId !== undefined) {

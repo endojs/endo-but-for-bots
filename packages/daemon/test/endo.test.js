@@ -1578,14 +1578,15 @@ testNeedsNodeManager('only the root host manages secrets', async t => {
     message: /Invalid pet name/,
   });
 
-  // Hygiene, not containment: the child still reaches the root host through
-  // its ambient `@endo`, so withholding the name narrows the namespace
-  // rather than the authority. See designs/daemon-secret-manager.md.
-  const rootViaChild = await E(await E(child).lookup('@endo')).host();
-  t.is(
-    await E(rootViaChild).identify('@agent'),
-    await E(host).identify('@agent'),
-  );
+  // #1128 closed the escape hatch this test once documented. Withholding
+  // `@secrets` above was namespace hygiene, not containment, precisely because
+  // a child could still reach the root host through an ambient `@endo`. That
+  // `@endo` is now withheld from non-root hosts too, so the child can no longer
+  // resolve it — the root is unreachable through the child. This is the actual
+  // trust boundary; see the `@endo`-specific tests below and #1128.
+  await t.throwsAsync(() => E(child).lookup('@endo'), {
+    message: /Invalid pet name "@endo"/,
+  });
 });
 
 test('rehydrated requests can be resolved after restart', async t => {
@@ -3116,6 +3117,62 @@ test('child host @host points at parent handle', async t => {
 
   t.is(childHostId, parentHandleId);
   t.not(childHostId, await E(childHost).identify('@self'));
+});
+
+// Issue #1128: the ambient `@endo` special name made every `provideHost`
+// child a full-authority peer of the root — `E(child).lookup('@endo')` then
+// `E(endo).host()` returns the root principal. `@endo` is now withheld from
+// non-root hosts, so a delegated child cannot reach the root through it.
+test('root host exposes a working @endo', async t => {
+  const { host } = await prepareHost(t);
+
+  t.true(await E(host).has('@endo'));
+  const endo = await E(host).lookup('@endo');
+  // The endo facet's `host()` returns the root principal itself.
+  const rootViaEndo = await E(endo).host();
+  const rootSelf = await E(host).identify('@self');
+  t.is(await E(rootViaEndo).identify('@self'), rootSelf);
+});
+
+test('child host does not expose @endo, so the root is unreachable through it', async t => {
+  const { host } = await prepareHost(t);
+  // `provideHost` formulates the child, persisting a formula that carries
+  // `endo: endoId` (makeChildHost passes it into formulateHost), then realizes
+  // it. `specialNames` is recomputed from that formula at realization and
+  // gated on `isRootHost`, so a child — new here, and identically any
+  // already-persisted "old" child — realizes without `@endo`, no migration.
+  const childHost = await E(host).provideHost('child-host');
+
+  // A non-root host has no `@endo` in its special names, so the name is
+  // rejected outright by every name-hub method — the child cannot reach the
+  // root's `endo` facet (and thus `E(endo).host()` → root) at all.
+  await t.throwsAsync(() => E(childHost).has('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+  await t.throwsAsync(() => E(childHost).lookup('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+  await t.throwsAsync(() => E(childHost).identify('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+
+  // The parent (root) still has its `@endo`, confirming the guard is scoped
+  // to non-root hosts rather than removing the name globally.
+  t.true(await E(host).has('@endo'));
+});
+
+test('a guest still does not expose @endo, unchanged by the #1128 fix', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+
+  // Guests never carried `@endo`; withholding it from child hosts leaves the
+  // guest surface exactly as before — the name is still rejected here.
+  await t.throwsAsync(() => E(guest).has('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
+  await t.throwsAsync(() => E(guest).lookup('@endo'), {
+    message: /Invalid pet name "@endo"/u,
+  });
 });
 
 test('guest cannot access host methods', async t => {
