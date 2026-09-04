@@ -1,8 +1,7 @@
 /*---
-description: TextDecoder accepts genuine immutable views and thawed emulated views (prefer-endo-primitives-exempt standalone Test262 case)
+description: TextDecoder accepts genuine immutable views and thawed emulated views
 features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
-// prefer-endo-primitives-exempt: Test262 cases must be self-contained scripts.
 
 var decoder = new TextDecoder();
 var mutableBytes = new Uint8Array([0x41, 0xc2, 0xa2, 0xe2, 0x82, 0xac]);

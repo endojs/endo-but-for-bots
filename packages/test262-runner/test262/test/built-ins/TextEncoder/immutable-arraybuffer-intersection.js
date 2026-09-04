@@ -1,9 +1,8 @@
 /*---
-description: TextEncoder produces mutable bytes and rejects frozen destinations (prefer-endo-primitives-exempt standalone Test262 case)
+description: TextEncoder produces mutable bytes and rejects frozen destinations
 includes: [compareArray.js]
 features: [ses-xs-parity,immutable-arraybuffer,pass-style-bytes]
 ---*/
-// prefer-endo-primitives-exempt: Test262 cases must be self-contained scripts.
 
 var encoder = new TextEncoder();
 var encoded = encoder.encode('A¢€');
