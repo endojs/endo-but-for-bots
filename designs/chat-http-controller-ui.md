@@ -17,7 +17,7 @@ and a policy-bearing `control()` facet, but the only surfaces that read or steer
 them today are the CLI (`endo http`, the parallel
 [cli-http-client](cli-http-client.md) track) and the agent-tool adapter
 (`makeHttpTool`). The provisioning that mints the pair is the landed `@endo/fetch`
-plugin's `FetchService` (see § Grounding).
+plugin's `FetchService` (see § Grounding in the Current Implementation).
 
 In Chat, an `HttpClient` capability shows up in the inventory like any other
 pet-named value, and clicking it opens the [Value modal](formula-inspector.md),
@@ -187,7 +187,7 @@ The four `policyMode` values are defined by
   capability.
 
 `tofu-prompt` and `tofu-attenuator` require a `fetch-policy-authority` endowment
-(§ Grounding); without one the plugin runs strict and those two modes fail closed.
+(§ Grounding in the Current Implementation); without one the plugin runs strict and those two modes fail closed.
 
 ### Durable policy on the fetch service's state directory
 
@@ -226,10 +226,11 @@ through*, and the UI must reflect exactly that, never more.
 
 ```mermaid
 flowchart TD
-  V["Value in modal"] --> D{"Interface tag / method names:<br/>HttpClient or FetchService?"}
+  V["Value in modal"] --> D{"Interface tag / method names:<br/>HttpClient, FetchService, or bare control?"}
   D -- "neither" --> G["Generic remotable / blob / tree rendering"]
   D -- "HttpClient (fetch + allowedOrigins)" --> R["Read-only surface:<br/>allowedOrigins() + request composer only"]
   D -- "FetchService (client + control)" --> F["Full control surface:<br/>client read/test + policy steering via control()"]
+  D -- "HttpClientControl (inspect + revoke, no client)" --> C["Control-only surface:<br/>policy steering, no request composer"]
 ```
 
 1. **Client / control split.** The `FetchService` holds both facets and exposes
@@ -239,7 +240,11 @@ flowchart TD
    a viewer holding the `FetchService` (or its `control()`), which in practice is
    the host that provisioned it. This is the same authority split the git-remote
    grant uses (see [daemon-git-remotes](daemon-git-remotes.md)), surfaced in the
-   UI for the first time.
+   UI for the first time. Because the split contemplates retaining the `control()`
+   facet *without* the service wrapper, a **standalone `HttpClientControl`** is a
+   detected shape in its own right (§ Detection, `isHttpClientControlLike`): it
+   renders the policy-steering surface (Policy, Bindings, Audit, Revoke) but omits
+   the request composer, since a bare control holds no `client()` to test through.
 
 2. **The steering surface is control-only.** When Chat runs under a guest profile
    (an "enter profile" descent, `enterProfile`), the value in the guest's petstore
@@ -350,16 +355,30 @@ specializations do:
 - `isHttpClientLike(value)`: interface tag `HttpClient`, or names include both
   `fetch` and `allowedOrigins`. The read-only client surface applies; the value
   *is* the client.
+- `isHttpClientControlLike(value)`: interface tag `HttpClientControl`, or names
+  include `inspect` and `revoke` but *not* `client` (which would make it a
+  `FetchService`) and *not* `fetch` (which would make it an `HttpClient`). The
+  **control-only** surface applies: the value *is* the `control()` facet, steering
+  policy directly without a wrapping service, so the Policy, Bindings, Audit, and
+  Revoke sections render but the request composer is omitted (no `client()` to
+  test through). This is the standalone-`control()` case § Capability and Authority
+  Boundaries 1 contemplates; without it, a bare control granted on its own would
+  fall through to a generic remotable and the control surface would silently
+  vanish, contradicting § Design Decisions 6.
 
-Preferring the interface tag raises the bar against Open Question 4's look-alike
+Preferring the interface tag raises the bar against § Open Questions 4's look-alike
 concern: `Alleged: FetchService` is stronger evidence than the generic
 `client` + `control` name pair, but a self-asserted `Alleged:` tag is entropy,
 not authentication (a hostile remotable picks its own tag), so it does not by
-itself answer Open Question 4 and steering stays gated on a resolved `control()`
+itself answer § Open Questions 4 and steering stays gated on a resolved `control()`
 whose `inspect()` succeeds. On a positive result it renders the surface into
 `$valueMount` (replacing the bare remotable tag). Detection order: the
-fetch-service shape is checked first, then the bare `HttpClient` shape, then blob/tree.
-The detected shapes are disjoint (an HTTP client has neither `text` nor `sha256`),
+fetch-service shape is checked first (it carries `client`, so it must be ruled out
+before the bare-client and bare-control shapes), then the bare `HttpClient` shape,
+then the standalone `HttpClientControl` shape, then blob/tree.
+The detected shapes are disjoint (a `FetchService` carries `client`, an
+`HttpClient` carries `fetch` but no `client`, an `HttpClientControl` carries
+neither `client` nor `fetch`, and an HTTP value has neither `text` nor `sha256`),
 so order determines precedence, not correctness. The async fallback path is guarded by the
 same `currentValue === value` staleness check the blob/tree probes use, so a fast
 re-`showValue` cannot cross-render.
@@ -376,7 +395,7 @@ cleanly.
 ```mermaid
 flowchart TD
   subgraph Modal["Value modal: front face"]
-    H["Title chips: @petname, 'HTTP Client' badge, policyMode, revoked?"]
+    H["Title chips: @petname, tier badge (Service control / Client read-only), policyMode, revoked?"]
     P["Policy panel: allowedOrigins list, rate limit, size cap, policyMode"]
     RC["Request composer: method, URL, headers, body, to Response viewer"]
     B["Bindings panel (control): Binding table + block/reset/re-allow"]
@@ -386,13 +405,20 @@ flowchart TD
   H --- P --- RC --- B --- A --- K
 ```
 
-**1. Header / status.** The existing title chips (`@petname`, unnamed) gain an
-"HTTP Client" badge and a compact status line. When `control()` is available, the
-line shows `policyMode`, `allowedOrigins` count, and a **Revoked** pill when
-`inspect().revoked` is true. A read-only viewer (bare `HttpClient`) has no
-revocation query, so its status line shows only the `allowedOrigins()` count and
-omits the mode and the Revoked pill; revocation for that viewer is discovered
-reactively (see § Loading and error states, "Revoked client").
+**1. Header / status.** The existing title chips (`@petname`, unnamed) gain a
+**tier badge** and a compact status line. The tier badge is the explicit,
+header-level signal of *which cap the viewer is looking through* (the design's
+central thesis, § Capability and Authority Boundaries), so it is never left to be
+inferred from which fields are present: a control viewer (a `FetchService` or a
+standalone `HttpClientControl`) reads **"HTTP Service (control)"**, a read-only
+viewer (a bare `HttpClient`, guest or foreign) reads **"HTTP Client (read-only)"**.
+When `control()` is available, the status line additionally shows `policyMode`, the
+`allowedOrigins` count, and a **Revoked** pill when `inspect().revoked` is true. A
+read-only viewer has no revocation query, so its status line shows only the
+`allowedOrigins()` count and omits the mode and the Revoked pill. But the
+read-only *tier* itself is carried by the badge, not by that omission; revocation
+for that viewer is discovered reactively (see § Loading and error states,
+"Revoked client").
 
 **2. Policy panel** (control only). Renders `inspect()`:
 
@@ -407,10 +433,17 @@ reactively (see § Loading and error states, "Revoked client").
   static allowlist and `revokeBinding`s it to a durable `Revoked`), tooltip "Deny
   this origin; survives restart, reversible by re-adding it." The deny is durable
   but *not* irreversible: re-adding the origin re-allows it (`addAllowedOrigin`
-  overwrites the `Revoked` binding, `http-client.js:903`), so a blocked row keeps a
-  **"Re-allow"** affordance. "Block" is the *same verb* the Bindings panel uses for
-  the same mutation (§ Layout 4); the surface never spells one mutation with two
-  verbs. To clear a *TOFU-pinned* row, the row also offers **"Reset"** (`unpin`);
+  overwrites the `Revoked` binding, `http-client.js:903`). But once blocked, the
+  origin drops out of the effective `inspect().allowedOrigins` the Policy panel is
+  specified to render, so its Policy-panel row *disappears* on the next re-read;
+  the Policy panel is therefore **not** the home of the undo. The **"Re-allow"**
+  affordance instead lives in the **Bindings panel** (§ Layout 4), whose data
+  source is `listBindings()` (which retains the now-`Revoked` row after a Block),
+  so the one-click undo has a stable place to render. The Policy panel does not
+  merge blocked rows back in from `listBindings()`; it shows only the effective
+  reachable set, and points the user to the Bindings panel for a just-blocked
+  origin. "Block" is the *same verb* the Bindings panel uses for the same mutation
+  (§ Layout 4); the surface never spells one mutation with two verbs. To clear a *TOFU-pinned* row, the row also offers **"Reset"** (`unpin`);
   because `unpin` also deletes the origin from the static allowlist and a `strict`
   service then denies it (`decide()` throws in `strict`), Reset is offered only on
   rows whose `decidedBy` is a TOFU decider, never on a `constructor` / `controller`
@@ -451,7 +484,8 @@ remotable in a **Response viewer**: `status()` + `statusText()` + `ok()`
 consumption of a large body). The URL input may autocomplete from the current
 `allowedOrigins` to steer the user toward in-policy requests (advisory only). In a
 `tofu-*` mode, a send to an origin outside the effective allowlist is confirmed
-first because it will durably pin (§ Capability Boundaries 5). Response text is
+first because it will durably pin (§ Capability and Authority Boundaries 5).
+Response text is
 confined vnodes.
 
 **4. Bindings panel** (control). The binding table is the authoritative record of
@@ -475,6 +509,12 @@ Each row offers clearly labeled actions per its `state`:
   reversible by re-adding the origin." Shown for `Pinned-Allow` and `Pinned-Deny`
   rows; hidden on an already-`Revoked` row (already denied). This is the same verb
   and mutation as the Policy panel's origin "Block".
+- **"Re-allow"** (`addAllowedOrigin(origin)`), tooltip "Restore this origin to the
+  allowlist; overwrites the deny." Shown for `Revoked` and `Pinned-Deny` rows. This
+  is the **home** of the undo for a Policy-panel Block: because a blocked origin
+  leaves the effective `inspect().allowedOrigins` the Policy panel renders, its row
+  vanishes there, but the `listBindings()`-backed Bindings panel keeps the
+  `Revoked` row and so can offer the one-click re-allow the Policy panel cannot.
 
 Lazily fetched on panel expand, and re-read after any composer send, Block, Reset,
 or allowlist edit that can change the binding set (§ Keeping the view live).
@@ -531,7 +571,7 @@ accelerator, a modeline hint. Enumerated:
 | Flip to formula | `F` / header gear / flip button | `getFormula(id)` | Existing back face; read-only |
 | Add allowed origin | "Add origin" submit | `addAllowedOrigin` | Client-side origin validation first |
 | Block an origin | Row "Block" | `removeAllowedOrigin` / `revokeBinding` | Durable deny (reversible by re-add); confirmed |
-| Re-allow a blocked origin | Row "Re-allow" | `addAllowedOrigin` | Overwrites the `Revoked` binding |
+| Re-allow a blocked origin | Bindings-panel row "Re-allow" | `addAllowedOrigin` | Overwrites the `Revoked` binding; undo home for a Block (blocked origin has left the Policy panel's effective list) |
 | Reset a pinned origin | Row "Reset" | `unpin` | Confirmed when it narrows a static origin |
 | Set limits | Numeric input + explicit Apply / Enter | `setMaxRequestsPerMinute` / `setMaxResponseBytes` | Positive-safe-integer validation; never on blur |
 | Change policy mode | `<select>` + explicit Apply confirm | `setPolicyMode` | Never on bare select-change |
@@ -582,7 +622,15 @@ composer accelerator earns a composer-local modeline hint.
   the displayed policy re-reads from `inspect()` so the panel re-syncs to exo
   truth.
 - **Revoked client**: for a control viewer, `inspect().revoked` drives the Revoked
-  pill, disables the composer's Send, and makes the policy panel read-only. For a
+  pill, disables the composer's Send, and makes the policy panel read-only. It
+  **also proactively disables the Bindings panel's per-row Block / Reset /
+  Re-allow** (`revokeBinding` / `unpin` / `addAllowedOrigin`): all eight
+  `HttpClientControl` mutators throw once `revoke()` has fired
+  (`assertNotRevoked()`, `http-client.js:887-953`), so leaving those buttons live
+  would only route the user into the generic edit-rejection path. Proactively
+  disabling them (the same treatment the Policy panel's controls get) keeps the
+  whole control surface's post-revoke state consistent with Boundary 4's principle
+  that a revoked client shows no live mutators. For a
   **read-only viewer** (bare `HttpClient`, no `isRevoked()`), revocation cannot be
   detected proactively: the exo's only revoked signal is a prose
   `Error('HttpClient has been revoked')` (`http-client.js:833`) with no code or
@@ -663,9 +711,16 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 - **Integration: fetch rejection versus HTTP error.** An off-allowlist URL and a
   4xx response render distinctly (exo error inline versus `ok() === false`
   Response), and neither throws to the console.
+- **Integration: revoke disables all control mutators.** With a `FetchService`,
+  after `revoke()` the re-read `inspect().revoked` proactively disables not only the
+  composer's Send and the Policy panel's editors but also the Bindings panel's
+  per-row Block / Reset / Re-allow; assert none of the eight `HttpClientControl`
+  mutators is offered live post-revoke (rather than being left to throw into the
+  edit-rejection path).
 - **Manual checklist.** The "Revoked client" states for both viewer tiers (control
-  viewer: Revoked pill and disabled Send; read-only viewer: message-matched
-  fetch-rejection framing), the "Edit rejection" re-sync from `inspect()`, the
+  viewer: Revoked pill, disabled Send, and disabled Bindings-panel Block/Reset/
+  Re-allow; read-only viewer: message-matched fetch-rejection framing), the "Edit
+  rejection" re-sync from `inspect()`, the
   dirty-composer `Esc` discard confirm, the `SELECT`-focused accelerator guard, the
   aria-live announcements, and the kill-switch confirm copy.
 
@@ -686,8 +741,18 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 1. **Read-only client view.** Detection (bare `HttpClient`) + header badge/status
    + `allowedOrigins()` list + request composer + Response viewer, including the
    reactive revoked-client framing. Works for both host and guest/foreign clients
-   (no control dependency, rests only on landed #566). Ships the majority of the
-   user value.
+   (no *control*-facet dependency, rests only on landed #566). Ships the majority of
+   the user value. **Provisioning prerequisite (not a UI gate, but a real
+   dependency):** for any of this to have a value to click on, a companion
+   daemon/CLI change must actually mint and retain a `FetchService`: run
+   `E(host).makeUnconfined(worker, '@endo/fetch', ...)`, pin the result under
+   `['@pins', 'fetch']`, and grant `client()` to the guest. That wiring is **not
+   deployed today**: no call site outside `packages/fetch/` itself invokes the
+   plugin (the `makeUnconfined` example in `packages/fetch/src/index.js` is a
+   docstring, not deployed daemon/CLI code). Phase 1 therefore cannot ship
+   standalone user value until that provisioning change lands; it is owned by
+   [endo-fetch](endo-fetch.md) and the maintainer (§ Open Questions 1), not by this
+   design, but this design depends on it and does not silently assume it.
 2. **Control policy panel** (gated only on how a `FetchService` reaches Chat, per
    § Open Questions 1; the `@endo/fetch` package itself is landed). `control()`
    recovery, `inspect()` render, allowlist/limit/mode editors with client-side
@@ -696,7 +761,7 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 3. **Bindings + audit panels.** TOFU-mode binding table with block/reset, the
    authority-widening composer confirm, and the audit-ring view paged by growing
    `limit`.
-4. **Formula back face reconciliation** (gated on Open Question 1). If the daemon
+4. **Formula back face reconciliation** (gated on § Open Questions 1). If the daemon
    exposes a fetch-plugin formula record, add a `formula-view-registry` entry for
    its provisioning wiring.
 
@@ -725,7 +790,7 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    host genuinely wants to exercise the *guest's* client), the surface keeps the
    composer and treats an off-allowlist send in a TOFU mode as the
    authority-widening act it is, with the same explicit confirm an allowlist edit gets. This
-   is the decomplected resolution of Open Question 3: the composer does not
+   is the decomplected resolution of § Open Questions 3: the composer does not
    silently move the bound.
 
 4. **Policy is durable; the front face is the authoritative view.** Because
@@ -785,7 +850,7 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    may or may not carry, and `inspect()` does not report it. This design offers all
    modes and lets an unenforceable one fail into the inline error path rather than
    statically disabling a mode that a properly-endowed service *can* enforce
-   (Design Decision 6). The clean fix is an upstream ask: extend `inspect()` (or
+   (§ Design Decisions 6). The clean fix is an upstream ask: extend `inspect()` (or
    add a query) to report the supported-mode set, so the `<select>` renders the
    true set. Recommended: file that ask against `@endo/exo-http-client` /
    `@endo/fetch`.
@@ -794,7 +859,7 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    where the client is genuinely a guest's grant?** Testing a request as the host
    uses the same client the guest holds, which is exactly the point (verify what
    the grantee can reach), but in a `tofu-*` mode it can durably pin a new origin
-   and consume the guest's rate budget. Recommended (Design Decision 3): keep it,
+   and consume the guest's rate budget. Recommended (§ Design Decisions 3): keep it,
    but confirm any off-allowlist send in a TOFU mode as an authority-widening act,
    so the composer never silently moves the guest's bound.
 
