@@ -3,63 +3,75 @@
 | | |
 |---|---|
 | **Created** | 2026-07-11 |
-| **Updated** | 2026-07-15 |
+| **Updated** | 2026-09-04 |
 | **Author** | endolinbot (prompted) |
 | **Status** | Proposed |
 
 ## Summary
 
-Endo agents (Lal, Fae, Genie, and `@endo/agent-tools`) need to provide and
-accept a sturdy reference (a *sturdyref*) as a value in a tool call, without
+Endo agents (Lal, Fae, and Genie, sharing `@endo/agent-tools`) need to provide
+and accept a sturdy reference (a *sturdyref*) as a value in a tool call, without
 assigning it a pet name. The value is the first-class `'sturdyref'` pass-style
 value defined by the sturdyref work. It is inert data, not a remotable, and it
 is *enlivened* (resolved from the opaque value into a live, message-able
-presence) only by a closely held capability of the relevant CapTP network.
+presence) only by a closely held capability the daemon holds on the worker's
+behalf.
 
-This revision, made per the 2026-07-15 maintainer review of PR #695 (which
-corrected the earlier assumption that this value should be a daemon-minted
-remotable; see the `## Prompt` section), deliberately removes the proposed
-`SturdyRefToken` remotable. There is one reference representation at this
-boundary: `SturdyRef`. The daemon holds the capability that associates a
-sturdyref with its locator; that same capability can also obtain a sturdyref
-from a locator. Confined code receives neither that capability nor a locator. It
-can pass a sturdyref back to a daemon method that accepts one, which makes the
-sturdyref an anonymous placeholder for a formula.
+There is one reference representation at this boundary: `SturdyRef`. The daemon
+holds the capability that resolves a sturdyref to a presence and that associates
+a sturdyref with its locator. Confined code receives neither that capability nor
+a locator. A confined worker can pass a sturdyref back to a daemon method that
+accepts one, which makes the sturdyref an anonymous placeholder for a formula.
 
 The design does not settle retention. Holding an anonymous sturdyref across a
-worker turn may require a retention edge. Before implementation, the daemon
-must establish whether it does, and, if so, expose the retaining workers to the
-user so the user can revoke them. The previous draft's claim that this surface
-needs no retention machinery is withdrawn.
+worker turn may require a retention edge. Before implementation, the
+implementation must establish whether it does, and, if so, expose the retaining
+workers to the user so the user can revoke a retention edge (see `## Retention
+and user revocation`). Until then the agent surface is single-turn only: a
+worker may present a sturdyref it received during the current delivery, and no
+cross-turn retention is offered.
 
-Removing `SturdyRefToken` is not cost-free, and this design does not pretend
-otherwise. A remotable's identity carries a GC-tied lifecycle that is itself a
-ready-made retention-and-revocation story: a Presence lives while it is held and
-is reclaimed when it is dropped. A bare `SturdyRef` value has no such lifecycle,
-so the retention and revocation machinery the token would have supplied for free
-must instead be designed and built explicitly (see `## Retention and user
-revocation`). This design accepts that trade, on the view that an
-auditable, user-visible retention lifecycle is worth more than a GC-observation
-one, but records it as a deliberate cost, not an absent problem.
-
-## What Is Being Solved?
+## What is the Problem Being Solved?
 
 Today a daemon worker normally designates a formula by a pet-name path. That
 forces namespace allocation for a temporary handoff. A sturdyref permits the
 same worker to keep an opaque data value and later give it back to a daemon
 facet for enlivenment or a value-producing operation.
 
+This surface leans on three terms of art from the parent sturdyref work; the
+sibling design [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) defines
+them in full (its `## Background`), and they are summarized here because this
+document's acceptance criteria depend on them:
+
+- A **locator** is the daemon's authority-bearing designator for a formula: the
+  `endo://{peerKey}/{formulaAddress}?type=` string that anyone holding it can
+  redeem to a presence through `lookupByLocator`
+  (`packages/daemon/src/interfaces.js:154`). Disclosing a locator to confined
+  code hands it that redemption authority directly, which is why the confinement
+  rule below forbids it.
+- A **formula identifier** is the daemon's internal id for a formula node in the
+  formula graph, redeemable through `lookupById` (`interfaces.js:153`).
+- A **swiss number** is the unguessable secret naming a capability within a
+  formula graph; on the OCapN wire a sturdyref is carried as a peer locator plus
+  a swiss number.
+
+A sturdyref differs from a locator in exactly the property this design turns on:
+a locator is self-redeeming for its holder, whereas a sturdyref is inert and can
+be turned into a presence only by a daemon facet that holds the closely held
+association capability. Preserving that difference across the marshalling
+boundary is `## Open Questions` item 1, not a settled fact (see `## Distributed
+confinement`).
+
 The relevant capability split is:
 
 - A `SturdyRef` is a passable value in the `'sturdyref'` category. It is not a
   presence and cannot receive eventual messages.
-- The CapTP-network layer owns the locator association. Its closely held
-  capability can enliven a sturdyref and can map between a locator and the
-  corresponding sturdyref.
-- A daemon facet is allowed to use that capability on behalf of a worker.
-  Confined code is not allowed to receive the locator association capability,
-  a locator, a formula identifier, or another representation that can be used
-  to locate an arbitrary sturdyref.
+- The daemon holds the closely held capability. That capability can enliven a
+  sturdyref to a presence and can map between a locator and the corresponding
+  sturdyref. It is never passed to confined code.
+- A daemon facet uses that capability on behalf of a worker. Confined code does
+  not receive the association capability, a locator, a formula identifier, or
+  any other representation that can locate an arbitrary sturdyref.
 
 The distinction is authority, not a second guest-specific value type. A
 sturdyref is the anonymous value a daemon uses while holding the authority that
@@ -73,40 +85,45 @@ The agent surface accepts and returns `SturdyRef` values. It does not introduce
 `SturdyRefToken`, a method-less remotable, a new guest-only pass style, or a
 tool-layer proxy for a sturdyref.
 
-The pass-style implementation defines how a sturdyref is recognized. The
-CapTP-network layer, separately, constructs the value and keeps the locator
-association. The interface available to a confined worker has this shape
+The pass-style implementation defines how a sturdyref is recognized. The daemon,
+separately, holds the closely held capability that resolves the value. The
+`@endo/ocapn` package already ships this capability's operations under the names
+`makeSturdyRef(location, swissNumber)` and `enlivenSturdyRef(sturdyRef)`
+(`packages/ocapn/test/sturdyref.test.js:16`,
+`packages/goblin-chat/src/use-goblin-chat.js:440`); this design reuses those
+spellings rather than coining new ones. The capability the daemon holds is,
 conceptually:
 
 ```js
 // Held by the daemon, never passed to confined code.
-const sturdyRefLocator = {
-  sturdyRefForLocator(locator) {},
-  locatorForSturdyRef(sturdyRef) {},
+const association = {
+  // Mint. Kept on the constructing side; a worker-facing facet never holds it.
+  makeSturdyRef(location, swissNumber) {},
+  // Resolve to a presence. This is the only operation a worker-facing daemon
+  // method needs, and it is the only one such a method is handed.
   enlivenSturdyRef(sturdyRef) {},
-};
-
-// Available to a confined worker through a daemon facet.
-const workerFacet = {
-  lookup(sturdyRef) {},
-  maybeLookup(sturdyRef) {},
-  list(sturdyRef) {}, // pending confirmation; see the admission table below
+  // De-anonymize: sturdyRef -> its locator. This is the disclosure confined
+  // code must never reach; it is not handed to any worker-facing facet.
+  locatorForSturdyRef(sturdyRef) {},
 };
 ```
 
-The names above describe authority boundaries, not a proposed public module or
-method names. The daemon may use its closely held capability to resolve the
-argument, but no worker receives any of the first object's operations.
+Attenuating by construction matters here: a worker-facing daemon method is
+handed `enlivenSturdyRef` alone, never the whole `association` object, so
+minting and locator disclosure are out of reach by construction rather than by
+an audit obligation. The names above are the operations' real spellings where
+they exist in `@endo/ocapn`; the daemon-facing method names are proposed in `##
+Daemon provide and accept`.
 
-This directly supports the usual tool flow:
+This directly supports the usual tool flow, once the marshalling dependency in
+`## Dependencies` (CapTP boxing and unboxing of sturdyrefs) is in place:
 
 1. A tool result contains a `SturdyRef` supplied by a daemon facet.
-2. The tool layer retains the value in its local passable-value table and gives
-   the model an opaque, transcript-local handle.
+2. The tool layer retains the value in its local render map and gives the model
+   an opaque, transcript-local handle.
 3. A later tool call redeems that handle before its argument guard and passes
    the same `SturdyRef` to the daemon facet.
-4. The facet enlivens or otherwise resolves it with its closely held
-   capability.
+4. The facet enlivens or otherwise resolves it with `enlivenSturdyRef`.
 
 The text handle is only a local rendering of an already-held sturdyref. It is
 not a serialization, not an authority-bearing string, and not a second kind of
@@ -115,94 +132,136 @@ reference.
 ### Distributed confinement
 
 The surface follows the distributed-confinement rule (see
-[daemon-retention-paths](daemon-retention-paths.md) and the parent sturdyref
-design #539 for the confinement vocabulary this leans on) that code confined by
-a mediator must not gain a capability for turning arbitrary bits or values into
-authority. In particular:
+[daemon-retention-paths](daemon-retention-paths.md) and
+[sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) `## Background` for
+the confinement vocabulary this leans on, and PR #539 for the parent sturdyref
+work) that code confined by a mediator must not gain a capability for turning
+arbitrary bits or values into authority. In particular:
 
 - A worker may hold and return a `SturdyRef` that the daemon gave it.
-- A worker may not call `locatorForSturdyRef`, `sturdyRefForLocator`, or
+- A worker may not call `makeSturdyRef`, `locatorForSturdyRef`, or
   `enlivenSturdyRef` directly.
-- A worker may not obtain a locator, a formula identifier, a swiss number (the
-  unguessable secret that names a capability within a formula graph), or a
+- A worker may not obtain a locator, a formula identifier, a swiss number, or a
   general operation for resolving an arbitrary sturdyref.
 - A daemon method that accepts a sturdyref resolves only its supplied argument
   for that method's established authority. It does not turn the method into a
   general locator service.
 
-This permits the daemon to use a sturdyref as an anonymous pet name while
-keeping locator and enlivenment authority outside the worker's reach. It also
-avoids the false premise that a remotable's identity is necessary for this
-boundary: the sturdyref passable value is the intended designation. The cost of
-that choice, that the token's GC-tied lifecycle no longer supplies retention
-and revocation for free, is weighed in `## Retention and user revocation`.
+This confinement property is a **target, not an achieved property of the
+value**. Today the OCapN codec serializes a sturdyref by writing its location
+and swiss number onto the wire and re-minting on decode
+(`packages/ocapn/src/codecs/descriptors.js:315-337`), so an inbound message that
+delivers a sturdyref to a confined worker carries the swiss number unless the
+boundary substitutes a daemon-side index for it. Establishing that transport
+rule is `## Open Questions` item 1, and until it exists the confinement
+guarantee is not yet met. This design states the property as the bar the
+implementation must clear, not as something the shipped representation already
+satisfies.
+
+The confined agent surface is also **narrower than the shipped `EndoGuest`**. A
+real `EndoGuest` today spreads `nameHubMethodGuards`
+(`packages/daemon/src/interfaces.js:139`, guards at `:97`), which grants
+`identify`, `locate`, `reverseLocate`, `listIdentifiers`, `listLocators`,
+`lookupById`, `lookupByLocator`, `storeIdentifier`, and `storeLocator`, wired
+live on the guest (`packages/daemon/src/guest.js:330`); `lookupByLocator` is
+precisely a general locator-to-presence capability. Only the `least-authority`
+null agent disallows these (`packages/daemon/src/daemon.js:3818`). So the
+"confined worker" this design targets is not an `EndoGuest` as shipped: an
+attenuation step must construct a facet that removes the locator-disclosing
+methods before this design's third acceptance criterion can hold. That step is
+called out explicitly in `## Phased Work` (who builds it, and when).
 
 ### Daemon provide and accept
 
-Existing read-side methods that are safe to use with a designated value may
-accept `SturdyRef` alongside a pet-name path. Their guards use the sturdyref
-pass-style recognizer and the facet resolves the value through the closely held
-capability.
+The daemon already spells "redeem a non-pet-name designator" as its own method
+per designator kind: `lookupById(id)` and `lookupByLocator(locator)`
+(`packages/daemon/src/interfaces.js:153-154`). This design follows that
+convention rather than overloading `lookup`, whose argument today is a pet-name
+path (`NameOrPathShape`). A new daemon method, `lookupBySturdyRef(sturdyRef)`,
+resolves a sturdyref through the closely held `enlivenSturdyRef` capability. A
+distinct name keeps admission visible at the call site (a caller reads
+`lookupBySturdyRef` and knows it takes a sturdyref, rather than consulting a
+table to learn which arguments `lookup` now accepts), keeps the portable
+name-hub and filesystem guards (`packages/platform/src/fs/interfaces.js`)
+untouched, and keeps a sturdyref (a fixed formula, no name-change semantics)
+from sharing one method with a mutable pet-name binding.
 
-The final method list must be derived from authority, not from input shape. The
-methods below are the daemon's existing surface (`lookup`, `maybeLookup`, and
-`list` are the read/enumerate methods a worker already calls; `identify`,
-`locate`, `listIdentifiers`, and `listLocators` are the naming- and
-locator-disclosing methods, all defined in
-`packages/daemon/src/interfaces.js`); each row records whether that method may
-additionally accept a `SturdyRef` argument, and why:
+The method list below must be derived from authority, not from input shape. Each
+method named is an existing daemon or name-hub method
+(`packages/daemon/src/interfaces.js`); the design adds exactly one method,
+`lookupBySturdyRef`, and admits no sturdyref argument to any existing method
+until an authority review clears it. Each row records whether a sturdyref may be
+resolved through that surface, and why:
 
-| Surface | SturdyRef input | Reason |
+| Surface | SturdyRef resolution | Reason |
 |---|---|---|
-| `lookup`, `maybeLookup`, and value-producing evaluation slots | Yes | The facet designates or enlivens the supplied value. |
-| `list` when its existing path argument identifies the directory to list | No, pending investigation | The implementation must verify that the result does not reveal locator authority before this can become Yes. |
-| `identify`, `locate`, `listIdentifiers`, and `listLocators` | No | These return stable naming or locator information and are not part of the confined placeholder surface. |
-| Mutating name operations (`write`, `remove`, `move`, `copy`) | No | A sturdyref must not silently become authority to mutate a namespace. |
-| Reverse lookup operations | No | They would turn a value into naming information. |
+| `lookupBySturdyRef` (new) and value-producing evaluation slots | Yes | The facet enlivens the supplied value through `enlivenSturdyRef`; the method exists only for this. |
+| `lookup`, `maybeLookup`, `has` (`interfaces.js:597-604`) | No | These take a pet-name path today; a sturdyref is redeemed by `lookupBySturdyRef`, not by widening these guards. |
+| `list` (`interfaces.js:598`, variadic over path segments) | No | `list` enumerates a directory named by a path; a sturdyref names a single formula, not a directory. |
+| `identify`, `locate`, `listIdentifiers`, `listLocators` (`:99-104`) | No | These return locator or stable naming information and are not part of the confined placeholder surface. |
+| Mutating name operations `storeIdentifier`, `storeLocator`, `remove`, `move`, `copy` (`:107-111`) | No | A sturdyref must not silently become authority to mutate a namespace; each row needs an explicit deny plus a negative test. |
+| Reverse operations `reverseLookup` (`:106`), `reverseLocate` (`:101`), `reverseIdentify` (`:152`) | No | They would turn a value into naming or locator information; `reverseLookup` is guarded `M.call(M.any())`, so it needs an explicit deny, not just an absent guard change. |
 
-Because the accepted-argument shape of `lookup`/`maybeLookup` (and possibly
-`list`) changes, the phase that admits these inputs must also update the
-daemon's self-documenting help surface (`packages/daemon/src/help.md` and the
-per-method help strings that `help("lookup")` returns) so an agent discovering
-the method through that entry point sees the new `SturdyRef` argument shape.
+Because `lookupBySturdyRef` is a new method, the phase that adds it must also
+update the daemon's self-documenting help surface (`packages/daemon/src/help.md`
+and the per-method help strings in `packages/daemon/src/help-text-data.js` that
+`help("lookupBySturdyRef")` returns) so an agent discovering the method through
+that entry point sees it.
 
 Mail and agent APIs may carry a `SturdyRef` only as a passable attachment or
-tool argument. Accepting such a value must not create a pet name implicitly.
-An explicit user-authorized namespace write remains a separate operation.
+tool argument. Accepting such a value must not create a pet name implicitly. An
+explicit user-authorized namespace write remains a separate operation; note that
+`storeLocator(petNamePath, locator)` needs a locator the confined worker does
+not hold, so there is no path from an anonymous sturdyref to a pet name on the
+worker's own authority.
 
 ### Tool-layer escrow
 
 LLM tool protocols carry text, so no passable value is sent through the model.
-Each agent tool layer may keep an in-memory table from an opaque local handle
-to a `SturdyRef`. On output it renders a handle; on input it redeems a known
-handle before daemon argument matching. The table is restricted to sturdyrefs.
+Each agent tool layer keeps a **render map**: an in-memory, single-turn table
+from an opaque local handle to a `SturdyRef`. On output it renders a handle; on
+input it redeems a known handle before daemon argument matching. The table is
+restricted to sturdyrefs, and it is presentation state only.
 
-This is transport presentation only. It neither mints a fresh authority nor
-changes the sturdyref's pass style. An unknown handle is ordinary untrusted
-text and must fail before reaching the daemon facet.
+This render map is deliberately **not** a lifetime record. It neither mints a
+fresh authority nor changes the sturdyref's pass style. Any cross-turn retention
+is a separate, daemon-side concern (`## Retention and user revocation`): the
+daemon-side retention set, not the tool layer's render map, is the authoritative
+and auditable record of what is held. Keeping the two apart means losing the
+render map to a process restart can never strand a daemon-side edge, because the
+render map was never the edge's holder of record.
 
-Lal, Fae, Genie, and `@endo/agent-tools` should share this narrow behavior
-rather than each inventing a reference type or allowing arbitrary remotables
-through their JSON or SmallCaps boundaries.
+An unknown handle is ordinary untrusted text and must fail before reaching the
+daemon facet. To keep a handle from silently colliding with a pet name (any
+string lacking `/`, `\0`, and `@`; `packages/daemon/src/pet-name.js:15`), handle
+syntax must be disjoint from a legal pet name (the `@` sigil space is already
+reserved for this). On an unknown handle the model sees an explicit
+handle-not-found failure, not a daemon lookup on attacker-chosen text.
+
+Lal, Fae, and Genie (sharing `@endo/agent-tools`) should share this narrow
+behavior rather than each inventing a reference type or allowing arbitrary
+remotables through their JSON or SmallCaps boundaries.
 
 ### Retention and user revocation
 
 On-demand enlivenment does not by itself answer whether a worker retaining a
-sturdyref must keep its referenced formula alive. Nor is this a free
-consequence of the earlier decision to drop `SturdyRefToken`: had this surface
-kept an identity-bearing remotable, a Presence's own held-or-dropped lifecycle
-would have carried the retention and revocation story, and this section could
-be far shorter. Because the reference is now a bare value, that lifecycle must
-be built here explicitly. There are two distinct cases:
+sturdyref must keep the sturdyref's referenced formula alive. This gap is a
+direct cost of dropping `SturdyRefToken`: had this surface kept an
+identity-bearing remotable, a presence's own held-or-dropped lifecycle would
+have carried the retention and revocation story, and this section could be far
+shorter. Because the reference is now a bare value, that lifecycle must be built
+here explicitly. There are two distinct cases:
 
-1. The sturdyref is only a transient argument. No worker retention edge should
-   be created merely for the call.
+1. The sturdyref is only a transient argument within a single delivery. No
+   worker retention edge is created merely for the call. This is the only case
+   the initial agent surface admits.
 2. A worker keeps a sturdyref across turns. If that value must remain
-   enlivenable, the daemon may need an ephemeral retention edge from that
-   worker to the referenced formula.
+   enlivenable, the daemon may need an ephemeral retention edge from that worker
+   to the referenced formula. This case is deferred; it does not ship until the
+   investigation below has answers.
 
 The second case is a design prerequisite, not an implementation detail. Before
-adding the agent surface, the implementation must answer all of these:
+offering cross-turn retention, the implementation must answer all of these:
 
 - Does the existing formula graph already retain the formula through another
   root, or does a cross-turn sturdyref require a new edge? The edge-label
@@ -211,18 +270,16 @@ adding the agent surface, the implementation must answer all of these:
   graph) is the place to start this investigation rather than deriving it from
   scratch.
 - If a new edge is needed, what precise event adds it and what precise event
-  removes it? Garbage-collection observation and `FinalizationRegistry` are
-  not an acceptable substitute for an auditable lifecycle.
-- What happens when the tool-layer escrow table (explicitly in-memory, with no
-  durability claim; see `## Tool-layer escrow`) is lost to a process restart
-  or session end while a durable daemon-side retention edge added on its behalf
-  still exists? The design must state which side is authoritative and how a
-  now-holderless edge is reclaimed or released, so an evicted tool layer cannot
-  strand an edge no live holder can exercise.
+  removes it? Garbage-collection observation and `FinalizationRegistry` are not
+  acceptable substitutes for an auditable lifecycle.
+- Is redemption holder-scoped or bearer? If any facet redeems any sturdyref
+  presented to it, then revoking worker A's edge revokes nothing when worker B
+  holds a copy, so per-worker revocation is not meaningful without a
+  holder-scoping rule. See `## Open Questions`.
 - Which user-visible surface lists every worker retaining a sturdyref for a
   formula, including the worker identity and the retention path?
-- What user action revokes one listed worker's retention, and what happens to
-  its future attempts to enliven the sturdyref?
+- What user action revokes one listed worker's retention edge, and what happens
+  to that worker's future attempts to enliven the sturdyref?
 - Does revocation also terminate or partition a worker that already holds an
   enlivened presence? If not, what authority remains after the edge is removed?
 
@@ -235,55 +292,90 @@ the worker-level information required here.
 ## Acceptance Criteria
 
 - `passStyleOf(sturdyRef)` is `'sturdyref'`; no guest-facing reference is a
-  remotable or a second pass-style category.
-- A confined worker can pass a previously received sturdyref to an admitted
-  daemon operation and receive that operation's value result.
+  remotable or a second pass-style category. (Current state: `passStyleOf`
+  returns `'tagged'` for the in-tree shim, which `ocapnPassStyleOf` upgrades;
+  this criterion is met by the pass-style dependency in `## Dependencies`, not
+  by the shim.)
+- A confined worker can pass a previously received sturdyref to
+  `lookupBySturdyRef` (or an admitted value-producing operation) and receive
+  that operation's value result.
 - A confined worker cannot obtain a locator, formula identifier, swiss number,
-  or a general sturdyref-to-locator or sturdyref-to-presence capability.
+  or a general sturdyref-to-locator or sturdyref-to-presence capability. This
+  criterion is contingent on the transport rule of `## Open Questions` item 1
+  and on the attenuation step of `## Phased Work`; it is not satisfied by the
+  shipped `EndoGuest`.
+- A negative test demonstrates that a confined worker facet cannot reach a
+  locator or a swiss number through any admitted method (the single property
+  this surface exists to preserve).
 - Tool handles are local opaque renderings that redeem only to an already-held
-  `SturdyRef`; arbitrary text never becomes a sturdyref.
+  `SturdyRef`; arbitrary text never becomes a sturdyref, and a handle that
+  collides with no live entry yields an explicit handle-not-found failure.
 - Every admitted daemon method has an authority review proving that it does not
-  disclose a locator or stable naming information. `list` is not admitted (its
-  table row stays "No, pending investigation") until that review clears; its
-  own acceptance criterion is that the review demonstrates the list result
-  reveals no locator authority.
+  disclose a locator or stable naming information, with an explicit negative
+  test for each "No" row above.
 - Before cross-turn sturdyref retention ships, a test demonstrates the
   user-visible listing of each retaining worker and a test demonstrates the
   corresponding user-driven revocation.
 
 ## Phased Work
 
-1. Confirm the pass-style and closely held locator-association contract with
-   the sturdyref implementation work. Remove the prior remotable-token branch
-   from the parent design.
-2. Audit daemon methods and add only the admitted `SturdyRef` inputs, with
-   confinement tests for each method, and update the daemon help surface
-   (`help.md` and the per-method help strings) to document the new argument
-   shape.
-3. Add the narrow tool-layer escrow to `@endo/agent-tools`, then adapt Lal,
-   Fae, and Genie to it.
-4. Complete the retention investigation and design the worker-retention and
-   user-revocation surfaces before allowing cross-turn retention.
+1. Confirm the pass-style and closely held enlivenment contract with the
+   sturdyref implementation work, and confirm the CapTP boxing/unboxing rule
+   that preserves a sturdyref's meaning across the daemon-worker marshalling
+   boundary (see `## Dependencies`). Remove the prior remotable-token branch
+   from the parent design. 2. Build the attenuated confined-worker facet: a
+   guest-derived facet that removes the locator-disclosing name-hub methods
+   (`locate`, `lookupByLocator`, `listLocators`, `reverseLocate`, `identify`,
+   `lookupById`, `listIdentifiers`, `reverseIdentify`) that the shipped
+   `EndoGuest` currently grants, so the confinement criterion can hold. This
+   step is owned by the daemon agent-surface work, not by `@endo/agent-tools`.
+   3. Add the new `lookupBySturdyRef` daemon method (single-turn only; it
+   resolves a sturdyref supplied within the current delivery and creates no
+   retention edge), with a confinement test and an explicit negative test for
+   each "No" row of the admission table, and update the daemon help surface
+   (`help.md` and the per-method help strings in `help-text-data.js`). 4. Add
+   the narrow single-turn tool-layer render map to `@endo/agent-tools`, then
+   adapt Lal, Fae, and Genie to it. This ships no cross-turn retention. 5.
+   Complete the retention investigation and design the worker-retention and
+   user-revocation surfaces before allowing any cross-turn retention.
 
 ## Dependencies
 
 | Design / PR | Relationship |
 |---|---|
-| SturdyRefs on demand design (PR #539) | Defines the sturdyref pass style and closely held enlivenment capability this surface consumes. Its guest-token conclusion must be revised to match this document. Note the conflict: #541 (below) currently states retention is already resolved as retention-free, the exact premise this design's `## Retention and user revocation` withdraws; that dependency is gated on the retention investigation's outcome and must be revised if it concludes otherwise. |
+| SturdyRefs on demand (PR #539) | Defines the sturdyref pass style and closely held enlivenment capability this surface consumes. Its guest-token conclusion must be revised to match this document. |
 | PR #737 | Implements the first-class `'sturdyref'` pass-style work that this design assumes. (Supersedes the closed PR #521, its wrong-account predecessor.) |
+| CapTP box/unbox for sturdyrefs | The daemon's worker transport is `@endo/captp` plus marshal and does not depend on `@endo/ocapn` (`packages/daemon/package.json`). A sturdyref marshalled to a worker and handed back must survive the round trip with its meaning intact; this is item 2 of the sibling design and is a hard prerequisite for phase 3. |
+| [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | Design 2 of 2 of the competing sturdyref pair. It proposes an `endor` `retain`/`release` syscall for exactly the cross-turn retention this document defers to an investigation; the retention investigation's first question already has a competing in-tree answer there. This document's `## Retention and user revocation` must be reconciled with it. |
 | PR #541 | Provides daemon-side sturdyref resolution at the facet boundary. Its body currently asserts anonymous sturdyrefs are retention-free; this design treats that as an open question, so #541's retention claim must be held pending, or revised by, the retention investigation rather than taken as a settled foundation. |
 | [daemon-retention-paths](daemon-retention-paths.md) | Candidate basis for showing the user the workers that retain a formula; also supplies the `worker`/`petStore`/`retention` edge-label taxonomy the retention investigation starts from. |
 
 ## Open Questions
 
-- What exact pass-style representation and CapTP transport rule lets the
-  closely held network associate an opaque `SturdyRef` with its locator without
-  exposing that association to confined code?
-- Does holding a sturdyref across a worker turn require a formula-graph
+- What exact pass-style representation and CapTP transport rule let the closely
+  held association map an opaque `SturdyRef` to its locator without exposing
+  that association, or the swiss number, to confined code? - Is sturdyref
+  redemption holder-scoped or bearer? Per-worker revocation is only meaningful
+  if a redeeming facet checks the presenting worker, not merely the value. -
+  Does holding a sturdyref across a worker turn require a formula-graph
   retention edge, and, if so, what is its explicit lifecycle, including what
-  reclaims an edge whose in-memory tool-layer holder was lost to a restart?
-- Which existing or new UI exposes worker-specific retention and performs the
+  reclaims an edge whose in-memory tool-layer holder was lost to a restart? -
+  Which existing or new UI exposes worker-specific retention and performs the
   user-authorized revocation?
+
+## Status
+
+This design was revised per the 2026-07-15 maintainer review of PR #695, which
+corrected the earlier assumption that this value should be a daemon-minted
+remotable: the proposed `SturdyRefToken` remotable is removed in favor of the
+single `SturdyRef` pass-style value. Removing the token is a deliberate cost,
+not an absent problem: a remotable's identity carries a GC-tied lifecycle that
+would have supplied retention and revocation for free, whereas a bare
+`SturdyRef` value requires that lifecycle to be designed and built explicitly
+(`## Retention and user revocation`). The design accepts that trade on the view
+that an auditable, user-visible retention lifecycle is worth building; a
+remotable would not have precluded such a lifecycle, so the honest framing is
+that the token was removed and the hand-built lifecycle is its replacement cost.
 
 ## Prompt
 
@@ -291,6 +383,6 @@ This design covers the sturdyref effort's agent-surface bar: Endo agents can
 provide and accept a sturdy reference as a value in a tool call instead of
 naming it in a namespace. The 2026-07-15 maintainer review of PR #695 corrected
 the earlier assumption that this value should be a daemon-minted remotable. It
-requires the first-class sturdyref passable value, closely held locator and
-enlivenment authority, and an explicit investigation of retention and
-user-directed revocation.
+requires the first-class sturdyref passable value, closely held enlivenment
+authority, and an explicit investigation of retention and user-directed
+revocation.
