@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-12 |
-| **Updated** | 2026-07-12 |
+| **Updated** | 2026-09-04 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Not Started |
 
@@ -15,7 +15,7 @@ a REPL result), the only tool inside `packages/ses` is
 `bestEffortStringify` (`packages/ses/src/error/stringify-utils.js`), a
 deliberately minimal, `JSON.stringify`-based formatter whose own doc comment
 warns it "has an imprecise specification and may change over time" and "possibly
-emits too many 'seen' markings." It produces flat, un-styled, cycle-lossy text
+emits too many 'seen' markings." It produces flat, unstyled, cycle-lossy text
 and knows nothing of the host's rendering capabilities.
 
 Meanwhile each host has a *good* inspector that Endo cannot portably reach:
@@ -54,16 +54,20 @@ failure.
 We cannot do better *faithfully* in engine-portable code because **standard
 JavaScript has no Proxy brand check**: proxies are specified to be fully
 transparent, so no supported predicate answers "is this value a Proxy?", and
-`passStyleOf`'s existing defense (reject accessor properties) does not cover a
-proxy pretending to hold data properties. Node is the one exception:
-`util.types.isProxy` is a public, native, internal-slot brand check, which is
-why the Node entry below can quarantine proxies today. Nothing equivalent
-exists for XS, for a string-mode browser render, or for pure SES userland.
-Repairing that gap is tracked upstream along two distinct lines (a stamping
-power, and a non-trapping integrity trait) and is a hard **dependency** of a
+the existing defense of `passStyleOf` (Endo's `@endo/marshal` pass-style
+classifier, the marshalling-eligibility gate that decides how a value may cross
+CapTP) — rejecting accessor properties — does not cover a proxy pretending to
+hold data properties. Node is the one exception: `util.types.isProxy` is a
+public, native, internal-slot brand check, which is why the Node entry below can
+quarantine proxies today. Nothing equivalent exists for XS, for a string-mode
+browser render, or for pure SES userland. Repairing that gap is tracked upstream
+along two distinct lines — a **stamping power** (a Proxy constructor that marks
+every instance at creation so it can later be recognized trap-free) and a
+**non-trapping integrity trait** (an integrity level a value can carry so that a
+proxy of it never calls its handler) — and is a hard **dependency** of a
 *faithful* portable inspector; see Dependencies below. The maintainer has asked
-that **@erights** and **@mhofman** be tagged on this design for the
-capability-security review of that gap.
+that @erights and @mhofman be tagged on this design for the capability-security
+review of that gap.
 
 ## Design
 
@@ -72,29 +76,54 @@ capability-security review of that gap.
 `@endo/inspect` exports one primary function plus its options type:
 
 ```js
-import { inspect } from '@endo/inspect';
+import { inspect, inspectToConsoleArgs, log } from '@endo/inspect';
 
-inspect(value, options); // -> the host-appropriate rendering
+inspect(value, options);             // -> always a string, on every host
+inspectToConsoleArgs(value, options); // -> always a console-argument array
+log(value, options);                 // -> delivers to this host's console sink
 ```
 
-- On **node**, `inspect` returns a **string**; `options.colors` defaults to
-  "detect from the destination TTY" and may be forced on/off. Semantically this
-  is a thin, safety-hardened wrapper over `util.inspect` (depth, breakLength,
-  `getters: false`, `customInspect: false` by default; see "Avoiding triggered
-  behavior").
-- On **browser**, `inspect` returns a **render request**, by default an array
-  of `console` arguments (a format string plus the live values) so the caller
-  can splat it into `console.log(...inspect(value))` and preserve the rich,
-  expandable tree. A `{ as: 'string' }` option forces flat text for
-  non-console sinks.
-- On **xs**, `inspect` returns a **plain string** produced by the internal
-  portable formatter (no ANSI, no host inspector), and the console-binding entry
-  is a no-op sink because XS has no `console`.
+To keep call sites portable, the return *type* of a given exported name does not
+vary by build condition — a hazard both the decomplector and ergonomist seats
+flagged in round 1, since a source line authored against one shape but resolved
+under a different condition (`...inspect(value)` spreading a string into
+one-argument-per-character, for example) corrupts the output silently. The
+surface therefore separates "compute a representation" (data, uniform type per
+name) from "deliver it to this host's log sink" (mechanism):
+
+- **`inspect(value, options)` returns a `string` on every host.** It is the
+  portable, capability-free representation, identical across node/browser/xs
+  (see the shared core below). On **node** it additionally honors
+  `options.colors` (VT-100/ANSI, defaulting to "detect from the destination
+  TTY"), semantically a thin, safety-hardened wrapper over `util.inspect`
+  (`depth`, `breakLength`, `getters: false`, `customInspect: false` by default;
+  see "Avoiding triggered behavior"). On **browser** and **xs** `options.colors`
+  is accepted and ignored (never rejected), so one options bag is valid
+  everywhere.
+- **`inspectToConsoleArgs(value, options)` returns an array of `console`
+  arguments** (a format string plus values) on every host. On **browser** the
+  values are the *live* objects, so `console.log(...inspectToConsoleArgs(value))`
+  preserves the rich, expandable tree; on **node**/**xs** it returns a
+  one-element `[inspect(value, options)]`, so the identical splat call is correct
+  (never per-character) under every condition.
+- **`log(value, options)`** is the write-once console idiom: it delivers the
+  best rendering this host offers to the host console sink — the live-object
+  splat on browser, the colorized string on node, and a no-op on xs (which has
+  no `console`). Callers that only want "show me this object in the console"
+  reach for `log` and never brand their call site by target.
 
 The three behaviors share one internal, dependency-free **portable formatter**
 (the evolution of `bestEffortStringify`, with cycle marking, depth limiting, and
-typed-value tags) so that `{ as: 'string' }` output is identical across hosts
-and XS has a real implementation rather than a stub.
+typed-value tags) so that `inspect`'s string output is identical across hosts
+and XS has a real implementation rather than a stub. The rich browser tree is
+the one deliberate exception: `inspectToConsoleArgs`/`log` on browser bypass the
+shared core and hand the live value to the host console, which is why that path
+is faithful-by-delegation (see "How far each environment can go").
+
+The options bag (`depth`, `breakLength`, `colors`, `as`) is shared across all
+three exports and all three conditions; a condition that cannot honor a field
+(colors on browser/xs) ignores rather than rejects it, so a call authored once
+type-checks and behaves predictably under every target.
 
 ### Condition-parameterized resolution
 
@@ -120,10 +149,31 @@ resolving to `{ "xs": "./src-xs/...", "default": "./..." }`):
 }
 ```
 
-`default` is the portable (string-only, capability-free) formatter, so any host
-that selects no condition still gets a correct, if plain, result. Node's `-C
-node` / `--conditions=node`, a bundler's `browser` condition, and the
-`compartment-mapper` `xs` condition each steer to the matching entry.
+`default` is the portable (string-only, capability-free) formatter, and it is
+the fallback for any resolver that activates *none* of the named conditions.
+Which conditions a target activates automatically differs by runtime, and the
+skeptic seat correctly flagged that "select no condition" is not an achievable
+state on every host:
+
+- **Node** activates the `node` condition *implicitly* on every resolution — no
+  `-C node` / `--conditions=node` flag is required ("in most cases explicitly
+  calling out the Node.js platform is not necessary" — Node package-exports
+  docs). Because the map lists `node` ahead of `default`, a plain
+  `import '@endo/inspect'` under any Node process resolves to `inspect-node.js`,
+  the host inspector — Node consumers *always* get the host entry, never the
+  portable core, unless a build deliberately clears the `node` condition. A Node
+  build that wants the portable core opts in explicitly (a bundler resolving
+  with `node` removed from its condition set, or importing the `default` entry
+  path directly).
+- **Browsers/bundlers** activate `browser` by configuration (webpack/rollup/vite
+  `browser` condition), not implicitly; a bundler that omits it falls through to
+  `default`.
+- **XS** activates `xs` through the `compartment-mapper` condition set used to
+  build for XS; absent that, `default`.
+
+So `default` is the genuine "no named condition" result (a raw resolver, or a
+build that clears every platform condition), not a state Node reaches on its
+own.
 
 ```mermaid
 flowchart TD
@@ -138,8 +188,8 @@ flowchart TD
 ### The shim and SES integration
 
 `@endo/inspect/shim.js` is a vetted shim in the sense of the other
-`*-shim.js` entries: importing it for side effect installs the inspector as the
-formatter SES uses. Concretely, SES's console taming
+`*-shim.js` entries: importing it for its side effects installs the inspector as
+the formatter SES uses. Concretely, SES's console taming
 (`packages/ses/src/error/tame-console.js` and `console.js`) and its assertion
 quoting currently reach `bestEffortStringify`; the shim provides a
 `setInspector`-style seam so that, when loaded, those code paths delegate to
@@ -151,6 +201,30 @@ without SES taking a static dependency on any host inspector.
 
 The default SES build (no `@endo/inspect/shim.js`) keeps `bestEffortStringify`
 unchanged, so this is strictly additive and opt-in per build.
+
+**Adopter guidance — the shim before Phase 5 reopens a surface SES exists to
+close.** The `default` and `xs` shims install the *best-effort* portable core,
+whose own contract (step 5 below) concedes the faithful portable guarantee is
+not available: a proxy handed to trusted code can still make
+`getOwnPropertyDescriptor` throw, lie, or re-enter — the exact reentrancy /
+interleaving attack `Agoric/agoric-sdk#3905` describes. Wiring that best-effort
+formatter into SES's own console-taming and assertion path (the trusted logging
+machinery) means a downstream consumer that enables the shim under an
+*adversarial* threat model, before the faithful contract of Phase 5 lands,
+reintroduces a reentrancy surface in precisely the place SES is meant to defend.
+The critic seat flagged this in round 1. The design therefore scopes the
+integration by adopter posture rather than shipping it unconditionally:
+
+- The **node** and **browser** shims are safe to adopt now: node quarantines
+  proxies via `util.types.isProxy` before reading, and the browser rich path
+  never reads the value in our code (faithful-by-delegation).
+- The **`default` (pure SES userland)** and **xs** shims — which have no brand
+  check — should be treated as *dev-and-non-adversarial-context* tooling (REPLs,
+  local diagnostics, trusted-input logging) until Phase 5 supplies a faithful
+  brand/trait check. An adopter enabling them inside a trust boundary that
+  handles untrusted proxies accepts the residual reentrancy risk knowingly. A
+  build that base-integrates the `default`/`xs` shim into SES for adversarial use
+  should gate that on Phase 5.
 
 ### Avoiding triggered behavior (the safety contract)
 
@@ -171,11 +245,21 @@ The portable core restricts itself to a graded vocabulary of operations:
   *stamping* (endojs/endo#1756) a sound defense, and it is why an inspector
   could consult an existing registry (for example the `passStyleMemo` inside
   `passStyleOf`) without touching the value.
+- **Trap-free but brand-specific — internal-slot brand probes:** applying a
+  built-in that reads an internal slot directly (for example
+  `Date.prototype.getTime`, which reads `[[DateValue]]` via the `thisTimeValue`
+  abstract operation) to classify a suspected `Date`. A Proxy has *no* such
+  internal slot, so the operation throws `TypeError` immediately **without
+  invoking any handler trap** — it is trap-free, not trap-firing. The practical
+  consequence is the *inverse* of a re-entrancy hazard: a Proxy-wrapped `Date`
+  is safely misidentified as "not a `Date`" (rendered opaquely) with no
+  interleaving channel opened, so probe ordering can lean on these operations as
+  non-triggering. These throws are still caught by the fallible-read wrapper of
+  contract step 4 below, but the catch is for the ordinary brand-mismatch throw,
+  not for trap re-entrancy.
 - **Getter-free on ordinary objects but trap-firing on proxies:**
   `Object.getOwnPropertyDescriptor(s)`, `Reflect.ownKeys`,
-  `Object.getPrototypeOf`, `Object.isFrozen`, and internal-slot brand probes
-  (for example applying `Date.prototype.getTime` to classify a suspected
-  `Date`; these throw on brand mismatch and are wrapped). On a non-proxy these
+  `Object.getPrototypeOf`, and `Object.isFrozen`. On a non-proxy these
   read engine-internal state without running guest code, and descriptor reads
   let the renderer show `[Getter]` without calling it. On a proxy, every one
   of them enters the handler; endojs/endo#1912 makes the point that even
@@ -192,8 +276,9 @@ The contract, in descending order of what we can guarantee today:
    this is `util.inspect(v, { customInspect: false, getters: false })`.
 2. **Quarantine detectable proxies before reading them.** Where the selected
    condition supplies a brand check (Node's `util.types.isProxy` today; a
-   stamping predicate or non-trapping trait check portably, once a dependency
-   lands), test first, and render a detected proxy opaquely (`Proxy` plus its
+   stamping predicate or non-trapping trait check, available portably once a
+   dependency lands), test first, and render a detected proxy opaquely (`Proxy`
+   plus its
    `typeof`), disclosing proxy-ness without entering the handler. This matches
    the direction Node itself took in nodejs/node#61029.
 3. **Prefer own-enumerable data descriptors** obtained via
@@ -251,7 +336,18 @@ The contract, in descending order of what we can guarantee today:
 4. **SES seam + shim.** Add the `setInspector` hook to console taming and
    assertion quoting; ship `@endo/inspect/shim.js` per-target; wire an
    optional SES base build that includes it. Guard behind the condition so the
-   default SES build is byte-for-byte unchanged.
+   default SES build is byte-for-byte unchanged. This phase has the largest
+   blast radius (it wires into SES's global console/assertion machinery), so it
+   names explicit tests: (a) a **byte-identical-output regression test** proving
+   the default SES build (shim not loaded) emits exactly the current
+   `bestEffortStringify` output for a fixture corpus, pinning the "byte-for-byte
+   unchanged" invariant; (b) an **end-to-end test through the real
+   `console.log` and assertion path** (not the portable core in isolation) that
+   loads the shim and asserts the tamed console and `assert`/`throwRedacted`
+   quoting render through `@endo/inspect`; and (c) a proxy-in-a-logged-argument
+   test confirming the shimmed console path discloses proxy-ness (or, in
+   pure-userland, degrades per the best-effort contract) rather than re-entering
+   a trap.
 5. **Faithful Proxy handling (deferred).** When a portable brand check exists
    (the endojs/endo#1756 stamping power, or the non-trapping trait via
    endojs/endo#2673 / endojs/endo#2675), tighten the safety contract from
@@ -267,10 +363,16 @@ The contract, in descending order of what we can guarantee today:
    condition, not by sniffing `typeof window` / `process` at runtime, so an XS
    build carries no Node code and a browser build carries no ANSI logic. Runtime
    TTY detection is confined to the already-Node-only entry.
-3. **Return shape differs by host on purpose.** Node/XS return strings; browser
-   returns console arguments so the rich, expandable tree survives. A uniform
-   `{ as: 'string' }` escape hatch exists for callers that need flat text
-   everywhere.
+3. **One name, one return type — presentation is downstream of the value.**
+   Rejected in round 1: a single `inspect` whose return *type* (string vs
+   console-argument array) varied by build condition, which braided "compute a
+   representation" with "deliver it to a host sink" and made `...inspect(value)`
+   silently corrupt output under the wrong condition (decomplector/ergonomist
+   findings). Instead `inspect` always returns a string, `inspectToConsoleArgs`
+   always returns an array (a one-element `[string]` off-browser so the splat is
+   always valid), and `log` is the write-once console idiom. The rich,
+   expandable browser tree still survives — it rides the `inspectToConsoleArgs`
+   live-value path — but no exported name changes its type by target.
 4. **Default is the safe, plain formatter.** Selecting no condition yields the
    capability-free portable core, never a host inspector.
 5. **Best-effort now, faithful later.** We ship the try/catch-guarded contract
