@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-05-15 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-09-04 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -30,7 +30,7 @@ registry in [`designs/README.md`](./README.md) carries both rows.
 
 `@endo/compartment-mapper` is the package that turns a Node-style
 application's package graph into a single, replayable archive
-(typically a `tar.gz`) containing every module in the graph plus a
+(a `zip`) containing every module in the graph plus a
 synthetic compartment configuration that re-instantiates it at runtime.
 A `compartment-mapper` workflow has three legs:
 
@@ -83,7 +83,7 @@ In scope for v1:
   remain byte-identical.
 - The archive read path: an archive entry without an `attributes`
   field is read as the SES sentinel `EMPTY_ATTRIBUTES`, and the
-  legacy-collapse rule (the bare-string vs. `{ specifier, attributes }`
+  legacy-collapse rule (the bare-string vs. `{ default, attributes }`
   serialization defined in full under `## Per-import attribute record in
   the compartment-map descriptor` below) keeps it on the same memo key
   as today.
@@ -254,12 +254,22 @@ specifier. The in-memory record, carried during the map and link legs:
 ```ts
 // In-memory only, during the map and link legs.
 type ResolvedImport = {
-  specifier: string;
+  default: string; // the resolved target specifier
   attributes?: Record<string, string>; // undefined === EMPTY_ATTRIBUTES
 };
 
 type ResolvedImports = Record<string /* import specifier */, ResolvedImport>;
 ```
+
+The target field is named `default` (not `specifier`) on the maintainer's
+steer (PR #264 review): naming it `default` means the object arm
+`{ default: <target>, attributes: {...} }` degrades gracefully for an engine
+that does not recognize the new `attributes` property — it reads the record
+as an ordinary conditions object whose `default` condition resolves to the
+target and whose unknown `attributes` key is harmlessly ignored, so the
+resolved *specifier* is unchanged. This is the same first-match/`default`
+graceful-degradation property the `package.json` companion-field placement
+leans on (see `## infer-exports.js and package.json conditions`).
 
 **One canonical persisted form.**
 `ResolvedImport` has exactly one serialized shape, the same union that
@@ -270,7 +280,7 @@ the two sections describe one value, not two competing wire shapes:
 // Persisted (JSON) form of a single resolved import.
 type PersistedImport =
   | string // legacy collapse: an attribute-free resolved specifier
-  | { specifier: string; attributes: Record<string, string> };
+  | { default: string; attributes: Record<string, string> };
 ```
 
 The map from `ResolvedImport` to `PersistedImport` is total and lives
@@ -278,8 +288,8 @@ in exactly one place, the serializer:
 
 - An attribute-free import (`attributes` absent, that is
   `EMPTY_ATTRIBUTES`) serializes as the **bare resolved-specifier
-  string**, never as `{ specifier }` and never as
-  `{ specifier, attributes: {} }`. A reader recovering a bare string
+  string**, never as `{ default }` and never as
+  `{ default, attributes: {} }`. A reader recovering a bare string
   reconstructs `EMPTY_ATTRIBUTES` for it, matching the SES sentinel.
 - An attribute-bearing import serializes as the object arm, whose
   `attributes` bag is non-empty by construction (the empty bag never
@@ -332,8 +342,10 @@ field on a `package.json` exports entry:
 ```
 
 Under this design the grapher records the export as
-`('./policy.json', { specifier: './src/policy.json',
-attributes: { type: 'json' } })`.
+`('./policy.json', { default: './src/policy.json',
+attributes: { type: 'json' } })` — the target field is `default`, not
+`specifier` (PR #264 review), so the record degrades to an ordinary
+conditions object for any reader that does not recognize `attributes`.
 A consumer that does `import policy from
 '@example/data/policy.json'` (no `with` clause at the import site)
 then sees the package's declared attribute set propagate through to
@@ -379,6 +391,28 @@ should be as unlike a plausible runtime condition as possible (the
 is itself carried as an open decision in `## Open questions` § 1, so the
 maintainer chooses the reservation-plus-lint contract deliberately
 rather than inheriting it by omission.
+
+**Ordering rule (maintainer steer, PR #264 review): the companion key
+comes after `default`.** The maintainer proposes a structural placement
+that is *stronger* than reserve-plus-lint and does not cost Node-ignore
+compatibility: require the companion key to appear **after the `default`
+condition** in the subpath object. Node.js matches conditions in
+declaration order and `default` is the unconditional catch-all, so any key
+following `default` is unreachable as a condition by construction — Node
+has already matched `default` and stopped. Placing the companion last,
+after `default`, therefore makes it *provably* impossible for stock Node
+(or a first-match condition walker) to mistake it for a winning condition,
+without moving it off the bare-sibling shape that keeps the entry
+Node-resolvable. This dovetails with the `default`-named target field the
+resolved record now uses (see `## Per-import attribute record in the
+compartment-map descriptor`): a subpath written
+`{ "default": "./src/policy.json", "with": { "type": "json" } }`
+resolves its target through `default` on any engine and carries the
+companion inertly behind it. The map leg still reserves the key and lints
+a genuine user-condition collision (contract (a) above); the after-`default`
+ordering is the additional invariant that makes the reservation safe in
+practice. `## Open questions` § 1 records this as the leading placement
+rule, with the maintainer's preferred spelling `with`.
 
 **Precedence when both surfaces speak.**
 Two independent surfaces can now declare attributes for the same
@@ -533,6 +567,23 @@ attribute-free entries through it).
 A compartment that needs to thread an attribute-bearing entry seats
 it via `modulesWithAttributes` at construction time and lets the
 attribute-aware `importHook` handle the dynamic case.
+
+**Hook-shape note (`moduleMapHook` ≡ `importNowHook` today).**
+`moduleMapHook` and `importNowHook` share one signature on the current
+base — `(moduleSpecifier: string) => ModuleDescriptor | undefined`
+(`packages/ses/types.d.ts`), synchronous and specifier-keyed, distinct
+from the async `importHook` (`(moduleSpecifier) => Promise<ModuleDescriptor>`).
+So the two specifier-keyed hooks *might collapse into one* in a later SES
+revision, and this design does not depend on their staying separate.
+What it depends on is the property they *share*: both are specifier-keyed
+and neither can carry the attribute companion. That is precisely why
+attribute-bearing records are seated through `modulesWithAttributes` at
+construction time rather than through either hook — a future collapse of
+`moduleMapHook` and `importNowHook` into a single specifier-keyed hook
+leaves the routing conclusion here untouched. (Verified against
+`packages/compartment-mapper/src/link.js`, whose sole `new Compartment(...)`
+supplies `moduleMapHook`, `importHook`, and `importNowHook`, and against the
+two hook types in `packages/ses/types.d.ts`.)
 
 **`moduleMapHook` + attribute-bearing entry, in detail.**
 Three cases exhaust the interaction between `moduleMapHook` (the
@@ -805,9 +856,11 @@ this section and that one describe one canonical wire shape, not two:
 +   * optional per-import attributes.
 +   * Specifier-only entries (the dominant case) serialize as a bare
 +   * string for backward compatibility; entries with non-empty
-+   * attributes serialize as { specifier, attributes }.
++   * attributes serialize as { default, attributes }, where `default`
++   * names the resolved target so a reader that ignores `attributes`
++   * still recovers the specifier as an ordinary `default` condition.
 +   */
-+  imports?: Record<string, string | { specifier: string; attributes: Record<string, string> }>;
++  imports?: Record<string, string | { default: string; attributes: Record<string, string> }>;
  }
 ```
 
@@ -976,27 +1029,38 @@ catalogue, in `packages/compartment-mapper/test/`:
 
 ## Open questions
 
-1. **`withAttributes` companion-field name *and placement* on
-   `package.json`.**
-   This design proposes `withAttributes` to mirror the
-   `with { ... }` clause at the import site.
-   Alternatives for the *name*: `with` (verbatim mirror), `attributes`
-   (mirrors the SES API).
-   Beyond the name, the *placement* is also open: the companion sits as
-   a bare sibling of condition names, which stock Node.js resolution
-   ignores harmlessly (the property that keeps it Node-compatible) but
-   which a generic condition-walking tool cannot distinguish from a real
-   condition (see `## infer-exports.js and package.json conditions` §
-   "Structural distinctness of the companion key"). Because conditions
-   are open-ended author-declared strings, no bare key is
-   collision-proof; the design's contract is a **reserved key plus a
-   map-leg lint** on a package that declares a user condition of the
-   same name. The maintainer decides both the spelling and whether the
-   reservation-plus-lint contract is acceptable, or whether a stronger
-   structural marking is worth breaking Node-ignore compatibility for.
-   Resolving the name needs a brief survey of the TC39 and Node.js
-   tracker for any existing convention that other tools already
-   honor; if none, the maintainer picks.
+1. **Companion-field name *and placement* on `package.json`.**
+   **Invention, not precedent (settled).** The PR #264 review asked
+   whether this companion is our invention or an established precedent.
+   It is our invention: a brief survey of the TC39
+   [import-attributes proposal](https://github.com/tc39/proposal-import-attributes)
+   and the [Node.js resolution](https://nodejs.org/api/esm.html#import-attributes)
+   surface finds an import-**site** `with { ... }` clause but **no**
+   package-declared default-attribute surface anywhere in `package.json`
+   `exports`/`imports`. There is no convention for another tool to honor,
+   so the garden establishes one — which is exactly why the name and
+   placement must be chosen deliberately below rather than inherited.
+   **Name (maintainer prefers `with`).** This design's working spelling
+   was `withAttributes`; the PR #264 maintainer review states a preference
+   for **`with`** (verbatim mirror of the import-site clause). Remaining
+   alternative: `attributes` (mirrors the SES API). `with` is now the
+   leading candidate; the body still writes `withAttributes` pending the
+   final pick, and the implementation PR does the one-shot rename.
+   **Placement (leading rule: after `default`).** The companion sits as a
+   bare sibling of condition names, which stock Node.js resolution ignores
+   harmlessly (the property that keeps it Node-compatible) but which a
+   generic condition-walking tool cannot distinguish from a real condition
+   (see `## infer-exports.js and package.json conditions` § "Structural
+   distinctness of the companion key"). Because conditions are open-ended
+   author-declared strings, no bare key is collision-proof. The
+   maintainer's steer supplies the structural rule that makes this safe
+   without breaking Node-ignore compatibility: **the companion key must
+   come after the `default` condition**, where Node's first-match ordering
+   makes it provably unreachable as a condition (a matched `default` stops
+   the search). The design's contract is therefore a **reserved key, a
+   map-leg lint** on a colliding user condition, **plus the after-`default`
+   ordering invariant**. The implementation PR settles the final spelling
+   (`with` vs. `attributes`) and locks the ordering rule.
 2. **Shape of the schema-version marker (a dedicated field either way).**
    This design signals an archive that requires attribute-aware reading
    with a **dedicated top-level field**, `importAttributes: 'v1'` — not
@@ -1044,11 +1108,15 @@ catalogue, in `packages/compartment-mapper/test/`:
    (a) The persisted per-import field is named `imports`, one letter and
    one shape away from the pre-existing in-memory `resolvedImports` map
    (`ResolvedImport`/`resolvedImports`/`PersistedImport` all coexist).
-   This design keeps them separate and disambiguates by prose (see
-   `## Per-import attribute record in the compartment-map descriptor`),
-   but whether the persisted field should instead take a name that needs
-   no such caveat — or whether the two concepts should converge once the
-   bundler (§ 3) also becomes attribute-aware — is left to the
+   The *inner* target-field clash is now resolved: on the PR #264 review's
+   steer the record's target field is named **`default`**, not `specifier`
+   (see `## Per-import attribute record in the compartment-map descriptor`),
+   which both removes the `specifier`/`resolvedImports` naming overlap and
+   buys graceful degradation for an unaware reader. What remains open is the
+   *outer* map field: whether the persisted top-level field should stay
+   `imports` (one letter from `resolvedImports`) or take a name that needs
+   no disambiguating caveat — and whether the two concepts should converge
+   once the bundler (§ 3) also becomes attribute-aware — is left to the
    implementation PR, which owns the final schema field name.
    (b) The `withAttributes`-vs-import-site precedence rule is fixed as
    **whole-value override** (see `## infer-exports.js and package.json
