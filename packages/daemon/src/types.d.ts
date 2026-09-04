@@ -648,6 +648,19 @@ export type InvitationFormula = {
   /** The inviting agent's handle, which the locator's `from` names. */
   invitingHandle: FormulaIdentifier;
   guestName: NameOrPath;
+  /**
+   * @deprecated Legacy field name for {@link invitingAgent}, persisted by
+   * records minted before the `hostAgent`/`hostHandle` →
+   * `invitingAgent`/`invitingHandle` rename. Read-only: newly minted
+   * invitations never set it, but reads coerce it so existing production
+   * databases need not be purged.
+   */
+  hostAgent?: FormulaIdentifier;
+  /**
+   * @deprecated Legacy field name for {@link invitingHandle}. See
+   * {@link hostAgent}.
+   */
+  hostHandle?: FormulaIdentifier;
 };
 
 export type InvitationDeferredTaskParams = {

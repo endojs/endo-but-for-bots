@@ -4207,6 +4207,11 @@ const makeDaemonCore = async (
       {
         invitingAgent: invitingAgentId,
         invitingHandle: invitingHandleId,
+        // Tolerate and coerce records minted before the
+        // hostAgent/hostHandle → invitingAgent/invitingHandle rename, so
+        // existing production databases need not be purged.
+        hostAgent: legacyInvitingAgentId,
+        hostHandle: legacyInvitingHandleId,
         guestName,
       },
       _context, // eslint-disable-line no-underscore-dangle
@@ -4216,8 +4221,8 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       makeInvitation(
         id,
-        invitingAgentId,
-        invitingHandleId,
+        invitingAgentId ?? legacyInvitingAgentId,
+        invitingHandleId ?? legacyInvitingHandleId,
         /** @type {import('./types.js').NameOrPath} */ (guestName),
       ),
     timer: async ({ intervalMs, label: timerLabel }, context) => {

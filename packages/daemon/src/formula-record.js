@@ -231,13 +231,16 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
       break;
     }
     case 'invitation': {
+      // Coerce records minted before the hostAgent/hostHandle →
+      // invitingAgent/invitingHandle rename, so a legacy invitation still
+      // inspects without a database purge.
       properties.invitingAgent = {
         kind: 'reference',
-        identifier: formula.invitingAgent,
+        identifier: formula.invitingAgent ?? formula.hostAgent,
       };
       properties.invitingHandle = {
         kind: 'reference',
-        identifier: formula.invitingHandle,
+        identifier: formula.invitingHandle ?? formula.hostHandle,
       };
       properties.guestName = { kind: 'literal', value: formula.guestName };
       break;
