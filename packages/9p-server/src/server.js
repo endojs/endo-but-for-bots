@@ -46,35 +46,29 @@ const VERSION_9P2000_L = '9P2000.L';
 const MIN_MSIZE = 4096;
 const DEFAULT_MSIZE = 131_072;
 
-// Largest payload we will move through the backing Filesystem in one
-// Tread/Twrite, independent of `msize`.
+// `iterateBytesReader` carries each chunk from the backing Filesystem as a
+// base64 string and validates it with `M.string()`, which without an explicit
+// limit inherits @endo/patterns' default `stringLengthLimit` of 100_000
+// characters. Base64 encodes n bytes as 4*ceil(n/3) characters, so that
+// default caps a single chunk at 75_000 bytes: 75_000 encodes to exactly
+// 100_000 characters and passes, 75_001 encodes to 100_004 and is rejected
+// before it ever reaches us. The rejection surfaces to the client as a bare
+// EIO, which reads as disk corruption rather than as a limit — and with a
+// 128 KiB `msize` the client believes it may read far more than that at
+// once, so any file over ~75 KiB was unreadable through a mount.
 //
-// `iterateBytesReader`/`iterateBytesWriter` carry each chunk as a base64
-// string and validate it against @endo/patterns' default
-// `stringLengthLimit` of 100_000 characters. Base64 encodes n bytes as
-// 4*ceil(n/3) characters, so the hard ceiling is exactly 75_000 bytes:
-// 75_000 encodes to 100_000 characters and passes, 75_001 encodes to
-// 100_004 and is rejected before it ever reaches us. The rejection reaches
-// the client as a bare EIO, which reads as disk corruption rather than as a
-// limit.
+// The bound we actually want is "no more than this Tread asked for", which
+// `onRead` already clamps against `msize`. Deriving the limit from `count`
+// says that directly, and is a tighter bound than the 100_000-character
+// default rather than a looser one.
 //
-// Without this cap the negotiated 128 KiB `msize` promises an I/O size the
-// transport cannot actually carry, so every read large enough to matter
-// fails: GNU `cat` and Node's `fs.readFile` both issue one big read, which
-// made any file over ~75 KiB unreadable through a mount.
-//
-// 64 KiB rather than the 75_000-byte ceiling itself, for two reasons. That
-// ceiling is a default of a dependency we do not configure here, so sitting
-// exactly on it means a lower default upstream silently restores the EIO;
-// 64 KiB keeps ~9 KB of margin. And a power of two keeps every full request
-// a whole number of 4 KiB pages, so a client's reads stay block-aligned and
-// only the tail of a file is a partial chunk, where an iounit of 75_000
-// would make every request after the first ragged. 64 KiB is also the
-// conventional 9P iounit, so clients are well exercised against it.
-//
-// 9P lets a server return fewer bytes than asked for, so capping is
-// conformant; the client just issues more, smaller requests.
-const MAX_IO_BYTES = 65_536;
+/**
+ * The longest base64 chunk a Tread of `count` bytes can legitimately carry.
+ *
+ * @param {number} count - bytes this Tread may return.
+ * @returns {number} characters
+ */
+const base64LimitFor = count => 4 * Math.ceil(count / 3);
 
 const MASK_U32 = 0xffff_ffffn;
 const MASK_U64 = (1n << 64n) - 1n;
@@ -581,10 +575,9 @@ export const serveConnection = ({
     const w = makeWriter(13 + 4);
     writeQid(w, qidToWire(f.qid));
     // iounit: the max bytes the client may Tread/Twrite in one frame.
-    // Advertise the real ceiling — the smaller of the frame budget and
-    // MAX_IO_BYTES — rather than 0 ("just use msize"), so the client sizes
-    // I/O to something that works instead of discovering the limit as EIO.
-    w.u32(Math.max(0, Math.min(msize - 24, MAX_IO_BYTES)));
+    // The onWrite/onRead clamps cap at `msize - header`; advertise that
+    // rather than 0 ("just use msize") so the client sizes I/O to fit.
+    w.u32(Math.max(0, msize - 24));
     send(wrapMessage(T.Rlopen, tag, w.finish()));
     return undefined;
   };
@@ -596,15 +589,14 @@ export const serveConnection = ({
   const onRead = async (/** @type {number} */ tag, r) => {
     const fid = r.u32();
     const offset = r.u64();
-    // Clamp the requested count to what fits in one `msize` frame, and to
-    // what the bytes stream underneath can carry (see MAX_IO_BYTES).
+    // Clamp the requested count to what fits in one `msize` frame.
     // 9P allows a server to return fewer bytes than the client
     // asked for, so this is conformant; without the clamp a peer
     // could trigger huge allocations / reads regardless of the
     // negotiated frame size.
     const requested = /** @type {number} */ (r.u32());
     const maxByMsize = Math.max(0, msize - RREAD_HEADER_BYTES);
-    const count = Math.min(requested, maxByMsize, MAX_IO_BYTES);
+    const count = Math.min(requested, maxByMsize);
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);
     if (f.qid.type === 'directory') {
@@ -620,12 +612,24 @@ export const serveConnection = ({
       const chunks = [];
       let total = 0;
       const want = Number(count);
-      // `buffer: 1` lets the producer pre-emit the first chunk
-      // without waiting for our sync — collapses the per-chunk
-      // sync/ack round-trip for the common single-frame case
-      // (`makeBytesReaderFromBytes` yields the whole slice in one
-      // chunk, so this is almost always single-frame).
-      for await (const chunk of iterateBytesReader(reader, { buffer: 1 })) {
+      // A single-frame read is two nodes on the wire, not one: the chunk,
+      // then the terminator the producer emits when its iterator runs out
+      // (`makeBytesReaderFromBytes` and the extended-fs backends all yield
+      // the whole slice in one chunk). `makeReaderPump` waits for a sync
+      // before every pull past `buffer`, so `buffer: 1` pre-satisfies the
+      // chunk but leaves the terminator behind a second sync — a round trip
+      // we pay on every Tread, because we always break out of this loop and
+      // drain. `buffer: 2` covers both. Higher values only add unused sync
+      // nodes: measured against a remote Filesystem, 2 is where the latency
+      // win saturates while the message count keeps climbing.
+      //
+      // `stringLengthLimit` overrides @endo/patterns' 100_000-character
+      // default, which is narrower than `count` and surfaces as EIO
+      // (see `base64LimitFor`).
+      for await (const chunk of iterateBytesReader(reader, {
+        buffer: 2,
+        stringLengthLimit: base64LimitFor(count),
+      })) {
         // Stop pulling from the FS if the connection was torn down
         // mid-read (cancellation / disconnect) instead of draining a
         // potentially large read against a dead socket.
@@ -862,7 +866,7 @@ export const serveConnection = ({
       });
       const w = makeWriter(17);
       writeQid(w, qidToWire(childQid));
-      w.u32(Math.max(0, Math.min(msize - 24, MAX_IO_BYTES))); // iounit (see onLopen)
+      w.u32(Math.max(0, msize - 24)); // iounit (see onLopen)
       send(wrapMessage(T.Rlcreate, tag, w.finish()));
     } catch (e) {
       return sendError(tag, errnoOf(e));
@@ -887,11 +891,11 @@ export const serveConnection = ({
     if (count > remaining || count > maxByMsize) {
       return sendError(tag, ERRNO.EINVAL);
     }
-    // A conforming client sizes writes by the iounit we advertised, which is
-    // already capped. Clamp anyway: the base64 limit applies to writes as
-    // well, so an oversized one would otherwise fail as EIO rather than as
-    // the short write 9P defines for exactly this case.
-    const data = r.take(Math.min(count, MAX_IO_BYTES));
+    // The write path has no chunk-length limit to work around: the
+    // responder (`bytesWriterFromIterator`) builds its pump without a
+    // `writePattern`, so a write chunk is never length-validated. `count`
+    // is already bounded by the frame checks above.
+    const data = r.take(count);
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);
     if (f.qid.type === 'directory') return sendError(tag, ERRNO.EISDIR);
@@ -911,8 +915,6 @@ export const serveConnection = ({
       );
       await w8.return();
       const w = makeWriter(4);
-      // Report what was actually written, which the clamp above may have made
-      // shorter than the request; the client sends the remainder.
       w.u32(data.length);
       send(wrapMessage(T.Rwrite, tag, w.finish()));
     } catch (e) {

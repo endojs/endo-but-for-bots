@@ -434,44 +434,101 @@ test.serial('Tlopen advertises a nonzero iounit (msize - 24)', async t => {
   t.is(open.type, T.Rlopen);
   const r = makeReader(open.payload);
   readQid(r); // qid (13 bytes)
-  t.is(r.u32(), Math.min(msize - 24, 65_536));
+  t.is(r.u32(), msize - 24);
 });
 
-// A chunk crosses the backing Filesystem as base64, which the bytes reader
-// validates against the default 100_000-character `stringLengthLimit` — so a
-// read over ~75_000 bytes is rejected there and reaches the client as a bare
-// EIO. With a 128 KiB msize the client believes it may read that much at once,
-// and GNU `cat` and Node's `fs.readFile` both do, which made any file over
-// ~75 KiB unreadable through a mount rather than merely slow.
+/**
+ * Negotiate the msize the mount caplet actually asks for. `negotiate`'s
+ * default 8192 is too small for any of the chunk-limit regressions below to
+ * bite: every bound under test sits above it, so the interesting comparisons
+ * all collapse to "smaller than the frame".
+ *
+ * @param {ReturnType<typeof connectClient>} c
+ * @returns {Promise<number>} the negotiated msize
+ */
+const negotiateFullMsize = async c => {
+  const nw = makeWriter();
+  nw.u32(131_072);
+  nw.str('9P2000.L');
+  c.send(T.Tversion, 0xffff, nw.finish());
+  const rep = await c.recv();
+  return makeReader(rep.payload).u32();
+};
+
+// A chunk crosses the backing Filesystem as base64, which `iterateBytesReader`
+// validates with `M.string()`. Left to @endo/patterns' default
+// `stringLengthLimit` of 100_000 characters that caps a chunk at 75_000 bytes
+// and rejects anything past it, which reaches the client as a bare EIO — so
+// with a 128 KiB msize any file over ~75 KiB was unreadable through a mount.
+// GNU `cat` and Node's `fs.readFile` both issue one big read, so this was the
+// common path, not an edge case.
 test.serial(
-  'a read larger than the base64 chunk limit is short, not EIO',
+  'a read at the full negotiated msize is served, not EIO',
   async t => {
     const { rootDir, socketPath } = await setupNodeFsBridge(t);
     writeFileSync(path.join(rootDir, 'big.bin'), Buffer.alloc(200_000, 0x61));
     const c = await setupClient(t, socketPath);
-    // Negotiate the msize the mount caplet actually asks for; the default 8192
-    // in `negotiate` is too small for this to bite.
-    const nw = makeWriter();
-    nw.u32(131_072);
-    nw.str('9P2000.L');
-    c.send(T.Tversion, 0xffff, nw.finish());
-    t.is(makeReader((await c.recv()).payload).u32(), 131_072);
+    const msize = await negotiateFullMsize(c);
+    t.is(msize, 131_072);
     await attach(c, 1);
     t.is((await walk(c, 1, 2, ['big.bin'])).type, T.Rwalk);
-    t.is((await lopen(c, 2, 0)).type, T.Rlopen);
+
+    const open = await lopen(c, 2, 0);
+    t.is(open.type, T.Rlopen);
+    const or = makeReader(open.payload);
+    readQid(or);
+    // The client sizes its reads by this; it has to describe the whole frame,
+    // not some smaller bound the client would have to discover as an error.
+    t.is(or.u32(), msize - 24, 'Rlopen iounit spans the frame');
 
     for (const requested of [4096, 65_536, 100_000, 131_048]) {
       const rd = await tread(c, 2, 0n, requested);
       t.is(rd.type, T.Rread, `count=${requested} should not error`);
-      const got = makeReader(rd.payload).u32();
       t.is(
-        got,
-        Math.min(requested, 65_536),
-        `count=${requested} bytes returned`,
+        makeReader(rd.payload).u32(),
+        requested,
+        `count=${requested} served`,
       );
     }
   },
 );
+
+test.serial('Rlcreate advertises the same iounit as Rlopen', async t => {
+  const { socketPath } = await setupNodeFsBridge(t);
+  const c = await setupClient(t, socketPath);
+  const msize = await negotiateFullMsize(c);
+  await attach(c, 1);
+  t.is((await walk(c, 1, 2, [])).type, T.Rwalk);
+  const created = await tlcreate(c, 2, 'fresh.bin');
+  t.is(created.type, T.Rlcreate);
+  const r = makeReader(created.payload);
+  readQid(r);
+  t.is(r.u32(), msize - 24);
+});
+
+// The write path has no chunk-length limit to route around: the responder
+// builds its pump without a `writePattern`, so a write chunk is never
+// length-validated. Guards against reintroducing a clamp here by symmetry
+// with the read path, which would silently halve the write frame.
+test.serial('a write past the base64 read limit is not truncated', async t => {
+  const { rootDir, socketPath } = await setupNodeFsBridge(t);
+  const c = await setupClient(t, socketPath);
+  await negotiateFullMsize(c);
+  await attach(c, 1);
+  t.is((await walk(c, 1, 2, [])).type, T.Rwalk);
+  t.is((await tlcreate(c, 2, 'wide.bin')).type, T.Rlcreate);
+
+  const payload = Buffer.alloc(100_000, 0x62);
+  const wrote = await twrite(c, 2, 0n, payload);
+  t.is(wrote.type, T.Rwrite);
+  t.is(
+    makeReader(wrote.payload).u32(),
+    payload.length,
+    'full write, not short',
+  );
+  t.is((await tclunk(c, 2)).type, T.Rclunk);
+  t.is(readFileSync(path.join(rootDir, 'wide.bin')).length, payload.length);
+});
 
 test.serial('Tclunk closes an open directory cursor', async t => {
   const closes = { n: 0 };
