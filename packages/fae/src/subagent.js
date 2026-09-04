@@ -49,7 +49,7 @@ export const HANDLE_SUFFIX = '-handle';
  * scheme is derived by concatenation, and a name that reads like part of that
  * scheme is one collision away from being part of it.
  */
-const reservedSubagentSuffixes = harden([
+export const reservedSubagentSuffixes = harden([
   DRIVER_SUFFIX,
   SPAWNER_SUFFIX,
   HANDLE_SUFFIX,
