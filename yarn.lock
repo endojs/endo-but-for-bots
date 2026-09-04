@@ -1776,6 +1776,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/claude@workspace:packages/claude":
+  version: 0.0.0-use.local
+  resolution: "@endo/claude@workspace:packages/claude"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    fast-check: "npm:^4.9.0"
+    typescript: "catalog:dev"
+  bin:
+    endo-claude-shim: ./src/shim.js
+  languageName: unknown
+  linkType: soft
+
 "@endo/cli@workspace:^, @endo/cli@workspace:packages/cli":
   version: 0.0.0-use.local
   resolution: "@endo/cli@workspace:packages/cli"

@@ -40,11 +40,14 @@ const CredentialsInterface = M.interface('ClaudeCredentials', {
 });
 
 /**
- * Credential kinds and the Claude Code env var each lands in. `apiKey`
- * is a raw Anthropic API key; `oauthToken` is the short-lived OAuth
- * access token Claude Code accepts headlessly (`claude setup-token`).
+ * Credential kinds. `apiKey` is a raw Anthropic API key; `oauthToken`
+ * is the short-lived OAuth access token Claude Code accepts headlessly
+ * (`claude setup-token`); `subscription` is a Max/Pro subscription value
+ * that `@endo/claude` presents to `claude --bare` through an
+ * `apiKeyHelper` (settings-file-shaped, not env-var-shaped — see
+ * `claude-credentials-factory.js` and `claude-client-module.js`).
  */
-const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken']);
+const CREDENTIAL_KINDS = harden(['apiKey', 'oauthToken', 'subscription']);
 
 /**
  * @param {unknown} _powers
