@@ -96,14 +96,16 @@ source for the Windows, macOS, and Linux release matrix, while a shared
 service aligned; summary table, M11 row, dependency graph, estimate, totals,
 and timeline synced),
 [promise-debug-view](promise-debug-view.md) (added 2026-07-12; the
-forward-looking follow-up to pass-style-promise (PR #169): an opt-in,
-bounded ring buffer of long-pending, forever-pending, and
-unlistened-rejection carriers, inspectable while debugging without a
-production log line per hop, with no background timer, weak carrier
-references keyed on a stable serial id, and a hardened `{ enabled,
-entries }` snapshot inspection surface; layers on the parent's
-rejection-retention and first-listener (`onFirstListen`) contracts
-rather than restating them),
+forward-looking follow-up to pass-style-promise, requested on that
+design's PR #169 review: an opt-in, bounded record of long-pending,
+forever-pending, and unlistened-rejection carriers, inspectable while
+debugging without a production log line per hop, with no background
+timer, weak carrier references keyed on a stable serial id, an eviction
+policy that protects the undelivered half of a rejection/finalization
+pair, a value-only reason projection, and a hardened snapshot that
+separates recorded entries from a derived long-pending query and reports
+its own bounds; layers on the parent's rejection-retention and
+first-listener contracts rather than restating them),
 [cbor-codec](cbor-codec.md) (added 2026-07-12; shared canonical-CBOR
 primitive codec `@endo/cbor` at `packages/cbor/`: hardened functional
 write/read primitives for the RFC 8949 subset that slot-machine
