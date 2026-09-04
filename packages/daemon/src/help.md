@@ -271,7 +271,7 @@ Example: form("@host", "Configure settings", [{ name: "name", label: "Your name"
 ## storeBlob(readerRef, petName?) -> Promise<EndoReadable>
 
 Store binary data as a blob with a pet name.
-- readerRef: An async iterator yielding base64-encoded strings
+- readerRef: A PassableBytesReader (a remotable whose stream() yields immutable Uint8Array chunks)
 - petName: Name to store the blob under
 Returns a readable blob reference.
 
@@ -344,7 +344,7 @@ Get documentation for this interface or a specific method.
 ## storeBlob(readerRef, petName) -> Promise<EndoReadable>
 
 Store binary data as a blob with a pet name.
-- readerRef: An async iterator yielding base64-encoded strings
+- readerRef: A PassableBytesReader (a remotable whose stream() yields immutable Uint8Array chunks)
 - petName: Name to store the blob under
 Returns a readable blob reference.
 

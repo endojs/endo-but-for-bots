@@ -11,7 +11,8 @@ The companion write-side `zip(tree) -> bytes` lives in
 `@endo/exo-zip`.
 Path-segment validation now sources from the new shared
 `@endo/zip/path.js` rather than a per-package copy.
-A blob's `stream()` may yield multiple chunks; every chunk
-except possibly the last has a length divisible by 4 and carries
-no `=` padding, so a consumer can decode the joined chunks in a
-single `decodeBase64` call.
+A blob's `stream()` yields immutable `Uint8Array` chunks
+directly (the byte-stream method carries bytes, not base64
+strings), so a consumer simply concatenates the chunks to
+recover the blob's bytes — no `decodeBase64` step and no
+interior-padding constraint.

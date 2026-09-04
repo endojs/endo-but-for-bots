@@ -1590,8 +1590,20 @@ export const makeHostMaker = ({
             kind = await E(child).kind();
           }
         }
+        // `stream` alone no longer discriminates a blob (it is the generic
+        // byte-stream method name shared with readers/writers and
+        // `HttpResponse`); a genuine file child also carries the `getInfo`
+        // content-address surface — or `readReturnPattern` for a raw
+        // `PassableBytesReader` — which those non-blob stream-bearers lack. A
+        // generic value `PassableReader` shares `readReturnPattern`, so it is
+        // excluded by requiring `readPattern` to be absent.
         const looksLikeBlob =
-          kind === undefined ? methodNames.includes('stream') : kind === 'file';
+          kind === undefined
+            ? methodNames.includes('stream') &&
+              !methodNames.includes('readPattern') &&
+              (methodNames.includes('getInfo') ||
+                methodNames.includes('readReturnPattern'))
+            : kind === 'file';
         const looksLikeTree =
           kind === undefined
             ? methodNames.includes('list')

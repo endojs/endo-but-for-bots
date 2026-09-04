@@ -44,16 +44,44 @@ const mountRecords = new WeakMap();
 const revokedSentinel = Symbol('mount-revoked');
 
 /**
- * Narrow a remote source after the Exo method-name check used by `write()`.
- * The runtime guard proves that a source advertising `stream` is the
- * passable reader capability expected by `iterateBytesReader`.
+ * Recognise a readable-blob source by its advertised method names.
+ *
+ * `stream` alone is not discriminating: it was `streamBase64` before the
+ * byte-stream consolidation, and the generic name is now shared by
+ * `PassableReader`/`PassableWriter` and by `HttpResponse` (a 0-arg `stream()`).
+ * A byte source that `write()` can drain through `iterateBytesReader` carries a
+ * read-side marker that those non-blob stream-bearers lack: either `getInfo`
+ * (the content-address surface every daemon/mount `ReadableBlob` exposes) or
+ * `readReturnPattern` (a raw `PassableBytesReader`). A writer
+ * (`writePattern`/`writeReturnPattern`, so neither marker) and an
+ * `HttpResponse` (neither marker) are rejected by that positive test. A
+ * generic value `PassableReader` also advertises `readReturnPattern`, so it is
+ * excluded by additionally requiring the *absence* of `readPattern` — the
+ * value-pattern accessor a bytes reader does not carry (its yields are always
+ * `Uint8Array`).
+ *
+ * @param {string[]} methodNames
+ * @returns {boolean}
+ */
+const looksLikeReadableBlob = methodNames =>
+  methodNames.includes('stream') &&
+  !methodNames.includes('readPattern') &&
+  (methodNames.includes('getInfo') ||
+    methodNames.includes('readReturnPattern'));
+harden(looksLikeReadableBlob);
+
+/**
+ * Assert a remote source is a readable blob after the `write()` method-name
+ * check. Unlike a bare `stream` test, this rejects a writer or an
+ * `HttpResponse` with the same clear error the fall-through branch gives,
+ * rather than admitting it and dying on an opaque byte-reader guard error.
  *
  * @param {unknown} value
  * @param {string[]} methodNames
  * @returns {asserts value is import('@endo/eventual-send').ERef<import('@endo/exo-stream').PassableBytesReader>}
  */
 const assertReadableBlobSource = (value, methodNames) => {
-  if (!methodNames.includes('stream')) {
+  if (!looksLikeReadableBlob(methodNames)) {
     throw new TypeError('Expected a ReadableBlob source');
   }
 };
@@ -1232,7 +1260,7 @@ const makeMountExo = ctx => {
        * }} */ (value);
     // eslint-disable-next-line no-underscore-dangle
     const methodNames = await E(source).__getMethodNames__();
-    if (methodNames.includes('stream')) {
+    if (looksLikeReadableBlob(methodNames)) {
       if (await filePowers.isDirectory(target)) {
         throw new Error('Path is a directory');
       }

@@ -381,6 +381,14 @@ export interface MakeBytesWriterOptions<
   buffer?: number;
   /** Pattern for TWriteReturn (return value) */
   writeReturnPattern?: Pattern;
+  /**
+   * Maximum byte length for each incoming write frame (symmetric with
+   * `IterateBytesReaderOptions.byteLengthLimit`). When omitted the per-frame
+   * size is unbounded — the responder validates only that each frame is a byte
+   * array, not its size — matching the pre-validation behaviour. Set this to
+   * bound the frames a remote initiator may push.
+   */
+  byteLengthLimit?: number;
 }
 
 /**

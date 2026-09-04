@@ -107,7 +107,16 @@ const drainBytesReader = async fileCap => {
  */
 const kindFromMethods = methods => {
   if (methods.includes('lookup')) return 'directory';
-  if (methods.includes('text') || methods.includes('stream')) {
+  // `text` is the discriminating file marker; a bare `stream` is not (it is the
+  // generic byte-stream method shared with readers/writers and `HttpResponse`),
+  // so require a read-side blob marker — `getInfo` or `readReturnPattern`, with
+  // `readPattern` absent to exclude a generic value `PassableReader`.
+  if (
+    methods.includes('text') ||
+    (methods.includes('stream') &&
+      !methods.includes('readPattern') &&
+      (methods.includes('getInfo') || methods.includes('readReturnPattern')))
+  ) {
     return 'file';
   }
   return undefined;

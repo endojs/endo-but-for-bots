@@ -10,7 +10,6 @@ The previous read-side implementation under this name has moved to
 the new `@endo/exo-unzip` package and is exported as `unzip(bytes)`.
 Entries are emitted with `STORE` compression, matching the
 constraint of `@endo/zip`'s `ZipWriter`.
-The walker accumulates each blob's `stream()` chunks as
-encoded strings and decodes the concatenation in a single pass,
-relying on the producer's contract that every non-final chunk is
-unpadded.
+The walker drains each blob's `stream()` — which yields immutable
+`Uint8Array` chunks directly — and concatenates them into the
+blob's bytes, with no base64 decode step.

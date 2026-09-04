@@ -2,6 +2,7 @@
 
 import { makeExo } from '@endo/exo';
 import { thawedBytes } from '@endo/immutable-arraybuffer';
+import { M } from '@endo/patterns';
 
 import { PassableBytesWriterInterface } from './type-guards.js';
 import { makeWriterPump } from './writer-pump.js';
@@ -40,7 +41,7 @@ import { asyncIterate } from './async-iterate.js';
  * @returns {PassableBytesWriter<TWriteReturn>}
  */
 export const bytesWriterFromIterator = (iterator, options = {}) => {
-  const { buffer = 0, writeReturnPattern } = options;
+  const { buffer = 0, writeReturnPattern, byteLengthLimit } = options;
 
   // Copy passable immutable bytes into mutable local chunks before forwarding.
   const sinkIterator = asyncIterate(iterator);
@@ -61,7 +62,27 @@ export const bytesWriterFromIterator = (iterator, options = {}) => {
     },
   };
 
-  const pump = makeWriterPump(thawingIterator, { buffer });
+  // Validate every syn value against the byte-array pattern before it reaches
+  // `thawedBytes`. Without this the responder trusts the remote initiator: a
+  // peer sending a stale base64 string (or any non-bytes producer) would flow
+  // through `thawedBytes`, which silently coerces a non-Uint8Array to
+  // `Uint8Array(0)` — a truncated write that acks as success. This mirrors the
+  // reader direction, which already guards with `M.byteArray()`.
+  //
+  // The check is on the *kind* (a base64 string is not a `byteArray` and is
+  // rejected regardless of size). A caller may bound the per-frame size with
+  // `byteLengthLimit` (symmetric with `iterateBytesReader`); when omitted the
+  // limit is effectively unbounded, preserving the prior no-`writePattern`
+  // behaviour so a legitimate large frame (e.g. a 256 KiB file write) is not
+  // newly rejected by the default 100 KB `M.byteArray()` cap.
+  const writePattern = M.byteArray({
+    byteLengthLimit:
+      byteLengthLimit === undefined ? Number.MAX_SAFE_INTEGER : byteLengthLimit,
+  });
+  const pump = makeWriterPump(thawingIterator, {
+    buffer,
+    writePattern,
+  });
 
   return /** @type {PassableBytesWriter<TWriteReturn>} */ (
     /** @type {unknown} */ (
