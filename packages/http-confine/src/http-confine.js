@@ -7,6 +7,7 @@ import { makeError, q, X } from '@endo/errors';
  * @import {
  *   ConfinedRequest,
  *   ConfinedResponse,
+ *   ConfinedResponseSummary,
  *   FetchLike,
  *   FetchLikeBodyReader,
  *   FetchLikeResponse,
@@ -431,15 +432,20 @@ export const resolveRedirect = (response, origins) => {
 freeze(resolveRedirect);
 
 /**
- * Copy response headers out of native Web API objects before hardening. Node's
- * Undici Headers implementation lazily populates an internal sorted cache when
- * iterated; deep-hardening the native object first makes that cache read-only
- * and turns an ordinary response into an uncaught TypeError.
+ * Copy response headers into a plain record before anything hardens them.
+ * Node's Undici `Headers` fills an internal sorted cache the first time it is
+ * iterated, so a `Headers` that was deep-hardened while still empty throws
+ * `TypeError: Cannot assign to read only property 'Symbol(headers map sorted)'`
+ * at the first read, in the reader's frame rather than at the harden.
+ *
+ * Names are lowercased, so a repeated name keeps its last value. Undici already
+ * joins repeats with `, ` when it iterates, except `set-cookie`, which it
+ * yields once per cookie and which therefore survives only as its last value.
  *
  * @param {Headers | Record<string, string> | Iterable<[string, string]> | undefined} headers
  * @returns {Record<string, string>}
  */
-const snapshotHeaders = headers => {
+export const snapshotHeaders = headers => {
   /** @type {Record<string, string>} */
   const record = {};
   /**
@@ -479,16 +485,19 @@ const snapshotHeaders = headers => {
   }
   return freeze(record);
 };
+freeze(snapshotHeaders);
 
 /**
- * Project a transport response to inert data. The body has already been
- * consumed into bounded bytes, so retaining and hardening the native Response
- * object serves no purpose and is unsafe for host objects with lazy internals.
+ * Project a transport response to inert data. By the time a response is
+ * summarized its body has already been drained into bounded bytes, so the
+ * summary carries no `body`: the transport object never escapes the
+ * confinement, and nothing downstream can harden a host object with lazy
+ * internals. See {@link snapshotHeaders} for the failure this avoids.
  *
  * @param {FetchLikeResponse} response
- * @returns {FetchLikeResponse}
+ * @returns {ConfinedResponseSummary}
  */
-const snapshotResponse = response =>
+export const snapshotResponse = response =>
   freeze({
     status: Number(response.status || 0),
     statusText: String(response.statusText || ''),
@@ -496,6 +505,7 @@ const snapshotResponse = response =>
     headers: snapshotHeaders(response.headers),
     url: String(response.url || ''),
   });
+freeze(snapshotResponse);
 
 /**
  * @param {{ timeoutMs: number, cancellation?: Promise<never> }} opts
