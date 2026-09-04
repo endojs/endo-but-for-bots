@@ -36,11 +36,15 @@ keep their legacy `kind` record bytes and a `constraints` field appears only for
 genuinely new axes), and the durable/orthogonal persistence (thixotrope #786 /
 #989 / #281 / #984 / #813), version-pin, and target binary-fetch categories land
 as typed `Not Started` extension points naming the exact seam each plugs into.
-Summary-table row, the M11 (Rust Daemon `endor`) constituent-table row, and the
-"Recently added or revised" list synced; this addition is Proposed +1, design
-count +1 against the live current-totals block (a delta line records it in
-`README.md`; the maintainer's next grooming pass reconciles the absolute running
-totals, which had drifted before this pass).*
+All five cross-document surfaces synced per `designs/AGENTS.md` § Progress
+Tracking: the summary-table row, the M11 (Rust Daemon `endor`)
+constituent-table row (and its milestone-rollup constituent count 6→7), the
+dependency-graph node (`worker-constraint-model`, edge from
+`ocapn-orthogonal-persistence`), the per-design size/duration estimate row (M11,
+S-M / 3-4 days), and the "Recently added or revised" list. This addition is
+Proposed +1, design count +1 against the live current-totals block (a delta line
+records it in `README.md`; the maintainer's next grooming pass reconciles the
+absolute running totals, which had drifted before this pass).*
 
 *Layered on 2026-09-03 (client-side-bridge carve): re-worded **M3 (Remote
 Access and Coding Capabilities)** — the first unfinished milestone, M1 and M2
