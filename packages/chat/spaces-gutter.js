@@ -167,6 +167,22 @@ const loadDeviceDefaultSpaceId = () => {
 };
 
 /**
+ * Whether a mode read back out of the boot cache is one this build mounts.
+ *
+ * `KNOWN_MODES` lists only the modes that are *not* the default: its one other
+ * caller, `parseSpaceConfig`, uses it to normalize anything else to 'inbox'.
+ * A cached descriptor records a mode that has already been through that
+ * normalization, so 'inbox' is the commonest value here and belongs in the set
+ * the cache accepts — testing `KNOWN_MODES` alone would reject every
+ * inbox-mode space and quietly send it to Home.
+ *
+ * @param {unknown} mode
+ */
+const isCachedMode = mode =>
+  typeof mode === 'string' && (mode === 'inbox' || KNOWN_MODES.has(mode));
+harden(isCachedMode);
+
+/**
  * The cached descriptor of the space to open on load, if one was cached.
  *
  * Synchronous by design: the caller uses it to choose what to mount before the
@@ -187,11 +203,27 @@ export const readBootDefaultSpace = () => {
       !parsed.profilePath.every(segment => typeof segment === 'string') ||
       parsed.profilePath.length === 0 ||
       typeof parsed.spaceInfo !== 'object' ||
-      parsed.spaceInfo === null
+      parsed.spaceInfo === null ||
+      // The mode picks which component the shell mounts, so a cache naming one
+      // this build does not have — a downgrade, or a space kind since removed —
+      // is rejected here rather than mounted as whatever falls through.
+      !isCachedMode(parsed.spaceInfo.mode)
     ) {
       return undefined;
     }
-    return parsed;
+    // The scheme is applied by setting an attribute before the first paint,
+    // ahead of any of the gutter's own checks, so it is screened here too.
+    // Dropping just the scheme rather than the whole entry: the space is still
+    // the right one to open, and `refresh()` applies its real scheme shortly.
+    const scheme = validSchemes.includes(parsed.scheme)
+      ? parsed.scheme
+      : undefined;
+    return {
+      id: parsed.id,
+      profilePath: parsed.profilePath,
+      spaceInfo: parsed.spaceInfo,
+      ...(scheme === undefined ? {} : { scheme }),
+    };
   } catch {
     return undefined;
   }
