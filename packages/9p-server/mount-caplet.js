@@ -60,6 +60,10 @@ import { makeFsBridge9p } from './src/fs-bridge.js';
 
 const execFileP = promisify(execFile);
 
+// Fallback identity where the platform has no uid/gid (Windows). Matches the
+// defaults in `src/fs-bridge.js` and `src/server.js`.
+const DEFAULT_ID = 1000;
+
 const MountHandleInterface = M.interface('Fs9pMountHandle', {
   unmount: M.call().returns(M.promise()),
   mountPoint: M.call().returns(M.string()),
@@ -72,6 +76,28 @@ const MounterInterface = M.interface('Fs9pMounter', {
   list: M.call().returns(M.array()),
   help: M.call().returns(M.string()),
 });
+
+/**
+ * The POSIX identity the 9P server reports as the owner of every node in the
+ * projection. The capability filesystem has no ownership of its own, so this
+ * is what decides whether the kernel lets the accessing process write (see the
+ * Rgetattr comment in `src/server.js`).
+ *
+ * The worker's own uid/gid is the right answer for the case this exists for: a
+ * rootless container whose root maps to the user running the caplet sees that
+ * user as the owner, and so gets the writable view the caller asked for. Taken
+ * from an injected `proc` rather than the ambient global so the fallback branch
+ * is reachable from a test; `getuid`/`getgid` are absent on Windows.
+ *
+ * @param {{ getuid?: () => number, getgid?: () => number }} proc
+ * @returns {{ uid: number, gid: number }}
+ */
+export const mountIdentity = proc =>
+  harden({
+    uid: typeof proc.getuid === 'function' ? proc.getuid() : DEFAULT_ID,
+    gid: typeof proc.getgid === 'function' ? proc.getgid() : DEFAULT_ID,
+  });
+harden(mountIdentity);
 
 /**
  * Pick a default directory for the per-mount UDS.  Prefer the XDG
@@ -523,8 +549,7 @@ export const make = async (_powers, context, options = {}) => {
     makeDir: mkdir,
     removeDir: rmdir,
     makeBridge: makeFsBridge9p,
-    uid: typeof process.getuid === 'function' ? process.getuid() : 1000,
-    gid: typeof process.getgid === 'function' ? process.getgid() : 1000,
+    ...mountIdentity(process),
   });
 };
 harden(make);
