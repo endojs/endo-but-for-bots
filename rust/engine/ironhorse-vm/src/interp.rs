@@ -37983,6 +37983,14 @@ impl Interp {
                     f64::INFINITY
                 } else if argc < 2 {
                     0.0
+                } else if last {
+                    // `lastIndexOf` maps *any* NaN position to +INFINITY, not
+                    // only a missing or `undefined` one, so it cannot share
+                    // `ToIntegerOrInfinity`'s NaN-to-zero rule.
+                    self.string_last_index_of_position(
+                        code,
+                        argn(1).unwrap_or_else(Slot::undefined),
+                    )?
                 } else {
                     self.array_to_integer_or_infinity(
                         code,
@@ -41234,6 +41242,37 @@ impl Interp {
 
     /// `ToIntegerOrInfinity(? ToNumber(v))` (ECMA-262 7.1.5): `NaN` → 0,
     /// infinities pass through, else truncate toward zero.
+    /// `String.prototype.lastIndexOf`'s position coercion (ECMA-262 22.1.3.9
+    /// steps 4-6): `ToNumber(position)`, and then **any** NaN becomes
+    /// `+INFINITY` -- the whole string is searched -- where
+    /// [`Self::array_to_integer_or_infinity`] maps NaN to 0.
+    ///
+    /// Step 5 only *asserts* that an `undefined` position is NaN; it is not the
+    /// sole way to get there. `"abcabc".lastIndexOf("a", NaN)`,
+    /// `..., "zzz")` and `..., {})` are all NaN and all answer 3, and sharing
+    /// the array rule started them at 0 instead. `indexOf` genuinely wants
+    /// NaN to 0, so only this branch is affected.
+    ///
+    /// The coercion is observable, so this repeats the body rather than
+    /// calling `ToNumber` a second time to inspect it.
+    fn string_last_index_of_position(&mut self, code: &[u8], v: Slot) -> Result<f64, Halt> {
+        let num = self.to_number_value(code, v)?;
+        // Same ToNumber (not ToNumeric) boundary as the array helper: a BigInt,
+        // including one produced by a guest `valueOf`/`@@toPrimitive`, is a
+        // catchable TypeError rather than a position.
+        if num.kind == Kind::BigInt {
+            return Err(self.catchable_type_error());
+        }
+        let n = to_number(&num);
+        if n.is_nan() {
+            Ok(f64::INFINITY)
+        } else if n.is_infinite() {
+            Ok(n)
+        } else {
+            Ok(n.trunc())
+        }
+    }
+
     fn array_to_integer_or_infinity(&mut self, code: &[u8], v: Slot) -> Result<f64, Halt> {
         let num = self.to_number_value(code, v)?;
         // `to_number_value` is the shared ToNumeric primitive and deliberately
