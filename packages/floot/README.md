@@ -91,3 +91,17 @@ A subagent session runs on its parent's backend and model, records its parent in
 the session registry, and is released with it.
 Set `FLOOT_MAX_SUBAGENT_DEPTH=0` to withhold the tools entirely.
 See [@endo/fae's SUBAGENTS.md](../fae/SUBAGENTS.md).
+
+## Provider credentials
+
+`floot-factory-setup.js` puts `ANTHROPIC_API_KEY` in the daemon's secret manager
+under `secrets/floot-auth` and hands the factory the `SecretBlob`; the
+`floot/llm-provider` value carries no credential.
+Re-running setup without the key in the environment keeps the secret already in
+the manager, and re-running it *with* a key replaces the bytes of the existing
+record rather than minting a second one, so delegated capabilities stay valid.
+
+A provider pins the token as of the moment it was built.
+Call `refreshCredentials()` on the factory after rotating or revoking the secret
+to drop the cached providers, so the next turn reads it again — no daemon
+restart required.

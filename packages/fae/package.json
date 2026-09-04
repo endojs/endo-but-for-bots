@@ -18,13 +18,14 @@
   "exports": {
     ".": "./agent.js",
     "./llm-provider-factory.js": "./llm-provider-factory.js",
+    "./src/credentials.js": "./src/credentials.js",
+    "./src/extract-tool-calls.js": "./src/extract-tool-calls.js",
     "./src/fae-tool-interface.js": "./src/fae-tool-interface.js",
+    "./src/subagent-host.js": "./src/subagent-host.js",
+    "./src/subagent.js": "./src/subagent.js",
     "./src/tool-makers.js": "./src/tool-makers.js",
     "./src/tools.js": "./src/tools.js",
-    "./src/subagent.js": "./src/subagent.js",
-    "./src/subagent-host.js": "./src/subagent-host.js",
     "./src/turn-engine.js": "./src/turn-engine.js",
-    "./src/extract-tool-calls.js": "./src/extract-tool-calls.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -53,6 +54,7 @@
   },
   "dependencies": {
     "@endo/agentry": "workspace:^",
+    "@endo/base64": "workspace:^",
     "@endo/conversation-tree": "workspace:^",
     "@endo/daemon": "workspace:^",
     "@endo/errors": "workspace:^",
@@ -67,10 +69,12 @@
     "@endo/patterns": "workspace:^",
     "@endo/platform": "workspace:^",
     "@endo/promise-kit": "workspace:^",
+    "@endo/utf8": "workspace:^",
     "safe-regex2": "^5.1.1"
   },
   "devDependencies": {
     "@endo/cli": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev"

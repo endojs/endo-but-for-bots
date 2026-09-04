@@ -6,6 +6,8 @@
 
 import { E } from '@endo/eventual-send';
 
+import { AUTH_SECRET_PETNAME } from './src/credentials.js';
+
 const faeFactorySpecifier = new URL('agent.js', import.meta.url).href;
 
 /**
@@ -67,6 +69,28 @@ export const main = async agent => {
   // storeIdentifier rather than storeLocator (which requires endo://).
   const factoryPowers = await E(agent).lookup(agentName);
   await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+
+  // The provider config names the pet name its token was bound to under
+  // `secrets/`. A name means nothing to the factory — it has no `secrets`
+  // directory — so resolve it here, where it does mean something, and delegate
+  // the `SecretBlob` capability itself.
+  const providerConfig = /** @type {any} */ (
+    await E(agent).lookup(providerName)
+  );
+  const authSecretName = providerConfig?.authSecretName;
+  if (typeof authSecretName === 'string' && authSecretName !== '') {
+    const secretLocator = await E(agent).locate('secrets', authSecretName);
+    if (typeof secretLocator !== 'string') {
+      throw new Error(
+        `Provider "${providerName}" names secret "${authSecretName}", which does not exist.`,
+      );
+    }
+    await E(factoryPowers).storeLocator(AUTH_SECRET_PETNAME, secretLocator);
+  } else if (await E(factoryPowers).has(AUTH_SECRET_PETNAME)) {
+    // A provider that reverted to a plaintext token must not keep silently
+    // reading a stale blob, which the resolver would prefer.
+    await E(factoryPowers).remove(AUTH_SECRET_PETNAME);
+  }
 
   // Launch the fae-factory caplet.
   await E(agent).makeUnconfined('@main', faeFactorySpecifier, {

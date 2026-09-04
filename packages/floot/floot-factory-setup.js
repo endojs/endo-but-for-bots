@@ -9,11 +9,20 @@
 // is configured programmatically (Anthropic API endpoint by default) and handed
 // to the factory behind an `llm-provider` capability handle, so no secret lives
 // in env. Persistence is daemon-only.
+//
+// The auth token is held by the daemon's secret manager and handed to the
+// factory as a `SecretBlob` capability, so the token can be rotated or revoked
+// without re-provisioning anything, every read is audited, and the pet-store
+// value the factory reads carries no credential at all.
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { E } from '@endo/eventual-send';
+import {
+  AUTH_SECRET_PETNAME,
+  provideAuthSecret,
+} from '@endo/fae/src/credentials.js';
 
 const flootFactorySpecifier = new URL('agent.js', import.meta.url).href;
 
@@ -61,15 +70,19 @@ export const main = async agent => {
   const systemPrompt = process.env.FLOOT_SYSTEM_PROMPT || '';
   const codePath = resolveCodePath();
 
-  if (provider === 'anthropic' && !authToken) {
-    throw new Error(
-      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
-    );
-  }
-
   // 0. Ensure the floot/ directory exists (idempotent on re-provision).
   if (!(await E(agent).has(dir))) {
     await E(agent).makeDirectory(dir);
+  }
+
+  // A re-provision without the key in env keeps the secret already in the
+  // manager: the credential lives in the daemon now, not in this shell.
+  const secretName = `${dir}-auth`;
+  const hasExistingSecret = await E(agent).has('secrets', secretName);
+  if (provider === 'anthropic' && !authToken && !hasExistingSecret) {
+    throw new Error(
+      'ANTHROPIC_API_KEY (or FLOOT_AUTH_TOKEN) is required for the Anthropic provider.',
+    );
   }
 
   // 1. The factory is its own child host. It needs host authority because only
@@ -82,20 +95,58 @@ export const main = async agent => {
     agentName,
   });
 
-  // 2. Store the provider config (incl. the API key) as a value under
-  // `floot/llm-provider` and hand the factory a capability reference to it under
-  // `llm-provider` — the fae pattern.
+  // 2. Put the auth token in the daemon's secret manager and hand the factory
+  // the `SecretBlob`. `@secrets` is carried only by the root host, so a setup
+  // run from a child host falls back to the pre-secret-manager arrangement: a
+  // plaintext token inside the config value, which cannot be rotated, revoked,
+  // or audited.
+  /** @type {string | undefined} */
+  let authSecretLocator;
+  if (authToken || hasExistingSecret) {
+    try {
+      ({ locator: authSecretLocator } = authToken
+        ? await provideAuthSecret({
+            hostAgent: agent,
+            name: secretName,
+            description: `Floot ${provider} provider auth token`,
+            token: authToken,
+          })
+        : { locator: await E(agent).locate('secrets', secretName) });
+    } catch (error) {
+      if (!authToken) throw error;
+      console.warn(
+        `Floot: could not use the secret manager (${
+          error instanceof Error ? error.message : String(error)
+        }); falling back to a plaintext token in ${dir}/llm-provider.`,
+      );
+    }
+  }
+
+  // 3. Store the provider config as a value under `floot/llm-provider` and hand
+  // the factory a capability reference to it under `llm-provider` — the fae
+  // pattern. The value carries a credential only on the fallback path.
   if (await E(agent).has(dir, 'llm-provider')) {
     await E(agent).remove(dir, 'llm-provider');
   }
-  await E(agent).storeValue(harden({ provider, model, authToken }), [
-    dir,
-    'llm-provider',
-  ]);
+  await E(agent).storeValue(
+    harden({
+      provider,
+      model,
+      ...(authSecretLocator ? {} : { authToken }),
+    }),
+    [dir, 'llm-provider'],
+  );
   const providerLocator = await E(agent).locate(dir, 'llm-provider');
   await E(factoryHost).storeLocator('llm-provider', providerLocator);
+  if (authSecretLocator) {
+    await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+  } else if (await E(factoryHost).has(AUTH_SECRET_PETNAME)) {
+    // Do not leave a stale blob reachable beside a fallback plaintext token:
+    // the factory prefers the capability, so a stale one would win silently.
+    await E(factoryHost).remove(AUTH_SECRET_PETNAME);
+  }
 
-  // 3. Launch the factory caplet straight into floot/controller.
+  // 4. Launch the factory caplet straight into floot/controller.
   await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
     powersName: agentName,
     resultName: controllerPath,
@@ -105,17 +156,17 @@ export const main = async agent => {
     }),
   });
 
-  // 4. Tuck the factory host + its profile under floot/ so the top level stays
-  // clean. (The factory already resolved its powers in step 3; renaming the
+  // 5. Tuck the factory host + its profile under floot/ so the top level stays
+  // clean. (The factory already resolved its powers in step 4; renaming the
   // pet-names afterward is cosmetic — formulas reference by identity.)
   await E(agent).move([guestName], [dir, 'controller-handle']);
   await E(agent).move([agentName], [dir, 'controller-profile']);
 
-  // 5. Single pin: the factory revives all its sessions on daemon restart.
+  // 6. Single pin: the factory revives all its sessions on daemon restart.
   await E(agent).copy(controllerPath, ['@pins', `${dir}-controller`]);
   console.log(`Floot factory created at "${dir}/controller" and pinned.`);
 
-  // 6. Seed a default session if this is a fresh factory.
+  // 7. Seed a default session if this is a fresh factory.
   const factory = await E(agent).lookup(controllerPath);
   const sessions = await E(factory).listSessions();
   if (sessions.length === 0) {

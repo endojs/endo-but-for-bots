@@ -35,6 +35,7 @@ import {
   makeSubagentDelegations,
 } from '@endo/fae/src/subagent.js';
 import { DEFAULT_MAX_SUBAGENT_DEPTH } from '@endo/fae/src/subagent-host.js';
+import { resolveAuthToken } from '@endo/fae/src/credentials.js';
 import {
   assertHostedBackendDescriptor,
   normalizeHostedModelDescriptor,
@@ -144,6 +145,7 @@ const FlootFactoryInterface = M.interface('FlootFactory', {
   getSession: M.callWhen(M.string()).returns(M.remotable()),
   renameSession: M.callWhen(M.string(), M.string()).returns(M.undefined()),
   deleteSession: M.callWhen(M.string()).returns(M.undefined()),
+  refreshCredentials: M.callWhen().returns(M.undefined()),
   help: M.call().optional(M.string()).returns(M.string()),
 });
 
@@ -1369,6 +1371,12 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // One streaming provider per model. Sessions that don't pin a model share the
   // entry under the empty-string key (the factory's configured default model).
+  //
+  // The auth token is read from the `SecretBlob` at construction, never held in
+  // the config value. A provider therefore pins the token as of the moment it
+  // was built: `refreshCredentials()` drops the cache so the next turn reads
+  // the secret again, which is how a rotation or revocation takes effect
+  // without restarting the daemon.
   /** @type {Map<string, Promise<any>>} */
   const providersByModel = new Map();
   const getProvider = model => {
@@ -1380,7 +1388,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         return createStreamingProvider({
           FLOOT_PROVIDER: cfg.provider,
           FLOOT_MODEL: model || cfg.model,
-          FLOOT_AUTH_TOKEN: cfg.authToken,
+          FLOOT_AUTH_TOKEN: await resolveAuthToken({ powers, config: cfg }),
         });
       })().catch(error => {
         providersByModel.delete(key);
@@ -2316,12 +2324,28 @@ export const make = (hostPowers, _context, { env } = {}) => {
     },
 
     /**
+     * Drop the cached API providers so the next turn re-reads the auth token
+     * from the `SecretBlob`.
+     *
+     * A provider pins the token as of the moment it was constructed, so this is
+     * what makes a rotation (`SecretAdmin.replaceBase64`) or a revocation take
+     * effect without restarting the daemon. Sessions on a hosted backend are
+     * unaffected: their credentials belong to the backend, not to Floot.
+     */
+    async refreshCredentials() {
+      providersByModel.clear();
+      console.error(
+        '[floot-factory] Cleared cached providers; the next turn re-reads the auth secret.',
+      );
+    },
+
+    /**
      * @param {string} [methodName]
      * @returns {string}
      */
     help(methodName) {
       if (methodName === undefined) {
-        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id). Session facets expose converse(), getHistory(), getUsage(), and getInfo().';
+        return 'Floot factory: createSession({title,presetId,backendId,modelId,reasoningEffort} | title?, presetId?, model?) -> session facet; listSessions() includes backend/model/reasoning/lifecycle metadata; listBackends(); listModels(backendId?); listPresets(); getSession(id); renameSession(id,title); deleteSession(id); refreshCredentials(). Session facets expose converse(), getHistory(), getUsage(), and getInfo().';
       }
       const docs = {
         createSession:
@@ -2337,7 +2361,9 @@ export const make = (hostPowers, _context, { env } = {}) => {
         getSession: 'getSession(id) — Return the session facet for an id.',
         renameSession: 'renameSession(id, title) — Rename a session.',
         deleteSession:
-          'deleteSession(id) — Delete a session and its backing guest.',
+          'deleteSession(id) — Delete a session, its backing guest, and every subagent session beneath it.',
+        refreshCredentials:
+          'refreshCredentials() — Drop cached API providers so the next turn re-reads the auth secret, applying a rotation or revocation without a restart.',
       };
       return docs[methodName] || `No documentation for method "${methodName}".`;
     },

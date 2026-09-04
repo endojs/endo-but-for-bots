@@ -40,6 +40,7 @@ import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   provisionFaeAgent,
 } from './src/subagent-host.js';
+import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
@@ -697,6 +698,10 @@ export const make = async (guestPowers, _context) => {
         throw new Error('maxSubagentDepth must be a non-negative integer.');
       }
 
+      // The auth token travels as a capability, not as a value: when the
+      // factory holds a SecretBlob, every agent it creates gets the same one,
+      // so a rotation or revocation reaches all of them at once.
+      const hasAuthSecret = await E(powers).has(AUTH_SECRET_PETNAME);
       const { profileName } = await provisionFaeAgent({
         hostAgent,
         name,
@@ -706,6 +711,13 @@ export const make = async (guestPowers, _context) => {
         hostAgentLocator: /** @type {string} */ (
           await E(powers).locate('host-agent')
         ),
+        ...(hasAuthSecret
+          ? {
+              authSecretLocator: /** @type {string} */ (
+                await E(powers).locate(AUTH_SECRET_PETNAME)
+              ),
+            }
+          : {}),
         driverSpecifier,
         spawnerSpecifier,
         depth: 0,

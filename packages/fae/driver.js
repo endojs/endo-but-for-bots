@@ -3,6 +3,7 @@ import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
 import { spawnWorkerLoop } from './agent.js';
+import { resolveAuthToken } from './src/credentials.js';
 
 /**
  * Fae agent driver caplet.
@@ -39,10 +40,17 @@ export const make = async (powers, context, { env } = {}) => {
   const systemPrompt = env?.FAE_SYSTEM_PROMPT || undefined;
 
   const startLoop = async () => {
-    const providerConfig =
-      /** @type {{ host: string, model: string, authToken: string }} */ (
+    const storedConfig =
+      /** @type {{ host: string, model: string, authToken?: string }} */ (
         await E(powers).lookup('llm-provider')
       );
+    // The token comes from the SecretBlob when one was delegated, so the
+    // stored config need carry no credential. Read once per loop start: a
+    // rotation takes effect when the driver next starts.
+    const providerConfig = harden({
+      ...storedConfig,
+      authToken: await resolveAuthToken({ powers, config: storedConfig }),
+    });
     const agentPowers = await E(powers).lookup('agent');
     const spawner = (await E(powers).has('subagent-spawner'))
       ? await E(powers).lookup('subagent-spawner')
