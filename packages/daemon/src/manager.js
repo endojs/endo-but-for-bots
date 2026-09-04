@@ -4204,7 +4204,11 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       makePeer(networksId, nodeId, addressesId, context),
     invitation: (
-      { invitingAgent: invitingAgentId, invitingHandle: invitingHandleId, guestName },
+      {
+        invitingAgent: invitingAgentId,
+        invitingHandle: invitingHandleId,
+        guestName,
+      },
       _context, // eslint-disable-line no-underscore-dangle
       id,
     ) =>

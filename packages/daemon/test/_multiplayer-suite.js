@@ -470,7 +470,10 @@ export const runMultiplayerSuite = ({ test, network }) => {
     const bobId = await E(guestA).identify('bob');
     t.truthy(bobId, "inviting guest bound the acceptor's handle under 'bob'");
     const aliceId = await E(hostB).identify('alice');
-    t.truthy(aliceId, "acceptor bound the inviting guest's handle under 'alice'");
+    t.truthy(
+      aliceId,
+      "acceptor bound the inviting guest's handle under 'alice'",
+    );
     t.is(
       parseId(aliceId).number,
       parseId(guestHandleId).number,
