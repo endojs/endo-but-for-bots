@@ -2012,3 +2012,65 @@ test('a completion already in flight cannot resurrect a quarantined turn', async
   const status = await client.status();
   t.true(status.needsReconciliation);
 });
+
+test('a turn can be interrupted while an Endo tool call is still running', async t => {
+  /** @type {(value: string) => void} */
+  let releaseTool = () => {};
+  const toolRunning = new Promise(resolve => {
+    releaseTool = resolve;
+  });
+  /** @type {() => void} */
+  let toolStarted = () => {};
+  const started = new Promise(resolve => {
+    toolStarted = resolve;
+  });
+  const fixture = makeFixture({
+    clientOptions: {
+      // The default ratio in production: a tool may run four times as long as
+      // a request may take to answer.
+      requestTimeoutMs: 300,
+      toolCallTimeoutMs: 1200,
+      toolSetId: 'tools-v1',
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'slow',
+          description: 'A tool that takes a while.',
+          inputSchema: { type: 'object', properties: {}, required: [] },
+        },
+      ],
+      callTool: async () => {
+        toolStarted();
+        return toolRunning;
+      },
+    },
+  });
+  const reader = await fixture.client.send('do the slow thing');
+  fixture.push({
+    id: 77,
+    method: 'item/tool/call',
+    params: {
+      threadId: 'thread-new',
+      turnId: 'turn-1',
+      callId: 'call-1',
+      namespace: null,
+      tool: 'slow',
+      arguments: {},
+    },
+  });
+  await started;
+
+  // The user presses stop. Before the pump stopped blocking on the tool call,
+  // `turn/interrupt` was answered by the app-server but never dequeued, so it
+  // hit its own 300 ms timeout and quarantined the session.
+  await fixture.client.interrupt();
+  releaseTool('done');
+  const events = await drain(reader);
+  t.is(events.at(-1)?.type, 'abort');
+  const status = await fixture.client.status();
+  t.false(status.terminated, 'the session survives a cancelled tool call');
+  t.true(
+    fixture.sent.some(message => message.method === 'turn/interrupt'),
+    'the interrupt actually reached the app-server',
+  );
+});

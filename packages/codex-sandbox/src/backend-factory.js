@@ -655,12 +655,27 @@ export const makeCodexBackendFactory = ({
                 throw error;
               }
             })();
-        const cleanup = await Promise.allSettled([
-          clientCleanup,
-          resources.dispose(),
-        ]);
-        for (const result of cleanup) {
-          if (result.status === 'rejected') failures.push(result.reason);
+        try {
+          await clientCleanup;
+        } catch (error) {
+          failures.push(error);
+        }
+        // Destroying the slice, the workspace mount, and the broker lease is
+        // only safe once the client has actually stopped. Building an
+        // `allSettled` array invoked `dispose()` eagerly, so it ran
+        // concurrently with — and regardless of — the admission barrier above:
+        // a session with an unsettled Endo tool call had its container killed
+        // mid-call, its credential revoked, and its durable workspace deleted,
+        // while `terminate()` rejected and told the caller the session had been
+        // left intact for a later lifecycle retry. `clientStopped` is exactly
+        // the condition that makes disposal safe, including the case where
+        // `terminate()` rejected after the client had irreversibly stopped.
+        if (clientStopped) {
+          try {
+            await resources.dispose();
+          } catch (error) {
+            failures.push(error);
+          }
         }
         if (failures.length > 0) {
           const failureMessages = failures.map(error =>

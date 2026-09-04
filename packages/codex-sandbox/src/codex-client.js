@@ -215,6 +215,14 @@ export const makeCodexClient = ({
   const cleanupFailures = [];
   /** @type {Set<Promise<unknown>>} */
   const pendingToolOperations = new Set();
+  /**
+   * Server-request handlers the pump dispatched without awaiting, so that a
+   * long-running Endo tool cannot stall the read loop. Shutdown observes them;
+   * `pendingToolOperations` remains the admission barrier for the tool calls
+   * themselves.
+   * @type {Set<Promise<void>>}
+   */
+  const detachedRequests = new Set();
   const audit = async (kind, payload = {}) => {
     await auditEvent(kind, harden({ sessionId, ...payload }));
   };
@@ -402,6 +410,12 @@ export const makeCodexClient = ({
           // startup continuation observes `terminated` and closes any process
           // that arrives late; keep its rejection observed here.
           void ready.catch(() => undefined);
+        }
+        // A detached tool-call handler may still be writing its reply or its
+        // audit entry. Its errors are already routed to `failSession`; waiting
+        // keeps shutdown from resolving while one is mid-write.
+        if (detachedRequests.size > 0) {
+          await Promise.all([...detachedRequests]);
         }
         if (sessionFailureAudit) {
           try {
@@ -1063,7 +1077,28 @@ export const makeCodexClient = ({
             pending.delete(responseId);
           }
         } else if ('id' in message && 'method' in message) {
-          await handleServerRequest(message);
+          if (message.method === 'item/tool/call') {
+            // An Endo tool call runs for as long as `toolCallTimeoutMs`
+            // allows — four times the request timeout by default. Awaiting it
+            // here stopped the pump from dequeuing responses, so every
+            // concurrent request timed out on this side even though the
+            // app-server had already answered; `request()` then read its own
+            // timeout as an ambiguous mutating request and quarantined the
+            // session. Since a user pressing stop during a tool call takes
+            // exactly that path through `turn/interrupt`, cancelling a
+            // long-running tool destroyed the session instead of interrupting
+            // the turn. Dispatch it and keep reading.
+            const handled = handleServerRequest(message).catch(error => {
+              if (!terminated) failSession(error);
+            });
+            detachedRequests.add(handled);
+            void handled.then(
+              () => detachedRequests.delete(handled),
+              () => detachedRequests.delete(handled),
+            );
+          } else {
+            await handleServerRequest(message);
+          }
         } else if ('method' in message) {
           await onNotification(message);
         }
