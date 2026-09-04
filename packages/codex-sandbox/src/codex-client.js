@@ -6,6 +6,7 @@ import { makeExo } from '@endo/exo';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
+import { makeTurnLedger } from '@endo/hosted-agent/turn-ledger.js';
 
 import { toolFromItem } from './codex-protocol.js';
 
@@ -259,8 +260,53 @@ export const makeCodexClient = ({
   let nextRequestId = 1;
   let threadId = savedThreadId;
   let threadReady = false;
-  let recovery = savedRecovery;
-  let needsRollback = Boolean(recovery);
+  // Codex app-server 0.152.0 refuses `thread/turns/list` on a thread that has
+  // had no user message: a thread is not materialized until its first turn
+  // starts. A saved recovery marker proves a turn was dispatched on the saved
+  // thread, so a resumed session may ask; a freshly started one may not, and
+  // its write-ahead base checkpoint is `null` because there is nothing before
+  // its first turn.
+  let threadHasTurns = Boolean(savedThreadId && savedRecovery);
+  // The write-ahead / settle-once / reconcile protocol is @endo/hosted-agent's,
+  // not this adapter's: it is the same for every hosted backend and it is where
+  // durability bugs live. Only the two Codex-specific operations —
+  // `thread/turns/list` and `thread/revert` — stay here. The persisted shape
+  // keeps Codex's own field names, so existing durable state still loads.
+  const ledger = makeTurnLedger({
+    audit: (event, detail) => audit(event, detail),
+    ...(savedRecovery
+      ? {
+          recovery: harden({
+            baseCheckpoint: savedRecovery.baseTurnId ?? null,
+            ...(savedRecovery.turnId
+              ? { checkpoint: savedRecovery.turnId }
+              : {}),
+            status:
+              savedRecovery.status === 'completed' ? 'completed' : 'started',
+          }),
+        }
+      : {}),
+    persist: async record => {
+      if (!threadId || !saveThreadState) return;
+      await saveThreadState(
+        harden({
+          threadId,
+          ...(toolSetId ? { toolSetId } : {}),
+          ...(record
+            ? {
+                recovery: harden({
+                  baseTurnId: record.baseCheckpoint,
+                  ...(record.checkpoint ? { turnId: record.checkpoint } : {}),
+                  ...(record.status === 'completed'
+                    ? { status: 'completed' }
+                    : {}),
+                }),
+              }
+            : {}),
+        }),
+      );
+    },
+  });
   /** @type {Map<number, { resolve: (value: any) => void, reject: (error: Error) => void }>} */
   const pending = new Map();
   /** @type {ActiveTurn | undefined} */
@@ -285,6 +331,34 @@ export const makeCodexClient = ({
     turn.resolveTerminal();
   };
 
+  /**
+   * Settle the active turn through the ledger and deliver its terminal event
+   * only if this outcome is the one that won.
+   *
+   * Every terminal path goes through here, so a notification the app-server had
+   * already queued when the session failed cannot rewrite the durable marker or
+   * hand the consumer a second terminal event: the ledger latches the first
+   * outcome synchronously, and a loser never reaches `endActive`.
+   *
+   * @param {any} turn
+   * @param {{ type: 'completed', checkpoint: string } | { type: 'aborted' | 'failed', reason: string }} outcome
+   * @returns {Promise<boolean>}
+   */
+  const settleTurn = async (turn, outcome) => {
+    if (!turn) return false;
+    let accepted = true;
+    if (turn.ledgerTurn) {
+      ({ accepted } = await turn.ledgerTurn.settle(outcome));
+    }
+    if (!accepted || active !== turn) return false;
+    endActive(
+      outcome.type === 'completed'
+        ? harden({ type: 'end', checkpoint: outcome.checkpoint })
+        : harden({ type: 'abort', reason: outcome.reason }),
+    );
+    return true;
+  };
+
   const failSession = (error, recordFailure = true) => {
     const failure = error instanceof Error ? error : Error(`${error}`);
     if (recordFailure && !sessionFailureAudit) {
@@ -302,9 +376,10 @@ export const makeCodexClient = ({
     if (active) {
       const failedTurn = active;
       const finish = () => {
-        if (active === failedTurn) {
-          endActive(harden({ type: 'abort', reason: failure.message }));
-        }
+        void settleTurn(failedTurn, {
+          type: 'failed',
+          reason: failure.message,
+        });
       };
       if (sessionFailureAudit) {
         sessionFailureAudit.then(finish, finish);
@@ -924,27 +999,23 @@ export const makeCodexClient = ({
           }),
         });
         if (status === 'completed') {
-          recovery = harden({
-            baseTurnId: /** @type {any} */ (recovery).baseTurnId,
-            turnId: eventTurnId,
-            status: 'completed',
-          });
-          await persistThreadState(recovery);
           // Floot persists this checkpoint with its conversation node, then
           // acknowledges it. Until then the next send conservatively rolls the
-          // backend turn out.
-          endActive({ type: 'end', checkpoint: eventTurnId });
-        } else if (status === 'interrupted' || status === 'failed') {
-          needsRollback = true;
-          endActive({
-            type: 'abort',
-            reason: `${
-              (status === 'interrupted' && active?.interruptReason) ||
-              active?.errorReason ||
-              params.turn?.error?.message ||
-              `Codex turn ${status || 'failed'}`
-            }`,
+          // backend turn out. The ledger records the commit only if this is the
+          // outcome that won: a `completed` the app-server had already queued
+          // when the session failed must not resurrect the turn.
+          await settleTurn(active, {
+            type: 'completed',
+            checkpoint: `${eventTurnId}`,
           });
+        } else if (status === 'interrupted' || status === 'failed') {
+          const reason = `${
+            (status === 'interrupted' && active?.interruptReason) ||
+            active?.errorReason ||
+            params.turn?.error?.message ||
+            `Codex turn ${status || 'failed'}`
+          }`;
+          await settleTurn(active, { type: 'aborted', reason });
         } else {
           failSession(
             Error(
@@ -1135,8 +1206,11 @@ export const makeCodexClient = ({
       // remains intact for audit/recovery.
       rotatedFrom = threadId;
       threadId = undefined;
-      recovery = undefined;
-      needsRollback = false;
+      threadHasTurns = false;
+      // The marker names a turn in the thread being abandoned; the new thread
+      // starts with nothing outstanding. The old thread is left intact for
+      // audit and recovery.
+      ledger.forget();
       await audit('thread-rotation-required', {
         oldThreadId: rotatedFrom,
         oldToolSetId: savedToolSetId || '',
@@ -1196,19 +1270,11 @@ export const makeCodexClient = ({
     return /** @type {string} */ (threadId);
   };
 
-  const persistThreadState = async nextRecovery => {
-    if (!threadId || !saveThreadState) return;
-    await saveThreadState(
-      harden({
-        threadId,
-        ...(toolSetId ? { toolSetId } : {}),
-        ...(nextRecovery ? { recovery: nextRecovery } : {}),
-      }),
-    );
-  };
-
   const readLatestTurnId = async () => {
     const currentThreadId = await ensureThread();
+    // Asking an unmaterialized thread is an error, not an empty answer, and
+    // the honest answer for one is that it has no turns.
+    if (!threadHasTurns) return null;
     const response = await request('thread/turns/list', {
       threadId: currentThreadId,
       cursor: null,
@@ -1230,82 +1296,28 @@ export const makeCodexClient = ({
   };
 
   const reconcileThread = async () => {
-    if (!needsRollback || !recovery) return;
+    if (!ledger.status().needsReconciliation) return;
     const currentThreadId = await ensureThread();
-    const latestBefore = await readLatestTurnId();
-    await audit('history-reconciliation-started', {
-      threadId: currentThreadId,
-      strategy: 'checkpointed-thread-revert',
-      baseTurnId: recovery.baseTurnId || '',
-      latestTurnId: latestBefore || '',
+    await ledger.reconcile({
+      readLatestCheckpoint: readLatestTurnId,
+      revertBefore: async beforeTurnId => {
+        const response = await request('thread/revert', {
+          threadId: currentThreadId,
+          beforeTurnId,
+        });
+        if (response?.thread?.id !== currentThreadId) {
+          const failure = Error(
+            'Codex history reconciliation returned the wrong thread',
+          );
+          failSession(failure);
+          throw failure;
+        }
+      },
     });
-    if (latestBefore === recovery.baseTurnId) {
-      await audit('history-reconciled', {
-        threadId: currentThreadId,
-        strategy: 'checkpoint-already-restored',
-      });
-      await persistThreadState(undefined);
-      recovery = undefined;
-      needsRollback = false;
-      return;
-    }
-    if (recovery.turnId && latestBefore !== recovery.turnId) {
-      throw Error(
-        'Codex history advanced beyond the unacknowledged turn; session quarantined',
-      );
-    }
-    if (latestBefore === null) {
-      throw Error(
-        'Codex history lost the unacknowledged turn; session quarantined',
-      );
-    }
-    const response = await request('thread/revert', {
-      threadId: currentThreadId,
-      beforeTurnId: latestBefore,
-    });
-    if (response?.thread?.id !== currentThreadId) {
-      const failure = Error(
-        'Codex history reconciliation returned the wrong thread',
-      );
-      failSession(failure);
-      throw failure;
-    }
-    const latestAfter = await readLatestTurnId();
-    if (latestAfter !== recovery.baseTurnId) {
-      throw Error('Codex rollback did not restore the durable turn checkpoint');
-    }
-    // This comparison makes recovery idempotent if a crash occurs after the
-    // rollback response but before the marker is cleared.
-    await audit('history-reconciled', {
-      threadId: currentThreadId,
-      strategy: 'checkpointed-thread-revert',
-    });
-    await persistThreadState(undefined);
-    recovery = undefined;
-    needsRollback = false;
   };
 
   const acknowledgeCheckpoint = async checkpoint => {
-    await null;
-    if (!recovery) {
-      await audit('turn-commit-already-acknowledged', {
-        threadId: threadId || '',
-        turnId: checkpoint,
-      });
-      return;
-    }
-    if (recovery.status !== 'completed' || recovery.turnId !== checkpoint) {
-      throw Error(
-        `Codex checkpoint is not awaiting acknowledgement: ${checkpoint}`,
-      );
-    }
-    await persistThreadState(undefined);
-    recovery = undefined;
-    needsRollback = false;
-    await audit('turn-committed', {
-      threadId: /** @type {string} */ (threadId),
-      turnId: checkpoint,
-    });
+    await ledger.acknowledge(checkpoint);
   };
 
   return makeExo('CodexClient', CodexClientInterface, {
@@ -1379,11 +1391,13 @@ export const makeCodexClient = ({
             opts.reasoningEffort || reasoningEffort || '',
           ),
         });
-        // Floot commits only after a successful terminal event. Persist the
-        // previous backend turn as a write-ahead checkpoint before dispatch.
-        recovery = harden({ baseTurnId: await readLatestTurnId() });
-        await persistThreadState(recovery);
-        needsRollback = true;
+        // Floot commits only after a successful terminal event, so the turn
+        // about to be dispatched is written ahead first: the marker names the
+        // checkpoint the thread must be rolled back to if nothing acknowledges
+        // it.
+        turn.ledgerTurn = await ledger.begin({
+          baseCheckpoint: await readLatestTurnId(),
+        });
         const response = await request('turn/start', {
           threadId: currentThreadId,
           input: [{ type: 'text', text: prompt, text_elements: [] }],
@@ -1413,11 +1427,10 @@ export const makeCodexClient = ({
         }
         if (active === turn) {
           turn.turnId = `${response.turn.id}`;
-          recovery = harden({
-            baseTurnId: /** @type {any} */ (recovery).baseTurnId,
-            turnId: turn.turnId,
-          });
-          await persistThreadState(recovery);
+          // The thread is materialized from here on: a later turn can ask
+          // Codex for the latest turn id without erroring.
+          threadHasTurns = true;
+          await turn.ledgerTurn.observe(turn.turnId);
           const early = turn.earlyByTurn.get(turn.turnId) || [];
           turn.earlyByTurn.clear();
           for (const message of early) {
@@ -1429,12 +1442,10 @@ export const makeCodexClient = ({
           }
         }
       } catch (error) {
-        if (active === turn) {
-          endActive({
-            type: 'abort',
-            reason: error instanceof Error ? error.message : `${error}`,
-          });
-        }
+        await settleTurn(turn, {
+          type: 'failed',
+          reason: error instanceof Error ? error.message : `${error}`,
+        });
       }
       return channel.reader;
     },
@@ -1499,7 +1510,7 @@ export const makeCodexClient = ({
       if (!terminated && !closeRequestedAudited) {
         await audit('session-close-requested', {
           threadId: threadId || '',
-          needsRollback,
+          needsRollback: ledger.status().needsReconciliation,
         });
         closeRequestedAudited = true;
       }
@@ -1512,7 +1523,9 @@ export const makeCodexClient = ({
         threadId: threadId || null,
         ready: initialized && !terminated,
         active: Boolean(active),
-        ...(needsRollback ? { needsReconciliation: true } : {}),
+        ...(ledger.status().needsReconciliation
+          ? { needsReconciliation: true }
+          : {}),
         pendingToolCalls: pendingToolOperations.size,
         ...(toolSetId ? { toolSetId } : {}),
         closing,

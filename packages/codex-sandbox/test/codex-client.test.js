@@ -1910,3 +1910,105 @@ test('oversized prompts are rejected before transport startup', async t => {
   });
   t.is(starts, 0);
 });
+
+test('a first turn on a fresh thread does not ask an unmaterialized thread for its history', async t => {
+  const fixture = makeFixture();
+  const reader = await fixture.client.send('hello');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  const events = await drain(reader);
+  t.deepEqual(
+    fixture.sent.filter(message => message.method === 'thread/turns/list'),
+    [],
+    'app-server 0.152.0 rejects thread/turns/list before the first user message',
+  );
+  t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
+
+  // The thread is materialized now, so the next turn reads its write-ahead
+  // checkpoint normally.
+  await fixture.client.acknowledge('turn-1');
+  const second = await fixture.client.send('again');
+  fixture.push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-2', status: 'completed' },
+    },
+  });
+  await drain(second);
+  t.deepEqual(
+    fixture.sent
+      .filter(message => message.method === 'thread/turns/list')
+      .map(message => message.params.threadId),
+    ['thread-new'],
+    'once a turn exists the checkpoint is read',
+  );
+});
+
+test('a completion already in flight cannot resurrect a quarantined turn', async t => {
+  /** @type {any[]} */
+  const saved = [];
+  /** @type {(() => void) | undefined} */
+  let releaseAudit;
+  const held = new Promise(resolve => {
+    releaseAudit = () => resolve(undefined);
+  });
+  const { client, push } = makeFixture({
+    interruptTerminal: false,
+    clientOptions: {
+      requestTimeoutMs: 200,
+      saveThreadState: async state => {
+        saved.push(JSON.parse(JSON.stringify(state)));
+      },
+      auditEvent: async event => {
+        // A durable journal append is real I/O; the failure path awaits it
+        // before delivering the abort, which is the window in which the
+        // app-server's already-queued completion used to win.
+        if (event?.type === 'session-failed') await held;
+      },
+    },
+  });
+  const reader = await client.send('hello');
+  /** @type {any[]} */
+  const events = [];
+  const draining = (async () => {
+    for await (const event of iterateReader(reader)) events.push(event);
+  })();
+
+  // The interrupt is acked but never confirmed, so the deadline quarantines the
+  // session; the completion the app-server had already emitted arrives during
+  // the session-failed audit.
+  const interrupted = client.interrupt().then(
+    () => undefined,
+    error => error,
+  );
+  await new Promise(resolve => setTimeout(resolve, 350));
+  push({
+    method: 'turn/completed',
+    params: {
+      threadId: 'thread-new',
+      turn: { id: 'turn-1', status: 'completed' },
+    },
+  });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  /** @type {any} */ (releaseAudit)();
+  t.truthy(await interrupted);
+  await draining;
+
+  t.is(events.at(-1)?.type, 'abort', 'the consumer sees the abort, not an end');
+  t.false(
+    events.some(event => event.type === 'end'),
+    'a quarantined turn never reports a commit checkpoint',
+  );
+  t.false(
+    saved.some(state => state.recovery?.status === 'completed'),
+    'and never persists one either',
+  );
+  const status = await client.status();
+  t.true(status.needsReconciliation);
+});

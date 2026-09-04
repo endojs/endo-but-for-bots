@@ -287,7 +287,7 @@ export const makeFlootToolRegistry = (
           petName,
           // Endo locators bind the schema to the durable formula/capability,
           // not merely to a same-shaped replacement after reincarnation.
-          locator: await E(powers).locate(['tools', petName]),
+          locator: await E(powers).locate('tools', petName),
         }),
       ),
     );
