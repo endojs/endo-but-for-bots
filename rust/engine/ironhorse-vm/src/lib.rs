@@ -44,7 +44,7 @@ pub use interp::{
     IntlBoundFunctionRow, IntlTables, IteratorRow, ListFormatData, LocaleData, Native,
     CombinatorRow, NumberFormatData, PluralRulesData, PrivateAccessorRow, PrivateElementSnapshot,
     PrivateValueRow, PromiseClusterSnapshot, PromiseFnRow, PromiseReactionRow, PromiseRow,
-    ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError, RunOutcome,
+    PanicKind, ProxyRevokerRow, ProxyRow, ProxyStateSnapshot, RelinkError, RunOutcome,
     SavedFrameRow, SavedJumpRow,
     SegmentIteratorData, SegmenterData, SegmentsData, SourceCompileError, SourceCompiler,
     PROGRAM_INVOCATION_COMPUTRONS, TYPED_ARRAY_TYPES,
@@ -207,6 +207,27 @@ mod tests {
         a.define_global("x", Slot::integer(1));
         assert!(a.global("x").is_some());
         assert!(b.global("x").is_none(), "globals are per-compartment");
+    }
+
+    #[test]
+    fn is_panic_names_the_terminate_do_not_commit_set() {
+        // The single source of truth for the panic set (design
+        // `ironhorse-panic.md` § The Formal `Panic` Category, item 2).
+        // Settled core:
+        assert!(Halt::StackOverflow(3).is_panic());
+        assert!(Halt::MeterAbort.is_panic());
+        assert!(Halt::Panic(PanicKind::EngineFault {
+            message: "arena kind check".to_string(),
+            location: None,
+        })
+        .is_panic());
+        // Provisional members (Open Question), included for the commit
+        // decision:
+        assert!(Halt::Decode("truncated".to_string()).is_panic());
+        assert!(Halt::StepLimit(9).is_panic());
+        // Not panics: an ordinary (uncaught) throw and normal completion.
+        assert!(!Halt::Throw("catchable".to_string()).is_panic());
+        assert!(!Halt::Return.is_panic());
     }
 }
 

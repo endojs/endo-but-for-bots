@@ -3879,10 +3879,22 @@ impl Native {
 }
 
 /// Why a run stopped.
+///
+/// Match a **panic** via [`Halt::is_panic`] (or the
+/// [`ExecutionOutcome`](../../../endo/src/ironhorse_engine.rs) seam that
+/// delegates to it), never on a variant shape directly: the
+/// "terminate, do not commit" set is defined in exactly one place
+/// (`is_panic`), so a commit-path caller that matches `StackOverflow` /
+/// `MeterAbort` / `Panic(_)` by hand reproduces that logic and silently
+/// drifts when the set changes (design `ironhorse-panic.md`
+/// § The Formal `Panic` Category). `#[non_exhaustive]` adds
+/// discovery-time friction toward this rule for out-of-crate matches; it
+/// is a convention, not a type-level guarantee.
 // `Eq` is not derivable: `Halt::Yield` carries a `Slot`, whose `Number` arm
 // holds an `f64` (only `PartialEq`). `Halt` is compared with `==` (a
 // `PartialEq` use), never used as a hash key, so `PartialEq` alone suffices.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum Halt {
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
@@ -3935,6 +3947,83 @@ pub enum Halt {
     /// An async-generator body reached `YIELD`; its active request remains
     /// pending while the yielded value is assimilated as a promise.
     AsyncYield(Slot),
+    /// A **net-new panic** with no legacy `Halt` variant (design
+    /// `ironhorse-panic.md` § The Formal `Panic` Category, item 3). The
+    /// pre-existing panics (`StackOverflow`, `MeterAbort`) keep their flat,
+    /// diagnostic-carrying shapes; the sources introduced by the panic
+    /// design nest under `Panic(PanicKind)`. Both spellings answer the same
+    /// supervisor question — routed through [`Halt::is_panic`], never a
+    /// direct variant match.
+    Panic(PanicKind),
+}
+
+/// The kind of a net-new [`Halt::Panic`], each carrying a diagnostic
+/// payload so a frozen-at-fault snapshot is self-describing rather than
+/// requiring the cause to be re-derived from the program counter (design
+/// `ironhorse-panic.md` § The Formal `Panic` Category, item 3).
+///
+/// Extensible on purpose: the reference-error source of the design's Coda
+/// (`ReferenceError { name, site }`, off by default) is a deferred
+/// follow-on and is intentionally absent here; `#[non_exhaustive]` lets it
+/// be added later without churning match sites.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PanicKind {
+    /// A caught Rust panic, converted into this value at the thread/FFI
+    /// boundary so the supervisor observes a worker-death *value* rather
+    /// than a process abort. As informative as `StackOverflow`'s overshoot:
+    /// it carries the caught panic's message and, where the panic hook
+    /// could recover it, its physical source location.
+    ///
+    /// Named `EngineFault` (not `Host`) deliberately: this document uses
+    /// "host" for the surrounding-runtime call surface, so `Host` would
+    /// read as "a host-function call panicked" rather than "the engine hit
+    /// an internal logic bug." `EngineFault` names *what happened*.
+    EngineFault {
+        /// The caught panic's message.
+        message: String,
+        /// The panic's physical source position (`file:line:col`), when the
+        /// panic hook could recover it. Optional because a hook cannot
+        /// always reconstruct it.
+        location: Option<String>,
+    },
+}
+
+impl Halt {
+    /// True when this halt is a **panic**: an uncatchable abort-to-host
+    /// termination whose crank the supervisor must *discard, not commit*
+    /// (design `ironhorse-panic.md` § The Formal `Panic` Category, item 2).
+    ///
+    /// This is the single place the "terminate, do not commit" set is
+    /// defined. The `ExecutionOutcome` classifier delegates its `Panicked`
+    /// arm here rather than re-listing panic shapes, so adding a new panic
+    /// variant updates this predicate alone.
+    ///
+    /// The settled core is `StackOverflow | MeterAbort | Panic(_)`.
+    /// `Decode` and the harness-only `StepLimit` are **provisional**
+    /// members: they terminate-without-commit like a panic, but their
+    /// provenance is supervisor/harness rather than guest behavior, so
+    /// their inclusion is an open question (design § Open Questions).
+    /// Because this returns a bare `bool`, a caller written against today's
+    /// answer for those two gets **no compiler signal** if the question
+    /// later flips it — treat this doc note as that signal.
+    ///
+    /// A pure function of the `Halt` value: it never consults caller
+    /// context. `Decode` arises only on the loader path and `StepLimit`
+    /// only on the un-metered fuzz harness, but that is a fact about *where
+    /// those variants arise*, not a branch inside this predicate.
+    pub fn is_panic(&self) -> bool {
+        matches!(
+            self,
+            Halt::StackOverflow(_)
+                | Halt::MeterAbort
+                | Halt::Panic(_)
+                // Provisional (Open Question), may change without a
+                // type-level signal:
+                | Halt::Decode(_)
+                | Halt::StepLimit(_)
+        )
+    }
 }
 
 /// Propagate a native/helper result from the bytecode dispatch loop, resuming
@@ -55726,6 +55815,10 @@ mod tests {
                     unreachable!("yield escaped an async-generator resume")
                 }
                 Halt::Resume(_) => unreachable!("catch resume escaped a nested dispatch"),
+                // `Panic` is constructed only at the thread/FFI or `Machine`
+                // seam (a caught Rust panic), never by the interpreter's own
+                // dispatch, so it cannot reach a top-level `run` outcome here.
+                Halt::Panic(_) => unreachable!("engine-fault panic escaped the FFI/Machine seam"),
             }
         }
     }
