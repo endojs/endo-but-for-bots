@@ -1869,6 +1869,7 @@ __metadata:
     "@endo/eventual-send": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
     "@endo/pass-style": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
