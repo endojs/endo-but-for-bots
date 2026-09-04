@@ -21,6 +21,15 @@
     "url": "https://github.com/endojs/endo/issues"
   },
   "type": "module",
+  "files": [
+    "LICENSE",
+    "PROTOCOL.md",
+    "README.md",
+    "SECURITY.md",
+    "caplet.js",
+    "setup-forgejo-credential.js",
+    "setup.js"
+  ],
   "exports": {
     "./setup.js": "./setup.js",
     "./setup-forgejo-credential.js": "./setup-forgejo-credential.js",

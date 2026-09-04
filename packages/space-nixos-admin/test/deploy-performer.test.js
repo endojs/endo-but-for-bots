@@ -42,8 +42,12 @@ const fingerprintFor = (
 /** @param {number} ms */
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-/** @param {import('ava').ExecutionContext} t */
-const makeHarness = async t => {
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {{ shell?: string }} [options] - `shell` stands in for the lock
+ *   holder's `/bin/sh`, so a test can model a holder that dies mid-transaction.
+ */
+const makeHarness = async (t, { shell = '/bin/sh' } = {}) => {
   const dir = await mkdtemp(join(tmpdir(), 'nixos-deploy-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
   const configDir = join(dir, 'config');
@@ -100,7 +104,7 @@ const makeHarness = async t => {
       systemPaths: {
         currentSystem,
         ...(process.platform === 'linux'
-          ? { flock: '/usr/bin/flock', shell: '/bin/sh' }
+          ? { flock: '/usr/bin/flock', shell }
           : {}),
       },
     });
@@ -194,6 +198,7 @@ const makeHarness = async t => {
     admin,
     reincarnate,
     processNext,
+    nextRequest,
     pickUpAndConsume,
     recordOutcome,
     readRequest,
@@ -498,6 +503,74 @@ test.serial(
   },
 );
 
+test.serial(
+  'a lock holder that dies mid-transaction fails loud, never silently',
+  async t => {
+    if (process.platform !== 'linux') {
+      t.pass();
+      return;
+    }
+    // The holder is reaped after the caplet has begun working under its lock
+    // — the OOM killer during a long fingerprint walk, or an operator's kill.
+    // The kernel drops the lock the instant that process dies, so the
+    // transaction is no longer exclusive and its result must not be
+    // acknowledged. This fixture also closes its stdin, so the caplet's
+    // release write lands on a broken pipe: without an `error` listener on
+    // `child.stdin` that EPIPE is an unhandled stream error, which is an
+    // uncaught exception that takes the daemon down instead of surfacing here.
+    const dir = await mkdtemp(join(tmpdir(), 'nixos-lockdeath-'));
+    t.teardown(() => rm(dir, { recursive: true, force: true }));
+    const shell = join(dir, 'dying-holder.sh');
+    await writeFile(
+      shell,
+      '#!/bin/sh\nprintf "locked\\n"\nexec 0<&-\nsleep 0.05\nexit 9\n',
+      'utf8',
+    );
+    await chmod(shell, 0o755);
+    const { admin } = await makeHarness(t, { shell });
+
+    await t.throwsAsync(() => admin.getEndoRev(), {
+      message: /was not exclusive/,
+    });
+  },
+);
+
+test('an unprovisioned lock directory does not sink the whole capability', async t => {
+  // ENDO_NIXOS_LOCK_DIR lives on a tmpfs a reboot clears and the privileged
+  // service reprovisions; the daemon may legitimately start first.
+  // Canonicalizing it eagerly used to reject `make` outright, leaving even the
+  // read-only diagnostics unreachable until something re-instantiated the
+  // caplet.
+  const dir = await mkdtemp(join(tmpdir(), 'nixos-lockdir-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const configDir = join(dir, 'config');
+  const spoolDir = join(dir, 'spool');
+  await Promise.all([mkdir(configDir), mkdir(spoolDir)]);
+
+  const admin = await make(undefined, undefined, {
+    env: {
+      ENDO_NIXOS_CONFIG_DIR: configDir,
+      ENDO_NIXOS_DIR: spoolDir,
+      ENDO_NIXOS_LOCK_DIR: join(dir, 'not-yet-provisioned'),
+      ENDO_NIXOS_POLL_MS: '10',
+      ENDO_NIXOS_WATCH_LIMIT_MS: '5000',
+    },
+    systemPaths:
+      process.platform === 'linux'
+        ? { flock: '/usr/bin/flock', shell: '/bin/sh' }
+        : {},
+  });
+  const config = await admin.getConfig();
+  t.true(config.configured);
+  // Exactly what `realpath` will report once the service creates it, so an
+  // incarnation on either side of that computes the same lock path.
+  t.is(
+    config.canonicalLockDir,
+    join(await realpath(dir), 'not-yet-provisioned'),
+  );
+  t.deepEqual(await admin.listFiles(), [], 'a locked verb still works');
+});
+
 test('config fingerprint matches the published known-answer vector', async t => {
   const { admin, configDir, readRequest, processNext } = await makeHarness(t);
   await writeFile(join(configDir, 'a.nix'), 'abc\n');
@@ -604,6 +677,66 @@ test('an outcome must echo the submitted configuration fingerprint', async t => 
     }),
   );
   await t.throwsAsync(() => settled, { message: /already bound/ });
+});
+
+// `rollback` is the only action that submits `configFingerprint: null`, so
+// these three are the only exercise of the null branches in
+// operationFingerprint, assertApplyRequest, assertOutcomeRecord, and
+// isConfigFingerprint. It is also the root-equivalent recovery verb: a
+// re-dispatch that re-submitted would reactivate a generation a second time,
+// restarting the daemon that is trying to observe the first one.
+
+test('a rollback settles on a null fingerprint and re-dispatch never re-submits', async t => {
+  const { admin, reincarnate, processNext, readRequest, requestBytes } =
+    await makeHarness(t);
+  const settled = admin.rollback('r-11:0-0');
+  const record = await processNext();
+  t.is(record.configFingerprint, null, 'a rollback binds no config content');
+  t.like(await settled, {
+    ok: true,
+    phase: 'ok',
+    id: 'r-11:0-0',
+    action: 'rollback',
+  });
+  t.is((await readRequest()).configFingerprint, null);
+
+  const bytesBefore = await requestBytes();
+  const revived = await reincarnate();
+  const again = await revived.rollback('r-11:0-0');
+  t.like(again, { ok: true, phase: 'ok', id: 'r-11:0-0', action: 'rollback' });
+  t.is(await requestBytes(), bytesBefore, 'no second spool submission');
+});
+
+test('a settled rollback left in the slot is validated, not clobbered', async t => {
+  // The next operation must accept the null-fingerprint rollback occupying
+  // the slot as well-formed and settled, rather than reading it as the
+  // malformed request that would freeze the spool.
+  const { admin, processNext, readRequest } = await makeHarness(t);
+  const rolledBack = admin.rollback('r-11:1-0');
+  await processNext();
+  t.true((await rolledBack).ok);
+
+  const built = admin.build('after the rollback', 'r-11:1-1');
+  const next = await processNext();
+  t.is(next.id, 'r-11:1-1');
+  t.true((await built).ok);
+  t.regex((await readRequest()).configFingerprint, /^[0-9a-f]{64}$/);
+});
+
+test('a rollback outcome may not claim a configuration fingerprint', async t => {
+  const { admin, nextRequest, outcomesDir } = await makeHarness(t);
+  const settled = admin.rollback('r-11:2-0');
+  const request = await nextRequest();
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId(request.id)}.json`),
+    JSON.stringify({
+      ...request,
+      configFingerprint: '0'.repeat(64),
+      phase: 'ok',
+    }),
+  );
+  await t.throwsAsync(() => settled, { message: /configFingerprint/ });
 });
 
 test('stageFiles captures previous contents and revertFiles restores them', async t => {

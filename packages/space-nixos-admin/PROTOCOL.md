@@ -21,6 +21,20 @@ The administrator configures these paths:
 - `ENDO_NIXOS_LOCK_DIR` defaults to `/run/lock/endo-nixos-admin` and is a
   protected lock directory shared by the daemon and privileged service.
 
+The capability also creates two lock files of its own, inside the spools rather
+than in the lock directory, because they guard the spool slots themselves:
+
+- `$ENDO_NIXOS_DIR/submit.lock` serializes the submit-or-attach decision for
+  `apply-request.json` across processes.
+- `$ENDO_NIXOS_STATE_DIR/deploy/submit.lock` does the same for the prebuild
+  spool's `request.json`.
+
+Both are empty `flock(2)` anchors: nothing is ever read from them and their
+contents carry no meaning.
+The service does not take them — it is the single consumer, and the daemon side
+is what needs mutual exclusion — but a service that validates or cleans a spool
+directory must expect them and must not delete them.
+
 Do not make either spool world-writable.
 Give the daemon user write access only to request publication and the checkout;
 status, outcome, log, and protocol files should be service-owned and readable
@@ -102,8 +116,11 @@ protocol generation from satisfying the current operation.
 
 For `build` and `switch`, `configFingerprint` binds the request to the exact
 checkout contents seen at publication time.
-Walk entries in JavaScript string-code-unit order, omit `.git`, and reject
-symlinks and special files.
+Walk entries in JavaScript string-code-unit order, omit any entry named `.git`
+at every depth rather than only at the checkout root, and reject symlinks and
+special files.
+The capability refuses to write through such a path for the same reason, so no
+content it can edit is outside the digest.
 For each directory and regular file, hash its type (`d` or `f`), relative UTF-8
 path, and low 12 permission bits as
 `<type><path-byte-length>:<path><mode>:` where `mode` is decimal.
@@ -140,9 +157,22 @@ If it embeds another ID, stop with a protocol error.
 While running, atomically update `apply-status.json` with at least `id`,
 `action`, `fingerprint`, `configFingerprint`, `protocolFingerprint`, and
 `phase`.
-The service may consume the request only after publishing a status that echoes
-the ID.
-Otherwise, retain the request until a later publication replaces it.
+
+The service must not leave a window in which neither `apply-request.json` nor
+`apply-status.json` names the ID it is working on.
+Concretely, it must publish the ID-echoing status durably — `fsync` and rename,
+per "Atomic file publication" — and only then remove or overwrite
+`apply-request.json`; the simplest compliant service never consumes the request
+at all and lets the next publication replace it.
+This is a MUST rather than a nicety because it is the only thing that closes
+the last double-apply hole.
+The capability decides a slot is free to claim when it sees no request and no
+status for its ID, and it holds `submit.lock` while deciding — but the service
+does not take that lock, so a sample inside such a window would let an
+at-least-once re-dispatch of an already-running key publish a second request.
+For a `switch`, that means activating the host twice.
+The capability cannot close this from its side; the service's ordering is what
+makes the guarantee.
 
 On completion, atomically write
 `outcomes/<sanitizeId(id)>.json` with at least `id`, `action`, `fingerprint`,

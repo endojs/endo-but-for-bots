@@ -45,6 +45,38 @@ test('rejects the .git directory and its contents', t => {
   });
 });
 
+test('rejects a nested .git at any depth, as the walkers do', t => {
+  // walkFiles and fingerprintConfig skip `.git` at every depth, so a nested
+  // one that stayed writable would be editable yet outside both the listing
+  // and the fingerprint binding the request to what the service may build.
+  t.throws(() => resolveWithin(BASE, `sub${sep}.git`), {
+    message: /\.git directory is not editable/,
+  });
+  t.throws(
+    () => resolveWithin(BASE, `sub${sep}.git${sep}hooks${sep}pre-push`),
+    {
+      message: /\.git directory is not editable/,
+    },
+  );
+  t.throws(() => resolveWithin(BASE, `a${sep}b${sep}.git${sep}config`), {
+    message: /\.git directory is not editable/,
+  });
+});
+
+test('a normalized path cannot smuggle a .git component past the check', t => {
+  t.throws(() => resolveWithin(BASE, `sub${sep}..${sep}.git${sep}config`), {
+    message: /\.git directory is not editable/,
+  });
+});
+
+test('names that merely start with .git stay editable', t => {
+  t.is(resolveWithin(BASE, '.gitignore'), `${BASE}/.gitignore`);
+  t.is(
+    resolveWithin(BASE, `sub${sep}.gitattributes`),
+    `${BASE}/sub/.gitattributes`,
+  );
+});
+
 test('rejects empty and non-string paths', t => {
   t.throws(() => resolveWithin(BASE, ''), {
     message: /non-empty relative path/,
