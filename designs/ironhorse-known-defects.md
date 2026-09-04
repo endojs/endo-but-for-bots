@@ -213,6 +213,17 @@ over ten calls.
 So the apply walk is calibrated and the arguments-object `length` read is the
 next item, worth about a quarter of a computron each time a guest reads it.
 
+`AggregateError` carries a second residual, and it is a trade rather than a
+regression.
+`new AggregateError(arguments)` used to answer from the dense shortcut, which
+was one computron low and, for the shapes `F180` names, gave the wrong answer.
+It now takes the generic iterable path, which is right and runs one to four
+computrons high, growing with arity at roughly 65,500 raw units per element.
+That is the generic-iterable calibration itself, not something arguments
+objects do: an ordinary array-like carrying `Array.prototype[Symbol.iterator]`
+is three computrons high at the same arity, and a dense Array is still exact.
+`F181` is where that belongs, so no third credit is spent here to hide it.
+
 ## A harness caveat worth knowing
 
 The pinned oracle's answer for a program in this family can depend on which
