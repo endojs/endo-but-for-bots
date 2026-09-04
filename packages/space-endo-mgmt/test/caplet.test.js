@@ -76,6 +76,14 @@ test('requestUpdate accepts an explicit branch and trims it', async t => {
   t.is((await readRequest(deployDir)).branch, 'feature/some-work');
 });
 
+test('requestUpdate accepts a dot inside the name but not at the end', async t => {
+  const { controller, deployDir } = await makeCaplet(t);
+
+  // git reads the trailing-dot rule over the whole ref, not each component.
+  await controller.requestUpdate('a./v1.2.3');
+  t.is((await readRequest(deployDir)).branch, 'a./v1.2.3');
+});
+
 test('each request carries a distinct nonce', async t => {
   const { controller, deployDir } = await makeCaplet(t);
 
@@ -156,6 +164,8 @@ test('requestUpdate rejects otherwise malformed refs', async t => {
     ['.hidden', /must not start with/],
     ['feature/.hidden', /must not start with/],
     ['feature/x.lock', /must not end with/],
+    ['trailing.', /must not end with/],
+    ['feature/trailing.', /must not end with/],
     ['x'.repeat(256), /1 to 255 characters/],
   ];
 
