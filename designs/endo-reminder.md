@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-10 |
+| **Updated** | 2026-09-04 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress (PR #721 merged) |
 | **Supersedes** | [endoclaw-timer](endoclaw-timer.md) |
