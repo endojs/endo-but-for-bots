@@ -38,9 +38,9 @@ Scoping the SES win precisely matters, because SES today reaches
 `bestEffortStringify` from exactly one place. The only call site in the whole
 package is `quote()` at `packages/ses/src/error/assert.js:80`, inside a frozen
 `toString` thunk (`toString: freeze(() => bestEffortStringify(value, spaces))`).
-The tamed *causal console* — SES's console wrapper (installed by
-`tame-console.js`) that records the causal chain of errors while forwarding log
-calls to the host console rather than serializing their arguments — does
+The tamed *causal console* (SES's console wrapper, installed by
+`tame-console.js`, that records the causal chain of errors while forwarding log
+calls to the host console rather than serializing their arguments) does
 **not** stringify: it forwards live arguments
 straight to the host console (`baseConsole[name](...args)`,
 `packages/ses/src/error/console.js:330`) and, on Node, already opts out of
@@ -128,10 +128,18 @@ richness):
   richness lives only in the two console exports below, which own a sink and may
   legitimately vary by host. `inspect` honors `depth`, `breakLength`, and `indent`
   (the last is the per-level indentation width `quote()`'s `spaces` argument
-  threads through — see "The shim and SES integration"); it
+  threads through; see "The shim and SES integration"); it
   **defaults `colors: false` and never senses a TTY**, because it has no
   destination in its signature (its caller does). `colors` is accepted and
-  ignored rather than rejected, so one options bag is valid everywhere.
+  ignored rather than rejected, so one options bag is valid everywhere. This is
+  a deliberate **divergence from Node's well-known `util.inspect`**, whose name
+  `inspect` deliberately echoes: `util.inspect(v, { colors: true })` colorizes,
+  but `inspect(v, { colors: true })` here silently produces the same plain
+  string. The collision and whether to make it fail loud (rename the string
+  export, or reject a non-default `colors`) is called out as its own hazard and
+  left as an open decision under "Open Questions" below; it is flagged here at
+  the definition site so the divergence is not discovered only by diffing output
+  against a real TTY render.
 - **`inspectToConsoleArgs(value, options)` returns an array of `console`
   arguments** on every host. On **browser** the array is the *live* object(s),
   so `console.log(...inspectToConsoleArgs(value))` preserves the rich,
@@ -140,13 +148,13 @@ richness):
   `[str]`: a bare first element would let a `%s`/`%o` sequence inside
   caller-derived text be interpreted as a `console` format directive and corrupt
   the render), where `str` is `util.inspect`'s output honoring the same options
-  plus TTY-driven `colors`. **The destination the TTY-ness is sensed against
+  plus TTY-driven `colors`. **The destination against which TTY-ness is sensed
   lives in the signature, not in an implicit global stream:** `options.stream`
   (default `process.stdout`) names the stream whose `.isTTY` decides colorization.
   A caller who will splat the result into `console.error` passes
   `inspectToConsoleArgs(value, { stream: process.stderr })`, so colors track the
   real destination when stdout and stderr TTY-ness diverge (piped stdout with a
-  TTY stderr, or the reverse — a common CI/shell shape). `stream` is a
+  TTY stderr, or the reverse, a common CI/shell shape). `stream` is a
   console-path-only option (`inspect`, the string export, has no sink and ignores
   it); on non-node conditions it is inert. On **xs**/**default** it returns
   `['%s', inspect(value, options)]`, the portable-core string in the same
@@ -160,8 +168,8 @@ richness):
   non-default `stream`) call `inspectToConsoleArgs(value, options)` and splat the
   result themselves. TTY sensing lives here and in `inspectToConsoleArgs`, the
   exports that own the destination, never in `inspect`. Because `log` writes to
-  `console.log`, it senses `process.stdout` — the stream `console.log` actually
-  targets — so its default destination and the stream it colorizes for never
+  `console.log`, it senses `process.stdout` (the stream `console.log` actually
+  targets), so its default destination and the stream it colorizes for never
   diverge.
 
 The three behaviors share one internal, dependency-free **portable formatter**
@@ -172,14 +180,27 @@ the one deliberate exception: `inspectToConsoleArgs`/`log` on browser bypass the
 shared core and hand the live value to the host console, which is why that path
 is faithful-by-delegation (see "How far each environment can go").
 
-**Totality is a top-level invariant.** `inspect` (and therefore the seam that
-routes assertion quoting through it) **never throws and never re-enters the
-console/assert path**, matching the total guarantee of the
-`bestEffortStringify` it replaces (`stringify-utils.js` wraps the whole render
-in one `try/catch`). A throw inside `quote().toString()` would destroy the very
-error report it belongs to, and an inspector that logged could re-enter
-`console`/`assert`. The per-property `try/catch` of contract step 4 below is the
-inner guard; this is the outer, whole-render guarantee. It is a Phase 1 test.
+**Totality has two halves, guaranteed to different strengths.** The first half
+is **unconditional**: `inspect` (and therefore the seam that routes assertion
+quoting through it) **never throws** and **initiates no console/assert call of
+its own** (it renders to a string and logs nothing). The never-throw guarantee
+comes from wrapping the whole render in one outer `try/catch`, matching the
+total guarantee of the `bestEffortStringify` it replaces (`stringify-utils.js`),
+so a throw inside `quote().toString()` can never destroy the error report it
+belongs to, and `inspect` cannot re-enter `console`/`assert` through its *own*
+code. The second half is **conditional**: whether reading a hostile value
+re-enters the caller *through a proxy trap* cannot be promised unconditionally,
+because a trap fires synchronously during the read, before any `try/catch` can
+catch a later throw, and suppressing it requires a Proxy brand check that the
+portable core (`inspect` on every condition) does not have. Where no brand check
+applies, the trap-re-entrancy half is therefore **best-effort**, scoped exactly
+like the "faithful vs best-effort" split tracked everywhere else in this
+document (contract step 5, and the "How far each environment can go" table):
+steps 1-4 reduce but cannot eliminate it. The per-property `try/catch` of
+contract step 4 below is the inner guard for the throw half; the outer
+whole-render `try/catch` is the never-throw guarantee. Both halves are Phase 1
+tests (the never-throw half as a totality assertion, the re-entrancy half as a
+best-effort assertion over the hostile corpus).
 
 **Option honoring, per condition** (the value export `inspect`):
 
@@ -187,7 +208,7 @@ inner guard; this is the outer, whole-render guarantee. It is a Phase 1 test.
 |---|---|---|---|---|
 | `depth` | honored (shared core) | honored | honored | honored |
 | `breakLength` | honored (shared core; line-wrap threshold) | honored | honored | honored |
-| `indent` | honored (shared core; per-level indentation width — the axis `quote()`'s `spaces` threads through) | honored | honored | honored |
+| `indent` | honored (shared core; per-level indentation width: the axis `quote()`'s `spaces` threads through) | honored | honored | honored |
 | `colors` | accepted, ignored (plain core string; colorization is the `log` / `inspectToConsoleArgs` sink path) | accepted, ignored | accepted, ignored | accepted, ignored |
 
 The bag is shared across all three exports and all three conditions; a condition
@@ -196,9 +217,27 @@ authored once type-checks and behaves predictably under every target. Note the
 deliberate asymmetry in the last row: `colors` is the one field `inspect`
 *accepts but silently drops* on every condition (the string export owns no sink
 to colorize into), whereas `depth`/`breakLength`/`indent` are always honored.
-That silent-ignore is intentional — one options bag stays valid everywhere — but
+That silent-ignore is intentional (one options bag stays valid everywhere), but
 it is the only field `inspect` does not honor, and implementers must not widen
 "accept-and-ignore" to any other option.
+
+**`colors` on the console path** (`inspectToConsoleArgs`/`log`, distinct from the
+`inspect`-only row above, which owns no sink): here `colors` *is* honored, and it
+takes **precedence over the `stream`-driven auto-detection** when it is set. The
+console path both auto-detects (via `options.stream.isTTY`, default
+`process.stdout`) and accepts an explicit `colors`; the explicit value wins so a
+caller can force color on for output that will later be viewed with `less -R`, or
+force it off on a TTY for accessibility or log-scraping:
+
+| `options.colors` (console path) | Effect |
+|---|---|
+| unset / `undefined` | auto-detect from `options.stream.isTTY` (default `process.stdout`) |
+| `true` | force colorization on, regardless of `stream.isTTY` |
+| `false` | force colorization off, regardless of `stream.isTTY` |
+
+On non-node conditions the console path has no ANSI render, so `colors` is inert
+there just as `stream` is. Phase 2's TTY test matrix must cover the override case
+(explicit `colors` opposing `stream.isTTY`), not only the auto-detected default.
 
 ### Condition-parameterized resolution
 
@@ -307,13 +346,18 @@ replacement may drop:
   is dropped on the one call site the shim is built around.
 
 Incorporating the shim "in the base of SES" means it is part of the SES
-bootstrap for a given target build, selected by the same export condition, so a
-Node base build renders assertion details through the proxy-quarantining node
-inspector, a browser base build through the string core, and an XS base build
-through the plain core, all without SES taking a static dependency on any host
-inspector. The default SES build (no `@endo/inspect/shim.js`) keeps
-`bestEffortStringify` unchanged, so this is strictly additive and opt-in per
-build.
+bootstrap for a given target build, selected by the same export condition. The
+seam routes `quote()` through `inspect` (the **string** export), which is the
+shared portable core on *every* condition (see "Package surface"), so a Node,
+browser, or XS base build all render assertion details through that same
+brand-check-free portable core, without SES taking a static dependency on any
+host inspector. The host inspector (`util.inspect` and its `util.types.isProxy`
+quarantine) is reached only by the direct-console exports
+(`inspectToConsoleArgs`/`log`), which the SES base seam never calls; the
+condition still selects the *package* build, but at the `quote()` seam every
+condition, node included, resolves to the same portable core. The default SES
+build (no `@endo/inspect/shim.js`) keeps `bestEffortStringify` unchanged, so
+this is strictly additive and opt-in per build.
 
 **Seam authority (the invariant that constrains the seam choice).** Because
 `quote()` is SES's redaction-adjacent surface, whoever can set the inspector
@@ -327,9 +371,13 @@ against this write-once bound, not against ergonomics. A mutable post-lockdown
 `setInspector` is out of scope by this invariant.
 
 **Adopter guidance: the best-effort SES base build is an explicit act, never an
-omission.** The `default` and `xs` shims install the *best-effort* portable
-core, whose own contract (step 5 below) concedes the faithful portable guarantee
-is not available: a proxy handed to trusted code can still make
+omission.** Every `@endo/inspect/shim.js` variant routes `quote()` through the
+**string** `inspect` export, which is the *best-effort* portable core on *every*
+condition (the host inspector's `util.types.isProxy` quarantine lives only on
+the direct-console path the seam never calls). So the SES base assertion seam
+carries the *same* best-effort exposure regardless of condition, **node
+included**: its own contract (step 5 below) concedes the faithful portable
+guarantee is not available, a proxy handed to trusted code can still make
 `getOwnPropertyDescriptor` throw, lie, or re-enter, the exact re-entrancy /
 interleaving attack [Agoric/agoric-sdk#3905](https://github.com/Agoric/agoric-sdk/issues/3905)
 describes. Wiring that best-effort formatter into SES's own assertion path (the
@@ -341,23 +389,26 @@ happening by accident:
 - **A base integration cannot be reached by forgetting a condition.** `default`
   is both the least-safe entry and the fallthrough for a resolver that activates
   *no* condition, so a build that merely omits its conditions must not silently
-  wire the best-effort formatter into SES's trusted assertion path. Base-integrating
-  the `default`/`xs` inspector into SES is therefore gated behind a distinct,
-  named opt-in (a dedicated build entry / condition that the adopter sets
-  deliberately), not the plain `default` fallthrough. Adopting the best-effort
-  formatter is an act, not an omission.
-- **Scoped by adopter posture:**
-  - The **node** and **browser** shims are safe to adopt now: node quarantines
-    proxies via `util.types.isProxy` before reading, and the browser rich path
-    never reads the value in our code (faithful-by-delegation, with the
-    expand-time caveat in the table below).
-  - The **`default` (pure SES userland)** and **xs** shims, which have no brand
-    check, should be treated as *dev-and-non-adversarial-context* tooling
-    (REPLs, local diagnostics, trusted-input logging) until Phase 5 supplies a
-    faithful brand/trait check. An adopter enabling them inside a trust boundary
-    that handles untrusted proxies accepts the residual re-entrancy risk
-    knowingly. A build that base-integrates the `default`/`xs` inspector into SES
-    for adversarial use should gate that on Phase 5.
+  wire the inspector into SES's trusted assertion path. Base-integrating the
+  inspector into SES is therefore gated behind a distinct, named opt-in (a
+  dedicated build entry / condition that the adopter sets deliberately),
+  regardless of target condition, not the plain `default` fallthrough. Adopting
+  the best-effort formatter is an act, not an omission.
+- **Scoped by surface, not by condition, for the base seam.** The node
+  quarantine (`util.types.isProxy`) and the browser faithful-by-delegation path
+  benefit the **direct console API** (`inspectToConsoleArgs`/`log`, which own a
+  sink and may reach the host inspector); those exports are safe to adopt now on
+  node/browser (with the browser expand-time caveat in the table below). The
+  **SES base assertion seam is a different surface**: it calls only the string
+  `inspect` (portable core, no brand check on *any* condition), so
+  base-integrating the shim carries the best-effort re-entrancy exposure on
+  **every** condition, node included, not only on `default`/`xs`. Until Phase 5
+  supplies a faithful brand/trait check, treat the base integration itself, on
+  any condition, as *dev-and-non-adversarial-context* tooling (REPLs, local
+  diagnostics, trusted-input logging); an adopter enabling it inside a trust
+  boundary that handles untrusted proxies accepts the residual re-entrancy risk
+  knowingly, and a base integration for adversarial use should gate on Phase 5
+  regardless of the target condition.
 
 ### Avoiding triggered behavior (the safety contract)
 
@@ -416,10 +467,10 @@ The contract, in descending order of what we can guarantee today:
    condition supplies a brand check (Node's `util.types.isProxy` today; a
    stamping predicate or non-trapping trait check, available portably once a
    dependency lands), test first, and render a detected proxy opaquely as the
-   bracketed placeholder `[Proxy <typeof>]` (for example `[Proxy function]`) —
-   kept in the same `[…]` family as the `[Getter]` / `[Setter]` / `[Getter threw]`
+   bracketed placeholder `[Proxy <typeof>]` (for example `[Proxy function]`),
+   kept in the same `[...]` family as the `[Getter]` / `[Setter]` / `[Getter threw]`
    read-outcome tags so the whole placeholder sub-vocabulary spells as one pattern
-   a reader or downstream parser can match — disclosing proxy-ness without entering
+   a reader or downstream parser can match, disclosing proxy-ness without entering
    the handler. This
    matches the direction Node itself took in [nodejs/node#61029](https://github.com/nodejs/node/pull/61029).
 3. **Prefer own-enumerable data descriptors** obtained via
@@ -469,33 +520,54 @@ The contract, in descending order of what we can guarantee today:
    typed-tag formatter from `bestEffortStringify` as `inspect-portable.js`;
    ship `default` + `xs` entries. No host dependency. Unit tests pin output for
    cycles, bigints, symbols, errors, functions, and accessor placeholders; a
-   **never-throw/never-re-enter** test over a hostile corpus (revoked proxies,
-   throwing getters, lying `getOwnPropertyDescriptor`, huge `ownKeys`) proves
-   the top-level totality invariant; and a **per-condition resolution test**
-   confirms each condition resolves its intended entry: `node` → `inspect-node.js`,
-   `browser` → `inspect-browser.js`, `xs` → `inspect-xs.js`, `default` →
-   `inspect-portable.js`, and — the case the resolution analysis above flags as
-   counter-intuitive — `node --conditions=browser` still resolving
-   **`inspect-node.js`** (the `node` entry, because `node` is listed first and
-   remains active; *not* the browser entry a naive reading expects). Because
-   Node fixes the active `exports` conditions at process start (`--conditions` is
-   not swappable per-import), this is not one in-process test but a small matrix of
-   **child-process spawns** — one `node` invocation per condition set (plain, and
-   `--conditions=browser`), each importing `@endo/inspect` and asserting the
-   resolved module's identity — orchestrated from a single AVA test that spawns the
-   children and collects their results; the `xs` resolution's *file* identity is
-   included in this Node matrix (the `xs` condition set), but its *behavior* is
-   verified by the XS-runtime test below rather than under Node. Finally, an
-   **XS-runtime test** executes the portable core on the real Moddable engine via
-   `xst` (the same harness the repo's `node-parity-test` skill uses for
-   XS-sensitive packages): it runs the cycle/bigint/symbol/error/function pinning
-   corpus and confirms `inspect-portable.js` produces byte-identical output to the
-   Node run and executes without any Node-only global, and that the `xs` `log`
-   export is a true no-op (XS has no `console`). This is the one phase-1 assertion
-   that must run on XS itself — resolving the `xs` *condition* under V8 only proves
-   the module graph picks the file, not that the file behaves under XS.
-2. **Node entry.** `inspect-node.js` supplying the portable-core `inspect`
-   (string, no colors) plus the `inspectToConsoleArgs`/`log` path wrapping
+   **hostile-corpus** test (revoked proxies, throwing getters, lying
+   `getOwnPropertyDescriptor`, huge `ownKeys`) proves the **never-throw** totality
+   invariant unconditionally and pins the **best-effort re-entrancy** behavior
+   (render an opaque placeholder, never propagate) where no brand check applies,
+   matching the two-strength totality stated under "Package surface"; and a
+   **per-condition resolution test** confirms each condition resolves its
+   intended entry, using the mechanism each condition can actually be observed
+   through. This split is forced by Node's resolver: it activates the `node`
+   condition implicitly, unconditionally, and first in key order, and
+   `--conditions` is strictly *additive* (it cannot *clear* the built-in `node`
+   condition), so **no real `node` process can ever resolve the `browser`, `xs`,
+   or `default` entry**. The test therefore separates by observability:
+   - **Under real `node` child processes** (the only resolutions a live `node`
+     resolver can produce): a plain `node` invocation resolves
+     **`inspect-node.js`**, and, the case the resolution analysis above flags as
+     counter-intuitive, a `node --conditions=browser` (and `--conditions=xs`)
+     invocation *still* resolves **`inspect-node.js`** (the `node` entry, because
+     `node` is listed first and remains active; *not* the browser or xs entry a
+     naive reading expects). Because Node fixes the active `exports` conditions at
+     process start (`--conditions` is not swappable per-import), this is a small
+     matrix of **child-process spawns**, one `node` invocation per condition set,
+     each importing `@endo/inspect` and asserting the resolved module's identity,
+     orchestrated from a single AVA test that spawns the children and collects
+     their results.
+   - **For the `browser`, `xs`, and `default` entries** (unreachable from any live
+     `node` resolver, because it cannot clear `node`): resolve the `exports` map
+     against a condition set that omits `node`, using a standalone resolver such
+     as `resolve.exports` (or an equivalent in-test walk of `package.json`'s
+     `exports`), asserting `browser` resolves `inspect-browser.js`, `xs` resolves
+     `inspect-xs.js`, and a no-named-condition set falls through to
+     `inspect-portable.js`. This checks the same `exports` key order and
+     first-match priority the `node` matrix pins for the `node`-active cases,
+     without pretending a `node` process can observe a `node`-cleared resolution.
+
+   The `xs` entry's *file* identity is pinned by the standalone-resolver leg above;
+   its *behavior* under the real Moddable engine is verified by the XS-runtime
+   test below, which imports `inspect-portable.js` **directly** rather than
+   relying on condition resolution. That **XS-runtime test** executes the portable
+   core on the real Moddable engine via `xst` (the same harness the repo's
+   `node-parity-test` skill uses for XS-sensitive packages): it runs the
+   cycle/bigint/symbol/error/function pinning corpus and confirms
+   `inspect-portable.js` produces byte-identical output to the Node run and
+   executes without any Node-only global, and that the `xs` `log` export is a true
+   no-op (XS has no `console`). This is the one phase-1 assertion that must run on
+   XS itself; resolving (or in this case direct-importing) the `xs` file under V8
+   only proves the module graph picks the file, not that the file behaves under XS.
+2. **Node entry.** Add `inspect-node.js`, supplying the portable-core `inspect`
+   (string, no colors) plus the `inspectToConsoleArgs`/`log` path that wraps
    `util.inspect` with the safety defaults and TTY-driven `colors`, quarantining
    proxies via `util.types.isProxy` before delegation. Test both TTY (ANSI
    present) and non-TTY (bare) rendering of the console path keyed off
@@ -504,7 +576,7 @@ The contract, in descending order of what we can guarantee today:
    track the passed `stream` rather than an implicit `process.stdout`, that
    `inspect` itself is plain and equals the portable core, and proxy disclosure
    (top-level on all Node; nested where the build carries [nodejs/node#61029](https://github.com/nodejs/node/pull/61029)).
-3. **Browser entry.** `inspect-browser.js` supplying the live-value console
+3. **Browser entry.** Add `inspect-browser.js`, supplying the live-value console
    arguments behind `inspectToConsoleArgs`/`log`; its `inspect` is the portable
    core.
 4. **SES seam + shim.** Add the `setInspector` hook to the assertion-detail
@@ -519,10 +591,17 @@ The contract, in descending order of what we can guarantee today:
    the "unchanged" invariant; (b) a **seam test** that loads the shim and
    asserts `quote().toString()` renders through `@endo/inspect` while preserving
    laziness (the thunk is not evaluated until `toString`), declassifier-WeakMap
-   registration (`declassifiers.get(quote(v)) === v`), and `spaces`; and (c) a
+   registration (`declassifiers.get(quote(v)) === v`), and `spaces`; (c) a
    **proxy-in-a-quoted-detail** test confirming the shimmed assertion path
    discloses proxy-ness (or, in pure userland, degrades per the best-effort
-   contract) and never throws or re-enters a trap.
+   contract) and never throws or re-enters a trap; and (d) a **write-once
+   authority** test that directly exercises the seam-authority invariant stated
+   under "The shim and SES integration": it sets the inspector before `lockdown()`,
+   then asserts that any attempt to re-point the inspector *after* `lockdown()` is
+   **rejected** (throws, or is otherwise inert, per the chosen seam) and that
+   `quote().toString()` still renders through the pre-lockdown inspector. This
+   pins the load-bearing "settable only before `lockdown()`" bound rather than
+   leaving it implied by the adjacent laziness/declassifier assertions.
 5. **Faithful Proxy handling (deferred).** When a portable brand check exists
    (the [endojs/endo#1756](https://github.com/endojs/endo/issues/1756) stamping
    power, or the non-trapping trait via [endojs/endo#2673](https://github.com/endojs/endo/pull/2673)
@@ -558,8 +637,8 @@ The contract, in descending order of what we can guarantee today:
    or its portable bytes by target.
 4. **The `default` entry is the capability-free, portable formatter.** A
    resolver that activates none of the named conditions gets the capability-free
-   portable core, never a host inspector. ("Capability-free" is the axis here —
-   it touches no host inspector; this is deliberately *not* the same axis as the
+   portable core, never a host inspector. ("Capability-free" is the axis here:
+   it touches no host inspector. This is deliberately *not* the same axis as the
    proxy-adversarial "safe"/"least-safe" language under "Adopter guidance", where
    this same `default` entry is the **least-safe** entry because it has no proxy
    brand check. The two axes are orthogonal: what the code is *capable of
@@ -620,9 +699,26 @@ The contract, in descending order of what we can guarantee today:
   strings into whatever XS diagnostic channel exists (for example `print`
   under `xst`, `trace` under the Moddable runtime)? Relatedly, should Endo
   request a native proxy brand check from Moddable for the `xs` entry?
-- Should `@endo/inspect` re-export a Node-`util.inspect`-compatible signature
+- **The `inspect` name collides with Node's `util.inspect`, yet silently diverges
+  on `colors`.** The string export reuses the exact name a Node developer reaches
+  for first, but `inspect(v, { colors: true })` silently returns the same plain
+  string that `util.inspect(v, { colors: true })` would have colorized, and the
+  mismatch is invisible until output is diffed against a real TTY render (flagged
+  at the definition site under "Package surface"). How should the surface fail
+  loud rather than plausible? The candidates each trade against a stated
+  invariant: (a) **rename the string export** (for example `format` or
+  `stringify`), freeing `inspect` for a later, genuinely
+  Node-`util.inspect`-compatible entry, at the cost of the maintainer-chosen
+  `inspect` name; or (b) **reject a non-default `colors`** on the string export
+  instead of silently ignoring it, at the cost of the "one options bag valid
+  everywhere" invariant (a caller building one `{ colors: true }` bag for both
+  `log` and `inspect` would then get a throw from `inspect`). A third option keeps
+  the silent-ignore and treats the collision as documented-only. Relatedly, should
+  `@endo/inspect` re-export a Node-`util.inspect`-compatible positional signature
   (`inspect(value, showHidden?, depth?, colors?)`) for drop-in familiarity, or
-  keep only the single options-bag form?
+  keep only the single options-bag form? This is a maintainer decision, surfaced
+  here because both fail-loud remedies conflict with an otherwise-settled design
+  invariant.
 
 ## Prompt
 
