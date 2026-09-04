@@ -16,6 +16,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { checkinTree } from '@endo/platform/fs/lite';
+import { blobFromBytes } from '@endo/platform/blob';
 
 import { makeFilePowers } from '../src/manager-node-powers.js';
 import { makeMount } from '../src/mount.js';
@@ -719,7 +720,7 @@ test('write rejects a value that is neither a ReadableBlob nor a ReadableTree', 
         ),
       ),
     {
-      message: /ReadableBlob or ReadableTree/,
+      message: /must be a ReadableBlob/,
     },
   );
 });
@@ -745,9 +746,31 @@ test('write rejects a generic PassableReader that merely advertises stream', asy
         ),
       ),
     {
-      message: /ReadableBlob or ReadableTree/,
+      message: /must be a ReadableBlob/,
     },
   );
+});
+
+test('write materializes a canonical ReadableBlob source (blobFromBytes)', async t => {
+  const rootPath = makeTempRoot(t);
+  const mount = makeMount({ rootPath, readOnly: false, filePowers });
+
+  // `blobFromBytes` is the repo's canonical `ReadableBlob`: its interface is
+  // exactly `{ help, stream, text, json }`, carrying neither `getInfo` nor
+  // `readReturnPattern`. The narrowed `stream && (getInfo || readReturnPattern)`
+  // predicate rejected it — `write()` threw "must be a ReadableBlob…" on a value
+  // that *is* one. `looksLikeReadableBlob` admits it via the `text` whole-value
+  // read surface, so `write()` must now materialize its bytes.
+  const bytes = new TextEncoder().encode('hello canonical blob');
+  const blob = blobFromBytes(Promise.resolve(bytes));
+  await E(mount).write(
+    ['out.txt'],
+    /** @type {Parameters<import('../src/types.js').EndoMount['write']>[1]} */ (
+      /** @type {unknown} */ (blob)
+    ),
+  );
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('out.txt'));
+  t.is(await E(file).text(), 'hello canonical blob');
 });
 
 test('write rejects a non-remotable source at the Exo guard', async t => {
