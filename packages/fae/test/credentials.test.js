@@ -8,6 +8,7 @@ import { encodeUtf8 } from '@endo/utf8/encode.js';
 import {
   AUTH_SECRET_PETNAME,
   encodeAuthToken,
+  hasAuthSecret,
   provideAuthSecret,
   readAuthToken,
   resolveAuthToken,
@@ -130,7 +131,8 @@ test('provideAuthSecret replaces in place rather than orphaning a record', async
     setDescription: async () => {},
   });
   const hostAgent = Far('HostAgent', {
-    has: async (...path) => path.join('/') === 'secrets/floot-auth',
+    has: async (...path) =>
+      path.join('/') === 'secrets' || path.join('/') === 'secrets/floot-auth',
     lookup: async path => {
       t.deepEqual(path, ['@secrets', 'catalog']);
       return Far('SecretCatalog', {
@@ -191,4 +193,63 @@ test('a payload that is not UTF-8 text is refused rather than mangled', async t 
 test('a token with non-ASCII characters survives the round trip', async t => {
   const token = 'sk-café-\u{1F511}';
   t.is(await readAuthToken(makeBlob(encodeAuthToken(token))), token);
+});
+
+test('the write bound counts bytes, so a token cannot be written unreadable', t => {
+  // 8192 UTF-16 code units of a two-byte character is 16384 bytes: it used to
+  // pass the write check and fail the read check, which meant a token stored
+  // once and rejected on every read from then on.
+  const wide = 'é'.repeat(8192);
+  t.is(wide.length, 8192);
+  t.throws(() => encodeAuthToken(wide), { message: /at most 8192 bytes/ });
+  // A token that does fit still round-trips, non-ASCII and all.
+  const fits = 'é'.repeat(4096);
+  t.is(encodeAuthToken(fits).length > 0, true);
+});
+
+test('a daemon that has never held a secret answers "no", not an error', async t => {
+  /** @type {string[][]} */
+  const asked = [];
+  const hostAgent = Far('HostAgent', {
+    has: async (...path) => {
+      asked.push(path);
+      if (path.length === 1 && path[0] === 'secrets') return false;
+      // `has` on a two-segment path looks the prefix up first, so the daemon
+      // throws here rather than answering. Treating that as "the manager is
+      // unavailable" downgraded to a plaintext token on exactly the daemon
+      // where the manager would have worked.
+      throw Error('Failed to lookup "secrets"');
+    },
+  });
+  t.false(await hasAuthSecret({ hostAgent, name: 'floot-auth' }));
+  t.deepEqual(asked, [['secrets']]);
+});
+
+test('provideAuthSecret creates the first secret on a daemon with no secrets directory', async t => {
+  /** @type {any[]} */
+  const created = [];
+  const hostAgent = Far('HostAgent', {
+    has: async (...path) => {
+      if (path.length === 1 && path[0] === 'secrets') return false;
+      throw Error('Failed to lookup "secrets"');
+    },
+    lookup: async path => {
+      t.deepEqual(path, ['@secrets', 'create']);
+      return Far('SecretImporter', {
+        createBase64: async (name, description, payload) => {
+          created.push({ name, payload });
+          return harden({ secretId: 'id', description });
+        },
+      });
+    },
+    locate: async () => 'endo://node/formula?type=lookup',
+  });
+  const result = await provideAuthSecret({
+    hostAgent,
+    name: 'floot-auth',
+    description: 'Floot anthropic provider auth token',
+    token: TOKEN,
+  });
+  t.true(result.created);
+  t.is(created.length, 1);
 });

@@ -44,23 +44,24 @@ export const make = async (powers, context, { env } = {}) => {
       /** @type {{ host: string, model: string, authToken?: string }} */ (
         await E(powers).lookup('llm-provider')
       );
-    // The token comes from the SecretBlob when one was delegated, so the
-    // stored config need carry no credential. Read once per loop start: a
-    // rotation takes effect when the driver next starts.
-    const providerConfig = harden({
-      ...storedConfig,
-      authToken: await resolveAuthToken({ powers, config: storedConfig }),
-    });
     const agentPowers = await E(powers).lookup('agent');
     const spawner = (await E(powers).has('subagent-spawner'))
       ? await E(powers).lookup('subagent-spawner')
       : undefined;
+    // The token comes from the `SecretBlob` when one was delegated, so the
+    // stored config carries no credential. Handing the loop a thunk rather
+    // than a token is what makes rotation and revocation reach an agent that
+    // is already running: it reads the secret again for every turn.
     await spawnWorkerLoop(
       agentPowers,
       context,
-      providerConfig,
+      storedConfig,
       systemPrompt,
-      harden({ ...(spawner ? { spawner } : {}) }),
+      harden({
+        ...(spawner ? { spawner } : {}),
+        provideAuthToken: () =>
+          resolveAuthToken({ powers, config: storedConfig }),
+      }),
     );
   };
 
