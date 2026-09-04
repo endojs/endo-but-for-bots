@@ -1348,29 +1348,42 @@ export interface EndoMount extends PathEntryIssuer {
    * Recursive glob search delegated to the platform engine
    * (`@endo/platform/fs/search`): mount-face-relative paths matching
    * `pattern`, UTF-16-sorted and capped at `GLOB_MAX_RESULTS`.
+   *
+   * `**` reports a directory symlink but does not descend through it, so the
+   * walk covers the tree rather than the link graph; a segment that names a
+   * path still follows one. `followSymlinks` restores the sweep, as `rg -L`
+   * does.
    */
-  glob(pattern: string): Promise<string[]>;
+  glob(
+    pattern: string,
+    options?: { followSymlinks?: boolean },
+  ): Promise<string[]>;
   /**
    * Content search for an ECMAScript RegExp source (no flags). `paths` is
    * the file set to search; the exo awaits it (`M.await`), so a `glob`
    * promise pipes straight in: `grep(pattern, glob(g))`. Omitted, every
-   * file under the face's root is searched.
+   * file under the face's root is searched — and `followSymlinks` governs
+   * that implicit walk only; a supplied path is named, so it is followed
+   * either way.
    */
   grep(
     pattern: string,
     paths?: string[] | Promise<string[]>,
-    options?: { maxResults?: number },
+    options?: { maxResults?: number; followSymlinks?: boolean },
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
   /**
    * Fused glob+grep: search the files matching `globPattern` for
    * `grepPattern`. The reference implementation composes the decoupled
    * surface (`grep(grepPattern, glob(globPattern))`); a native powers layer
    * may push both patterns down as one enumerate-and-scan pass.
+   *
+   * `followSymlinks` reaches the enumeration half only: grep's half receives
+   * an explicit path array, and a named path is followed regardless.
    */
   glorp(
     globPattern: string,
     grepPattern: string,
-    options?: { maxResults?: number },
+    options?: { maxResults?: number; followSymlinks?: boolean },
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
   lookup(
     path: string | readonly string[] | EndoMountEntry,

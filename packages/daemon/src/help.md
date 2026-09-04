@@ -770,7 +770,7 @@ Each argument is one path segment: list("subdir").
 Call with no arguments to list the root.
 Entries with symlinks escaping the mount root are excluded.
 
-## glob(pattern) -> Promise<string[]>
+## glob(pattern, options?) -> Promise<string[]>
 
 Recursively enumerate paths matching a glob pattern, relative to this mount face.
 pattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.
@@ -782,6 +782,13 @@ Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
 Entries whose symlinks escape the mount root are excluded. Results include
 directories as well as files, are sorted by UTF-16 code unit, and are capped at
 10,000 with silent truncation.
+`**` reports a symlink to a directory but does not descend through it, so the walk
+covers the tree and not the link graph; a segment that names a path still follows one,
+so glob("node_modules/@endo/*/src/**/*.js") reaches through workspace links.
+options.followSymlinks: boolean — Let `**` descend through directory symlinks too
+(default false). This is `rg -L`, and like it, the sweep can become very large: in a
+workspace checkout every node_modules link points back into the tree, so the walk
+enumerates every route to every package rather than every file.
 Example: glob("**/*.js") → all JavaScript files at any depth.
 Example: glob("src/*") → the immediate children of src.
 
@@ -793,6 +800,8 @@ paths: string[] | Promise<string[]> — Which files to search. Pass a glob resul
 the two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of
 paths (the promise is awaited for you). Omit it to search every file under the mount face.
 options.maxResults: number — Cap on the number of match records (default 1000).
+options.followSymlinks: boolean — Applies only when paths is omitted, to the implicit
+walk that finds the files (see glob); a path you pass in is named, so it is always read.
 Each matching line yields one { file, line, text } record: file is the mount-face-relative
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
 (CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot
@@ -809,6 +818,8 @@ Both patterns are required, so the whole operation is one call whose two pattern
 layer can push down and fuse into a single enumerate-and-scan pass. It returns the same
 { file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
 options.maxResults: number — Cap on the number of match records (default 1000).
+options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
+receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
 Example: glorp("src/**/*.js", "TODO") → every TODO line under src.
 
