@@ -393,6 +393,7 @@ LLM-agent stack).*
 | [endoclaw-skill-registry](endoclaw-skill-registry.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-timer](endoclaw-timer.md) | 2026-03-03 | 2026-07-10 | Superseded by [endo-reminder](endo-reminder.md) |
 | [endo-reminder](endo-reminder.md) | 2026-07-10 | 2026-07-10 | Not Started |
+| [endo-reminder-familiar-integration](endo-reminder-familiar-integration.md) | 2026-08-06 | 2026-08-06 | Not Started |
 | [endoclaw-voice](endoclaw-voice.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [endoclaw-webhooks](endoclaw-webhooks.md) | 2026-03-03 | 2026-03-03 | Not Started |
 | [daemon-locator-terminology](daemon-locator-terminology.md) | 2026-02-24 | 2026-05-10 | In Progress |
@@ -633,6 +634,7 @@ flowchart TD
 
     subgraph Agent Capabilities
         ereminder[endo-reminder]
+        ereminderfam[endo-reminder-familiar-integration]
         efetch[endo-fetch base]
         cfetch[confined-fetch]
         eoauth[endoclaw-oauth]
@@ -647,6 +649,7 @@ flowchart TD
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
+        ereminder --> ereminderfam
         eoauth --> ebridge
         eoauth --> eproactive
         eoauth --> esheets
@@ -984,6 +987,7 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
 | daemon-xs-worker-snapshot | In Progress | XS heap snapshot/restore; Phases 1-2 implemented — streaming CAS write/read, suspend/resume supervisor integration, CBOR control verbs; 12 passing tests; Phase 2 integration test and ephemeral GC roots remaining |
 | endo-reminder (supersedes endoclaw-timer) | Not Started | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
+| endo-reminder-familiar-integration | Not Started | **Strategic:** the Phase 3 "one worked integration" deliverable of `@endo/reminder` — wires the plugin against the LAL agent over a dedicated attenuated guest and makes the Familiar deployment own `@pins` retention, proving restart-survival end to end. Shared LAL substrate with the Chat and minion.town integrations. |
 | endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
 | endo-workflow | In Progress | `@endo/workflow`: durable, composable workflow system — pure statechart kernel (charts as passable pattern-guarded data) + unconfined service plugin (reminder packaging); runs journal as numbered marshals in pet stores (mailbox-store idiom), revive via `@pins`, effect via durable mail `ask`s and idempotency-keyed `invoke`s; journal = attributed audit log; snapshot status + seq-cursored `follow`; `space-workflow` UI. Motivating use case: agent-implements → multi-reviewer → CI → operator-approval → merge over the git stack ([endo-workflow](endo-workflow.md)). **Phases 1–4 + follow feeds + hardening round + `space-workflow` UI landed** (kernel, service, mail asks, composition, redaction/hash-chain/fail-loud/factories, Chat space, adversarial-review hardening; 81 tests incl. the feature-change flow with a mid-CI restart over a fake daemon agent); remaining: CLI verbs, live-substrate reference flow. Formula-type graduation path named; composes with agentry agents, forms, reminder, and the git trio. |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
@@ -1639,6 +1643,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | daemon-locator-terminology | S | 1 day | 3 | locator.js + host.js changes |
 | daemon-rename-to-manager | S | 1 day | 3 | Mechanical rename; design merged (PR #85); implementation TBD |
 | endo-reminder (supersedes endoclaw-timer) | S-M | 3 days | 3 | `@endo/reminder` message-scheduler plugin: reminder delivery, VFS durable store, host-controlled limits, integration-owned revival; core logic ports from PR #609's head |
+| endo-reminder-familiar-integration | M | 3-4 days | 3 | Shared LAL substrate (recipient adapter over a dedicated `profile-for-reminder` guest, node-fs store, `setup.js` provisioning hoisted above the early return, `makeReminder`/`listReminders`/`cancelReminder` tool + primer how-to, `reminder-plugin.js` bundle shim as an eighth entry point) plus the Familiar restart-survival integration test; consumes `@endo/reminder` as published, no plugin change |
 | ~~daemon-guest-eval-simplification~~ | — | — | 3 | ✅ Implemented (PR #92, ~2 hours actual; well under 1-day estimate) |
 | endo-fetch (supersedes endoclaw-network-fetch) | S-M | ~1-2 days | 3 | `@endo/fetch` unconfined base provides direct HTTP; `@endo/confined-fetch` receives that base plus a VFS state directory, adds policy + TOFU persistence through `@endo/exo-http-client`, and revives through `@pins`; `makeHttpTool` binds only the confined client ([`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6) |
 | endo-workflow | L-XL | 2.5-3.5 weeks (phases 1-4: kernel M, service M-L, mail M, composition M; UI space + worked reference flow follow as M-L + M) | 3 | `@endo/workflow` durable workflow system: pure statechart kernel, plugin service with numbered-marshal journals, mail-backed `ask` effects, `@pins` revival, seq-cursored `follow`, `space-workflow`. No daemon changes; effort is concentrated in the kernel semantics, recovery discipline, and the Phase 6 end-to-end acceptance flow. **Phases 1-4 + follow feeds + the hardening rounds + the `space-workflow` UI landed (~2 days actual, 81 tests); CLI verbs and the live-substrate flow carry the remaining M** |
@@ -1857,6 +1862,7 @@ pre-empt later milestones.
 | Design | Milestone | Rationale |
 |--------|-----------|-----------|
 | endo-reminder (was endoclaw-timer) | M3 (was M1) | **Core capability concern.** SES lockdown removes `setTimeout` and `setInterval`. The message scheduler is the *only* mechanism for scheduled agent execution. Prerequisite for proactive messages, monitoring, reminders. Without it, agents are purely reactive. Redrafted as an unconfined plugin per the PR #609 review. |
+| endo-reminder-familiar-integration | M3 | **Worked integration of the core scheduler.** The `@endo/reminder` Phase 3 deliverable: one deployment proving restart-survival end to end. Sits in M3 beside `endo-reminder` since it depends on that plugin and shares the LAL substrate the Chat and minion.town integrations reuse. |
 | endo-fetch (was endoclaw-network-fetch) | M3 (was M1) | **Foundation for all external access.** M3 already does Docker/remote access. A self-hosted agent that cannot reach external APIs is inert. HttpClient with origin allowlist is the minimal network capability. OAuth, channel bridges, and all integrations depend on it. The direct `@endo/fetch` base is explicitly attenuated into `@endo/confined-fetch` with a state directory. |
 
 **Progress as of 2026-06-15 (targeted post-event M2 closure):** The
