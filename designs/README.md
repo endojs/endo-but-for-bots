@@ -16,11 +16,11 @@ leaves OAuth, signing, brokers, and consumer-specific policy to layers above
 it),
 [introduced-special-names](introduced-special-names.md) (added 2026-08-31,
 narrowed 2026-09-04; a generic `introducedSpecialNames` option on the provisioning
-options bag endows a newly provisioned agent with indelible `@`-prefixed special
-names — resolved once, persisted in the agent formula, re-supplied across
-reincarnation, and enumerated for garbage-collection reachability; narrowed at
-maintainer request from a broader Claude-agent provisioning proposal to just this
-daemon mechanism),
+options bag endows a newly provisioned agent with indelible `@intro-`-prefixed
+special names. Each source name is resolved once, and the resulting identifier is
+persisted in the agent formula, re-supplied across reincarnation, and enumerated
+for garbage-collection reachability. Narrowed at maintainer request from a broader
+Claude-agent provisioning proposal to just this daemon mechanism),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -945,8 +945,8 @@ halves and their directly-dependent companions as its first-to-land work:
   inference engine, reaching only that one guest's facet as its whole tool
   surface. Confinement core in flight as PR
   [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open
-  draft); the generic daemon seam its child-guest provisioning half needs —
-  indelibly endowing a provisioned guest with special names — is
+  draft). The generic daemon seam the `endo-claude` child-guest provisioning
+  path needs, indelibly endowing a provisioned guest with special names, is
   [introduced-special-names](introduced-special-names.md), PR
   [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft),
   narrowed at maintainer request from a broader Claude-agent provisioning
