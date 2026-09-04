@@ -204,11 +204,16 @@ The four axis-value types spell alike: bare `WorkerRuntime` /
 `WorkerPersistence` / `WorkerVersion` / `WorkerTarget`, no `Constraint`
 suffix: so a reader can predict the name of any axis's value type from
 the field name alone. `WorkerConstraints` is the only *caller-facing*
-`Constraints`-named type (the seam also defines `ResolvedWorkerConstraints`,
-`PersistedWorkerConstraints`, and the `WorkerConstraintsShape` guard, all
-internal). Every new `export type` this design names lives in
-`packages/daemon/src/types.d.ts` (beside the existing `WorkerFormula` at
-`:174` and `makeWorker` at `:2462`), not a new `types.js`.
+`Constraints`-named type (the seam also defines `WorkerConstraintsInput`,
+`ResolvedWorkerConstraints`, `PersistedWorkerConstraints`, and the
+`WorkerConstraintsShape` guard, all internal). Where these types live and
+which cross the package boundary is § *Caller surface and type home* (below);
+the short version is that the new **type-only** definitions go in a checked
+`packages/daemon/src/types.ts` (per `AGENTS.md` § *Where type definitions go* —
+`.d.ts` is unchecked under `skipLibCheck`, exactly wrong for the
+`(string & {})` unions this design leans on), not the unchecked
+`src/types.d.ts` where `WorkerFormula` (`:174`) and `makeWorker` (`:2462`)
+predate that rule.
 
 ### Axis 1: runtime (migrates today's `kind`)
 
@@ -231,8 +236,19 @@ extension point" would be untyped):
  *                   RESERVED; not yet wired at this seam.
  * The `(string & {})` member keeps the union open while preserving the
  * three seed literals for completion and exhaustiveness.
+ *
+ * The union is factored through a seed-free base, `NonSeedWorkerRuntime`,
+ * so that "non-seed only" can be named as a type (`PersistedWorkerConstraints.runtime`)
+ * without an `Exclude` — `Exclude<WorkerRuntime, 'locked' | 'node'>` is a
+ * no-op here, because `Exclude` distributes and the `(string & {})` member
+ * does not extend `'locked' | 'node'`, so it survives and re-admits both
+ * seed literals (verified under the repo's `tsc --strict`:
+ * `const r: Exclude<WorkerRuntime,'locked'|'node'> = 'locked'` compiles clean).
+ * A type-level narrowing an open `(string & {})` union cannot carry is stated
+ * instead as a runtime encode/decode guard (§ Passability item 4).
  */
-export type WorkerRuntime = 'locked' | 'node' | 'xs-in-rust' | (string & {});
+export type NonSeedWorkerRuntime = 'xs-in-rust' | (string & {});
+export type WorkerRuntime = 'locked' | 'node' | NonSeedWorkerRuntime;
 ```
 
 The three points `xs-in-rust` / `locked` (XS-via-xsnap) / `node` are one
@@ -247,9 +263,12 @@ unconfined Node process (the CLI defaults the `--UNSAFE` unconfined
 worker to `@node`). Because two of the four backends accept-and-ignore
 the axis and the two that act on it fall back to a default binary when
 their env var is unset (`bus-manager-rust-xs.js:485`,
-`bus-manager-node-powers.js:226`), an *unserviceable* runtime must **fail
-the spawn**, never silently downgrade to whatever binary the backend
-happens to have. See § *Passability and rejection*.
+`bus-manager-node-powers.js:226`), an *unserviceable* **non-seed** runtime
+must **fail the spawn**, never silently downgrade to whatever binary the
+backend happens to have. The gate is scoped to explicitly-supplied non-seed
+values precisely so it cannot fire on the two seed runtimes today's code
+already spawns (which would break the zero-behavior-change migration); see
+§ *Passability and rejection* item 3.
 
 The axis names *engine + supervision* together rather than splitting
 them, even though today's two seed values already vary on both
@@ -476,40 +495,74 @@ direction-ambiguous `<->` edge). The load-bearing detail is which
 structurally erases (it fills every axis, so it cannot distinguish "the
 caller supplied `node`" from "the daemon defaulted to `node`"). Encode and
 decode therefore both live on the **input** side of resolution, not the
-resolved side:
+resolved side.
 
-- `resolveWorkerConstraints(constraints, daemonEnv)`: fills flexible
+The load-bearing input type of all three edges — the one the round-trip
+property quantifies over — is named, not left as the prose "`WorkerConstraints`
+plus the legacy `kind`": it is `WorkerConstraintsInput`, declared in the same
+`types.ts` block and used in every signature below.
+
+```ts
+/**
+ * The actual argument shape the three conversion functions take: the
+ * caller-facing WorkerConstraints widened with the deprecated seed-runtime
+ * sugar `kind`. This is what the round-trip and precedence properties
+ * quantify over; `WorkerConstraints` alone has no `kind` field.
+ */
+export type WorkerConstraintsInput = WorkerConstraints & {
+  /** @deprecated seed-runtime sugar for `{ runtime: kind }`. */
+  kind?: 'locked' | 'node';
+};
+```
+
+The parameter is named `request` (a `WorkerConstraintsInput`), never
+`constraints`: it is *not* a `WorkerConstraints` (that type has no `kind`), and
+`constraints` is separately a *field inside* the persisted formula, so reusing
+the name for the whole argument would collide.
+
+- `resolveWorkerConstraints(request, daemonWorkerSupport)`: fills flexible
   axes with the daemon's defaults and canonicalizes each axis, producing a
   `ResolvedWorkerConstraints`. Takes the **canonicalized caller input**
-  (`WorkerConstraints` plus the legacy `kind`); canonicalization
+  (`WorkerConstraintsInput`); canonicalization
   (collapsing an axis's sugar spellings to one form, e.g.
-  `{ persistence: { durability: 'ephemeral' } }` to `'ephemeral'`) is a
-  pure, host-independent step run *before* the presence predicate, so two
-  spellings of one request persist identical bytes (§ *Migration*). The
-  second argument `daemonEnv` bundles **two** injected facts this step
-  closes on: the flexible-axis **defaults** (`defaultWorkerKind` and the
-  like), and (the fact the fail-closed gate needs) the host's
-  **serviceable-runtime set** (`daemonEnv.serviceableRuntimes`), assembled
-  once at daemon bring-up from the backends (§ *Passability* item 3). Both
-  are available before `formulate`, so the gate runs where Open Question 3
-  puts it without consulting a backend at spawn time.
-- `encodeWorkerConstraints(constraints)`: derives the **persisted** formula
+  `{ persistence: { durability: 'ephemeral' } }` to `'ephemeral'`) is the
+  pure, host-independent step that also performs the input coercion
+  (`passStyleOf(request) === 'copyRecord'`, § *Passability* item 1), run
+  *before* the presence predicate, so two spellings of one request persist
+  identical bytes (§ *Migration*). The second argument `daemonWorkerSupport`
+  is the daemon's injected worker-support record (named to *not* collide with
+  this package's existing string-to-string environment-variable `env`; it is
+  not an `Environment`). It bundles **two** injected facts this step closes
+  on: the flexible-axis **defaults** (`defaults.runtime` and the like,
+  carrying today's `defaultWorkerKind`), and (the fact the fail-closed gate
+  needs) the host's **serviceable-runtime set** (`daemonWorkerSupport.serviceableRuntimes`),
+  assembled once at daemon bring-up from the backends (§ *Passability* item 3).
+  Both are available before `formulate`, so the gate runs where Open Question
+  3 puts it without consulting a backend at spawn time.
+- `encodeWorkerConstraints(request)`: derives the **persisted** formula
   fields from the caller's canonicalized input (legacy `kind` for the two
   seed runtimes, else a `constraints` sub-object. See *Migration*). It is
-  typed over the *input*, `WorkerConstraints` + `kind`, **not** the resolved
+  typed over the *input* `WorkerConstraintsInput`, **not** the resolved
   value, because the persisted form keys on input *presence* and resolution
-  has already erased presence.
+  has already erased presence. It reads only the copyRecord-coerced value
+  canonicalization produced.
 - `decodeWorkerConstraints(formula)`: the inverse of encode: reads a
-  persisted formula **back** into the caller-input shape
-  (`WorkerConstraints` + legacy `kind`), taking no daemon defaults. The
-  spawn path is therefore `decode` -> `resolve`: decode recovers the stored
-  request, resolve fills its flexible axes against *this* daemon's defaults.
+  persisted formula **back** into the `WorkerConstraintsInput` shape, taking
+  no daemon facts (no defaults, no serviceable set). It performs only the
+  **host-independent** shape rejection its trust-boundary role requires
+  (unrecognized axis; a record carrying both a seed `kind` and a
+  `constraints.runtime`; § *Passability* item 4); host-dynamic
+  **serviceability** is not decode's to check (it has no host input) — it is
+  `resolve`'s. The spawn path is therefore `decode` -> `resolve`: decode
+  recovers the stored request and rejects malformed bytes, resolve fills the
+  flexible axes against *this* daemon's defaults and applies the serviceable
+  gate.
 
 ```mermaid
 flowchart TD
-  A["WorkerConstraints + kind (caller input, canonicalized)"] -->|"encodeWorkerConstraints (persist)"| C
+  A["WorkerConstraintsInput (caller input, copyRecord-coerced + canonicalized)"] -->|"encodeWorkerConstraints (persist)"| C
   C["persisted WorkerFormula fields (kind or constraints)"] -->|"decodeWorkerConstraints (read back)"| A
-  A -->|"resolveWorkerConstraints(constraints, daemonEnv)"| B
+  A -->|"resolveWorkerConstraints(request, daemonWorkerSupport)"| B
   B["ResolvedWorkerConstraints (canonical, every axis filled)"] -->|"passed to backend"| D["controlPowers.makeWorker(id, ..., resolved)"]
 ```
 
@@ -548,13 +601,15 @@ shape:
 
 ```ts
 /**
- * Resolved runtime. Same open union as the input, but by contract narrowed
- * to a value the daemon can service: the serviceability gate (§ Passability
- * item 3), which closes on the injected `daemonEnv.serviceableRuntimes` set,
- * runs before resolution returns. TypeScript cannot express "serviceable
- * subset", so the type is the input union and the injected serviceable-set
- * check is the runtime defense; a backend reading this may assume the
- * fail-closed gate has run.
+ * Resolved runtime. Same open union as the input. By contract it is either a
+ * value the daemon can service OR one of the two SEED runtimes ('locked' /
+ * 'node'), which are always spawnable on today's backends and are exempt from
+ * the fail-closed gate (§ Passability item 3): the gate rejects only an
+ * explicitly-supplied NON-seed runtime absent from the injected
+ * `daemonWorkerSupport.serviceableRuntimes` set, never a seed value and never a
+ * defaulted one. TypeScript cannot express "serviceable-or-seed subset", so the
+ * type is the input union and the injected serviceable-set check is the runtime
+ * defense; a backend reading this may assume the fail-closed gate has run.
  */
 export type ResolvedWorkerRuntime = WorkerRuntime;
 
@@ -574,8 +629,11 @@ export type ResolvedWorkerVersion = { exact: string };
 
 /**
  * Resolved target. Kept no wider than the input WorkerTarget on either
- * axis; bare `string` here would discard the input's completion/typo-checking at
- * exactly the value that reaches a binary path join.
+ * axis; the `(string & {})` escape hatch preserves the seed literals for
+ * completion but is, for assignability, bare `string`, so it is NOT a
+ * typo-guard at the value that reaches a binary path join. The load-bearing
+ * defense there is the § Passability item 3 allowlist check against a
+ * `serviceableTargets` set, not this type.
  */
 export type ResolvedWorkerTarget = {
   operatingSystem: 'linux' | 'darwin' | 'win32' | (string & {});
@@ -639,12 +697,13 @@ it can now carry is a **third, distinct shape**: neither the caller-facing
 persisted, and it holds seed runtimes as legacy `kind` rather than inside
 `constraints`) nor the sparse-optional `ResolvedWorkerConstraints`. It is a
 partial record of the explicitly-supplied non-legacy axes, named
-`PersistedWorkerConstraints`, and both new types live in
-`packages/daemon/src/types.d.ts` beside the existing `WorkerFormula`
-(`:174`) and `makeWorker` (`:2462`):
+`PersistedWorkerConstraints`. The `WorkerFormula` *shape* extension shown
+below lands where `WorkerFormula` already lives (`src/types.d.ts:174`); the
+new **type-only** axis definitions land in the checked `src/types.ts`
+(§ *Caller surface and type home*):
 
 ```ts
-// packages/daemon/src/types.d.ts: the widened persisted formula.
+// the widened persisted formula (extends WorkerFormula at src/types.d.ts:174).
 export type WorkerFormula = {
   type: 'worker';
   label?: string;
@@ -659,11 +718,15 @@ export type WorkerFormula = {
  * The persisted projection of a request: only the explicitly-supplied axes
  * that have no legacy `kind` home. `runtime` appears only for a NON-seed
  * value (seed runtimes stay in `kind`); `metered`/`retention` never appear
- * (mutable policy, § Axis 2). Mutually exclusive with `kind` on runtime
- * (§ Passability item 4).
+ * (mutable policy, § Axis 2). The `NonSeedWorkerRuntime` type keeps the two
+ * seed literals out of this field *by construction* (no `Exclude`, which is a
+ * no-op over the open union — see `WorkerRuntime` above). Being disjoint from
+ * `kind` *on disk* is an additional runtime invariant (a record must carry a
+ * seed `kind` or a non-seed `constraints.runtime`, never both) that the type
+ * cannot express and the encode/decode guards enforce (§ Passability item 4).
  */
 export type PersistedWorkerConstraints = {
-  runtime?: Exclude<WorkerRuntime, 'locked' | 'node'>;
+  runtime?: NonSeedWorkerRuntime;
   persistence?: WorkerPersistence;
   version?: WorkerVersion;
   target?: WorkerTarget;
@@ -685,17 +748,29 @@ bridge, and the bag is the recommended first move for the implementing PR.
 
 ## Passability and rejection
 
-`WorkerConstraints` is caller-supplied and crosses the exo/CapTP
-boundary before it lands in a persisted formula, so resolution is
-stated defensively:
+`WorkerConstraints` is caller-supplied and — in the cycle where the exo
+`provideWorker` guard grows a `constraints` option (§ *Caller surface and
+type home*, below) — crosses the exo/CapTP boundary before it lands in a
+persisted formula. This cycle it stays daemon-internal (see that section for
+where the guard lands and defers), but the coercion and rejection below are
+stated for the crossing case so the internal formulation entry point is
+already defended, so resolution is stated defensively:
 
-1. **Assert `passStyleOf(input) === 'copyRecord'` first.**
-   `resolveWorkerConstraints` begins by requiring its input to be a
-   `CopyRecord`, and every downstream read is of that value. `harden` alone
-   does **not** foreclose the "Proxy getter returns a different value each
-   read" attack: it freezes an accessor in place, and every read still
-   invokes the getter. What forecloses it is `passStyleOf`'s copyRecord rule
-   that a property "must not be an accessor property"
+1. **Coerce `passStyleOf(request) === 'copyRecord'` in `canonicalize`, the
+   common ancestor of both edges.** The copyRecord coercion must run in
+   `canonicalize` — the pure, host-independent step that feeds **both**
+   `encodeWorkerConstraints` and `resolveWorkerConstraints` (the mermaid's
+   node A fans out to both) — not inside `resolveWorkerConstraints` alone.
+   The write path is `encode ∘ canonicalize` and never runs `resolve`
+   (§ *Migration*, host-independence property), so a coercion sitting only in
+   `resolve` would leave `encode` reading the caller's raw value on an edge
+   the coercion never touches: precisely the read-1-persists-`{kind:'node'}`
+   / read-2-spawns-otherwise varying-read attack. With the assertion in
+   `canonicalize`, encode and resolve both read **only** the coerced value.
+   `harden` alone does **not** foreclose the "Proxy getter returns a
+   different value each read" attack: it freezes an accessor in place, and
+   every read still invokes the getter. What forecloses it is `passStyleOf`'s
+   copyRecord rule that a property "must not be an accessor property"
    (`packages/pass-style/src/passStyle-helpers.js:135`), together with the
    ECMA-262 `[[Get]]` invariant that a non-configurable non-writable data
    property returns SameValue on every read: once the value passes as a
@@ -723,47 +798,139 @@ stated defensively:
    downgrade Axis 1 forbids. Pass an explicit closing rest of `harden({})`
    (equivalently a `copyRecord` pattern, which rejects unexpected
    properties): **open value sets per axis, closed key set for the record.**
-   And this guard covers only the *write* (caller-input) path. See
+   The closed key set must reach the **nested** axis records too, not only the
+   outer one: an object-form `persistence` (`{ durability, substrate?, metered?,
+   retention? }`), a `version` (`{ exact }` / `{ range }`), and a `target`
+   (`{ operatingSystem?, architecture? }`) each get their own closed-key-set
+   sub-pattern, so `{ persistence: { durability: 'durable', substrat: 'snapshot' } }`
+   (a misspelled nested key) is rejected rather than silently downgraded to a
+   default substrate — the same silent-downgrade failure this item forbids at
+   the top level. And this guard covers only the *write* (caller-input) path. See
    § *Migration* for the matching fail-closed rule on the reincarnation read.
 
-3. **Fail closed on an unserviceable axis, against an injected serviceable
-   set.** Item 2's guard is a *static, host-independent* shape check (closed
-   key set, per-axis value grammar); it rejects typos and unknown axes but
-   cannot know what *this host* can spawn. Serviceability is host-dynamic and
-   lives only in the backends, so it is supplied as an explicit injected
-   fact rather than read from a backend at spawn time: at daemon bring-up the
-   daemon assembles `daemonEnv.serviceableRuntimes` from its `makeWorker`
-   powers: each power that **acts on** the runtime axis
-   (`bus-manager-rust-xs.js:485`, `bus-manager-node-powers.js:226`) declares
-   the runtime values its configured binaries (`ENDO_WORKER_BIN`,
-   `ENDO_NODE_WORKER_BIN`) can service; the two powers that ignore the axis
-   (`manager-node-powers.js`, `manager-go-powers.js`) declare none. An axis
-   value absent from that injected set (a `runtime` the host has no binary
-   for, a reserved `'xs-in-rust'` on a host with no Rust backend) throws a
-   typed `UnserviceableConstraintError` naming the offending axis and value
-   **before any worker id is minted**. Because the set is *passed into*
-   `resolveWorkerConstraints`, the check runs where Open Question 3 puts it
-   (before `formulate`) without a backend round-trip: the fact the gate
-   closes on has a named source (`daemonEnv.serviceableRuntimes`) and a
-   locus where it is available (the resolver, pre-`formulate`). `kind` and a
-   disagreeing `constraints.runtime` on one call is a separate caller error
-   and is **rejected**, not silently resolved by precedence.
+3. **Fail closed on an unserviceable *non-seed* axis value, against an
+   injected serviceable set.** Item 2's guard is a *static, host-independent*
+   shape check (closed key set, per-axis value grammar); it rejects typos and
+   unknown axes but cannot know what *this host* can spawn. Serviceability is
+   host-dynamic and lives only in the backends, so it is supplied as an
+   explicit injected fact rather than read from a backend at spawn time: at
+   daemon bring-up the daemon assembles
+   `daemonWorkerSupport.serviceableRuntimes` from its `makeWorker` powers.
+   **The two seed runtimes are always in the set.** Every backend declares the
+   runtimes it can *in fact* spawn: the two powers that act on the axis
+   (`bus-manager-rust-xs.js:485`, `bus-manager-node-powers.js:226`) declare the
+   values their configured binaries (`ENDO_WORKER_BIN`, `ENDO_NODE_WORKER_BIN`,
+   each with its documented fallback) can service; and the two powers that
+   *accept-and-ignore* the axis (`manager-node-powers.js:1079`,
+   `manager-go-powers.js:178`) declare the seed runtimes they in fact spawn
+   (`['locked', 'node']`), **not** an empty set. Declaring an empty set was the
+   original defect: it would make a fully-flexible `{}` resolve to
+   `defaultWorkerKind` and then throw, and would brick every existing
+   `{ kind: 'node' }` record at reincarnation — falsifying § *Migration*'s
+   "identical to `llm` today". So the gate is scoped two ways that both keep
+   it inert for today's traffic: (a) it never fires on a **seed** runtime
+   (`'locked'`/`'node'` are always serviceable, exactly the values today's
+   code spawns), and (b) it fires only on an **explicitly-supplied non-seed**
+   value (`'xs-in-rust'`, a typo'd runtime), never on a defaulted axis. Such a
+   value absent from the injected set throws — spelled with `@endo/errors`
+   `makeError`/`Fail` (the daemon has no `extends Error` classes; a subclass
+   thrown out of the resolver would not be passable across the exo/CapTP
+   boundary — `packages/pass-style/src/error.js:318` requires the prototype be
+   a recognized error constructor's), carrying the offending axis and value in
+   `q(...)` and a stable **error name/detail** `'UnserviceableConstraint'` for
+   discrimination rather than a class — **before any worker id is minted**.
+   Because the set is *passed into* `resolveWorkerConstraints`, the check runs
+   where Open Question 3 puts it (before `formulate`) without a backend
+   round-trip. `kind` and a disagreeing `constraints.runtime` on one call is a
+   separate caller error and is **rejected**, not silently resolved by
+   precedence.
 
-4. **The reincarnation read fails closed too.** Fail-closed is not only a
-   caller-input stance: `decodeWorkerConstraints(formula)` reads *persisted*
-   bytes, which an older writer, a hand-edited state dir, or a bug can shape,
-   so it is a trust boundary. Persisted worker records are read with no shape
-   validation today (`manager.js:2172` reads `workerFormula.kind ?? ...`
-   directly), so decode must **reject** an unrecognized `constraints` axis or
-   a non-serviceable runtime value rather than fall through to
-   `defaultWorkerKind`: a `{ constraints: { runtime: 'xs-in-rust' } }` record
-   on a daemon lacking that backend must throw at reincarnation, not silently
-   resolve to `'node'` (the *unconfined* default) while the bus bring-ups use
-   `'locked'`. Correspondingly, the **encode-side invariant** is that `kind`
-   and `constraints.runtime` are **mutually exclusive on disk** (a seed
-   runtime persists as `kind`, a non-seed inside `constraints`; the two never
-   coexist in one record), so the two late-binding readers and
-   `decodeWorkerConstraints` can never disagree about a record's runtime.
+4. **The reincarnation read fails closed too — on *shape*, which is all it
+   has.** Fail-closed is not only a caller-input stance:
+   `decodeWorkerConstraints(formula)` reads *persisted* bytes, which an older
+   writer, a hand-edited state dir, or a bug can shape, so it is a trust
+   boundary. But decode takes **no daemon facts** (no defaults, no serviceable
+   set — § *The Seam It Plugs Into*), so it can only reject what is
+   host-independently malformed; it must **not** attempt a host-dynamic
+   serviceability check it has no input for. Persisted worker records are read
+   with no shape validation today (`manager.js:2172` reads
+   `workerFormula.kind ?? ...` directly), so decode **rejects**, at the shape
+   level, exactly two things:
+   - an **unrecognized `constraints` axis** (a key outside the closed set), and
+   - a record carrying **both** a seed `kind` **and** a `constraints.runtime`
+     — it is rejected outright, **never precedence-resolved**, because the two
+     late-binding readers (`manager.js:2172` reads `kind` → the tree/archive
+     path; a `constraints`-aware reader reads the axis) would otherwise
+     disagree about one byte string's runtime. This closes the wire-divergence
+     attack (`{ kind: 'node', constraints: { runtime: 'xs-in-rust' } }`): one
+     reader sees `'node'` (unconfined), another the constraint, so the record
+     is refused rather than resolved.
+
+   What decode does **not** do is judge serviceability: a
+   `{ constraints: { runtime: 'xs-in-rust' } }` record is *well-shaped*, so
+   decode accepts it and returns `{ runtime: 'xs-in-rust' }`; the spawn path is
+   `decode` → `resolve`, and `resolve` — which *does* receive
+   `daemonWorkerSupport.serviceableRuntimes` — is where that value throws on a
+   daemon with no Rust backend (item 3), before any worker starts. This split
+   (shape at decode, serviceability at resolve) is what lets the round-trip
+   property (§ *Migration*) quantify over `'xs-in-rust'` without decode
+   throwing for lack of a host input. Correspondingly, the **encode-side
+   invariant** is that `kind` and `constraints.runtime` are **mutually
+   exclusive on disk** (a seed runtime persists as `kind`, a non-seed inside
+   `constraints`; the two never coexist in one record), and decode's
+   both-present rejection above is what enforces that invariant on the read
+   side against a writer this item distrusts — so the two late-binding readers
+   and `decodeWorkerConstraints` can never disagree about a record's runtime.
+
+## Caller surface and type home
+
+Two structural facts the schema above leaves implicit, made explicit here so
+the implementing PR is not free to guess.
+
+**Which method grows `constraints`, and when.** The only worker-provisioning
+exo method today is `provideWorker: M.call(NameOrPathShape).returns(M.promise())`
+(`interfaces.js:476`, matched by `EndoHost.provideWorker(petNamePath)` at
+`types.d.ts:1840`): one argument, no options bag, so `kind` crosses no exo
+guard today and `MakeCapletOptionsShape` (`interfaces.js:45`) has no `kind`
+key. **This cycle, `WorkerConstraints` stays daemon-internal**: the
+`constraints` option is threaded through the *internal* formulation entry
+points (`formulateWorker`/`formulateNumberedWorker`, `makeIdentifiedWorker`,
+`provideWorkerId`), and `WorkerConstraintsShape` guards *that* internal entry —
+which is why the Passability coercion is stated as a defensive measure that is
+*ready* for the crossing, not one that a caller exercises yet. The exo-surface
+widening is a **named follow-up**: `provideWorker`'s guard grows an optional
+`constraints` argument (`M.call(NameOrPathShape).optional(WorkerConstraintsShape)`)
+**in lockstep** with `EndoHost.provideWorker`'s exported `.d.ts` signature (the
+`packages/daemon/AGENTS.md` § *Keep exported facet `.d.ts` interfaces in sync*
+rule), and only then does `WorkerConstraintsShape` guard an actual CapTP
+boundary. Deferring the exo guard, not smuggling it in, is the honest cycle-1
+scope.
+
+**Which types the package publishes.** `packages/daemon`'s public type surface
+is the root `packages/daemon/types.d.ts` (the `exports["."]` `types`
+condition), a hand-curated re-export — not `src/types.ts`/`src/types.d.ts`,
+which have no `exports` subpath, so a cross-package consumer such as
+`@endo/cli` (`/** @import { RetentionPath } from '@endo/daemon' */`) cannot name
+a `src`-only type. So: **`WorkerConstraints` and the four axis value types
+(`WorkerRuntime`/`WorkerPersistence`/`WorkerVersion`/`WorkerTarget`) join the
+root `types.d.ts` re-export** (they become caller-nameable when the exo guard
+lands); `WorkerConstraintsInput`, `Resolved*`, `PersistedWorkerConstraints`,
+and `WorkerConstraintsShape` **deliberately do not** (daemon-internal). The
+definitions themselves live in the checked `src/types.ts`, per `AGENTS.md`
+§ *Where type definitions go*.
+
+**Forward-compatibility: fail-closed decode ships before any writer.** A
+persisted `{ constraints: ... }` record is a format widening, so the ordering
+across releases is stated, not left to chance: the **fail-closed
+`decodeWorkerConstraints` reader ships at least one release before any writer
+emits a `constraints` key**. Until then, no record carries `constraints`, so an
+older daemon — or the `endor` second-seat daemon, which M11's exit criterion
+runs against the *same state directory* — never encounters bytes it would
+misread (today both read `workerFormula.kind ?? defaultWorkerKind` with a bare
+`JSON.parse`, `manager-database.js:387`, and would silently ignore an
+unknown `constraints` key: exactly the silent downgrade § *Passability* item 4
+forbids). Sequencing the reader ahead of the writer is what makes the widening
+safe for a previous reader, not only for the new one.
 
 ## Migration of Today's Two Kinds (zero behavior, zero record churn)
 
@@ -798,8 +965,13 @@ would persist differently on two hosts). The rule, one line per axis:
   persist nothing for it. `metered`/`retention` are mutable policy and are
   never persisted (§ Axis 2).
 - **the `constraints` key appears iff at least one non-runtime axis was
-  explicitly supplied, or the runtime is a new value.** The two seed
-  runtimes never introduce a `constraints` key; they stay `kind`.
+  supplied *with a value other than that axis's flexible-default token*, or
+  the runtime is a new value.** The "explicitly supplied" phrasing alone is
+  too strong: an explicit `{ persistence: 'ephemeral' }` / `{ version: 'latest' }`
+  *is* supplied yet persists nothing (it collapses to its omitted twin, above),
+  so the biconditional is stated over the post-collapse value, not raw
+  presence. The two seed runtimes never introduce a `constraints` key; they
+  stay `kind`.
 
 Two invariants follow, and (crucially) they do **not** contradict,
 because the discriminator is input presence, not resolved value:
@@ -861,6 +1033,20 @@ named tests:
   and `:5665`'s `!existingFormula.kind` does not mint a spurious second Node
   worker. This is the case a `{ kind: 'node' }`-only fixture can never
   redden, so it is required (see § *Migration*, the two-reads normalization).
+- **Per-backend spawn-selection test (the observable half of "zero behavior
+  change").** The golden test pins persisted *bytes* and the two `manager.js`
+  reads, but the change also rewrites all four `makeWorker` powers, and the
+  two that act on the axis branch on `kind === 'node'` for **binary selection**
+  (`bus-manager-rust-xs.js:485`, `bus-manager-node-powers.js:226`). A
+  normalization that dropped `kind` at that boundary would keep every byte and
+  read test green while spawning the wrong binary for a `{ kind: 'node' }`
+  worker. So each of the two acting backends owes an assertion that a resolved
+  `{ runtime: 'node' }` selects `ENDO_NODE_WORKER_BIN` and `{ runtime: 'locked' }`
+  selects `ENDO_WORKER_BIN`, matching today's `kind`-keyed selection exactly —
+  including the two backends' differing in-backend default skew
+  (`bus-manager-rust-xs.js:469` leaves it undefined; `bus-manager-node-powers.js:206`
+  defaults `'locked'`), which the resolved-value handoff must preserve. Bytes
+  are the persistence half of the equivalence; this is the spawn half.
 - **Default-collapse test (non-runtime axes).** Assert every "spelled-out
   default" request on a non-runtime axis (`{ persistence: 'ephemeral' }`,
   `{ version: 'latest' }`) persists nothing extra: matching its
@@ -898,50 +1084,78 @@ named tests:
   `decode(encode(resolved)) == resolved` is *unsatisfiable*: decode takes
   no defaults and cannot rebuild a filled axis). It is what catches lossy
   persistence of a `constraints` object (`xs-in-rust`, `durable`, a pinned
-  target) that a two-value example cannot.
+  target) that a two-value example cannot. **The property is runnable over a
+  generated `'xs-in-rust'` precisely because decode is shape-only** (it does
+  not check serviceability — § *Passability* item 4 — so it does not throw for
+  a well-shaped non-seed runtime the host cannot spawn); the earlier draft that
+  put a serviceability check in decode made this property unsatisfiable (every
+  shrink to `'xs-in-rust'` threw on a host with no Rust backend, rather than
+  fail-equal), which is why serviceability now lives only in `resolve`.
 - **Host-independence property.** The persisted bytes are a function of the
-  request alone, never the host. `encodeWorkerConstraints(constraints)` takes
-  no daemon defaults *by signature*, so host-independence is structural; the
-  property guards that the whole write entry point stays that way even as
-  resolution (which *does* consume `daemonEnv`) evolves:
-  `keyEQ(persist(c, d1), persist(c, d2))` over one input `c` and two arbitrary
-  `daemonEnv` bring-ups `d1`/`d2` differing in `defaultWorkerKind`, where
-  `persist(c, d) = encodeWorkerConstraints(canonicalize(c))` is the write path
-  formulation actually calls (canonicalization is host-independent, § *The
-  Seam It Plugs Into*, so `d` cannot leak into the bytes). This is the
+  request alone, never the host. `encodeWorkerConstraints(request)` takes no
+  daemon defaults *by signature*, so host-independence is structural — but a
+  property that asserts it as `keyEQ(encode(canonicalize(c)), encode(canonicalize(c)))`
+  is a value compared to itself: **green under any mutation of the write path**,
+  including one that started reading `defaultWorkerKind` inside
+  `formulateNumberedWorker` and stamping it into the record. To be
+  load-bearing the property must drive the **real write entry point**:
+  formulate a worker for one request `c` under two arbitrary
+  `daemonWorkerSupport` bring-ups `d1`/`d2` differing in `defaultWorkerKind`
+  (`manager.js:5244-5250`, the write formulation actually calls), then
+  `keyEQ` the two persisted formula records. It must catch a regression where
+  the *formulation* (not just `encode`) leaks `d` into the bytes; comparing a
+  hand-composed `encode(canonicalize(c))` to itself cannot. This is the
   `forall` behind the single hand-picked pair the golden test checks.
 - **`constraints`-key biconditional property.** `'constraints' in encode(c)`
-  holds **iff** at least one non-runtime axis was explicitly supplied or the
-  runtime is a non-seed value: one property over `arbWorkerConstraints`
-  rather than the Default-collapse + New-axis-control example pair.
+  holds **iff** at least one non-runtime axis was supplied *with a
+  post-collapse value other than its flexible-default token* or the runtime is
+  a non-seed value: one property over `arbWorkerConstraints` rather than the
+  Default-collapse + New-axis-control example pair. Stated over the
+  post-collapse value (not raw presence) so it does not contradict the
+  Default-collapse rule, under which `{ persistence: 'ephemeral' }` supplies an
+  axis yet persists no key.
 - **Resolution idempotence property.** `keyEQ(resolve(resolve(x)), resolve(x))`,
   which forces the resolved types to be genuinely canonical at design
   time.
-- **Precedence property.** `resolve({ constraints: { runtime: r }, kind: k }, d).runtime === r`
-  over `arbRuntime` triples where `r`/`k` agree or `k` is absent (the
-  disagreement case is the rejection test below), pinning
-  `constraints.runtime > kind > defaultWorkerKind`.
+- **Precedence property.** `resolve({ constraints: { runtime: r }, kind: k }, d).runtime === r`,
+  pinning `constraints.runtime > kind > defaultWorkerKind`. The runtime `r`
+  must be **co-generated from `d.serviceableRuntimes`** (or a seed value),
+  never drawn independently: `resolve` applies the fail-closed gate (item 3),
+  so an `r` the generated `d` cannot service would throw rather than return,
+  making the equality unsatisfiable. Draw the pair from an `fc.record` whose
+  `runtime` is `fc.constantFrom(...d.serviceableRuntimes)`, and where `r`/`k`
+  agree or `k` is absent (the disagreement case is the rejection test below).
 - **New-axis test (negative control).** `{ persistence: 'durable' }` *does*
   persist a `constraints` key: the field appears exactly when it should.
 - **Rejection tests (§ *Passability and rejection*).** The fail-closed
   stances are load-bearing safety claims and each owes a test:
-  - an unserviceable `runtime` (`'constructor'`, `'toString'`, a reserved
-    `'xs-in-rust'` on a host with no backend for it) throws
-    `UnserviceableConstraintError` naming the axis and value, **and leaves no
-    persisted formula record** (assert the record count is unchanged after
-    the throw, per Open Question 3's fail-before-`formulate` invariant);
+  - an unserviceable *non-seed* `runtime` (`'constructor'`, `'toString'`, a
+    reserved `'xs-in-rust'` on a host with no backend for it) throws in
+    `resolve` a `@endo/errors` `makeError` carrying name/detail
+    `'UnserviceableConstraint'` plus the axis and value in `q(...)` (not an
+    `extends Error` subclass, which would not be passable across CapTP), **and
+    leaves no persisted formula record** (assert the record count is unchanged
+    after the throw, per Open Question 3's fail-before-`formulate` invariant);
+    conversely a **seed** runtime (`'locked'`/`'node'`) is asserted **never** to
+    throw on any bring-up, including the accept-and-ignore backends (item 3);
   - an explicit `kind` with a *disagreeing* `constraints.runtime` on one
     call is rejected as a caller error (property over `arbRuntime` pairs
     filtered to `a !== b`);
-  - `decodeWorkerConstraints` on a formula carrying an **unrecognized**
-    `constraints` axis or non-serviceable runtime value *rejects* rather
-    than falling through to `defaultWorkerKind`: the reincarnation reader is
-    a trust boundary (persisted bytes an older or hand-edited state dir can
-    contain), so it fails closed exactly as the caller path does;
+  - `decodeWorkerConstraints` on a persisted formula carrying an
+    **unrecognized `constraints` axis**, or carrying **both** a seed `kind`
+    **and** a `constraints.runtime`, *rejects* (shape-level) rather than
+    precedence-resolving or falling through to `defaultWorkerKind`: the
+    reincarnation reader is a trust boundary (persisted bytes an older or
+    hand-edited state dir can contain). Decode does **not** reject a
+    well-shaped non-serviceable runtime (it has no host input); that
+    `{ constraints: { runtime: 'xs-in-rust' } }` record decodes fine and throws
+    downstream in `resolve` on a Rust-less host — assert the throw is at the
+    resolve step, not decode;
   - the varying-read Proxy attack: an input whose `runtime` getter returns
     `'node'` on read 1 and `'xs-in-rust'` on read 2 is rejected at the
-    `passStyleOf(input) === 'copyRecord'` coercion (a copyRecord may hold no
-    accessor property), not persisted-once-spawned-other.
+    `passStyleOf(request) === 'copyRecord'` coercion in `canonicalize` (a
+    copyRecord may hold no accessor property), before either the encode edge or
+    the resolve edge reads it, not persisted-once-spawned-other.
 - **Golden byte-order note.** The golden record-shape test compares the
   **serialized string** `JSON.stringify(formula)` (`manager-database.js:404`),
   not a `deepEqual`/`keyEQ` of the parsed object: key *order* is
@@ -960,25 +1174,37 @@ sites keep working:
 - `formulateWorker` / `formulateNumberedWorker` gain an optional
   `constraints` alongside the retained `kind`.
 - `provideWorkerId(..., kind)` keeps its `kind` parameter; internally it
-  becomes sugar for `{ runtime: kind }`. **Worker reuse is decided per axis,
-  by one rule that holds across all four axes** (not runtime alone): a
-  caller who supplies a worker id together with constraints reuses the
-  existing worker **iff every explicitly supplied axis is satisfied** by that
-  worker's decoded formula (`decodeWorkerConstraints(existingFormula)`); if
-  any supplied axis is unsatisfied the daemon does **not** silently return
-  the existing worker but either **mints** a fresh worker (for a divergence a
-  new identity can satisfy, e.g. a different runtime) or **rejects** (for an
-  axis that cannot be retrofitted onto a live identity, e.g. changing
-  `persistence` on an already-durable worker). This is the same fail-closed
-  stance § *Axis 1* states for runtime, made uniform so that a supplied but
+  becomes sugar for `{ runtime: kind }`. **The new per-axis reuse rule is
+  carved to preserve today's seed-runtime behavior exactly**, so it changes no
+  existing caller. Today the `!existingFormula.kind` branch (`:5665`, whose
+  `defaultWorkerKind` read is `:5657`) returns a *specified* worker id
+  **unchanged even when its `kind` mismatches** the requested seed kind — the
+  `makeUnconfined` / `endo make --UNSAFE` path (`manager.js:6005`) passes
+  `'node'` together with a `specifiedWorkerId`, and on a Node-default daemon
+  that tolerated mismatch returns the existing (possibly `{ kind: 'locked' }`)
+  worker. **That seed-runtime reuse path reads unchanged**: a seed-runtime
+  request against a specified id keeps today's return-the-existing-worker
+  behavior, because the discriminator is still the presence/absence of the
+  `kind` key, exactly as today. The stricter *mint-or-reject* rule applies
+  **only** to an explicitly-supplied **non-seed** axis (a non-seed runtime, or
+  a `persistence`/`version`/`target` pin): for such an axis, a caller who
+  supplies a worker id together with constraints reuses the existing worker
+  **iff every such supplied axis is satisfied** by that worker's decoded
+  formula (`decodeWorkerConstraints(existingFormula)`); otherwise the daemon
+  does **not** silently return the existing worker but either **mints** a fresh
+  worker (a divergence a new identity can satisfy, e.g. a different runtime) or
+  **rejects** (an axis that cannot be retrofitted onto a live identity, e.g.
+  changing `persistence` on an already-durable worker). This keeps the
+  fail-closed stance § *Axis 1* states for a new axis — a supplied but
   unsatisfied `persistence`/`version`/`target` can never fall through to an
-  unpinned or ephemeral worker the way runtime is forbidden to. Concretely,
-  the `!existingFormula.kind` branch (`:5665`) reads unchanged **for a seed
-  runtime** (which still persists as `kind`) but a `constraints`-carrying
-  formula (a non-seed runtime, or a non-runtime axis) has no `kind` key, so
-  that branch consults the decoded per-axis values rather than treat the
-  absent key as "flexible node". The same normalization covers the
-  `manager.js:2172` archive-vs-tree read.
+  unpinned or ephemeral worker — while leaving the seed-runtime reuse of every
+  existing caller byte-for-byte as it is. Mechanically: the
+  `!existingFormula.kind` branch reads unchanged for a seed runtime (which
+  still persists as `kind`); a `constraints`-carrying formula (a non-seed
+  runtime, or a non-runtime axis) has no `kind` key, so that branch consults
+  the decoded per-axis values rather than treat the absent key as "flexible
+  node". The same normalization covers the `manager.js:2172` archive-vs-tree
+  read.
 - CLI `@node` selection, `@main`/`@node` special names, and
   `defaultWorkerKind` bring-up are untouched.
 
@@ -1138,26 +1364,76 @@ deprecation.
 
 ## Prompt
 
-> The daemon selects every worker it spawns through a single closed field,
-> `kind?: 'locked' | 'node'`, threaded from the persisted worker formula
-> down through `manager.js` and the supervisor backends. That closed union
-> hard-codes today's two kinds as the ceiling and forces every emerging
-> worker category, durable/orthogonally-persistent workers (thixotrope,
-> the quiescence embargo, the snapshot substrate, the metered-storage
-> worker of issue #984), version-pinned builds, and os/arch-selected
-> binaries, to become a bespoke new `kind` that cross-multiplies with the
-> runtime axis. Design an open, multi-axis worker-selection constraint
-> schema that replaces the closed union: independent, individually-optional
-> axes (runtime, persistence, version, target), each flexible-by-default.
-> Migrate today's `'locked'`/`'node'` onto the runtime axis with zero
-> behavior change and zero persisted-formula churn, keep the API strictly
-> additive over `kind`, and give the durable/version/target categories each
-> a typed, named extension point that identifies the exact seam it will
-> plug into, without designing those mechanisms here. The acceptance test
-> for the schema is that issue #984's metered-storage worker can be
-> expressed as one constraint combination rather than a new worker kind.
+The verbatim generating prompt, from the originating job brief
+`jobs/todo/design-endo-worker-kind-constraints.md` (garden `journal2` commit
+`88afaf4f1d`):
 
-*(Prompt reconstructed from the design's own Problem/Goals framing; the
-original generating prompt was not captured at authoring time. Retained
-per `designs/AGENTS.md` § Capturing the prompt, labeled as a
-reconstruction.)*
+> Design a forward-looking, portable constraint model for the daemon's worker
+> selection, replacing the closed two-value `kind: 'locked' | 'node'` union that
+> `makeWorker`/`makeIdentifiedWorker` carry today (`packages/daemon/src/manager.js`,
+> `bus-manager-rust-xs.js`, `manager-node-powers.js`, `manager-go-powers.js`, and the
+> `kind?: 'locked' | 'node'` signature in `types.d.ts`, threaded identically across
+> all three supervisor backends). The maintainer's ask (verbatim intent): a
+> through-line that is portable across platforms, lets a caller express worker
+> constraints or leave them flexible, and does not hard-code today's two kinds as
+> the ceiling.
+>
+> **This must be forward-looking but land something usable now.** Do not just
+> propose a distant target architecture. Define the constraint schema and the
+> seam it plugs into now, migrate today's two kinds (`locked`, `node`) onto it as
+> the first two instances with zero behavior change, and leave explicit,
+> well-typed extension points for the categories below — even though most of
+> them are not ready to implement yet.
+>
+> ## Known converging pieces (reconcile with these; do not duplicate them)
+>
+> - **Durable orthogonal-persistence worker category** — the maintainer's
+>   headline case: consistent, portable, snapshotted, embargoes messages to
+>   prevent hangover-inconsistency, transcripted and/or snapshotted for durable
+>   storage. Maps to `@endo/thixotrope` (PR #786), PR #989 (the quiescence
+>   embargo), the `daemon-xs-worker-snapshot` design + PR #281, issue #984 (the
+>   metered-storage worker — this design's constraint model should make #984
+>   expressible as one constraint combination, not a bespoke worker kind), and
+>   issue #813 (snapshot continuity across a live code upgrade).
+> - **Alternate worker runtime** — Ironhorse (PR #600, merged): Rust process
+>   embedding XS. Treat "worker runtime/engine" as its own constraint dimension,
+>   since XS-in-Rust vs. XS-via-xsnap-in-Node vs. plain Node are three points on
+>   that axis, not three unrelated kinds.
+> - **Sturdy-refs / worker retention** — PR #511 (draft design).
+>
+> ## Entirely unfiled — this design is where they first get a home
+>
+> - **Version pinning.** A caller must be able to pin a specific worker build
+>   (binary/engine version), not just a kind. Sketch what a version constraint
+>   looks like in the schema (exact pin vs. range vs. "flexible/latest") without
+>   committing to a resolution mechanism yet.
+> - **Platform/architecture-specific binary fetch on demand.** On deployments
+>   like minion.town, the daemon may need to pull a platform+arch-matched worker
+>   binary from remote storage (e.g. S3) rather than assume a local binary is
+>   present. Note the seam where a future binary-fetch provider would plug into
+>   `makeWorker`'s constraint resolution (e.g. alongside
+>   `endoWorkerBin`/`endoNodeWorkerBin` in `bus-manager-rust-xs.js`), without
+>   designing the fetch mechanism itself here.
+>
+> ## Shape to aim for
+>
+> A constraint expression a caller passes to `makeWorker` (or the formula that
+> requests one) with independent, individually-optional axes — kind/runtime,
+> persistence class (ephemeral vs. durable/transcripted/snapshotted with
+> hangover-consistency guarantees), version, platform/arch — each either pinned
+> or left flexible for the daemon to resolve. Today's `'locked'` and `'node'`
+> become the flexible-default resolution of the kind/runtime axis with every
+> other axis flexible. Keep the wire/API surface additive over the current
+> `kind?: 'locked' | 'node'` signature so existing callers need no changes.
+>
+> ## Output
+>
+> A design doc (`designs/<slug>.md`) plus a `designs/README.md` summary-table
+> row. Flag open questions rather than resolving them past the load-bearing seam
+> (the schema + the migration of today's two kinds onto it); the unfiled pieces
+> above should end as explicit `Not Started` extension points, not implementation
+> plans.
+
+*(Verbatim from the job brief's `## Task` and following sections, condensed
+only by eliding the per-item PR/issue provenance already carried inline in
+§ *Reconciliation*; not a reconstruction.)*
