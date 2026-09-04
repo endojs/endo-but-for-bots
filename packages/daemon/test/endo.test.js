@@ -1560,6 +1560,34 @@ testNeedsNodeManager(
   },
 );
 
+testNeedsNodeManager('only the root host manages secrets', async t => {
+  const { host } = await prepareHost(t);
+  const child = await E(host).provideHost('space-a');
+
+  t.true((await E(host).list()).includes('@secrets'));
+  t.truthy(await E(host).lookup(['@secrets', 'catalog']));
+
+  // A child host does not advertise `@secrets`, and every name-hub method
+  // rejects the path rather than resolving it: `@secrets` is absent from
+  // its special names, so `isPetName` refuses it outright.
+  t.false((await E(child).list()).includes('@secrets'));
+  await t.throwsAsync(() => E(child).has('@secrets'), {
+    message: /Invalid pet name/,
+  });
+  await t.throwsAsync(() => E(child).lookup(['@secrets', 'catalog']), {
+    message: /Invalid pet name/,
+  });
+
+  // Hygiene, not containment: the child still reaches the root host through
+  // its ambient `@endo`, so withholding the name narrows the namespace
+  // rather than the authority. See designs/daemon-secret-manager.md.
+  const rootViaChild = await E(await E(child).lookup('@endo')).host();
+  t.is(
+    await E(rootViaChild).identify('@agent'),
+    await E(host).identify('@agent'),
+  );
+});
+
 test('rehydrated requests can be resolved after restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
 

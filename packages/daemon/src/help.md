@@ -334,8 +334,9 @@ A host has all guest capabilities plus:
 - Manage network peers
 - Manage secret blobs through `@secrets` without revealing them in inventory
 
-`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are host-only
-management facets.
+`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are management
+facets on the daemon's root host only; a host made with provideHost does not
+carry `@secrets`.
 Created read capabilities are bound beneath the ordinary `secrets` directory.
 Prefer endowing a formula with a secret capability instead of calling its
 `readBase64()` method in an agent session.

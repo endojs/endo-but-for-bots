@@ -483,3 +483,55 @@ test.serial('secret Space ingests a file byte for byte', async t => {
   t.true(await waitFor(() => !$parent.textContent.includes('id_ed25519')));
   t.true($parent.textContent.includes('No file chosen'));
 });
+
+test.serial('secret Space reports a clipboard clear that fails', async t => {
+  const document = testDocument;
+  const catalog = Far('MockSecretCatalog', { list: () => [] });
+  const audit = Far('MockSecretAudit', { list: () => [] });
+  const importer = Far('MockSecretImporter', { createBase64: () => {} });
+  const powers = Far('MockSecretPowers', {
+    lookup: path => {
+      const key = Array.isArray(path) ? path.join('/') : path;
+      if (key === '@secrets/catalog') return catalog;
+      if (key === '@secrets/audit') return audit;
+      if (key === '@secrets/create') return importer;
+      throw new Error('unknown path');
+    },
+  });
+
+  const $parent = document.createElement('div');
+  document.body.appendChild($parent);
+  // Both shapes a clipboard write can fail in: a rejected promise, and a
+  // synchronous throw from an absent or blocked clipboard.
+  let mode = 'reject';
+  const cleanup = secretsComponent($parent, powers, [], () => {
+    if (mode === 'throw') throw new Error('no clipboard');
+    return Promise.reject(new Error('denied'));
+  });
+  t.teardown(cleanup);
+
+  // Zero-row branch: the empty catalog renders its own copy, not a card.
+  await waitFor(() => $parent.textContent.includes('No secrets yet.'));
+  t.is($parent.querySelector('.secret-card'), null);
+
+  const $clear = [...$parent.querySelectorAll('button')].find(
+    button => button.textContent === 'Clear clipboard',
+  );
+  $clear.click();
+  t.true(
+    await waitFor(() =>
+      $parent.textContent.includes('Could not clear the clipboard.'),
+    ),
+  );
+  // The failure must not be reported as a successful overwrite.
+  t.false($parent.textContent.includes('Clipboard overwritten'));
+
+  mode = 'throw';
+  $clear.click();
+  t.true(
+    await waitFor(() =>
+      $parent.textContent.includes('Could not clear the clipboard.'),
+    ),
+  );
+  t.false($parent.textContent.includes('Clipboard overwritten'));
+});

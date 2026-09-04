@@ -36,12 +36,12 @@ The store is therefore single-principal.
 `secret_record`, `secret_grant`, and `secret_audit_event` carry no owning-host
 column, and `SecretCatalog.list()` returns a `SecretAdmin` for every record in
 the daemon, so any holder of a `@secrets` root administers all of them.
-This is not enforced against child hosts, and cannot be at this layer: a host
-created by `provideHost` already reaches the root host through its ambient
-`@endo` special name, so it is a full-authority peer rather than a lower-trust
+Only the daemon's root host carries `@secrets`; a host created by
+`provideHost` does not, and every name-hub method rejects the path on one.
+That is namespace hygiene rather than containment, and cannot be more at this
+layer: such a host already reaches the root host through its ambient `@endo`
+special name, so it is a full-authority peer rather than a lower-trust
 principal.
-Withholding `@secrets` from non-root hosts is namespace hygiene, not
-containment.
 Per-space secrets require both an owning-principal column and attenuating or
 withholding `@endo` on non-root hosts; an owner column alone is bypassable.
 
