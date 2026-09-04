@@ -86,10 +86,10 @@ const ocapn = await makeOcapn({
 ```
 
 `@endo/daemon`'s `makeFormulaNonceLocator` (from
-`@endo/daemon/formula-nonce-locator.js`) is a ready-made pairing: its `get`
-serves as the shared `locator` and its `makeLocatorForSession` supplies this
-hook, bounding each session's failed presentations against a
-formula-identifier oracle.
+`@endo/daemon/formula-nonce-locator.js`) is a ready-made pairing: the object
+it returns is itself a `NonceLocator` (pass it as the shared `locator`), and
+its `makeLocatorForSession` supplies this hook, bounding each session's failed
+presentations against a formula-identifier oracle.
 
 ## Status
 

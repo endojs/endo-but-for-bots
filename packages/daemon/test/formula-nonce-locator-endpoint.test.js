@@ -1,5 +1,4 @@
 // @ts-nocheck
-// spell-out-exempt: swissNum spells the OCapN "Swiss number" domain term.
 import '@endo/init/debug.js';
 
 import test from 'ava';
@@ -249,16 +248,36 @@ test('the per-session miss bound aborts the abusive session but not a valid peer
     locator: new Map(),
   });
 
-  // The prober misses repeatedly; each miss is the same rejection, and
-  // crossing the bound aborts its session.
+  // The prober misses repeatedly; each below-bound miss is the same
+  // rejection, and crossing the bound aborts its session. Collect the
+  // peer-visible messages so we can observe the crossing directly: every
+  // presentation *below* the bound (probes 1..missBound-1) must be the
+  // identical uniform miss over the wire, and crossing the bound must
+  // sever the session (asserted via `wireAborts` below). The security
+  // property is uniformity of the below-bound misses plus severance at
+  // the crossing — not that the crossing reply is byte-identical, which
+  // would rest on engine-dependent teardown ordering.
+  const proberMessages = [];
   for (let i = 0; i < 4; i += 1) {
     const ref = prober.client.makeSturdyRef(
       server.location,
       `${'e'.repeat(64)}:${localNode}`,
     );
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => prober.client.enlivenSturdyRef(ref));
+    const error = await t.throwsAsync(() =>
+      prober.client.enlivenSturdyRef(ref),
+    );
+    proberMessages.push(error.message);
   }
+
+  // Probes 1 and 2 are below the bound (missBound is 3): they share one
+  // uniform message, so no below-bound miss is an oracle over the wire.
+  const [firstMiss, secondMiss] = proberMessages;
+  t.is(
+    secondMiss,
+    firstMiss,
+    'below-bound misses share one uniform rejection over the wire',
+  );
 
   // Crossing the bound reached the real session-teardown callback over
   // the wire — the abuse is actually severed, not merely rejected each

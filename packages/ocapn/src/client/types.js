@@ -373,11 +373,16 @@
 
 /**
  * The context `makeOcapn`'s `makeLocatorForSession` factory receives
- * when a session is established. `remoteDesignator` is the authenticated
- * peer's designator (its stable transport identity), so an embedder can
- * key per-peer accounting on it. `abortSession` tears this session down;
- * a locator that has seen too many misses can call it to enforce a
- * per-session bound without leaking which presentation crossed it.
+ * when a session is established. `remoteDesignator` is the peer's claimed
+ * designator (its stable transport identity). It is bound to the
+ * transport-authenticated identity only when the netlayer supplies
+ * {@link NetLayer.verifyPeerLocation} (e.g. iroh's QUIC-verified
+ * EndpointId); on a netlayer without transport authentication it is
+ * self-asserted and therefore spoofable, so an embedder keying durable
+ * per-peer accounting on it should prefer the session's verified public
+ * key (`getPeerPublicKeyForSessionId`). `abortSession` tears this session
+ * down; a locator that has seen too many misses can call it to enforce a
+ * per-session bound.
  *
  * @typedef {object} SessionLocatorContext
  * @property {string} remoteDesignator
