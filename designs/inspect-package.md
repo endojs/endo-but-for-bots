@@ -116,7 +116,15 @@ string into one-argument-per-character output with no error. The surface closes
 that hazard by fixing each name's return *type* independent of build condition,
 and by separating "compute a representation" (data, uniform type and uniform
 bytes per name) from "deliver it to this host's log sink" (mechanism, per-host
-richness):
+richness). That same representation-vs-delivery separation runs through the
+**options type**, so a field only a sink-owning export honors cannot silently
+no-op on one that owns no sink: `inspect` takes an `InspectOptions` bag (the
+representation options: `depth`, `breakLength`, `indent`, and the cardinality /
+size bounds under "Avoiding triggered behavior") and nothing about a sink; the
+two console exports take a `ConsoleOptions` bag that `extends InspectOptions`
+with the sink-owning fields (`stream`, `colors`). A field only the console
+exports honor is therefore absent from `inspect`'s parameter type, so handing it
+to `inspect` is a compile-time type error rather than a silent drop:
 
 - **`inspect(value, options)` returns a `string` on every host, and the same
   string on every host.** It is the portable, capability-free, deterministic
@@ -128,18 +136,19 @@ richness):
   richness lives only in the two console exports below, which own a sink and may
   legitimately vary by host. `inspect` honors `depth`, `breakLength`, and `indent`
   (the last is the per-level indentation width `quote()`'s `spaces` argument
-  threads through; see "The shim and SES integration"); it
-  **defaults `colors: false` and never senses a TTY**, because it has no
-  destination in its signature (its caller does). `colors` is accepted and
-  ignored rather than rejected, so one options bag is valid everywhere. This is
-  a deliberate **divergence from Node's well-known `util.inspect`**, whose name
-  `inspect` deliberately echoes: `util.inspect(v, { colors: true })` colorizes,
-  but `inspect(v, { colors: true })` here silently produces the same plain
-  string. The collision and whether to make it fail loud (rename the string
-  export, or reject a non-default `colors`) is called out as its own hazard and
-  left as an open decision under "Open Questions" below; it is flagged here at
-  the definition site so the divergence is not discovered only by diffing output
-  against a real TTY render.
+  threads through; see "The shim and SES integration"). Its `InspectOptions`
+  parameter type carries **no `colors` and no `stream`**, and it **never senses a
+  TTY**, because it owns no destination (its caller does). Because `colors` is not
+  a field `inspect` accepts, `inspect(v, { colors: true })` is a **compile-time
+  type error**, not a silent no-op. That is the deliberate resolution of the
+  divergence from Node's well-known `util.inspect`, whose name `inspect` echoes and
+  which *does* colorize on `{ colors: true }`: rather than accept-and-ignore
+  `colors` and diverge silently at runtime, the surface makes the mismatch fail
+  loud at the type boundary. A narrower, cosmetic question does remain open (whether
+  `inspect` should additionally be *renamed*, to `format` or `stringify`, to free
+  the `inspect` name for a future genuinely `util.inspect`-compatible entry),
+  carried under "Open Questions" below; but the silent-wrong-output hazard itself is
+  closed here, at the definition site, by the option-type split.
 - **`inspectToConsoleArgs(value, options)` returns an array of `console`
   arguments** on every host. On **browser** the array is the *live* object(s),
   so `console.log(...inspectToConsoleArgs(value))` preserves the rich,
@@ -154,9 +163,10 @@ richness):
   A caller who will splat the result into `console.error` passes
   `inspectToConsoleArgs(value, { stream: process.stderr })`, so colors track the
   real destination when stdout and stderr TTY-ness diverge (piped stdout with a
-  TTY stderr, or the reverse, a common CI/shell shape). `stream` is a
-  console-path-only option (`inspect`, the string export, has no sink and ignores
-  it); on non-node conditions it is inert. On **xs**/**default** it returns
+  TTY stderr, or the reverse, a common CI/shell shape). `stream` and `colors` are
+  `ConsoleOptions` fields, absent from `inspect`'s `InspectOptions` type entirely
+  (the string export owns no sink); on non-node conditions they are inert. On
+  **xs**/**default** it returns
   `['%s', inspect(value, options)]`, the portable-core string in the same
   never-misinterpreted shape.
 - **`log(...values)`** is the console idiom: it maps each value through
@@ -200,29 +210,34 @@ steps 1-4 reduce but cannot eliminate it. The per-property `try/catch` of
 contract step 4 below is the inner guard for the throw half; the outer
 whole-render `try/catch` is the never-throw guarantee. Both halves are Phase 1
 tests (the never-throw half as a totality assertion, the re-entrancy half as a
-best-effort assertion over the hostile corpus).
+best-effort assertion over the hostile corpus). Bounded *work* (that a hostile
+`ownKeys` returning millions of synthetic keys, or an oversized value, cannot
+exhaust CPU or memory even when it never throws and never re-enters) is a
+**third, orthogonal guarantee**, not covered by either totality half; it is
+carried by the cardinality / size bounds under "Avoiding triggered behavior"
+below.
 
-**Option honoring, per condition** (the value export `inspect`):
+**Option honoring, per condition** (the value export `inspect`, whose parameter
+type is `InspectOptions`):
 
 | Option | node | browser | xs | default |
 |---|---|---|---|---|
 | `depth` | honored (shared core) | honored | honored | honored |
 | `breakLength` | honored (shared core; line-wrap threshold) | honored | honored | honored |
 | `indent` | honored (shared core; per-level indentation width: the axis `quote()`'s `spaces` threads through) | honored | honored | honored |
-| `colors` | accepted, ignored (plain core string; colorization is the `log` / `inspectToConsoleArgs` sink path) | accepted, ignored | accepted, ignored | accepted, ignored |
+| `maxArrayLength` / `maxStringLength` / max own-keys | honored (shared core; bounded-work caps, see "Avoiding triggered behavior") | honored | honored | honored |
 
-The bag is shared across all three exports and all three conditions; a condition
-or export that cannot honor a field ignores rather than rejects it, so a call
-authored once type-checks and behaves predictably under every target. Note the
-deliberate asymmetry in the last row: `colors` is the one field `inspect`
-*accepts but silently drops* on every condition (the string export owns no sink
-to colorize into), whereas `depth`/`breakLength`/`indent` are always honored.
-That silent-ignore is intentional (one options bag stays valid everywhere), but
-it is the only field `inspect` does not honor, and implementers must not widen
-"accept-and-ignore" to any other option.
+Every field `InspectOptions` carries is honored on every condition; `inspect` has
+no accept-and-ignore field. The sink-owning fields (`colors`, `stream`) are not
+part of `InspectOptions` at all; they live only on the `ConsoleOptions` bag the
+two console exports take (below), so a caller cannot hand `inspect` an option it
+would have to silently drop; doing so is a type error, not a no-op. Implementers
+must keep `inspect`'s parameter type free of any sink-owning field rather than
+widening it to "accept-and-ignore".
 
-**`colors` on the console path** (`inspectToConsoleArgs`/`log`, distinct from the
-`inspect`-only row above, which owns no sink): here `colors` *is* honored, and it
+**`colors` on the console path** (`inspectToConsoleArgs`/`log`; `colors` is a
+`ConsoleOptions` field, absent from `inspect`'s `InspectOptions`): here `colors`
+*is* honored, and it
 takes **precedence over the `stream`-driven auto-detection** when it is set. The
 console path both auto-detects (via `options.stream.isTTY`, default
 `process.stdout`) and accepts an explicit `colors`; the explicit value wins so a
@@ -311,6 +326,18 @@ host. The per-host console richness (`util.inspect` colorization on node, the
 live-value tree on browser) is a property of `inspectToConsoleArgs`/`log`, a
 separate path not shown here.
 
+Because `inspect`'s bytes are condition-invariant, the per-condition entry files
+(`inspect-node.js` / `inspect-browser.js` / `inspect-xs.js`) exist to carry only
+the *sink-owning* exports whose behavior the condition actually changes; each
+**re-exports** the one invariant `inspect` from the shared core rather than
+reimplementing it, so the condition axis selects varying behavior (`log` /
+`inspectToConsoleArgs`) and never a distinct `inspect`. That keeps the axis
+applied only where it earns its keep. Whether to go further and expose `inspect`
+at its own condition-free subpath (retiring those three re-exports, at the cost
+of a second import site and a bundler tree-shaking tradeoff) is an
+implementation-level refinement deferred to the code panel's packager / assessor,
+not settled here.
+
 ### The shim and SES integration
 
 `@endo/inspect/shim.js` is a vetted shim in the sense of the other
@@ -325,8 +352,8 @@ The shim provides a `setInspector`-style seam so that, when loaded, `quote()`'s
 `toString` delegates to `@endo/inspect`'s `inspect` (a **string**, the only
 shape a `toString` may return) instead of to `bestEffortStringify`.
 
-The seam must preserve `quote()`'s existing contract, none of which the
-replacement may drop:
+The seam must preserve `quote()`'s existing contract in full; the replacement
+may drop none of its terms:
 
 - **Laziness.** `quote` returns a frozen `Stringable` whose `toString` renders
   only when read; the seam stays a `toString` thunk and never renders eagerly.
@@ -488,6 +515,26 @@ The contract, in descending order of what we can guarantee today:
    or re-enter). The residual risk is the subject of the upstream dependencies
    below and the reason for the @erights / @mhofman review.
 
+**Bounded work is a separate defense from never-throw.** "Never throws" is not
+the same guarantee as "safe against a hostile input" on the resource axis: a
+`[[OwnPropertyKeys]]` trap on an extensible proxy target may legally return
+millions of synthetic keys, and a getter (or a genuinely enormous data value)
+may yield a multi-gigabyte string, *without* throwing and *without* re-entering
+beyond the initial trap call, so a render that satisfies both totality halves
+above can still exhaust CPU or memory before it finishes producing the string.
+`inspect` therefore carries cardinality and size bounds analogous to Node's
+`util.inspect` defaults (`maxArrayLength`, `maxStringLength`, and a matching cap
+on the number of own keys walked per object) as `InspectOptions` fields with
+finite, total-work-preserving defaults, truncating with an explicit elision
+marker (for example `... N more items`) once a limit is hit rather than walking
+an attacker-chosen count to completion. This is a distinct defense from the
+never-throw wrapper (step 4) and the proxy quarantine (step 2): it closes the
+resource-exhaustion vector those two do not, which matters most on the SES base
+assertion seam that "Adopter guidance" already frames as reachable by adversarial
+proxies (the [Agoric/agoric-sdk#3905](https://github.com/Agoric/agoric-sdk/issues/3905)
+interleaving attack), so a bounded render cannot be turned into an unbounded
+denial-of-service by a hostile `ownKeys`.
+
 #### How far each environment can go
 
 | Environment | Proxy brand check | Faithfulness achievable today |
@@ -521,10 +568,14 @@ The contract, in descending order of what we can guarantee today:
    ship `default` + `xs` entries. No host dependency. Unit tests pin output for
    cycles, bigints, symbols, errors, functions, and accessor placeholders; a
    **hostile-corpus** test (revoked proxies, throwing getters, lying
-   `getOwnPropertyDescriptor`, huge `ownKeys`) proves the **never-throw** totality
-   invariant unconditionally and pins the **best-effort re-entrancy** behavior
-   (render an opaque placeholder, never propagate) where no brand check applies,
-   matching the two-strength totality stated under "Package surface"; and a
+   `getOwnPropertyDescriptor`, huge `ownKeys`, oversized strings) proves the
+   **never-throw** totality invariant unconditionally, pins the **best-effort
+   re-entrancy** behavior (render an opaque placeholder, never propagate) where no
+   brand check applies, matching the two-strength totality stated under "Package
+   surface", and, for the huge-`ownKeys` and oversized-string cases specifically,
+   asserts **bounded work**: the render truncates at the cardinality / size limits
+   with an elision marker rather than walking the attacker-chosen count to
+   completion, pinning the resource-exhaustion defense distinct from never-throw; and a
    **per-condition resolution test** confirms each condition resolves its
    intended entry, using the mechanism each condition can actually be observed
    through. This split is forced by Node's resolver: it activates the `node`
@@ -553,6 +604,20 @@ The contract, in descending order of what we can guarantee today:
      `inspect-portable.js`. This checks the same `exports` key order and
      first-match priority the `node` matrix pins for the `node`-active cases,
      without pretending a `node` process can observe a `node`-cleared resolution.
+   - **Through `compartment-mapper` itself, for the `xs` entry** (the resolver
+     "Condition-parameterized resolution" names as authoritative for XS, and the
+     mechanism Design Decision 2 rests on): ask `compartment-mapper` to resolve
+     `@endo/inspect`'s `exports` map under the XS condition set it actually builds
+     with, and assert it selects **`inspect-xs.js`**. The generic-`resolve.exports`
+     leg above pins *Node-exports-spec* semantics; this leg pins the **real build
+     path**, so a divergence between `compartment-mapper`'s condition matching and
+     generic Node-exports semantics (key order, condition-set composition, `default`
+     fallthrough) cannot leave the one host with the weakest safety story (no brand
+     check) selecting the wrong file through an untested resolver. Without this leg
+     no test ever asks `compartment-mapper` to resolve the package, so Design
+     Decision 2's "condition selection over runtime detection" premise would go
+     unverified against its own mechanism on exactly the condition that most needs
+     it.
 
    The `xs` entry's *file* identity is pinned by the standalone-resolver leg above;
    its *behavior* under the real Moddable engine is verified by the XS-runtime
@@ -612,9 +677,11 @@ The contract, in descending order of what we can guarantee today:
 
 ## Design Decisions
 
-1. **No `exo-` prefix.** `@endo/inspect` exports no passable interfaces over
-   CapTP (it is a local diagnostic formatter), so the `exo-` naming rule does
-   not apply. The name `@endo/inspect` is the maintainer's.
+1. **No `exo-` prefix.** The `exo-` naming rule is Endo's convention of
+   prefixing the names of CapTP-passable exo-interface designs with `exo-`.
+   `@endo/inspect` exports no passable interfaces over CapTP (it is a local
+   diagnostic formatter), so that rule does not apply. The name `@endo/inspect`
+   is the maintainer's.
 2. **Condition selection over runtime detection.** Behavior is chosen by build
    condition, not by sniffing `typeof window` / `process` at runtime, so an XS
    build carries no Node code and a browser build carries no ANSI logic. Runtime
@@ -699,26 +766,26 @@ The contract, in descending order of what we can guarantee today:
   strings into whatever XS diagnostic channel exists (for example `print`
   under `xst`, `trace` under the Moddable runtime)? Relatedly, should Endo
   request a native proxy brand check from Moddable for the `xs` entry?
-- **The `inspect` name collides with Node's `util.inspect`, yet silently diverges
-  on `colors`.** The string export reuses the exact name a Node developer reaches
-  for first, but `inspect(v, { colors: true })` silently returns the same plain
-  string that `util.inspect(v, { colors: true })` would have colorized, and the
-  mismatch is invisible until output is diffed against a real TTY render (flagged
-  at the definition site under "Package surface"). How should the surface fail
-  loud rather than plausible? The candidates each trade against a stated
-  invariant: (a) **rename the string export** (for example `format` or
-  `stringify`), freeing `inspect` for a later, genuinely
+- **How should the `inspect` name's residual collision with Node's `util.inspect`
+  be resolved: keep the name, or rename the string export?** The silent-divergence
+  hazard is *already closed* at the type boundary: `inspect` takes `InspectOptions`
+  (`depth` / `breakLength` / `indent`), which carries no `colors` field, so
+  `inspect(v, { colors: true })` is a compile-time type error rather than the same
+  plain string `util.inspect(v, { colors: true })` would have colorized (see
+  "Package surface"). What remains open is only the *name*: `inspect` still echoes
+  a stdlib function a Node developer reaches for first, yet accepts a narrower
+  option set. The candidates: (a) **rename the string export** (for example
+  `format` or `stringify`), freeing `inspect` for a later, genuinely
   Node-`util.inspect`-compatible entry, at the cost of the maintainer-chosen
-  `inspect` name; or (b) **reject a non-default `colors`** on the string export
-  instead of silently ignoring it, at the cost of the "one options bag valid
-  everywhere" invariant (a caller building one `{ colors: true }` bag for both
-  `log` and `inspect` would then get a throw from `inspect`). A third option keeps
-  the silent-ignore and treats the collision as documented-only. Relatedly, should
-  `@endo/inspect` re-export a Node-`util.inspect`-compatible positional signature
-  (`inspect(value, showHidden?, depth?, colors?)`) for drop-in familiarity, or
-  keep only the single options-bag form? This is a maintainer decision, surfaced
-  here because both fail-loud remedies conflict with an otherwise-settled design
-  invariant.
+  `inspect` name; or (b) **keep `inspect`**, treating the name collision as
+  documented and type-guarded (the type error at the boundary is the fail-loud
+  signal). Relatedly, should `@endo/inspect` re-export a
+  Node-`util.inspect`-compatible positional signature
+  (`inspect(value, showHidden?, depth?, colors?)`) for drop-in familiarity, or keep
+  only the single options-bag form? This is a maintainer decision, surfaced here
+  because it trades the maintainer-chosen name against least-surprise for Node
+  developers; the substantive `colors` behavior it once forked on is no longer at
+  stake.
 
 ## Prompt
 
