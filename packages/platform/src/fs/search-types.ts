@@ -39,6 +39,16 @@ export type GlobOptions = {
   batchSize?: number;
   /** Include directory entries in results (default `true`). */
   includeDirectories?: boolean;
+  /**
+   * Emit results in the normative UTF-16 code-unit sorted order (default
+   * `true`, glob's contract). When `false`, matched paths are yielded in *walk
+   * order* as they are discovered, with no global-sort barrier — so the first
+   * batch can be emitted before the whole tree is walked. Confinement and
+   * denial filtering are unchanged; only the terminal sort is dropped. Used by
+   * `streamGrep`, whose flattened order is path-then-line as files are read and
+   * so needs no sort (see the engine header).
+   */
+  sorted?: boolean;
 };
 
 export type GrepOptions = {

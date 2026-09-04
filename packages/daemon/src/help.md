@@ -908,12 +908,14 @@ Omit to search every file under the mount face.
 options.buffer: number — Pre-acknowledge window for high-latency links (default 0; clamped to 1024).
 Each pre-acknowledged element costs one round trip, so the default 0 is one round trip per record.
 Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. There is no maxResults cap.
-Content reads are incremental — closing the iterator early leaves the remaining files' contents
-unread — but the directory walk is eager (the whole tree is enumerated before the first match, like
-streamGlob), so early close bounds file reads, not the walk. With buffer 0 a mid-stream revoke()
-rejects the next pull immediately; a non-zero buffer may still deliver up to that many
-already-buffered elements first (the reader is once-only, so that window is per reader, not
-multiplied across concurrent streams).
+Fully incremental: unlike streamGlob, grep needs no global sort, so the directory walk is enumerated
+in walk order — a first match can arrive before the whole tree is walked, and closing the iterator
+early leaves both the remaining files' contents unread AND the rest of the tree unwalked (early close
+bounds the directory walk, not only file reads). Because enumeration is walk order, the record order
+across files is walk order, not glob's UTF-16 sorted-path order; it remains the same multiset of
+matches as grep(). With buffer 0 a mid-stream revoke() rejects the next pull immediately; a non-zero
+buffer may still deliver up to that many already-buffered elements first (the reader is once-only, so
+that window is per reader, not multiplied across concurrent streams).
 Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { ... }
 
 # EndoMountFile - A file within a mounted directory.

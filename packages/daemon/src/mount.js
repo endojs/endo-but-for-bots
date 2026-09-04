@@ -47,11 +47,15 @@ export { GLOB_MAX_RESULTS };
 // bounded per *reader*, not merely per stream — a grantee holding the reader
 // cannot open k concurrent streams to multiply either. Two important limits on
 // what it does *not* bound:
-//  - It is not the whole daemon-side memory high-water mark. `globPaths` (the
-//    engine the streams ride) collects and sorts the *entire* match set before
-//    its first batch, and the streams drop `GLOB_MAX_RESULTS`, so the peak
-//    in-daemon commitment is the full unbounded sorted path list, not `buffer`.
-//    The clamp bounds only the marshalled pre-ack window, not that internal set.
+//  - It is not the whole daemon-side memory high-water mark. For `streamGlob`
+//    the engine (`globPaths`, `sorted: true`) collects and sorts the *entire*
+//    match set before its first batch, and the streams drop `GLOB_MAX_RESULTS`,
+//    so the peak in-daemon commitment is the full unbounded sorted path list,
+//    not `buffer`. `streamGrep` enumerates in `sorted: false` walk-order, so it
+//    does not pre-materialize the whole path list — but it still retains the set
+//    of already-emitted paths for dedup, so its walk-phase commitment is bounded
+//    by the match count, not by `buffer` either. The clamp bounds only the
+//    marshalled pre-ack window, not that internal set.
 //  - It bounds element *count*, not aggregate bytes: a `streamGrep` record's
 //    `text` is one whole matched line, so 1024 buffered records can still be
 //    large in bytes (the same per-line cost eager `grep` carries).
@@ -967,24 +971,26 @@ const makeMountExo = ctx => {
   // still live before surfacing each batch to the consumer of this iterable.
   // Interposed on the `globPaths` source that feeds both streaming methods.
   //
-  // This does *not* interrupt the directory enumeration. `globPaths` produces a
-  // *globally sorted* result, so it runs the entire `await walk(...)` to
-  // completion and only then sorts and yields its first batch — the check here
-  // first runs after enumeration is already done. A `revoke()` landing during
-  // the walk lets the walk run to completion; the enumeration phase is
-  // uninterruptible today (see designs/mount-stream-glob-grep.md § Revocation
-  // and § Follow-up).
+  // For `streamGlob` (`sorted: true`) this does *not* interrupt the directory
+  // enumeration: `globPaths` produces a *globally sorted* result, so it runs the
+  // entire `walk(...)` to completion and only then sorts and yields its first
+  // batch — the check first runs after enumeration is already done, and a
+  // `revoke()` landing during the sort-mode walk lets the walk run to completion
+  // (that enumeration phase is uninterruptible; see
+  // designs/mount-stream-glob-grep.md § Revocation).
   //
-  // Where the check is load-bearing is `streamGrep`'s *content-read* phase:
-  // after enumeration, path batches are surfaced one at a time and `grepFiles`
-  // reads file contents per batch, so asserting between batches bounds
-  // post-revoke *content reads* to a single path batch — including a sparse
-  // grep that matches nothing for many files (where the per-yield
-  // `assertLive()` below would otherwise not run until the next, never-arriving
-  // match and the daemon would keep reading files after revocation). For
-  // `streamGlob` enumeration is the only filesystem work and is already complete
-  // by the first batch, so the check earns nothing there beyond the adjacent
-  // per-yield `assertLive()`.
+  // For `streamGrep` (`sorted: false`) enumeration is *walk-order*: a path is
+  // surfaced the moment the walk finds it, so this check runs between walk
+  // steps as well as between content reads. It is thus load-bearing across the
+  // whole `streamGrep` pipeline — the walk-and-read phase surfaces path batches
+  // one at a time and `grepFiles` reads file contents per batch, so asserting
+  // between batches bounds post-revoke *walk steps and content reads* to a
+  // single path batch, including a sparse grep that matches nothing for many
+  // files (where the per-yield `assertLive()` below would otherwise not run
+  // until the next, never-arriving match and the daemon would keep walking and
+  // reading after revocation). For `streamGlob` enumeration is the only
+  // filesystem work and is already complete by the first batch, so the check
+  // earns nothing there beyond the adjacent per-yield `assertLive()`.
   const assertLivePathBatches = async function* assertLivePathBatches(source) {
     for await (const batch of source) {
       assertLive();
@@ -1051,30 +1057,35 @@ const makeMountExo = ctx => {
   // Streaming counterpart of `grep`: a `PassableReader` over the same platform
   // walk, yielding one `{ file, line, text }` record per element. There is
   // deliberately no `maxResults`; the consumer bounds the stream by closing it
-  // (an early `for await` break stops the remote content reads — though not the
-  // eager directory walk; see the incrementality note below). `options.glob` selects
+  // (an early `for await` break stops both the remote content reads *and* the
+  // directory walk; see the incrementality note below). `options.glob` selects
   // the file set exactly like `grep`'s `paths`, but the glob enumeration is
   // piped straight into grep as an async iterable of path batches, so — unlike
   // the eager `grep(pattern, glob(g))` composition, which awaits the whole glob
   // array first — no full path array round-trips through JS as grep's argument
-  // and the 10,000-path cap is dropped. (The engine's `globPaths` still collects
-  // and sorts the full path set *internally* before its first batch; what is
-  // avoided is the marshalled full-array hand-off and the cap, not the internal
-  // materialization.) The path source is always `globPaths` — even when
-  // `options.glob` is omitted (defaulting to `**`), rather than letting
-  // `grepFiles` walk the tree itself — so the liveness check can be interposed
-  // on it (`assertLivePathBatches`); every file under the face's root is
-  // searched in that case. Incrementality is asymmetric: the directory
-  // *enumeration* is eager — the file list comes from the same `globPaths` walk
-  // `streamGlob` uses — which collects the whole confined tree before yielding
-  // its first path — so, like `streamGlob`, the first element only arrives after
-  // the full walk. What *is* incremental is the content read: grep needs no
-  // global sort (its order is path-then-line as files are read), so a consumer
-  // that stops early leaves the remaining files' *contents* unread. Early close
-  // thus bounds file reads, not the directory walk. `assertLive()` runs at
-  // invocation, per path batch (via `assertLivePathBatches`, so a revoke during
-  // a sparse grep is observed within one file rather than after the whole walk),
-  // and before each yield.
+  // and the 10,000-path cap is dropped. The path source is always `globPaths` —
+  // even when `options.glob` is omitted (defaulting to `**`), rather than
+  // letting `grepFiles` walk the tree itself — so the liveness check can be
+  // interposed on it (`assertLivePathBatches`); every file under the face's root
+  // is searched in that case. Unlike `streamGlob`, `streamGrep` is incremental
+  // in the *directory walk* too: it enumerates through `globPaths` in `sorted:
+  // false` walk-order mode, because grep needs no global sort (its flattened
+  // order is path-then-line as files are read, not sorted-path order). A path is
+  // surfaced the moment the walk discovers it, so the first match can arrive
+  // before the whole tree is walked, and a consumer that stops early abandons
+  // both the unread files' *contents* and the *unwalked* remainder of the tree —
+  // early close bounds the directory walk, not only the content reads.
+  // `assertLive()` runs at invocation, per path batch (via
+  // `assertLivePathBatches`, so a revoke during a sparse grep is observed within
+  // one file/one walk step rather than after the whole walk), and before each
+  // yield.
+  //
+  // Ordering caveat: because enumeration is walk-order, `streamGrep`'s flattened
+  // sequence is *walk order*, not the UTF-16 sorted-path order eager
+  // `grep(pattern, glob(g))` inherits from glob. It remains a multiset-equal
+  // superset of eager `grep` (same records, possibly past the eager cap); only
+  // the order across files differs. `streamGlob` keeps `sorted: true` — glob's
+  // sort is its normative contract.
   /**
    * @param {string} pattern
    * @param {{ glob?: string, buffer?: number }} [options]
@@ -1090,11 +1101,14 @@ const makeMountExo = ctx => {
       // Always enumerate through `globPaths` (defaulting to `**` when
       // `options.glob` is omitted) and interpose the liveness check on it, so a
       // mid-stream `revoke()` is observed within one path batch during the
-      // *content-read* phase — including a sparse grep that yields no match for
-      // many files. `batchSize: 1` sets this source's yield granularity to one
-      // path per batch (per-path revocation granularity); it does not make the
-      // enumeration incremental — the global sort still runs the whole walk to
-      // completion before the first path (see the method comment).
+      // walk-and-read phase — including a sparse grep that yields no match for
+      // many files. `sorted: false` routes the shared walker in walk-order
+      // (incremental) mode: grep's flattened order is path-then-line as files
+      // are read and needs no global sort, so a path is surfaced as the walk
+      // discovers it rather than after the whole tree is walked and sorted.
+      // `batchSize: 1` sets this source's yield granularity to one path per
+      // batch, so a path flows into grep the moment the walk finds it (per-path
+      // revocation granularity, and per-path incrementality).
       const paths = assertLivePathBatches(
         search.globPaths(
           currentDir,
@@ -1104,6 +1118,7 @@ const makeMountExo = ctx => {
             confinementRoot,
             includeDirectories: false,
             batchSize: 1,
+            sorted: false,
           },
         ),
       );
@@ -2104,12 +2119,15 @@ harden(makeMount);
  * deliver after `revoke()` before the next pull rejects. These readers are
  * minted once-only, so that window is bounded per reader: a grantee cannot open
  * a second concurrent stream over the reader to multiply it. A `buffer: 0`
- * stream (the default) is a hard delivery cutoff like every other face. This
- * cutoff governs *delivery* and post-revoke *content reads*, not the directory
- * enumeration: `globPaths` runs the whole walk to completion before its first
- * batch, so a `revoke()` during the walk lets the enumeration finish (the
- * per-path-batch liveness check bounds post-revoke content reads to one path
- * batch, but the walk itself is uninterruptible today).
+ * stream (the default) is a hard delivery cutoff like every other face. For
+ * `streamGlob` this cutoff governs *delivery* and post-revoke *content reads*,
+ * not the directory enumeration: its `globPaths` (`sorted: true`) runs the whole
+ * walk to completion before its first batch, so a `revoke()` during the walk
+ * lets the enumeration finish (the per-path-batch liveness check bounds
+ * post-revoke content reads to one path batch, but that sort-mode walk is
+ * uninterruptible today). `streamGrep` enumerates in `sorted: false` walk-order,
+ * so its walk *is* interruptible: the per-path-batch liveness check bounds
+ * post-revoke walk steps and content reads to one path batch.
  * The daemon's `mount` /
  * `scratch-mount` formulas wire
  * `context.onCancel(() => control.revoke())`, tying revocation to formula

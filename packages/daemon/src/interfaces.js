@@ -709,12 +709,14 @@ export const MountInterface = M.interface('EndoMount', {
   // Streaming search (grep). Like `streamGlob`, returns a `PassableReader`
   // synchronously. `options.glob` selects the file set (piped straight into
   // grep as path batches, so no full path array round-trips as grep's argument
-  // and the 10,000-path cap is dropped — though the engine still sorts the full
-  // path set internally); `buffer` is the clamped pre-ack window. No
-  // `maxResults`. Content reads are incremental — early close leaves
-  // the remaining files' contents unread — but the directory walk itself is
-  // eager (the whole confined tree is enumerated before the first match), like
-  // `streamGlob`, so early close bounds file reads, not the walk.
+  // and the 10,000-path cap is dropped); `buffer` is the clamped pre-ack
+  // window. No `maxResults`. Fully incremental: grep needs no global sort, so
+  // enumeration runs in walk order (`sorted: false`) — a first match can arrive
+  // before the whole tree is walked, and early close leaves both the remaining
+  // files' contents unread AND the rest of the tree unwalked (early close bounds
+  // the directory walk, not only file reads). Record order across files is
+  // therefore walk order, not glob's sorted-path order — the same multiset of
+  // matches as `grep()`.
   streamGrep: M.call(M.string())
     .optional(M.splitRecord({}, { glob: M.string(), buffer: M.number() }))
     .returns(M.remotable('PassableReader')),
