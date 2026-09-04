@@ -6,16 +6,16 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
-[chat-http-controller-ui](chat-http-controller-ui.md) (added 2026-07-15,
-regrounded 2026-09-04; the Value modal's front face becomes a control surface
+[chat-http-controller-ui](chat-http-controller-ui.md) (added 2026-07-15, revised
+2026-09-04; the Value modal's front face becomes a control surface
 for a value detected as an `HttpClient` or the `FetchService` that mints one,
 giving read-only viewers an `allowedOrigins` list and a policy-bounded request
-composer and control viewers the policy/limit/mode editors, TOFU binding table,
-audit-ring view, and revoke kill switch recovered through `control()`; a
+composer, and giving control viewers the policy/limit/mode editors, TOFU binding
+table, audit-ring view, and revoke kill switch recovered through `control()`; a
 front-face sibling of `formula-inspector` over the landed #566
 `HttpClient` / `HttpClientControl` pair, provisioned by the landed `@endo/fetch`
 plugin ([endo-fetch](endo-fetch.md)) rather than the superseded
-`provideHttpClient` daemon formula, degrading silently to the read-only view for
+`provideHttpClient` daemon formula, degrading without an error to the read-only view for
 guests and foreign clients and treating policy as durable on the service's state
 directory),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
@@ -525,7 +525,11 @@ from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
 
-The 2026-09-04 update folds [chat-http-controller-ui](chat-http-controller-ui.md) (Not Started) into the summary table (added 2026-07-15, regrounded on the landed `@endo/fetch` provisioning plugin), increasing Not Started from 49 to 50 and the design count from 196 to 197.
+The 2026-09-04 update folds
+[chat-http-controller-ui](chat-http-controller-ui.md) (Not Started) into the
+summary table (added 2026-07-15, regrounded on the landed `@endo/fetch`
+provisioning plugin), increasing Not Started from 49 to 50 and the design count
+from 196 to 197.
 
 ## Roadmap
 

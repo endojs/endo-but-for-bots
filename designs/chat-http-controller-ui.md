@@ -140,13 +140,15 @@ Two facets, split by authority. `HttpClient`, the guest-facing read/test facet:
 | Method | Returns | Notes |
 |---|---|---|
 | `inspect()` | `Policy` | The effective policy snapshot |
-| `setAllowedOrigins(origins)` / `addAllowedOrigin(o)` | | Widen the static allowlist |
-| `removeAllowedOrigin(o)` | | **Permanent revoke** of `o` (`revokeBinding`), not a reversible removal |
-| `setMaxRequestsPerMinute(n)` / `setMaxResponseBytes(n)` | | Positive-safe-integer only |
-| `setPolicyMode(mode)` | | Validates the mode string; accepts all four modes |
-| `revoke()` / `isRevoked()` | `boolean` | Permanent, durable kill switch |
-| `listBindings()` | `Binding[]` | Static-vs-pinned breakdown |
-| `revokeBinding(origin)` / `unpin(origin)` | | Block (permanent deny) / clear a decision |
+| `setAllowedOrigins(origins)` | `(none)` | Replace the static allowlist (can narrow or widen) |
+| `addAllowedOrigin(o)` | `(none)` | Widen the static allowlist by one origin |
+| `removeAllowedOrigin(o)` | `(none)` | Durable deny of `o` (drops it from the static allowlist, then `revokeBinding`s it); reversible by re-adding |
+| `setMaxRequestsPerMinute(n)` / `setMaxResponseBytes(n)` | `(none)` | Positive-safe-integer only |
+| `setPolicyMode(mode)` | `(none)` | Validates the mode string; accepts all four modes |
+| `revoke()` | `(none)` | Permanent, durable kill switch |
+| `isRevoked()` | `boolean` | Revocation query |
+| `listBindings()` | `Binding[]` | Full binding table; `decidedBy` distinguishes static from TOFU pins |
+| `revokeBinding(origin)` / `unpin(origin)` | `(none)` | Durable deny / clear a decision (both also drop the origin from the static allowlist) |
 | `listAuditEntries({ since?, limit? })` | `AuditEntry[]` | `filter(at >= since).slice(-limit)` (see § Layout 5) |
 | `help()` | `string` | |
 
@@ -159,8 +161,12 @@ for large bodies), and `help()`.
 maxRequestsPerMinute: number, maxResponseBytes: number, policyMode: string,
 revoked: boolean }`. Its `allowedOrigins` is the **effective reachable set**: the
 static allowlist **plus** any TOFU `Pinned-Allow` bindings, matching
-`client.allowedOrigins()` (`http-client.js:874-883`). The static-versus-pinned
-breakdown is available only through `listBindings()`. `Binding` is `{ target,
+`client.allowedOrigins()` (`http-client.js:874-883`). Which origins are static
+versus TOFU-pinned is *not* legible from mere presence in `listBindings()`,
+because the constructor pins every static origin as a `Pinned-Allow` binding
+(`http-client.js:772`, `decidedBy: 'constructor'`); it is read off each
+`Binding.decidedBy` (`constructor` / `controller` for static, `tofu-auto` /
+`pending` and the other TOFU deciders for pinned). `Binding` is `{ target,
 state ('Pinned-Allow' | 'Pinned-Deny' | 'Revoked'), decidedAt, decidedBy,
 decisionMode, note? }`. `AuditEntry` is `{ at, target, fromState, toState,
 decisionMode, decidedBy, context? }`. The exos enforce the origin-exactness and
@@ -205,7 +211,7 @@ bounded operational state, not durable policy.
 
 Every durable mutation, including a request-time TOFU pin, is written back
 through the service's `onPolicyChange(snapshot)` seam (`service.js`,
-[endo-fetch](endo-fetch.md) § Durable policy) — the invalidation event this UI
+[endo-fetch](endo-fetch.md) § Durable policy), the invalidation event this UI
 uses in § Keeping the view live.
 
 This durability is the correction that most reshapes this design from the #661
@@ -252,26 +258,34 @@ flowchart TD
 4. **Editing bounds is an authority-widening act.** `addAllowedOrigin`,
    `setAllowedOrigins`, `setMaxResponseBytes`, `setMaxRequestsPerMinute`, and
    `setPolicyMode` expand or relax the client's reach. Each edit is an explicit,
-   visibly labeled control action committed only on an explicit user action —
+   visibly labeled control action committed only on an explicit user action:
    never on tab-out blur or a bare `<select>` change (§ Modal interactions);
    `revoke()` (permanent and durable) is confirmed before it fires. The surface
-   never widens authority as a side effect of merely *viewing*.
+   never widens authority as a side effect of merely *viewing*. Durable
+   *narrowing* acts carry the same confirm bar: a **Block** (`removeAllowedOrigin`
+   / `revokeBinding`) and a **Reset** (`unpin`) that would delete a static
+   (`constructor` / `controller`) origin from the allowlist are as durable as a
+   widening edit (under `strict` the origin then fails closed), so each is
+   confirmed with copy that states the outcome, not left as a one-click act.
 
 5. **The request composer can widen authority in a TOFU mode, and says so.** In
    `strict` mode, `fetch` to an off-allowlist origin fails closed and the composer
-   adds no authority: every request is re-parsed, exact-origin-matched, rate-
-   limited, size-capped, and run with redirects disabled by the exo. But in a
+   adds no authority: every request is re-parsed, exact-origin-matched,
+   rate-limited, size-capped, and run with redirects disabled by the exo. But in a
    `tofu-auto` mode a `fetch` to an unlisted origin runs the exo's `decide()` path
    and **durably pins** a `Pinned-Allow` binding (`http-client.js` `decide()` ->
-   `setBinding()`), permanently widening the guest's reach — from the *same*
+   `setBinding()`), permanently widening the guest's reach, from the *same*
    `client()` the guest holds, and against the *same* shared
    `maxRequestsPerMinute` budget. So the composer is not authority-neutral in a
    TOFU mode. The surface therefore treats a composer send to an origin **not in
    the effective allowlist** as an authority-widening act while the mode is
    `tofu-*`: it is confirmed ("This origin is not yet allowed; sending will
-   permanently pin it") exactly as an allowlist edit is (Boundary 4). In `strict`
-   mode no confirm is needed because the send cannot mutate policy. See § Design
-   Decisions 3 and § Open Questions 3.
+   durably pin it") exactly as an allowlist edit is (Boundary 4). In `strict` mode
+   no confirm is needed because the send cannot mutate policy. A control viewer
+   reads the mode through `inspect()` and gates the confirm on it; a **read-only
+   viewer** (a bare `HttpClient`) cannot read the mode at all (Boundary 2), so it
+   cannot know whether a send will pin, and therefore confirms *every*
+   off-`allowedOrigins()` send. See § Design Decisions 3 and § Open Questions 3.
 
 6. **Response and policy text is untrusted.** Response bodies and headers come off
    the network; `Binding.target` / `decidedBy` / `note` and `AuditEntry.decidedBy`
@@ -283,9 +297,14 @@ flowchart TD
 
 Because `@endo/fetch` persists policy to its private state directory, control
 edits are **durable**: they survive a daemon restart, and a revoked service
-revives revoked. The front face's live `inspect()` and the service's on-disk
-`config.json` do not drift, because `inspect()` reads the same authoritative
-policy the service persists.
+revives revoked. On the happy path the front face's live `inspect()` and the
+service's on-disk `config.json` do not drift, because `inspect()` reads the same
+authoritative policy the service persists. The one gap: a persist is best-effort,
+so a failed on-disk write is swallowed to a `console.error` and leaves `inspect()`
+(and any durability copy read from it, the Revoke kill switch included) showing an
+edit the disk did not keep. The surface therefore frames its persistence claims as
+"durable" rather than "guaranteed on disk", and § Open Questions 5(d) files the
+upstream ask for a persist-status query that would let it confirm the write.
 
 Two ephemeral facts remain, and the UI must not overstate them as durable:
 
@@ -332,13 +351,16 @@ specializations do:
   `fetch` and `allowedOrigins`. The read-only client surface applies; the value
   *is* the client.
 
-Preferring the interface tag directly answers Open Question 4's look-alike
-concern: `Alleged: FetchService` is far stronger evidence than the generic
-`client` + `control` name pair. On a positive result it renders the surface into
-`$valueMount` (replacing the bare remotable tag). Detection order: the fetch-
-service shape is checked first, then the bare `HttpClient` shape, then blob/tree.
-The facets are disjoint (an HTTP client has neither `text` nor `sha256`), so order
-determines precedence, not correctness. The async fallback path is guarded by the
+Preferring the interface tag raises the bar against Open Question 4's look-alike
+concern: `Alleged: FetchService` is stronger evidence than the generic
+`client` + `control` name pair, but a self-asserted `Alleged:` tag is entropy,
+not authentication (a hostile remotable picks its own tag), so it does not by
+itself answer Open Question 4 and steering stays gated on a resolved `control()`
+whose `inspect()` succeeds. On a positive result it renders the surface into
+`$valueMount` (replacing the bare remotable tag). Detection order: the
+fetch-service shape is checked first, then the bare `HttpClient` shape, then blob/tree.
+The detected shapes are disjoint (an HTTP client has neither `text` nor `sha256`),
+so order determines precedence, not correctness. The async fallback path is guarded by the
 same `currentValue === value` staleness check the blob/tree probes use, so a fast
 re-`showValue` cannot cross-render.
 
@@ -357,7 +379,7 @@ flowchart TD
     H["Title chips: @petname, 'HTTP Client' badge, policyMode, revoked?"]
     P["Policy panel: allowedOrigins list, rate limit, size cap, policyMode"]
     RC["Request composer: method, URL, headers, body, to Response viewer"]
-    B["Bindings panel (TOFU modes): Binding table + block/reset"]
+    B["Bindings panel (control): Binding table + block/reset/re-allow"]
     A["Audit panel: AuditEntry ring, lazy, paged by growing limit"]
     K["Kill switch: Revoke client (confirmed)"]
   end
@@ -376,17 +398,27 @@ reactively (see § Loading and error states, "Revoked client").
 
 - **Allowed origins**: a list of the **effective** reachable set. Because
   `inspect().allowedOrigins` folds in TOFU `Pinned-Allow` pins, each row is marked
-  **static** or **pinned** (cross-referencing `listBindings()`) so the two are not
-  conflated. Each row offers a single, honestly-named action: **"Block"**
-  (`removeAllowedOrigin`, which the exo implements as a permanent `revokeBinding`
-  — a durable deny, *not* a reversible removal), tooltip "Permanently deny this
-  origin." This is the *same verb* the Bindings panel uses for the same mutation
-  (§ Layout 4); the surface never spells one mutation with two verbs. To clear a
-  *pinned* row back to undecided, the row also offers **"Reset"** (`unpin`) in TOFU
-  modes, matching the Bindings panel. An "Add origin" input appends via
-  `addAllowedOrigin`, validated client-side against the exo's origin-exactness rule
-  (scheme + host [+ port], no path/query/fragment) so a bad entry is rejected
-  before the round trip, with the exo error surfaced inline if it still rejects.
+  **static** or **TOFU-pinned** by reading its `Binding.decidedBy` from the
+  cross-referenced `listBindings()` (`constructor` / `controller` is static,
+  `tofu-auto` / `pending` and the other TOFU deciders are pinned): mere presence in
+  `listBindings()` cannot tell the two apart, since the constructor pins every
+  static origin (`http-client.js:772`). Each row offers a single, honestly-named
+  action: **"Block"** (`removeAllowedOrigin`, which drops the origin from the
+  static allowlist and `revokeBinding`s it to a durable `Revoked`), tooltip "Deny
+  this origin; survives restart, reversible by re-adding it." The deny is durable
+  but *not* irreversible: re-adding the origin re-allows it (`addAllowedOrigin`
+  overwrites the `Revoked` binding, `http-client.js:903`), so a blocked row keeps a
+  **"Re-allow"** affordance. "Block" is the *same verb* the Bindings panel uses for
+  the same mutation (§ Layout 4); the surface never spells one mutation with two
+  verbs. To clear a *TOFU-pinned* row, the row also offers **"Reset"** (`unpin`);
+  because `unpin` also deletes the origin from the static allowlist and a `strict`
+  service then denies it (`decide()` throws in `strict`), Reset is offered only on
+  rows whose `decidedBy` is a TOFU decider, never on a `constructor` / `controller`
+  static row where it would silently narrow authority. An "Add origin" input
+  appends via `addAllowedOrigin`, validated client-side against the exo's
+  origin-exactness rule (scheme + host [+ port], no path/query/fragment) so a bad
+  entry is rejected before the round trip, with the exo error surfaced inline if it
+  still rejects.
 - **Max requests / minute** and **Max response bytes**: numeric inputs with an
   explicit **Apply** affordance (or Enter), never a blur commit, calling
   `setMaxRequestsPerMinute` / `setMaxResponseBytes`; both validated as positive
@@ -422,25 +454,33 @@ consumption of a large body). The URL input may autocomplete from the current
 first because it will durably pin (§ Capability Boundaries 5). Response text is
 confined vnodes.
 
-**4. Bindings panel** (control, TOFU modes only). Visibility derives from the
-policy actually carrying bindings — `listBindings()` non-empty, or a `tofu-*`
-mode — rather than from a hard-coded `strict`-string test. It renders a table
+**4. Bindings panel** (control). The binding table is the authoritative record of
+every policy *decision*, `Pinned-Allow` / `Pinned-Deny` / `Revoked`, and the
+Policy panel's effective allowlist shows none of the deny or revoke rows, so this
+panel is available to any control viewer rather than gated on a `strict`-string
+test or on a `tofu-*` mode. Both such gates are misleading: a `strict` service
+still accrues `Revoked` and `Pinned-Deny` rows, and every static origin is already
+a `Pinned-Allow` binding, so a "non-empty `listBindings()`" gate is always true.
+It is collapsed by default and lazily loaded on expand. It renders a table
 (target, state, decidedBy, decisionMode, `decidedAt` as a relative time, `note`).
-Each row offers up to two clearly labeled actions, shown per the row's `state`:
+Each row offers clearly labeled actions per its `state`:
 
-- **"Reset"** (`unpin(origin)`), tooltip "Clear this decision so the origin is
-  decided again on next request." Shown for `Pinned-Allow` and `Pinned-Deny` rows;
-  hidden on a `Revoked` row (nothing to reset).
-- **"Block"** (`revokeBinding(origin)`), tooltip "Move this origin to a permanent
-  deny." Shown for `Pinned-Allow` and `Pinned-Deny` rows; hidden on an already-
-  `Revoked` row. This is the same verb and mutation as the Policy panel's origin
-  "Block".
+- **"Reset"** (`unpin(origin)`), tooltip "Clear this decision and drop the origin
+  from the static allowlist; it is decided again on next request, and denied at
+  once under `strict`." Shown for every state, including `Revoked` (`unpin` deletes
+  a `Revoked` binding too), so an accidental Block is recoverable. On a
+  `constructor` / `controller` static row it narrows authority durably and is
+  confirmed (§ Capability and Authority Boundaries 4).
+- **"Block"** (`revokeBinding(origin)`), tooltip "Durable deny; survives restart,
+  reversible by re-adding the origin." Shown for `Pinned-Allow` and `Pinned-Deny`
+  rows; hidden on an already-`Revoked` row (already denied). This is the same verb
+  and mutation as the Policy panel's origin "Block".
 
 Lazily fetched on panel expand, and re-read after any composer send, Block, Reset,
 or allowlist edit that can change the binding set (§ Keeping the view live).
 
-**5. Audit panel** (control). `listAuditEntries({ limit })` renders a reverse-
-chronological view of the in-memory audit ring (`at`, `target`,
+**5. Audit panel** (control). `listAuditEntries({ limit })` renders a
+reverse-chronological view of the in-memory audit ring (`at`, `target`,
 `fromState -> toState`, `decisionMode`, `decidedBy`, `context.method`). Lazily
 fetched on expand. The exo filters `entry.at >= since` and then takes
 `.slice(-limit)` (`http-client.js:578-584`), so `since` is a *lower* bound that
@@ -468,7 +508,7 @@ controls, open-time focus capture and restore, and `autofocus` (because the
 confined renderer strips `ref`, `value-component.js`). The control surface extends
 it to its new states:
 
-- Each async panel announces its load and settle ("Loading policy…", "Policy
+- Each async panel announces its load and settle ("Loading policy...", "Policy
   loaded") and each per-panel error + Retry announces through `#value-aria-live`,
   so a screen-reader user is not left on a silent spinner.
 - The revoke confirm, the composer's off-allowlist TOFU confirm, and the Revoked
@@ -490,8 +530,9 @@ accelerator, a modeline hint. Enumerated:
 | Open control surface | Click/inspect a client or service value | interface tag, then `control()` | Automatic on detection |
 | Flip to formula | `F` / header gear / flip button | `getFormula(id)` | Existing back face; read-only |
 | Add allowed origin | "Add origin" submit | `addAllowedOrigin` | Client-side origin validation first |
-| Block an origin | Row "Block" | `removeAllowedOrigin` / `revokeBinding` | Permanent deny; confirmed |
-| Reset a pinned origin | Row "Reset" | `unpin` | TOFU modes |
+| Block an origin | Row "Block" | `removeAllowedOrigin` / `revokeBinding` | Durable deny (reversible by re-add); confirmed |
+| Re-allow a blocked origin | Row "Re-allow" | `addAllowedOrigin` | Overwrites the `Revoked` binding |
+| Reset a pinned origin | Row "Reset" | `unpin` | Confirmed when it narrows a static origin |
 | Set limits | Numeric input + explicit Apply / Enter | `setMaxRequestsPerMinute` / `setMaxResponseBytes` | Positive-safe-integer validation; never on blur |
 | Change policy mode | `<select>` + explicit Apply confirm | `setPolicyMode` | Never on bare select-change |
 | Send request | Composer "Send" / Cmd+Enter in composer | `fetch` -> `HttpResponse` | Off-allowlist send confirmed in TOFU modes |
@@ -521,7 +562,7 @@ composer accelerator earns a composer-local modeline hint.
   default remotable tag and swaps in on resolution, same as the blob/tree probes.
 - **Resolving control**: the client read view (header + composer + read-only
   policy list) renders immediately from `allowedOrigins()`; the steering controls
-  appear once `control()` resolves. A brief "checking control authority…"
+  appear once `control()` resolves. A brief "checking control authority..."
   affordance covers the gap.
 - **No control authority**: the value is a bare `HttpClient` (guest / foreign), or
   `control()` is unavailable: read-only surface, quiet inline "read-only (no
@@ -572,8 +613,8 @@ not yet exist.
 ## Test Plan
 
 Sibling design [formula-inspector](formula-inspector.md) carries an explicit Test
-Plan; this surface's real risk area (client-side validation versus exo-
-authoritative rejection, TOFU binding transitions, the authority-widening composer
+Plan; this surface's real risk area (client-side validation versus
+exo-authoritative rejection, TOFU binding transitions, the authority-widening composer
 send, revoke-then-composer, the read-only degradation path) earns the same.
 
 - **Unit: detection precedence.** `isFetchServiceLike` and `isHttpClientLike`
@@ -592,8 +633,8 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
   surface renders header + composer + read-only origins list, shows the "read-only
   (no control authority)" note, and exposes no steering affordances.
 - **Integration: control edits and durability framing.** With a `FetchService`, an
-  added origin / raised limit (via Apply) / mode change (via Apply confirm) round-
-  trips through `control()` and the re-read `inspect()` reflects it; assert the UI
+  added origin / raised limit (via Apply) / mode change (via Apply confirm)
+  round-trips through `control()` and the re-read `inspect()` reflects it; assert the UI
   presents the edit as persistent (no session-scoped caveat), that a limit input
   does *not* commit on blur, and that a simulated restart preserving the state
   directory shows the same policy.
@@ -602,16 +643,23 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
   confirm; on confirm, the send resolves, a `Pinned-Allow` binding appears, and the
   re-read Policy/Bindings panels reflect the new pin (§ Keeping the view live). In
   `strict` mode the same send fails closed with no confirm and no pin.
-- **Integration: effective-vs-static origins.** In a `tofu-*` mode with a pin, the
-  same origin shows once in the Policy panel marked "pinned" and once in Bindings,
-  and "Block" in either place performs the one `revokeBinding` mutation.
+- **Integration: effective-vs-static origins.** In a `tofu-*` mode with a pin, a
+  static origin shows in the Policy panel marked "static" (its `Binding.decidedBy`
+  is `constructor` / `controller`) and the TOFU-pinned origin shows marked
+  "TOFU-pinned" (`decidedBy` is `tofu-auto` / `pending`); the pinned origin also
+  shows in Bindings, and "Block" in either place performs the one `revokeBinding`
+  mutation. Assert the marking is read off `decidedBy`, not off mere presence in
+  `listBindings()` (which holds both).
 - **Integration: audit paging grows the window.** "Load older" grows `limit` and
   reveals older entries until the count stops growing; assert it never simply
   re-renders the same slice.
-- **Integration: TOFU bindings.** In a `tofu-*` mode, the Bindings panel shows
-  "Reset"/"Block" per row state (both on `Pinned-Allow`/`Pinned-Deny`, neither on
-  `Revoked`), and each button calls the right facet method. Panel is hidden when no
-  bindings exist and the mode is `strict`.
+- **Integration: bindings actions per state.** The Bindings panel shows "Reset" on
+  every row (including `Revoked`, where `unpin` deletes the binding and recovers an
+  accidental Block) and "Block" on `Pinned-Allow` / `Pinned-Deny` rows but not on
+  an already-`Revoked` row, and each button calls the right facet method. The panel
+  is available to any control viewer; assert a `strict` service that has accrued a
+  `Revoked` row still shows it (the panel is not gated off on `strict`), and that a
+  Block or Reset that narrows a static origin prompts a confirm.
 - **Integration: fetch rejection versus HTTP error.** An off-allowlist URL and a
   4xx response render distinctly (exo error inline versus `ok() === false`
   Response), and neither throws to the console.
@@ -641,7 +689,7 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    (no control dependency, rests only on landed #566). Ships the majority of the
    user value.
 2. **Control policy panel** (gated only on how a `FetchService` reaches Chat, per
-   § Open Questions 1 — the `@endo/fetch` package itself is landed). `control()`
+   § Open Questions 1; the `@endo/fetch` package itself is landed). `control()`
    recovery, `inspect()` render, allowlist/limit/mode editors with client-side
    validation, explicit Apply commits, and inline exo-error surfacing, plus the
    confirmed Revoke kill switch and the effective-vs-static origin marking.
@@ -675,15 +723,15 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    guest's bound. Rather than retract the composer (testing what you granted is its
    whole point) or vend a separate host-side test client (more surface, and the
    host genuinely wants to exercise the *guest's* client), the surface keeps the
-   composer and treats an off-allowlist send in a TOFU mode as the authority-
-   widening act it is, with the same explicit confirm an allowlist edit gets. This
+   composer and treats an off-allowlist send in a TOFU mode as the
+   authority-widening act it is, with the same explicit confirm an allowlist edit gets. This
    is the decomplected resolution of Open Question 3: the composer does not
    silently move the bound.
 
 4. **Policy is durable; the front face is the authoritative view.** Because
    `@endo/fetch` persists policy to its state directory, the front face's
-   `inspect()` is the single durable, authoritative policy view; there is no live-
-   versus-baked contrast to surface. The only ephemeral facts (rate-limit window,
+   `inspect()` is the single durable, authoritative policy view; there is no
+   live-versus-baked contrast to surface. The only ephemeral facts (rate-limit window,
    audit ring) are labeled as operational state, a bare-`HttpClient` viewer is
    explicitly limited to `allowedOrigins()`, and the surface enumerates exactly
    which events refresh its snapshot rather than claiming it cannot drift
@@ -696,13 +744,15 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
 
 6. **The UI queries the capability; it does not encode the deployment.** Which
    `policyMode`s a given service can enforce, and whether a service is minted with
-   a `fetch-policy-authority`, are provisioning facts. The surface does not hard-
-   code the enforceable-mode set or hard-code Bindings visibility on a `strict`-
-   string test: it derives Bindings visibility from the policy actually carrying
-   bindings, offers all modes and lets an unenforceable one fail into the inline
-   error path, and files the upstream ask for `inspect()` to report its supported
-   modes (§ Open Questions 2). View code does not need re-editing when an authority
-   endowment lands.
+   a `fetch-policy-authority`, are provisioning facts. The surface does not
+   hard-code the enforceable-mode set: it offers all modes and lets an
+   unenforceable one fail into the inline error path, and files the upstream ask
+   for `inspect()` to report its supported modes (§ Open Questions 2). Nor does it
+   read a UI distinction off a query that cannot carry it: static-versus-pinned is
+   taken from each `Binding.decidedBy`, not from mere presence in `listBindings()`,
+   and the Bindings panel is shown to any control viewer rather than gated on a
+   `strict`-string or "non-empty bindings" test that a provisioned service always
+   passes. View code does not need re-editing when an authority endowment lands.
 
 7. **One bespoke surface now, with generalization deferred deliberately.** This is
    knowingly the second capability type (after the git-remote grant) needing a
@@ -724,7 +774,7 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    `control()` facet. The `@endo/fetch` plugin is landed and pins the service at
    `['@pins', 'fetch']`, so the mechanism largely exists; the residual is whether
    that pinned service is reachable and clickable in Chat's inventory and how one
-   confined service is provisioned per guest — a surfacing/integration call owned
+   confined service is provisioned per guest, a surfacing/integration call owned
    by [endo-fetch](endo-fetch.md) and the maintainer, not a package-landing gate.
    This gates Phase 2's *wiring*, not its feasibility.
 
@@ -762,14 +812,23 @@ send, revoke-then-composer, the read-only degradation path) earns the same.
    client's declared bounds* rather than a guarantee, and gate all steering
    strictly on a resolved `control()`.
 
-5. **Two small upstream asks the exo's shape forces.** (a) A read-only viewer
-   recovers revocation only by string-matching the prose
+5. **Small upstream asks the exo's shape forces.** (a) A read-only viewer recovers
+   revocation only by string-matching the prose
    `Error('HttpClient has been revoked')`; a tagged/coded error would let the UI
    distinguish revoked from rate-limited/off-allowlist without message sniffing.
    (b) The audit facet has no backward `until`/`before` window, so "Load older"
-   must grow `limit`; a real backward-paging parameter would bound the read. Both
-   are `@endo/exo-http-client` surface (#566), not this design's, but this design
-   is their first consumer and should file them.
+   must grow `limit`; a real backward-paging parameter would bound the read. (c)
+   `inspect()` reports only the *effective* allowlist; the static allowlist is a
+   second place the exo writes on every mutation (`allowed`, `http-client.js:744`)
+   and is readable through no control method, so the UI must infer
+   static-versus-pinned from `Binding.decidedBy`. A query that reports the static
+   set directly would remove that inference. (d) A persist is best-effort:
+   `service.js` and the `onPolicyChange` seam swallow a failed write into a
+   `console.error`, so a durable edit that failed to persist is invisible to
+   `inspect()`; a persist-status query would let the surface stop claiming a
+   durability it cannot confirm.
+   All are `@endo/exo-http-client` / `@endo/fetch` surface (#566), not this
+   design's, but this design is their first consumer and should file them.
 
 ## Prompt
 
