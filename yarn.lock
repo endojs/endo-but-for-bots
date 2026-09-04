@@ -3436,6 +3436,7 @@ __metadata:
     "@endo/ses-ava": "workspace:^"
     ava: "catalog:dev"
     eslint: "catalog:dev"
+    typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
 
