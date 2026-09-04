@@ -1394,7 +1394,8 @@ export const make = async (_powers, _context, options = {}) => {
 
   /**
    * Await the terminal outcome for `id`, without ever submitting anything.
-   * Transient read errors are inconclusive (retry next poll); an id-less
+   * A read that keeps failing is refused rather than guessed at
+   * (`readDecisive` retries a few times, then throws); an id-less
    * status beyond the grace, a verified-mismatched outcome record, a
    * superseded request, and the watch cap all throw.
    *
