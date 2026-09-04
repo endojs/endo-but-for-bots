@@ -987,7 +987,9 @@ impl std::fmt::Display for XsnapError {
             XsnapError::Archive(s) => write!(f, "archive: {s}"),
             XsnapError::Bootstrap(s) => write!(f, "bootstrap: {s}"),
             XsnapError::Panicked { message, location } => match location {
-                Some(loc) => write!(f, "worker panicked (FFI-guarded) at {loc}: {message}"),
+                Some(location) => {
+                    write!(f, "worker panicked (FFI-guarded) at {location}: {message}")
+                }
                 None => write!(f, "worker panicked (FFI-guarded): {message}"),
             },
         }
@@ -1759,7 +1761,23 @@ pub fn run_xs_program(
     // `XsnapError::Panicked`, so only this one worker dies.
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
 
-    if supervised {
+    // A guarded `extern "C"` callback can panic during *bootstrap eval*
+    // above — the bundle's own guest JS calls `hostBase64Decode`,
+    // `hostUrlParse`, `host_trace`, `install_archive`, … before the loop
+    // exists. Drain that poison *now*, before the supervised loop's first
+    // act is a **blocking** `recv_raw_envelope`: a bootstrap-time death
+    // would otherwise leave the worker registered and hung forever (dead but
+    // never reported), with every later callback silently short-circuited
+    // (design `designs/ironhorse-panic.md` § Scope: "The already-live FFI
+    // abort hazard"). Both run paths below are skipped when this fires, so
+    // control falls straight through to the teardown that returns
+    // `XsnapError::Panicked`.
+    if worker_io::ffi_panicked() {
+        ffi_death = worker_io::take_ffi_panic();
+        eprintln!("{label}: worker died from an FFI-guarded panic during bootstrap");
+    }
+
+    if ffi_death.is_none() && supervised {
         eprintln!("{label}: entering main loop");
 
         // Enable metering — the callback checks the thread-local
@@ -1773,6 +1791,17 @@ pub fn run_xs_program(
             METERING_ABORTED.with(|a| a.set(false));
             let hard_limit = CRANK_HARD_LIMIT.with(|c| c.get());
             set_crank_limit(hard_limit);
+
+            // A guarded callback may have poisoned this worker on the
+            // *previous* crank's reactive pump. Observe it here, *before* the
+            // blocking recv below — otherwise a dead worker would block for an
+            // envelope it can no longer serve (every callback short-circuits),
+            // looking alive indefinitely.
+            if worker_io::ffi_panicked() {
+                ffi_death = worker_io::take_ffi_panic();
+                eprintln!("{label}: worker died from an FFI-guarded panic (pre-recv)");
+                break 'outer;
+            }
 
             // Block until the next envelope arrives.
             let frame = worker_io::with_transport(|t| t.recv_raw_envelope());
@@ -1906,7 +1935,7 @@ pub fn run_xs_program(
         }
 
         machine.end_metering();
-    } else {
+    } else if ffi_death.is_none() {
         // Run until idle: drain promise jobs and fire timers until
         // both queues are empty.
         machine.run_loop();
@@ -1920,10 +1949,10 @@ pub fn run_xs_program(
     unsafe { drop(Box::from_raw(powers_ptr)) };
     drop(machine);
 
-    if let Some(p) = ffi_death {
+    if let Some(ffi_panic) = ffi_death {
         return Err(XsnapError::Panicked {
-            message: p.message,
-            location: p.location,
+            message: ffi_panic.message,
+            location: ffi_panic.location,
         });
     }
     Ok(())
