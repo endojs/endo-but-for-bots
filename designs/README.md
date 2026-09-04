@@ -514,7 +514,7 @@ Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
 
 The 2026-09-04 update adds [inspect-package](inspect-package.md) (Not Started)
-to M10 (Capability Confinement and Ecosystem): an `@endo/inspect` package plus
+to M10: an `@endo/inspect` package plus
 an `@endo/inspect/shim.js` that SES can incorporate in its base so the
 assertion-detail quoting (`quote()`, the sole reader of `bestEffortStringify`)
 renders through it. `@endo/inspect`'s faithful portable safety contract is
@@ -524,9 +524,9 @@ blocked on the missing SES Proxy brand check, surfaced as a dependency
 49 -> 50 and the design count 196 -> 197. This item lands in M10, so M10's
 milestone rollup below goes 7 -> 8 items and the **Total remaining** row goes
 65 -> 66; M10's 14-20 week effort band and the Gantt's 20w M10 bar are
-deliberately unchanged, because the addition is a single M-sized 2-3 day
-(~0.5 week) item that is absorbed within that band at its whole-week rounding
-rather than shifting it.
+deliberately unchanged, because the addition is a single M-sized 2-to-3-day
+(~0.5 week) item that is absorbed within that band's whole-week rounding
+rather than shifting the band.
 
 ## Roadmap
 

@@ -80,7 +80,8 @@ transparent, so no supported predicate answers "is this value a Proxy?". The
 existing defense of `passStyleOf` (Endo's [`@endo/marshal`](https://github.com/endojs/endo/tree/master/packages/marshal)
 pass-style classifier, the marshalling-eligibility gate that decides how a value
 may cross CapTP, Endo's capability-transfer protocol for passing references
-between vats) rejects accessor properties, but that does not cover a proxy
+between *vats* — the isolated, single-threaded units of computation Endo and
+Agoric run guest code in) rejects accessor properties, but that does not cover a proxy
 pretending to hold data properties. Node is the one exception:
 `util.types.isProxy` is a public, native, internal-slot brand check, which is
 why the Node entry below can quarantine proxies today. Nothing equivalent exists
@@ -149,6 +150,23 @@ to `inspect` is a compile-time type error rather than a silent drop:
   the `inspect` name for a future genuinely `util.inspect`-compatible entry),
   carried under "Open Questions" below; but the silent-wrong-output hazard itself is
   closed here, at the definition site, by the option-type split.
+  **Residual gap, and the runtime backstop that closes it.** TypeScript's
+  excess-property check — the mechanism that makes `inspect(v, { colors: true })`
+  a compile error — fires *only* on an inline object literal passed directly at
+  the call site. Because `ConsoleOptions extends InspectOptions`, a caller who
+  builds one shared bag typed `ConsoleOptions` (or any variable/spread of a wider
+  structural type carrying `colors`/`stream`) is structurally assignable to
+  `inspect`'s `options: InspectOptions` parameter with **no** compile error, and
+  those sink fields are then silently dropped — the same silent-no-op the split
+  is meant to abolish, in a realistic pattern (one options object reused across a
+  `log`/`inspectToConsoleArgs` call and a plain `inspect(v, opts)` call). The
+  type split therefore closes the hazard for the inline-literal case only; to
+  give the variable-passing and untyped/JS-caller cases the same fail-loud
+  guarantee, `inspect` additionally carries a **runtime backstop**: it throws on
+  an unrecognized option key (in particular `colors`/`stream`), so a dropped-sink
+  bug fails loud at runtime rather than silently mis-rendering. The claim above is
+  scoped accordingly — the *type* boundary closes the literal case, the runtime
+  assertion closes the rest.
 - **`inspectToConsoleArgs(value, options)` returns an array of `console`
   arguments** on every host. On **browser** the array is the *live* object(s),
   so `console.log(...inspectToConsoleArgs(value))` preserves the rich,
@@ -169,14 +187,35 @@ to `inspect` is a compile-time type error rather than a silent drop:
   **xs**/**default** it returns
   `['%s', inspect(value, options)]`, the portable-core string in the same
   never-misinterpreted shape.
-- **`log(...values)`** is the console idiom: it maps each value through
-  `inspectToConsoleArgs` and delivers the best rendering this host offers to the
-  host console sink (the live-object splat on browser, the colorized string on
-  node, a no-op on xs, which has no `console`). It is variadic to match
-  `console.log` muscle memory (`log('tick:', obj)` logs both, never binding
-  `obj` as an options bag); callers who need explicit options (including a
-  non-default `stream`) call `inspectToConsoleArgs(value, options)` and splat the
-  result themselves. TTY sensing lives here and in `inspectToConsoleArgs`, the
+- **`log(...values)`** is the console idiom: it renders its arguments and
+  delivers the best rendering this host offers to the host console sink (the
+  live-object splat on browser, the colorized string on node, a no-op on xs,
+  which has no `console`). It is variadic to match `console.log` muscle memory
+  (`log('tick:', obj)` logs both, never binding `obj` as an options bag); callers
+  who need explicit options (including a non-default `stream`) call
+  `inspectToConsoleArgs(value, options)` and splat the result themselves.
+  **Argument mapping and format-string composition.** `log` is not a naive
+  "map each value through `inspectToConsoleArgs` and concatenate the pairs"
+  splat: concatenating N two-element `['%s', str]` pairs would not compose,
+  because `console.log`/`util.format` consumes `%`-directives only from its
+  *first* argument against the args that follow it, so a second embedded `'%s'`
+  fragment from a later value's pair prints as literal text and its `str` is
+  re-inspected as a bare trailing argument. `log` instead preserves
+  `console.log`'s own argument discipline, so it is a true drop-in:
+  - **A plain-string argument is a literal label, passed through unquoted**,
+    exactly as `console.log('tick:', obj)` prints `tick:` bare today — it is
+    *not* routed through the inspector's quoting path (which would render it as
+    `'tick:'`). Only **non-string** values are inspected.
+  - The inspected (non-string) values are rendered per host — live objects on
+    browser, `inspectToConsoleArgs`-derived strings on node — and `log`
+    assembles a **single** leading format string covering the whole argument
+    vector (one `'%s'` slot per inspected value it must protect, string labels
+    spliced in as their literal text), so `%`-directives are accumulated once,
+    at argument position zero, and no later fragment is misread as a directive or
+    double-represented. This keeps the label-vs-value distinction (presentation
+    vs data) orthogonal rather than braiding both through one uniform per-value
+    quote-and-inspect map.
+  TTY sensing lives here and in `inspectToConsoleArgs`, the
   exports that own the destination, never in `inspect`. Because `log` writes to
   `console.log`, it senses `process.stdout` (the stream `console.log` actually
   targets), so its default destination and the stream it colorizes for never
@@ -217,6 +256,28 @@ exhaust CPU or memory even when it never throws and never re-enters) is a
 carried by the cardinality / size bounds under "Avoiding triggered behavior"
 below.
 
+**Scope of the never-throw guarantee: it covers `inspect`, not the delegated
+console path.** The unconditional never-throw half above is proven for the
+portable-core `inspect` (and therefore the `quote()` assertion seam) because that
+core is the code this design owns and wraps in one outer `try/catch`. The Node
+`inspectToConsoleArgs`/`log` path is different: after quarantining detectable
+proxies via `util.types.isProxy` (contract step 2), it *delegates* rendering to
+`util.inspect`, a complex host function with its own crash history — Node's own
+`console.log` crashed on a proxy before native detection was added
+([nodejs/node#6464](https://github.com/nodejs/node/issues/6464)). This design does
+**not** silently inherit `util.inspect`'s robustness: the Node console path
+carries the *same* outer `try/catch` totality wrapper as `inspect`, so a throw
+inside the delegated `util.inspect` call (a hostile getter, a lying
+`getOwnPropertyDescriptor`, an oversized `ownKeys` the quarantine did not catch
+because the value was not a top-level proxy) is caught and rendered as a
+best-effort placeholder rather than propagating out of `log`. That never-throw
+guarantee for the console path is a Phase 2 test (the same hostile-corpus Phase 1
+runs against the portable core, replayed against `inspectToConsoleArgs` on Node).
+The *re-entrancy* (trap) half remains best-effort on the console path exactly as
+it is for the portable core — `util.inspect`'s own walk of a nested,
+undetected-by-`isProxy` value can still fire a trap — and this is disclaimed, not
+promised, consistent with the "How far each environment can go" table.
+
 **Option honoring, per condition** (the value export `inspect`, whose parameter
 type is `InspectOptions`):
 
@@ -230,10 +291,15 @@ type is `InspectOptions`):
 Every field `InspectOptions` carries is honored on every condition; `inspect` has
 no accept-and-ignore field. The sink-owning fields (`colors`, `stream`) are not
 part of `InspectOptions` at all; they live only on the `ConsoleOptions` bag the
-two console exports take (below), so a caller cannot hand `inspect` an option it
-would have to silently drop; doing so is a type error, not a no-op. Implementers
+two console exports take (below), so a caller cannot hand `inspect` an inline
+literal with a sink field without a compile error, and cannot hand it a *variable*
+of a wider type (or an untyped JS bag) carrying one without a runtime throw — the
+two-layer guarantee stated under "Package surface" (excess-property check for the
+literal case, runtime unrecognized-key assertion for the rest). Implementers
 must keep `inspect`'s parameter type free of any sink-owning field rather than
-widening it to "accept-and-ignore".
+widening it to "accept-and-ignore", and must implement the runtime backstop so
+the variable-passing and JS-caller cases fail loud rather than dropping the field
+silently.
 
 **`colors` on the console path** (`inspectToConsoleArgs`/`log`; `colors` is a
 `ConsoleOptions` field, absent from `inspect`'s `InspectOptions`): here `colors`
@@ -341,7 +407,10 @@ not settled here.
 ### The shim and SES integration
 
 `@endo/inspect/shim.js` is a vetted shim in the sense of the other
-`*-shim.js` entries (permitted to run before `lockdown()`): importing it for its
+`*-shim.js` entries (permitted to run before `lockdown()` — the one-time SES call
+that hardens the shared intrinsics and freezes the realm, after which no further
+tampering with the primordials is possible; the "before `lockdown()`" window is
+therefore the only time a shim may install itself): importing it for its
 side effects installs the inspector as the formatter SES uses for
 **assertion-detail quoting**. The scope is exactly that one seam. As established
 above, `quote()` (`assert.js:80`) is the sole reader of `bestEffortStringify` in
@@ -404,8 +473,8 @@ condition (the host inspector's `util.types.isProxy` quarantine lives only on
 the direct-console path the seam never calls). So the SES base assertion seam
 carries the *same* best-effort exposure regardless of condition, **node
 included**: its own contract (step 5 below) concedes the faithful portable
-guarantee is not available, a proxy handed to trusted code can still make
-`getOwnPropertyDescriptor` throw, lie, or re-enter, the exact re-entrancy /
+guarantee is not available. A proxy handed to trusted code can still make
+`getOwnPropertyDescriptor` throw, lie, or re-enter — the exact re-entrancy /
 interleaving attack [Agoric/agoric-sdk#3905](https://github.com/Agoric/agoric-sdk/issues/3905)
 describes. Wiring that best-effort formatter into SES's own assertion path (the
 trusted logging machinery) under an *adversarial* threat model, before the
@@ -461,7 +530,15 @@ The portable core restricts itself to a graded vocabulary of operations:
 - **Trap-free but brand-specific, internal-slot brand probes:** applying a
   built-in that reads an internal slot directly (for example
   `Date.prototype.getTime`, which reads `[[DateValue]]` via the `thisTimeValue`
-  abstract operation) to classify a suspected `Date`. A proxy has *no* such
+  abstract operation) to classify a suspected `Date`. **The trap-free property
+  holds only for the `Reflect.apply` / `.call` invocation form: every such probe
+  is applied as `Reflect.apply(Date.prototype.getTime, value, [])` (equivalently
+  `Date.prototype.getTime.call(value)`) against the bare built-in method pulled
+  from its prototype — never as a method-style property access on the suspect
+  value (`value.getTime()`), which would first perform a property `Get` on
+  `value` and, on a proxy, fire the `get` trap before the internal-slot check
+  ever runs, defeating the very non-triggering property this technique is cited
+  to provide.** A proxy has *no* such
   internal slot, so the operation throws `TypeError` immediately **without
   invoking any handler trap**; it is trap-free, not trap-firing. The practical
   consequence is the *inverse* of a re-entrancy hazard: a proxy-wrapped `Date`
@@ -500,6 +577,17 @@ The contract, in descending order of what we can guarantee today:
    a reader or downstream parser can match, disclosing proxy-ness without entering
    the handler. This
    matches the direction Node itself took in [nodejs/node#61029](https://github.com/nodejs/node/pull/61029).
+   **This quarantine step applies only to the sink-owning console exports
+   (`inspectToConsoleArgs`/`log`) on the one condition whose brand check exists
+   in host code (Node's `util.types.isProxy`) — never to the portable-core
+   `inspect` string export.** `inspect` returns the same bytes on every host (see
+   "Package surface"), so running a Node-only `util.types.isProxy` quarantine
+   inside `inspect-node.js`'s `inspect` would diverge its Node bytes from its
+   browser/xs/default bytes and silently reintroduce exactly the cross-host
+   byte-divergence "Package surface" closes off. `inspect` therefore renders
+   best-effort *uniformly* across every condition; the "How far each environment
+   can go" table's "`inspect` (the string export) is the portable core and shares
+   its limits" is the authoritative scoping for that uniformity.
 3. **Prefer own-enumerable data descriptors** obtained via
    `getOwnPropertyDescriptor`; render accessor properties as `[Getter]` /
    `[Setter]` **without calling them** unless the caller opts in.
@@ -641,9 +729,26 @@ denial-of-service by a hostile `ownKeys`.
    track the passed `stream` rather than an implicit `process.stdout`, that
    `inspect` itself is plain and equals the portable core, and proxy disclosure
    (top-level on all Node; nested where the build carries [nodejs/node#61029](https://github.com/nodejs/node/pull/61029)).
+   Named tests also pin the **console-path never-throw** guarantee stated under
+   "Package surface": replay Phase 1's hostile corpus (a throwing getter, a lying
+   `getOwnPropertyDescriptor`, an oversized `ownKeys`, an oversized string)
+   through `inspectToConsoleArgs`/`log` on Node and assert the delegated
+   `util.inspect` call is caught by the outer `try/catch` and rendered as a
+   best-effort placeholder — never propagating a throw out of `log` — so the
+   everyday console path carries the same stated safety contract as the assertion
+   seam and does not silently rest on `util.inspect`'s own robustness.
 3. **Browser entry.** Add `inspect-browser.js`, supplying the live-value console
    arguments behind `inspectToConsoleArgs`/`log`; its `inspect` is the portable
-   core.
+   core. Named tests: a **live-value pass-through** test asserting
+   `inspectToConsoleArgs(value)` on the browser condition returns an array whose
+   element is the *live* object identity (`result[0] === value`), not a
+   stringified render, so `console.log(...result)` preserves the expandable tree
+   rather than accidentally flattening it; and a **portable-core parity** test
+   asserting `inspect(value)` on the browser condition produces bytes identical to
+   the portable core's (the same cycle/bigint/symbol/error/function pinning corpus
+   Phase 1 pins), confirming the browser entry re-exports the one invariant
+   `inspect` rather than diverging. This keeps Phase 3 to the same
+   at-least-one-test-per-behavioral-claim discipline Phases 1, 2, and 4 follow.
 4. **SES seam + shim.** Add the `setInspector` hook to the assertion-detail
    quoting path (`quote()`), *not* the tamed console (which already forwards
    live arguments and sets `customInspect: false`); ship
@@ -739,6 +844,17 @@ denial-of-service by a hostile `ownKeys`.
   the inspector is a value fixed at taming construction, not a post-lockdown
   mutable place, because `quote()` is redaction-adjacent. Which seam keeps the
   taming code free of a static `@endo/inspect` import while honoring that bound?
+  A sub-question the chosen seam must answer, on the same error-visibility axis
+  the rest of the surface holds (illegal states made unrepresentable, or at least
+  fail-loud): a *post*-lockdown re-point is rejected (Phase 4 test (d) pins that),
+  but what of a **second, *pre*-lockdown** set — is it first-wins, last-wins, or
+  itself rejected? The bound above only fixes the value by `lockdown()`; leaving
+  the pre-lockdown double-set case's error visibility unspecified is an
+  inconsistency with the surface's make-illegal-states-unrepresentable posture
+  elsewhere. The recommended resolution is to **reject a second pre-lockdown set
+  as well** (write-*once*, not merely write-before-lockdown), so the seam has a
+  single unambiguous installation point; the seam shape chosen here should make
+  that the case, and Phase 4 test (d) should extend to assert it.
 - Which faithful substrate should the inspector bind to: the **stamping power**
   of [endojs/endo#1756](https://github.com/endojs/endo/issues/1756), or the
   **non-trapping integrity trait** ([tc39/proposal-stabilize](https://github.com/tc39/proposal-stabilize),
