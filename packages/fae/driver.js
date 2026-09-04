@@ -14,6 +14,12 @@ import { spawnWorkerLoop } from './agent.js';
  *   - `llm-provider`  – the provider config `{ host, model, authToken }`
  *   - `agent`          – the agent's EndoGuest (inbox, mail, petstore, tools)
  *
+ * and optionally a third:
+ *
+ *   - `subagent-spawner` – authority to create, list, and release agents named
+ *     beneath this one.  Absent for an agent at the delegation bound, which is
+ *     what withholds the subagent tools from it.
+ *
  * When this formula is pinned (`PINS`), `revivePins()` re-provides it on
  * daemon restart, which re-imports this module and calls `make()` again,
  * restarting the inbox loop automatically.
@@ -38,7 +44,16 @@ export const make = async (powers, context, { env } = {}) => {
         await E(powers).lookup('llm-provider')
       );
     const agentPowers = await E(powers).lookup('agent');
-    await spawnWorkerLoop(agentPowers, context, providerConfig, systemPrompt);
+    const spawner = (await E(powers).has('subagent-spawner'))
+      ? await E(powers).lookup('subagent-spawner')
+      : undefined;
+    await spawnWorkerLoop(
+      agentPowers,
+      context,
+      providerConfig,
+      systemPrompt,
+      harden({ ...(spawner ? { spawner } : {}) }),
+    );
   };
 
   startLoop().catch(error => {

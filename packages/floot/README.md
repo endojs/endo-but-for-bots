@@ -82,3 +82,12 @@ The voice id encodes its path: `en_GB-alba-medium` → `en/en_GB/alba/medium/`.
 pet-name. To use a different engine, provision a replacement object exposing the
 same interface (`transcribe` / `synthesize`) under the same pet-name — no change
 to the factory or UI is required.
+
+## Subagents
+
+A session may delegate to a subagent session and converse with it over the
+daemon mailbox, using `spawnSubagent`, `askSubagent`, and `stopSubagent`.
+A subagent session runs on its parent's backend and model, records its parent in
+the session registry, and is released with it.
+Set `FLOOT_MAX_SUBAGENT_DEPTH=0` to withhold the tools entirely.
+See [@endo/fae's SUBAGENTS.md](../fae/SUBAGENTS.md).

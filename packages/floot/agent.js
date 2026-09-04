@@ -29,6 +29,13 @@ import {
 } from '@endo/conversation-tree';
 import { runAgenticTurn } from '@endo/fae/src/turn-engine.js';
 import {
+  SubagentSpawnerInterface,
+  assertSubagentName,
+  isSameFormula,
+  makeSubagentDelegations,
+} from '@endo/fae/src/subagent.js';
+import { DEFAULT_MAX_SUBAGENT_DEPTH } from '@endo/fae/src/subagent-host.js';
+import {
   assertHostedBackendDescriptor,
   normalizeHostedModelDescriptor,
 } from '@endo/hosted-agent';
@@ -195,6 +202,15 @@ objects attached:
   number and the object's edge name, plus a petname to file it under.
 - send — send a message (and optionally objects) to another party.
 - reply — respond to a message by its number.
+
+Delegation — when spawnSubagent, askSubagent, and stopSubagent are listed among
+your tools, you may hand a self-contained piece of work to a helper agent:
+- spawnSubagent — create one, giving it standing instructions for its role.
+- askSubagent — mail it a task and wait for its reply. It cannot see this
+  conversation, so put everything it needs in the task.
+- stopSubagent — release it once its work is done.
+Use this for work whose details you don't need to keep — a long search, a
+self-contained draft — not for things you can simply do yourself.
 
 Caplet tools dropped into your \`tools/\` directory are discovered automatically,
 so your abilities can grow over time. When asked what you can do, you can list
@@ -481,6 +497,10 @@ const provisionPresetObjects = async (
  * @param {Promise<object> | object | undefined} _context
  * @param {ProviderConstructorConfig | InjectedProviderConfig | ClaudeClientConfig | { hostedClient: any }} providerConfig
  * @param {string} [systemPrompt]
+ * @param {object} [options]
+ * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
+ *   session at the delegation bound, which withholds the subagent tools.
+ * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @returns {Promise<{
  *   converse: (
  *     input: string | object,
@@ -499,6 +519,7 @@ export const makeStreamingAgent = async (
   _context,
   providerConfig,
   systemPrompt,
+  { spawner, timers } = {},
 ) => {
   const claudeClient = /** @type {any} */ (providerConfig).claudeClient;
   const hostedClient = /** @type {any} */ (providerConfig).hostedClient;
@@ -576,7 +597,15 @@ export const makeStreamingAgent = async (
     return usageWrite;
   };
 
-  const toolRegistry = makeFlootToolRegistry(powers);
+  // Delegation state is per session and lives beside the inbox loop that feeds
+  // it: `claim` below is the only reader of the mailbox stream.
+  const delegations = makeSubagentDelegations(
+    harden({ powers, ...(timers ? { timers } : {}) }),
+  );
+  const toolRegistry = makeFlootToolRegistry(
+    powers,
+    harden(spawner ? { spawner, delegations } : {}),
+  );
 
   // One session = one guest = one linear conversation. The guest's petstore
   // holds a conversation-tree root and a linear branch beneath it. We cache the
@@ -995,8 +1024,26 @@ export const makeStreamingAgent = async (
         const { from: fromId, number, type, strings, names } = message;
         if (!handled.has(number)) {
           handled.add(number);
+          // Offer every message — this session's own outbound mail included —
+          // to the delegation registry first. It learns a delegation's identity
+          // from the echo of the send and consumes the matching reply, which
+          // the awaiting `askSubagent` call returns instead of this loop
+          // turning it into a conversation (and replying to it, which with a
+          // subagent would be an unbounded exchange).
+          const delegated = delegations.claim(message);
+          if (delegated.claimed) {
+            // A reply carrying capabilities is left in the inbox so it can
+            // still be adopted; a plain answer is fully consumed here.
+            if (delegated.dismissable) await E(powers).dismiss(number);
+            // eslint-disable-next-line no-continue
+            continue;
+          }
           // Skip our own outbound messages echoed back into the inbox.
-          if (fromId !== selfLocator) {
+          // Compare formulas, not locator strings: `locate` decorates with the
+          // transport hints currently published by `@nets` while a message's
+          // `from` is always hint-free, so a daemon with network addresses
+          // would fail string equality and answer its own mail.
+          if (!isSameFormula(fromId, selfLocator)) {
             let text;
             if (type === 'package' && Array.isArray(strings)) {
               const parts = [];
@@ -1501,11 +1548,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
         } else {
           agentConfig = { provider: await getProvider(entry?.model) };
         }
+        // A session may delegate only while its own depth leaves room. The
+        // spawner is rebuilt on every revival rather than persisted, so the
+        // durable record of the tree is the session registry alone.
+        const sessionDepth = Number(entry?.subagentDepth) || 0;
         const agent = await makeStreamingAgent(
           sessionGuest,
           undefined,
           agentConfig,
           sessionPrompt,
+          harden(
+            sessionDepth < maxSubagentDepth
+              ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
+              : {},
+          ),
         );
         // Each session is addressable by mail: start following its inbox.
         agent.startInbox();
@@ -1713,6 +1769,291 @@ export const make = (hostPowers, _context, { env } = {}) => {
     console.error(`[floot-factory] Deleted session "${id}"`);
   };
 
+  /**
+   * Create one session: its registry entry, its guest, and its running inbox
+   * loop. Shared by the factory's public `createSession` and by the subagent
+   * spawner, so a subagent session is an ordinary session that records which
+   * session asked for it.
+   *
+   * @param {Record<string, any>} options
+   * @returns {Promise<string>} the new session id
+   */
+  const provisionSession = async options => {
+    await loadRegistry();
+    const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
+    const id = newSessionId();
+    const { parentSessionId, subagentName, subagentDepth } = options;
+    const delegationFields =
+      parentSessionId === undefined
+        ? {}
+        : {
+            parentSessionId: `${parentSessionId}`,
+            subagentName: `${subagentName}`,
+            subagentDepth: Number(subagentDepth),
+          };
+    let backendId;
+    let modelId;
+    const selectedModel = options.modelId || options.model || '';
+    if (options.backendId && options.backendId !== 'provider') {
+      backendId = `${options.backendId}`;
+      modelId = `${options.modelId || ''}`;
+    } else if (
+      typeof selectedModel === 'string' &&
+      selectedModel.includes(':')
+    ) {
+      [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
+    }
+    if (backendId) {
+      const backend = (await getHostedBackends()).get(backendId);
+      if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
+      const models = await E(backend.factory).listModels();
+      const chosen = models.find(candidate => candidate.id === modelId);
+      if (!chosen) {
+        throw Error(`Unknown model "${modelId}" for backend "${backendId}"`);
+      }
+      const projected = normalizeHostedModelDescriptor(chosen);
+      const supportedEfforts = projected.reasoningEfforts;
+      if (
+        options.reasoningEffort &&
+        !supportedEfforts.includes(options.reasoningEffort)
+      ) {
+        throw Error(
+          `Unsupported reasoning effort "${options.reasoningEffort}" for ${backendId}:${modelId}`,
+        );
+      }
+    }
+    // Snapshot the preset's id and prompt so later catalog edits don't change
+    // a live session. The object set is re-read from the catalog by id in
+    // getAgent (objects are provisioned once, idempotently). A model is pinned
+    // only when the caller chose a known one; otherwise the session follows
+    // the factory's configured default model.
+    const entry = harden({
+      id,
+      title: options.title || 'New chat',
+      createdAt: Date.now(),
+      presetId: preset.id,
+      systemPrompt: preset.systemPrompt,
+      lifecycle: 'creating',
+      ...(options.systemPrompt
+        ? { systemPrompt: `${options.systemPrompt}` }
+        : {}),
+      ...delegationFields,
+      ...(backendId
+        ? {
+            backendId,
+            modelId,
+            ...(options.reasoningEffort
+              ? { reasoningEffort: `${options.reasoningEffort}` }
+              : {}),
+          }
+        : isKnownModel(selectedModel)
+          ? { model: selectedModel }
+          : {}),
+    });
+    /** @type {any[]} */ (registry).push(entry);
+    await saveRegistry();
+    // Build the agent now so the new session immediately follows its inbox
+    // (addressable by mail without waiting for a first UI converse) and its
+    // preset objects are provisioned up front.
+    try {
+      await getAgent(id);
+      const index = /** @type {any[]} */ (registry).findIndex(
+        session => session.id === id,
+      );
+      const currentEntry = /** @type {any[]} */ (registry)[index];
+      /** @type {any[]} */ (registry)[index] = harden({
+        ...currentEntry,
+        lifecycle: 'ready',
+      });
+      await saveRegistry();
+    } catch (error) {
+      const failed = (registry || []).findIndex(session => session.id === id);
+      if (failed >= 0) {
+        const failedEntry = /** @type {any[]} */ (registry)[failed];
+        /** @type {any[]} */ (registry)[failed] = harden({
+          ...failedEntry,
+          lifecycle: 'error',
+        });
+      }
+      await saveRegistry();
+      agents.delete(id);
+      try {
+        await finishSessionDeletion(id);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          `Floot session ${id} creation and rollback failed`,
+          { cause: cleanupError },
+        );
+      }
+      throw error;
+    }
+    console.error(
+      `[floot-factory] Created session "${id}" (preset "${preset.id}"${
+        entry.backendId
+          ? `, backend "${entry.backendId}", model "${entry.modelId}"`
+          : entry.model
+            ? `, model "${entry.model}"`
+            : ''
+      })`,
+    );
+    return id;
+  };
+
+  /**
+   * Delete one session and, depth-first, every subagent session beneath it. A
+   * subagent that outlived its parent would keep an inbox loop (and a hosted
+   * backend slice) alive with nobody left to read its replies.
+   *
+   * @param {string} id
+   * @returns {Promise<void>}
+   */
+  const releaseSession = async id => {
+    await loadRegistry();
+    const index = (registry || []).findIndex(session => session.id === id);
+    if (index === -1) throw Error(`Unknown session "${id}".`);
+    const children = (registry || []).filter(
+      session => session.parentSessionId === id,
+    );
+    for (const child of children) {
+      await releaseSession(child.id);
+    }
+    // `finishSessionDeletion` rebinds `registry`, so re-find rather than
+    // reusing the index computed before the recursion.
+    const current = (registry || []).findIndex(session => session.id === id);
+    if (current === -1) return;
+    /** @type {any[]} */ (registry)[current] = harden({
+      .../** @type {any[]} */ (registry)[current],
+      lifecycle: 'deleting',
+    });
+    await saveRegistry();
+    await finishSessionDeletion(id);
+  };
+
+  // Layers of delegation a session tree may reach. 0 withholds the subagent
+  // tools from every session.
+  const maxSubagentDepth = (() => {
+    const configured = env?.FLOOT_MAX_SUBAGENT_DEPTH;
+    if (configured === undefined || configured === '') {
+      return DEFAULT_MAX_SUBAGENT_DEPTH;
+    }
+    const value = Number(configured);
+    if (!Number.isInteger(value) || value < 0) {
+      throw Error(
+        `Invalid FLOOT_MAX_SUBAGENT_DEPTH ${JSON.stringify(configured)}`,
+      );
+    }
+    return value;
+  })();
+  const MAX_SUBAGENTS_PER_SESSION = 8;
+
+  /**
+   * The whole of the authority a session gets over the factory: create, list,
+   * and release sessions recorded as its own subagents. It cannot name, reach,
+   * or delete any other session, and it never sees a session guest — the
+   * locator it returns is the subagent's mail handle, which is exactly what
+   * the parent needs to converse with it and nothing more.
+   *
+   * @param {string} parentId
+   * @param {number} depth - Delegation depth of the subagents it creates.
+   */
+  const makeSessionSpawner = (parentId, depth) => {
+    const listSubagents = async () => {
+      await loadRegistry();
+      return (registry || []).filter(
+        session => session.parentSessionId === parentId,
+      );
+    };
+    return makeExo('SubagentSpawner', SubagentSpawnerInterface, {
+      /**
+       * @param {string} name
+       * @param {{ systemPrompt?: string }} [options]
+       */
+      async spawn(name, options = {}) {
+        assertSubagentName(name);
+        const { systemPrompt: childPrompt } = options;
+        if (
+          childPrompt !== undefined &&
+          (typeof childPrompt !== 'string' || childPrompt.length > 32_768)
+        ) {
+          throw Error(
+            'Subagent system prompt must be a string of at most 32768 characters',
+          );
+        }
+        const siblings = await listSubagents();
+        if (siblings.some(session => session.subagentName === name)) {
+          throw Error(`Subagent "${name}" already exists.`);
+        }
+        if (siblings.length >= MAX_SUBAGENTS_PER_SESSION) {
+          throw Error(
+            `Subagent limit of ${MAX_SUBAGENTS_PER_SESSION} reached; stop one first.`,
+          );
+        }
+        const parent = (registry || []).find(
+          session => session.id === parentId,
+        );
+        // A subagent runs on the same backend and model as its parent: it is
+        // extra context, not a way to reach a backend this session was not
+        // provisioned for.
+        const inheritedModel = parent?.backendId
+          ? {
+              backendId: parent.backendId,
+              modelId: parent.modelId,
+              ...(parent.reasoningEffort
+                ? { reasoningEffort: parent.reasoningEffort }
+                : {}),
+            }
+          : parent?.model
+            ? { model: parent.model }
+            : {};
+        const childId = await provisionSession({
+          title: `${parent?.title || 'Session'} / ${name}`,
+          presetId: parent?.presetId,
+          ...inheritedModel,
+          ...(childPrompt ? { systemPrompt: childPrompt } : {}),
+          parentSessionId: parentId,
+          subagentName: name,
+          subagentDepth: depth,
+        });
+        const locator = await E(getHost()).locate(`session-${childId}`);
+        return harden({ name, locator });
+      },
+
+      /** @param {string} name */
+      async stop(name) {
+        assertSubagentName(name);
+        await null;
+        const entry = (await listSubagents()).find(
+          session => session.subagentName === name,
+        );
+        if (!entry) throw Error(`No subagent named "${name}".`);
+        await releaseSession(entry.id);
+      },
+
+      async list() {
+        await null;
+        const names = (await listSubagents())
+          .map(session => `${session.subagentName}`)
+          .sort();
+        return harden(names);
+      },
+
+      /** @param {string} [methodName]  */
+      help(methodName) {
+        if (methodName === 'spawn') {
+          return 'spawn(name, { systemPrompt? }) — Create a subagent session beneath this one and return { name, locator }.';
+        }
+        if (methodName === 'stop') {
+          return 'stop(name) — Delete a subagent session and every session beneath it.';
+        }
+        if (methodName === 'list') {
+          return 'list() — Names of this session’s live subagents.';
+        }
+        return 'Subagent spawner: create, list, and release sessions recorded as subagents of one parent session.';
+      },
+    });
+  };
+
   // Revive every session's inbox loop after a restart, without blocking make()
   // (the reincarnation-deadlock constraint forbids awaiting remote refs here).
   // Fire-and-forget: load the registry and build each agent, which starts its
@@ -1773,7 +2114,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
      * @returns {Promise<object>} an opaque session facet
      */
     async createSession(titleOrOptions, presetId, model) {
-      await loadRegistry();
       const options =
         titleOrOptions && typeof titleOrOptions === 'object'
           ? titleOrOptions
@@ -1782,115 +2122,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
               presetId,
               model,
             };
-      const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
-      const id = newSessionId();
-      let backendId;
-      let modelId;
-      const selectedModel = options.modelId || options.model || '';
-      if (options.backendId && options.backendId !== 'provider') {
-        backendId = `${options.backendId}`;
-        modelId = `${options.modelId || ''}`;
-      } else if (
-        typeof selectedModel === 'string' &&
-        selectedModel.includes(':')
-      ) {
-        [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
-      }
-      if (backendId) {
-        const backend = (await getHostedBackends()).get(backendId);
-        if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
-        const models = await E(backend.factory).listModels();
-        const chosen = models.find(candidate => candidate.id === modelId);
-        if (!chosen) {
-          throw Error(`Unknown model "${modelId}" for backend "${backendId}"`);
-        }
-        const projected = normalizeHostedModelDescriptor(chosen);
-        const supportedEfforts = projected.reasoningEfforts;
-        if (
-          options.reasoningEffort &&
-          !supportedEfforts.includes(options.reasoningEffort)
-        ) {
-          throw Error(
-            `Unsupported reasoning effort "${options.reasoningEffort}" for ${backendId}:${modelId}`,
-          );
-        }
-      }
-      // Snapshot the preset's id and prompt so later catalog edits don't change
-      // a live session. The object set is re-read from the catalog by id in
-      // getAgent (objects are provisioned once, idempotently). A model is pinned
-      // only when the caller chose a known one; otherwise the session follows
-      // the factory's configured default model.
-      const entry = harden({
-        id,
-        title: options.title || 'New chat',
-        createdAt: Date.now(),
-        presetId: preset.id,
-        systemPrompt: preset.systemPrompt,
-        lifecycle: 'creating',
-        ...(backendId
-          ? {
-              backendId,
-              modelId,
-              ...(options.reasoningEffort
-                ? { reasoningEffort: `${options.reasoningEffort}` }
-                : {}),
-            }
-          : isKnownModel(selectedModel)
-            ? { model: selectedModel }
-            : {}),
-      });
-      /** @type {any[]} */ (registry).push(entry);
-      await saveRegistry();
-      // Build the agent now so the new session immediately follows its inbox
-      // (addressable by mail without waiting for a first UI converse) and its
-      // preset objects are provisioned up front.
-      try {
-        await getAgent(id);
-        const index = /** @type {any[]} */ (registry).findIndex(
-          session => session.id === id,
-        );
-        const currentEntry = /** @type {any[]} */ (registry)[index];
-        /** @type {any[]} */ (registry)[index] = harden({
-          ...currentEntry,
-          lifecycle: 'ready',
-        });
-        await saveRegistry();
-      } catch (error) {
-        const failed = (registry || []).findIndex(session => session.id === id);
-        if (failed >= 0) {
-          const failedEntry = /** @type {any[]} */ (registry)[failed];
-          /** @type {any[]} */ (registry)[failed] = harden({
-            ...failedEntry,
-            lifecycle: 'error',
-          });
-        }
-        await saveRegistry();
-        agents.delete(id);
-        try {
-          await finishSessionDeletion(id);
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            `Floot session ${id} creation and rollback failed`,
-            { cause: cleanupError },
-          );
-        }
-        throw error;
-      }
-      console.error(
-        `[floot-factory] Created session "${id}" (preset "${preset.id}"${
-          entry.backendId
-            ? `, backend "${entry.backendId}", model "${entry.modelId}"`
-            : entry.model
-              ? `, model "${entry.model}"`
-              : ''
-        })`,
-      );
-      return getFacet(id);
+      // The delegation fields are minted by the spawner, never accepted from a
+      // caller: a session that claimed another's parentage would join that
+      // parent's subagent list and become stoppable by it.
+      const {
+        parentSessionId: _parentSessionId,
+        subagentName: _subagentName,
+        subagentDepth: _subagentDepth,
+        ...publicOptions
+      } = options;
+      return getFacet(await provisionSession(publicOptions));
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, createdAt: number, presetId: string, model: string, backendId: string, modelId: string, reasoningEffort: string, lifecycle: string, parentSessionId: string, subagentName: string }>>}
      */
     async listSessions() {
       await loadRegistry();
@@ -1906,6 +2151,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
             modelId,
             reasoningEffort,
             lifecycle,
+            parentSessionId,
+            subagentName,
           }) => ({
             id,
             title,
@@ -1918,6 +2165,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
             modelId: modelId || model || '',
             reasoningEffort: reasoningEffort || '',
             lifecycle: lifecycle || 'ready',
+            // Empty for a session the user opened; set for one an agent
+            // spawned, so a client can group or hide the delegated tree.
+            parentSessionId: parentSessionId || '',
+            subagentName: subagentName || '',
           }),
         ),
       );
@@ -2061,14 +2312,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      * @param {string} id
      */
     async deleteSession(id) {
-      await loadRegistry();
-      const reg = registry || [];
-      const index = reg.findIndex(session => session.id === id);
-      if (index === -1) throw Error(`Unknown session "${id}".`);
-      const entry = reg[index];
-      reg[index] = harden({ ...entry, lifecycle: 'deleting' });
-      await saveRegistry();
-      await finishSessionDeletion(id);
+      await releaseSession(id);
     },
 
     /**

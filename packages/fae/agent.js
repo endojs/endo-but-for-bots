@@ -31,6 +31,15 @@ import {
 } from './src/tool-makers.js';
 import { extractToolCallsFromContent } from './src/extract-tool-calls.js';
 import { runAgenticTurn } from './src/turn-engine.js';
+import {
+  isSameFormula,
+  makeSubagentDelegations,
+  makeSubagentTools,
+} from './src/subagent.js';
+import {
+  DEFAULT_MAX_SUBAGENT_DEPTH,
+  provisionFaeAgent,
+} from './src/subagent-host.js';
 
 /** Same pattern as isSpecialName in packages/daemon/src/pet-name.js */
 const specialNamePattern = /^[A-Z][A-Z0-9-]{0,127}$/;
@@ -69,6 +78,16 @@ reasoning, steps, logs, or recaps to a channel.
 - **send** — Send unsolicited inbox message to a named agent.
 - **adoptTool** — Install a FaeTool capability from a message.
 - **dismiss** — Dismiss a handled message.
+
+## Subagents (only when the tools below are listed)
+
+- **spawnSubagent** — Create a helper agent with its own conversation.
+- **askSubagent** — Mail it a task and wait for its reply.
+- **stopSubagent** — Release it when its work is done.
+
+Delegate work that would otherwise fill your own context, and give the \
+subagent everything it needs in the task text — it cannot see your \
+conversation. Release each subagent once you have its answer.
 
 You receive messages from other agents and the @host. Use these tools to interact:
 
@@ -134,6 +153,11 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @param {Promise<object> | object | undefined} context - Context for cancellation
  * @param {ProviderConstructorConfig | InjectedProviderConfig} providerConfig - LLM provider config. Pass `provider` to inject a pre-built provider (e.g. for tests); otherwise host/model/authToken are used to construct one.
  * @param {string} [systemPrompt] - Override system prompt (defaults to guestSystemPrompt)
+ * @param {object} [options]
+ * @param {any} [options.spawner] - A `SubagentSpawner` capability. Present only
+ *   for an agent this deployment allows to delegate; its absence is what
+ *   withholds the subagent tools.
+ * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -141,6 +165,7 @@ export const spawnWorkerLoop = async (
   context,
   providerConfig,
   systemPrompt,
+  { spawner, timers } = {},
 ) => {
   const getCancelled = async () => {
     if (!context) return null;
@@ -236,6 +261,22 @@ export const spawnWorkerLoop = async (
   localTools.set('messageHistory', makeMessageHistoryTool(powers));
   localTools.set('exec', makeExecTool(powers));
   localTools.set('readChannel', makeReadChannelTool(powers));
+
+  // Delegation is capability-gated: without a spawner there are no subagent
+  // tools and `claim` has nothing to match, so the inbox loop below behaves
+  // exactly as it did before.
+  const delegations = makeSubagentDelegations(
+    harden({ powers, ...(timers ? { timers } : {}) }),
+  );
+  if (spawner) {
+    for (const [name, tool] of makeSubagentTools({
+      powers,
+      spawner,
+      delegations,
+    })) {
+      localTools.set(name, tool);
+    }
+  }
 
   /**
    * Process tool calls from the LLM response.
@@ -464,7 +505,18 @@ export const spawnWorkerLoop = async (
         done: messageDone = true,
       } = /** @type {any} */ (message);
 
-      if (fromId !== selfLocator) {
+      // Offer every message — including this agent's own outbound mail — to
+      // the delegation registry before any other routing. It learns a
+      // delegation's identity from the echo of the send and consumes the
+      // matching reply, which the awaiting `askSubagent` call returns instead.
+      const delegated = delegations.claim(message);
+      if (delegated.claimed) {
+        console.log(`[fae] Message #${number} answers a pending subagent ask`);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      if (!isSameFormula(fromId, selfLocator)) {
         const { messageId, replyTo } = /** @type {any} */ (message);
 
         // Skip partial (in-flight) submissions: wait until the sender
@@ -588,6 +640,7 @@ harden(spawnWorkerLoop);
 // ============================================================================
 
 const driverSpecifier = new URL('driver.js', import.meta.url).href;
+const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
 
 /**
  * Creates a Fae factory that provisions and manages agent instances.
@@ -621,55 +674,45 @@ export const make = async (guestPowers, _context) => {
      * @param {object} [options]
      * @param {string} [options.systemPrompt] - Override system prompt
      * @param {boolean} [options.pin] - Pin the driver to PINS for restart survival
+     * @param {number} [options.maxSubagentDepth] - Layers of delegation this
+     *   agent's tree may reach. 0 withholds the subagent tools entirely.
      * @returns {Promise<string>} The agent's profile petname
      */
     async createAgent(name, options = {}) {
-      const { systemPrompt, pin } =
-        /** @type {{ systemPrompt?: string, pin?: boolean }} */ (options);
-
-      const guestName = name;
-      const profileName = `profile-for-${guestName}`;
-      const driverHandleName = `${name}-driver-handle`;
-      const driverProfileName = `profile-for-${driverHandleName}`;
-      const driverResultName = `${name}-driver`;
-
-      if (await E(hostAgent).has(driverResultName)) {
-        throw new Error(`Agent "${name}" already exists.`);
-      }
-
-      // 1. Create the agent guest (inbox, petstore, tools).
-      await E(hostAgent).provideGuest(guestName, {
-        agentName: profileName,
-      });
-
-      // 2. Create a lightweight driver guest whose namespace will hold
-      //    capability references to the provider config and the agent.
-      const driverGuest = await E(hostAgent).provideGuest(driverHandleName, {
-        agentName: driverProfileName,
-      });
-
-      // 3. Write capability references into the driver's namespace.
-      const providerLocator = await E(powers).locate('llm-provider');
-      await E(driverGuest).storeLocator('llm-provider', providerLocator);
-
-      const agentLocator = await E(hostAgent).locate(profileName);
-      await E(driverGuest).storeLocator('agent', agentLocator);
-
-      // 4. Launch the driver caplet.
-      await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
-        powersName: driverProfileName,
-        resultName: driverResultName,
-        env: harden({ FAE_SYSTEM_PROMPT: systemPrompt || '' }),
-      });
-
-      // 5. Pin the driver so it auto-restarts on daemon reboot.
-      if (pin) {
-        await E(hostAgent).copy(
-          [driverResultName],
-          ['@pins', driverResultName],
+      const { systemPrompt, pin, maxSubagentDepth } =
+        /** @type {{ systemPrompt?: string, pin?: boolean, maxSubagentDepth?: number }} */ (
+          options
         );
-        console.log(`[fae-factory] Pinned driver "${driverResultName}"`);
+      // Subagent names are formed by infixing their parent's name, and
+      // teardown enumerates the tree by that infix. A root agent carrying it
+      // would make one tree indistinguishable from another.
+      if (name.includes('-sub-')) {
+        throw new Error(`Agent name "${name}" must not contain "-sub-".`);
       }
+      const maxDepth =
+        maxSubagentDepth === undefined
+          ? DEFAULT_MAX_SUBAGENT_DEPTH
+          : maxSubagentDepth;
+      if (!Number.isInteger(maxDepth) || maxDepth < 0) {
+        throw new Error('maxSubagentDepth must be a non-negative integer.');
+      }
+
+      const { profileName } = await provisionFaeAgent({
+        hostAgent,
+        name,
+        providerLocator: /** @type {string} */ (
+          await E(powers).locate('llm-provider')
+        ),
+        hostAgentLocator: /** @type {string} */ (
+          await E(powers).locate('host-agent')
+        ),
+        driverSpecifier,
+        spawnerSpecifier,
+        depth: 0,
+        maxDepth,
+        systemPrompt,
+        pin,
+      });
 
       console.log(`[fae-factory] Created agent "${name}"`);
       return profileName;
