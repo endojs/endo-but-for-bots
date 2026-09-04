@@ -133,8 +133,14 @@ const SCHEMA_SQL = `
     secret_id TEXT NOT NULL REFERENCES secret_record(secret_id)
   );
 
+  -- seq orders the audit trail. occurred_at is millisecond-resolution and
+  -- event_id is random, so ordering by those puts same-millisecond events
+  -- (an operation's own attempted/succeeded pair, routinely) in arbitrary
+  -- order. AUTOINCREMENT never reuses a value, so the sequence stays monotonic
+  -- across restarts even though audit rows are never deleted.
   CREATE TABLE IF NOT EXISTS secret_audit_event (
-    event_id TEXT PRIMARY KEY,
+    seq INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id TEXT NOT NULL UNIQUE,
     secret_id TEXT NOT NULL,
     operation TEXT NOT NULL,
     outcome TEXT NOT NULL,
@@ -143,9 +149,6 @@ const SCHEMA_SQL = `
     operation_id TEXT NOT NULL,
     reason_code TEXT
   );
-
-  CREATE INDEX IF NOT EXISTS idx_secret_audit_time
-    ON secret_audit_event(occurred_at, event_id);
 `;
 
 /**
@@ -188,7 +191,33 @@ export const makeDaemonDatabase = (config, options) => {
   db.exec('PRAGMA foreign_keys = ON;');
 
   // Create schema if needed.
+  // An earlier build of this unreleased feature created `secret_audit_event`
+  // without `seq`. `CREATE TABLE IF NOT EXISTS` cannot restructure it and there
+  // is no migration runner, so rename it out of the way, let the schema below
+  // create the current shape, and copy the rows across in timestamp order.
+  const auditColumns = /** @type {{name: string}[]} */ (
+    db.prepare("SELECT name FROM pragma_table_info('secret_audit_event')").all()
+  );
+  const rebuildAuditEvents =
+    auditColumns.length > 0 && !auditColumns.some(({ name }) => name === 'seq');
+  if (rebuildAuditEvents) {
+    db.exec(
+      'ALTER TABLE secret_audit_event RENAME TO secret_audit_event_pre_seq',
+    );
+  }
+
   db.exec(SCHEMA_SQL);
+
+  if (rebuildAuditEvents) {
+    db.exec(`
+      INSERT INTO secret_audit_event
+        (event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, reason_code)
+      SELECT event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, reason_code
+      FROM secret_audit_event_pre_seq
+      ORDER BY occurred_at, event_id;
+      DROP TABLE secret_audit_event_pre_seq;
+    `);
+  }
 
   // Check/set schema version.
   const versionRow = prepare(
@@ -331,7 +360,10 @@ export const makeDaemonDatabase = (config, options) => {
     'INSERT INTO secret_audit_event (event_id, secret_id, operation, outcome, generation, occurred_at, operation_id, reason_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
   );
   const stmtListSecretAuditEvents = prepare(
-    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event ORDER BY occurred_at DESC, event_id DESC LIMIT ?',
+    // Newest first, ordered by the insertion sequence rather than the
+    // millisecond timestamp. `seq` is not projected: it is an internal
+    // ordering key, not part of the `SecretAuditEvent` contract.
+    'SELECT event_id AS eventId, secret_id AS secretId, operation, outcome, generation, occurred_at AS occurredAt, operation_id AS operationId, reason_code AS reasonCode FROM secret_audit_event ORDER BY seq DESC LIMIT ?',
   );
 
   // -- Formula operations --

@@ -227,6 +227,22 @@ Creation is in a disclosure panel that is closed by default.
 Replacement is inside each secret's closed danger-zone disclosure because it
 changes the value returned to every existing holder of that capability.
 Closing either disclosure synchronously clears its secret-value draft.
+
+Creation also accepts a secret from a file, so an operator can ingest an SSH
+key or other key material without pasting it.
+Reading a file is a filesystem capability and stays on the host side of the
+confinement boundary: the confined view renders a button bound to an opaque
+callback, and the host holds the picker.
+The confined view is given the chosen file's name and byte length only, never
+its bytes, so the value cannot reach the DOM.
+A file is submitted byte for byte rather than through a text round trip, so
+key material that is not valid UTF-8 survives intact, and the typed value field
+is disabled while a file is loaded so the two cannot disagree.
+The file draft is cleared on submission and on closing the creation panel, like
+the typed draft.
+Failure to read a file reports a fixed message rather than the caught error,
+which can name filesystem paths the operator did not mean to disclose.
+
 Description and inventory-name controls remain ordinary text because their
 values are explicitly non-secret metadata.
 The current description appears only in its editable description field; the
@@ -471,7 +487,7 @@ upstream action already performed with them.
 
 The singleton manager is the mandatory mediation point because no backend
 record capability leaves it.
-It records create, release, replace, description change, revoke, and delete
+It records create, read, replace, description change, revoke, and delete
 operations.
 
 ```ts
@@ -480,7 +496,7 @@ type SecretAuditEvent = {
   secretId: string;
   operation:
     | 'create'
-    | 'release'
+    | 'read'
     | 'replace'
     | 'set-description'
     | 'revoke'
@@ -506,10 +522,11 @@ Application logs contain only an audit event identifier and fixed diagnostic
 codes.
 
 For `readBase64()`, the manager durably records an attempt before reading the
-backend and durably records release before resolving with bytes.
-A crash may conservatively record release even if the response did not reach
+backend and durably records the read before resolving with bytes.
+A crash may conservatively record a read even if the response did not reach
 the caller.
-The event therefore means that the manager released the value, not that a
+The event therefore means that the manager released the value to a caller,
+not that a
 specific human or process received it.
 
 The manager must not receive the Endo root merely to enrich audit records.
@@ -548,8 +565,8 @@ formula type:
 10. An exo tag never carries a grant identifier. A tag becomes the remotable's
     interface name, which marshal transmits across CapTP and splices into
     guard-violation messages.
-11. A release that overlaps an uncommitted replacement fails closed rather than
-    returning bytes the recorded generation does not describe. A release whose
+11. A read that overlaps an uncommitted replacement fails closed rather than
+    returning bytes the recorded generation does not describe. A read whose
     physical fetch preceded the new bytes is also failed, because the two are
     indistinguishable at the point the record is sampled.
 
