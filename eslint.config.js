@@ -127,6 +127,7 @@ export default defineConfig(
   {
     files: [
       'packages/chat/**',
+      'packages/floot-web-voice/**',
       'packages/monaco-wrapper/**',
       'packages/preact-container/**',
       'packages/preact-social/**',

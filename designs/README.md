@@ -137,6 +137,18 @@ exo's fetch, over the endoclaw-network-fetch allowlist substrate) so
 neither package ever touches a token; first concrete instance of the
 M7 OAuth-integration pattern and a template for Gmail / Calendar
 siblings),
+[familiar-android-assistant](familiar-android-assistant.md) (added
+2026-06-30; the Android analog of the desktop Familiar — a native
+companion app that registers as the system assistant
+(VoiceInteractionService + ROLE_ASSISTANT) so the assist gesture reaches
+Floot, and bridges Android system settings to the agent as a single
+typed, revocable `AndroidSystem` capability over CapTP, behind a
+pluggable privilege backend (Shizuku / ADB / Device Owner / accessibility
+/ root); the brain stays in the daemon, and it reuses Floot's
+converse/transcribe/synthesize voice wires plus the
+`@endo/floot-web-voice` WASM backends; closes the "Android node" gap
+noted in endoclaw.md; full dependency-graph / Gantt / milestone
+integration deferred as a Not-Started sibling),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
 2026-06-23; design 2 of 2 in a competing pair addressing the
 maintainer's directive on PR #500 to land SturdyRefs in
@@ -403,6 +415,7 @@ LLM-agent stack).*
 | [daemon-weblet-application](daemon-weblet-application.md) | 2026-02-24 | 2026-02-25 | Not Started |
 | [exo-google-sheets](exo-google-sheets.md) | 2026-07-06 | 2026-07-06 | Proposed |
 | [exo-zip-package](exo-zip-package.md) | 2026-05-08 | 2026-05-08 | Proposed (PR #154 open questions resolved) |
+| [familiar-android-assistant](familiar-android-assistant.md) | 2026-06-30 | 2026-06-30 | Not Started |
 | [familiar-bundled-agents](familiar-bundled-agents.md) | 2026-03-02 | 2026-03-05 | **Complete** |
 | [familiar-chat-weblet-hosting](familiar-chat-weblet-hosting.md) | 2026-02-14 | 2026-02-26 | Not Started |
 | [familiar-daemon-bundling](familiar-daemon-bundling.md) | 2026-02-14 | 2026-03-05 | **Complete** |

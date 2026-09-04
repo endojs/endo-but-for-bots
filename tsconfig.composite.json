@@ -126,6 +126,9 @@
       "path": "packages/far/tsconfig.composite.json"
     },
     {
+      "path": "packages/floot-web-voice/tsconfig.composite.json"
+    },
+    {
       "path": "packages/gateway/tsconfig.composite.json"
     },
     {

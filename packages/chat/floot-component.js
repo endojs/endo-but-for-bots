@@ -416,6 +416,11 @@ const DEFAULT_PRESET_ID = 'general';
  * @param {(newPath: string[]) => void} _onProfileChange
  * @param {string[]} [audioPath] - pet-name path to a speech-to-text object
  * @param {string[]} [ttsPath] - pet-name path to a text-to-speech object
+ * @param {{ audioServer?: any, ttsServer?: any }} [localVoice] - in-browser
+ *   (WASM/WebGPU) STT/TTS servers from `@endo/floot-web-voice`
+ *   (`makeLocalVoiceServers`). When supplied they take precedence over
+ *   audioPath/ttsPath and run on-device with no network hop; both expose the
+ *   same transcribe/synthesize interface as the remote caplets.
  * @returns {() => void} cleanup function
  */
 export const flootComponent = (
@@ -425,6 +430,7 @@ export const flootComponent = (
   _onProfileChange,
   audioPath,
   ttsPath,
+  localVoice,
 ) => {
   // Resolve the floot factory by walking the profile path.
   /** @type {any} */
@@ -433,22 +439,29 @@ export const flootComponent = (
     factory = E(/** @type {any} */ (factory)).lookup(name);
   }
 
-  // Optionally resolve a speech-to-text object for mic input, the same way.
-  const hasMic = Boolean(audioPath && audioPath.length);
+  // Speech-to-text for mic input. A local in-browser server (WASM/WebGPU) takes
+  // precedence when supplied; otherwise resolve the remote daemon caplet by
+  // pet-name path. Either way `audioServer` exposes the same transcribe()
+  // interface, so the rest of the component is identical.
+  const hasMic =
+    Boolean(localVoice && localVoice.audioServer) ||
+    Boolean(audioPath && audioPath.length);
   /** @type {any} */
-  let audioServer = null;
-  if (hasMic) {
+  let audioServer = (localVoice && localVoice.audioServer) || null;
+  if (!audioServer && audioPath && audioPath.length) {
     audioServer = rootPowers;
     for (const name of /** @type {string[]} */ (audioPath)) {
       audioServer = E(/** @type {any} */ (audioServer)).lookup(name);
     }
   }
 
-  // Optionally resolve a text-to-speech object for spoken replies, the same way.
-  const hasTts = Boolean(ttsPath && ttsPath.length);
+  // Text-to-speech for spoken replies. Prefer a local server, else the remote.
+  const hasTts =
+    Boolean(localVoice && localVoice.ttsServer) ||
+    Boolean(ttsPath && ttsPath.length);
   /** @type {any} */
-  let ttsServer = null;
-  if (hasTts) {
+  let ttsServer = (localVoice && localVoice.ttsServer) || null;
+  if (!ttsServer && ttsPath && ttsPath.length) {
     ttsServer = rootPowers;
     for (const name of /** @type {string[]} */ (ttsPath)) {
       ttsServer = E(/** @type {any} */ (ttsServer)).lookup(name);
