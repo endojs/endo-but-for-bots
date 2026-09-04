@@ -217,7 +217,13 @@ test.serial(
     await waitFor(() => ctx.sentMessages.length > 0);
 
     t.is(ctx.sentMessages.length, 1, 'one message sent');
-    t.is(ctx.sentMessages[0].to, 'alice', 'sent to the conversation');
+    // The recipient is handed to powers.send as a pet-name PATH (send-form
+    // splits on "/" so nested recipients resolve — see send-form.js).
+    t.deepEqual(
+      ctx.sentMessages[0].to,
+      ['alice'],
+      'sent to the conversation as a pet-name path',
+    );
     t.deepEqual(
       ctx.sentMessages[0].strings,
       ['hello world'],
