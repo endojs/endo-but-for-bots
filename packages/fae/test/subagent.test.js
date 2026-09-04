@@ -204,24 +204,21 @@ test('askSubagent resolves with the reply the subagent mails back', async t => {
   await mailbox.whenSent();
   // The daemon echoes our own send into our stream; the loop offers it first.
   t.is(mailbox.stream.length, 1);
-  t.deepEqual(delegations.claim(mailbox.stream[0]), {
-    claimed: false,
-    dismissable: false,
-  });
+  t.deepEqual(delegations.claim(mailbox.stream[0]), { claimed: false });
 
   const reply = mailbox.deliverReply({
     from: locatorFor(CHILD),
     replyTo: 'out-1',
     text: 'the design is sound',
   });
-  t.deepEqual(delegations.claim(reply), { claimed: true, dismissable: true });
+  t.deepEqual(delegations.claim(reply), { claimed: true });
 
   const answer = await answerP;
   t.is(answer.text, 'the design is sound');
   t.deepEqual(answer.edgeNames, []);
 });
 
-test('a reply carrying capabilities stays in the inbox for adoption', async t => {
+test('a reply reports the capabilities it carried', async t => {
   const mailbox = makeMailbox({
     names: { 'subagents/helper': locatorFor(CHILD) },
   });
@@ -243,7 +240,7 @@ test('a reply carrying capabilities stays in the inbox for adoption', async t =>
     text: 'here it is: ',
     edgeNames: ['grep'],
   });
-  t.deepEqual(delegations.claim(reply), { claimed: true, dismissable: false });
+  t.deepEqual(delegations.claim(reply), { claimed: true });
   const answer = await answerP;
   t.deepEqual(answer.edgeNames, ['grep']);
 });
@@ -271,10 +268,7 @@ test('a reply from a different sender does not settle the delegation', async t =
     replyTo: 'out-1',
     text: 'I am not your subagent',
   });
-  t.deepEqual(delegations.claim(forged), {
-    claimed: false,
-    dismissable: false,
-  });
+  t.deepEqual(delegations.claim(forged), { claimed: false });
 
   fireAll();
   await t.throwsAsync(answerP, { message: /did not reply within/ });
@@ -306,7 +300,7 @@ test('a late reply is no longer claimable and falls through to the inbox', async
     replyTo: 'out-1',
     text: 'sorry, took a while',
   });
-  t.deepEqual(delegations.claim(late), { claimed: false, dismissable: false });
+  t.deepEqual(delegations.claim(late), { claimed: false });
 });
 
 test('two questions to one subagent at a time are refused', async t => {
@@ -463,16 +457,56 @@ test('a partial reply is left alone until the sender settles it', async t => {
     text: 'Thinking…',
     done: false,
   });
-  t.deepEqual(delegations.claim(partial), {
-    claimed: false,
-    dismissable: false,
-  });
+  t.deepEqual(delegations.claim(partial), { claimed: false });
 
   const settled = mailbox.deliverReply({
     from: locatorFor(CHILD),
     replyTo: 'out-1',
     text: 'here is the answer',
   });
-  t.deepEqual(delegations.claim(settled), { claimed: true, dismissable: true });
+  t.deepEqual(delegations.claim(settled), { claimed: true });
   t.is((await answerP).text, 'here is the answer');
+});
+
+test('the attachment advice matches what the harness actually retains', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagents/helper': locatorFor(CHILD) },
+  });
+  const { timers } = makeManualTimers();
+  const spawner = Far('SubagentSpawner', {});
+  /** @param {boolean} retainsAttachments */
+  const askWithAttachment = async retainsAttachments => {
+    const delegations = makeSubagentDelegations({
+      powers: mailbox.powers,
+      timers,
+    });
+    const tools = makeSubagentTools({
+      powers: mailbox.powers,
+      spawner,
+      delegations,
+      retainsAttachments,
+    });
+    const askTool = /** @type {any} */ (tools.get('askSubagent'));
+    const resultP = askTool.execute(
+      harden({ name: 'helper', task: `find a tool ${retainsAttachments}` }),
+    );
+    await mailbox.whenSent();
+    const outbound = mailbox.stream[mailbox.stream.length - 1];
+    delegations.claim(outbound);
+    delegations.claim(
+      mailbox.deliverReply({
+        from: locatorFor(CHILD),
+        replyTo: outbound.messageId,
+        text: 'here: ',
+        edgeNames: ['grep'],
+      }),
+    );
+    return resultP;
+  };
+
+  t.regex(await askWithAttachment(true), /Call adopt with that message number/);
+  t.regex(
+    await askWithAttachment(false),
+    /this session does not retain.*store it under a pet name/s,
+  );
 });

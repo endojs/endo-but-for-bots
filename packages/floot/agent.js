@@ -1048,11 +1048,14 @@ export const makeStreamingAgent = async (
           // the awaiting `askSubagent` call returns instead of this loop
           // turning it into a conversation (and replying to it, which with a
           // subagent would be an unbounded exchange).
-          const delegated = delegations.claim(message);
-          if (delegated.claimed) {
-            // A reply carrying capabilities is left in the inbox so it can
-            // still be adopted; a plain answer is fully consumed here.
-            if (delegated.dismissable) await E(powers).dismiss(number);
+          if (delegations.claim(message).claimed) {
+            // Dismissed like every other message this loop handles. Leaving it
+            // would mean that after a restart — when no ask is pending — the
+            // reply replays as an ordinary message, this session answers it,
+            // and the subagent answers back: two models in an unbounded
+            // exchange. The cost is that a reply's attachments are not
+            // retained, which `askSubagent` says plainly.
+            await E(powers).dismiss(number);
             // eslint-disable-next-line no-continue
             continue;
           }

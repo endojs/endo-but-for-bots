@@ -152,10 +152,10 @@ export const makeSubagentDelegations = ({
    * Offer one mailbox message to the delegation registry.
    *
    * @param {any} message
-   * @returns {{ claimed: boolean, dismissable: boolean }}
+   * @returns {{ claimed: boolean }}
    */
   const claim = message => {
-    const unclaimed = harden({ claimed: false, dismissable: false });
+    const unclaimed = harden({ claimed: false });
     if (!message || message.type !== 'package') return unclaimed;
     // A sender may reveal a message progressively, settling it later with
     // `editMessage`. Claiming a partial would answer the ask with a
@@ -199,10 +199,7 @@ export const makeSubagentDelegations = ({
       number,
       edgeNames: harden(edgeNames),
     });
-    // A reply that carries capabilities stays in the inbox so the parent can
-    // still adopt them; a plain text answer is fully consumed by the tool
-    // result and its message would only be replayed after a restart.
-    return harden({ claimed: true, dismissable: edgeNames.length === 0 });
+    return harden({ claimed: true });
   };
 
   /**
@@ -289,9 +286,18 @@ harden(makeSubagentDelegations);
  * @param {any} options.powers - The parent agent's guest powers.
  * @param {any} options.spawner - A `SubagentSpawner` capability.
  * @param {ReturnType<typeof makeSubagentDelegations>} options.delegations
+ * @param {boolean} [options.retainsAttachments] - Whether a claimed reply stays
+ *   in the inbox long enough to adopt what it carries. False for a harness that
+ *   dismisses every message it handles, where telling the model to adopt would
+ *   be a lie.
  * @returns {Map<string, FaeTool>}
  */
-export const makeSubagentTools = ({ powers, spawner, delegations }) => {
+export const makeSubagentTools = ({
+  powers,
+  spawner,
+  delegations,
+  retainsAttachments = true,
+}) => {
   /** @type {Map<string, FaeTool>} */
   const tools = new Map();
 
@@ -399,11 +405,13 @@ export const makeSubagentTools = ({ powers, spawner, delegations }) => {
       const edges = answer.edgeNames
         .map(edgeName => `"${edgeName}"`)
         .join(', ');
-      return (
-        `${text}\n\n(System: the reply is message #${answer.number} and ` +
-        `attaches object(s) with edge name(s) ${edges}. Call adopt with that ` +
-        `message number and edge name to keep any of them.)`
-      );
+      return retainsAttachments
+        ? `${text}\n\n(System: the reply is message #${answer.number} and ` +
+            `attaches object(s) with edge name(s) ${edges}. Call adopt with ` +
+            `that message number and edge name to keep any of them.)`
+        : `${text}\n\n(System: the reply attached object(s) with edge name(s) ` +
+            `${edges}, which this session does not retain. To keep one, ask ` +
+            `the subagent to store it under a pet name and tell you the name.)`;
     },
     help: () =>
       'Send a task to a subagent by mail and return its reply as text.',
