@@ -162,3 +162,45 @@ test('relaxing the final component does not relax the parents', async t => {
   );
   await t.notThrowsAsync(() => access(join(outside, 'secret')));
 });
+
+test('stageRev can un-pin a symlinked endo.rev', async t => {
+  // `stageRev('')` is a removal, and it was the one removal site still using
+  // the strict resolver — so a symlinked `endo.rev` could not be un-pinned
+  // from here, while `fingerprintConfig` refused to fingerprint a checkout
+  // still holding it. `revertFiles` was a workaround; this is the verb an
+  // operator would actually reach for.
+  const dir = await mkdtemp(join(tmpdir(), 'nixos-rev-'));
+  t.teardown(() => rm(dir, { recursive: true, force: true }));
+  const configDir = join(dir, 'config');
+  const lockDir = join(dir, 'locks');
+  await Promise.all([mkdir(configDir), mkdir(lockDir)]);
+  await writeFile(join(dir, 'elsewhere'), 'not the pin\n', 'utf8');
+  await symlink(join(dir, 'elsewhere'), join(configDir, 'endo.rev'));
+
+  const admin = await make(undefined, undefined, {
+    env: {
+      ENDO_NIXOS_CONFIG_DIR: configDir,
+      ENDO_NIXOS_DIR: join(dir, 'spool'),
+      ENDO_NIXOS_LOCK_DIR: lockDir,
+      ENDO_NIXOS_POLL_MS: '10',
+      ENDO_NIXOS_WATCH_LIMIT_MS: '2000',
+    },
+    systemPaths:
+      process.platform === 'linux'
+        ? { flock: '/usr/bin/flock', shell: '/bin/sh' }
+        : {},
+  });
+
+  const result = await admin.stageRev('');
+  t.is(result.rev, '');
+  t.is(result.previous, '', 'a symlink has no readable pin to report');
+  await t.throwsAsync(
+    () => access(join(configDir, 'endo.rev')),
+    { code: 'ENOENT' },
+    'the link is gone',
+  );
+  await t.notThrowsAsync(
+    () => access(join(dir, 'elsewhere')),
+    'the file it pointed at was not deleted',
+  );
+});
