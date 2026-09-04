@@ -942,20 +942,46 @@ export const makeStreamingAgent = async (
 
     // Fold this turn's token usage into the session total, persist it, and emit
     // it so the UI can surface per-session cost.
-    const totals = await loadUsage();
-    totals.inputTokens += turnInput;
-    totals.outputTokens += turnOutput;
-    totals.turns += 1;
+    // Compute the next totals without touching the cache, then adopt them only
+    // once the node carrying them is durable — the same discipline as
+    // `commitExternalTurn`. Mutating the live cache first meant a failed
+    // `addNode` left the in-memory counters permanently inflated by a turn
+    // that produced nothing, and the next successful turn committed that
+    // inflated figure as authoritative metadata.
+    const current = await loadUsage();
+    const totals = harden({
+      inputTokens: current.inputTokens + turnInput,
+      outputTokens: current.outputTokens + turnOutput,
+      turns: current.turns + 1,
+    });
     // Persist the complete logical turn and its accounting in one node. A
     // provider failure therefore leaves no deeper branch for revival to adopt.
     const committedNode = await tree.addNode(baseLeafId, stagedMessages, {
-      usageTotals: harden({ ...totals }),
+      usageTotals: totals,
     });
     cachedLeaf = committedNode.id;
+    usage = { ...totals };
     await saveUsage();
     writer.usage(totals);
     writer.final(finalContent);
     writer.end();
+  };
+
+  /**
+   * Close the inbox loop.
+   *
+   * Quarantine and shutdown both mean this agent will never take another turn,
+   * but the loop is parked in `messages.next()` and would otherwise keep
+   * accepting mail: for every message it would call `converse`, drop an
+   * unobserved rejection, and mail the quarantine error back to the sender —
+   * indefinitely, and with no way to stop it short of a daemon restart.
+   * Declared before `converse` so its quarantine path can reach it; the
+   * iterator it closes is bound later, which is why this is a function.
+   */
+  const stopInbox = () => {
+    if (inboxIterator) {
+      void Promise.resolve(inboxIterator.return()).catch(() => undefined);
+    }
   };
 
   const converse = (input, writer, meta, signal) => {
@@ -986,6 +1012,7 @@ export const makeStreamingAgent = async (
               ) {
                 quarantineError = err;
                 stopped = true;
+                stopInbox();
                 writer.abort(err.message);
                 throw err;
               }
@@ -1099,11 +1126,18 @@ export const makeStreamingAgent = async (
               fromName = fromId;
             }
 
+            if (stopped || quarantineError) break;
             const { writer, done: turnDone } = makeBufferingWriter();
             // Route through converse so the turn joins turnChain and shares
             // context. Tag the turn as mail so getHistory can mark it (and the
             // UI can show the sender) rather than render it like local input.
-            converse(text, writer, { mail: { from: fromName } });
+            // The turn's outcome is read from the writer below, so the promise
+            // itself is deliberately unused — but it must still be observed,
+            // or a turn that rejects before reaching the writer becomes an
+            // unhandled rejection in the daemon worker.
+            void converse(text, writer, { mail: { from: fromName } }).catch(
+              () => undefined,
+            );
             const result = await turnDone;
             const replyText = result.ok
               ? result.text || ''
@@ -1214,6 +1248,12 @@ harden(makeStreamingAgent);
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
 const REGISTRY_PREFIX = 'floot-sessions-v1-';
+/**
+ * Snapshots retained behind the newest. One is enough for correctness — the
+ * newest complete snapshot is the record — and a handful gives an operator
+ * something to fall back on if the newest turns out to be unreadable.
+ */
+const REGISTRY_JOURNAL_DEPTH = 4;
 
 const newSessionId = () =>
   `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -1503,6 +1543,20 @@ export const make = (hostPowers, _context, { env } = {}) => {
         name,
       );
       registrySequence += 1n;
+      // Append-only was never meant to be unbounded: every lifecycle
+      // transition wrote a snapshot and nothing removed one, so the factory
+      // host's pet store accumulated a full copy of the session array per
+      // operation and every cold start listed and sorted all of them. Trim
+      // only after the new snapshot is durable, so the journal is never
+      // momentarily empty, and keep a few behind it so a snapshot that turns
+      // out to be unreadable is not the only record.
+      if (sequence >= BigInt(REGISTRY_JOURNAL_DEPTH)) {
+        const oldest = sequence - BigInt(REGISTRY_JOURNAL_DEPTH);
+        const staleName = `${REGISTRY_PREFIX}${`${oldest}`.padStart(20, '0')}`;
+        await E(powers)
+          .remove(staleName)
+          .catch(() => undefined);
+      }
     });
     // Keep the chain alive even if this write rejects.
     registryWrite = result.catch(() => {});
@@ -1815,11 +1869,27 @@ export const make = (hostPowers, _context, { env } = {}) => {
         failures.push(error);
       }
     } else if (entry.model === CLAUDE_CLI_MODEL_ID) {
-      try {
-        await E(await getClaudeClient(id)).terminate();
-        claudeClients.delete(id);
-      } catch (error) {
-        failures.push(error);
+      // Terminate only a client this session actually obtained.
+      // `getClaudeClient` has claim side effects, so calling it here would
+      // let a deletion acquire the shared client *on behalf of* the session
+      // being deleted and then destroy it — taking down a live sibling's
+      // conversation and workspace — or, when a sibling already holds the
+      // claim, throw and make this session permanently undeletable.
+      const clientP = claudeClients.get(id);
+      if (clientP) {
+        try {
+          await E(await clientP).terminate();
+          claudeClients.delete(id);
+          if (sharedClientClaimedBy === id) sharedClientClaimedBy = undefined;
+        } catch (error) {
+          // Keep the map entry so a lifecycle retry terminates it again
+          // rather than silently skipping a client that is still running.
+          failures.push(error);
+        }
+      } else if (sharedClientClaimedBy === id) {
+        // Never built one, but the claim is recorded against this session;
+        // releasing it lets a sibling take the shared client.
+        sharedClientClaimedBy = undefined;
       }
     }
     // A hosted/CLI teardown failure can mean a host-side Endo tool call is
@@ -1982,15 +2052,32 @@ export const make = (hostPowers, _context, { env } = {}) => {
           lifecycle: 'error',
         });
       }
-      await saveRegistry();
-      agents.delete(id);
+      // Recording the failure must not be able to skip the rollback: by this
+      // point `getAgent` may have started the session's inbox loop, and only
+      // `cleanupSessionResources` can stop it. Observe the write's outcome and
+      // report it alongside, rather than letting it escape the catch.
+      const markFailure = await saveRegistry().then(
+        () => undefined,
+        markError => markError,
+      );
+      // The agent deliberately stays in the map. `cleanupSessionResources`
+      // shuts it down before removing the guest's pet names; dropping the
+      // reference first would tear the guest out from under a live inbox loop
+      // with nothing left that could ever stop it.
       try {
         await finishSessionDeletion(id);
       } catch (cleanupError) {
         throw new AggregateError(
-          [error, cleanupError],
+          [error, cleanupError, ...(markFailure ? [markFailure] : [])],
           `Floot session ${id} creation and rollback failed`,
           { cause: cleanupError },
+        );
+      }
+      if (markFailure) {
+        throw new AggregateError(
+          [error, markFailure],
+          `Floot session ${id} creation failed and the failure could not be recorded`,
+          { cause: markFailure },
         );
       }
       throw error;

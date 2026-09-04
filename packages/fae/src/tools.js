@@ -60,6 +60,13 @@ export const discoverTools = async (host, localTools) => {
      * @returns {x is string}
      */ x => typeof x === 'string',
   );
+  // Read every stored tool's schema first, then decide what each name binds
+  // to. A tool declares its own function name, and a tool can arrive by mail:
+  // installing them one at a time in pet-name order would let an adopted tool
+  // claim the name of a tool already installed later in that order, and the
+  // displaced one would be reported only as "not a valid FaeTool".
+  /** @type {Array<{ petName: string, functionName: string, tool: object, schema: ToolSchema }>} */
+  const candidates = [];
   for (const name of names.sort()) {
     try {
       const tool = await E(host).lookup(['tools', name]);
@@ -68,17 +75,57 @@ export const discoverTools = async (host, localTools) => {
       if (typeof functionName !== 'string' || functionName === '') {
         throw Error('schema has no function name');
       }
-      if (toolMap.has(functionName)) {
-        throw Error(`function name ${functionName} is already endowed`);
-      }
-      toolMap.set(functionName, /** @type {object} */ (tool));
-      schemas.push(toolSchema);
-      storedTools.push(harden({ petName: name, functionName }));
+      candidates.push(
+        harden({
+          petName: name,
+          functionName,
+          tool: /** @type {object} */ (tool),
+          schema: toolSchema,
+        }),
+      );
     } catch (/** @type {any} */ err) {
       console.warn(
         `[fae] tools/${name}: not a valid FaeTool: ${err.message || err}`,
       );
     }
+  }
+
+  /** @type {Map<string, string[]>} */
+  const claimants = new Map();
+  for (const { petName, functionName } of candidates) {
+    claimants.set(functionName, [
+      ...(claimants.get(functionName) || []),
+      petName,
+    ]);
+  }
+
+  for (const { petName, functionName, tool, schema } of candidates) {
+    if (toolMap.has(functionName)) {
+      // A built-in owns the name. The stored tool is refused rather than
+      // shadowing it; endowed authority is not up for grabs.
+      console.warn(
+        `[fae] tools/${petName}: not installed; function name "${functionName}" is a built-in`,
+      );
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    const competing = /** @type {string[]} */ (claimants.get(functionName));
+    if (competing.length > 1) {
+      // Neither wins. Whichever went first would be a name capture, since the
+      // order is the agent's choice of pet names and a tool it adopted from a
+      // message can influence it. Refusing both is a visible gap the model can
+      // report, not a silent substitution.
+      console.warn(
+        `[fae] function name "${functionName}" is claimed by ${competing
+          .map(claimant => `tools/${claimant}`)
+          .join(' and ')}; none installed`,
+      );
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+    toolMap.set(functionName, tool);
+    schemas.push(schema);
+    storedTools.push(harden({ petName, functionName }));
   }
 
   return harden({ schemas, toolMap, storedTools });
