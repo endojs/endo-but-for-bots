@@ -32,7 +32,6 @@ import {
  *   Binding,
  *   BindingState,
  *   FetchLike,
- *   FetchLikeResponse,
  *   FetchOptions,
  *   HttpClient,
  *   HttpClientControl,
@@ -43,6 +42,7 @@ import {
  *   PolicySnapshot,
  * } from './types.js'
  */
+/** @import { ConfinedResponseSummary } from '@endo/http-confine' */
 
 const DEFAULT_MAX_REQUESTS_PER_MINUTE = 60;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -589,66 +589,16 @@ export const makeTrustOnFirstBindPolicyAdapter = ({
 harden(makeTrustOnFirstBindPolicyAdapter);
 
 /**
- * @param {Headers | Record<string, string> | Iterable<[string, string]>} headers
- * @returns {Record<string, string>}
- */
-const headersToRecord = headers => {
-  /** @type {Record<string, string>} */
-  const record = {};
-  /**
-   * @param {string} key
-   * @param {string} value
-   */
-  const setHeader = (key, value) => {
-    Object.defineProperty(record, key.toLowerCase(), {
-      value: String(value),
-      enumerable: true,
-      writable: true,
-      configurable: true,
-    });
-  };
-  if (
-    headers &&
-    typeof (
-      /** @type {Iterable<[string, string]>} */ (headers)[Symbol.iterator]
-    ) === 'function'
-  ) {
-    for (const [key, value] of /** @type {Iterable<[string, string]>} */ (
-      headers
-    )) {
-      setHeader(key, value);
-    }
-    return harden(record);
-  }
-  if (
-    headers &&
-    typeof (/** @type {Headers} */ (headers).forEach) === 'function'
-  ) {
-    /** @type {Headers} */ (headers).forEach((value, key) => {
-      setHeader(key, value);
-    });
-    return harden(record);
-  }
-  for (const [key, value] of Object.entries(headers || {})) {
-    setHeader(key, value);
-  }
-  return harden(record);
-};
-
-/**
  * @param {object} args
- * @param {FetchLikeResponse} args.response
+ * @param {ConfinedResponseSummary} args.response
  * @param {number} args.maxResponseBytes
  * @param {Uint8Array} args.bytes
  * @param {boolean} args.truncated
  */
 const makeHttpResponse = ({ response, maxResponseBytes, bytes, truncated }) => {
-  const headers = headersToRecord(response.headers || {});
+  // The confinement already normalized every field; see snapshotResponse.
+  const { headers, status, statusText, ok, url: responseUrl } = response;
   const text = new TextDecoder().decode(bytes);
-  const responseUrl = String(response.url || '');
-  const status = Number(response.status || 0);
-  const statusText = String(response.statusText || '');
-  const ok = Boolean(response.ok);
 
   /**
    * Yield the already-bounded body in fixed-size chunks so `stream()` hauls it
