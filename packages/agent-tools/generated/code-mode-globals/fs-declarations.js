@@ -353,8 +353,7 @@ type MountStreamYieldNode<Y = unknown, R = undefined> = {
     streamGlob: (pattern: string, options?: {
         buffer?: number;
     }) => MountPassableReader<string, undefined>;
-    streamGrep: (pattern: string, options?: {
-        glob?: string;
+    streamGrep: (pattern: string, files: unknown, options?: {
         buffer?: number;
     }) => MountPassableReader<MountGrepMatch, undefined>;
     subView: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace>;

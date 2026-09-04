@@ -231,7 +231,9 @@ export const makeSearch = powers => {
    * cannot be emitted in sorted order. That barrier is glob's contract, not the
    * walker's: with `sorted: false` the same walker yields matched paths in
    * *walk order* as they are discovered, so the first batch is emitted before
-   * the whole tree is walked (used by `streamGrep`, which needs no global sort).
+   * the whole tree is walked (the substrate for a walk-order path *producer* —
+   * e.g. a future unsorted `streamGlob` — since grep, decoupled, needs no global
+   * sort of the files it is handed).
    * Either way the generator is the shared core — the eager surface
    * flattens-and-caps it, the stream surface reads it — and there is exactly one
    * walk: `sorted` only chooses between draining it to sort and streaming it.

@@ -1393,23 +1393,28 @@ export interface EndoMount extends PathEntryIssuer {
     options?: { buffer?: number },
   ): import('@endo/exo-stream').PassableReader<string, undefined>;
   /**
-   * Streaming grep: a `PassableReader` yielding `{ file, line, text }` records
-   * one element at a time, in path-then-line order. `options.glob` selects the
-   * file set (piped into grep as path batches, so no full path array round-trips
-   * as grep's argument and the 10,000-path cap is dropped; the engine still
-   * sorts the full path set internally). No
-   * `maxResults`. Content reads are incremental — early close leaves the
-   * remaining files' contents unread — but the directory walk is eager (the
-   * whole confined tree is enumerated before the first match), like
-   * `streamGlob`, so early close bounds file reads, not the walk. With
-   * `buffer: 0` a mid-stream `revoke()` rejects the next pull immediately; a
-   * non-zero `buffer` may still deliver up to that many already-acknowledged
-   * elements first — and the reader is once-only, so that window is bounded per
-   * reader.
+   * Streaming grep, decoupled from enumeration: a `PassableReader` yielding
+   * `{ file, line, text }` records one element at a time. `files` is a
+   * *mandatory* external stream of mount-relative paths to grep — a
+   * `PassableReader<string>` (the shape `streamGlob` returns), or a promise for
+   * one so `E(mount).streamGlob(g)` can be piped straight in. Grep does not
+   * glob: search everything with `streamGrep(p, streamGlob('**'))` and a subset
+   * with `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern,
+   * glob(g))` seam. No `maxResults`. Content reads are incremental — grep reads
+   * one supplied file per pull, so early close leaves later supplied files
+   * unread; whether the directory *walk* is incremental is the producer's
+   * concern (`streamGlob` keeps glob's eager global sort). Record order follows
+   * the supplied file stream. With `buffer: 0` a mid-stream `revoke()` rejects
+   * the next pull immediately; a non-zero `buffer` may still deliver up to that
+   * many already-acknowledged elements first — and the reader is once-only, so
+   * that window is bounded per reader.
    */
   streamGrep(
     pattern: string,
-    options?: { glob?: string; buffer?: number },
+    files: import('@endo/eventual-send').ERef<
+      import('@endo/exo-stream').PassableReader<string, any>
+    >,
+    options?: { buffer?: number },
   ): import('@endo/exo-stream').PassableReader<
     import('@endo/platform/fs/search.types').GrepMatch,
     undefined

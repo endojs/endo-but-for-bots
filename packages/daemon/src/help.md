@@ -876,7 +876,7 @@ layer can push down and fuse into a single enumerate-and-scan pass. It returns t
 { file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
 options.maxResults: number — Cap on the number of match records (default 1000).
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Results are capped; for incremental or unbounded result sets use streamGrep(grep, { glob }), its streaming form.
+Results are capped; for incremental or unbounded result sets use streamGrep(grep, streamGlob(glob)), its streaming form.
 Example: glorp("src/**/*.js", "TODO") -> every TODO line under src.
 
 ## streamGlob(pattern, options?) -> PassableReader<string>
@@ -897,26 +897,28 @@ deliver up to that many already-buffered elements first (the reader is once-only
 per reader, not multiplied across concurrent streams).
 Example: for await (const p of iterateReader(E(mount).streamGlob("**/*.js"))) { ... }
 
-## streamGrep(pattern, options?) -> PassableReader<{ file, line, text }>
+## streamGrep(pattern, files, options?) -> PassableReader<{ file, line, text }>
 
-Streaming grep: a reader that yields { file, line, text } match records one at a time, in
-path-then-line order, with the same confinement, deny filtering, and CRLF normalization as grep().
+Streaming grep, decoupled from enumeration: a reader that yields { file, line, text } match records
+one at a time, with the same confinement, deny filtering, and CRLF normalization as grep().
 pattern: string — An ECMAScript RegExp source (same as grep()).
-options.glob: string — Restrict the search to files matching this glob (piped into grep as path
-batches, so no full path array round-trips as grep's argument and the 10,000-path cap is dropped).
-Omit to search every file under the mount face.
+files: PassableReader<string> | Promise<PassableReader<string>> — A mandatory external stream of
+mount-relative paths to grep, the shape streamGlob returns. Grep does not glob; compose it with a
+producer: streamGrep("TODO", streamGlob("**")) searches everything, streamGrep("TODO",
+streamGlob("*.js")) a glob subset — the streaming twin of grep(pattern, glob(g)). A supplied path
+that is denied, escapes the mount, is a directory, or cannot be read is skipped silently, so a
+hand-supplied file stream cannot widen authority.
 options.buffer: number — Pre-acknowledge window for high-latency links (default 0; clamped to 1024).
 Each pre-acknowledged element costs one round trip, so the default 0 is one round trip per record.
 Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. There is no maxResults cap.
-Fully incremental: unlike streamGlob, grep needs no global sort, so the directory walk is enumerated
-in walk order — a first match can arrive before the whole tree is walked, and closing the iterator
-early leaves both the remaining files' contents unread AND the rest of the tree unwalked (early close
-bounds the directory walk, not only file reads). Because enumeration is walk order, the record order
-across files is walk order, not glob's UTF-16 sorted-path order; it remains the same multiset of
-matches as grep(). With buffer 0 a mid-stream revoke() rejects the next pull immediately; a non-zero
-buffer may still deliver up to that many already-buffered elements first (the reader is once-only, so
-that window is per reader, not multiplied across concurrent streams).
-Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", { glob: "src/**/*.js" }))) { ... }
+Grep reads the supplied files' contents lazily — one file per pull — so closing the iterator early
+leaves later supplied files unread. Whether the directory walk is incremental is the producer's
+concern: streamGlob keeps glob's eager global sort, so streamGrep(p, streamGlob("**")) is not
+walk-incremental. Fed streamGlob(g), the record order is glob's sorted-path order — the same multiset
+of matches as grep(). With buffer 0 a mid-stream revoke() rejects the next pull immediately; a
+non-zero buffer may still deliver up to that many already-buffered elements first (the reader is
+once-only, so that window is per reader, not multiplied across concurrent streams).
+Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", E(mount).streamGlob("src/**/*.js")))) { ... }
 
 # EndoMountFile - A file within a mounted directory.
 

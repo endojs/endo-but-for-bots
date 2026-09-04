@@ -11,6 +11,7 @@ import path from 'path';
 import { E } from '@endo/eventual-send';
 import { M, mustMatch } from '@endo/patterns';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { GLOB_MAX_RESULTS, GREP_MAX_RESULTS } from '@endo/platform/fs/lite';
 
@@ -29,10 +30,41 @@ import { buildMountFixture } from './_mount-fixture.js';
  * the shared platform search engine (`@endo/platform/fs/search`, batch
  * generators consumed by the eager `glob`/`grep` collectors), so these tests
  * cover the stream surface built over that engine: parity with the eager
- * variants, incrementality, backpressure, cancellation, mid-stream revocation,
- * confinement/denial parity, the self-describing pattern guard, and the option
- * / buffer-clamp behavior.
+ * variants, `streamGrep`'s content-read incrementality, backpressure,
+ * cancellation, mid-stream revocation, confinement/denial parity, the
+ * self-describing pattern guard, and the buffer-clamp behavior.
+ *
+ * `streamGrep` is decoupled from enumeration (PR #1085 review): it takes a
+ * *mandatory* external stream of files to grep — a `PassableReader<string>`, the
+ * shape `streamGlob` returns — and never globs internally. "Search everything"
+ * and "search a glob subset" are `streamGrep(p, streamGlob('**'))` and
+ * `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern, glob(g))`
+ * seam. Because the walk moved to the producer and `streamGlob` keeps glob's
+ * eager global sort, `streamGrep(p, streamGlob('**'))` is not walk-incremental
+ * (the producer walks fully before its first path); grep's own incrementality is
+ * in the *content reads* of the supplied files. Walk-incremental grep would need
+ * an unsorted producer, a flagged follow-up.
  */
+
+/**
+ * A hand-built `PassableReader<string>` over a fixed list of mount-relative
+ * paths — the decoupled `files` source `streamGrep` greps, standing in for a
+ * producer like `streamGlob`. Once-only, like the mount's own search readers.
+ *
+ * @param {readonly string[]} paths
+ */
+const readerOfPaths = paths =>
+  readerFromIterator(
+    (async function* pathsGen() {
+      for (const p of paths) {
+        yield p;
+      }
+    })(),
+    { readPattern: M.string(), once: true },
+  );
+
+/** An empty once-only reader, for call sites that reject before consuming it. */
+const emptyReader = () => readerOfPaths([]);
 
 const filePowers = makeFilePowers({ fs, path });
 
@@ -91,13 +123,13 @@ const collect = async reader => {
 
 /**
  * Canonicalize grep records into a stable (path, then line) order so a
- * multiset comparison is order-independent. `streamGrep` now enumerates in
- * *walk order* (`sorted: false`) for time-to-first-result in the directory
- * walk, so its cross-file order is no longer the UTF-16 sorted-path order eager
- * `grep(pattern, glob(g))` inherits from glob. The two remain multiset-equal
- * (same records, one per matched line per file); only the order across files
- * differs, so parity is compared through this canonical key. Order *within* a
- * single file (line order) is still normative and preserved directly.
+ * multiset comparison is order-independent. Fed `streamGlob(g)`, `streamGrep`'s
+ * cross-file order is the producer's — glob's UTF-16 sorted-path order — so it
+ * would in fact match eager `grep(pattern, glob(g))` element-for-element; the
+ * multiset comparison is the robust statement (same records, one per matched
+ * line per file) and stays correct if a future unsorted producer changes the
+ * cross-file order. Order *within* a single file (line order) is still normative
+ * and preserved directly.
  *
  * @param {Array<{ file: string, line: number }>} records
  * @returns {Array<{ file: string, line: number }>}
@@ -134,11 +166,11 @@ test('streamGrep collected equals grep(pattern, glob(g)) as a multiset', async t
     ...(await E(mount).grep('export', E(mount).glob('src/**/*.js'))),
   ];
   const streamed = await collect(
-    E(mount).streamGrep('export', { glob: 'src/**/*.js' }),
+    E(mount).streamGrep('export', E(mount).streamGlob('src/**/*.js')),
   );
   t.true(eager.length > 1, 'the fixture yields several grep matches');
-  // streamGrep enumerates in walk order, so cross-file order differs from the
-  // sorted eager grep; the record sets are multiset-equal.
+  // streamGrep composes with streamGlob(g); the record sets are multiset-equal
+  // with eager grep(pattern, glob(g)).
   t.deepEqual(
     byFileThenLine(streamed),
     byFileThenLine(eager),
@@ -146,14 +178,77 @@ test('streamGrep collected equals grep(pattern, glob(g)) as a multiset', async t
   );
 });
 
-test('streamGrep with glob omitted searches the whole tree, equal to grep() as a multiset', async t => {
+test('streamGrep(p, streamGlob("**")) searches the whole tree, equal to grep() as a multiset', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   await null;
   const eager = [...(await E(mount).grep('line'))];
-  const streamed = await collect(E(mount).streamGrep('line'));
+  const streamed = await collect(
+    E(mount).streamGrep('line', E(mount).streamGlob('**')),
+  );
   t.true(eager.length > 0);
   t.deepEqual(byFileThenLine(streamed), byFileThenLine(eager));
+});
+
+// --- Decoupling: streamGrep greps whatever file stream it is handed ---
+// The reviewer's contract (PR #1085): grep takes a mandatory input stream of
+// files and does not glob. Feed it a hand-built reader over a chosen subset and
+// assert it greps exactly those files — the composition seam, independent of any
+// producer.
+
+test('streamGrep greps exactly the files a supplied stream carries', async t => {
+  const root = makeTemporaryRoot(t, 'mount-stream-decoupled-');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'needle in a\n');
+  fs.writeFileSync(path.join(root, 'b.txt'), 'needle in b\n');
+  fs.writeFileSync(path.join(root, 'c.txt'), 'needle in c\n');
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  // Only a and c are in the supplied stream, so b is never searched even though
+  // it matches — grep searches the file set it is handed, nothing more.
+  const records = await collect(
+    E(mount).streamGrep('needle', readerOfPaths(['a.txt', 'c.txt'])),
+  );
+  t.deepEqual(
+    records.map(r => /** @type {any} */ (r).file).sort(),
+    ['a.txt', 'c.txt'],
+    'exactly the supplied files were grepped, b.txt excluded',
+  );
+});
+
+// --- Authority: a hand-supplied file stream cannot widen authority ---
+// Confinement, denial, directory, and unreadable paths are re-checked in the
+// engine per supplied path, so a denied / nonexistent / escaping path in a
+// hand-built stream is skipped silently — the same uniform envelope eager
+// grep(pattern, paths) guarantees. A caller cannot reach a secret by naming it.
+
+test('a hand-supplied file stream naming denied / missing / directory paths is skipped silently', async t => {
+  const root = makeTemporaryRoot(t, 'mount-stream-authority-');
+  fs.mkdirSync(path.join(root, '.ssh'));
+  fs.writeFileSync(path.join(root, '.ssh', 'id_rsa'), 'must-never-surface\n');
+  fs.mkdirSync(path.join(root, 'sub'));
+  fs.writeFileSync(path.join(root, 'sub', 'ok.txt'), 'must-never-surface\n');
+  fs.writeFileSync(path.join(root, 'real.txt'), 'must-never-surface\n');
+  const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
+  await null;
+
+  const records = await collect(
+    E(mount).streamGrep(
+      'must-never-surface',
+      readerOfPaths([
+        '.ssh/id_rsa', // denied segment — skipped
+        'sub', // a directory — skipped
+        'does-not-exist.txt', // unreadable / missing — skipped
+        '../escape.txt', // escapes confinement — skipped
+        'real.txt', // the one legitimate file
+      ]),
+    ),
+  );
+  t.deepEqual(
+    records.map(r => /** @type {any} */ (r).file),
+    ['real.txt'],
+    'only the confined, readable, non-denied file surfaced',
+  );
 });
 
 test('streamGlob on a subView is scoped to the sub-root, like glob', async t => {
@@ -172,10 +267,9 @@ test('streamGrep is incremental: closing after one match leaves later files unre
   const root = makeTemporaryRoot(t, 'mount-stream-incremental-');
   const total = 40;
   for (let i = 0; i < total; i += 1) {
-    // Every file matches, so the first walk-order file to be read produces the
-    // first match. streamGrep enumerates in walk order, not sorted order, so we
-    // no longer assert *which* file is first — only that far fewer than the
-    // whole tree was read before the first pull returned.
+    // Every file matches, so the first supplied file to be read produces the
+    // first match. grep reads the supplied files one at a time, so far fewer
+    // than the whole set is read before the first pull returns.
     fs.writeFileSync(
       path.join(root, `f${String(i).padStart(3, '0')}.txt`),
       'needle here\n',
@@ -188,7 +282,9 @@ test('streamGrep is incremental: closing after one match leaves later files unre
     filePowers: powers,
   });
 
-  const iterator = iterateReader(E(mount).streamGrep('needle'));
+  const iterator = iterateReader(
+    E(mount).streamGrep('needle', E(mount).streamGlob('**')),
+  );
   const first = await iterator.next();
   t.false(first.done, 'the stream produced a first match');
   t.regex(
@@ -215,20 +311,17 @@ test('streamGrep is incremental: closing after one match leaves later files unre
   );
 });
 
-// --- Walk incrementality: the *directory walk* itself is incremental now ---
-// Unlike streamGlob (whose global sort forces the whole walk before the first
-// path), streamGrep enumerates in walk order, so a first match arrives after
-// walking only the directories on the path to it — and an early close abandons
-// the rest of the walk, not merely the unread files' contents. Counted through
-// `readDirectory` (the directory-walk power), the asymmetric counterpart of the
-// `readFileText`-counted content-read test above.
+// --- The directory walk is the producer's, and streamGlob's is eager ---
+// With grep decoupled, "walk incrementality" is no longer a property of grep. A
+// streamGlob('**') producer keeps glob's global sort, so it walks the whole tree
+// (reading every subdirectory) before yielding its first path — content reads
+// stay incremental in grep, but the *walk* is eager. This pins the current
+// composed behavior; restoring a first-match-before-full-walk would need an
+// unsorted producer (a flagged follow-up), not a change to grep.
 
-test('streamGrep is incremental in the directory walk: first match before the whole tree is walked', async t => {
-  const root = makeTemporaryRoot(t, 'mount-stream-walk-incremental-');
-  // Many sibling subdirectories, each holding one matching file. A global-sort
-  // enumeration would have to readDirectory every subdirectory before yielding
-  // the first path; a walk-order enumeration descends into just the first
-  // subdirectory it visits and yields that file's match straight away.
+test('streamGrep(p, streamGlob("**")) inherits streamGlob\'s eager walk; grep content reads stay incremental', async t => {
+  const root = makeTemporaryRoot(t, 'mount-stream-producer-walk-');
+  // Many sibling subdirectories, each holding one matching file.
   const dirs = 40;
   for (let i = 0; i < dirs; i += 1) {
     const sub = path.join(root, `d${String(i).padStart(3, '0')}`);
@@ -242,7 +335,9 @@ test('streamGrep is incremental in the directory walk: first match before the wh
     filePowers: powers,
   });
 
-  const iterator = iterateReader(E(mount).streamGrep('needle'));
+  const iterator = iterateReader(
+    E(mount).streamGrep('needle', E(mount).streamGlob('**')),
+  );
   const first = await iterator.next();
   t.false(first.done, 'a first match arrives');
   t.regex(
@@ -250,28 +345,29 @@ test('streamGrep is incremental in the directory walk: first match before the wh
     /^d\d{3}\/hit\.txt$/,
     'the first match is one of the per-directory files',
   );
-  // The load-bearing assertion: the directory walk did NOT visit every
-  // subdirectory before the first match. A sorted enumeration would have read
-  // the root plus all `dirs` subdirectories (>= dirs + 1); walk order reads the
-  // root plus only the subdirectories descended en route to the first file.
+  // The producer's global sort walked every subdirectory before its first path,
+  // so the whole tree is enumerated by the first match — the walk is eager.
   t.true(
-    counters.readDirectory < dirs,
-    `walked ${counters.readDirectory} directories of ${dirs} before the first match`,
+    counters.readDirectory > dirs,
+    `the streamGlob producer walked the whole tree (${counters.readDirectory} directory reads) before the first match`,
   );
-  const walkAtFirst = counters.readDirectory;
+  // But grep read only the one file it needed for the first match — content
+  // reads are incremental even though the producer's walk is eager.
+  t.is(
+    counters.readFileText,
+    1,
+    'only the first match file was read; grep content reads are incremental',
+  );
 
-  // Early close abandons the remaining directory walk — not only content reads.
+  // Early close abandons the remaining content reads (the producer's walk is
+  // already done).
   await iterator.return();
   await null;
   await null;
   t.is(
-    counters.readDirectory,
-    walkAtFirst,
-    'no further directories are walked after the consumer closes the stream',
-  );
-  t.true(
-    counters.readDirectory < dirs,
-    'the walk is bounded by early close, not run to completion',
+    counters.readFileText,
+    1,
+    'no further files are read after the consumer closes the stream',
   );
 });
 
@@ -293,7 +389,9 @@ test('streamGrep with buffer 0 does not read ahead of demand', async t => {
     filePowers: powers,
   });
 
-  const iterator = iterateReader(E(mount).streamGrep('hit'));
+  const iterator = iterateReader(
+    E(mount).streamGrep('hit', E(mount).streamGlob('**')),
+  );
   t.is(counters.readFileText, 0, 'no file is read before the first pull');
 
   await iterator.next();
@@ -309,8 +407,8 @@ test('streamGrep with buffer 0 does not read ahead of demand', async t => {
 });
 
 // --- Cancellation: break out of for-await; content reads stop, no unhandled rejection ---
-// The eager directory walk is already complete by the first match; what early
-// close abandons is the *content* reads of the still-unread files, not the walk.
+// What early close abandons is the *content* reads of the still-unread supplied
+// files, and it pulls no further paths from the producer.
 
 test('breaking out of a streamGrep for-await leaves the remaining files unread', async t => {
   const root = makeTemporaryRoot(t, 'mount-stream-cancel-');
@@ -329,7 +427,9 @@ test('breaking out of a streamGrep for-await leaves the remaining files unread',
   });
 
   let seen = 0;
-  for await (const match of iterateReader(E(mount).streamGrep('stop'))) {
+  for await (const match of iterateReader(
+    E(mount).streamGrep('stop', E(mount).streamGlob('**')),
+  )) {
     t.is(typeof match.file, 'string');
     seen += 1;
     if (seen === 1) {
@@ -360,7 +460,9 @@ test('streamGrep rejects the next pull after a mid-stream revoke', async t => {
     filePowers,
   });
 
-  const iterator = iterateReader(E(mount).streamGrep('match'));
+  const iterator = iterateReader(
+    E(mount).streamGrep('match', E(mount).streamGlob('**')),
+  );
   const first = await iterator.next();
   t.false(first.done, 'a first match arrives before revocation');
 
@@ -383,7 +485,9 @@ test('streamGlob throws synchronously at invocation on an already-revoked mount'
   await t.throwsAsync(() => E(mount).streamGlob('**'), {
     message: /Mount has been revoked/,
   });
-  await t.throwsAsync(() => E(mount).streamGrep('x'), {
+  // The `files` argument is valid (a real reader), so the rejection is the
+  // invocation-time assertLive(), not an argument-guard failure.
+  await t.throwsAsync(() => E(mount).streamGrep('x', emptyReader()), {
     message: /Mount has been revoked/,
   });
 });
@@ -439,7 +543,9 @@ test('a sparse streamGrep observes a mid-stream revoke without reading to the en
     filePowers: powers,
   });
 
-  const iterator = iterateReader(E(mount).streamGrep('needle'));
+  const iterator = iterateReader(
+    E(mount).streamGrep('needle', E(mount).streamGlob('**')),
+  );
   const first = await iterator.next();
   t.false(first.done, 'the single match arrives before revocation');
   t.is(/** @type {any} */ (first.value).file, 'f000.txt');
@@ -451,11 +557,11 @@ test('a sparse streamGrep observes a mid-stream revoke without reading to the en
   await t.throwsAsync(() => iterator.next(), {
     message: /Mount has been revoked/,
   });
-  // And the revoke was observed within one path batch, not after draining the
-  // whole tree of non-matching files.
+  // And the revoke was observed within one file, not after draining the whole
+  // supplied stream of non-matching files.
   t.true(
     counters.readFileText <= readsAtRevoke + 2,
-    `post-revoke reads are bounded to one path batch: ${
+    `post-revoke reads are bounded to one file: ${
       counters.readFileText - readsAtRevoke
     } more after revoke, of ${total - 1} remaining files`,
   );
@@ -488,13 +594,17 @@ test('streamGrep never reads denied files or escaping symlinks', async t => {
   await null;
   // Every credential fixture file contains this sentinel; all are denied.
   t.deepEqual(
-    await collect(E(mount).streamGrep('must-never-surface')),
+    await collect(
+      E(mount).streamGrep('must-never-surface', E(mount).streamGlob('**')),
+    ),
     [],
     'denied files are never searched',
   );
   // The escaping symlink target (outside confinement) carries this text.
   t.deepEqual(
-    await collect(E(mount).streamGrep('outside the mount')),
+    await collect(
+      E(mount).streamGrep('outside the mount', E(mount).streamGlob('**')),
+    ),
     [],
     'a symlink escaping the mount root is never followed',
   );
@@ -522,7 +632,7 @@ test('streamGlob readPattern is a no-limit M.string() and every element matches 
 test('streamGrep readPattern is { file, line, text } and every element matches it', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
-  const reader = E(mount).streamGrep('export', { glob: 'src/**/*.js' });
+  const reader = E(mount).streamGrep('export', E(mount).streamGlob('src/**/*.js'));
   const pattern = await E(reader).readPattern();
   t.notThrows(() =>
     mustMatch(harden({ file: 'a', line: 1, text: 't' }), pattern),
@@ -542,8 +652,6 @@ test('a stream element that violates the readPattern breaks the stream with an e
   // The reader pump validates each element against readPattern via mustMatch,
   // so a hand-built reader over a mistyped element rejects rather than leaking
   // an ill-shaped value. This pins the guard the mount relies on.
-  const { readerFromIterator } =
-    await import('@endo/exo-stream/reader-from-iterator.js');
   const badReader = readerFromIterator(
     (async function* bad() {
       yield 42; // not a string
@@ -578,7 +686,9 @@ test('streamGrep streams a match line longer than the default string-length limi
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   await null;
 
-  const records = await collect(E(mount).streamGrep('needle'));
+  const records = await collect(
+    E(mount).streamGrep('needle', E(mount).streamGlob('**')),
+  );
   t.is(records.length, 4, 'every matching line streams, long lines included');
   const longText = /** @type {string} */ (records[1].text);
   t.true(
@@ -621,7 +731,9 @@ test('streamGrep streams a match line past 10 MB — no residual finite ceiling'
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   await null;
 
-  const records = await collect(E(mount).streamGrep('needle'));
+  const records = await collect(
+    E(mount).streamGrep('needle', E(mount).streamGlob('**')),
+  );
   t.is(records.length, 3, 'the match after a > 10 MB line is not lost');
   t.true(
     /** @type {string} */ (records[1].text).length > 10_000_000,
@@ -642,8 +754,6 @@ test('streamGrep streams a match line past 10 MB — no residual finite ceiling'
 // pre-ack / post-revoke window as k×buffer. [warden finding 1]
 
 test('readerFromIterator({ once: true }) rejects a second stream()', async t => {
-  const { readerFromIterator } =
-    await import('@endo/exo-stream/reader-from-iterator.js');
   const reader = readerFromIterator(
     (async function* g() {
       yield 'a';
@@ -702,7 +812,9 @@ test('streamGrep { line, text } identifies the matched source line for generated
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   await null;
 
-  const records = await collect(E(mount).streamGrep('MARK-\\d+'));
+  const records = await collect(
+    E(mount).streamGrep('MARK-\\d+', E(mount).streamGlob('**')),
+  );
   t.true(records.length > 3, 'the regex matches several generated lines');
 
   // Source of truth: re-read the file from disk and split on newlines exactly
@@ -750,7 +862,7 @@ test('the readOnly() ReadableTree view does not carry streamGlob / streamGrep', 
   await t.throwsAsync(() => E(view).streamGlob('**'), {
     message: /streamGlob|no method|not/,
   });
-  await t.throwsAsync(() => E(view).streamGrep('x'), {
+  await t.throwsAsync(() => E(view).streamGrep('x', emptyReader()), {
     message: /streamGrep|no method|not/,
   });
 });
@@ -827,7 +939,9 @@ test('streamGrep yields past GREP_MAX_RESULTS while grep truncates at it', async
     'eager grep truncates at GREP_MAX_RESULTS',
   );
 
-  const streamed = await collect(E(mount).streamGrep('needle'));
+  const streamed = await collect(
+    E(mount).streamGrep('needle', E(mount).streamGlob('**')),
+  );
   t.is(
     streamed.length,
     overCap,
@@ -895,7 +1009,9 @@ test('streamGrep clamps producer read-ahead to STREAM_BUFFER_MAX', async t => {
   // Request a buffer far above the ceiling and DON'T pull: the producer pre-acks
   // up to its clamped buffer, then blocks awaiting a synchronize node.
   const iterator = iterateReader(
-    E(mount).streamGrep('needle', { buffer: STREAM_BUFFER_MAX * 4 }),
+    E(mount).streamGrep('needle', E(mount).streamGlob('**'), {
+      buffer: STREAM_BUFFER_MAX * 4,
+    }),
   );
   // Let the producer run until its pre-ack read-ahead settles (it cannot exceed
   // the clamp), then a grace window in which a broken clamp would over-read.
@@ -940,7 +1056,9 @@ test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buff
   });
 
   const buffer = 4;
-  const iterator = iterateReader(E(mount).streamGrep('match', { buffer }));
+  const iterator = iterateReader(
+    E(mount).streamGrep('match', E(mount).streamGlob('**'), { buffer }),
+  );
   const first = await iterator.next();
   t.false(first.done, 'a first match arrives before revocation');
 
@@ -974,22 +1092,19 @@ test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buff
   );
 });
 
-// --- Both the directory walk AND the content reads are incremental now ---
-// streamGrep enumerates in walk order (`sorted: false`), so the whole confined
-// tree is NOT walked before the first match: a match is surfaced after
-// descending only the subtree that carries it, leaving sibling subtrees
-// unwalked. The fixture has two top-level branches, each with a match (one
-// shallow, one deep), so whichever branch the walk visits first, at least the
-// *other* branch's directory is still unwalked at the first match — the
-// assertion holds regardless of the platform's directory-read order.
-// (Superseded the old "eager walk" pin; see also the sibling-subdir walk-
-// incrementality test above.)
+// --- Content reads stay incremental across a deep composed pipeline ---
+// With grep decoupled, the directory walk belongs to the producer (an eager
+// streamGlob('**') here). What grep guarantees is that it reads the supplied
+// files' *contents* one at a time: on a deep tree with two matching files, only
+// the first match's file is read before the first pull returns, and early close
+// leaves the other unread. (The producer's walk is eager; that is pinned by the
+// producer-walk test above.)
 
-test('streamGrep walks incrementally: the whole tree is not enumerated before the first match', async t => {
+test('streamGrep content reads stay incremental on a deep composed pipeline', async t => {
   const root = makeTemporaryRoot(t, 'mount-stream-deep-');
   // Branch A: a shallow match. Branch B: a deep chain whose deepest file also
-  // matches. Two top-level directories, so one is always unwalked at the first
-  // match no matter which the walk descends first.
+  // matches. Two matching files, so early close after the first can leave the
+  // second unread.
   const branchA = path.join(root, 'branch-a');
   fs.mkdirSync(branchA);
   fs.writeFileSync(path.join(branchA, 'shallow.txt'), 'deep-needle\n');
@@ -1002,51 +1117,31 @@ test('streamGrep walks incrementally: the whole tree is not enumerated before th
   }
   fs.writeFileSync(path.join(directory, 'deep.txt'), 'deep-needle\n');
 
-  // Learn the full-walk directory-read count from a complete streamGlob pass.
-  const globWalkPowers = makeCountingPowers();
-  const globMount = makeMount({
-    rootPath: root,
-    readOnly: false,
-    filePowers: globWalkPowers.powers,
-  });
-  await collect(E(globMount).streamGlob('**'));
-  const fullWalkDirectoryReads = globWalkPowers.counters.readDirectory;
-  t.true(fullWalkDirectoryReads >= depth, 'the fixture is genuinely deep');
-
   const { powers, counters } = makeCountingPowers();
   const mount = makeMount({
     rootPath: root,
     readOnly: false,
     filePowers: powers,
   });
-  const iterator = iterateReader(E(mount).streamGrep('deep-needle'));
+  const iterator = iterateReader(
+    E(mount).streamGrep('deep-needle', E(mount).streamGlob('**')),
+  );
   const firstMatch = await iterator.next();
   t.false(firstMatch.done);
   t.regex(
     /** @type {any} */ (firstMatch.value).file,
     /^branch-(a\/shallow\.txt|b\/(d\d\/)+deep\.txt)$/,
-    'the first match is whichever branch the walk descended first',
+    'the first match is one of the two matching files',
   );
 
-  // The directory walk is incremental: at the first match the whole tree has
-  // NOT been enumerated — at least the other top-level branch is still unwalked.
-  t.true(
-    counters.readDirectory < fullWalkDirectoryReads,
-    `walked ${counters.readDirectory} of ${fullWalkDirectoryReads} dirs before the first match`,
-  );
-  // Content reads are incremental too: only the one match file was read.
+  // Content reads are incremental: only the one match file was read for the
+  // first pull, even though the producer's walk has already run.
   t.is(counters.readFileText, 1, 'only the first match file was read');
 
-  const walkAtClose = counters.readDirectory;
   await iterator.return();
   await null;
   await null;
   t.is(counters.readFileText, 1, 'early close leaves the other file unread');
-  t.is(
-    counters.readDirectory,
-    walkAtClose,
-    'early close leaves the remaining directory walk abandoned',
-  );
 });
 
 // --- streamGlob early cancellation: return() cleans up before completion ---
@@ -1080,18 +1175,21 @@ test('breaking out of a streamGlob for-await stops cleanly with no late reads', 
   );
 });
 
-// --- streamGrep with a glob matching zero files yields nothing ---
+// --- streamGrep over a producer matching zero files yields nothing ---
 // [corner-prober finding 6]
 
-test('streamGrep with a glob that matches no file yields an empty stream', async t => {
+test('streamGrep over a streamGlob that matches no file yields an empty stream', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   await null;
   t.deepEqual(
     await collect(
-      E(mount).streamGrep('export', { glob: 'no-such-dir/**/*.nope' }),
+      E(mount).streamGrep(
+        'export',
+        E(mount).streamGlob('no-such-dir/**/*.nope'),
+      ),
     ),
     [],
-    'a glob matching nothing produces no matches',
+    'a producer matching nothing produces no matches',
   );
 });

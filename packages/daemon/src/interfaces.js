@@ -706,19 +706,24 @@ export const MountInterface = M.interface('EndoMount', {
   streamGlob: M.call(M.string())
     .optional(M.splitRecord({}, { buffer: M.number() }))
     .returns(M.remotable('PassableReader')),
-  // Streaming search (grep). Like `streamGlob`, returns a `PassableReader`
-  // synchronously. `options.glob` selects the file set (piped straight into
-  // grep as path batches, so no full path array round-trips as grep's argument
-  // and the 10,000-path cap is dropped); `buffer` is the clamped pre-ack
-  // window. No `maxResults`. Fully incremental: grep needs no global sort, so
-  // enumeration runs in walk order (`sorted: false`) — a first match can arrive
-  // before the whole tree is walked, and early close leaves both the remaining
-  // files' contents unread AND the rest of the tree unwalked (early close bounds
-  // the directory walk, not only file reads). Record order across files is
-  // therefore walk order, not glob's sorted-path order — the same multiset of
-  // matches as `grep()`.
-  streamGrep: M.call(M.string())
-    .optional(M.splitRecord({}, { glob: M.string(), buffer: M.number() }))
+  // Streaming search (grep), decoupled from enumeration. Like `streamGlob`,
+  // returns a `PassableReader` synchronously. `files` is a *mandatory* external
+  // stream of mount-relative paths to grep — a `PassableReader<string>` (the
+  // shape `streamGlob` returns), or a promise for one so a caller may pipe
+  // `E(mount).streamGlob(g)` straight in — not an options bag. Grep does not
+  // glob: "everything" is `streamGrep(p, streamGlob('**'))` and "a subset" is
+  // `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern, glob(g))`
+  // seam. `buffer` is the clamped pre-ack window. No `maxResults`. Grep reads
+  // the supplied files' contents lazily (one file per pull), so early close
+  // leaves later supplied files unread; whether the directory *walk* is
+  // incremental is the producer's concern. Record order follows the supplied
+  // file stream, so fed `streamGlob(g)` it is glob's sorted-path order — the same
+  // multiset of matches as `grep()`.
+  streamGrep: M.call(
+    M.string(),
+    M.or(M.remotable('PassableReader'), M.promise()),
+  )
+    .optional(M.splitRecord({}, { buffer: M.number() }))
     .returns(M.remotable('PassableReader')),
   lookup: M.call(PathArgShape).returns(M.promise()),
   // `maybeLookup` is async in every mount implementation, so retain the

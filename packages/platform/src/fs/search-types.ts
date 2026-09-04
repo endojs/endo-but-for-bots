@@ -44,9 +44,10 @@ export type GlobOptions = {
    * `true`, glob's contract). When `false`, matched paths are yielded in *walk
    * order* as they are discovered, with no global-sort barrier — so the first
    * batch can be emitted before the whole tree is walked. Confinement and
-   * denial filtering are unchanged; only the terminal sort is dropped. Used by
-   * `streamGrep`, whose flattened order is path-then-line as files are read and
-   * so needs no sort (see the engine header).
+   * denial filtering are unchanged; only the terminal sort is dropped. The
+   * substrate for a walk-order path *producer* (e.g. a future unsorted
+   * `streamGlob`); decoupled `streamGrep` greps whatever file stream it is
+   * handed and needs no sort of its own (see the engine header).
    */
   sorted?: boolean;
 };
