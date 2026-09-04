@@ -137,7 +137,8 @@ awaited promise — the exact infrastructure `Promise.prototype.finally`
   skip); an async arrow (if the compiler emits `START_ASYNC` in it — it reuses the
   same machinery).
 - Miri-clean test over the async suspend/resume + result-promise settle path
-  (`TMPDIR=/home/kris/tmp`).
+  (`TMPDIR="${TMPDIR:-$HOME/tmp}"` — a machine-local writable dir that,
+  unlike `/tmp` on hosts that mount it `noexec`, can hold the test binary).
 - Dual-run `language/expressions/await`, `language/statements/async-function`
   (DIRECTORY sections; whole-tree `language/` OOMs) — divergent=0, every skip
   named. `language/statements/async-generator` + `for-await-of` stay the
