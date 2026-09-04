@@ -4,6 +4,7 @@ import '@endo/init/debug.js';
 
 import test from 'ava';
 import { Far } from '@endo/pass-style';
+import { decodeBase64 } from '@endo/base64';
 
 import { createDOM, tick } from '../helpers/dom-setup.js';
 import { secretsComponent } from '../../secrets-component.js';
@@ -394,4 +395,91 @@ test.serial('secret Space orders and deletes revoked records', async t => {
   await waitFor(() => deleted.length === 1);
   await waitFor(() => $parent.querySelectorAll('.secret-card').length === 1);
   t.deepEqual(deleted, ['revoked-secret']);
+});
+
+test.serial('secret Space ingests a file byte for byte', async t => {
+  const document = testDocument;
+  const calls = [];
+  const catalog = Far('MockSecretCatalog', { list: () => [] });
+  const audit = Far('MockSecretAudit', { list: () => [] });
+  const importer = Far('MockSecretImporter', {
+    createBase64: (name, description, value) => {
+      calls.push(['create', name, description, value]);
+      return harden({
+        secretId: 'secret-file',
+        description,
+        state: 'active',
+        generation: 1n,
+        createdAt: '2026-09-04T00:00:00.000Z',
+        updatedAt: '2026-09-04T00:00:00.000Z',
+      });
+    },
+  });
+  const powers = Far('MockSecretPowers', {
+    lookup: path => {
+      const key = Array.isArray(path) ? path.join('/') : path;
+      if (key === '@secrets/catalog') return catalog;
+      if (key === '@secrets/audit') return audit;
+      if (key === '@secrets/create') return importer;
+      throw new Error('unknown path');
+    },
+  });
+
+  // Bytes that are not valid UTF-8 and include a NUL: a text round trip would
+  // corrupt them, so this pins that the file path stays binary-exact.
+  const raw = new Uint8Array([0x00, 0xff, 0xfe, 0x41, 0x0a, 0x80, 0x7f]);
+  const $parent = document.createElement('div');
+  document.body.appendChild($parent);
+  const cleanup = secretsComponent(
+    $parent,
+    powers,
+    [],
+    async () => {},
+    async () => ({ name: 'id_ed25519', bytes: new Uint8Array(raw) }),
+  );
+  t.teardown(cleanup);
+
+  // 'No secrets yet.' renders only once the initial load settles; the file
+  // button is disabled while loading.
+  await waitFor(() => $parent.textContent.includes('No secrets yet.'));
+  const $createPanel = $parent.querySelector('.secret-create-panel');
+  $createPanel.open = true;
+  $createPanel.dispatchEvent(new Event('toggle'));
+
+  const $create = $parent.querySelector('.secret-create-form');
+  const $name = $create.elements.namedItem('name');
+  const $description = $create.elements.namedItem('description');
+  const $value = $create.elements.namedItem('value');
+
+  const $readFile = [...$parent.querySelectorAll('button')].find(
+    button => button.textContent === 'Read from file…',
+  );
+  t.truthy($readFile);
+  $readFile.click();
+  t.true(await waitFor(() => $parent.textContent.includes('id_ed25519')));
+
+  // The view learns the name and length, never the bytes.
+  t.true($parent.textContent.includes('7 bytes'));
+  t.false($parent.textContent.includes('AP/+QQqAfw=='));
+  // The typed field yields to the file rather than competing with it.
+  t.true($value.disabled);
+
+  $name.value = 'ssh-key';
+  $name.dispatchEvent(new Event('input', { bubbles: true }));
+  $description.value = 'Deploy key';
+  $description.dispatchEvent(new Event('input', { bubbles: true }));
+  $create.dispatchEvent(
+    new Event('submit', { bubbles: true, cancelable: true }),
+  );
+  await waitFor(() => calls.length === 1);
+
+  const [[, name, description, value]] = calls;
+  t.is(name, 'ssh-key');
+  t.is(description, 'Deploy key');
+  // Decodes back to exactly the bytes the file held.
+  t.deepEqual([...decodeBase64(value)], [...raw]);
+
+  // The panel forgets the file once the secret is stored.
+  t.true(await waitFor(() => !$parent.textContent.includes('id_ed25519')));
+  t.true($parent.textContent.includes('No file chosen'));
 });

@@ -10504,6 +10504,30 @@ button.btn-spinner::after {
   width: 100%;
 }
 
+/* File ingress sits beside the typed value: one row that wraps on narrow
+   screens, matching the Space's other controls. */
+.secret-file-ingress {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-block: 10px;
+}
+
+.secret-file-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.9em;
+}
+
+.secret-file-empty {
+  opacity: 0.75;
+}
+
 .secret-id {
   overflow-wrap: anywhere;
 }

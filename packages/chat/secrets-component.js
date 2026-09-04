@@ -35,7 +35,11 @@ harden(textToBase64);
  * @param {string | null} props.error
  * @param {'cleared' | 'failed' | null} props.clipboardStatus
  * @param {{ name: string, description: string, value: string }} props.createDraft
+ * @param {{ name: string, byteLength: number } | null} props.createFile
+ *   Metadata only. The confined view is never given the file's bytes.
  * @param {(field: 'name' | 'description' | 'value', value: string) => void} props.onCreateInput
+ * @param {() => void} props.onReadFile
+ * @param {() => void} props.onClearFile
  * @param {(open: boolean) => void} props.onCreateToggle
  * @param {() => void} props.onCreate
  * @param {(secretId: string, description: string) => void} props.onDescriptionInput
@@ -55,7 +59,10 @@ const SecretsView = ({
   error,
   clipboardStatus,
   createDraft,
+  createFile,
   onCreateInput,
+  onReadFile,
+  onClearFile,
   onCreateToggle,
   onCreate,
   onDescriptionInput,
@@ -170,7 +177,10 @@ const SecretsView = ({
           h('input', {
             type: 'password',
             name: 'value',
-            required: true,
+            // A chosen file supplies the bytes instead, so the typed field is
+            // neither required nor editable while one is loaded.
+            required: createFile === null,
+            disabled: loading || createFile !== null,
             autocomplete: 'off',
             autocapitalize: 'off',
             'data-1p-ignore': 'true',
@@ -180,6 +190,39 @@ const SecretsView = ({
             /** @param {{ target: { value: string } }} event */
             onInput: event => onCreateInput('value', event.target.value),
           }),
+        ),
+        h(
+          'div',
+          { class: 'secret-file-ingress' },
+          h(
+            'button',
+            {
+              type: 'button',
+              disabled: loading,
+              onClick: () => onReadFile(),
+            },
+            'Read from file…',
+          ),
+          createFile === null
+            ? h(
+                'span',
+                { class: 'secret-file-status secret-file-empty' },
+                'No file chosen. A file is sent byte for byte, so binary keys stay intact.',
+              )
+            : h(
+                'span',
+                { class: 'secret-file-status' },
+                `${createFile.name} — ${createFile.byteLength} bytes`,
+                h(
+                  'button',
+                  {
+                    type: 'button',
+                    disabled: loading,
+                    onClick: () => onClearFile(),
+                  },
+                  'Clear file',
+                ),
+              ),
         ),
         h('button', { type: 'submit', disabled: loading }, 'Store secret'),
       ),
@@ -408,10 +451,46 @@ const SecretsView = ({
 harden(SecretsView);
 
 /**
+ * Reading a file is a filesystem capability, so it stays on the host side of
+ * the confinement boundary: `renderConfined` deliberately never hands a `File`
+ * or a DOM node to a handler. The confined view only invokes an opaque
+ * callback; the picker, the bytes, and their disposal all live out here.
+ *
+ * @param {Document} $document
+ * @returns {() => Promise<{ name: string, bytes: Uint8Array } | null>}
+ */
+const makeFileReader = $document => async () => {
+  const $input = $document.createElement('input');
+  $input.type = 'file';
+  $input.hidden = true;
+  $document.body.appendChild($input);
+  try {
+    /** @type {File | null} */
+    const file = await new Promise(resolve => {
+      $input.addEventListener(
+        'change',
+        () => resolve($input.files && $input.files[0] ? $input.files[0] : null),
+        { once: true },
+      );
+      // Fired when the picker is dismissed without a choice. Browsers without
+      // it simply leave the promise pending until the next pick, which is the
+      // pre-existing behavior of a file input.
+      $input.addEventListener('cancel', () => resolve(null), { once: true });
+      $input.click();
+    });
+    if (file === null) return null;
+    return { name: file.name, bytes: new Uint8Array(await file.arrayBuffer()) };
+  } finally {
+    $input.remove();
+  }
+};
+
+/**
  * @param {HTMLElement} $parent
  * @param {unknown} rootPowers
  * @param {string[]} profilePath
  * @param {(text: string) => Promise<void>} [writeClipboard]
+ * @param {() => Promise<{ name: string, bytes: Uint8Array } | null>} [readFile]
  * @returns {() => void}
  */
 export const secretsComponent = (
@@ -419,6 +498,7 @@ export const secretsComponent = (
   rootPowers,
   profilePath,
   writeClipboard = text => navigator.clipboard.writeText(text),
+  readFile = makeFileReader($parent.ownerDocument),
 ) => {
   $parent.replaceChildren();
   let powers = rootPowers;
@@ -436,6 +516,10 @@ export const secretsComponent = (
   /** @type {SecretAuditEvent[]} */
   let events = [];
   let createDraft = { name: '', description: '', value: '' };
+  // Holds the file's base64 payload host-side; only name and length are ever
+  // passed into the confined view.
+  /** @type {{ name: string, byteLength: number, base64: string } | null} */
+  let createFile = null;
   /** @type {Map<string, string>} */
   const descriptionDrafts = new Map();
   const dirtyDescriptions = new Set();
@@ -465,31 +549,65 @@ export const secretsComponent = (
         error,
         clipboardStatus,
         createDraft,
+        createFile:
+          createFile === null
+            ? null
+            : harden({
+                name: createFile.name,
+                byteLength: createFile.byteLength,
+              }),
         onCreateInput: (field, value) => {
           createDraft = { ...createDraft, [field]: value };
           render();
         },
+        onReadFile: () => {
+          if (loading) return;
+          void (async () => {
+            try {
+              const picked = await readFile();
+              if (picked === null) return;
+              createFile = {
+                name: picked.name,
+                byteLength: picked.bytes.length,
+                base64: encodeBase64(picked.bytes),
+              };
+              picked.bytes.fill(0);
+              error = null;
+            } catch {
+              // Never surface the caught error: a filesystem message can name
+              // paths the operator did not mean to disclose.
+              error = 'Could not read the selected file.';
+            }
+            render();
+          })();
+        },
+        onClearFile: () => {
+          createFile = null;
+          render();
+        },
         onCreateToggle: open => {
-          if (!open && createDraft.value !== '') {
+          if (!open && (createDraft.value !== '' || createFile !== null)) {
             createDraft = { ...createDraft, value: '' };
+            createFile = null;
             render();
           }
         },
         onCreate: () => {
           if (loading) return;
           const { name, description, value } = createDraft;
+          // A chosen file supplies the bytes verbatim; the typed field is
+          // disabled while one is loaded, so it cannot also contribute.
+          const bytesBase64 =
+            createFile === null ? textToBase64(value) : createFile.base64;
           createDraft = { name: '', description: '', value: '' };
+          createFile = null;
           render();
           void mutate(async () => {
             const importer = E(/** @type {any} */ (powers)).lookup([
               '@secrets',
               'create',
             ]);
-            await E(importer).createBase64(
-              name,
-              description,
-              textToBase64(value),
-            );
+            await E(importer).createBase64(name, description, bytesBase64);
           });
         },
         onDescriptionInput: (secretId, description) => {
