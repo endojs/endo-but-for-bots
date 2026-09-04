@@ -1,0 +1,15 @@
+[Unit]
+Description=Endo OCapN-Noise-WS demo daemon (toy greeter, docker, 127.0.0.1:8930)
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f endo-ocapn-toy
+ExecStart=/usr/bin/docker run --rm --name endo-ocapn-toy -p 127.0.0.1:8930:8930 -v /opt/ocapn-demo:/demo-out -e DEMO_HOST=0.0.0.0 -e DEMO_PORT=8930 --entrypoint node endo-pet-daemon:ocapn-ws demo/minion-town/ocapn-ws-server.mjs /demo-out/ocapn-demo-location.json
+ExecStop=-/usr/bin/docker stop endo-ocapn-toy
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
