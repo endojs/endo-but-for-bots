@@ -497,14 +497,19 @@ freeze(snapshotHeaders);
  * @param {FetchLikeResponse} response
  * @returns {ConfinedResponseSummary}
  */
-export const snapshotResponse = response =>
-  freeze({
-    status: Number(response.status || 0),
+export const snapshotResponse = response => {
+  const status = Number(response.status || 0);
+  return freeze({
+    status,
     statusText: String(response.statusText || ''),
-    ok: Boolean(response.ok),
+    // A fetch-like may omit `ok`; `FetchLikeResponse` marks it optional. Fall
+    // back to the definition the platform uses rather than reporting a 200 as
+    // not ok.
+    ok: response.ok ?? (status >= 200 && status < 300),
     headers: snapshotHeaders(response.headers),
     url: String(response.url || ''),
   });
+};
 freeze(snapshotResponse);
 
 /**

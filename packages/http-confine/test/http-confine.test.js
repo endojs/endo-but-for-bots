@@ -499,6 +499,14 @@ test('snapshotResponse coerces a response that omits every optional field', t =>
   );
 });
 
+test('snapshotResponse derives ok when the transport omits it', t => {
+  t.true(snapshotResponse(harden({ status: 204 })).ok);
+  t.false(snapshotResponse(harden({ status: 404 })).ok);
+  // An explicit flag still wins over the derivation.
+  t.false(snapshotResponse(harden({ status: 200, ok: false })).ok);
+  t.true(snapshotResponse(harden({ status: 500, ok: true })).ok);
+});
+
 test('request summarizes a native Response instead of hardening it', async t => {
   const nativeResponse = new Response('ok', {
     headers: { 'X-Native-Response': 'yes' },
