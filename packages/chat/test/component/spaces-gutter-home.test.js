@@ -667,3 +667,67 @@ test.serial(
     t.is(readBootDefaultSpace(), undefined, 'and dropped the stale cache');
   },
 );
+
+// The boot cache is read before the first paint and its `mode` decides which
+// component the shell mounts, so what it accepts is worth pinning: too loose
+// and a foreign mode reaches the shell, too tight and ordinary spaces are sent
+// to Home instead of the space the user chose.
+
+test.serial('a boot cache for an inbox-mode space is honored', async t => {
+  window.localStorage.clear();
+  // 'inbox' is the default mode, so it is absent from KNOWN_MODES — that set
+  // exists to normalize everything else *to* it. A validator that tests only
+  // KNOWN_MODES rejects this entry and silently opens Home instead.
+  window.localStorage.setItem(
+    'chat-default-space-boot',
+    JSON.stringify({
+      id: '3',
+      profilePath: ['desk-agent'],
+      spaceInfo: { mode: 'inbox' },
+      scheme: 'light',
+    }),
+  );
+
+  const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+  const boot = readBootDefaultSpace();
+  t.truthy(boot, 'an inbox-mode space is a perfectly ordinary default');
+  t.is(boot.id, '3');
+  t.is(boot.spaceInfo.mode, 'inbox');
+  t.is(boot.scheme, 'light');
+});
+
+test.serial('a boot cache naming an unknown mode is ignored', async t => {
+  window.localStorage.clear();
+  // Written by a build that had a space kind this one does not.
+  window.localStorage.setItem(
+    'chat-default-space-boot',
+    JSON.stringify({
+      id: '4',
+      profilePath: ['agent'],
+      spaceInfo: { mode: 'holodeck' },
+    }),
+  );
+
+  const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+  t.is(readBootDefaultSpace(), undefined);
+});
+
+test.serial('a boot cache with an unusable scheme keeps the space', async t => {
+  window.localStorage.clear();
+  // The scheme reaches `setAttribute` before any of the gutter's own checks.
+  // It is the scheme that is unusable here, not the space, so the space stays.
+  window.localStorage.setItem(
+    'chat-default-space-boot',
+    JSON.stringify({
+      id: '5',
+      profilePath: ['agent'],
+      spaceInfo: { mode: 'channel' },
+      scheme: 'ultraviolet',
+    }),
+  );
+
+  const { readBootDefaultSpace } = await import('../../spaces-gutter.js');
+  const boot = readBootDefaultSpace();
+  t.is(boot.id, '5', 'still opens the space');
+  t.is(boot.scheme, undefined, 'but not with a scheme it cannot apply');
+});
