@@ -306,6 +306,43 @@ test('a late reply is no longer claimable and falls through to the inbox', async
   t.deepEqual(delegations.claim(late), { claimed: false });
 });
 
+test('two questions raced at one subagent are refused, not silently dropped', async t => {
+  const mailbox = makeMailbox({
+    names: { 'subagents/helper': locatorFor(CHILD) },
+  });
+  const { timers } = makeManualTimers();
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+  });
+
+  // Checked-then-awaited, both calls passed the "already in flight" guard
+  // before either recorded itself, and the second overwrote the first — whose
+  // caller then waited out its whole timeout for an answer nothing could
+  // deliver. The slot is claimed before the first `await`.
+  const first = delegations.ask({
+    name: 'helper',
+    task: 'first',
+    timeoutSeconds: 60,
+  });
+  const second = delegations.ask({
+    name: 'helper',
+    task: 'second',
+    timeoutSeconds: 60,
+  });
+  await t.throwsAsync(second, { message: /already has a question in flight/ });
+
+  await mailbox.whenSent();
+  for (const message of mailbox.stream) delegations.claim(message);
+  mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-1',
+    text: 'answered the first',
+  });
+  delegations.claim(mailbox.stream[mailbox.stream.length - 1]);
+  t.like(await first, { text: 'answered the first' });
+});
+
 test('two questions to one subagent at a time are refused', async t => {
   const mailbox = makeMailbox({
     names: { 'subagents/helper': locatorFor(CHILD) },
