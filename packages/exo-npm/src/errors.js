@@ -22,39 +22,28 @@ const TAMPERED = 'RegistryTamperedError';
 const MISSING = 'RegistryMissingPackageError';
 const NETWORK = 'RegistryNetworkError';
 const OFFLINE = 'RegistryOfflineError';
-const PACKAGE_REGISTRY = 'PackageRegistryError';
 
-const annotateRegistryFailure = (error, concreteName) => {
-  // Non-enumerable: an enumerable own property trips pass-style's
-  // "own property must not be enumerable" check. These tags are a same-vat
-  // convenience only — a passable error keeps just message/stack/cause/errors,
-  // so `errorName`/`registryErrorName` are dropped the moment the error crosses
-  // a marshal boundary. Cross-boundary classification therefore rides the
-  // message text (see `registryErrorName`'s prefix fallback), which every
-  // structured registry error carries a distinct spelling of.
-  Object.defineProperties(error, {
-    errorName: { value: PACKAGE_REGISTRY, enumerable: false },
-    registryErrorName: { value: concreteName, enumerable: false },
-  });
-  return harden(error);
-};
+// Every structured registry error carries its classification through
+// `makeError`'s `errorName` option, which SES records out-of-band via
+// `tagError` — it is NOT installed as an own property, so the error stays
+// passable (an own property outside `{message, stack, cause, errors}` makes an
+// error non-passable, enumerable or not — `packages/pass-style/src/error.js`).
+// The native constructor (`RangeError`/`SyntaxError`) is preserved via
+// `makeError`'s second argument, and `registryErrorName`'s message-prefix
+// fallback recovers the concrete name across a marshal boundary, where the tag
+// does not travel.
 
 /**
  * A registry path names no published node.
  * @param {string} path
  */
 export const RegistryNotFoundError = path =>
-  annotateRegistryFailure(
-    // `q(path)` keeps the offending path in the message under a default
-    // `lockdown()`, where a bare `${path}` substitution is redacted to
-    // `(a string)`. The fresh `RangeError` (rather than the `makeError` result,
-    // which is already hardened and non-extensible) is what
-    // `annotateRegistryFailure` can still stamp the classification tags onto.
-    new RangeError(
-      makeError(X`Package registry has no entry at ${q(path)}`).message,
-    ),
-    'RegistryNotFoundError',
-  );
+  // `q(path)` keeps the offending path in the message under a default
+  // `lockdown()`, where a bare `${path}` substitution is redacted to
+  // `(a string)`.
+  makeError(X`Package registry has no entry at ${q(path)}`, RangeError, {
+    errorName: 'RegistryNotFoundError',
+  });
 harden(RegistryNotFoundError);
 
 /**
@@ -62,13 +51,10 @@ harden(RegistryNotFoundError);
  * @param {string} segment
  */
 export const RegistryPathSyntaxError = segment =>
-  annotateRegistryFailure(
-    new SyntaxError(
-      makeError(
-        X`Invalid package-registry path segment ${q(segment)}; use @scope/package or a string-array path`,
-      ).message,
-    ),
-    'RegistryPathSyntaxError',
+  makeError(
+    X`Invalid package-registry path segment ${q(segment)}; use @scope/package or a string-array path`,
+    SyntaxError,
+    { errorName: 'RegistryPathSyntaxError' },
   );
 harden(RegistryPathSyntaxError);
 
@@ -173,20 +159,20 @@ harden(RegistryNetworkError);
  * @param {string} [version]
  * @returns {Error}
  */
-export const RegistryOfflineError = (nameOrReason, version) => {
+export const RegistryOfflineError = (nameOrReason, version) =>
   // `q(...)` keeps the name/version visible under a default `lockdown()`, where
-  // a bare `${nameOrReason}` substitution is redacted to `(a string)`. The
-  // message is copied into a fresh (still-extensible) `Error` so
-  // `annotateRegistryFailure` can stamp the classification tags onto it.
-  const message = (
-    version === undefined
-      ? makeError(X`Registry is offline: ${q(nameOrReason)}`)
-      : makeError(
-          X`Registry is in offline mode and ${q(nameOrReason)}@${q(version)} is not cached`,
-        )
-  ).message;
-  return annotateRegistryFailure(new Error(message), OFFLINE);
-};
+  // a bare `${nameOrReason}` substitution is redacted to `(a string)`. Passing
+  // `errorName` restores the passable, `tagError`-classified shape this
+  // pre-existing factory carried before the tree errors were added.
+  version === undefined
+    ? makeError(X`Registry is offline: ${q(nameOrReason)}`, undefined, {
+        errorName: OFFLINE,
+      })
+    : makeError(
+        X`Registry is in offline mode and ${q(nameOrReason)}@${q(version)} is not cached`,
+        undefined,
+        { errorName: OFFLINE },
+      );
 harden(RegistryOfflineError);
 
 /**
@@ -195,10 +181,10 @@ harden(RegistryOfflineError);
  */
 export const isPackageRegistryError = error => {
   // Classify through `registryErrorName` (which recovers the concrete name from
-  // the message when the non-enumerable `errorName` tag was stripped at a
-  // marshal boundary) rather than reading `errorName` directly, so the family
-  // predicate holds for an error received over CapTP as well as one caught
-  // same-vat. The tree family is exactly {NotFound, PathSyntax, Offline}.
+  // the message when the out-of-band `tagError` classification does not travel
+  // a marshal boundary) so the family predicate holds for an error received
+  // over CapTP as well as one caught same-vat. The tree family is exactly
+  // {NotFound, PathSyntax, Offline}.
   const concreteName = registryErrorName(error);
   return (
     concreteName === 'RegistryNotFoundError' ||
@@ -212,22 +198,21 @@ harden(isPackageRegistryError);
  * Tag interrogation: returns the registry error class of `err`, or
  * undefined if it is not a registry error.
  *
- * `makeError` records the supplied `errorName` on the SES `assert`
- * channel but the runtime error's `name` property still reflects its
- * constructor (`Error`, `URIError`, etc.).  This helper inspects the
- * `Symbol.for('asserted')`-style annotation that SES exposes through
- * the error's enumerable `errorName` property when present, and falls
- * back to a message-prefix check for environments that do not.
+ * `makeError` records the supplied `errorName` out-of-band via `tagError`
+ * (not as an own property, which would make the error non-passable) and the
+ * runtime error's `name` property still reflects its constructor (`Error`,
+ * `RangeError`, etc.).  This helper probes any own classification property a
+ * sibling factory may set (e.g. the daemon's `.name`-tagged errors) and falls
+ * back to the message-prefix check, which is the channel that survives a
+ * marshal boundary and the path every registry error takes.
  *
  * @param {unknown} err
  * @returns {string | undefined}
  */
 export const registryErrorName = err => {
   if (err === null || typeof err !== 'object') return undefined;
-  // SES annotates errors created via `makeError(_, _, { errorName })`
-  // with an `errorName` property visible to assertion logs; the
-  // runtime error's `.name` reflects the constructor.  We probe
-  // multiple properties to stay resilient across SES versions.
+  // Registry errors carry their class in the message (below); these own-property
+  // probes only catch a sibling factory that tags via `.name`/`.errorName`.
   const candidates = [
     /** @type {{ registryErrorName?: unknown }} */ (err).registryErrorName,
     /** @type {{ errorName?: unknown }} */ (err).errorName,
@@ -261,9 +246,9 @@ export const registryErrorName = err => {
   if (message.startsWith('Registry network error')) return NETWORK;
   if (message.startsWith('Registry is in offline mode')) return OFFLINE;
   if (message.startsWith('Registry is offline')) return OFFLINE;
-  // The tree-originated not-found and path-syntax errors carry the
-  // `errorName`/`registryErrorName` tags same-vat, but those are stripped when
-  // the error crosses a marshal boundary; the message is the surviving channel.
+  // The tree-originated not-found and path-syntax errors carry their `errorName`
+  // as an out-of-band `tagError` classification same-vat, but that does not
+  // travel a marshal boundary; the message is the surviving channel.
   if (message.startsWith('Package registry has no entry at'))
     return 'RegistryNotFoundError';
   if (message.startsWith('Invalid package-registry path segment'))

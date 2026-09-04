@@ -26,8 +26,7 @@ resolver over that tree: new subpath exports `./registry-tree.js` and
 `./registry-tree-resolver.js`, the root exports `makeNpmRegistryTree`,
 `makePackageRegistryTree`, `makeLookupTreeView`, `makeEndorNpmRegistryTree`,
 `resolveRegistryTree`, `lookupPackageVersion`, `makeDeprecatedEndoRegistryAdapter`,
-`comparePublishedVersions` (via `./registry-tree.js`), the
-`RegistryDirectoryInterface` / `RegistryHubInterface` /
+the `RegistryDirectoryInterface` / `RegistryHubInterface` /
 `RegistrySnapshotTreeInterface` guards, the `RegistryNotFoundError` /
 `RegistryPathSyntaxError` / `RegistryMissingPackageError` /
 `RegistryNetworkError` error factories, and the `isPackageRegistryError`

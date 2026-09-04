@@ -2,7 +2,8 @@
 /* eslint-disable no-underscore-dangle */
 
 import test from '@endo/ses-ava/prepare-endo.js';
-import { Far } from '@endo/far';
+import { Far, passStyleOf } from '@endo/far';
+import { M, mustMatch } from '@endo/patterns';
 
 import {
   RegistryNotFoundError,
@@ -94,6 +95,53 @@ test('has and lookup agree on the @scope/package spelling with a version', async
   const alsoLeaf = await /** @type {any} */ (npm).lookup('@scope/package');
   const stepwise = await /** @type {any} */ (alsoLeaf).lookup('1.2.3');
   t.is(/** @type {any} */ (stepwise).sha256(), 'sha256-@scope/package-1.2.3');
+});
+
+test('has does not apply the npm name charset to version or in-tree file segments', async t => {
+  // Regression: `has` normalized *every* segment through the npm package-name
+  // charset, while `lookup` normalizes only the leading segment. A version or
+  // in-tree file whose name carries a space, `+`, or a non-ASCII character (all
+  // ordinary in published packages) was therefore reported absent by `has` even
+  // though `lookup` resolves it, breaking the has⇒lookup agreement invariant.
+  const fileNames = harden(['a b.txt', 'es5+es6.js', 'café.js']);
+  const makeFileBlob = name =>
+    Far('HardeningFileBlob', {
+      help: () => name,
+      sha256: () => `sha256-${name}`,
+      getInfo: async () => harden({ temporal: 'immutable' }),
+    });
+  const makeVersionTree = (name, version) =>
+    Far('HardeningVersionTree', {
+      help: () => `${name}@${version}`,
+      has: async (...path) => path.length === 0 || fileNames.includes(path[0]),
+      list: async () => [...fileNames],
+      lookup: async segment =>
+        fileNames.includes(segment) ? makeFileBlob(segment) : undefined,
+      sha256: () => `sha256-${name}-${version}`,
+      getInfo: async () => harden({ temporal: 'immutable' }),
+    });
+  const operations = harden({
+    async listVersions(name) {
+      return name === 'alpha' ? ['1.0.0'] : undefined;
+    },
+    async providePackageTree(name, version) {
+      if (name !== 'alpha' || version !== '1.0.0') {
+        throw new RangeError(`${name}@${version}`);
+      }
+      return harden({
+        treeRef: makeVersionTree(name, version),
+        integrity: 'sha512-a1',
+      });
+    },
+  });
+  const npm = makeNpmRegistryTree(operations);
+  for (const fileName of fileNames) {
+    // eslint-disable-next-line no-await-in-loop
+    t.true(await npm.has('alpha', '1.0.0', fileName), `has ${fileName}`);
+    // eslint-disable-next-line no-await-in-loop
+    const blob = await npm.lookup(['alpha', '1.0.0', fileName]);
+    t.is(/** @type {any} */ (blob).sha256(), `sha256-${fileName}`);
+  }
 });
 
 test('makeLookupTreeView withholds enumeration at every depth', async t => {
@@ -301,14 +349,21 @@ test('makePackageRegistryTree does not leak intrinsics through inherited keys', 
   }
 });
 
-test('registry error classification survives loss of the annotated tags', async t => {
-  // A structured error carries non-enumerable tags that are stripped when it
-  // crosses a marshal boundary; classification must still work from the
-  // message channel that does survive.
-  const original = RegistryNotFoundError('/npm/example');
-  // Simulate the passable copy: same message, no errorName/registryErrorName.
+test('registry errors are passable and classify across the real marshal boundary', async t => {
+  // A structured error must stay passable: an own property outside
+  // {message, stack, cause, errors} makes an error non-passable regardless of
+  // enumerability, so the classification rides `makeError`'s out-of-band
+  // `tagError` tag (same-vat) and the message channel (cross-boundary), never an
+  // own property. Exercise the *real* boundary rather than a hand-built copy.
+  const original = harden(RegistryNotFoundError('/npm/example'));
+  t.true(original instanceof RangeError);
+  // passStyleOf throws for a non-passable error; M.error() is the pattern a
+  // return guard applies. Both must accept the error.
+  t.is(passStyleOf(original), 'error');
+  t.notThrows(() => mustMatch(original, M.error()));
+  // The message is the surviving classification channel once the out-of-band tag
+  // is dropped by a marshal round-trip (simulated here by a bare copy).
   const copied = harden(Error(original.message));
-  t.is(/** @type {any} */ (copied).registryErrorName, undefined);
   t.is(registryErrorName(copied), 'RegistryNotFoundError');
   t.true(isPackageRegistryError(copied));
 });

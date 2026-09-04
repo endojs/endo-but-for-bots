@@ -4,7 +4,7 @@
 /** @import { RegistryDirectory, RegistryHub, RegistryVersionTree } from '../types.js' */
 
 import test from '@endo/ses-ava/prepare-endo.js';
-import { Far } from '@endo/far';
+import { Far, passStyleOf } from '@endo/far';
 
 import {
   RegistryOfflineError,
@@ -204,7 +204,9 @@ for (const backend of backends) {
     t.true(missing instanceof RangeError);
     t.is(registryErrorName(missing), 'RegistryNotFoundError');
     t.true(isPackageRegistryError(missing));
-    t.is(/** @type {any} */ (missing).errorName, 'PackageRegistryError');
+    // The classification rides an out-of-band `tagError` tag, never an own
+    // property, so the error stays passable (see the hardening suite).
+    t.is(passStyleOf(harden(missing)), 'error');
 
     for (const malformed of [
       'scope/package',
@@ -216,10 +218,7 @@ for (const backend of backends) {
       t.true(malformedError instanceof SyntaxError);
       t.is(registryErrorName(malformedError), 'RegistryPathSyntaxError');
       t.true(isPackageRegistryError(malformedError));
-      t.is(
-        /** @type {any} */ (malformedError).errorName,
-        'PackageRegistryError',
-      );
+      t.is(passStyleOf(harden(malformedError)), 'error');
     }
   });
 }
