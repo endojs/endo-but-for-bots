@@ -194,15 +194,27 @@ export const spawnWorkerLoop = async (
   systemPrompt,
   { spawner, timers, provideAuthToken, delegatedPrompt } = {},
 ) => {
+  /**
+   * The agent's cancellation promise, boxed.
+   *
+   * Boxed because an async function *adopts* a promise it returns: handing
+   * back `whenCancelled()` directly meant `await getCancelled()` did not
+   * settle until the agent was cancelled, so `runAgent` never reached its
+   * inbox loop at all under a real daemon context — which is exactly the shape
+   * `makeFarContext` supplies to every unconfined caplet. The tests pass no
+   * context, so the loop started and nothing showed it.
+   *
+   * @returns {Promise<{ promise: Promise<unknown> } | null>}
+   */
   const getCancelled = async () => {
     if (!context) return null;
     const resolvedContext = await context;
     if (!resolvedContext) return null;
     if (typeof resolvedContext.whenCancelled === 'function') {
-      return E(resolvedContext).whenCancelled();
+      return harden({ promise: E(resolvedContext).whenCancelled() });
     }
     if (resolvedContext.cancelled) {
-      return resolvedContext.cancelled;
+      return harden({ promise: Promise.resolve(resolvedContext.cancelled) });
     }
     return null;
   };
@@ -496,7 +508,7 @@ export const spawnWorkerLoop = async (
     const selfLocator = await E(powers).locate('@self');
     const cancelled = await getCancelled();
     const cancelledSignal = cancelled
-      ? cancelled.then(
+      ? cancelled.promise.then(
           () => ({ cancelled: true }),
           () => ({ cancelled: true }),
         )
@@ -729,11 +741,15 @@ export const spawnWorkerLoop = async (
           // Queued turns are abandoned rather than drained: cancellation must
           // be prompt, and an in-flight provider call can take minutes.
           stopping = true;
-          try {
-            await messageIterator.return?.();
-          } catch {
-            // ignore iterator return errors on cancellation
-          }
+          // Asked to close, never awaited. The reader pump observes a close
+          // only *between* pulls, so once it is parked in the source's
+          // `next()` on a quiet mailbox this promise never settles — and
+          // awaiting it here would hold the `finally` below, leaving every
+          // pending ask to wait out its own timeout for a reply that cannot
+          // arrive and the worker parked on a wake nobody will send.
+          void Promise.resolve(messageIterator.return?.()).catch(
+            () => undefined,
+          );
           return;
         }
         const { value: message, done } = raced.result;

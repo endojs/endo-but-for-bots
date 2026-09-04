@@ -145,6 +145,20 @@ Provisioning checks every name an agent will own before it creates anything, so
 a collision is a refusal rather than a takeover — and so a failed provisioning
 can roll back by name without removing something it did not create.
 
+Teardown is all-or-nothing on names: it attempts every cancellation, because a
+spawner caplet left running holds `host-agent`, but it drops no name unless
+every one of them succeeded.
+A name is the only way back to whatever survived, and cancelling is idempotent,
+so a failed release leaves the tree reachable and a retry converges.
+
+> **Upgrading from an earlier commit of this branch.** The infix was `-sub-`
+> before it was `.sub.`, and there is no migration.
+> A daemon that ran the earlier scheme should release its subagents before
+> upgrading: afterwards their host names are no longer enumerable, so nothing
+> lists, counts, or releases them.
+> A legacy matcher would have to reopen the ambiguity the delimiter closed, so
+> there is deliberately none.
+
 ### Revival
 
 **Fae** runs each agent's loop in its own `driver` caplet, which is revived
