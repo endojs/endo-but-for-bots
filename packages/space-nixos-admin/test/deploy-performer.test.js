@@ -927,6 +927,38 @@ test('a foreign operation in flight is slot-busy even once its request is gone',
   t.true((await second).ok);
 });
 
+test('a recorded outcome frees the slot even if the status never went terminal', async t => {
+  // The outcome and the terminal status are two separate publications, so an
+  // applier that dies between them leaves a permanently nonterminal status.
+  // Waiting on that alone would wedge every later submission for the whole
+  // watch limit — a day in production.
+  const { admin, pickUpAndConsume, outcomesDir, statusPath, processNext } =
+    await makeHarness(t);
+  const stranded = admin.apply('the applier dies after recording', 'r-14:0-0');
+  const request = await pickUpAndConsume();
+  await mkdir(outcomesDir, { recursive: true });
+  await writeFile(
+    join(outcomesDir, `${sanitizeId(request.id)}.json`),
+    JSON.stringify({
+      id: request.id,
+      action: request.action,
+      fingerprint: request.fingerprint,
+      configFingerprint: request.configFingerprint,
+      protocolFingerprint: request.protocolFingerprint,
+      phase: 'ok',
+    }),
+    'utf8',
+  );
+  t.true((await stranded).ok);
+  // apply-status.json still says `switching`, and now always will.
+  t.is(JSON.parse(await readFile(statusPath, 'utf8')).phase, 'switching');
+
+  const next = admin.build('not wedged behind a dead applier', 'r-14:0-1');
+  const mine = await processNext();
+  t.is(mine.id, 'r-14:0-1');
+  t.true((await next).ok);
+});
+
 test('a request from another host configuration says so', async t => {
   // Reconfiguring the flake host, checkout, or lock namespace leaves a
   // well-formed request bound to the previous marker. That is a reconfigured
