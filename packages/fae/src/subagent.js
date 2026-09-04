@@ -89,7 +89,17 @@ export const agentNamePattern = /^[a-z][a-z0-9-]{0,62}$/;
 export const assertAgentName = name => {
   (typeof name === 'string' && agentNamePattern.test(name)) ||
     Fail`Agent name ${q(name)} must match ${q(agentNamePattern.source)}`;
-  return /** @type {string} */ (name);
+  const text = /** @type {string} */ (name);
+  // `profile-for-` is how an agent's guest is named, and the enumeration's
+  // exactness would otherwise rest on a coincidence: `profile-for-q.sub.r` —
+  // the guest of `q`'s subagent `r` — splits as an agent named
+  // `profile-for-q` with a subagent `r`, so an agent by that name could list
+  // and stop somebody else's child. Nothing today can hold both names at once,
+  // because provisioning refuses the second, but that is the pre-check's
+  // business and not something the parse should depend on.
+  !text.startsWith('profile-for-') ||
+    Fail`Agent name ${q(text)} must not begin with ${q('profile-for-')}, which names a guest`;
+  return text;
 };
 harden(assertAgentName);
 
