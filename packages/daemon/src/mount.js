@@ -803,16 +803,22 @@ const makeMountExo = ctx => {
   // directory symlink but does not recurse through it, so the walk covers the
   // tree rather than the link graph — the cap cannot rescue an unbounded walk,
   // because the sort needs the whole result set before the first batch. A
-  // segment naming a path still follows a link. The walk, the
+  // segment naming a path still follows a link, and `followSymlinks` opts the
+  // sweep back in (`rg -L`) for a caller that means to cross them. The walk, the
   // two-metacharacter dialect, the ReDoS-safe matcher, symlink-cycle
   // termination, deny filtering, and confinement all live in the platform
   // engine (`@endo/platform/fs/search`); this method is the eager
   // flatten-and-cap collector over its batch generator. A `subView`'s glob
   // sees only its own sub-root because the face's `confinementRoot` is the
   // walk boundary, and the revocation gate wraps the call.
-  const glob = async pattern => {
+  /**
+   * @param {string} pattern
+   * @param {{ followSymlinks?: boolean }} [options]
+   */
+  const glob = async (pattern, options = {}) => {
     await null;
     assertLive();
+    const { followSymlinks } = options;
     const search = provideSearch(filePowers);
     /** @type {string[]} */
     const paths = [];
@@ -820,6 +826,7 @@ const makeMountExo = ctx => {
       deniedSegments:
         deniedSegments === undefined ? undefined : [...deniedSegments],
       confinementRoot,
+      followSymlinks,
     })) {
       paths.push(...batch);
       if (paths.length >= GLOB_MAX_RESULTS) {
@@ -840,7 +847,9 @@ const makeMountExo = ctx => {
   // Omitting `paths` searches every file under the face's root. Each supplied
   // path that is denied, escapes confinement, is a directory, or is
   // unreadable is skipped silently — the uniform envelope that makes
-  // glob-produced and hand-supplied paths behave identically. The walk, deny
+  // glob-produced and hand-supplied paths behave identically. `followSymlinks`
+  // governs only the implicit walk taken when `paths` is omitted; a supplied
+  // path is named, so it is followed either way. The walk, deny
   // filtering, confinement, and CRLF normalization live in the platform
   // engine (`@endo/platform/fs/search`); this method is the eager
   // flatten-and-cap collector over its batch generator, with the revocation
@@ -848,12 +857,12 @@ const makeMountExo = ctx => {
   /**
    * @param {string} pattern
    * @param {readonly string[]} [paths]
-   * @param {{ maxResults?: number }} [options]
+   * @param {{ maxResults?: number, followSymlinks?: boolean }} [options]
    */
   const grep = async (pattern, paths = undefined, options = {}) => {
     await null;
     assertLive();
-    const { maxResults = GREP_MAX_RESULTS } = options;
+    const { maxResults = GREP_MAX_RESULTS, followSymlinks } = options;
     const search = provideSearch(filePowers);
     /** @type {Array<{ file: string, line: number, text: string }>} */
     const matches = [];
@@ -862,6 +871,7 @@ const makeMountExo = ctx => {
         deniedSegments === undefined ? undefined : [...deniedSegments],
       confinementRoot,
       maxResults,
+      followSymlinks,
     })) {
       matches.push(...batch);
       if (matches.length >= maxResults) {
@@ -885,13 +895,18 @@ const makeMountExo = ctx => {
   /**
    * @param {string} globPattern
    * @param {string} grepPattern
-   * @param {{ maxResults?: number }} [options]
+   * @param {{ maxResults?: number, followSymlinks?: boolean }} [options]
    */
   const glorp = async (globPattern, grepPattern, options = {}) => {
     await null;
     assertLive();
-    const { maxResults = GREP_MAX_RESULTS } = options;
-    const paths = await glob(globPattern);
+    const { maxResults = GREP_MAX_RESULTS, followSymlinks } = options;
+    // `followSymlinks` belongs to the enumeration half only. grep receives an
+    // explicit `paths` array here, and a named path is followed regardless, so
+    // forwarding it to grep as well would be inert — and would misreport, to
+    // anyone reading this as the reference for a fused native implementation,
+    // that the scan half has a link policy of its own.
+    const paths = await glob(globPattern, { followSymlinks });
     return grep(grepPattern, paths, { maxResults });
   };
 

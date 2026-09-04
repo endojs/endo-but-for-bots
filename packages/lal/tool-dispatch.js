@@ -426,15 +426,25 @@ export const makeExecuteTool = powers => {
         return harden({ applied, diff });
       }
       case 'glob': {
-        const { petNameOrPath, pattern } = args;
+        const { petNameOrPath, pattern, followSymlinks } = args;
         const capability = await E(powers).lookup(petNameOrPath);
-        return E(capability).glob(pattern);
+        // Omit the options record entirely when the tool call carried no
+        // option, so a capability predating the parameter still answers.
+        return followSymlinks === undefined
+          ? E(capability).glob(pattern)
+          : E(capability).glob(pattern, harden({ followSymlinks }));
       }
       case 'grep': {
-        const { petNameOrPath, pattern, glob, maxResults } = args;
+        const { petNameOrPath, pattern, glob, maxResults, followSymlinks } =
+          args;
         const capability = await E(powers).lookup(petNameOrPath);
         const options =
-          maxResults === undefined ? undefined : harden({ maxResults });
+          maxResults === undefined && followSymlinks === undefined
+            ? undefined
+            : harden({
+                ...(maxResults === undefined ? {} : { maxResults }),
+                ...(followSymlinks === undefined ? {} : { followSymlinks }),
+              });
         if (glob !== undefined) {
           return options === undefined
             ? E(capability).glorp(glob, pattern)
