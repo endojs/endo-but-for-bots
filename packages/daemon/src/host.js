@@ -491,6 +491,15 @@ export const makeHostMaker = ({
     // The id no longer participates in any special-name lookup;
     // `getFormula(identifier)` is the user-facing replacement.
     // See `designs/formula-inspector.md` "Removing the `@info` name hub".
+    // Only the daemon's root host manages secrets. `formulateEndo` omits
+    // `hostHandleId`, which `formulateNumberedHost` then defaults to the
+    // host's own handle, while `makeChildHost` always passes the parent's —
+    // so this is exhaustive. Withholding `@secrets` from a child host is
+    // namespace hygiene, not containment: a child already reaches the root
+    // host through its ambient `@endo`, so it is a full-authority peer.
+    // See designs/daemon-secret-manager.md § Summary.
+    const isRootHost = hostHandleId === undefined || hostHandleId === handleId;
+
     /** @type {Record<string, FormulaIdentifier>} */
     const specialNames = {
       ...platformNames,
@@ -504,9 +513,11 @@ export const makeHostMaker = ({
       '@nets': networksDirectoryId,
       '@planes': planesDirectoryId,
       '@pins': pinsDirectoryId,
-      '@secrets': hostId,
       '@none': leastAuthorityId,
     };
+    if (isRootHost) {
+      specialNames['@secrets'] = hostId;
+    }
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
     }
@@ -586,21 +597,25 @@ export const makeHostMaker = ({
       }
     };
 
-    const secretManagerDirectory = secretManager.makeHostDirectory({
-      bindGrant: async (grantId, name) => {
-        await null;
-        if (!(await directory.has('secrets'))) {
-          await directory.makeDirectory(['secrets']);
-        }
-        await formulateSecretLookup(
-          hostId,
-          /** @type {NamePath} */ (['@secrets', 'use', grantId]),
-          id => directory.storeIdentifier(['secrets', name], id),
-        );
-      },
-      listKnownGrantPaths,
-      removeKnownGrantPaths,
-    });
+    // Undefined on a non-root host, which is what the `@secrets` routing
+    // below tests before intercepting a path.
+    const secretManagerDirectory = !isRootHost
+      ? undefined
+      : secretManager.makeHostDirectory({
+          bindGrant: async (grantId, name) => {
+            await null;
+            if (!(await directory.has('secrets'))) {
+              await directory.makeDirectory(['secrets']);
+            }
+            await formulateSecretLookup(
+              hostId,
+              /** @type {NamePath} */ (['@secrets', 'use', grantId]),
+              id => directory.storeIdentifier(['secrets', name], id),
+            );
+          },
+          listKnownGrantPaths,
+          removeKnownGrantPaths,
+        });
     const mailbox = await makeMailbox({
       petStore: specialStore,
       agentNodeNumber,
@@ -2374,7 +2389,7 @@ export const makeHostMaker = ({
 
     /** @type {EndoHost['has']} */
     const has = async (...petNamePath) => {
-      if (petNamePath[0] === '@secrets') {
+      if (petNamePath[0] === '@secrets' && secretManagerDirectory) {
         if (petNamePath.length === 1) return true;
         return E(secretManagerDirectory).has(petNamePath[1]);
       }
@@ -2384,7 +2399,7 @@ export const makeHostMaker = ({
     /** @type {EndoHost['lookup']} */
     const lookup = petNameOrPath => {
       const path = namePathFrom(petNameOrPath);
-      if (path[0] === '@secrets') {
+      if (path[0] === '@secrets' && secretManagerDirectory) {
         if (path.length === 1) return Promise.resolve(secretManagerDirectory);
         return E(secretManagerDirectory).lookup(path.slice(1));
       }
@@ -2394,7 +2409,7 @@ export const makeHostMaker = ({
     /** @type {EndoHost['maybeLookup']} */
     const maybeLookup = petNameOrPath => {
       const path = namePathFrom(petNameOrPath);
-      if (path[0] === '@secrets') {
+      if (path[0] === '@secrets' && secretManagerDirectory) {
         if (path.length === 1) return Promise.resolve(secretManagerDirectory);
         return E(secretManagerDirectory)
           .lookup(path.slice(1))
@@ -2405,7 +2420,7 @@ export const makeHostMaker = ({
 
     /** @type {EndoHost['list']} */
     const list = async (...petNamePath) => {
-      if (petNamePath[0] === '@secrets') {
+      if (petNamePath[0] === '@secrets' && secretManagerDirectory) {
         if (petNamePath.length !== 1) throw new TypeError('Unknown path');
         return /** @type {Promise<Name[]>} */ (
           E(secretManagerDirectory).list()

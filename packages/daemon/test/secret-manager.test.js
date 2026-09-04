@@ -33,7 +33,9 @@ const makeHarness = () => {
       records.delete(secretId);
     },
     writeSecretAuditEvent: event => events.push(event),
-    listSecretAuditEvents: limit => events.slice(-limit).reverse(),
+    // `slice(-0)` would yield every event; SQL `LIMIT 0` yields none.
+    listSecretAuditEvents: limit =>
+      limit === 0 ? [] : events.slice(-limit).reverse(),
   });
   const backend = harden({
     create: async (_operationId, secretId, bytes) => {
@@ -208,7 +210,8 @@ test('a revoke racing a backend read fails the read closed', async t => {
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
       deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
-      listSecretAuditEvents: limit => harness.events.slice(-limit),
+      listSecretAuditEvents: limit =>
+        limit === 0 ? [] : harness.events.slice(-limit),
     }),
     backend: racingBackend,
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
@@ -301,7 +304,8 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
       deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
-      listSecretAuditEvents: limit => harness.events.slice(-limit),
+      listSecretAuditEvents: limit =>
+        limit === 0 ? [] : harness.events.slice(-limit),
     }),
     backend,
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
@@ -348,7 +352,8 @@ const makeRacingManager = (
       writeSecretGrant: (id, secretId) => harness.grants.set(id, secretId),
       deleteSecret: secretId => harness.records.delete(secretId),
       writeSecretAuditEvent: event => harness.events.push(event),
-      listSecretAuditEvents: limit => harness.events.slice(-limit),
+      listSecretAuditEvents: limit =>
+        limit === 0 ? [] : harness.events.slice(-limit),
     }),
     backend,
     randomHex256: async () => {
@@ -504,4 +509,102 @@ test('a secret at the size limit is accepted and an oversize one is rejected wit
   );
   t.false(error.message.includes(overLimit.slice(0, 64)));
   t.true(error.message.length < 200);
+});
+
+test('a description at the length limit is accepted and one past it is not', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const { maxDescriptionLength } = secretManagerLimits;
+  const bytes = encodeBase64(new TextEncoder().encode(canary));
+
+  const atLimit = 'd'.repeat(maxDescriptionLength);
+  t.is(
+    (await E(importer).createBase64('at-limit', atLimit, bytes)).description,
+    atLimit,
+  );
+
+  await t.throwsAsync(
+    () =>
+      E(importer).createBase64(
+        'over-limit',
+        'd'.repeat(maxDescriptionLength + 1),
+        bytes,
+      ),
+    { message: /Secret operation failed/ },
+  );
+  // Empty and multi-line descriptions are rejected for the same reason: the
+  // description is single-line metadata, not free text.
+  await t.throwsAsync(() => E(importer).createBase64('empty', '', bytes), {
+    message: /Secret operation failed/,
+  });
+  await t.throwsAsync(
+    () => E(importer).createBase64('newline', 'one\ntwo', bytes),
+    { message: /Secret operation failed/ },
+  );
+
+  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  await t.throwsAsync(
+    () => E(entry.admin).setDescription('d'.repeat(maxDescriptionLength + 1)),
+    { message: /Secret operation failed/ },
+  );
+  // The rejected description never reaches the record or the audit trail.
+  t.is((await E(entry.admin).getSummary()).description, atLimit);
+});
+
+test('the audit limit guard admits its range and refuses outside it', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  await E(importer).createBase64(
+    'audited',
+    'Exercise the audit limit',
+    encodeBase64(new TextEncoder().encode(canary)),
+  );
+  const audit = await E(directory).lookup('audit');
+
+  /** @param {bigint} [limit] */
+  const countEvents = async limit => {
+    const listed = /** @type {unknown[]} */ (
+      limit === undefined ? await E(audit).list() : await E(audit).list(limit)
+    );
+    return listed.length;
+  };
+
+  // Zero is in range and asks for nothing, matching SQL `LIMIT 0`.
+  t.deepEqual(await E(audit).list(0n), []);
+  t.is(await countEvents(1n), 1);
+  t.true((await countEvents(1000n)) > 0);
+  // The default is applied when the argument is omitted.
+  t.true((await countEvents()) > 0);
+
+  for (const limit of [1001n, -1n]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(audit).list(limit), {
+      message: /Secret operation failed/,
+    });
+  }
+});
+
+test('re-creating a secret under a taken pet name is the binder decision', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const importer = await E(directory).lookup('create');
+  const bytes = encodeBase64(new TextEncoder().encode(canary));
+
+  const first = await E(importer).createBase64('dup', 'First', bytes);
+  const second = await E(importer).createBase64('dup', 'Second', bytes);
+
+  // Each create mints a distinct record and a distinct grant: the manager
+  // never merges two secrets because they share an inventory name. Which
+  // binding survives is the host's pet-store decision, not the manager's.
+  t.not(first.secretId, second.secretId);
+  t.is(harness.records.size, 2);
+  t.is(new Set([...harness.grants.keys()]).size, 2);
+  t.deepEqual(
+    (await E(await E(directory).lookup('catalog')).list()).map(
+      entry => entry.summary.description,
+    ),
+    ['First', 'Second'],
+  );
 });
