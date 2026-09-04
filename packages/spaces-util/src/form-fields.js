@@ -46,26 +46,25 @@ const tagOf = value => {
  * chart has to be rewritten to opt in. Everything else stays text, which is
  * exactly the previous behaviour.
  *
- * Recognised two ways on purpose. The tagged form is what a CopyTagged looks
- * like when it arrives intact, which is the case for a form message delivered
- * live. The untagged form — a plain record whose only content is
- * `payload: 'boolean'` — is what a `match:kind` pattern degrades to once the
- * daemon has persisted the form: message formulas round-trip through
- * `JSON.stringify`/`JSON.parse` (`daemon/src/manager-database.js`), and
- * `makeStampedMessage` hands `formula.fields` straight back, so the symbol tag
- * is gone for every form restored after a daemon restart.
+ * Recognised two ways on purpose. The tagged form is the normal one, and is
+ * now what every form carries: the daemon stores a form message's fields as
+ * smallcaps capdata, so a CopyTagged's `Symbol.toStringTag` survives the
+ * formula's JSON round-trip.
  *
- * Reading it structurally as well costs nothing: no other field shape is a
- * record whose sole own property is a `payload` of exactly `'boolean'`.
+ * The untagged form — a plain record whose only content is `payload:
+ * 'boolean'` — is what a `match:kind` pattern was flattened to by that round
+ * trip *before* the fix. Reading it structurally as well costs nothing: no
+ * other field shape is a record whose sole own property is a `payload` of
+ * exactly `'boolean'`.
  *
- * Note what this does and does not buy. It does not make such a field
- * submittable today — the daemon checks the submission against that same
- * degraded pattern, and `mustMatch(true, { payload: 'boolean' })` fails
- * exactly as `mustMatch('yes', ...)` does, so the pattern is unsatisfiable
- * until the daemon stops flattening patterns on the way to storage. What it
- * buys is that the UI reads the field's intent correctly, and so renders the
- * right control and submits the right type the moment that is fixed, instead
- * of needing a second change here.
+ * Be clear about what that second reading buys, because it is less than it
+ * looks. A form persisted before the daemon fix cannot be repaired — nothing
+ * recovers a tag that was never written — and `submit` still checks the answer
+ * against the flattened pattern, where `mustMatch(true, { payload: 'boolean'
+ * })` fails exactly as `mustMatch('yes', ...)` does. Such a field stays
+ * unanswerable either way. All this branch does is render the control the
+ * field asked for instead of a text box, and give a migration something to
+ * recognise if one is ever written.
  *
  * @param {FormFieldDef} field
  * @returns {'boolean' | 'text'}
