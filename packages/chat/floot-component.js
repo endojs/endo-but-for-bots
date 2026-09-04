@@ -1562,7 +1562,11 @@ export const flootComponent = (
       ]);
       presets = presetList;
       models = modelList;
-      const readyMetas = [...metas].filter(
+      // `listSessions()` is a remote call, so its result is unknown here;
+      // materialize it once as an array both the filter and the recovery
+      // check below can read.
+      const allMetas = /** @type {any[]} */ ([...metas]);
+      const readyMetas = allMetas.filter(
         (/** @type {any} */ meta) =>
           !meta.lifecycle || meta.lifecycle === 'ready',
       );
@@ -1581,7 +1585,7 @@ export const flootComponent = (
           facet: null,
           loaded: false,
         }));
-      if (!sessions.length && metas.length > 0) {
+      if (!sessions.length && allMetas.length > 0) {
         setStatus('Recovering sessions…');
         recoveryRefreshTimer = setTimeout(() => {
           if (!cancelled) void loadInitialSessions();
