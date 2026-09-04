@@ -65,6 +65,14 @@ const reservedSubagentSuffixes = harden([
  * The length bound is generous because a root agent's name is chosen by an
  * operator or a script, not typed: the fae smoke harness derives one from a
  * test title and a model id and runs to about fifty characters.
+ *
+ * It is also what bounds delegation depth against the pet-name limit. The
+ * longest name derived from an agent is `profile-for-<name>-spawner-handle`,
+ * 27 characters of decoration, and each level of delegation adds
+ * `.sub.<name>`, 68 more. At 255 characters — `isValidName`'s cap — that
+ * admits two levels; `DEFAULT_MAX_SUBAGENT_DEPTH` is 1. A deployment raising
+ * the depth bound past 2 with maximal names would have `provideGuest` reject
+ * a name mid-build.
  */
 export const agentNamePattern = /^[a-z][a-z0-9-]{0,62}$/;
 

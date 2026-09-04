@@ -239,8 +239,8 @@ test('provisioning refuses a name that would take one already in use', async t =
   t.deepEqual([...names.keys()].sort(), before, 'nothing may be unbound');
 });
 
-test('a teardown that could not finish leaves the whole tree reachable', async t => {
-  const { hostAgent, names } = makeFakeHost();
+test('a formula that could not be cancelled keeps the names that reach it', async t => {
+  const { hostAgent, names, cancelled } = makeFakeHost();
   await provisionFaeAgent({
     hostAgent,
     name: 'parent',
@@ -265,20 +265,27 @@ test('a teardown that could not finish leaves the whole tree reachable', async t
   );
   // Not every cancel failure means the formula survived, but some do, and a
   // name is the only way back to whatever did — a running spawner caplet holds
-  // `host-agent`. Dropping the names piecemeal produced the worst state
-  // available: an agent whose guest and driver were destroyed and which no
-  // retry could reach. Cancelling is idempotent, so the whole set stays bound
-  // and a retry converges.
+  // `host-agent`.
   t.true(names.has('parent-spawner'));
-  t.true(names.has('parent-driver'));
-  t.true(names.has('parent'));
+  // What *was* cancelled loses its names in the same step, because `cancel` is
+  // not idempotent: the daemon deletes the controller, so a second cancel of
+  // the same id re-runs the formula before cancelling it again. A retry that
+  // found these names still bound would reincarnate a driver — and a spawner —
+  // it had already destroyed.
+  t.false(names.has('parent-driver'));
+  t.false(names.has('parent'));
 
   // Retry once the cause has cleared.
   await releaseFaeAgent({ hostAgent, name: 'parent' });
   t.deepEqual([...names.keys()], []);
+  t.is(
+    cancelled.filter(entry => entry === 'parent-driver').length,
+    1,
+    'a retry must not re-cancel — and so reincarnate — what is already gone',
+  );
 });
 
-test('a stubborn grandchild does not half-destroy its parent', async t => {
+test('a stubborn grandchild leaves a retryable tree, not a resurrectable one', async t => {
   const { hostAgent, names, cancelled } = makeFakeHost();
   await provisionFaeAgent({
     hostAgent,
@@ -315,16 +322,21 @@ test('a stubborn grandchild does not half-destroy its parent', async t => {
       instanceOf: AggregateError,
     },
   );
-  // The parent's own caplets are still cancelled — a spawner left running
-  // holds `host-agent` — but nothing of the subtree is unbound, so the model's
-  // `subagents/x` edge still names something and a retry can finish the job.
+  // The parent's own caplets come down regardless — a spawner left running
+  // holds `host-agent` — and what came down loses its names. Only the
+  // grandchild's driver, which would not cancel, keeps one, which is what a
+  // retry needs to reach it.
   t.true(cancelled.includes('p.sub.x-spawner'));
-  t.true(names.has('p.sub.x'));
   t.true(names.has('p.sub.x.sub.c-driver'));
+  t.false(names.has('p.sub.x'));
 
   await releaseFaeAgent({ hostAgent, name: 'p.sub.x' });
-  t.false(names.has('p.sub.x'));
   t.false(names.has('p.sub.x.sub.c-driver'));
+  t.is(
+    cancelled.filter(entry => entry === 'p.sub.x-spawner').length,
+    1,
+    'the retry must not reincarnate the spawner it already destroyed',
+  );
   t.true(names.has('p'), 'the unrelated parent is untouched');
 });
 

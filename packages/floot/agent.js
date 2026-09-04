@@ -1133,6 +1133,23 @@ export const makeStreamingAgent = async (
       // rather than depending on the pump to notice.
       wakeMailWorker = wakeMail;
 
+      /**
+       * Dismissal is bookkeeping, and `followMessages` can re-deliver a number
+       * whose message this loop already removed. Letting that throw would kill
+       * the pump — and with it delegation for the rest of the session.
+       *
+       * @param {any} messageNumber
+       */
+      const dismissQuietly = async messageNumber =>
+        E(powers)
+          .dismiss(messageNumber)
+          .catch(error => {
+            console.error(
+              `[floot] could not dismiss message #${messageNumber}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+
       const mailWorker = (async () => {
         for (;;) {
           if (pendingMail.length === 0) {
@@ -1196,9 +1213,12 @@ export const makeStreamingAgent = async (
             // eslint-disable-next-line no-await-in-loop
             await E(powers).reply(number, [replyText], [], []);
             // Dismiss after handling so the message leaves the inbox and is not
-            // reprocessed when followMessages replays on the next daemon restart.
+            // reprocessed when followMessages replays on the next daemon
+            // restart. Bookkeeping, like the pump's: a failure here must not
+            // be reported as "could not complete mail turn", which the turn
+            // plainly did.
             // eslint-disable-next-line no-await-in-loop
-            await E(powers).dismiss(number);
+            await dismissQuietly(number);
           } catch (error) {
             console.error(
               `[floot] could not complete mail turn #${number}:`,
@@ -1215,23 +1235,6 @@ export const makeStreamingAgent = async (
       const whenStopped = inboxStopped.then(() =>
         harden({ value: undefined, done: true }),
       );
-      /**
-       * Dismissal is bookkeeping, and `followMessages` can re-deliver a number
-       * whose message this loop already removed. Letting that throw would kill
-       * the pump — and with it delegation for the rest of the session.
-       *
-       * @param {any} messageNumber
-       */
-      const dismissQuietly = async messageNumber =>
-        E(powers)
-          .dismiss(messageNumber)
-          .catch(error => {
-            console.error(
-              `[floot] could not dismiss message #${messageNumber}:`,
-              error instanceof Error ? error.message : String(error),
-            );
-          });
-
       // The tail below runs however this loop leaves — normally, by shutdown,
       // or by a throw. Without it, a pump that died left the worker parked on a
       // wake that would never come, holding every message it had already read.

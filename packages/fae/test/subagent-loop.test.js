@@ -492,11 +492,13 @@ test('a real daemon context does not stop the loop before it starts', async t =>
   const provider = makeScriptedProvider([
     () => harden({ message: { role: 'assistant', content: 'hello back' } }),
   ]);
-  // `makeFarContext` hands every unconfined caplet a `whenCancelled()` that
-  // returns the cancellation promise. Returning that from an async
-  // `getCancelled` adopts it, so awaiting the result did not settle until the
-  // agent was cancelled — and the inbox loop never started. Every test passed
-  // no context at all, so nothing showed it.
+  // Two things went wrong here at once. `getCancelled` duck-typed the context
+  // by property access, and a caplet's context arrives over CapTP as a
+  // *presence* — an empty Far object — so it always answered "no cancellation
+  // signal" and the loop could not be stopped. And returning `whenCancelled()`
+  // from an async function adopts it, so the shape below (a local Far object,
+  // which does have the property) blocked `runAgent` before its inbox loop.
+  // Every test passed no context at all, so neither showed.
   const loop = spawnWorkerLoop(
     mailbox.powers,
     Far('Context', { whenCancelled: () => new Promise(() => {}) }),
@@ -516,4 +518,29 @@ test('a real daemon context does not stop the loop before it starts', async t =>
     ),
     'the agent never answered: its loop never started',
   );
+});
+
+test('a context that cannot report cancellation stops the loop', async t => {
+  t.timeout(15_000);
+  const mailbox = makeLiveMailbox();
+  const provider = makeScriptedProvider([
+    () => harden({ message: { role: 'assistant', content: 'hello back' } }),
+  ]);
+  // Not being able to *observe* cancellation is not the same event as
+  // cancellation, but for an agent loop the safe collapse is the same one
+  // `packages/sandbox/src/factory.js` makes: a caplet that cannot tell whether
+  // its owner is alive should stop, and a context missing the method is a
+  // construction bug better surfaced as a stopped loop than as a loop nothing
+  // can stop.
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    Far('Context', { id: () => 'no-cancellation-method' }),
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(() => mailbox.close());
+  await loop;
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['are you there?'] });
+  t.false(await until(() => mailbox.sent.some(r => r.replyTo !== undefined)));
 });

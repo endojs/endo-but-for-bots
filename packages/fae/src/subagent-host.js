@@ -303,15 +303,41 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   const driverHandleName = `${driverResultName}${HANDLE_SUFFIX}`;
   const spawnerHandleName = `${spawnerResultName}${HANDLE_SUFFIX}`;
 
-  /** @param {string} capName */
-  const cancelIfPresent = async capName => {
+  /**
+   * Cancel a formula and drop the names that reach it, in that order.
+   *
+   * Paired, because `cancel` is *not* idempotent: `cancelValue` deletes the
+   * controller, so a second cancel of the same id re-runs the formula before
+   * cancelling it again. Retrying a teardown that had left a cancelled
+   * caplet's name bound would therefore reincarnate it — including the
+   * spawner caplet holding `host-agent`, which is the authority this whole
+   * path exists to reclaim. Dropping the name in the same step is what makes
+   * `has()` false on the retry and the retry safe.
+   *
+   * A cancel that fails keeps its names: they are the only way back to a
+   * formula that may still be running, and the caller is told to retry.
+   *
+   * @param {string} capletName - The formula to cancel.
+   * @param {string[]} reachedBy - Names to drop once it is gone.
+   */
+  const releaseCaplet = async (capletName, reachedBy) => {
     try {
-      if (await E(hostAgent).has(capName)) {
-        await E(hostAgent).cancel(capName);
+      if (await E(hostAgent).has(capletName)) {
+        await E(hostAgent).cancel(capletName);
       }
     } catch (error) {
       // Keep going: the rest of the tree still has to come down, and the
       // caller is told what failed at the end.
+      failures.push(error);
+      return;
+    }
+    try {
+      for (const petName of reachedBy) {
+        if (await E(hostAgent).has(petName)) {
+          await E(hostAgent).remove(petName);
+        }
+      }
+    } catch (error) {
       failures.push(error);
     }
   };
@@ -320,53 +346,32 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   // own guest. Dropping a name does not cancel what it named, so removing
   // these without cancelling would leave every guest incarnated for the life
   // of the daemon — inbox and all — reachable by anyone still holding it.
-  for (const capletName of [
-    driverResultName,
-    spawnerResultName,
+  await releaseCaplet(driverResultName, [driverResultName]);
+  await releaseCaplet(spawnerResultName, [spawnerResultName]);
+  await releaseCaplet(profileNameFor(driverHandleName), [
+    driverHandleName,
     profileNameFor(driverHandleName),
+  ]);
+  await releaseCaplet(profileNameFor(spawnerHandleName), [
+    spawnerHandleName,
     profileNameFor(spawnerHandleName),
-    profileNameFor(name),
-  ]) {
-    await cancelIfPresent(capletName);
+  ]);
+  await releaseCaplet(profileNameFor(name), [name, profileNameFor(name)]);
+
+  try {
+    // Removed unconditionally: a pin is a name, not a formula, and
+    // provisioning refused to start if this one was already taken.
+    if (await E(hostAgent).has('@pins', driverResultName)) {
+      await E(hostAgent).remove('@pins', driverResultName);
+    }
+  } catch (error) {
+    failures.push(error);
   }
 
-  // Names are dropped only once everything beneath and within this agent is
-  // actually gone.
-  //
-  // Cancelling is attempted regardless — a spawner caplet left running holds
-  // `host-agent`, the authority to mint agents — but a name is the only way
-  // back to whatever survived, so anything short of complete success leaves
-  // the whole set bound. Dropping them piecemeal produced the worst state
-  // available: an agent whose own guest and driver were destroyed, whose
-  // grandchild was still running, and which no retry could reach. Cancelling
-  // is idempotent, so a retry converges.
-  if (failures.length === 0) {
-    try {
-      if (await E(hostAgent).has('@pins', driverResultName)) {
-        await E(hostAgent).remove('@pins', driverResultName);
-      }
-      for (const petName of [
-        driverResultName,
-        driverHandleName,
-        profileNameFor(driverHandleName),
-        spawnerResultName,
-        spawnerHandleName,
-        profileNameFor(spawnerHandleName),
-        name,
-        profileNameFor(name),
-      ]) {
-        if (await E(hostAgent).has(petName)) {
-          await E(hostAgent).remove(petName);
-        }
-      }
-    } catch (error) {
-      failures.push(error);
-    }
-  }
   if (failures.length > 0) {
     throw new AggregateError(
       failures,
-      `Releasing agent "${name}" did not complete; its names are still bound, so retry once the cause is cleared`,
+      `Releasing agent "${name}" did not complete; what could not be cancelled is still bound, so retry once the cause is cleared`,
     );
   }
 };
