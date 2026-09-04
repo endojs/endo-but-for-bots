@@ -9757,7 +9757,11 @@ impl Interp {
                 },
             ))
             .collect();
-        callable_names.sort_unstable_by_key(|name| name.to_ascii_lowercase());
+        // `sort_by_cached_key`, not `sort_unstable_by_key`: the key allocates a
+        // String and the unstable form re-evaluates it on every comparison.
+        // The stable sort also pins the order of two names that differ only in
+        // case to their source order, rather than leaving it to the sort.
+        callable_names.sort_by_cached_key(|name| name.to_ascii_lowercase());
         callable_names.dedup();
 
         let mut names = callable_names;
@@ -14041,7 +14045,20 @@ impl Interp {
                     // the ordinary writable global property (a sloppy global),
                     // at the same measured creation boundary as before.
                     if self.id_map.contains_key(&name) {
-                        self.resolve_set(name, value);
+                        if !self.resolve_set(name, value) {
+                            // An initialized `const` reached by name (a `with`
+                            // scope that does not carry it, or an eval-published
+                            // reference). Same TypeError SET_LOCAL/SET_CLOSURE
+                            // raise for the by-index forms.
+                            let error = self.build_error("TypeError", 0, 0);
+                            pc = dispatch_result!(
+                                self.raise_js(error),
+                                pc,
+                                self,
+                                return_depth
+                            );
+                            continue;
+                        }
                     } else {
                         if !self.global_props.contains_key(&name) {
                             self.materialize_global_property(name);
@@ -23296,7 +23313,15 @@ impl Interp {
             }
         }
         self.meter.tick_raw(REGEXP_FLAGS_GETTER_METERING);
-        let _ = self.new_string_units(&units);
+        // XS materializes the flags string here, and the callers that only
+        // want the units drop it immediately. Charge exactly the chunk
+        // `new_string_units` would have charged instead of allocating one:
+        // every observable flags read (@@replace, @@split, @@match,
+        // @@matchAll, String.prototype.matchAll, RegExp.prototype.toString)
+        // reaches this, so the discarded chunk was per-dispatch garbage.
+        if !units.is_empty() {
+            self.meter.tick_chunk_new((units.len() + 1) as u64);
+        }
         Ok(units)
     }
 
@@ -26211,6 +26236,10 @@ impl Interp {
         if index > u32::MAX as u64 {
             return Ok(Err(self.build_error("TypeError", 0, 0)));
         }
+        // Minted before the compact arm for the same reason as
+        // `array_generic_create_data_property`: the pinned XS interns the index
+        // name here too, and the slot allocation `intern_key` charges is what
+        // keeps `Array.from`/`Array.of` element writes raw-exact against it.
         let id = self.intern_key(&index.to_string());
         let descriptor = OrdinaryDescriptor {
             value: Some(value),
@@ -31518,6 +31547,21 @@ impl Interp {
                 Payload::Reference(r) => self.wrapper_data.get(&r).copied().unwrap_or(this),
                 _ => this,
             },
+            // `Object.prototype.toString` steps 1-2: a nullish receiver answers
+            // before ToObject, so it skips the IsArray / IsCallable /
+            // Get(@@toStringTag) work the ordinary arm below does — which is
+            // also what the oracle charges for (doing that work anyway put
+            // IronHorse ~49k raw units above XS on both receivers).
+            NativeMethod::ObjectToString if matches!(this.kind, Kind::Undefined | Kind::Null) => {
+                let text: &[u8] = if this.kind == Kind::Undefined {
+                    b"[object Undefined]"
+                } else {
+                    b"[object Null]"
+                };
+                self.meter.tick_chunk_new(text.len() as u64);
+                let off = self.alloc_str_text(text);
+                Slot::of(Kind::String, Payload::String(off))
+            }
             // `Object.prototype.toString`: `[object Object]` for an ordinary
             // object (the exotic tags — Array/Error/… — are XS overrides or a
             // later increment). Allocates the result string chunk.
@@ -31585,6 +31629,20 @@ impl Interp {
                         Payload::BigInt(_) => b"[object BigInt]",
                         _ if wrapper_tag.is_some() => wrapper_tag.unwrap(),
                         _ if is_callable => b"[object Function]",
+                        // A primitive receiver takes the builtinTag of the
+                        // wrapper ToObject would produce. `this` arrives here
+                        // unboxed (`call_dot_call_native` pushes the raw
+                        // receiver), so `wrapper_tag` above -- which reads
+                        // `wrapper_data` -- only ever covers an already-boxed
+                        // receiver and left these falling through to the
+                        // ordinary-object default. (`undefined`/`null` never
+                        // reach here; they answer in the guarded arm above.)
+                        _ if this.kind == Kind::Boolean => b"[object Boolean]",
+                        _ if matches!(this.kind, Kind::Integer | Kind::Number) => {
+                            b"[object Number]"
+                        }
+                        _ if this.kind == Kind::String => b"[object String]",
+                        _ if this.kind == Kind::Symbol => b"[object Symbol]",
                         _ => b"[object Object]",
                     };
                     self.meter.tick_chunk_new(text.len() as u64);
@@ -36692,7 +36750,14 @@ impl Interp {
         for index in 0..length {
             *cost += JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
             let text = index.to_string();
-            let id = self.intern_key(&text);
+            // Unmetered: XS walks the array here by index and never mints a
+            // key, so charging `intern_key`'s slot allocation put IronHorse
+            // exactly 256 raw units per element above the oracle
+            // (`JSON.stringify([1])` +256, `[1,2]` +512, `[1,2,3]` +768, and
+            // +0 for an object, whose keys really are names). IronHorse still
+            // needs an id to drive the observable `mop_get` below, so take the
+            // id without the charge.
+            let id = self.intern_key_unmetered(&text);
             let key = self.property_key_slot(id)?;
             let name = JsonPropertyName {
                 id,
@@ -41294,6 +41359,12 @@ impl Interp {
         index: u64,
         value: Slot,
     ) -> Result<(), Halt> {
+        // The id is minted here, before the compact arm that does not read it,
+        // because the pinned XS interns the index name on this path too: the
+        // slot allocation `intern_key` charges is exactly the 256 raw units per
+        // element the oracle charges, and `flat_map_retains_calibrated_dense_metering`
+        // pins that. Deferring it to the slow arm makes IronHorse 256 raw units
+        // per element cheaper than XS.
         let id = self.array_generic_index_id(index);
         // A compact Array index is strictly below 2^32 - 1. The string
         // "4294967295" and every wider safe-integer key are ordinary
@@ -45640,8 +45711,11 @@ impl Interp {
 
     /// Intern a property key **without** metering — for a realm-boot property
     /// XS builds off the guest meter (the `Intl.NumberFormat.prototype.format`
-    /// accessor key). Returns the existing id if the name is already interned,
-    /// so a program that also names the key keeps the compiler's atom id.
+    /// accessor key), and for an id IronHorse needs internally where XS reaches
+    /// the same property without minting a key at all (`JSON.stringify`'s
+    /// array-index walk). Returns the existing id if the name is already
+    /// interned, so a program that also names the key keeps the compiler's atom
+    /// id.
     fn intern_key_unmetered(&mut self, name: &str) -> u16 {
         if let Some(&id) = self.symbol_ids.get(name) {
             return id;
@@ -50499,7 +50573,14 @@ impl Interp {
     /// Resolve a name for writing: a frame local when declared, else the
     /// global object's property slot (which must already exist — the
     /// caller materializes it and meters the creation first).
-    fn resolve_set(&mut self, name: u16, value: Slot) {
+    /// Returns `false` when the binding is an initialized `const` and the write
+    /// must raise a TypeError instead. `CONST_LOCAL`/`CONST_CLOSURE` stamp
+    /// `XS_DONT_SET_FLAG` on the local slot and on the shared closure cell, and
+    /// `SET_LOCAL`/`PULL_LOCAL`/`SET_CLOSURE`/`PULL_CLOSURE` all consult it; a
+    /// by-name write reaching here through `with`/eval has to observe the same
+    /// guard, or `with ({}) { c = 2 }` silently rewrites a `const`.
+    #[must_use]
+    fn resolve_set(&mut self, name: u16, value: Slot) -> bool {
         if let Some(&i) = self.id_map.get(&name) {
             // A closure-captured local writes through its shared `Kind::Closure`
             // cell (so the mutation is visible to every capturer), mirroring
@@ -50507,11 +50588,17 @@ impl Interp {
             // `with`/eval path; a plain write uses `SET_CLOSURE` by index.
             if self.locals[i].kind == Kind::Closure {
                 if let Payload::Reference(cell) = self.locals[i].value {
+                    if self.slots.get(cell).flag & XS_DONT_SET_FLAG != 0 {
+                        return false;
+                    }
                     let c = self.slots.get_mut(cell);
                     c.kind = value.kind;
                     c.value = value.value;
-                    return;
+                    return true;
                 }
+            }
+            if self.locals[i].flag & XS_DONT_SET_FLAG != 0 {
+                return false;
             }
             self.locals[i].kind = value.kind;
             self.locals[i].value = value.value;
@@ -50520,6 +50607,7 @@ impl Interp {
             p.kind = value.kind;
             p.value = value.value;
         }
+        true
     }
 
     /// ToBoolean with chunk access: a heap string is truthy iff its
@@ -50745,11 +50833,19 @@ impl Interp {
         // wrapper path (`Object(1) == 1`, `new Boolean(true) == true`) as well
         // as user objects with conversion methods. Two references still compare
         // by identity and strict equality never coerces either side.
+        // `IsLooselyEqual` only converts an object operand when the other side
+        // is a String, Number, BigInt or Symbol (steps 10-11). An Object
+        // compared against `null`/`undefined` falls through to step 12 and is
+        // `false` with no conversion at all, so running `ToPrimitive` there
+        // would let the guest observe a `valueOf`/`toString`/`@@toPrimitive`
+        // call the language guarantees does not happen -- and would propagate
+        // an abrupt completion from a throwing one.
+        let coercible = |other: &Slot| !matches!(other.kind, Kind::Null | Kind::Undefined);
         if !strict {
-            if a.kind == Kind::Reference && b.kind != Kind::Reference {
+            if a.kind == Kind::Reference && b.kind != Kind::Reference && coercible(&b) {
                 a = self.to_primitive_default(code, a)?;
             }
-            if b.kind == Kind::Reference && a.kind != Kind::Reference {
+            if b.kind == Kind::Reference && a.kind != Kind::Reference && coercible(&a) {
                 b = self.to_primitive_default(code, b)?;
             }
         }
