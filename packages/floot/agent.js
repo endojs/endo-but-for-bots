@@ -1388,6 +1388,41 @@ const newSessionId = () =>
  * @param {{ env?: Record<string, string> }} [options]
  * @returns {object}
  */
+/**
+ * The system prompt a new session runs under.
+ *
+ * A caller of the public `createSession` speaks with the operator's own
+ * authority, so a prompt it supplies replaces the preset's.
+ *
+ * A *delegated* session's prompt is composed instead. The parent model writes
+ * the child's instructions, while the preset still decides which objects the
+ * child gets — so substituting would let a model spawn a session with its own
+ * tools and none of the operator's standing instructions. That is a way around
+ * them, not a way to delegate.
+ *
+ * @param {object} options
+ * @param {string} options.presetPrompt
+ * @param {string} [options.requestedPrompt]
+ * @param {boolean} [options.delegated]
+ * @returns {string}
+ */
+export const composeSessionSystemPrompt = ({
+  presetPrompt,
+  requestedPrompt,
+  delegated = false,
+}) => {
+  if (!requestedPrompt) return presetPrompt;
+  if (!delegated) return `${requestedPrompt}`;
+  return [
+    presetPrompt,
+    '---',
+    'You are a subagent. Your parent agent gave you these standing ' +
+      'instructions, which do not replace anything above:',
+    `${requestedPrompt}`,
+  ].join('\n\n');
+};
+harden(composeSessionSystemPrompt);
+
 export const make = (hostPowers, _context, { env } = {}) => {
   /** @type {any} */
   const powers = hostPowers;
@@ -1538,7 +1573,14 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getAccountOracle = () => {
     if (!accountOracleP) {
       accountOracleP = (async () => {
-        if (!(await E(powers).has(accountOracleName))) return undefined;
+        if (!(await E(powers).has(accountOracleName))) {
+          // Do not cache the absence. An oracle is provisioned by re-running
+          // setup, which binds the name without restarting this caplet, and a
+          // remembered `undefined` would withhold `accountStatus` from every
+          // session for the life of the daemon.
+          accountOracleP = undefined;
+          return undefined;
+        }
         return E(powers).lookup(accountOracleName);
       })().catch(error => {
         accountOracleP = undefined;
@@ -1774,9 +1816,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
             ...(oracle
               ? {
                   accountOracle: oracle,
+                  // An unpinned session follows the factory's configured
+                  // default model. Reporting no model id at all left the
+                  // account tool unable to price the session, with nothing
+                  // said about why.
                   modelId: entry?.backendId
                     ? hostedModelId(entry.backendId, entry.modelId || '')
-                    : entry?.model || '',
+                    : entry?.model || (await getProviderConfig()).model || '',
                 }
               : {}),
           }),
@@ -2111,16 +2157,18 @@ export const make = (hostPowers, _context, { env } = {}) => {
     // getAgent (objects are provisioned once, idempotently). A model is pinned
     // only when the caller chose a known one; otherwise the session follows
     // the factory's configured default model.
+    const sessionPrompt = composeSessionSystemPrompt({
+      presetPrompt: preset.systemPrompt,
+      requestedPrompt: options.systemPrompt,
+      delegated: parentSessionId !== undefined,
+    });
     const entry = harden({
       id,
       title: options.title || 'New chat',
       createdAt: Date.now(),
       presetId: preset.id,
-      systemPrompt: preset.systemPrompt,
+      systemPrompt: sessionPrompt,
       lifecycle: 'creating',
-      ...(options.systemPrompt
-        ? { systemPrompt: `${options.systemPrompt}` }
-        : {}),
       ...delegationFields,
       ...(backendId
         ? {

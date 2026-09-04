@@ -81,6 +81,15 @@ Withholding the spawner is what withholds the tools.
 An agent at the delegation bound is given none, so `makeSubagentTools` is never
 called for it and `claim` has nothing to match.
 
+A Floot session on a *hosted backend* has no subagent tools.
+Its tool set is projected once, in `getAgent`, before the session agent — and
+therefore the delegation registry — exists, so the backend's own tool loop sees
+only the Endo tools.
+Delegation is available to provider-backed sessions and to Fae agents.
+Closing that gap belongs with exposing a hosted backend through the Floot
+factory, which `packages/codex-sandbox/MERGE-BLOCKERS.md` records as
+unreviewed.
+
 ### Bounds
 
 | Bound | Default | Where |

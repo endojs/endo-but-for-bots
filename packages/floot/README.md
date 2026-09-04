@@ -114,8 +114,11 @@ that were already running.
 subscription plan behind this deployment's credential, how much of each rate
 limit is left, and — per session — what the conversation has cost at the current
 list price.
-A session also gets an `accountStatus` tool, so the model can answer those
-questions where the user asked them.
+A provider-backed session also gets an `accountStatus` tool, so the model can
+answer those questions where the user asked them.
+A session on a hosted backend does not: it runs the backend's own tool loop over
+a tool set projected before the session agent exists.
+`getAccount(refresh?)` answers the same questions to a UI either way.
 
 Every figure carries `observedAt` and a source of `observed`, `declared`,
 `remembered`, or `unavailable`, so a declared figure is never mistaken for a

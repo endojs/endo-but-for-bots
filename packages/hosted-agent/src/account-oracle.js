@@ -56,25 +56,57 @@ export const makeAccountOracle = ({
   /** @type {Promise<any> | undefined} */
   let refreshP;
 
+  const SECTIONS = harden(['plan', 'rateLimits', 'rateCard']);
+
   /**
-   * Re-stamp a snapshot loaded from the journal. Its numbers were true when
-   * they were written and may not be now, so every section is downgraded to
-   * `remembered` — except one that was already `unavailable`, which stays
-   * unavailable rather than becoming a memory of nothing.
+   * The sections of a stored snapshot that were genuinely observed.
+   *
+   * Only a live reading is worth remembering, and only a live reading may be
+   * replayed as one. A stored section marked `declared` or `unavailable` is
+   * dropped rather than re-stamped: replaying a declaration as a `remembered`
+   * observation is exactly the laundering this module exists to prevent, and
+   * it is what a snapshot written before this check could contain.
+   *
+   * @param {any} stored
+   */
+  const observedSectionsOf = stored => {
+    /** @type {any} */
+    const out = {};
+    if (!stored || typeof stored !== 'object') return harden(out);
+    for (const section of SECTIONS) {
+      const value = stored[section];
+      if (value && typeof value === 'object' && value.source === 'observed') {
+        out[section] = value;
+      }
+    }
+    return harden(out);
+  };
+
+  /**
+   * Re-stamp the observed sections of a stored snapshot. Their numbers were
+   * true when they were written and may not be now, so each is downgraded to
+   * `remembered`.
    *
    * @param {any} stored
    */
   const asRemembered = stored => {
-    /** @param {any} section */
-    const remember = section =>
-      section.source === 'unavailable'
-        ? section
-        : { ...section, source: 'remembered' };
-    return harden({
-      plan: normalizeAccountPlan(remember(stored.plan)),
-      rateLimits: normalizeRateLimits(remember(stored.rateLimits)),
-      rateCard: normalizeRateCard(remember(stored.rateCard)),
-    });
+    const observedSections = observedSectionsOf(stored);
+    /** @type {any} */
+    const out = {};
+    const normalize = {
+      plan: normalizeAccountPlan,
+      rateLimits: normalizeRateLimits,
+      rateCard: normalizeRateCard,
+    };
+    for (const section of SECTIONS) {
+      if (observedSections[section]) {
+        out[section] = normalize[section]({
+          ...observedSections[section],
+          source: 'remembered',
+        });
+      }
+    }
+    return harden(out);
   };
 
   /**
@@ -86,23 +118,29 @@ export const makeAccountOracle = ({
     if (!raw || typeof raw !== 'object') return harden({});
     /** @type {any} */
     const out = {};
+    // The stamps go *after* the payload, not before it. Spread first, a source
+    // that names its own `source` decides whether the oracle presents its
+    // figures as measured — a declared profile could claim `observed`, and an
+    // observed payload could disown itself — and `providerId` would be
+    // whatever the payload said rather than the credential this oracle
+    // describes. Provenance is the oracle's to state, never the source's.
     if (raw.plan) {
       out.plan = normalizeAccountPlan({
+        ...raw.plan,
         providerId,
         observedAt,
         source,
-        ...raw.plan,
       });
     }
     if (raw.rateLimits) {
       out.rateLimits = normalizeRateLimits({
+        ...raw.rateLimits,
         observedAt,
         source,
-        ...raw.rateLimits,
       });
     }
     if (raw.rateCard) {
-      out.rateCard = normalizeRateCard({ observedAt, source, ...raw.rateCard });
+      out.rateCard = normalizeRateCard({ ...raw.rateCard, observedAt, source });
     }
     return harden(out);
   };
@@ -140,14 +178,29 @@ export const makeAccountOracle = ({
       }
     }
     /** @type {any} */
-    let remembered = {};
+    let stored;
+    let storedUnreadable = false;
     if (journal) {
       try {
-        const stored = await journal.read();
-        if (stored) remembered = asRemembered(stored);
+        stored = await journal.read();
       } catch (error) {
+        storedUnreadable = true;
         console.error(
           `[account-oracle] ${providerId}: stored snapshot unreadable: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    /** @type {any} */
+    let remembered = {};
+    if (stored) {
+      try {
+        remembered = asRemembered(stored);
+      } catch (error) {
+        storedUnreadable = true;
+        console.error(
+          `[account-oracle] ${providerId}: stored snapshot malformed: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -170,21 +223,35 @@ export const makeAccountOracle = ({
         remembered.rateCard ||
         unknownRateCard(observedAt),
     });
-    // Only a live read is worth remembering. Writing back a declared or
-    // remembered view would launder an assertion into an observation and
-    // overwrite a real measurement with it.
-    if (
-      journal &&
-      (observed.plan || observed.rateLimits || observed.rateCard)
-    ) {
-      try {
-        await journal.write(next);
-      } catch (error) {
-        console.error(
-          `[account-oracle] ${providerId}: could not persist snapshot: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
+
+    // What gets journalled is the *observed* sections, over whatever was
+    // observed before — never the merged answer above.
+    //
+    // The merged answer carries a declared section wherever the provider
+    // published nothing, and `asRemembered` would replay that as a past
+    // observation: an assertion laundered into a measurement. It also carries
+    // `unavailable` for a section the provider happened not to answer this
+    // time, which would erase a real earlier reading of it.
+    //
+    // A journal that could not be read is not written either: with no idea
+    // what is already there, a partial live read would replace it wholesale.
+    if (journal && !storedUnreadable) {
+      const previouslyObserved = observedSectionsOf(stored);
+      const record = {};
+      for (const section of SECTIONS) {
+        const value = observed[section] || previouslyObserved[section];
+        if (value) record[section] = value;
+      }
+      if (SECTIONS.some(section => observed[section])) {
+        try {
+          await journal.write(harden(record));
+        } catch (error) {
+          console.error(
+            `[account-oracle] ${providerId}: could not persist snapshot: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       }
     }
     return next;
