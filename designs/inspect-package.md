@@ -373,8 +373,13 @@ The contract, in descending order of what we can guarantee today:
    always valid), and `log` is the write-once console idiom. The rich,
    expandable browser tree still survives — it rides the `inspectToConsoleArgs`
    live-value path — but no exported name changes its type by target.
-4. **Default is the safe, plain formatter.** Selecting no condition yields the
-   capability-free portable core, never a host inspector.
+4. **The `default` entry is the safe, plain formatter.** A resolver that
+   activates none of the named conditions gets the capability-free portable
+   core, never a host inspector. This is a statement about the *fallback*, not
+   a promise that every host reaches it: Node activates `node` implicitly, so a
+   plain Node import gets the host inspector by default and must deliberately
+   clear the condition to get the portable core (see "Condition-parameterized
+   resolution").
 5. **Best-effort now, faithful later.** We ship the try/catch-guarded contract
    immediately and upgrade to the faithful contract behind the Proxy-repair
    dependencies rather than blocking all value on them.
