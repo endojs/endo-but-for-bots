@@ -458,66 +458,122 @@ export const makeOcapnNoiseNetwork = ({
     });
 
   /**
-   * Aggregate the hints from all currently-listening transports into
-   * one hints table, prefixed by each transport's scheme.
+   * Aggregate the currently-listening transports' hints into one
+   * **priority-ordered** list of self-describing dial-URL strings.
+   * Order is transport registration order, then each transport's own
+   * listener order (which already places IPv6 ahead of IPv4).
    *
-   * @returns {Record<string, string>}
+   * @returns {string[]}
    */
   const aggregatedHints = () => {
-    /** @type {Record<string, string>} */
-    const hints = {};
-    for (const [transport, listener] of listenersByTransport) {
-      for (const [k, v] of Object.entries(listener.hints)) {
-        hints[`${transport.scheme}:${k}`] = v;
+    /** @type {string[]} */
+    const hints = [];
+    for (const [, listener] of listenersByTransport) {
+      for (const url of listener.hints) {
+        hints.push(url);
       }
     }
     return hints;
   };
 
   /**
+   * Build a locator for `rk`, carrying the aggregated transport hints.
+   *
+   * The OCapN `OcapnLocation.hints` component is Syrup-serialized (and
+   * signed) via `@endo/ocapn`'s dictionary-of-strings codec, and is
+   * shared with the other netlayers, so it must remain a
+   * `Record<string, string>` (changing it to a raw array would be an
+   * OCapN-wide wire/codec change, breaking python interop — out of
+   * scope here). We therefore carry the **priority-ordered list** as a
+   * **positional** dictionary: decimal-index keys (`'0'`, `'1'`, …)
+   * mapping to self-describing dial URLs. The order is reconstructed
+   * from the numeric keys on the reading side, so the ordered list
+   * survives the dictionary round-trip. An empty list is `false`.
+   *
    * @param {RegisteredKey} rk
    * @returns {OcapnLocation}
    */
   const buildLocationFor = rk => {
-    const hints = aggregatedHints();
+    const urls = aggregatedHints();
+    /** @type {Record<string, string>} */
+    const hints = {};
+    urls.forEach((url, i) => {
+      hints[String(i)] = url;
+    });
     return harden({
       type: /** @type {'ocapn-peer'} */ ('ocapn-peer'),
       network: 'np',
       transport: 'np',
       designator: rk.keyId,
-      hints: Object.keys(hints).length > 0 ? { ...hints } : false,
+      hints: urls.length > 0 ? hints : false,
     });
   };
 
   /**
-   * Select a transport for reaching `location` by matching hint prefixes.
+   * Reconstruct the priority-ordered dial-URL list from an
+   * `OcapnLocation.hints` positional dictionary (see `buildLocationFor`).
+   * Entries are ordered by their numeric key; non-string values are
+   * skipped.
+   *
+   * @param {OcapnLocation['hints']} hints
+   * @returns {string[]}
+   */
+  const orderedHintUrls = hints => {
+    if (!hints || typeof hints !== 'object') return [];
+    return Object.entries(hints)
+      .filter(([, value]) => typeof value === 'string')
+      .sort(([a], [b]) => {
+        const na = Number(a);
+        const nb = Number(b);
+        if (Number.isNaN(na) || Number.isNaN(nb)) {
+          return a < b ? -1 : a > b ? 1 : 0;
+        }
+        return na - nb;
+      })
+      .map(([, value]) => /** @type {string} */ (value));
+  };
+
+  /**
+   * Match `location`'s priority-ordered hints to registered transports.
+   * Walks the hint list in order; each dial URL whose scheme names a
+   * registered transport becomes a candidate. The caller tries the
+   * candidates in order until one connects.
    *
    * @param {OcapnLocation} location
-   * @returns {{ transport: OcapnNoiseTransport, hints: Record<string, string> }}
+   * @returns {Array<{ transport: OcapnNoiseTransport, hint: string }>}
    */
-  const selectOutgoingTransport = location => {
-    const { hints } = location;
-    if (!hints || typeof hints !== 'object') {
+  const selectOutgoingCandidates = location => {
+    const urls = orderedHintUrls(location.hints);
+    if (urls.length === 0) {
       throw makeError(
         X`ocapn-noise: location ${q(location.designator)} has no hints`,
       );
     }
-    for (const transport of registeredTransports) {
-      const prefix = `${transport.scheme}:`;
-      /** @type {Record<string, string>} */
-      const matching = {};
-      for (const [key, value] of Object.entries(hints)) {
-        if (key.startsWith(prefix) && typeof value === 'string') {
-          matching[key.slice(prefix.length)] = value;
+    /** @type {Array<{ transport: OcapnNoiseTransport, hint: string }>} */
+    const dialCandidates = [];
+    for (const url of urls) {
+      /** @type {string | undefined} */
+      let scheme;
+      try {
+        scheme = new URL(url).protocol.replace(/:$/u, '');
+      } catch {
+        scheme = undefined;
+      }
+      if (scheme !== undefined) {
+        for (const transport of registeredTransports) {
+          if (transport.scheme === scheme) {
+            dialCandidates.push({ transport, hint: url });
+            break;
+          }
         }
       }
-      if (Object.keys(matching).length > 0) {
-        return { transport, hints: matching };
-      }
     }
-    throw makeError(
-      X`ocapn-noise: no registered transport matches hints ${q(hints)}`,
-    );
+    if (dialCandidates.length === 0) {
+      throw makeError(
+        X`ocapn-noise: no registered transport matches hints ${q(location.hints)}`,
+      );
+    }
+    return dialCandidates;
   };
 
   /**
@@ -788,8 +844,29 @@ export const makeOcapnNoiseNetwork = ({
    * @returns {Promise<{ session: OcapnNoiseSession, tiebreaker: Uint8Array, close: () => void }>}
    */
   const runInitiator = async (localKey, location, peerEd25519) => {
-    const { transport, hints } = selectOutgoingTransport(location);
-    const stream = await transport.connect(hints);
+    // Walk the peer's priority-ordered hints, trying each dialable
+    // candidate until one connects (IPv6 before IPv4, most-preferred
+    // link-layer address first). Sequential fallback today; the design
+    // sketches speculative race-to-connect as future work.
+    const dialCandidates = selectOutgoingCandidates(location);
+    /** @type {import('./types.js').ByteStream | undefined} */
+    let stream;
+    /** @type {unknown} */
+    let lastErr;
+    for (const dialCandidate of dialCandidates) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        stream = await dialCandidate.transport.connect(dialCandidate.hint);
+        break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    if (stream === undefined) {
+      throw makeError(
+        X`ocapn-noise: every transport hint for ${q(location.designator)} failed to connect: ${lastErr}`,
+      );
+    }
     const peerId = toHex(peerEd25519);
 
     try {

@@ -200,9 +200,9 @@ export const makeFragmentingMockMeshFabric = ({
     /** @type {OcapnNoiseTransport} */
     const transport = harden({
       scheme: 'frag',
-      connect: async hints => {
-        const target = hints.to;
-        if (!target) throw Error(`frag transport: missing 'to' hint`);
+      connect: async hint => {
+        const target = hint ? new URL(hint).pathname : '';
+        if (!target) throw Error(`frag transport: missing dial hint`);
         const accept = listeners.get(target);
         if (!accept)
           throw Error(`frag transport: no listener registered for ${target}`);
@@ -218,7 +218,7 @@ export const makeFragmentingMockMeshFabric = ({
         closers.add(() => listeners.delete(name));
         /** @type {TransportListener} */
         const listener = harden({
-          hints: { to: name },
+          hints: [`frag:${name}`],
           close: () => listeners.delete(name),
         });
         return listener;

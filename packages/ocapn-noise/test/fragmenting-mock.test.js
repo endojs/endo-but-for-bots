@@ -39,7 +39,7 @@ test('fragmenting mock fabric: handshake completes and message round-trips', asy
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
   await netB.addTransport(fabric.transportFor('B'));
-  const locB = { ...netB.locationFor(keyB), hints: { 'frag:to': 'B' } };
+  const locB = { ...netB.locationFor(keyB), hints: { 0: 'frag:B' } };
 
   const [sessionA, sessionB] = await Promise.all([
     netA.provideSession(locB),
@@ -80,8 +80,8 @@ test('fragmenting mock fabric: crossed hellos resolve to one session per side', 
   const keyB = addFreshKey(netB).keyId;
   await netA.addTransport(fabric.transportFor('A'));
   await netB.addTransport(fabric.transportFor('B'));
-  const locA = { ...netA.locationFor(keyA), hints: { 'frag:to': 'A' } };
-  const locB = { ...netB.locationFor(keyB), hints: { 'frag:to': 'B' } };
+  const locA = { ...netA.locationFor(keyA), hints: { 0: 'frag:A' } };
+  const locB = { ...netB.locationFor(keyB), hints: { 0: 'frag:B' } };
 
   // Simultaneous bidirectional dials race against each other; the
   // crossed-hellos dedup logic in network.js should pick exactly one
