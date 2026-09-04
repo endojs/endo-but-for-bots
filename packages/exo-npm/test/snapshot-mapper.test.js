@@ -302,19 +302,49 @@ test('makeMountReadPowers reads from a workspace member compartment', async t =>
 });
 
 test('makeMountReadPowers late-binds through a registry tree', async t => {
-  const moduleBlob = Far('LateBoundModuleBlob', {
-    text: async () => 'export const late = true;',
-    json: async () => undefined,
-    streamBase64: async () => undefined,
-    help: () => 'late-bound module',
-  });
-  const packageTree = Far('LateBoundPackageTree', {
-    help: () => 'late-bound package tree',
-    has: async () => true,
-    list: async () => ['index.js'],
-    lookup: async path => (path === 'index.js' ? moduleBlob : undefined),
-    sha256: () => 'late-bound-hash',
-    getInfo: async () => harden({ hash: 'late-bound-hash' }),
+  // Model a real SnapshotTree: each `lookup` argument (or array element) is one
+  // *literal* path segment, walked one level at a time. A slash-joined string
+  // is not a path grammar, so `lookup('src/main.js')` must miss while
+  // `lookup(['src', 'main.js'])` resolves — the un-split call the reader used to
+  // make always failed for a nested module (a flat `index.js` is the one case
+  // that happened to work because it is a single segment either way).
+  const makeModuleBlob = content =>
+    Far('LateBoundModuleBlob', {
+      text: async () => content,
+      json: async () => undefined,
+      streamBase64: async () => undefined,
+      help: () => 'late-bound module',
+    });
+  /** @param {Record<string, unknown>} entries */
+  const makeSnapshotDir = entries =>
+    Far('LateBoundPackageTree', {
+      help: () => 'late-bound package tree',
+      has: async () => true,
+      list: async () => Object.keys(entries),
+      lookup: async path => {
+        const segments = typeof path === 'string' ? [path] : [...path];
+        let node = /** @type {any} */ (entries);
+        let resolved;
+        for (const segment of segments) {
+          if (node === undefined || typeof node !== 'object') return undefined;
+          const child = node[segment];
+          if (child === undefined) return undefined;
+          if (typeof child === 'string') {
+            resolved = makeModuleBlob(child);
+            node = undefined;
+          } else {
+            resolved = makeSnapshotDir(child);
+            node = child;
+          }
+        }
+        return resolved;
+      },
+      sha256: () => 'late-bound-hash',
+      getInfo: async () => harden({ hash: 'late-bound-hash' }),
+    });
+  const packageTree = makeSnapshotDir({
+    'index.js': 'export const late = true;',
+    src: { 'main.js': 'export const nested = true;' },
   });
   const operations = harden({
     listVersions: async name => (name === 'late' ? ['1.0.0'] : undefined),
@@ -335,6 +365,9 @@ test('makeMountReadPowers late-binds through a registry tree', async t => {
   });
   const bytes = await powers.read('late@1.0.0/index.js');
   t.is(decodeUtf8(bytes), 'export const late = true;');
+  // A nested module path must resolve through segment-wise lookup.
+  const nested = await powers.read('late@1.0.0/src/main.js');
+  t.is(decodeUtf8(nested), 'export const nested = true;');
 });
 
 test('mapSnapshot produces the {compartmentMap, resolution, readPowers} trio', async t => {

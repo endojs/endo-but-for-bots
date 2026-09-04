@@ -128,9 +128,19 @@ const makeOperations = ({
   });
 };
 
+// Both rows exercise the *same* shared JS adapter: `makeEndorNpmRegistryTree`
+// is `makeNpmRegistryTree(ops, { label: 'Endor npm' })`, differing only by a
+// label. This suite therefore pins the shared directory-tree *shape contract*
+// (paths, node contracts, has/lookup agreement) that every backend must honour;
+// it does NOT and cannot detect real Node-vs-Endor divergence, because the
+// Endor projection is host code, not this library. The genuine Endor lane —
+// `makeEndorReadableTree`'s JSON-envelope unwrap and the integrity-failure
+// mapping, plus the Rust `RegistryTreeAdapter` — is exercised in
+// `packages/daemon/test/registry-tree.test.js` ("Endor adapter unwraps a
+// success envelope", "Endor adapter preserves the integrity-failure contract").
 const backends = harden([
   harden({ name: 'Node', makeNpm: makeNpmRegistryTree }),
-  harden({ name: 'Endor', makeNpm: makeEndorNpmRegistryTree }),
+  harden({ name: 'Endor-labeled', makeNpm: makeEndorNpmRegistryTree }),
 ]);
 
 for (const backend of backends) {

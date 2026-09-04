@@ -83,7 +83,7 @@ test('Endor adapter preserves the integrity-failure contract', async t => {
 
 test('Endor adapter unwraps a success envelope and threads the treeHash', async t => {
   // The failure-branch test above never exercises the success envelope, so the
-  // Rust↔JS wire contract (the camelCase `treeHash`/`integrity` keys) is
+  // Rust<->JS wire contract (the camelCase `treeHash`/`integrity` keys) is
   // otherwise unpinned: a renamed destructured key would pass makeTreeRef
   // `undefined` undetected.
   const encode = value => JSON.stringify(value);

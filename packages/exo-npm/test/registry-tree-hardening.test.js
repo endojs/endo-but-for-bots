@@ -86,7 +86,7 @@ test('comparePublishedVersions is a total order across unparseable spellings', t
 
 test('has and lookup agree on the @scope/package spelling with a version', async t => {
   const npm = makeNpmRegistryTree(makeOperations());
-  // The has⇒lookup contract must not disagree on the one slash-bearing spelling
+  // The has=>lookup contract must not disagree on the one slash-bearing spelling
   // npm tolerates as a leading segment.
   t.true(await npm.has('@scope/package', '1.2.3'));
   const leaf = await npm.lookup(['@scope/package', '1.2.3']);
@@ -102,7 +102,7 @@ test('has does not apply the npm name charset to version or in-tree file segment
   // charset, while `lookup` normalizes only the leading segment. A version or
   // in-tree file whose name carries a space, `+`, or a non-ASCII character (all
   // ordinary in published packages) was therefore reported absent by `has` even
-  // though `lookup` resolves it, breaking the has⇒lookup agreement invariant.
+  // though `lookup` resolves it, breaking the has=>lookup agreement invariant.
   const fileNames = harden(['a b.txt', 'es5+es6.js', 'café.js']);
   const makeFileBlob = name =>
     Far('HardeningFileBlob', {
@@ -222,9 +222,9 @@ test('has(name, version) does not materialize a version leaf', async t => {
   t.false(await npm.has('alpha', '9.9.9'));
   t.is(providePackageTreeCalls, 0);
   // The version-directory level enforces the same bound.
-  const alphaDir = /** @type {any} */ (await npm.lookup('alpha'));
-  t.true(await alphaDir.has('2.0.0'));
-  t.false(await alphaDir.has('9.9.9'));
+  const alphaDirectory = /** @type {any} */ (await npm.lookup('alpha'));
+  t.true(await alphaDirectory.has('2.0.0'));
+  t.false(await alphaDirectory.has('9.9.9'));
   t.is(providePackageTreeCalls, 0);
 });
 
@@ -366,4 +366,103 @@ test('registry errors are passable and classify across the real marshal boundary
   const copied = harden(Error(original.message));
   t.is(registryErrorName(copied), 'RegistryNotFoundError');
   t.true(isPackageRegistryError(copied));
+});
+
+test('has treats an undefined in-tree lookup as absent, not present', async t => {
+  // breaker: the Endor lane's leaf `lookup` returns `undefined` (rather than
+  // throwing) for a missing in-tree entry. `has` folded any non-throw into
+  // `true`, so an absent path inside a real version tree read as present. The
+  // fixture's `lookup` returns `undefined` like the Endor lane; `has` must
+  // agree with `lookup`: absent => false, and `lookup` => undefined (no throw).
+  const npm = makeNpmRegistryTree(makeOperations());
+  const root = makePackageRegistryTree({ npm });
+  t.false(await npm.has('alpha', '1.0.0', 'nope'));
+  t.false(await root.has('npm', 'alpha', '1.0.0', 'nope'));
+  const alphaDirectory = /** @type {any} */ (await npm.lookup('alpha'));
+  t.false(await alphaDirectory.has('1.0.0', 'nope'));
+  // The known (package, version) pair is still present.
+  t.true(await npm.has('alpha', '1.0.0'));
+  t.is(await npm.lookup(['alpha', '1.0.0', 'nope']), undefined);
+});
+
+test('has validates the charset on the split scoped spelling', async t => {
+  // corner-prober / spec-keeper: `has('@scope', part)` composes
+  // `${scope}/${part}` and reached `listVersions`/`hasPackage` unvalidated,
+  // while `lookup` validates the same segment. Both the two-argument split form
+  // and the array spelling must reject the same names `lookup` rejects, and the
+  // backend must never see the composed bad name.
+  const seen = /** @type {string[]} */ ([]);
+  const npm = makeNpmRegistryTree(
+    harden({
+      async listVersions(name) {
+        seen.push(name);
+        return undefined;
+      },
+      async providePackageTree() {
+        throw new Error('unreached');
+      },
+    }),
+  );
+  for (const part of ['..', 'foo?x=1', '%2e%2e%2fetc', 'a b']) {
+    // eslint-disable-next-line no-await-in-loop
+    t.false(await npm.has('@scope', part));
+    // eslint-disable-next-line no-await-in-loop
+    const error = await t.throwsAsync(() => npm.lookup(['@scope', part]));
+    t.is(registryErrorName(error), 'RegistryPathSyntaxError');
+  }
+  t.deepEqual(seen, []);
+});
+
+test('a zero-published-versions package reads as absent on both backends', async t => {
+  // corner-prober: `versionsFor` treated only `undefined` as absent, so an
+  // empty version list meant "exists" on the Node lane while Endor's
+  // `!versions.is_empty()` reported absent — a per-backend divergence. An empty
+  // list must read as not-found for both `has` and `lookup`.
+  const npm = makeNpmRegistryTree(
+    harden({
+      async listVersions(name) {
+        return name === 'empty' ? [] : undefined;
+      },
+      async providePackageTree() {
+        throw new Error('unreached');
+      },
+    }),
+  );
+  t.false(await npm.has('empty'));
+  const error = await t.throwsAsync(() => npm.lookup('empty'));
+  t.is(registryErrorName(error), 'RegistryNotFoundError');
+});
+
+test('@registry has traverses with has, never materializing a version leaf', async t => {
+  // locksmith: the root installed at every host's `@registry` implemented `has`
+  // as a `lookup`-based traversal, so `has('npm', name, version)` materialized a
+  // version leaf (tarball fetch + CAS write). A guest holding `@registry` could
+  // turn the free predicate into unbounded egress. `has` must exercise no more
+  // authority than the child's own `has`.
+  let providePackageTreeCalls = 0;
+  const operations = harden({
+    async listVersions(name) {
+      const versions = packages[name];
+      return versions === undefined ? undefined : Object.keys(versions);
+    },
+    async providePackageTree(name, version) {
+      providePackageTreeCalls += 1;
+      const record = packages[name]?.[version];
+      if (record === undefined) throw new RangeError(`${name}@${version}`);
+      return harden({
+        treeRef: makePackageTree(name, version),
+        integrity: record.integrity,
+      });
+    },
+  });
+  const npm = makeNpmRegistryTree(operations);
+  const root = makePackageRegistryTree({ npm });
+  t.true(await root.has('npm', 'alpha', '1.0.0'));
+  t.true(await root.has('npm', '@scope/package', '1.2.3'));
+  t.false(await root.has('npm', 'alpha', '9.9.9'));
+  // The scope hub's `has` likewise consults metadata only.
+  const scope = /** @type {any} */ (await npm.lookup('@scope'));
+  t.true(await scope.has('package', '1.2.3'));
+  t.false(await scope.has('package', '9.9.9'));
+  t.is(providePackageTreeCalls, 0);
 });
