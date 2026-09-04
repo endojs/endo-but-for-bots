@@ -7,22 +7,17 @@ layer new groom notes at the top of this file.*
 
 *Recently added or revised:
 [chat-http-controller-ui](chat-http-controller-ui.md) (added 2026-07-15,
-regrounded 2026-09-04; Chat-side control surface for the confined
-outbound-HTTP tier: the Value modal's front face, for a value detected as an
-`HttpClient` (a `fetch` + `allowedOrigins` remotable) or a
-`ConfinedFetchService` (a `client` + `control` remotable), becomes a control
-surface. The read-only view gives an `allowedOrigins` list and a
-policy-bounded request composer; the full view adds the policy/limit/mode
-editors, TOFU binding table, audit-ring view, and revoke kill switch,
-recovered through the confined service's `control()`. A front-face sibling of
-`formula-inspector`'s read-only back face over the landed #566
-`HttpClient` / `HttpClientControl` pair, provisioned per the
-`@endo/confined-fetch` model ([endo-fetch](endo-fetch.md)) rather than the
-superseded `provideHttpClient` daemon formula. Degrades silently to the
-read-only view for guests and foreign clients (a read-only viewer detects
-revocation reactively via a `fetch` rejection), gates its control phases on
-the confined-fetch provisioning path landing, and treats policy as durable on
-the confined service's state directory),
+regrounded 2026-09-04; the Value modal's front face becomes a control surface
+for a value detected as an `HttpClient` or the `FetchService` that mints one,
+giving read-only viewers an `allowedOrigins` list and a policy-bounded request
+composer and control viewers the policy/limit/mode editors, TOFU binding table,
+audit-ring view, and revoke kill switch recovered through `control()`; a
+front-face sibling of `formula-inspector` over the landed #566
+`HttpClient` / `HttpClientControl` pair, provisioned by the landed `@endo/fetch`
+plugin ([endo-fetch](endo-fetch.md)) rather than the superseded
+`provideHttpClient` daemon formula, degrading silently to the read-only view for
+guests and foreign clients and treating policy as durable on the service's state
+directory),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
@@ -508,8 +503,6 @@ LLM-agent stack).*
 
 The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed), increasing Proposed from 36 to 37 and the design count from 191 to 192.
 
-The 2026-09-04 update folds [chat-http-controller-ui](chat-http-controller-ui.md) (Not Started) into the summary table (added 2026-07-15, regrounded on the `@endo/confined-fetch` provisioning model), increasing Not Started from 49 to 50 and the design count from 196 to 197.
-
 **2026-08-27 (PR #89 refresh):** re-adds [genie-integration](genie-integration.md) as a *retrospective* (+1 design -> 192). `@endo/genie` was retired (`42bc7d516`, 2026-08-13), so the survey is trimmed to what its three headline facets became — the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, and scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)) — plus the residual `lal`/`fae` consolidation backlog.
 
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
@@ -531,6 +524,8 @@ This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
 from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
+
+The 2026-09-04 update folds [chat-http-controller-ui](chat-http-controller-ui.md) (Not Started) into the summary table (added 2026-07-15, regrounded on the landed `@endo/fetch` provisioning plugin), increasing Not Started from 49 to 50 and the design count from 196 to 197.
 
 ## Roadmap
 
@@ -1341,7 +1336,7 @@ star.)
 | ~~chat-view-edit-commands~~ | **Complete** | `/view` (alias `/cat`) and `/edit` blob commands shipped in `packages/chat/command-registry.js` with the Monaco-backed viewer/editor at `packages/chat/blob-viewer.js`; landed via direct-to-`llm` commit `ae2b074ac` plus typography / language-mode refinements |
 | chat-edit-message-ui | Not Started | `/edit` slash command, `e` focus shortcut, hover pencil for editing previously sent messages; revision-history panel |
 | chat-inventory-create-menu | Not Started | `+` button at the top of the inventory; pop-over menu to create whole-cloth inventory items (mounts, scratch spaces, passable / structured values, agents); three-pane wizard for the new-agent flow (harness, inference source by name with Ollama-model discovery and download, endowments over the nine-row capability-bank roster); subsumes `endo-gateway-mcp`'s `+ Add agent` Chat-UI affordance; provisioning entry point migrates from the daemon into Chat via the root host agent pet store, the `@root` endowment, and a sibling encrypted-formula-store design |
-| chat-http-controller-ui | Not Started | Value-modal front face becomes a control surface for a detected `HttpClient` or `ConfinedFetchService`: `allowedOrigins` list + request composer (read-only view), plus the policy/limit/mode editors, TOFU bindings, audit-ring view, and revoke kill switch recovered through the confined service's `control()`. Sibling of `formula-inspector` over the landed #566 HTTP capability pair, provisioned per the `@endo/confined-fetch` model. Control phases gate on that provisioning path; policy is durable on the confined service's state directory. |
+| chat-http-controller-ui | Not Started | Value-modal front face becomes a control surface for a detected `HttpClient` or the `FetchService` that mints one: `allowedOrigins` list + request composer (read-only view), plus the policy/limit/mode editors, TOFU bindings, audit-ring view, and revoke kill switch recovered through `control()`; sibling of `formula-inspector` over the landed #566 HTTP capability pair, provisioned by the landed `@endo/fetch` plugin, with control phases gating on how a `FetchService` reaches Chat and policy durable on the service's state directory |
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
