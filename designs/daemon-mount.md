@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-03-20 |
-| **Updated** | 2026-05-27 |
+| **Updated** | 2026-07-09 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
@@ -29,7 +29,11 @@ the bot as
 [PR #135](https://github.com/endojs/endo-but-for-bots/pull/135)
 (open).
 Additional mount extensions (revocation, deny patterns, glob/grep
-/stat/json) are forwarded as PR #127 (open), and an
+/stat/json) were forwarded as PR #127; per the 2026-07-09 review,
+that PR is being reconstructed on `llm` as four stacked PRs (stat
+already landed) per
+[mount-extensions-reconstruction](mount-extensions-reconstruction.md),
+and #127 closes when the replacements are open. An
 `EndoMount.followNameChanges` live entry-name stream is on PR #277
 (open).
 Phase 6 (CLI commands `endo ls`, `endo cat`, `endo write`) was
