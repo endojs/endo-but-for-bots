@@ -91,9 +91,9 @@ test('zip drains a multi-chunk byte-array stream', async t => {
   // The `@endo/exo-unzip` blob producer chunks at 48 KiB raw to keep
   // CapTP frames small; this test feeds it a payload large enough to
   // span multiple chunks and itself not a multiple of 3 bytes, so the
-  // accumulate-then-decode path in `drainBase64` is exercised across
-  // a boundary that would silently misalign under per-chunk decode if
-  // any non-final chunk ever included `=` padding.
+  // accumulate-then-concatenate path in `drainBytes` is exercised across
+  // a chunk boundary that would misalign if a non-final byte-array chunk
+  // were dropped or its short tail truncated.
   const { ZipWriter } = await import('@endo/zip/writer.js');
   const w = new ZipWriter();
   const total = 100_000;
