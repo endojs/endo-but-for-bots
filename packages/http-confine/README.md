@@ -22,6 +22,17 @@ the implementation request order:
 4. `fetch(url, { redirect: 'manual', ... })`
 5. manual redirect decision
 6. response byte cap
+7. response summary
+
+The transport response never escapes the confinement.
+`request()` returns a `ConfinedResponseSummary`: a plain frozen record of
+`status`, `statusText`, `ok`, lowercased `headers`, and `url`, with no `body`,
+because the body has already been drained into the returned `bytes`.
+Handing a native `Response` onward instead would invite the caller to harden
+it, and a hardened `Headers` throws on its first read: Undici fills an internal
+sorted cache lazily, and hardening freezes the slot it needs to write.
+`snapshotResponse()` and `snapshotHeaders()` are exported for callers that
+compose the primitives directly.
 
 The aggregate object also exposes control methods for mutating the allowlist and
 limits, plus revocation.
