@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-08-17 |
-| **Updated** | 2026-08-31 |
+| **Updated** | 2026-09-04 |
 | **Author** | Kriscendo Bot (prompted by Kris Kowal) |
 | **Status** | Not Started |
 
@@ -26,7 +26,7 @@ consequences:
    peer on the same host. To a peer on a different host, `127.0.0.1` names
    *that machine's own loopback*, a different computer. A domain-socket path
    or an internal `10.x` address is meaningless off the boundary it belongs
-   to. Trying such a hint is not just wasteful, it can connect somewhere
+   to. Trying such a hint is not just wasteful: it can connect somewhere
    wrong.
 2. **Cost.** Two daemons on the same LAN, or two workers under one supervisor,
    should reach each other directly (a LAN address, a domain socket) rather
@@ -99,37 +99,45 @@ order but from `costOf` (§ 4), so `makeLocalScope` need not order its tags.
 
 ```typescript
 type ScopeTag = {
-  kind: string;   // classification key, e.g., "supervisor" (read by costOf)
+  kind: string;   // classification key, say "supervisor" (read by costOf)
   id: string;     // opaque instance id, compared for equality only
 };
 // wire form "<kind>:<id>", split on the FIRST colon; equality is (kind, id).
 // keyOf(tag) = `${tag.kind}:${tag.id}` is that same wire string; it is the
 // native-comparable key wherever a tag needs Map/Set membership, so structural
-// (kind, id) equality — never JS referential equality — is what compares.
+// (kind, id) equality (never JS referential equality) is what compares.
 
 type LocalityOrder = Record<string, number>;  // <kind> -> cost; read by costOf (§ 4)
 
-type LocalScope = {
+// A ScopeSnapshot is an IMMUTABLE, point-in-time value: the set of tags this vat
+// sits inside at one instant. It is what selectRoutes (§ 4) consumes, so
+// selectRoutes is a pure value-to-value function: the same snapshot always yields
+// the same routes, and a log or test can name exactly which membership set
+// produced a given route list.
+type ScopeSnapshot = {
   // Keyed by the `<kind>:<id>` wire string so native Map lookups honor the
   // structural (kind, id) equality above. A raw `Set<ScopeTag>` is deliberately
-  // NOT exposed: two independently-built tags with equal fields are never
+  // NOT exposed: two independently built tags with equal fields are never
   // `===`-equal, so a caller reaching for `set.has(tag)` would get a silent
   // false-negative (a local route dropped as unreachable). Iterate
   // `tags.values()` for the tags themselves.
   tags: Map<string, ScopeTag>;       // every boundary this vat is inside (unordered)
   has: (tag: ScopeTag) => boolean;   // membership test (structural kind+id equality) used by selectRoutes
+};
 
-  // The local scope is a LIVE value, not a point-in-time snapshot: process/
-  // host/supervisor tags are present eagerly, but lan/hub/gateway are learned
-  // asynchronously and added after makeLocalScope returns. `onChange` fires when
-  // a tag is learned, so a caller that already ran selectRoutes can re-rank and
-  // promote a newly-cheaper local route (see § 4 and Open Questions); `has`
-  // always reflects current membership. Choosing a live value with a change
-  // signal (rather than an immutable snapshot) is the design decision the
-  // async-discovery race in Open Questions turns on: it is what lets a
-  // connection attempt already in flight over a global relay be preempted by a
-  // local hint that only just became eligible.
-  onChange: (listener: () => void) => () => void;  // subscribe; returns unsubscribe
+// A LocalScope is the identity-over-time: it holds the CURRENT snapshot and emits
+// successive immutable snapshots as tags are learned. process/host/supervisor
+// tags are present in the first snapshot; lan/hub/gateway are learned
+// asynchronously, each learned tag producing a NEW snapshot. Separating the live
+// identity (LocalScope) from the immutable value (ScopeSnapshot) is the design
+// decision the async-discovery race in Open Questions turns on: a connection
+// attempt already in flight over a global relay is preempted by RE-RUNNING
+// selectRoutes over the next snapshot, not by mutating a value under it, so no
+// caller ever observes membership changing mid-selection.
+type LocalScope = {
+  current: () => ScopeSnapshot;          // the membership value right now
+  onChange: (listener: (snapshot: ScopeSnapshot) => void) => () => void;
+                                         // successive snapshots; returns unsubscribe
 
   // makeLocalScope(): LocalScope discovers the tags for the boundaries this vat
   // sits inside (process/host/supervisor eagerly; lan/hub/gateway as they are
@@ -195,38 +203,61 @@ that ignores the fragment still recovers a working transport-locator and
 behaves exactly as it does today, no worse, and the Noise handshake still
 gates the result (see [Security](#security)).
 
-The [ocapn-noise-network](ocapn-noise-network.md) hint form is a different
-shape, a flat `Record<string,string>` of prefixed keys (`ws:host`, `tcp:port`,
-...), not a single URI string. This form is **live, not aspirational**:
-`packages/daemon/src/networks/ocapn.js` builds an `OcapnNetwork` through
-`makeOcapnNoiseNetwork` and reads `localLocation.hints` today, so the record
-encoding needs settling now. It has no transport-locator to hang a `#scope=`
-fragment on, so it carries the scope as one more flat key,
-`scope = "<kind>:<id>"`, alongside its transport keys. The two encodings differ
-only in surface (a fragment on the URI form, a key on the record form); the
-`ScopeTag` value and the `selectRoutes` logic below are identical for both, and
-`selectRoutes` reads `h.scope` from whichever hint representation the network
-plugin hands it.
+The [ocapn-noise-network](ocapn-noise-network.md) transport keeps a flat
+`Record<string,string>` of prefixed keys (`ws:host`, `tcp:port`, ...) as its
+internal dialable-hint shape, but that record is **not** the `ConnectionHint`
+`selectRoutes` sees. At the layer selection runs on, the ocapn-noise hint is a
+single URI string like any other, with the flat record nested inside a `loc=`
+parameter and unpacked only in the transport's `connect()`, after a route is
+already chosen:
 
-**Granularity: one scope per hint, not per address.** A `#scope=` fragment (or
-the record form's single `scope` key) binds to the whole `ConnectionHint`. Both
-shipped multi-address hint forms bundle several routes under one hint: an iroh
-hint is `iroh+captp0:///<nodeId>?relay=...&addr=...&addr=...`, a set of private
-direct addresses plus a public relay in one hint
-(`packages/daemon/src/networks/iroh-address.js`), and the ocapn-noise record
-aggregates every listening transport into one flat record
-(`packages/ocapn-noise/src/network.js`). One `scope` classifies every address in
-that bundle at one cost and keeps or drops them together. This design does
-**not** add per-`addr=`/per-transport-key sub-hint scoping, and it forfeits the
-mixed-scope-bundle case: a single hint whose addresses straddle more than one
-locality boundary (a private `addr=` and a public `relay=` together) cannot be
-split by scope at the receiver. It is narrowed at the *producer* instead: the
-iroh transport already omits its private direct addresses from published hints
-for out-of-scope audiences (`isPublishableDirectAddress`, § Security), so the
-private/public split is made producer-side before annotation rather than needing
-a sub-hint scope here; a producer that wants per-boundary receiver filtering
-emits one `ConnectionHint` per boundary. General per-`addr=` sub-hint scoping is
-left to a follow-on (see [Open Questions](#open-questions)).
+```
+ocapn+noise+tcp://host:port/?node=<nodeId>&loc=<encodeURIComponent(JSON.stringify(location))>
+```
+
+(`packages/daemon/src/networks/ocapn.js`). This form is **live, not
+aspirational**: `makeOcapnNoiseNetwork` builds that `OcapnNetwork` and publishes
+that URI today. Because the `ConnectionHint` is a URI, its scope rides as a
+`#scope=` fragment on the outer address, exactly like every other hint. Scope has
+a **single encoding surface**, the `#scope=` fragment on the `ConnectionHint`
+URI; a `scope` key written *inside* the nested `loc=` record would be invisible,
+because `selectRoutes` parses the URI string and never unpacks `loc=` (that
+happens in `connect()`, past selection). The `ScopeTag` value and the
+`selectRoutes` logic below are therefore one code path for every transport, and
+`selectRoutes` reads the scope from the one place it lives, the hint's `#scope=`
+fragment.
+
+**Granularity: one scope per hint, not per address.** A `#scope=` fragment binds
+to the whole `ConnectionHint`. Both shipped multi-address hint forms bundle
+several routes under one hint: an iroh hint is
+`iroh+captp0:///<nodeId>?relay=...&addr=...&addr=...`, a set of private direct
+addresses plus a public relay in one hint
+(`packages/daemon/src/networks/iroh-address.js`), and the ocapn-noise transport
+aggregates every listening transport into one `OcapnLocation` and publishes it as
+a **single** `ConnectionHint` URI (`aggregatedHints` / `buildLocationFor`,
+`packages/ocapn-noise/src/network.js`). One `#scope=` fragment classifies every
+address in that bundle at one cost and keeps or drops them together. This design
+does **not** add per-`addr=`/per-transport-key sub-hint scoping, and it forfeits
+the mixed-scope-bundle case: a single hint whose addresses straddle more than one
+locality boundary (a private `addr=` and a public `relay=` together, or a
+loopback `tcp:` listener and a public `ws:` listener in one aggregated
+ocapn-noise location) cannot be split by scope at the receiver.
+
+For the iroh and daemon-URI forms a producer that wants per-boundary receiver
+filtering can sidestep the forfeit by emitting one `ConnectionHint` per boundary.
+That escape hatch is **not available on the ocapn-noise substrate**, which emits
+exactly one aggregated location per daemon: there the forfeit fully applies, and a
+daemon listening on both a private and a public transport must carry one `#scope=`
+that fits the whole aggregate (in practice, no scope, so global) until the
+per-transport-key sub-hint scoping left to a follow-on lands (see
+[Open Questions](#open-questions)). Producer-side address-class narrowing is a
+partial, transport-specific mitigation, not a substitute: the iroh transport
+blanket-omits private/loopback/link-local direct addresses from *all* published
+hints unless an env flag re-enables them for same-host tests
+(`isPublishableDirectAddress`, § Security). That omission is audience-blind (it
+drops the private `addr=` for co-located and remote audiences alike), so it does
+not generalize to the non-address boundaries (`supervisor:`, `hub:`) the scope
+tag exists for.
 
 Case 6 (reach a peer only through its gateway) uses a **compound hint** whose
 payload is the gateway's own locator plus the inner target. It carries the
@@ -260,8 +291,9 @@ only the shared scope/encoding/filtering model it rides on.
 
 ### 4. Filtering and Ranking: Choosing the Route
 
-Given a locator's hints and the connector's `LocalScope`, `selectRoutes`
-returns a `{ hint, cost }[]`, each kept hint in its original wire form paired
+Given a locator's hints and a `ScopeSnapshot` of the connector's local scope
+(§ 2), `selectRoutes` returns a `{ hint, cost }[]`, each kept hint in its
+original wire form paired
 with its resolved `cost`, sorted cheapest-first. The `cost` is returned rather
 than discarded because the very next thing the caller does with the list is
 rank-sensitive: § 4 tells it to try hints closest-first with fallback and to
@@ -275,11 +307,11 @@ Callers that ignore rank read `.hint` and get the same cheapest-first order.
 (`packages/daemon/src/types.d.ts`, `type ConnectionHint = string`); the scope
 lives in its `#scope=` fragment, not as a field on a struct. `selectRoutes`
 therefore begins by parsing each raw hint **once** into an internal
-`{ h, scope }` pair — `h` the original untouched `ConnectionHint` string that
+`{ h, scope }` pair (`h` the original untouched `ConnectionHint` string that
 crosses the return boundary as the `.hint` of each returned pair, `scope` a
-`ScopeTag | undefined` recovered by
-splitting the `#scope=` fragment on its first colon (§ 1), or read from the flat
-`scope` key of the record-form hint (§ 3). This `parseHint` step is the one
+`ScopeTag | undefined` recovered by splitting the hint URI's `#scope=` fragment
+on its first colon per § 1, the single encoding surface every transport shares
+per § 3). This `parseHint` step is the one
 place the string<->struct boundary is crossed; every branch below reads the parsed
 `scope`, while `h` stays an untouched `ConnectionHint` throughout, so the input
 type is `ConnectionHint[]` and the output type is `{ hint: ConnectionHint, cost:
@@ -287,13 +319,13 @@ number }[]`. The parsed `scope` never leaks into the public shape; only the
 resolved cost does. `parseHint` classifies each hint into one of three
 dispositions:
 
-- **absent** — no `#scope=` fragment: a global route, *unless* the hint's
+- **absent** (no `#scope=` fragment): a global route, *unless* the hint's
   dialable transport address is a loopback/private/link-local literal, which
   takes the transition rule below (ranked last, never a cheap same-host claim).
-- **well-formed** — `#scope=<kind>:<id>` with a non-empty `<kind>` and `<id>`:
+- **well-formed** (`#scope=<kind>:<id>` with a non-empty `<kind>` and `<id>`):
   a scoped hint, filtered by membership.
-- **malformed** — a `#scope=` fragment that does not split into a non-empty
-  `<kind>` and `<id>`: **fail-safe dropped**, never promoted to global. A tag
+- **malformed** (a `#scope=` fragment that does not split into a non-empty
+  `<kind>` and `<id>`): **fail-safe dropped**, never promoted to global. A tag
   that cannot be structurally parsed cannot be shown to match the connector's
   scope, and § Security's fail-safe framing requires the un-comparable case
   resolve to "not reachable," not to the always-kept global tail. The
@@ -305,7 +337,7 @@ rank the sort used (the same-rank race consumes it) without re-deriving it:
 
 ```
 # input: raw ConnectionHint[]; output: { hint, cost }[] (kept, cheapest-first)
-selectRoutes(hints, localScope, order = defaultLocalityOrder):
+selectRoutes(hints, snapshot, order = defaultLocalityOrder):   # snapshot: immutable ScopeSnapshot
   ranked = []
   for raw in hints:
     (h, scope) = parseHint(raw)                 # scope: ScopeTag | undefined;
@@ -325,7 +357,7 @@ selectRoutes(hints, localScope, order = defaultLocalityOrder):
                                                 #   global route — no steering
       else:
         ranked.push({ h, cost: costOf("global", order) })  # global route
-    elif localScope.has(scope):                 # shared boundary => reachable
+    elif snapshot.has(scope):                   # shared boundary => reachable
       ranked.push({ h, cost: costOf(scope.kind, order) })
     else:
       drop h                                     # not reachable from here
@@ -351,8 +383,8 @@ process(0) < supervisor(1) < host(2) < lan(3) < hub(4) < gateway(5) < global(6)
 
 **Unknown kind fails closed to `global` cost.** `<kind>` is an "extensible
 enumeration" (§ 1), so a hint (or a matched local-scope tag) may carry a
-`<kind>` this connector's `order` has no entry for — a newer peer's kind this
-receiver has not been configured for. `costOf` returns the `global` cost for any
+`<kind>` this connector's `order` has no entry for (a newer peer's kind this
+receiver has not been configured for). `costOf` returns the `global` cost for any
 unranked kind rather than crashing, silently dropping, or misranking on an
 `undefined` cost: fail closed to the always-reachable tail. This is the fallback
 the § 1 extensibility promise requires, and it keeps the "sorted cheapest-first"
@@ -360,7 +392,7 @@ invariant total over every kind.
 
 **Unscoped loopback/private hints are ranked last, never first (transition
 rule).** Every `ConnectionHint` minted before this design ships, or by a
-not-yet-upgraded producer, carries no `#scope=` fragment at all — including a
+not-yet-upgraded producer, carries no `#scope=` fragment at all, including a
 bare `127.0.0.1` loopback address, a domain-socket path, or an internal `10.x`
 address, the design's own motivating examples. Two failure modes bracket this
 address class, and the rule must avoid both. Classifying such a hint as `global`
@@ -381,9 +413,15 @@ scoped and global routes are exhausted), while an attacker-chosen local endpoint
 is never tried ahead of a legitimate route and, when reached at all, the residual
 cost is one handshake-gated wrong-endpoint attempt (§ Security: a misrouted dial
 fails the Noise handshake against the absent peer, so this is a wasted connect,
-never a wrong connection). The heuristic is bounded and retired entirely once
-producers adopt the generalized `isPublishableDirectAddress` omission (§
-Security, "Produce for the audience's scope"). `addressOf(h)` inspects the hint's
+never a wrong connection). The heuristic is bounded and retired once producers
+**annotate** their private hints with `scope=` (§ Phased Implementation step 3;
+§ Security, "Produce for the audience's scope"), *not* by omitting them:
+`isPublishableDirectAddress`-style omission would drop the cheap same-host route
+this design exists to prefer for cases 1 and 4. An annotated private hint is
+filtered by membership like any scoped hint, so a receiver that holds the tag
+dials it at its scoped cost and the un-annotated transition rule never fires on
+it; the rule persists only for the legacy un-annotated address, and only until a
+producer annotates it. `addressOf(h)` inspects the hint's
 *dialable* transport address (the loopback/private literal a dial would actually
 open), never an outer authority a transport documents as informational (the
 ocapn-noise record's outer `host:port`, `packages/daemon/src/networks/ocapn.js`).
@@ -430,7 +468,7 @@ flowchart TD
 A hint is reachable from the connector when the connector's local scope
 contains the hint's tag. The diagram's nesting is the default *cost order*
 (innermost cheapest), not a claim that the connector sits at a single ring:
-membership is tested per tag independently (`localScope.has(h.scope)`), so a
+membership is tested per tag independently (`snapshot.has(h.scope)`), so a
 connector may hold `gateway:<G>` without `host:<H>` (case 3), and each hint is
 kept or dropped on its own tag. A global hint and a `via=` gateway-relay hint
 are always kept regardless of local scope.
@@ -489,11 +527,15 @@ path, an internal IP, the existence of a supervisor. Two mitigations:
   ([daemon-locator-terminology](daemon-locator-terminology.md)). A producer
   that knows a locator is bound for a peer outside a boundary SHOULD omit that
   boundary's hints. Production-side scope filtering is the mirror of the
-  receiver-side filtering above. The iroh transport already ships a special
-  case of exactly this SHOULD as a MUST: `isPublishableDirectAddress`
+  receiver-side filtering above. The iroh transport already ships a blunter,
+  **audience-blind** approximation of this SHOULD: `isPublishableDirectAddress`
   (`packages/daemon/src/networks/iroh-address.js`) blanket-excludes
-  loopback/private/link-local direct addresses from published hints (re-enabled
-  only behind an env flag for same-host tests). The scope model **complements it
+  loopback/private/link-local direct addresses from published hints for *every*
+  audience (re-enabled only behind an env flag for same-host tests), rather than
+  omitting a boundary's hints only for a peer known to be outside it. It is thus
+  not an instance of the receiver-relative rule but a coarser guard that forfeits
+  the cheap same-host route to co-located peers too; the audience-aware version is
+  a producer that annotates or omits by the reader's scope. The scope model **complements it
   at a different granularity**: `isPublishableDirectAddress` filters individual
   `addr=` entries *inside* one hint, whereas a scope tag attaches to a whole
   hint, so the two are not the same mechanism at two sizes: the scope model
@@ -558,7 +600,7 @@ owner and never derived from a locator.
 |--------|--------------|
 | [daemon-locator-reference](daemon-locator-reference.md) | Extends the locator hint format this design annotates with scope |
 | [daemon-locator-terminology](daemon-locator-terminology.md) | The `@`-delimited hint path encoding the scope fragment rides on |
-| [ocapn-noise-network](ocapn-noise-network.md) | The transport-plugin `connect(hints)` surface that consumes selected routes (`makeOcapnNoiseNetwork` builds an `OcapnNetwork` and reads `localLocation.hints` today); its `Record<string,string>` hint struct carries the scope as a flat `scope` key rather than a `#scope=` fragment (§ 3) |
+| [ocapn-noise-network](ocapn-noise-network.md) | The transport-plugin `connect(hints)` surface that consumes selected routes (`makeOcapnNoiseNetwork` builds an `OcapnNetwork` and reads `localLocation.hints` today); its `ConnectionHint` is the outer `ocapn+noise+tcp://...?loc=...` URI, so the scope rides as a `#scope=` fragment on that URI like every other hint, not as a key inside the nested `loc=` record `selectRoutes` never unpacks (§ 3) |
 | [daemon-agent-network-identity](daemon-agent-network-identity.md) | `AgentConnectionHints` is the inbound-policy complement to this outbound scope model |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | The network/transport layering `selectRoutes` slots into |
 
@@ -569,8 +611,14 @@ owner and never derived from a locator.
    cases (2, 4) are reachable with these three tag kinds alone.
 2. **Hint scope encoding.** The `scope` field on the hint struct and its
    `#scope=` URL projection; a scope-aware, scope-blind-tolerant parse.
-3. **`selectRoutes` filter/rank.** The configurable locality order, drop
-   behavior, and same-rank race, wired into the network's transport selection.
+3. **`selectRoutes` filter/rank, and producer-side annotation.** The
+   configurable locality order, drop behavior, and same-rank race, wired into the
+   network's transport selection. This step also owns the **producer** side that
+   retires the transition rule: hint producers (`packages/daemon/src/locator.js`
+   and each network's hint builder) annotate a private/loopback hint with its
+   `scope=` tag rather than omitting it, so a receiver holding the tag dials it at
+   its scoped cost. Annotation, not omission, is the retirement condition (§ 4);
+   omission would drop the cheap same-host route cases 1 and 4 depend on.
 4. **LAN and gateway kinds.** `lan:` discovery and the `hub:` route (cases 1,
    5); the compound `via=<gateway>` hint's introduction protocol (case 6) as
    its own follow-on design.
@@ -582,27 +630,29 @@ Dependencies table cites ([ocapn-noise-network](ocapn-noise-network.md),
 [ocapn-network-transport-separation](ocapn-network-transport-separation.md)),
 each "Cases in Scope" row maps to a `selectRoutes` unit test, plus the
 cross-cutting security and parse-tolerance tests. All are unit tests over
-`selectRoutes`/`parseHint`/`makeLocalScope` with a synthetic `LocalScope`,
+`selectRoutes`/`parseHint`/`makeLocalScope` with a synthetic `ScopeSnapshot`,
 except where noted as deferred to the follow-on that owns the mechanism.
 
 | Coverage | Test |
 |----------|------|
-| Case 1 — same-LAN | Connector holding `lan:<L>` keeps and ranks a `#scope=lan:<L>` direct hint cheaper than a global relay; a connector lacking `lan:<L>` drops it. |
-| Case 2 — shared supervisor | Connector holding `supervisor:<S>` ranks a `#scope=supervisor:<S>` domain-socket hint first (cost 1), the LAN hint second, the relay last; the worked example is this test. |
-| Case 3 — shared gateway/host | Connector holding `gateway:<G>` but **not** `host:<H>` keeps the `gateway:`-scoped hint and drops the `host:`-scoped one (per-tag independence). |
-| Case 4 — loopback/same-host | Connector holding `host:<H>` keeps a `#scope=host:<H>` `127.0.0.1` hint; a connector without it drops the scoped form. |
-| Case 5 — home hub | Connector holding `lan:<L>` + `hub:<K>` ranks the direct LAN address cheaper than the hub relay, both cheaper than global. |
-| Case 6 — gateway's children | A `via=`/`dest=gateway:<G>` compound hint is always kept and ranked at `gateway` cost regardless of local scope; its embedded gateway locator's hints are filtered recursively. (Introduction-protocol behavior itself deferred to the gateway-relayed-introduction follow-on.) |
+| Case 1, same-LAN | Connector holding `lan:<L>` keeps and ranks a `#scope=lan:<L>` direct hint cheaper than a global relay; a connector lacking `lan:<L>` drops it. |
+| Case 2, shared supervisor | Connector holding `supervisor:<S>` ranks a `#scope=supervisor:<S>` domain-socket hint first (cost 1), the LAN hint second, the relay last; the worked example is this test. |
+| Case 3, shared gateway/host | Connector holding `gateway:<G>` but **not** `host:<H>` keeps the `gateway:`-scoped hint and drops the `host:`-scoped one (per-tag independence). |
+| Case 4, loopback/same-host | Connector holding `host:<H>` keeps a `#scope=host:<H>` `127.0.0.1` hint; a connector without it drops the scoped form. |
+| Case 5, home hub | Connector holding `lan:<L>` + `hub:<K>` ranks the direct LAN address cheaper than the hub relay, both cheaper than global. |
+| Case 6, gateway's children | A `via=`/`dest=gateway:<G>` compound hint is always kept and ranked at `gateway` cost regardless of local scope; its embedded gateway locator's hints are filtered recursively. (Introduction-protocol behavior itself deferred to the gateway-relayed-introduction follow-on.) |
+| Nested ocapn-noise hint (§ 3) | An `ocapn+noise+tcp://host:port/?node=...&loc=...#scope=host:<H>` hint is classified by the `#scope=` fragment on the outer URI (kept/dropped by membership on `host:<H>`); a `scope` key written *inside* the `loc=` record is **ignored**, confirming the single encoding surface reads only the URI fragment and never unpacks `loc=`. |
 | § 3 scope-blind tolerance | A scope-blind parser fed a `#scope=...` hint recovers the same working transport-locator it would today (fragment ignored, no worse). |
 | Unscoped-loopback transition (§ 4) | An **absent-scope** `127.0.0.1`/`10.x`/domain-socket hint is kept but ranked **last** (`unscopedLocalCost`, after every scoped and global route), never at `host` cost and never ahead of a scoped local route; an absent-scope public address stays `global`. |
 | Unknown-kind fallback (§ 4) | A hint carrying a `<kind>` absent from the connector's `order` costs the `global` cost (fail closed), and the cheapest-first sort stays total. |
 | Malformed scope fail-safe (§ 4) | A hint with a `#scope=` fragment that does not split into non-empty `<kind>:<id>` is dropped, never promoted to global. |
-| ScopeTag equality (§§ 1-2) | Two independently-built tags with equal `kind`/`id` compare equal through `localScope.has` and the wire-string-keyed `tags` map (no referential-equality false-negative). |
-| Security — no reach by travel | A narrow-scope hint reaching a connector without the tag is dropped; the co-location->authority separation is asserted at the design level and verified structurally on the eventual implementation PR (handshake gating is out of `selectRoutes`' unit scope). |
+| ScopeTag equality (§§ 1-2) | Two independently-built tags with equal `kind`/`id` compare equal through `snapshot.has` and the wire-string-keyed `tags` map (no referential-equality false-negative). |
+| Security, no reach by travel | A narrow-scope hint reaching a connector without the tag is dropped; the co-location->authority separation is asserted at the design level and verified structurally on the eventual implementation PR (handshake gating is out of `selectRoutes`' unit scope). |
 
-The async-discovery re-rank (a tag learned via `onChange` after `selectRoutes`
-ran promotes a now-cheaper local route) is called out in Open Questions and its
-test belongs to whichever resolution Phase 4 lands.
+The async-discovery re-rank (a tag learned after `selectRoutes` ran arrives on the
+next `ScopeSnapshot`, re-running `selectRoutes` promotes a now-cheaper local
+route) is called out in Open Questions and its test belongs to whichever
+resolution Phase 4 lands.
 
 ## Open Questions
 
@@ -636,20 +686,22 @@ test belongs to whichever resolution Phase 4 lands.
   implementation follow-on, not settled here.
 - Discovery/selection race for the async-learned tags (`lan`, `hub`,
   `gateway`). § 2 discovers these tags "as they are learned," not eagerly like
-  `process`/`host`/`supervisor`, yet `LocalScope.has` is a synchronous
-  membership test. If `selectRoutes` runs before LAN/hub/gateway discovery
-  completes, a not-yet-learned shared tag looks identical to "not shared": the
-  connector drops a cheap local hint it should have kept and falls through to
-  the costly global relay, defeating the cost half of the design's own
-  motivation for exactly cases 1 and 5, the ones that most need async
-  discovery. The *value model* is settled — § 2's `LocalScope` is a live value
-  with an `onChange` signal, not an immutable snapshot, precisely so the second
-  shape below is expressible — but the *policy* is deferred to implementation,
-  one of: delay the first connection attempt for a bounded discovery window
-  before ranking; or re-run `selectRoutes` on `onChange` (scope-tag arrival) and
-  promote a cheaper route mid-flight (racing the newly-eligible local hint
-  against the global attempt already in progress). The eagerly-discovered tags
-  do not have this race, so the socket/loopback/supervisor cases are unaffected.
+  `process`/`host`/`supervisor`, yet a `ScopeSnapshot` (via `LocalScope.current()`)
+  is a synchronous membership test over one instant. If `selectRoutes` runs over a
+  snapshot taken before LAN/hub/gateway discovery completes, a not-yet-learned
+  shared tag looks identical to "not shared": the connector drops a cheap local
+  hint it should have kept and falls through to the costly global relay, defeating
+  the cost half of the design's own motivation for exactly cases 1 and 5, the ones
+  that most need async discovery. The *value model* is settled (§ 2 splits the
+  immutable `ScopeSnapshot` value that `selectRoutes` consumes from the live
+  `LocalScope` identity that emits successive snapshots, precisely so the second
+  shape below is expressible), but the *policy* is deferred to implementation, one
+  of: delay the first connection attempt for a bounded discovery window before
+  ranking; or re-run `selectRoutes` on each new snapshot (`onChange`, a scope-tag
+  arrival) and promote a cheaper route mid-flight (racing the newly-eligible local
+  hint against the global attempt already in progress). The eagerly-discovered
+  tags do not have this race, so the socket/loopback/supervisor cases are
+  unaffected.
 - Default policy for scope-blind peers: should a producer omit narrow-scope
   hints entirely from a locator bound for a peer of unknown scope-awareness,
   or tolerate the occasional mis-try? Leaning toward omit-when-out-of-scope
