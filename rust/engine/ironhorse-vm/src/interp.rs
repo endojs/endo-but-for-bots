@@ -3881,8 +3881,8 @@ impl Native {
 /// Why a run stopped.
 ///
 /// Match a **panic** via [`Halt::is_panic`] (or the
-/// [`ExecutionOutcome`](../../../endo/src/ironhorse_engine.rs) seam that
-/// delegates to it), never on a variant shape directly: the
+/// `ExecutionOutcome` seam in the `endo` crate's `ironhorse_engine`
+/// module, which delegates to it), never on a variant shape directly: the
 /// "terminate, do not commit" set is defined in exactly one place
 /// (`is_panic`), so a commit-path caller that matches `StackOverflow` /
 /// `MeterAbort` / `Panic(_)` by hand reproduces that logic and silently

@@ -428,23 +428,27 @@ static HOOK_INIT: Once = Once::new();
 /// elsewhere is unchanged.
 fn install_capture_hook() {
     HOOK_INIT.call_once(|| {
-        let prev = panic::take_hook();
+        let previous_hook = panic::take_hook();
         panic::set_hook(Box::new(move |info| {
             if CAPTURING.with(|c| c.get()) {
-                let loc = info
+                let location = info
                     .location()
                     .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
-                PANIC_LOCATION.with(|slot| *slot.borrow_mut() = loc);
+                PANIC_LOCATION.with(|slot| *slot.borrow_mut() = location);
                 // Handled: the guard turns this into a Panicked worker-death,
                 // so suppress the default hook's abort-style stderr dump.
                 return;
             }
-            prev(info);
+            previous_hook(info);
         }));
     });
 }
 
-fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+/// Best-effort message from a caught panic payload (`catch_unwind`'s `Err`).
+/// Exported so the machine-thread outer net (`inproc`) can recover the
+/// message from a panic that never crossed an `extern "C"` frame, matching
+/// the payload contract this module's guarded path publishes.
+pub fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&str>() {
         (*s).to_string()
     } else if let Some(s) = payload.downcast_ref::<String>() {
@@ -468,9 +472,18 @@ pub fn guard_ffi<F: FnOnce()>(f: F) {
         return;
     }
     install_capture_hook();
-    CAPTURING.with(|c| c.set(true));
+    // Save and restore `CAPTURING` (not set-then-clear): a guarded callback
+    // can re-enter JS that calls another `host_*` (e.g. `host_import_archive`
+    // → `install_archive`, `host_debug_poll` → `run_debugger`), nesting
+    // `guard_ffi`. Clearing the flag on the inner guard's exit would disarm
+    // capture for the outer body, so a later panic there would lose its
+    // location and leak the default hook's abort-style dump.
+    let was_capturing = CAPTURING.with(|c| c.replace(true));
+    // Clear any stale location before the body so a caught panic here records
+    // its own site, never a drained inner guard's.
+    PANIC_LOCATION.with(|slot| *slot.borrow_mut() = None);
     let result = panic::catch_unwind(AssertUnwindSafe(f));
-    CAPTURING.with(|c| c.set(false));
+    CAPTURING.with(|c| c.set(was_capturing));
     if let Err(payload) = result {
         let message = panic_payload_message(payload.as_ref());
         let location = PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
@@ -1267,9 +1280,56 @@ mod tests {
             p.message
         );
         // The capture hook recovers the panic!'s source position.
-        let loc = p.location.expect("a location was captured");
-        assert!(loc.contains("worker_io.rs"), "location was {loc:?}");
+        let location = p.location.expect("a location was captured");
+        assert!(location.contains("worker_io.rs"), "location was {location:?}");
         assert!(!ffi_panicked(), "take clears the marker");
+    }
+
+    #[test]
+    fn real_extern_c_callback_is_installed_under_the_guard() {
+        // Regression: prove the guard is actually *installed* on the real
+        // `extern "C"` callbacks, not merely that `guard_ffi` works when
+        // called directly (reverting a wrapper leaves every direct-call test
+        // green). `host_recv_frame` calls `with_transport(..)` — which
+        // `.expect(..)`-panics on this transport-less test thread — before it
+        // dereferences `the`, so a null machine pointer is safe: the panic
+        // fires inside the guarded body and must be caught, leaving this
+        // worker poisoned rather than aborting the process across the FFI
+        // frame.
+        assert!(take_ffi_panic().is_none(), "start clean");
+        unsafe { host_recv_frame(std::ptr::null_mut()) };
+        assert!(
+            ffi_panicked(),
+            "the real extern \"C\" callback must run its body under guard_ffi",
+        );
+        let _ = take_ffi_panic();
+    }
+
+    #[test]
+    fn nested_guard_preserves_outer_capture() {
+        // A guarded callback can re-enter JS that calls another `host_*`,
+        // nesting `guard_ffi`. The inner guard must not disarm capture for
+        // the outer body: a panic in the outer body *after* the inner guard
+        // returns must still be caught and located, never dumped by the
+        // default hook.
+        assert!(take_ffi_panic().is_none(), "start clean");
+        guard_ffi(|| {
+            // Inner guarded callback runs to completion without panicking.
+            guard_ffi(|| {});
+            // The outer body now panics; capture must still be armed.
+            panic!("outer body panic after a nested guard");
+        });
+        let p = take_ffi_panic().expect("the outer panic must be caught");
+        assert!(
+            p.message.contains("outer body panic after a nested guard"),
+            "message was {:?}",
+            p.message
+        );
+        let location = p
+            .location
+            .expect("the outer panic's location must survive nesting");
+        assert!(location.contains("worker_io.rs"), "location was {location:?}");
+        let _ = take_ffi_panic();
     }
 
     #[test]

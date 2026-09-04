@@ -94,6 +94,10 @@ pub mod engine {
             Halt::Decode(e) => format!("bytecode decode error: {e}"),
             Halt::Throw(e) => format!("uncaught throw: {e}"),
             Halt::StackOverflow(n) => format!("stack overflow ({n} slots over the limit)"),
+            Halt::Panic(PanicKind::EngineFault { message, location }) => match location {
+                Some(location) => format!("engine fault at {location}: {message}"),
+                None => format!("engine fault: {message}"),
+            },
             other => format!("halted: {other:?}"),
         }
     }
@@ -146,20 +150,32 @@ pub mod engine {
                 return ExecutionOutcome::Panicked(halt);
             }
             match halt {
-                Halt::Throw(msg) => ExecutionOutcome::Uncaught(msg),
+                Halt::Throw(message) => ExecutionOutcome::Uncaught(message),
                 Halt::Return => ExecutionOutcome::Quiesced,
-                // Only `Return` legitimately reaches this seam among the
-                // non-panic, non-throw halts. The rest are internal
-                // suspension/control states caught below the top-level run
-                // (`Yield`/`Await`/`AsyncYield`/`Resume`) or a named engine
-                // gap (`Unsupported`), none of which the supervisor
-                // delivery seam observes.
+                // A named, unlanded engine gap: the run demonstrably did
+                // **not** run the event loop to quiescence, so its crank
+                // must be discarded, never committed. `Unsupported` is a
+                // routine top-level halt at this seam (this file's header
+                // and `describe_halt` both name it as one), not a
+                // can't-happen — so it gets an explicit `Panicked` arm
+                // rather than falling to the catch-all below: it must never
+                // trip the `debug_assert!`, and a test can pin that it
+                // never classifies as `Quiesced`.
+                Halt::Unsupported(op) => {
+                    ExecutionOutcome::Panicked(Halt::Unsupported(op))
+                }
+                // Everything else is an internal suspension/control state
+                // (`Yield`/`Await`/`AsyncYield`/`Resume`) caught below the
+                // top-level run, or a future `#[non_exhaustive]` variant:
+                // none should surface here. Fail **closed** — discard the
+                // crank rather than commit it — while still shouting in a
+                // debug build.
                 other => {
                     debug_assert!(
                         false,
                         "unexpected top-level halt at the Machine seam: {other:?}"
                     );
-                    ExecutionOutcome::Quiesced
+                    ExecutionOutcome::Panicked(other)
                 }
             }
         }
@@ -990,6 +1006,26 @@ pub mod engine {
                 ExecutionOutcome::Uncaught(msg) => assert_eq!(msg, "boom"),
                 other => panic!("expected Uncaught, got {other:?}"),
             }
+        }
+
+        #[test]
+        fn unsupported_engine_gap_never_commits() {
+            // A named, unlanded engine gap did not run to quiescence, so the
+            // classifier must never tell the supervisor to commit its crank.
+            // The catch-all's `debug_assert!` compiles out in a release
+            // daemon, so `Quiesced` (= commit) would ship silently if this
+            // regressed. `Unsupported` reaches this seam routinely, so it
+            // has its own arm and must not trip the assert either.
+            let outcome = ExecutionOutcome::classify(Halt::Unsupported("STAGE8_GAP"));
+            assert_ne!(
+                outcome,
+                ExecutionOutcome::Quiesced,
+                "an engine gap must never classify as commit-the-crank",
+            );
+            assert!(
+                matches!(outcome, ExecutionOutcome::Panicked(_)),
+                "an engine gap must fail closed to Panicked (discard), got {outcome:?}",
+            );
         }
 
         #[test]
