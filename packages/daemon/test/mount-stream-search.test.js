@@ -632,7 +632,10 @@ test('streamGlob readPattern is a no-limit M.string() and every element matches 
 test('streamGrep readPattern is { file, line, text } and every element matches it', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
-  const reader = E(mount).streamGrep('export', E(mount).streamGlob('src/**/*.js'));
+  const reader = E(mount).streamGrep(
+    'export',
+    E(mount).streamGlob('src/**/*.js'),
+  );
   const pattern = await E(reader).readPattern();
   t.notThrows(() =>
     mustMatch(harden({ file: 'a', line: 1, text: 't' }), pattern),
