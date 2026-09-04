@@ -6,6 +6,14 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
+2026-09-03; a singleton, capability-authorized manager for arbitrary secret
+bytes, with management facets under the special `@secrets` directory and
+individual `SecretBlob` capabilities in the ordinary `secrets` pet store;
+uses existing `lookup` and `marshal` formulas, supports replacement,
+revocation, metadata-only audit, and a value-blind Secret Blobs Space, and
+leaves OAuth, signing, brokers, and consumer-specific policy to layers above
+it),
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) (added
 2026-08-29; supersedes the bespoke `EndoRegistry` capability with an enumerable
 registry root, non-enumerable npm and scope lookup hubs, enumerable exact-version
@@ -308,7 +316,8 @@ LLM-agent stack).*
 | [agent-follow-stream-tool](agent-follow-stream-tool.md) | 2026-05-12 | 2026-08-31 | Proposed |
 | [daemon-ocapn-external-connectivity](daemon-ocapn-external-connectivity.md) | 2026-05-21 | 2026-05-21 | In Progress |
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
-| [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-02-24 | Not Started |
+| [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-09-03 | Not Started |
+| [daemon-secret-manager](daemon-secret-manager.md) | 2026-09-03 | 2026-09-03 | Implemented (local backend) |
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-05-19 | Reference |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
@@ -437,6 +446,7 @@ LLM-agent stack).*
 | [endo-bytes](endo-bytes.md) | 2026-05-08 | 2026-05-10 | Implemented |
 | [endo-gateway-mcp](endo-gateway-mcp.md) | 2026-05-29 | 2026-05-29 | Not Started |
 | [endo-claude](endo-claude.md) | 2026-08-16 | 2026-08-16 | Not Started |
+| [endo-workflow](endo-workflow.md) | 2026-08-17 | 2026-09-02 | In Progress |
 | [gateway-package](gateway-package.md) | 2026-05-22 | 2026-06-29 | Proposed (absorbs the removed endo-gateway design) |
 | [agent-tools-mount-fs-tools](agent-tools-mount-fs-tools.md) | 2026-06-01 | 2026-06-25 | Superseded |
 | [endo-agent-tools](endo-agent-tools.md) | 2026-06-03 | 2026-06-25 | In Progress |
@@ -484,6 +494,17 @@ The 2026-08-25 update adds [hardener-indexed-cardinality](hardener-indexed-cardi
 The 2026-08-27 rebase adds [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed), increasing Proposed from 37 to 38 and the design count from 192 to 193.
 
 The 2026-08-29 rebase adds [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed), increasing Proposed from 38 to 39 and the design count from 193 to 194.
+
+The 2026-09-01 rebase adds [endo-workflow](endo-workflow.md) (Proposed) to M3, increasing Proposed from 39 to 40 and the design count from 194 to 195.
+
+The same 2026-09-01 pass flips [endo-workflow](endo-workflow.md) from Proposed to **In Progress** (implementation landed as `packages/workflow`), so Proposed returns 40 -> 39.
+
+The 2026-09-03 update adds
+[daemon-secret-manager](daemon-secret-manager.md) to M10.
+Its local backend and Secret Blobs Space are implemented; operation-journal,
+XS encryption-power, and production KMS/HSM hardening remain.
+Its estimate decomposes the existing `daemon-capability-bank` secret-storage
+slice and does not increase the milestone aggregate.
 
 ## Roadmap
 
@@ -616,12 +637,14 @@ flowchart TD
         eskill[endoclaw-skill-registry]
         evoice[endoclaw-voice]
         esheets[exo-google-sheets]
+        eworkflow[endo-workflow<br/><i>IN PROGRESS</i>]
         efetch --> cfetch
         cfetch --> eoauth
         ereminder --> eproactive
         eoauth --> ebridge
         eoauth --> eproactive
         eoauth --> esheets
+        ereminder -.-> eworkflow
     end
 
     subgraph OCapN
@@ -685,6 +708,7 @@ flowchart TD
         dfsw[filesystem-watchers]
         dcsgc[daemon-content-store-gc]
         dpers[daemon-capability-persona]
+        dsecret["daemon-secret-manager<br/><i>IMPLEMENTED (LOCAL)</i>"]
         dbank[daemon-capability-bank]
         icancel[inventory-cancel-and-liveness]
         dmkar[daemon-make-archive<br/><i>IN PROGRESS</i>]
@@ -719,6 +743,7 @@ flowchart TD
         enetfetch -.-> dtools
         enetfetch --> dgitremote
         dmount --> dcsgc
+        dsecret --> dbank
         dsand --> dbank
         dfs --> dbank
         dpers --> dbank
@@ -770,6 +795,13 @@ flowchart TD
     %% endo-posix-sandbox (dsand, Capability System) into LLM Agents by
     %% first-mention.
     dsand --> eclaude
+
+    %% endo-workflow (eworkflow, Agent Capabilities) composes the daemon
+    %% form/request mail, agentry agents, and the git loop; top-level for
+    %% the same first-mention reason.
+    dform --> eworkflow
+    eagentry --> eworkflow
+    dgitnext -.-> eworkflow
 ```
 
 ### Milestones
@@ -857,11 +889,60 @@ tracked separately and is not a blocker for M2's exit criterion on
 (Was **Milestone 1** before the 2026-06-03 renumbering pass. The
 gateway-package implementation stack and the MCP-bridge endpoint live
 here because they are the substrate the hosted-Gateway-service north
-star is built on.)
+star is built on. The 2026-09-03 groom pass re-worded this milestone —
+the first unfinished one, M1 and M2 being Complete — to name the
+**client-side bridge** capabilities as its now-first priority; see the
+block immediately below and [`ARCHIVE.md`](ARCHIVE.md) for the note.)
 
 **Goal:** Self-host a daemon with Docker, remote control it via local
 Familiar or hosted Chat with bearer token auth. Claw-like coding
-capabilities available to agents.
+capabilities available to agents. **First priority: close the
+client-side MCP/CapTP bridge bottleneck** (below) so getting code and
+state across the MCP-daemon boundary no longer requires an external LLM
+hand-marshaling bytes.
+
+**Client-side bridge (top priority, carved 2026-09-03).** A liaison
+session on 2026-09-02/03, building a live counter on a minion.town clip,
+hit a concrete, reproducible bottleneck: getting one artifact across the
+MCP/CapTP bridge required either hand-typing tens of thousands of base64
+characters into a tool call (which corrupted mid-copy and had to be
+discarded) or reverse-engineering the CapTP wire protocol to hand-write a
+~10 KB client narrow enough to transcribe. Both are present-day
+bottlenecks in the **same class** — *get code/state across the
+MCP-daemon boundary without an external LLM hand-marshaling bytes* — and
+both are already designed, not yet built. This milestone now names both
+halves and their directly-dependent companions as its first-to-land work:
+
+- **The capability-addressed git remote** — `git push` becomes the way to
+  get an artifact into an Endo directory (no MCP-tool-call byte marshaling
+  at all). Maintainer-mandated (@kriskowal, 2026-08-11). Design home is
+  `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR
+  [#41](https://github.com/kriscendobot/minion.town/pull/41), merged
+  2026-08-18); its § 12 named the endo-side follow-on as "named but not
+  actioned." That follow-on is exactly the git trio already in this
+  milestone (`daemon-git-capability`, `daemon-git-remotes`,
+  `daemon-git-next-steps`) plus the `daemon-agent-tools` `makeGitRemoteTool`
+  push tier (#705), and its Rust smart-HTTP backing is
+  [endor-git-bindings](endor-git-bindings.md) (home M11, revised
+  2026-08-14 after this Minion Town review — the shared `rust/endor-git`
+  contract backs Minion Town's smart-HTTP adapter). Read-side companion is
+  the landed `git-content-substrate` (minion.town #39) this reframes.
+- **The confined in-guest agent** — an agent running *inside* a guest,
+  acting with normal tools directly on the daemon side, instead of an
+  external agent marshaling everything across the bridge by value. This is
+  [endo-claude](endo-claude.md) (**moved here from M6** by this groom; see
+  the M6 pointer) — a confined `claude -p` that *is* an Endo guest's
+  inference engine, reaching only that one guest's facet as its whole tool
+  surface. Confinement core in flight as PR
+  [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open
+  draft); the child-guest provisioning half is `endo-claude-agents-capability`,
+  PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open
+  draft), which composes with #1015 and provisions Claude-backed child
+  guests without granting guests credentials.
+
+These two halves solve the two directions of the same bottleneck and lead
+this milestone; the remaining M3 rows below (gateway substrate, mount,
+docker-selfhost, the rest of agent-tools) keep their places behind them.
 
 | Design | Status | Notes |
 |--------|--------|-------|
@@ -889,12 +970,16 @@ capabilities available to agents.
 | exo-git-follow-root-advancement | Proposed | Extends `@endo/platform/fs` with tree identity, atomic method-call transactions, high-level patches, and separate lossless-change / lossy-latest root followers; `GitStage` adds tentative commit metadata and a mutable root whose explicit `commit()` advances the corresponding Git followers |
 | daemon-git-remotes | Proposed | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
 | daemon-git-next-steps | Proposed | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
+| **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
+| **endo-claude** | Not Started | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
+| **endo-claude-agents-capability** | Proposed | **Client-side bridge, top priority (carved 2026-09-03).** The provisioning half of the confined in-guest agent: a portable Endo capability for provisioning Claude-backed child guests without granting guests credentials, arbitrary host access, or authority over unrelated guest namespaces (namespace-scoped recursive factory facets, per-account-family credential sources, single-use per-child leases, durable revocation, fail-closed restart). Composes with `endo-claude` (#1015). Design in flight as PR [#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (open draft), requested in the minion.town #64 maintainer review; separates Endo's generic daemon/factory work from Minion Town's account UX/credential custody. |
 | filesystem-watchers | Not Started | `EndoMount.followNameChanges` parity with `EndoDirectory`; Node `fs.watch` adapter on `FilePowers` |
 | daemon-locator-terminology | Not Started | Clean locator API; unblocked |
 | daemon-rename-to-manager | Not Started | Rename `daemon.js`/`Daemon`/`MignonicPowers` to `manager.js`/`Manager`/`WorkerPowers` to align JS with Rust `endor` nomenclature |
 | daemon-xs-worker-snapshot | In Progress | XS heap snapshot/restore; Phases 1-2 implemented — streaming CAS write/read, suspend/resume supervisor integration, CBOR control verbs; 12 passing tests; Phase 2 integration test and ephemeral GC roots remaining |
 | endo-reminder (supersedes endoclaw-timer) | Not Started | **Strategic:** Core capability concern — SES removes `setTimeout`/`setInterval`; the message scheduler is the only way agents get scheduled execution. Prerequisite for proactive behavior. Redrafted per PR #609 review as the unconfined plugin `@endo/reminder` over the virtual file system. |
 | endo-fetch (supersedes endoclaw-network-fetch) | Not Started | **Strategic:** `HttpClient` with origin allowlist. Self-hosted agents need outbound HTTP; foundation for OAuth and all external integrations. The landed capability is `@endo/exo-http-client` over `@endo/http-confine` (#566). Provisioning uses an unfettered `@endo/fetch` base, endowed with a state directory to `@endo/confined-fetch`, which exposes the policy-bound client ([endo-fetch](endo-fetch.md)); `makeHttpTool` follows in [`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6. |
+| endo-workflow | In Progress | `@endo/workflow`: durable, composable workflow system — pure statechart kernel (charts as passable pattern-guarded data) + unconfined service plugin (reminder packaging); runs journal as numbered marshals in pet stores (mailbox-store idiom), revive via `@pins`, effect via durable mail `ask`s and idempotency-keyed `invoke`s; journal = attributed audit log; snapshot status + seq-cursored `follow`; `space-workflow` UI. Motivating use case: agent-implements → multi-reviewer → CI → operator-approval → merge over the git stack ([endo-workflow](endo-workflow.md)). **Phases 1–4 + follow feeds + hardening round + `space-workflow` UI landed** (kernel, service, mail asks, composition, redaction/hash-chain/fail-loud/factories, Chat space, adversarial-review hardening; 81 tests incl. the feature-change flow with a mid-CI restart over a fake daemon agent); remaining: CLI verbs, live-substrate reference flow. Formula-type graduation path named; composes with agentry agents, forms, reminder, and the git trio. |
 | ~~daemon-cross-peer-gc~~ | **Complete** | Replaced the proposed CRDT-of-pet-stores with a one-way retention-set sync per peer connection (`retention-accumulator.js`, `EndoGateway.followRetentionSet`, SQLite `retention` table). Solves the GC gap; bidirectional shared namespace deferred as YAGNI. |
 | ~~daemon-guest-eval-simplification~~ | **Implemented** | Eval-proposal handshake removed; guest eval delegates directly to `formulateEval`. Type-system cleanup and regression test in PR #92. |
 
@@ -905,8 +990,18 @@ user must be able to present their bearer token (the id of their root
 agent) in the URL anchor, so that the Chat UI can submit this over
 WebSocket to the Daemon's Gateway, in order to establish the root or
 home profile. Agents have scheduled execution and confined outbound HTTP.
+**And (client-side bridge, first priority): an artifact crosses the
+MCP-daemon boundary without an external LLM hand-marshaling bytes — a
+capability-addressed `git push` lands it into an Endo directory
+([git-remote-capability](https://github.com/kriscendobot/minion.town/pull/41)
++ the git trio and `daemon-agent-tools` push tier), and a confined
+in-guest agent ([endo-claude](endo-claude.md) #1015 + its child-guest
+provisioning #1102) acts with normal tools directly on the daemon side
+rather than marshaling everything across by value.**
 
-**Estimated duration (1 dev):** 4-5 weeks
+**Estimated duration (1 dev):** 4-5 weeks (the two carved client-side
+bridge halves add ~1-1.5 weeks for `endo-claude` — moved here from M6 —
+plus the git-remote endo follow-on, sequenced first)
 
 ---
 
@@ -1066,9 +1161,10 @@ MCP client (Claude Desktop, etc.) with the agent's bearer token +
 the gateway's `/mcp` URL, and the MCP client successfully calls the
 agent's tools.
 
-**Estimated added effort (M6's own MCP-termination work):** ~3-3.5 weeks
-(~2 weeks for `endo-gateway-mcp` per its phase plan, plus ~1-1.5 weeks for the
-constituent [endo-claude](endo-claude.md) design added 2026-08-16, below). The wider
+**Estimated added effort (M6's own MCP-termination work):** ~2 weeks
+(~2 weeks for `endo-gateway-mcp` per its phase plan; the constituent
+[endo-claude](endo-claude.md) design and its ~1-1.5 weeks moved to M3 with the
+2026-09-03 client-side-bridge carve, below). The wider
 shortest-route cut spans ~6-9 weeks across M3's P0 remainder
 (gateway phases 10 and 11, ~2-3 weeks), M5's P3 Stripe adapter
 design + implementation (~1 week), and M5's P4 OAuth bonding + key
@@ -1076,22 +1172,27 @@ recovery designs (~2 weeks design + implementation TBD). M5's P2 AWS
 hosting is gated on the merge cadence of PRs #343 and #356, not on
 fresh design effort.
 
-**Constituent design: the inverse direction ([endo-claude](endo-claude.md), added
-2026-08-16, Not Started).** The P1 slice above wires an *external* LLM client
-(Claude Desktop, Cursor) *into* an Endo agent over the gateway's `/mcp`
-termination (P0 is gateway implementation, P2 AWS hosting, P3 Stripe, P4 OAuth).
-`@endo/claude` is the inverse: a confined `claude -p` that *is* an
-Endo guest's inference engine, reaching only that one guest's facet as its entire
-tool surface. The confinement is a **combination** of Claude Code flags (`--bare`
-alone does not close MCP auto-discovery or settings layers): `--bare` +
-`--strict-mcp-config` + `--setting-sources ""` + `--tools ""` +
-`--disable-slash-commands`, a membership-validated facet-derived
-`mcp__<server>__<tool>` allow-list, never `--resume`, run inside a required
-`@endo/claude-sandbox` OS slice. It consumes the same `@endo/agent-tools` MCP-adapter
-projection this milestone extracts (a prerequisite), so it belongs to M6's MCP-bridge
-cut even though it points the opposite way. Its own concrete minion.town-box
-deployment is a named follow-on design that belongs in `kriscendobot/minion.town`,
-mirroring the two companion designs there.
+**Constituent design: the inverse direction ([endo-claude](endo-claude.md),
+added 2026-08-16) — MOVED to M3 by the 2026-09-03 groom (pointer, not a
+deletion; its priority is raised there, lowered here).** The P1 slice above
+wires an *external* LLM client (Claude Desktop, Cursor) *into* an Endo agent
+over the gateway's `/mcp` termination (P0 is gateway implementation, P2 AWS
+hosting, P3 Stripe, P4 OAuth). `@endo/claude` is the inverse — a confined
+`claude -p` that *is* an Endo guest's inference engine, reaching only that one
+guest's facet as its whole tool surface — and it is now one of the two
+**client-side bridge** capabilities carved at the head of **M3** (with the
+capability-addressed git remote), because its true prerequisite (the
+`@endo/agent-tools` MCP-adapter projection, `endo-agent-tools`) lives in M3, and
+because a 2026-09-02/03 liaison session was fresh, concrete evidence that the
+MCP-daemon-boundary bottleneck it addresses is the first thing to close. See
+M3's "Client-side bridge" block for the full statement, the confinement-flag
+combination, PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015)
+(confinement core) and PR
+[#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) (child-guest
+provisioning). Its own concrete minion.town-box deployment remains a named
+follow-on design belonging in `kriscendobot/minion.town`. M6 continues to own
+the *external*-client MCP-termination direction (the P1 slice); only the inverse
+`@endo/claude` direction moved.
 
 ---
 
@@ -1241,6 +1342,7 @@ ecosystem.
 | ~~daemon-os-sandbox-plugin~~ | Superseded | Replaced by `endo-posix-sandbox`; retained as historical proposal |
 | endo-posix-sandbox | In Progress | Phases 0-1 shipped, Phases 2 + 3 in flight on `bots-ssh/jcorbin-sandbox-paths`; Phase 4 (macOS via lima + Apple Containerization) and Phase 6 (Windows via WSL2) compose the same in-guest backend pattern |
 | daemon-capability-persona | Not Started | Epithets and delegation |
+| daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, live inventory-path metadata, replacement, revocation, post-revocation deletion with retained audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
@@ -1532,6 +1634,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endo-reminder (supersedes endoclaw-timer) | S-M | 3 days | 3 | `@endo/reminder` message-scheduler plugin: reminder delivery, VFS durable store, host-controlled limits, integration-owned revival; core logic ports from PR #609's head |
 | ~~daemon-guest-eval-simplification~~ | — | — | 3 | ✅ Implemented (PR #92, ~2 hours actual; well under 1-day estimate) |
 | endo-fetch (supersedes endoclaw-network-fetch) | S-M | ~1-2 days | 3 | `@endo/fetch` unconfined base provides direct HTTP; `@endo/confined-fetch` receives that base plus a VFS state directory, adds policy + TOFU persistence through `@endo/exo-http-client`, and revives through `@pins`; `makeHttpTool` binds only the confined client ([`daemon-agent-tools`](daemon-agent-tools.md) Phase 3.6) |
+| endo-workflow | L-XL | 2.5-3.5 weeks (phases 1-4: kernel M, service M-L, mail M, composition M; UI space + worked reference flow follow as M-L + M) | 3 | `@endo/workflow` durable workflow system: pure statechart kernel, plugin service with numbered-marshal journals, mail-backed `ask` effects, `@pins` revival, seq-cursored `follow`, `space-workflow`. No daemon changes; effort is concentrated in the kernel semantics, recovery discipline, and the Phase 6 end-to-end acceptance flow. **Phases 1-4 + follow feeds + the hardening rounds + the `space-workflow` UI landed (~2 days actual, 81 tests); CLI verbs and the live-substrate flow carry the remaining M** |
 | ~~ci-no-npm-lifecycle~~ | S | — | 2 | ✅ Complete (PR #126 merged 2026-05-15) |
 | ~~chat-playwright-smoke~~ | S | — | 2 | ✅ Complete (PRs #91 design, #94 impl, #95+#104 fix; ~16 hours total) |
 | ~~base64-native-fallthrough~~ | S | — | 2 | ✅ Complete (via `actual/master` merge, commit `7325bbe15` from `endojs/endo#3216`) |
@@ -1591,6 +1694,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~daemon-os-sandbox-plugin~~ | — | — | 10 | Superseded by `endo-posix-sandbox` |
 | endo-posix-sandbox | L-XL | 6-10 weeks remaining | 10 | Phases 0-1 shipped (bwrap on Linux); Phase 2 (podman) and Phase 3 (nested slices) in flight; Phases 1.5, 4, 6 ahead. Per-phase estimates pending PLAN backfill |
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
+| daemon-secret-manager | XL | 4-6 weeks | 10 | Endo-native singleton for arbitrary secret bytes, pluggable durable backend, `@secrets` management directory, ordinary `secrets` pet store, existing lookup/marshal formulas, audit, replacement, revocation, restart durability with a recorded crash-reconciliation gap, canary leak tests, and the Secret Blobs Space; capability possession is the only authorization; decomposes the secret-storage slice already included in daemon-capability-bank, so this estimate is not additive to that row |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
 | endoclaw-browser | M-L | 1.5 weeks | 10 | Playwright-backed, origin-confined; smallest cut in PR #106 |
 | endoclaw-channel-bridges | M | 4-5 days | 10 | Vercel `chat` SDK adapters |
@@ -1637,9 +1741,9 @@ date of this pass.
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
-| M10: Confinement & Ecosystem (was M5) | 6 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **64** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the

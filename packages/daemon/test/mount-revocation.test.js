@@ -19,6 +19,8 @@ import {
   defaultDeniedSegments,
 } from '../src/mount.js';
 
+/** @import { EndoMountFile } from '../src/types.js' */
+
 /**
  * Unit tests for PR A of the #127 reconstruction: the mount revocation
  * caretaker (`makeRevocableMount` / `EndoMountControl`) and the
@@ -292,7 +294,7 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
     filePowers,
   });
   await E(mount).writeText(['file.txt'], 'contents');
-  const file = await E(mount).lookup('file.txt');
+  const file = /** @type {EndoMountFile} */ (await E(mount).lookup('file.txt'));
   t.is(await E(file).text(), 'contents');
 
   E(control).revoke();

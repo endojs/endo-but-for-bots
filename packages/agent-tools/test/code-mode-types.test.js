@@ -260,6 +260,25 @@ test('git declarations retain reachable filesystem contracts without status caps
   }
 });
 
+test('git root followers retain their concrete reader contracts', t => {
+  const text = declarationText(gitDeclarations.git);
+  t.false(
+    text.includes(
+      'followRootChanges: (options?: GitFollowRootOptions) => unknown;',
+    ),
+  );
+  t.true(
+    text.includes(
+      'followRootChanges: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootChange, undefined>>;',
+    ),
+  );
+  t.true(
+    text.includes(
+      'followLatestRoot: (options?: GitFollowRootOptions) => GitERef<GitPassableReader<GitRootSnapshot, undefined>>;',
+    ),
+  );
+});
+
 test('git status declarations expose copy data without live capabilities', t => {
   const text = declarationText(gitDeclarations.git);
   t.true(text.includes('entries: GitStatusEntry[];'));

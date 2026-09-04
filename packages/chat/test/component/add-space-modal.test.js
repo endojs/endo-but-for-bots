@@ -68,7 +68,7 @@ test.afterEach(() => {
   testDocument.body.innerHTML = '';
 });
 
-test.serial('choose screen lists all nine space types', async t => {
+test.serial('choose screen lists all eleven space types', async t => {
   const { $container } = await setup();
   const modes = [...$container.querySelectorAll('.space-type-card')].map(c =>
     c.getAttribute('data-mode'),
@@ -83,6 +83,8 @@ test.serial('choose screen lists all nine space types', async t => {
     'peers',
     'files',
     'floot',
+    'workflow',
+    'secrets',
   ]);
 });
 
@@ -100,7 +102,7 @@ test.serial(
 
     $container.querySelector('.add-space-back').click();
     await waitFor(() => !!$container.querySelector('.add-space-choose'));
-    t.is($container.querySelectorAll('.space-type-card').length, 9);
+    t.is($container.querySelectorAll('.space-type-card').length, 11);
   },
 );
 
@@ -164,6 +166,17 @@ test.serial('peers form submits with the peers layout', async t => {
   submitForm($container);
   await waitFor(() => submitted.length > 0);
   t.is(submitted[0].layout, 'peers');
+});
+
+test.serial('secret blobs form submits with the secrets layout', async t => {
+  const { $container, submitted } = await setup();
+  $container.querySelector('[data-mode="secrets"]').click();
+  await waitFor(() => !!$container.querySelector('.add-space-form'));
+
+  submitForm($container);
+  await waitFor(() => submitted.length > 0);
+  t.is(submitted[0].layout, 'secrets');
+  t.is(submitted[0].name, 'secrets');
 });
 
 test.serial('an empty handle shows a validation error', async t => {

@@ -966,11 +966,65 @@ export const makeCryptoPowers = crypto => {
       ),
     );
 
+  /**
+   * AES-256-GCM envelope used only by the local development secret backend.
+   * The backend supplies a record identifier as associated data.
+   *
+   * @param {Uint8Array} key
+   * @param {Uint8Array} plaintext
+   * @param {Uint8Array} associatedData
+   */
+  const sealSecret = (key, plaintext, associatedData) => {
+    const nonce = crypto.randomBytes(12);
+    const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+    cipher.setAAD(associatedData);
+    const first = cipher.update(plaintext);
+    const final = cipher.final();
+    const tag = cipher.getAuthTag();
+    const sealed = new Uint8Array(
+      nonce.length + tag.length + first.length + final.length,
+    );
+    sealed.set(nonce, 0);
+    sealed.set(tag, nonce.length);
+    sealed.set(first, nonce.length + tag.length);
+    sealed.set(final, nonce.length + tag.length + first.length);
+    return sealed;
+  };
+
+  /**
+   * @param {Uint8Array} key
+   * @param {Uint8Array} sealed
+   * @param {Uint8Array} associatedData
+   */
+  const openSecret = (key, sealed, associatedData) => {
+    if (sealed.length < 28) throw new Error('Invalid secret envelope');
+    const nonce = sealed.subarray(0, 12);
+    const tag = sealed.subarray(12, 28);
+    const ciphertext = sealed.subarray(28);
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+    decipher.setAAD(associatedData);
+    decipher.setAuthTag(tag);
+    const first = decipher.update(ciphertext);
+    let final;
+    try {
+      final = decipher.final();
+      const plaintext = new Uint8Array(first.length + final.length);
+      plaintext.set(first, 0);
+      plaintext.set(final, first.length);
+      return plaintext;
+    } finally {
+      first.fill(0);
+      if (final !== undefined) final.fill(0);
+    }
+  };
+
   return harden({
     makeSha256,
     randomHex256,
     generateEd25519Keypair,
     ed25519Sign,
+    sealSecret,
+    openSecret,
   });
 };
 

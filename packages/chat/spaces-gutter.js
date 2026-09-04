@@ -27,6 +27,8 @@ const KNOWN_MODES = new Set([
   'peers',
   'files',
   'floot',
+  'workflow',
+  'secrets',
 ]);
 
 /**
@@ -39,7 +41,7 @@ const KNOWN_MODES = new Set([
  * @property {string} name - display name (shown on hover)
  * @property {string} icon - emoji character
  * @property {string[]} profilePath - pet-name path to the agent
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} mode - interaction mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} mode - interaction mode
  * @property {ColorScheme} [scheme] - color scheme preference (default: 'auto')
  * @property {string} [channelPetName] - pet name of the channel object (for channel mode)
  * @property {string} [proposedName] - display name for the channel creator
@@ -51,6 +53,7 @@ const KNOWN_MODES = new Set([
  * @property {Array<{key: string, channelPetName: string, label: string}>} [bookmarks] - bookmarked threads
  * @property {string[]} [audioPath] - pet-name path to an audio object (floot mic input)
  * @property {string[]} [ttsPath] - pet-name path to a text-to-speech object (floot spoken replies)
+ * @property {string[]} [workflowPath] - pet-name path to a workflow service (workflow space)
  */
 
 /**
@@ -335,7 +338,7 @@ harden(SpacesGutterView);
  * @param {HTMLElement} options.$modalContainer - Container for the add space modal
  * @param {ERef<EndoHost>} options.powers - Endo host powers
  * @param {string[]} options.currentProfilePath - Current profile path for initial selection
- * @param {(profilePath: string[], spaceInfo?: { mode: 'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot', channelPetName?: string, proposedName?: string, whylipSystemPrompt?: string, viewMode?: 'chat' | 'forum' | 'outliner' | 'microblog', channelOrder?: string[], bookmarks?: Array<{key: string, channelPetName: string, label: string}>, audioPath?: string[], ttsPath?: string[] }) => void} options.onNavigate - Navigate callback
+ * @param {(profilePath: string[], spaceInfo?: { mode: 'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets', channelPetName?: string, proposedName?: string, whylipSystemPrompt?: string, viewMode?: 'chat' | 'forum' | 'outliner' | 'microblog', channelOrder?: string[], bookmarks?: Array<{key: string, channelPetName: string, label: string}>, audioPath?: string[], ttsPath?: string[], workflowPath?: string[] }) => void} options.onNavigate - Navigate callback
  * @returns {SpacesGutterAPI}
  */
 export const createSpacesGutter = ({
@@ -619,6 +622,7 @@ export const createSpacesGutter = ({
       bookmarks: space.bookmarks,
       audioPath: space.audioPath,
       ttsPath: space.ttsPath,
+      workflowPath: space.workflowPath,
     });
   };
 
@@ -704,7 +708,7 @@ export const createSpacesGutter = ({
         name: data.name,
         icon: data.icon,
         profilePath: data.profilePath,
-        mode: /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} */ (
+        mode: /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} */ (
           KNOWN_MODES.has(data.layout) ? data.layout : 'inbox'
         ),
         scheme: data.scheme || 'auto',
@@ -735,6 +739,12 @@ export const createSpacesGutter = ({
         data.ttsPath.every(p => typeof p === 'string')
       ) {
         spaceConfig.ttsPath = data.ttsPath;
+      }
+      if (
+        Array.isArray(data.workflowPath) &&
+        data.workflowPath.every(p => typeof p === 'string')
+      ) {
+        spaceConfig.workflowPath = data.workflowPath;
       }
       await addSpace(spaceConfig);
     },
@@ -834,7 +844,7 @@ export const createSpacesGutter = ({
     if (!obj.profilePath.every(p => typeof p === 'string')) return null;
     // Mode is optional, default to 'inbox'
     const mode =
-      /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot'} */ (
+      /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets'} */ (
         typeof obj.mode === 'string' && KNOWN_MODES.has(obj.mode)
           ? obj.mode
           : 'inbox'
@@ -887,6 +897,12 @@ export const createSpacesGutter = ({
       obj.ttsPath.every(p => typeof p === 'string')
     ) {
       result.ttsPath = obj.ttsPath;
+    }
+    if (
+      Array.isArray(obj.workflowPath) &&
+      obj.workflowPath.every(p => typeof p === 'string')
+    ) {
+      result.workflowPath = obj.workflowPath;
     }
     if (
       Array.isArray(obj.channelOrder) &&
