@@ -64,9 +64,15 @@ carries its capabilities *by stored `FormulaIdentifier`*, not as live exos.
 The bridge is one small caplet — the **reminder courier** — bound to
 `reminder-recipient`. It exposes `notify(message)`, and on each firing formats
 the message and injects it into the user's inbox as an ordinary `package`
-message from a "Reminders" party. This is exactly the
-[proactive-messages](endoclaw-proactive-messages.md) pattern
-(`E(host).send('@self', summary)`), except the scheduling half is now the
+message from a distinct "Reminders" party. This is exactly the
+[proactive-messages](endoclaw-proactive-messages.md) pattern, which looks up the
+host and calls `E(host).send('@host', summary)`
+([endoclaw-proactive-messages.md:31](endoclaw-proactive-messages.md)) — i.e. it
+delivers to **`@host`**, the user's own handle, never `@self`. `@self` is the
+*sender's* own handle (for a guest, `packages/daemon/src/guest.js:96`; for a
+host, `host.js:484`), so a courier that sends to `@self` deposits every reminder
+in its own mailbox and the user never sees it. The courier must send to `@host`
+(the user's handle in the courier's namespace). The scheduling half is now the
 external `@endo/reminder` plugin rather than an in-process `Timer` callback, so
 the courier is the piece that holds the send authority the plugin deliberately
 does not.
@@ -75,23 +81,39 @@ does not.
 sequenceDiagram
     participant User
     participant UI as Chat UI (@endo/chat)
-    participant Sched as ReminderScheduler
+    participant Scheduler as ReminderScheduler
     participant Plugin as @endo/reminder worker
     participant Courier as reminder courier
     participant Mailbox as daemon mailbox
     User->>UI: "remind me every 30m"
-    UI->>Sched: makeReminder(label, periodMs, opts)
+    UI->>Scheduler: makeReminder(label, periodMs, opts)
     Note over Plugin: schedule fires
     Plugin->>Courier: notify(reminder-message)
-    Courier->>Mailbox: send('@self', [text]) as "Reminders"
-    Courier-->>Plugin: reminderResponse.resolve()
+    Courier->>Mailbox: send('@host', [text], [], []) as "Reminders"
+    Courier-->>Plugin: reminderResponse.resolve() after send resolves
     Mailbox-->>UI: followMessages() yields package
     UI->>User: renders in "Reminders" space (chime + chip)
 ```
 
+The `send` guard takes **four required arguments** —
+`(recipient, strings, edgeNames, petNamesOrPaths)`, with only
+`replyToMessageNumber` optional (`packages/daemon/src/interfaces.js:203-210`) —
+so the courier always calls `send('@host', [text], [], [])`.
+
 Because `@endo/space-chat` is a *recipient-filtered single-sender* inbox view,
-the "Reminders" party naturally gets its own space/conversation in the spaces
-gutter, with no filtering change.
+the distinct "Reminders" sender (the courier guest, a different handle from the
+user) *can* have its own single-sender space/conversation. But a space is **not**
+derived automatically from the arrival of a new sender: spaces are explicit
+configs created only through `addSpace` / the modal and persisted under the
+`spaces` pet-store directory (`packages/chat/spaces-gutter.js:410`), and
+`InboxRoot` takes an explicit `conversationId` / `conversationPetName`
+(`packages/space-chat/src/inbox.js:1386`). So `setup-reminder.js` (§ What
+changes) must **provision the "Reminders" space config**; until it does, reminder
+messages surface only in the unfiltered `home` view (`chat/chat.js`). The one
+thing that would silently *fail* is self-to-self delivery — a message whose
+sender is the user's own handle is dropped from every named conversation view
+(`inbox.js`) — which is exactly why the courier must be a **distinct** party
+sending to `@host`, not the user reminding itself.
 
 ## What a reminder means in Chat
 
@@ -100,11 +122,14 @@ gutter, with no filtering change.
   facet. `label` becomes the reminder text; `periodMs` the cadence;
   `firstDelayMs` a lead time.
 - **Who receives:** the same user — the first cut is **self-reminders**. The
-  courier is bound to send to `@self`, so a reminder is a note the user schedules
-  for their future self, arriving in a dedicated "Reminders" conversation.
-  Reminding *another* party is a later extension (§ Open questions): bind the
-  courier to `send` to that peer, which is proactive messaging to others and
-  carries its own consent/policy questions.
+  courier is a distinct party bound to send to `@host` (the user's own handle in
+  the courier's namespace), so a reminder is a note the user schedules for their
+  future self, arriving from the "Reminders" party into a dedicated "Reminders"
+  conversation. (Delivery to `@self` would land in the courier's *own* mailbox,
+  never the user's — see § The integration seam.) Reminding *another* party is a
+  later extension (§ Open questions): bind the courier to `send` to that peer,
+  which is proactive messaging to others and carries its own consent/policy
+  questions.
 - **How it survives a restart:** the reminder *service* is pinned in `@pins`, its
   VFS store persists each reminder and the config, and on the next boot
   `revivePins()` re-incarnates the worker, whose `make()` runs recovery
@@ -119,21 +144,35 @@ gutter, with no filtering change.
 The service is provisioned once, per the plugin's `makeUnconfined` recipe, and
 the `ReminderScheduler` facet is stored under a pet name the UI can `lookup`.
 `makeUnconfined` is host-side (`E(host).makeUnconfined(worker, '@endo/reminder',
-…)` over CapTP; the daemon's Node worker resolves the specifier), so the browser
+...)` over CapTP; the daemon's Node worker resolves the specifier), so the browser
 can drive it, but the running UI does not call `makeUnconfined` today — only the
-`setup-lal` / `setup-llm-provider` scripts do (`endo run --UNCONFINED … --powers
+`setup-lal` / `setup-llm-provider` scripts do (`endo run --UNCONFINED ... --powers
 @agent`). The plan follows that precedent with a **`setup-reminder.js`** script
 (§ What changes), leaving an in-UI "enable reminders" affordance as a later
-convenience.
+convenience. Provision the service in a **dedicated named worker** (an explicit
+`workerName`), not the shared `@node` worker: `makeUnconfined` grants the plugin
+ambient Node authority in its worker, and defaulting `workerName` (`host.js`)
+would co-locate the reminder plugin's ambient authority with every other
+unconfined caplet (`setup-lal`'s provider among them) in one process.
 
 The powers namehub the plugin resolves must carry exactly two names:
 
 - **`reminder-store`** — a writable `@endo/platform/fs/extended` directory. The
-  agent mints one with `E(host).provideScratchMount('reminder-store')` (or
-  `provideMount(absPath, 'reminder-store')` for a host-directory backing). This
-  is the "daemon mount" backing the plugin README anticipates; it exposes the
-  reconciled writable-tree verbs the store uses (`lookup`/`list`/`write`/
-  `makeDirectory`/`remove`/`move`, with atomic within-directory `move`).
+  agent mints one with `E(host).provideScratchMount('reminder-store')` (preferred
+  — a top-level `provideMount(mountPath, 'reminder-store')` is resolvable back to
+  a host path by any host holder, so it leaks more authority). This is the
+  "daemon mount" backing the plugin README anticipates. **Contract note (resolves
+  open question 3):** the store does not use the flat `EndoMount.list(): string[]`
+  shape — it calls `E(directory).list()` to get a **cursor**, `toArray()`s it, and
+  destructures `{ name, kind }` entries (`packages/reminder/src/store.js:105-110`),
+  and `makeDirectory(name, {})` with two arguments (`store.js:45`). That is the
+  `@endo/platform/fs/extended` `Directory` cursor contract, which is what
+  `provideScratchMount` must yield; verify the mount handed by a live daemon
+  satisfies it before building. The store also depends on `write` / `remove` /
+  atomic within-directory `move`. This seam is unchecked at the type level today
+  because `ReminderStoreDirectory` is aliased to `any`
+  (`packages/reminder/src/types.d.ts:82`); tightening that alias to the extended-fs
+  `Directory` type is named integration work.
 - **`reminder-recipient`** — the reminder courier caplet (below), a durable
   formula reachable by that name so revival re-resolves it.
 
@@ -141,20 +180,28 @@ The powers namehub the plugin resolves must carry exactly two names:
 flowchart LR
     Agent[User agent / powers]
     Agent -->|provideScratchMount| Store[reminder-store: VFS dir]
-    Agent -->|makeGuest + send-to-self| Courier[reminder courier: notify -> send]
+    Agent -->|makeGuest| Guest[courier guest: send to @host]
+    Guest -->|held privately by| Courier[reminder courier caplet: notify only]
     subgraph powersName[attenuated powers namehub]
       Store
       Courier
     end
-    Agent -->|makeUnconfined @endo/reminder<br/>resultName @pins/reminder| Service[ReminderService]
-    Service -->|scheduler facet| Sched[stored as reminder-scheduler]
+    Agent -->|makeUnconfined @endo/reminder<br/>dedicated worker<br/>resultName @pins/reminder| Service[ReminderService]
+    Service -->|scheduler facet| Scheduler[stored as reminder-scheduler]
     Service -.control facet retained.-> Agent
 ```
 
 Initial `maxActive` / `minPeriodMs` arrive via `env`; thereafter the store is
 authoritative. The service is pinned with `resultName: ['@pins', 'reminder']`.
 The integration retains the `ReminderControl` facet (pause / resume / revoke /
-limits); the UI holds only `ReminderScheduler`.
+limits); the UI holds only `ReminderScheduler`. For that split to be real, the
+`reminder-store` mount must be reachable **only** through the plugin's powers
+namehub — not also handed to the UI-side agent. The store, not `env`, is
+authoritative for the limits, and `readConfig` (`packages/reminder/src/store.js:87`)
+is deliberately **not** corruption-tolerant (unlike the entries path); a UI agent
+that could write the store's `config.json` directly would bypass `ReminderControl`
+and, on one out-of-range write, make the pinned service throw at revival —
+silently killing *all* reminders (`scheduler.js:129-146`).
 
 ## What has to change on each side
 
@@ -163,6 +210,15 @@ Phase 2/3 surface — `notify`-to-recipient delivery, VFS store, `@pins` revival
 is exactly what this uses, unchanged. The one capability the baseline cannot
 carry (an *actionable* response inside the delivered message) is the plugin's own
 gated Phase 4 (below), not a change this plan requests.
+
+**Mailbox retention (Chat-side follow-up).** Every firing persists a `package`
+message that the daemon mailbox never prunes, and the default cadence band
+(`minPeriodMs = 30_000`) permits a high message rate that is replayed through
+`followMessages` on every reconnect. A recurring reminder therefore grows the
+mailbox without bound. The baseline can ship without a retention story, but the
+"Reminders" conversation needs a pruning/coalescing policy (or a bounded
+retention window) before recurring reminders are used in earnest; name it as a
+follow-up rather than leaving it unstated.
 
 **Deployment side (the daemon Chat connects to):** `@endo/reminder` must be
 resolvable by the daemon's Node worker for `makeUnconfined('@endo/reminder')`. It
@@ -173,38 +229,106 @@ dependency with the sibling plans.
 
 **Chat side (`@endo/chat`):**
 
-1. **The reminder courier caplet** — the one genuinely new object. A small caplet
-   exposing `notify(message)` that holds a guest power granting only `send` to
-   `@self`, and on each `notify` formats the reminder (label, cadence, and — when
-   `missedMessages > 0` — the coalesced `annotation`) into markdown and sends it
-   as "Reminders", then resolves the one-shot response (auto-ack; a proactive
-   reminder needs no reply). Least authority: send-to-self only.
-2. **`setup-reminder.js`** — an `endo run --UNCONFINED … --powers @agent` script
+1. **The reminder courier caplet** — the one genuinely new object. It is a
+   hardened exo (`makeExo` + an `M.interface` guard exposing exactly
+   `notify(message)`, validating the `reminder-message` shape rather than trusting
+   the sender's record). It **closes over** a guest privately; that held guest —
+   never itself reachable from the powers namehub — is the trust boundary. This
+   distinction is load-bearing: a bare guest is **not** "send-to-self only".
+   `makeGuest` yields the full `GuestInterface` — the whole name-hub read *and
+   mutation* surface, directory file I/O, the entire mailbox (`request`, `adopt`,
+   `dismissAll`, `listMessages`/`followMessages`), and `send` to *any* name
+   (`packages/daemon/src/interfaces.js:160-260`) — so a guest handed out directly
+   could read and erase the user's whole inbox. The attenuation is therefore
+   *structural*: the courier exposes only `notify`, and the guest's broad
+   authority is denied by never being exported, not by convention.
+
+   On each `notify`, the courier formats the reminder (label, cadence, and — when
+   `missedMessages > 0` — the coalesced `annotation`; note `annotation` is present
+   on *every* message and `annotation: 'timestamps'` yields a list, not a count,
+   so the formatter must handle both shapes) into markdown and delivers it via the
+   held guest's `send('@host', [text], [], [])`. **The label must be delivered as
+   one opaque `strings` element with empty `edgeNames`/`petNames`** — it must *not*
+   be run back through `message-parse.js`. Chat's `parseMessage`
+   (`packages/chat/message-parse.js:3`) lifts every `@name` out of message text
+   into `petNames`, and `mail.js` then throws `Unknown pet name` for any that does
+   not resolve — so an ordinary label like `ping @alice about lunch` would
+   schedule fine and then **fail at every firing** (visible only as plugin
+   backoff). Passing the label opaquely also closes the authority leg where a
+   resolvable `@name` in the courier's namespace would attach a live capability to
+   the outgoing envelope. The markdown/annotation the courier composes must be
+   rendered as plain (escaped) text by `InboxRoot`, not as trusted "Reminders"
+   markup.
+
+   Only after the `send` promise resolves does the courier resolve the one-shot
+   response (auto-ack; a proactive reminder needs no reply). **On a `send`
+   rejection the courier calls `reminderResponse.reschedule()`**, so a failed
+   delivery is retried by the plugin's backoff rather than silently counted as
+   delivered (a broad `try`/`catch` that auto-acks anyway would drop the reminder
+   and suppress the plugin's retry). Do not resolve before the send is confirmed.
+2. **`setup-reminder.js`** — an `endo run --UNCONFINED ... --powers @agent` script
    that mints the store mount, makes the courier guest and mutual pet names,
    composes the `reminder-store` + `reminder-recipient` powers namehub,
    `makeUnconfined`s the service pinned into `@pins`, and stores the
    `ReminderScheduler` facet as `reminder-scheduler`. Mirrors `setup-lal.js`.
 3. **A scheduling affordance** — minimal first cut: a chat-bar command
-   (`/remind <period> <label>`, parsed like existing `@edge:petname` references
-   in `message-parse.js`) that looks up `reminder-scheduler` and calls
-   `makeReminder`. A richer form UI is a follow-up. **Delivery needs no UI
-   change** — a reminder that lands as a `package` message renders through the
-   existing `InboxRoot` path automatically.
+   (`/remind <period> <label>`) that looks up `reminder-scheduler` and calls
+   `makeReminder`. The command is parsed by its **own** parser (or the existing
+   `command-registry.js` slash-command surface — `packages/spaces-util/src/command-registry.js`),
+   **not** by `message-parse.js`: the `<label>` remainder is taken verbatim as the
+   reminder text (see the opaque-label requirement above), so a label containing
+   `@name` is preserved rather than lifted into pet-name references. The affordance
+   must (a) parse `<period>` and reject anything outside the plugin's cadence band
+   — **1 s (`ABSOLUTE_MIN_PERIOD_MS`) to 24 h (`MAX_PERIOD_MS = 86_400_000`)**,
+   both `periodMs` and `firstDelayMs` capped there (`scheduler.js:47`; the 24 h cap
+   is deliberate, tied to the `setTimeout` ~24.8-day ceiling, so it will not simply
+   be relaxed) — surfacing an out-of-band or unparseable duration as chat-bar
+   feedback, since `assertValidPeriod` (`scheduler.js`) throws a `TypeError` on a
+   non-numeric or out-of-range value and an unhandled rejection would otherwise be
+   silent. Absolute cadences ("tomorrow at 9am", weekly) are **not** expressible
+   within this band and are out of scope for the first cut. A richer form UI is a
+   follow-up. **Delivery needs no UI change** — a reminder that lands as a
+   `package` message renders through the existing `InboxRoot` path automatically.
 
 ## The interactive-response gap (dependency on #721 shape)
 
 Each fired message carries a one-shot `reminderResponse` exo (`resolve()` /
-`reschedule()`) — the hook for "snooze this reminder". How far that reaches into
-Chat is bounded by what #721 built:
+`reschedule()`) — a possible hook for "snooze this reminder", but a constrained
+one. **`reschedule()` is the delivery-*failure* retry path, not a user snooze:**
+it increments `consecutiveFailures` and re-arms via a jittered exponential backoff
+whose ceiling is `messageTimeoutMs` (`packages/reminder/src/scheduler.js`;
+`interfaces.js:5-15` documents it as retry). Recruiting it as snooze hands the
+user a backoff delay they did not choose and poisons the failure streak. The
+response is also **auto-resolved at `messageTimeoutMs`** (default `periodMs / 2`),
+after which *every* later call — `resolve` or `reschedule` — is silently inert
+(`interfaces.js:9-11`); and `resolve()` is what arms the next period, so a courier
+that *retains* the response un-resolved to "hold it open for snooze" delays the
+next firing and then degrades to a silent auto-ack timeout (emitting a
+`console.warn`). Any snooze design must state all three constraints. How far a
+snooze reaches into Chat is bounded by what #721 built:
 
-- **Auto-ack (baseline, available now):** the courier resolves on delivery.
-  Reminders fire and appear; no snooze. Ships on `@endo/reminder` as merged.
-- **Live snooze (available now, Chat-side only):** the courier retains the live
-  response in memory keyed by `reminderId`, embeds the id in the message, and
-  exposes `E(courier).snooze(id)` / `ack(id)`; a chat affordance calls it. Works
-  while the daemon is up; a response is lost on restart (recovery re-fires, so no
-  reminder is dropped). Needs no #721 change — the response never has to be
-  stored — but it does add a courier method and a small UI affordance.
+- **Auto-ack (baseline, available now):** the courier resolves on delivery (after
+  `send` confirms). Reminders fire and appear; no snooze. Ships on
+  `@endo/reminder` as merged.
+- **Live snooze (available now, Chat-side only, bounded):** a snooze that re-arms
+  a reminder sooner cannot use `reschedule()` (backoff-only) and cannot outlive
+  `messageTimeoutMs`; within that window the courier can retain the live response
+  and re-drive the schedule. If retained, it must be keyed by
+  **`(reminderId, messageNumber)`**, not `reminderId` alone — a redelivery re-uses
+  the same `reminderId` under a fresh `messageNumber` (carried on the message), so
+  a `reminderId`-only map either clobbers the retained response (which then never
+  resolves, stalling the schedule and firing the timeout) or grows unbounded.
+  Authority to snooze must be a **capability, not a bearer token**: `reminderId`
+  is `makeRandomHexId` — `Math.random()`, not a CSPRNG (`index.js:61-69`) — and is
+  published in the mailbox, so `E(courier).snooze(id)` would make "knows a
+  guessable string" sufficient. Pass a per-message ack/snooze *facet* to the UI
+  instead. This also means splitting the courier into a **recipient facet**
+  (`notify`, held by the plugin as `reminder-recipient`) and a **control facet**
+  (snooze/ack, held by the UI): one combined exo would let the plugin snooze and,
+  worse, let the UI `notify` — i.e. forge arbitrary "Reminders" messages into the
+  inbox. Works while the daemon is up; a response is lost on restart (recovery
+  re-fires, so no reminder is dropped). Needs no #721 change — the response never
+  has to be stored — but it adds the control facet and a small UI affordance.
 - **Native in-message action (blocked on #721 Phase 4):** surfacing the response
   as a first-class message attachment, so the inbox's existing reply/resolve
   affordances drive snooze durably, requires the response to be a *storable*
@@ -220,24 +344,37 @@ blocks the others.
 ## Test strategy
 
 - **Courier unit test:** a `notify(reminder-message)` produces one mailbox
-  `package` delivery observable through a mailbox stub / `followMessages`, with
-  the expected text, "Reminders" sender, and `annotation` rendering for a
-  coalesced message; and it resolves the response.
+  `package` delivery observable through a mailbox stub / `followMessages`, sent to
+  `@host`, with the expected text as one opaque `strings` element (empty
+  `edgeNames`/`petNames`), "Reminders" sender, and `annotation` rendering for both
+  the `count` and `timestamps` shapes; it resolves the response only after `send`
+  resolves, and calls `reschedule()` when the stub `send` rejects.
+- **Opaque-label test:** a label containing `@name` round-trips verbatim (is
+  *not* lifted into `petNames`) and delivery does not throw `Unknown pet name`.
+- **Clock seam:** the plugin's injectable `setTimeout` / `now` seam is on
+  `makeReminderService`'s powers, but the unconfined entry point (`make()`,
+  `index.js:111-121`) forwards only `store` / `makeId` / `onMessage` / limits /
+  `paused` — it does **not** forward a clock. So the timing test must drive
+  `makeReminderService` directly (or add an `env`/powers clock seam); an
+  end-to-end test through `makeUnconfined` runs on the real clock.
 - **End-to-end against a daemon:** provision the service with
   `reminder-recipient` = courier bound to a test agent's inbox, schedule a
-  reminder, advance the plugin's injectable clock (the `setTimeout`/`now` seam
-  from #609 survives in the plugin), and assert a `package` message appears in
-  `followMessages`.
+  short reminder, and assert a `package` message appears in `followMessages`.
 - **Revival:** pin, schedule, simulate a daemon restart, assert recovery
   re-fires per `catchUpPolicy` (`coalesce` produces one catch-up with the right
-  `missedMessages`; `skip` drops stale). Reuses the plugin's own recovery tests
-  as the lower layer.
-- **Space filtering:** assert the "Reminders" sender lands in its own
-  single-sender space view (`@endo/space-chat`).
-- **Playwright e2e** for the `/remind` affordance once it exists.
+  `missedMessages`; `skip` drops stale). Pin the revival assertion on the
+  injected `now` seam rather than elapsed sleeping — `missedMessages` derives from
+  wall-clock `Date.now()` (`scheduler.js:99`), so a real clock is nondeterministic
+  across the simulated downtime. Reuses the plugin's own recovery tests as the
+  lower layer.
+- **Space provisioning:** assert `setup-reminder.js` creates the "Reminders"
+  space config and that the courier's messages then land in that single-sender
+  space view (`@endo/space-chat`), not merely the `home` view.
+- **Playwright e2e** for the `/remind` affordance once it exists, including an
+  out-of-band duration (< 1 s or > 24 h) surfacing as chat-bar feedback.
 
-The plugin already ships 21 unit tests on the in-memory VFS; the integration
-tests target only the courier + provisioning seam, not the scheduler core.
+The integration tests target only the courier + provisioning seam, reusing the
+plugin's own unit suite for the scheduler core.
 
 ## Ordering
 
@@ -282,13 +419,19 @@ task (**to be filed**) rather than duplicated per plan.
 - Should reminders be schedulable *for another party*, not just self-reminders?
   That turns the courier into a proactive-messaging-to-others surface with
   consent implications; deferred here as a self-reminders-first cut.
-- Does `provideScratchMount` / `provideMount` yield a directory whose verb set
-  exactly matches the reminder store's `@endo/platform/fs/extended` contract
-  (including atomic within-directory `move`)? Named as the one integration point
-  to verify against a live daemon before building; the plugin README's "daemon
-  mount" backing and `daemon/src/mount.js` indicate yes, but it is unconfirmed
-  end-to-end.
+- **(Resolved in § Provisioning.)** The reminder store does *not* consume the
+  flat `EndoMount.list(): string[]` shape; it consumes the
+  `@endo/platform/fs/extended` `Directory` **cursor** contract — `list()` → cursor
+  → `toArray()` → `{ name, kind }` entries, and `makeDirectory(name, {})`
+  (`packages/reminder/src/store.js:45,105-110`) — plus `write` / `remove` / atomic
+  within-directory `move`. So `provideScratchMount` must yield an extended-fs
+  `Directory`, and the seam is unchecked today only because `ReminderStoreDirectory`
+  is aliased to `any` (`packages/reminder/src/types.d.ts:82`). Remaining work is
+  not a question but a task: verify the live daemon's `provideScratchMount` mount
+  against that contract end-to-end and tighten the alias to the extended-fs
+  `Directory` type.
 - What is the minimum viable scheduling affordance — a `/remind` chat-bar command
-  parsed like existing `@edge:petname` refs, or a dedicated form (the
-  `counter-proposal-form.js` / `add-space-modal.js` pattern)? This plan assumes
-  the command first, the form as a follow-up.
+  (registered in `command-registry.js`, with its `<label>` remainder taken
+  verbatim — *not* run through `message-parse.js`; see § What changes), or a
+  dedicated form (the `counter-proposal-form.js` / `add-space-modal.js` pattern)?
+  This plan assumes the command first, the form as a follow-up.
