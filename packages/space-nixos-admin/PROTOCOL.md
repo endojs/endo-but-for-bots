@@ -122,6 +122,9 @@ immediately after that directory's own entry, before the directory's next
 sibling.
 Omit any entry named `.git` at every depth rather than only at the checkout
 root, and reject symlinks and special files.
+The capability refuses to write through such a path for the same reason, so no
+content it can edit is outside the digest.
+For `rollback`, this field is `null`.
 
 Pre-order is not the same as sorting whole relative paths, and the difference
 is reachable in an ordinary flake checkout: for a directory `a/` beside a file
@@ -130,8 +133,7 @@ siblings by the names `a` and `a.nix`, while a global path sort emits `a`,
 `a.nix`, `a/z`, because `.` (U+002E) sorts before `/` (U+002F).
 The two readings yield different digests, and a service that picks the wrong
 one rejects every apply.
-The capability refuses to write through such a path for the same reason, so no
-content it can edit is outside the digest.
+
 For each directory and regular file, hash its type (`d` or `f`), relative UTF-8
 path, and low 12 permission bits as
 `<type><path-byte-length>:<path><mode>:` where `mode` is decimal.
@@ -168,7 +170,7 @@ Its digest is
 A global path sort of that same tree yields
 `a2782dc546b206b1a40ad66a85723d4b06502fc1886c78db21514bba705c5235`, which is
 the wrong answer.
-For `rollback`, this field is `null`.
+
 The service must reproduce the digest in a race-free staging area, build only
 that content, and reject a mismatch; it must never sweep later checkout edits
 into the operation.
