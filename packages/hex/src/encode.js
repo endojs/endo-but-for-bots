@@ -9,6 +9,12 @@ import harden from '@endo/harden';
 // the dispatched native intrinsic invocation.
 const { apply } = Reflect;
 
+// The committed genuine-vs-emulated distinguisher (issue #573): a genuine
+// `Uint8Array` view answers `true`, whether its backing buffer is mutable or
+// a genuine immutable buffer; an emulated `@endo/immutable-arraybuffer`
+// wrapper answers `false`.
+const { isView } = ArrayBuffer;
+
 const hexAlphabet = '0123456789abcdef';
 
 /**
@@ -57,12 +63,15 @@ const nativeToHex =
  * copy.
  *
  * Dispatches to the native `Uint8Array.prototype.toHex` intrinsic when
- * available (stage-4 TC39 proposal-arraybuffer-base64) and the input's
- * backing buffer is mutable. For frozen `Uint8Array` values backed by an
- * immutable `ArrayBuffer` (byteArray passable form) and for all other
- * non-plain-`Uint8Array` inputs, the call falls through to the pure-JavaScript
- * polyfill. The polyfill preserves the indexed loop's fast path for genuine
- * views and copies only an emulated immutable wrapper.
+ * available (stage-4 TC39 proposal-arraybuffer-base64) *and* the input is a
+ * genuine `Uint8Array` view (`ArrayBuffer.isView === true`) — whose bytes the
+ * native intrinsic can read directly, whether the backing buffer is mutable or
+ * a genuine immutable buffer. An emulated `@endo/immutable-arraybuffer` wrapper
+ * is a plain object (`isView(wrapper) === false`) whose bytes native C++ cannot
+ * read through the shim's proxy, so it falls through to the pure-JavaScript
+ * `jsEncodeHex`, which thaws it first. `isView` is the committed
+ * genuine-vs-emulated distinguisher (issue #573); consulting it (rather than
+ * `.buffer.immutable`) keeps the native fast path for genuine immutable views.
  *
  * @param {Uint8Array} bytes
  * @returns {string}
@@ -70,16 +79,13 @@ const nativeToHex =
 export const encodeHex =
   nativeToHex !== undefined
     ? bytes => {
-        // Use the native intrinsic only when the backing buffer is mutable.
-        // For immutable ArrayBuffers (shim or native stage-3), the frozen
-        // Uint8Array wrapper is a plain object that the native C++ toHex
-        // cannot handle: it reads via internal TypedArray exotic slots, not
-        // through the wrapper's delegated accessors. The polyfill normalizes
-        // that wrapper before entering its indexed loop.
-        if (
-          bytes instanceof Uint8Array &&
-          /** @type {any} */ (bytes.buffer).immutable !== true
-        ) {
+        // Use the native intrinsic for any genuine `Uint8Array` view, mutable
+        // or immutable. Only an emulated `@endo/immutable-arraybuffer` wrapper
+        // (`isView === false`) is a plain object that the native C++ toHex
+        // cannot handle — it reads via internal TypedArray exotic slots, not
+        // through the wrapper's delegated accessors — so it falls through to
+        // the polyfill, which normalizes that wrapper before its indexed loop.
+        if (bytes instanceof Uint8Array && isView(bytes)) {
           return apply(nativeToHex, bytes, []);
         }
         return jsEncodeHex(bytes);
