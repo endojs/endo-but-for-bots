@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-04-17 |
-| **Updated** | 2026-07-28 |
+| **Updated** | 2026-08-01 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | In Progress |
+| **Status** | Complete |
 
 ## Status
 
@@ -85,8 +85,9 @@ All five phases implemented:
   package's CAS tree and report entries whose blobs are
   missing, exiting non-zero on incompleteness).
 
-Known gaps recorded below. The two execution gaps this section
-used to record are both resolved. Directory-relative
+Post-finish-line extensions and constraints are recorded below.
+The two execution gaps this section used to record are both
+resolved. Directory-relative
 resolution: the archive loader's resolve hook resolves `./`
 and `../` specifiers against the referrer module's directory
 (escaping the package root is a clean error), so multi-file
@@ -126,6 +127,17 @@ quick-start entry — get Node-style **module-syntax detection**
 with `SyntaxError: invalid import`; dynamic `import()` and
 keyword mentions in strings/comments/nested scopes do not flip a
 real CJS file.
+
+### Reverification
+
+The finish line was reverified on 2026-08-01 with a clean
+application containing only `package.json` and `main.js`:
+`endor run main.js` fetched and executed `semver@7.5.4` and its
+transitive CommonJS dependencies, and a second `endor run
+--offline main.js` produced the same `semver@7.5.4` result from
+the SQLite registry table and CAS. `endor registry verify`
+reported three packages verified and zero incomplete; the
+application had no lockfile and no `node_modules` directory.
 
 ## What is the Problem Being Solved?
 
@@ -482,7 +494,7 @@ The tree's children are the package's files, stored as blobs.
    registry table for reproducibility, but the implicit
    behavior is sufficient for development workflows.
 
-## Known gaps
+## Post-finish-line extensions and constraints
 
 - [x] Private registry authentication beyond `.npmrc` tokens:
       basic auth via nerf-darted `:username`+`:_password`
@@ -541,13 +553,23 @@ The tree's children are the package's files, stored as blobs.
       `^16.8.0 || ^17 || ^18` — distinct anchor majors coexist)
       and leaves the optional peers `redux` / `@types/react`
       unactivated.
-- [ ] A `process` global (`process.env.NODE_ENV` at minimum) for
-      the archive runtime's CJS loader: real-world CJS packages
-      gate dev/prod entry selection on it (`react`, `graphql`),
-      so their evaluation dies on `get process: undefined
-      variable` even though their (peer) edges now link. Whether
-      to shim a frozen `process.env` or reject remains a
-      confinement decision.
+- [x] A `process` global for the archive runtime's CJS loader:
+      real-world CJS packages gate dev/prod entry selection on
+      `process.env.NODE_ENV` (`react`, `graphql`), so their
+      evaluation died on `get process: undefined variable` even
+      after their (peer) edges linked. Endowed as a minimal
+      **frozen** shim: `env` is `Object.freeze({ NODE_ENV:
+      'production' })` (deterministic, never the host's),
+      `nextTick` rides the promise queue, `versions` has no
+      `node` key (Node-detection takes its non-Node branch),
+      and the event-emitter surface (`on`, `once`, `emit`,
+      ...) is chainable no-ops. The rest of Node's `process`
+      surface (`stdout`, `exit`, signals, `hrtime`) stays
+      absent; packages touching it fail with a clean undefined
+      read. Verified by real execution: `endor run` of a
+      program reading `process.env.NODE_ENV` returns
+      `production`, `'node' in process.versions` is
+      `false`, and `process.platform` is `xs`.
 - [ ] Pre/post-install scripts (intentionally omitted — Endo
       does not execute arbitrary install scripts).
 - [ ] Binary packages (`.node` native modules) — not
