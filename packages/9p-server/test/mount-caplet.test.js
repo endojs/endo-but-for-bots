@@ -15,7 +15,7 @@ import nodePath from 'node:path';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 
-import { makeFsMounter } from '../mount-caplet.js';
+import { makeFsMounter, mountIdentity } from '../mount-caplet.js';
 
 // A caller-supplied socketPath must live inside the socket directory
 // (defaults to os.tmpdir() when XDG_RUNTIME_DIR is unset), so build the
@@ -75,6 +75,18 @@ const makeHarness = (opts = {}) => {
   });
   return { mounter, calls };
 };
+
+test("mountIdentity reports the worker's own uid/gid", t => {
+  t.deepEqual(mountIdentity({ getuid: () => 501, getgid: () => 20 }), {
+    uid: 501,
+    gid: 20,
+  });
+});
+
+test('mountIdentity falls back to 1000 where the platform has no uid/gid', t => {
+  // Windows: `process.getuid`/`getgid` are undefined rather than throwing.
+  t.deepEqual(mountIdentity({}), { uid: 1000, gid: 1000 });
+});
 
 test('mount builds the 9P mount argv, makes the dir, and starts the bridge', async t => {
   const { mounter, calls } = makeHarness({ uid: 999, gid: 998 });

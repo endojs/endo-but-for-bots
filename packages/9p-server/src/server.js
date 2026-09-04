@@ -680,9 +680,15 @@ export const serveConnection = ({
       const isDir = f.qid.type === 'directory';
       const mode = (isDir ? S.IFDIR : S.IFREG) | (isDir ? 0o755 : 0o644);
       w.u32(mode);
-      // The capability filesystem has no POSIX ownership. The bridge supplies
-      // the mounter worker's identity so a rootless container sees its mapped
-      // root user as the owner of a writable projection.
+      // The capability filesystem has no POSIX ownership, so the bridge
+      // supplies the mounter worker's identity. v9fs sets i_uid/i_gid from
+      // these and has no `.permission` op for 9P2000.L, so `generic_permission`
+      // checks them against the caller's fsuid — which makes the mount
+      // writable exactly when the accessing process's uid equals the uid this
+      // reports. That covers the case we care about: a rootless container
+      // whose root maps to the user running the caplet. A container process
+      // running as any *other* uid still gets a read-only view, because the
+      // mode below grants write to the owner only.
       w.u32(uid);
       w.u32(gid);
       // nlink: directories have >= 2 (`.` plus the parent's entry);
