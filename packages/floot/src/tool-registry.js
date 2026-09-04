@@ -17,6 +17,8 @@ import { makeSubagentTools } from '@endo/fae/src/subagent.js';
 import { discoverTools, executeTool } from '@endo/fae/src/tools.js';
 import { HostedToolSetInterface } from '@endo/hosted-agent';
 
+import { makeAccountStatusTool } from './account-tool.js';
+
 const TOOL_POLICY_VERSION = 'floot-endo-tools-v1';
 const MAX_SCHEMA_DEPTH = 32;
 const MAX_SCHEMA_NODES = 10_000;
@@ -196,14 +198,19 @@ harden(makeEndoToolSet);
  * `toolSetId`, so a hosted thread pinned without them cannot silently resume
  * with them.
  *
+ * `accountStatus` is gated the same way, on a read-only account oracle.
+ *
  * @param {any} powers
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability.
  * @param {any} [options.delegations] - The session's delegation registry.
+ * @param {any} [options.accountOracle] - A read-only `HostedAccount`.
+ * @param {() => Promise<{ inputTokens: number, outputTokens: number }>} [options.getUsage]
+ * @param {() => string} [options.getModelId]
  */
 export const makeFlootToolRegistry = (
   powers,
-  { spawner, delegations } = {},
+  { spawner, delegations, accountOracle, getUsage, getModelId } = {},
 ) => {
   /** @type {Map<string, any>} */
   const builtins = new Map();
@@ -254,6 +261,12 @@ export const makeFlootToolRegistry = (
     })) {
       builtins.set(name, tool);
     }
+  }
+  if (accountOracle) {
+    builtins.set(
+      'accountStatus',
+      makeAccountStatusTool({ oracle: accountOracle, getUsage, getModelId }),
+    );
   }
 
   const snapshot = async () => {

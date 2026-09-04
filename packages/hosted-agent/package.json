@@ -18,6 +18,8 @@
   "main": "src/hosted-backend.js",
   "exports": {
     ".": "./src/hosted-backend.js",
+    "./account.js": "./src/account.js",
+    "./account-oracle.js": "./src/account-oracle.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -25,13 +27,25 @@
     "lint": "yarn lint:types && yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
     "lint:eslint": "eslint '**/*.js'",
-    "lint:types": "tsc --build tsconfig.composite.json"
+    "lint:types": "tsc --build tsconfig.composite.json",
+    "test": "ava"
   },
   "dependencies": {
     "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
+    "@endo/far": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
     "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
   }
 }

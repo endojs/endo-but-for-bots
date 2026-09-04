@@ -105,3 +105,20 @@ A provider pins the token as of the moment it was built.
 Call `refreshCredentials()` on the factory after rotating or revoking the secret
 to drop the cached providers, so the next turn reads it again — no daemon
 restart required.
+
+## Plan and rate limits
+
+`getAccount(refresh?)` on the factory, and on each session facet, reports the
+subscription plan behind this deployment's credential, how much of each rate
+limit is left, and — per session — what the conversation has cost at the current
+list price.
+A session also gets an `accountStatus` tool, so the model can answer those
+questions where the user asked them.
+
+Every figure carries `observedAt` and a source of `observed`, `declared`,
+`remembered`, or `unavailable`, so a declared figure is never mistaken for a
+measured one.
+Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile when running
+setup; without one, `getAccount()` reports that no oracle is available and the
+tool is absent.
+See [@endo/hosted-agent's ACCOUNT-ORACLE.md](../hosted-agent/ACCOUNT-ORACLE.md).
