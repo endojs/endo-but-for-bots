@@ -24,7 +24,10 @@ test('a boolean pattern is still recognised if its tag was stripped', t => {
   // What a `match:kind` CopyTagged degrades to if it passes through anything
   // that copies structurally and drops symbol keys. Rendering text there means
   // the UI offers a control the daemon will refuse on submit.
-  t.is(fieldKind({ name: 'approved', pattern: { payload: 'boolean' } }), 'boolean');
+  t.is(
+    fieldKind({ name: 'approved', pattern: { payload: 'boolean' } }),
+    'boolean',
+  );
 });
 
 test('an untagged pattern with more than a payload is not swallowed', t => {
