@@ -279,8 +279,9 @@ type MountReadableBlobSource = {
 };
 type MountReadableTree = {
     has: (...petNamePath: string[]) => Promise<boolean>;
-    list: (...petNamePath: string[]) => Promise<readonly string[]>;
     lookup: (petNamePath: string | readonly string[]) => Promise<unknown>;
+    help?: (method?: string) => string;
+    list: (...petNamePath: string[]) => Promise<readonly string[]>;
     listTree?: (petNamePath: string | readonly string[], options?: {
         ignore?: readonly string[];
     }) => Promise<MountTreeEntry[]>;

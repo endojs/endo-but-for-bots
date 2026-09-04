@@ -196,8 +196,8 @@ export type HostFormula = {
   hostHandle: FormulaIdentifier;
   mainWorker: FormulaIdentifier;
   nodeWorker: FormulaIdentifier;
-  // Powers the `@registry` special name; required, mirroring `nodeWorker`
-  // (`@node`).  See designs/registry-capability.md § Host special name.
+  // Powers the package-registry root at `@registry`; required, mirroring
+  // `nodeWorker` (`@node`). See designs/npm-registry-as-directory-tree.md.
   registry: FormulaIdentifier;
   inspector: FormulaIdentifier;
   petStore: FormulaIdentifier;
@@ -270,7 +270,7 @@ export type ReadableTreeDeferredTaskParams = {
   readableTreeId: FormulaIdentifier;
 };
 
-// The `EndoRegistry` capability that backs the `@registry` special name.
+// The package-registry root tree that backs the `@registry` special name.
 // The first cut carries only the configured registry URL; the backing
 // resolver table and tarball cache are process-local (rebuilt on
 // reincarnation) and delegate byte-level retention to the CAS.  See
@@ -2505,23 +2505,41 @@ export type HostToolPowers = {
   makeHostSpawner: typeof import('@endo/host-spawner').makeHostSpawner;
 };
 
+export type RegistryPowers =
+  | {
+      adapter?: 'node';
+      offline?: boolean;
+      registryUrl: string;
+      makeRegistryBackend: (powers: {
+        contentStore: {
+          store: (readable: AsyncIterable<Uint8Array>) => Promise<string>;
+        };
+        makeReadableTree: (sha256: string) => unknown;
+        sha256Hex: (text: string) => string;
+        registryUrl: string;
+      }) => any;
+    }
+  | {
+      adapter: 'endor';
+      // No `offline`: Endor's no-egress posture is enforced structurally in Rust
+      // (`rust/endo/src/inproc.rs`), so a JS flag on these powers would be
+      // set-but-never-read. See `makeEndorRegistryPowers` in bus-manager-rust-xs.js.
+      registryUrl: string;
+      hasPackage: (name: string) => string;
+      listVersions: (name: string) => string;
+      providePackageTree: (name: string, version: string) => string;
+      listTree: (treeHash: string) => string;
+      lookupTree: (treeHash: string, name: string) => string;
+      readBlob: (hash: string) => string;
+    };
+
 export type DaemonicPowers = {
   crypto: CryptoPowers;
   petStore: PetStorePowers;
   persistence: DaemonicPersistencePowers;
   control: DaemonicControlPowers;
   filePowers: FilePowers;
-  registry: {
-    registryUrl: string;
-    makeRegistryBackend: (powers: {
-      contentStore: {
-        store: (readable: AsyncIterable<Uint8Array>) => Promise<string>;
-      };
-      makeReadableTree: (sha256: string) => unknown;
-      sha256Hex: (text: string) => string;
-      registryUrl: string;
-    }) => any;
-  };
+  registry: RegistryPowers;
   /**
    * Absent on a supervisor that cannot spawn host processes (the XS
    * one). `git` and `shell` formulas then refuse with a diagnosis.

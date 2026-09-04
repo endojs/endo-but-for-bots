@@ -4,13 +4,16 @@
  * Snapshot-mapper algorithm: produce a `CompartmentMap` document from
  * a `RegistryResolution` plus an entry-source descriptor.
  *
- * Per `designs/snapshot-mapper.md`, the mapper takes a pair of daemon
- * capabilities (an `EndoRegistry` resolution and an entry source) and
- * produces a `CompartmentMap` whose layout follows the
- * compartment-mapper archive precedent: a top-level
- * `compartment-map.json` plus peer directories named by package
- * (`<name>@<version>/` for registry-resolved entries, `<name>/` for
- * workspace members).
+ * The mapper takes a pair of daemon capabilities — a package-registry
+ * directory tree (`registryRoot`) and an entry source — and produces a
+ * `CompartmentMap` whose layout follows the compartment-mapper archive
+ * precedent: a top-level `compartment-map.json` plus peer directories named
+ * by package (`<name>@<version>/` for registry-resolved entries, `<name>/`
+ * for workspace members).
+ *
+ * (`designs/snapshot-mapper.md` still describes the superseded `EndoRegistry`
+ * method capability rather than this tree; the directory-tree amendment lives
+ * in `designs/daemon-worker-import-from-mount.md`.)
  *
  * The algorithmic core lives here. The daemon-side surface that
  * supplies the entry source and wires `compartment-mapper.importLocation`
@@ -19,12 +22,69 @@
  * `designs/daemon-worker-import-from-mount.md`) calls into it from the
  * worker's `makeFromPackage` dispatch.
  *
- * @import { RegistryResolution } from '../types.js';
+ * @import { RegistryDirectory, RegistryResolution } from '../types.js';
  */
 
-import { satisfiesRange } from './mvs-resolver.js';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
+import { decodeUtf8 } from '@endo/utf8/decode.js';
+import { encodeUtf8 } from '@endo/utf8/encode.js';
 
-const utf8Decoder = new TextDecoder();
+import { satisfiesRange } from './mvs-resolver.js';
+import { lookupPackageVersion } from './registry-tree.js';
+
+/**
+ * Read a module from either the mapper's legacy one-shot tree adapter or a
+ * standard SnapshotTree reached through the registry layout.
+ *
+ * @param {unknown} tree
+ * @param {string | string[]} modulePath
+ */
+const readTreeBytes = async (tree, modulePath) => {
+  const readableTree = /** @type {any} */ (tree);
+  if (typeof readableTree.readBytes === 'function') {
+    return readableTree.readBytes(modulePath);
+  }
+  // A SnapshotTree `lookup` matches each argument as one *literal* path
+  // segment, not a slash-delimited path grammar (see
+  // `packages/platform/src/fs/snapshot-tree.js`), and the registry version
+  // leaf forwards the argument verbatim. A nested module path (`src/main.js`)
+  // must therefore be split into segments; a lone `index.js` was the only
+  // shape the un-split call happened to resolve.
+  const segments =
+    typeof modulePath === 'string' ? modulePath.split('/') : modulePath;
+  const blob = await readableTree.lookup(segments);
+  if (blob === undefined || blob === null || typeof blob !== 'object') {
+    throw Error(`mapSnapshot read: no module at ${String(modulePath)}`);
+  }
+  if (
+    typeof (/** @type {any} */ (blob).getInfo) === 'function' &&
+    typeof (/** @type {any} */ (blob).fetch) === 'function'
+  ) {
+    const info = await /** @type {any} */ (blob).getInfo();
+    const reader = await /** @type {any} */ (blob).fetch(0n, info.size);
+    /** @type {Uint8Array[]} */
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of iterateBytesReader(reader)) {
+      chunks.push(chunk);
+      size += chunk.length;
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+    return bytes;
+  }
+  if (typeof (/** @type {any} */ (blob).text) === 'function') {
+    return encodeUtf8(await /** @type {any} */ (blob).text());
+  }
+  throw Error(
+    `mapSnapshot read: module at ${String(modulePath)} is not readable`,
+  );
+};
+harden(readTreeBytes);
 
 /**
  * The on-the-wire compartment-map shape this module emits. Mirrors
@@ -63,8 +123,7 @@ const utf8Decoder = new TextDecoder();
  * @param {Uint8Array | string} payload
  */
 const decodePackageJson = payload => {
-  const text =
-    typeof payload === 'string' ? payload : utf8Decoder.decode(payload);
+  const text = typeof payload === 'string' ? payload : decodeUtf8(payload);
   return JSON.parse(text);
 };
 harden(decodePackageJson);
@@ -275,21 +334,16 @@ harden(buildCompartmentMap);
  * @param {{
  *   entrySource: { readBytes(modulePath: string | string[]): Promise<Uint8Array> },
  *   resolution: RegistryResolution,
- *   registry?: { fetch(name: string, version: string): Promise<{ readBytes(modulePath: string | string[]): Promise<Uint8Array> }> },
+ *   registryRoot?: RegistryDirectory,
  * }} options
  */
 export const makeMountReadPowers = options => {
-  const { entrySource, resolution, registry } = options;
-  /** @type {Map<string, { readBytes(modulePath: string | string[]): Promise<Uint8Array> }>} */
+  const { entrySource, resolution, registryRoot } = options;
+  /** @type {Map<string, unknown>} */
   const treeRefs = new Map();
   for (const key of resolution.keys) {
     const entry = resolution.packagesByKey[key];
-    treeRefs.set(
-      key,
-      /** @type {{ readBytes(modulePath: string | string[]): Promise<Uint8Array> }} */ (
-        /** @type {unknown} */ (entry.treeRef)
-      ),
-    );
+    treeRefs.set(key, entry.treeRef);
   }
 
   /**
@@ -343,9 +397,9 @@ export const makeMountReadPowers = options => {
         return entrySource.readBytes(modulePath);
       }
       let treeRef = treeRefs.get(compartmentKey);
-      if (treeRef === undefined && registry !== undefined) {
-        // Late-bind via the registry capability the closure also
-        // holds. This path is rare: the pre-resolution closure should
+      if (treeRef === undefined && registryRoot !== undefined) {
+        // Late-bind through the same package/version tree traversal used by
+        // eager resolution. This path is rare: the pre-resolution closure should
         // cover everything the mapper walks, but the closure keeps
         // the read function self-sufficient rather than forcing a
         // re-dispatch into the worker for a single missing package.
@@ -353,10 +407,7 @@ export const makeMountReadPowers = options => {
         if (atIndex > 0) {
           const name = compartmentKey.slice(0, atIndex);
           const version = compartmentKey.slice(atIndex + 1);
-          treeRef =
-            /** @type {{ readBytes(modulePath: string | string[]): Promise<Uint8Array> }} */ (
-              /** @type {unknown} */ (await registry.fetch(name, version))
-            );
+          treeRef = await lookupPackageVersion(registryRoot, name, version);
           if (treeRef !== undefined) {
             treeRefs.set(compartmentKey, treeRef);
           }
@@ -367,7 +418,7 @@ export const makeMountReadPowers = options => {
           `mapSnapshot read: no compartment for ${compartmentKey} (location: ${location})`,
         );
       }
-      return treeRef.readBytes(modulePath);
+      return readTreeBytes(treeRef, modulePath);
     },
     /**
      * Canonicalize a location. For this archive-shaped layout, the
@@ -397,7 +448,7 @@ harden(makeMountReadPowers);
  *   entryPackageJson: string | Uint8Array,
  *   entryModule?: string,
  *   entryCompartmentLabel?: string,
- *   registry?: { fetch(name: string, version: string): Promise<{ readBytes(modulePath: string | string[]): Promise<Uint8Array> }> },
+ *   registryRoot?: RegistryDirectory,
  *   workspaceMembers?: Map<string, { packageJson: string | Uint8Array }>,
  * }} options
  */
@@ -413,7 +464,7 @@ export const mapSnapshot = async options => {
   const readPowers = makeMountReadPowers({
     entrySource: options.entrySource,
     resolution: options.resolution,
-    registry: options.registry,
+    registryRoot: options.registryRoot,
   });
   return harden({
     compartmentMap,

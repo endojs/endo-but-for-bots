@@ -1923,6 +1923,7 @@ __metadata:
     "@endo/exo": "workspace:^"
     "@endo/exo-git": "workspace:^"
     "@endo/exo-http-client": "workspace:^"
+    "@endo/exo-npm": "workspace:^"
     "@endo/exo-shell": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
@@ -2154,18 +2155,21 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/exo-npm@workspace:packages/exo-npm":
+"@endo/exo-npm@workspace:^, @endo/exo-npm@workspace:packages/exo-npm":
   version: 0.0.0-use.local
   resolution: "@endo/exo-npm@workspace:packages/exo-npm"
   dependencies:
     "@endo/bytes": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/mem-cas": "workspace:^"
     "@endo/patterns": "workspace:^"
+    "@endo/platform": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/utf8": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"

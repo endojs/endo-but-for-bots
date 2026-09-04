@@ -46,6 +46,15 @@ declare var hostSqliteStmtGet: (...args: any[]) => any;
 declare var hostSqliteStmtAll: (...args: any[]) => any;
 declare var hostSqliteStmtColumns: (...args: any[]) => any;
 declare var hostSqliteStmtFinalize: (...args: any[]) => any;
+declare var hostRegistryHasPackage: (name: string) => string;
+declare var hostRegistryListVersions: (name: string) => string;
+declare var hostRegistryProvidePackageTree: (
+  name: string,
+  version: string,
+) => string;
+declare var hostRegistryListTree: (treeHash: string) => string;
+declare var hostRegistryLookupTree: (treeHash: string, name: string) => string;
+declare var hostRegistryReadBlob: (hash: string) => string;
 
 // Convenience wrappers installed by bus-xs-core / polyfills.
 declare var trace: (...args: any[]) => any;

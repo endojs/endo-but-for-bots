@@ -516,6 +516,7 @@ pub fn worker_snapshot_callbacks() -> Vec<ffi::XsCallback> {
     cbs.extend_from_slice(powers::modules::CALLBACKS);
     cbs.extend_from_slice(powers::process::CALLBACKS);
     cbs.extend_from_slice(powers::sqlite::CALLBACKS);
+    cbs.extend_from_slice(powers::registry::CALLBACKS);
     cbs
 }
 
@@ -818,6 +819,7 @@ impl Machine {
             powers::modules::register(self);
             powers::process::register(self);
             powers::sqlite::register(self);
+            powers::registry::register(self);
         }
     }
 
@@ -1171,8 +1173,14 @@ fn bootstrap_ses(machine: &Machine, label: &str) {
 
 /// Register host powers (fs, crypto, modules, process) on the machine.
 /// Returns the raw pointer for later cleanup.
-fn register_host_powers(machine: &Machine) -> *mut powers::HostPowers {
+fn register_host_powers(
+    machine: &Machine,
+    registry: Option<Box<dyn powers::registry::RegistryHost>>,
+) -> *mut powers::HostPowers {
     let mut host_powers = powers::HostPowers::new();
+    if let Some(registry) = registry {
+        host_powers.set_registry(registry);
+    }
     if let Ok(root) = cap_std::fs::Dir::open_ambient_dir(
         "/",
         cap_std::ambient_authority(),
@@ -1579,6 +1587,7 @@ pub fn run_xs_program(
     creation: &ffi::XsCreation,
     label: &str,
     transport: Option<Box<dyn worker_io::WorkerTransport>>,
+    registry: Option<Box<dyn powers::registry::RegistryHost>>,
 ) -> Result<(), XsnapError> {
     eprintln!("{label}: starting");
     ensure_shared_cluster();
@@ -1636,7 +1645,7 @@ pub fn run_xs_program(
     // Register host powers context (needed for both fresh and
     // restored machines — the context pointer is not in the
     // snapshot).
-    let powers_ptr = register_host_powers(&machine);
+    let powers_ptr = register_host_powers(&machine, registry);
 
     if !is_restore {
         // Standalone runs get a print() alias for basic console output.
@@ -1896,6 +1905,7 @@ pub unsafe fn run_xs_worker() -> Result<(), XsnapError> {
         &WORKER_CREATION,
         "endor[worker]",
         Some(Box::new(t)),
+        None,
     )
 }
 
@@ -1906,12 +1916,14 @@ pub unsafe fn run_xs_worker() -> Result<(), XsnapError> {
 /// spawned by `endo::inproc::spawn_inproc_xs_manager`.
 pub fn run_xs_manager_inproc(
     transport: Box<dyn worker_io::WorkerTransport>,
+    registry: Box<dyn powers::registry::RegistryHost>,
 ) -> Result<(), XsnapError> {
     run_xs_program(
         XsProgram::Bundle(MANAGER_BOOTSTRAP),
         &MANAGER_CREATION,
         "endor[manager]",
         Some(transport),
+        Some(registry),
     )
 }
 
@@ -1930,6 +1942,7 @@ pub fn run_xs_worker_inproc(
         &WORKER_CREATION,
         "endor[worker]",
         Some(transport),
+        None,
     )
 }
 
@@ -1947,6 +1960,7 @@ pub fn run_xs_archive(archive_path: &std::path::Path) -> Result<(), XsnapError> 
         &WORKER_CREATION,
         "endor[run]",
         None,
+        None,
     )
 }
 
@@ -1961,7 +1975,7 @@ pub fn run_xs_archive_loaded(loaded: &archive::LoadedArchive) -> Result<(), Xsna
         .ok_or_else(|| XsnapError::MachineInit("failed to create XS machine".to_string()))?;
 
     machine.register_worker_io();
-    register_host_powers(&machine);
+    register_host_powers(&machine, None);
 
     // Provide archive endowments (shared with the supervised path).
     machine.eval(ARCHIVE_ENDOWMENTS_JS);

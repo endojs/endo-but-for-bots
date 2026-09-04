@@ -9,6 +9,7 @@ pub mod git_cas;
 pub mod npm_resolve;
 pub mod npmrc;
 pub mod registry;
+pub mod registry_tree;
 pub mod semver;
 pub mod workspace;
 pub mod endo;
