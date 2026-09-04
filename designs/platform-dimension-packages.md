@@ -264,10 +264,13 @@ lal, reminder, sha256, space-file-explorer). The transition:
    orchestration child (and opportunistically sooner); each repoint is
    mechanical per the table below.
 4. **Remove at next major.** The umbrella's deletion is reserved for a
-   next-major bump with a changeset note. Because `@endo/platform` is
-   `"private": true` there are no external consumers, so the practical gate is
-   in-repo: a grep for `@endo/platform` under `packages/` (excluding the
-   umbrella itself) returning zero hits.
+   next-major bump with a changeset note. `@endo/platform` is **publishable**
+   — no `private` flag, `publishConfig: {"access": "public"}` — so the gate has
+   two halves. The in-repo half is a grep for `@endo/platform` under
+   `packages/` (excluding the umbrella itself) returning zero hits. The
+   external half is at least one published major that carries the deprecation
+   notice before the package disappears, since a published consumer cannot be
+   grepped for.
 
 [inter-package-plain-re-exports](inter-package-plain-re-exports.md) (#543)
 prescribes the staging this transition follows — repoint importers, deprecate
@@ -311,8 +314,11 @@ additive.
 Each new package clones the shape of `packages/http-confine` /
 `packages/exo-http-client`, adjusted to platform's current conventions:
 
-- **`package.json`**: `"type": "module"`, `"private": true` and version
-  `0.1.0` matching platform today, a `description` that names the package's
+- **`package.json`**: `"type": "module"`, version `0.0.0` as the recently
+  added siblings start (`@endo/exo-git`, `@endo/exo-shell`), and platform's
+  own publish posture — no `private` flag, `publishConfig: {"access":
+  "public"}` — because a published umbrella re-exporting an unpublished
+  `@endo/fs` would dangle, a `description` that names the package's
   partner (every existing paired package does this — "Pair with `@endo/exo-git`",
   "pair with `@endo/host-spawner`" — so `ls packages/` tells pure from exo from
   binding), explicit `exports` map with `types` conditions and **no deep
@@ -424,8 +430,9 @@ commit) is what makes each child additive.
 3. **Umbrella as transitional plain re-exporter, deprecated at birth.**
    Consistent with the staging in
    [inter-package-plain-re-exports](inter-package-plain-re-exports.md);
-   removal reserved for the next major with a changeset note, gated in practice on
-   the in-repo zero-importer grep since the package is private.
+   removal reserved for the next major with a changeset note, gated on both
+   the in-repo zero-importer grep and one published deprecation major, since
+   the package is publishable rather than private.
 4. **`@endo/proc-node` ships without an exo pair.** Its passable relatives
    already exist (`@endo/exo-shell`, `@endo/host-spawner`,
    `@endo/endo-fs-exec`). Inventing
@@ -454,9 +461,11 @@ commit) is what makes each child additive.
 - Should `@endo/daemon-cas` eventually fold into `@endo/cas-node` (or rename
   to drop the `daemon-` prefix) once the umbrella is gone? Out of scope here;
   default is no change.
-- Do the chosen bare names (`@endo/fs`, `@endo/cas`) collide
-  with any reserved upstream `endojs/endo` package plans? The packages are
-  private on the `llm` line, so the question only bites at ferry time.
+- Do the chosen bare names (`@endo/fs`, `@endo/cas`) collide with any
+  reserved upstream `endojs/endo` package plans? `@endo/platform` is
+  publishable and these packages inherit that posture, so the question bites
+  at first publish, not only at ferry time. Deciding it needs an npm-registry
+  check against the `@endo` scope before C2 names the first bare package.
 
 ## Prompt
 
