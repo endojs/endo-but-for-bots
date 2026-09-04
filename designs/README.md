@@ -244,7 +244,17 @@ gap-closing designs prefixed `endopi-*`),
 [hardened-text-codecs-shim](hardened-text-codecs-shim.md)
 (added 2026-05-06; permits `TextEncoder`/`TextDecoder` in SES intrinsics),
 [hardened-url-shim](hardened-url-shim.md) (added 2026-05-06; vetted-shim
-treatment for the `URL` constructor and `URLSearchParams`).*
+treatment for the `URL` constructor and `URLSearchParams`),
+[sturdy-refs-finalization-registry](sturdy-refs-finalization-registry.md)
+(added 2026-06-22; one of a pair of competing designs addressing the
+PR #500 maintainer directive; first-classes a `'sturdyref'` pass-style
+category, treats SturdyRefs as inert data enlivened to a presence
+before `E()`, accepts a SturdyRef anywhere the daemon accepts a
+pet-name-path, and
+sources implicit-retention semantics from a daemon-side
+`FinalizationRegistry` over per-worker SturdyRef holders; sibling design
+on `design/sturdy-refs-via-endor-syscall` takes the ocap-kernel-leaning
+endor `retain`/`release` syscall path).*
 
 *Earlier additions: [daemon-make-archive](daemon-make-archive.md) (added
 2026-04-23), [filesystem-watchers](filesystem-watchers.md) (added
@@ -459,6 +469,7 @@ LLM-agent stack).*
 | [weblet-next](weblet-next.md) | 2026-03-24 | 2026-03-24 | Reference |
 | [workers-panel](workers-panel.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [pass-style-promise](pass-style-promise.md) | 2026-05-10 | 2026-05-10 | Proposed |
+| [sturdy-refs-finalization-registry](sturdy-refs-finalization-registry.md) | 2026-06-26 | 2026-06-26 | Proposed |
 | [namehub-interface-unification](namehub-interface-unification.md) | 2026-05-07 | 2026-05-07 | Proposed |
 | [forge-gap-analysis](forge-gap-analysis.md) | 2026-05-20 | 2026-05-20 | Reference (exploratory) |
 | [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
