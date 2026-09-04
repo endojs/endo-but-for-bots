@@ -57,13 +57,21 @@ export const enumerableTreeMethodGuards = harden({
   list: M.call().rest(NamePathShape).returns(M.promise()),
 });
 
-// Compatibility export for existing implementations. This is a real alias of
-// the one canonical declaration above — derived by spread, not a second literal
-// — so the two surfaces cannot silently drift (a guard added to one but not the
-// other). It lets directory, mount, Git, and zip trees keep implementing the
-// same superset while new lookup-only caps use the narrower record above.
+// Compatibility export for existing implementations. This is exactly the
+// `enumerableTreeMethodGuards` surface above (help / has / lookup / list); it
+// is spelled as its own literal rather than a spread/`= enumerableTreeMethodGuards`
+// alias because the `build:types` declaration emit for this package cannot name
+// a re-exported guard record from a derived value (it downgrades the emitted
+// `.d.ts` to a type, breaking `@endo/exo-npm` / `@endo/daemon` consumers). Kept
+// in lockstep with `enumerableTreeMethodGuards` by hand until the guards drift
+// is closed structurally without that emit hazard. It lets directory, mount,
+// Git, and zip trees continue to implement the same superset while new
+// lookup-only caps use the narrower record above.
 export const readableTreeMethodGuards = harden({
-  ...enumerableTreeMethodGuards,
+  help: HelpMethod,
+  has: M.call().rest(NamePathShape).returns(M.promise()),
+  lookup: M.call(NameOrPathShape).returns(M.promise()),
+  list: M.call().rest(NamePathShape).returns(M.promise()),
 });
 
 // `readableNameHubMethodGuards` is the read surface of a *mutable* name hub /
