@@ -47,15 +47,25 @@ const tagOf = value => {
  * exactly the previous behaviour.
  *
  * Recognised two ways on purpose. The tagged form is what a CopyTagged looks
- * like when it arrives intact. The untagged form — a plain record whose only
- * content is `payload: 'boolean'` — is what is left if the tag is lost in
- * transit, which is what a `match:kind` pattern degrades to when it passes
- * through anything that copies structurally and drops symbol keys.
+ * like when it arrives intact, which is the case for a form message delivered
+ * live. The untagged form — a plain record whose only content is
+ * `payload: 'boolean'` — is what a `match:kind` pattern degrades to once the
+ * daemon has persisted the form: message formulas round-trip through
+ * `JSON.stringify`/`JSON.parse` (`daemon/src/manager-database.js`), and
+ * `makeStampedMessage` hands `formula.fields` straight back, so the symbol tag
+ * is gone for every form restored after a daemon restart.
  *
  * Reading it structurally as well costs nothing: no other field shape is a
- * record whose sole own property is a `payload` of exactly `'boolean'`. The
- * alternative is a field the UI silently renders as text and the daemon then
- * refuses on submit, which is the failure this whole module exists to remove.
+ * record whose sole own property is a `payload` of exactly `'boolean'`.
+ *
+ * Note what this does and does not buy. It does not make such a field
+ * submittable today — the daemon checks the submission against that same
+ * degraded pattern, and `mustMatch(true, { payload: 'boolean' })` fails
+ * exactly as `mustMatch('yes', ...)` does, so the pattern is unsatisfiable
+ * until the daemon stops flattening patterns on the way to storage. What it
+ * buys is that the UI reads the field's intent correctly, and so renders the
+ * right control and submits the right type the moment that is fixed, instead
+ * of needing a second change here.
  *
  * @param {FormFieldDef} field
  * @returns {'boolean' | 'text'}
