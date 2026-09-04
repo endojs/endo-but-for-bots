@@ -211,7 +211,9 @@ const resolveCancelled = async context => {
  * @param {(file: string, args: string[]) => Promise<unknown>} deps.runProgram - `execFile`-shaped runner.
  * @param {(path: string, opts: { recursive: boolean }) => Promise<unknown>} deps.makeDir
  * @param {(path: string) => Promise<unknown>} deps.removeDir
- * @param {(opts: { fs: ERef<any>, socketPath: string, cancelled?: Promise<unknown> }) => any} deps.makeBridge
+ * @param {(opts: { fs: ERef<any>, socketPath: string, cancelled?: Promise<unknown>, uid?: number, gid?: number }) => any} deps.makeBridge
+ * @param {number} [deps.uid]
+ * @param {number} [deps.gid]
  */
 export const makeFsMounter = ({
   env = {},
@@ -220,6 +222,8 @@ export const makeFsMounter = ({
   makeDir,
   removeDir,
   makeBridge,
+  uid,
+  gid,
 }) => {
   /** @type {Set<{ unmount: () => Promise<void> }>} */
   const handles = new Set();
@@ -359,6 +363,8 @@ export const makeFsMounter = ({
       fs,
       socketPath,
       ...(cancelledP ? { cancelled: cancelledP } : {}),
+      ...(uid === undefined ? {} : { uid }),
+      ...(gid === undefined ? {} : { gid }),
     });
     try {
       await E(bridge).start();
@@ -517,6 +523,8 @@ export const make = async (_powers, context, options = {}) => {
     makeDir: mkdir,
     removeDir: rmdir,
     makeBridge: makeFsBridge9p,
+    uid: typeof process.getuid === 'function' ? process.getuid() : 1000,
+    gid: typeof process.getgid === 'function' ? process.getgid() : 1000,
   });
 };
 harden(make);

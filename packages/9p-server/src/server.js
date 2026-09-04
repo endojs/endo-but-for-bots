@@ -46,6 +46,36 @@ const VERSION_9P2000_L = '9P2000.L';
 const MIN_MSIZE = 4096;
 const DEFAULT_MSIZE = 131_072;
 
+// Largest payload we will move through the backing Filesystem in one
+// Tread/Twrite, independent of `msize`.
+//
+// `iterateBytesReader`/`iterateBytesWriter` carry each chunk as a base64
+// string and validate it against @endo/patterns' default
+// `stringLengthLimit` of 100_000 characters. Base64 encodes n bytes as
+// 4*ceil(n/3) characters, so the hard ceiling is exactly 75_000 bytes:
+// 75_000 encodes to 100_000 characters and passes, 75_001 encodes to
+// 100_004 and is rejected before it ever reaches us. The rejection reaches
+// the client as a bare EIO, which reads as disk corruption rather than as a
+// limit.
+//
+// Without this cap the negotiated 128 KiB `msize` promises an I/O size the
+// transport cannot actually carry, so every read large enough to matter
+// fails: GNU `cat` and Node's `fs.readFile` both issue one big read, which
+// made any file over ~75 KiB unreadable through a mount.
+//
+// 64 KiB rather than the 75_000-byte ceiling itself, for two reasons. That
+// ceiling is a default of a dependency we do not configure here, so sitting
+// exactly on it means a lower default upstream silently restores the EIO;
+// 64 KiB keeps ~9 KB of margin. And a power of two keeps every full request
+// a whole number of 4 KiB pages, so a client's reads stay block-aligned and
+// only the tail of a file is a partial chunk, where an iounit of 75_000
+// would make every request after the first ragged. 64 KiB is also the
+// conventional 9P iounit, so clients are well exercised against it.
+//
+// 9P lets a server return fewer bytes than asked for, so capping is
+// conformant; the client just issues more, smaller requests.
+const MAX_IO_BYTES = 65_536;
+
 const MASK_U32 = 0xffff_ffffn;
 const MASK_U64 = (1n << 64n) - 1n;
 
@@ -105,6 +135,8 @@ const errnoOf = e => {
  *   socket: import('node:net').Socket,
  *   onClose?: () => void,
  *   cancelled?: Promise<unknown>,
+ *   uid?: number,
+ *   gid?: number,
  * }} opts
  *
  * `cancelled`: settlement (resolve or reject) is the cancellation
@@ -119,6 +151,8 @@ export const serveConnection = ({
   socket,
   onClose,
   cancelled = new Promise(() => {}),
+  uid = 1000,
+  gid = 1000,
 }) => {
   /** @type {Map<number, Fid>} */
   const fids = new Map();
@@ -547,9 +581,10 @@ export const serveConnection = ({
     const w = makeWriter(13 + 4);
     writeQid(w, qidToWire(f.qid));
     // iounit: the max bytes the client may Tread/Twrite in one frame.
-    // The onWrite/onRead clamps cap at `msize - header`; advertise that
-    // rather than 0 ("just use msize") so the client sizes I/O to fit.
-    w.u32(Math.max(0, msize - 24));
+    // Advertise the real ceiling — the smaller of the frame budget and
+    // MAX_IO_BYTES — rather than 0 ("just use msize"), so the client sizes
+    // I/O to something that works instead of discovering the limit as EIO.
+    w.u32(Math.max(0, Math.min(msize - 24, MAX_IO_BYTES)));
     send(wrapMessage(T.Rlopen, tag, w.finish()));
     return undefined;
   };
@@ -561,14 +596,15 @@ export const serveConnection = ({
   const onRead = async (/** @type {number} */ tag, r) => {
     const fid = r.u32();
     const offset = r.u64();
-    // Clamp the requested count to what fits in one `msize` frame.
+    // Clamp the requested count to what fits in one `msize` frame, and to
+    // what the bytes stream underneath can carry (see MAX_IO_BYTES).
     // 9P allows a server to return fewer bytes than the client
     // asked for, so this is conformant; without the clamp a peer
     // could trigger huge allocations / reads regardless of the
     // negotiated frame size.
     const requested = /** @type {number} */ (r.u32());
     const maxByMsize = Math.max(0, msize - RREAD_HEADER_BYTES);
-    const count = Math.min(requested, maxByMsize);
+    const count = Math.min(requested, maxByMsize, MAX_IO_BYTES);
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);
     if (f.qid.type === 'directory') {
@@ -640,8 +676,11 @@ export const serveConnection = ({
       const isDir = f.qid.type === 'directory';
       const mode = (isDir ? S.IFDIR : S.IFREG) | (isDir ? 0o755 : 0o644);
       w.u32(mode);
-      w.u32(1000); // uid — base FS has no concept; default for guest mount.
-      w.u32(1000); // gid
+      // The capability filesystem has no POSIX ownership. The bridge supplies
+      // the mounter worker's identity so a rootless container sees its mapped
+      // root user as the owner of a writable projection.
+      w.u32(uid);
+      w.u32(gid);
       // nlink: directories have >= 2 (`.` plus the parent's entry);
       // reporting 1 confuses `find`'s link-count traversal optimisation.
       // The base FS exposes no real link count, so synthesise 2/1.
@@ -823,7 +862,7 @@ export const serveConnection = ({
       });
       const w = makeWriter(17);
       writeQid(w, qidToWire(childQid));
-      w.u32(Math.max(0, msize - 24)); // iounit (see onLopen)
+      w.u32(Math.max(0, Math.min(msize - 24, MAX_IO_BYTES))); // iounit (see onLopen)
       send(wrapMessage(T.Rlcreate, tag, w.finish()));
     } catch (e) {
       return sendError(tag, errnoOf(e));
@@ -848,7 +887,11 @@ export const serveConnection = ({
     if (count > remaining || count > maxByMsize) {
       return sendError(tag, ERRNO.EINVAL);
     }
-    const data = r.take(count);
+    // A conforming client sizes writes by the iounit we advertised, which is
+    // already capped. Clamp anyway: the base64 limit applies to writes as
+    // well, so an oversized one would otherwise fail as EIO rather than as
+    // the short write 9P defines for exactly this case.
+    const data = r.take(Math.min(count, MAX_IO_BYTES));
     const f = fids.get(fid);
     if (!f || !f.open) return sendError(tag, ERRNO.EBADF);
     if (f.qid.type === 'directory') return sendError(tag, ERRNO.EISDIR);
@@ -868,7 +911,9 @@ export const serveConnection = ({
       );
       await w8.return();
       const w = makeWriter(4);
-      w.u32(count);
+      // Report what was actually written, which the clamp above may have made
+      // shorter than the request; the client sends the remainder.
+      w.u32(data.length);
       send(wrapMessage(T.Rwrite, tag, w.finish()));
     } catch (e) {
       return sendError(tag, errnoOf(e));

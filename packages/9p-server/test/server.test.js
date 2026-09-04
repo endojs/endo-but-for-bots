@@ -434,8 +434,44 @@ test.serial('Tlopen advertises a nonzero iounit (msize - 24)', async t => {
   t.is(open.type, T.Rlopen);
   const r = makeReader(open.payload);
   readQid(r); // qid (13 bytes)
-  t.is(r.u32(), msize - 24);
+  t.is(r.u32(), Math.min(msize - 24, 65_536));
 });
+
+// A chunk crosses the backing Filesystem as base64, which the bytes reader
+// validates against the default 100_000-character `stringLengthLimit` — so a
+// read over ~75_000 bytes is rejected there and reaches the client as a bare
+// EIO. With a 128 KiB msize the client believes it may read that much at once,
+// and GNU `cat` and Node's `fs.readFile` both do, which made any file over
+// ~75 KiB unreadable through a mount rather than merely slow.
+test.serial(
+  'a read larger than the base64 chunk limit is short, not EIO',
+  async t => {
+    const { rootDir, socketPath } = await setupNodeFsBridge(t);
+    writeFileSync(path.join(rootDir, 'big.bin'), Buffer.alloc(200_000, 0x61));
+    const c = await setupClient(t, socketPath);
+    // Negotiate the msize the mount caplet actually asks for; the default 8192
+    // in `negotiate` is too small for this to bite.
+    const nw = makeWriter();
+    nw.u32(131_072);
+    nw.str('9P2000.L');
+    c.send(T.Tversion, 0xffff, nw.finish());
+    t.is(makeReader((await c.recv()).payload).u32(), 131_072);
+    await attach(c, 1);
+    t.is((await walk(c, 1, 2, ['big.bin'])).type, T.Rwalk);
+    t.is((await lopen(c, 2, 0)).type, T.Rlopen);
+
+    for (const requested of [4096, 65_536, 100_000, 131_048]) {
+      const rd = await tread(c, 2, 0n, requested);
+      t.is(rd.type, T.Rread, `count=${requested} should not error`);
+      const got = makeReader(rd.payload).u32();
+      t.is(
+        got,
+        Math.min(requested, 65_536),
+        `count=${requested} bytes returned`,
+      );
+    }
+  },
+);
 
 test.serial('Tclunk closes an open directory cursor', async t => {
   const closes = { n: 0 };
