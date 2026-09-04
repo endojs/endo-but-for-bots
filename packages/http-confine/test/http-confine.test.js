@@ -17,6 +17,8 @@ import {
   normalizeMethod,
   parseAllowedOrigins,
   resolveRedirect,
+  snapshotHeaders,
+  snapshotResponse,
 } from '../src/http-confine.js';
 
 /** @import { FetchLike } from '../src/types.js' */
@@ -390,4 +392,141 @@ test('makeHttpConfinement thunk mode rejects origin mutators', t => {
   t.throws(() => core.removeAllowedOrigin('https://api.example.com'), {
     message: /externally owned/,
   });
+});
+
+test('snapshotHeaders lowercases names into own data properties', t => {
+  const fromHeaders = snapshotHeaders(
+    new Headers([
+      ['X-Mixed-Case', 'yes'],
+      ['content-type', 'text/plain'],
+    ]),
+  );
+  t.deepEqual(
+    { ...fromHeaders },
+    {
+      'x-mixed-case': 'yes',
+      'content-type': 'text/plain',
+    },
+  );
+
+  const fromRecord = snapshotHeaders({ 'X-Mixed-Case': 'yes' });
+  t.deepEqual({ ...fromRecord }, { 'x-mixed-case': 'yes' });
+
+  const fromPairs = snapshotHeaders([['X-Mixed-Case', 'yes']]);
+  t.deepEqual({ ...fromPairs }, { 'x-mixed-case': 'yes' });
+
+  t.deepEqual({ ...snapshotHeaders(undefined) }, {});
+});
+
+test('snapshotHeaders collapses repeated names to one value', t => {
+  const headers = new Headers();
+  headers.append('x-repeat', '1');
+  headers.append('x-repeat', '2');
+  headers.append('set-cookie', 'a=1');
+  headers.append('set-cookie', 'b=2');
+
+  // Undici joins ordinary repeats itself, but yields set-cookie once per
+  // cookie, so a string-valued record can only keep the last one. Callers that
+  // need every cookie must read them off the transport response, which the
+  // confinement deliberately does not hand out.
+  t.deepEqual(
+    { ...snapshotHeaders(headers) },
+    {
+      'x-repeat': '1, 2',
+      'set-cookie': 'b=2',
+    },
+  );
+});
+
+test('snapshotHeaders keeps prototype-adjacent names off the prototype', t => {
+  // A literal cannot carry an own `__proto__`; JSON.parse and Headers can, and
+  // both are shapes a transport can hand us.
+  for (const headers of [
+    /** @type {Record<string, string>} */ (
+      JSON.parse('{"__proto__":"attacker","constructor":"no"}')
+    ),
+    new Headers([
+      ['__proto__', 'attacker'],
+      ['constructor', 'no'],
+    ]),
+  ]) {
+    const record = snapshotHeaders(headers);
+    t.is(Object.getPrototypeOf(record), Object.prototype);
+    t.is(
+      Object.getOwnPropertyDescriptor(record, '__proto__')?.value,
+      'attacker',
+    );
+    t.is(Object.getOwnPropertyDescriptor(record, 'constructor')?.value, 'no');
+    t.deepEqual(Object.keys(record).sort(), ['__proto__', 'constructor']);
+  }
+});
+
+test('snapshotResponse projects a transport response to inert data', t => {
+  const summary = snapshotResponse(
+    harden({
+      status: 201,
+      statusText: 'Created',
+      ok: true,
+      url: 'https://api.example.com/data',
+      headers: { 'X-Kind': 'summary' },
+      body: makeBody(['never read']),
+    }),
+  );
+  t.deepEqual(
+    { ...summary },
+    {
+      status: 201,
+      statusText: 'Created',
+      ok: true,
+      url: 'https://api.example.com/data',
+      headers: { 'x-kind': 'summary' },
+    },
+  );
+  t.false('body' in summary);
+});
+
+test('snapshotResponse coerces a response that omits every optional field', t => {
+  const summary = snapshotResponse(harden({}));
+  t.deepEqual(
+    { ...summary },
+    {
+      status: 0,
+      statusText: '',
+      ok: false,
+      url: '',
+      headers: {},
+    },
+  );
+});
+
+test('request summarizes a native Response instead of hardening it', async t => {
+  const nativeResponse = new Response('ok', {
+    headers: { 'X-Native-Response': 'yes' },
+  });
+  const core = makeHttpConfinement(
+    {
+      allowedOrigins: ['https://api.example.com'],
+    },
+    {
+      fetch: /** @type {FetchLike} */ (
+        async () => /** @type {unknown} */ (nativeResponse)
+      ),
+      now: () => 1000,
+    },
+  );
+
+  const result = await core.request({ url: 'https://api.example.com/data' });
+
+  t.is(result.response.status, 200);
+  t.is(result.response.ok, true);
+  t.is(result.response.headers['x-native-response'], 'yes');
+  t.false('body' in result.response);
+  t.is(new TextDecoder().decode(result.bytes), 'ok');
+
+  // The confinement hardens what it returns. Had the transport object been
+  // part of that graph, Undici's lazily populated sorted-header cache would be
+  // frozen and this read would throw.
+  t.true(Object.isFrozen(result.response));
+  t.notThrows(() => [...nativeResponse.headers]);
+  t.is(nativeResponse.headers.get('x-native-response'), 'yes');
 });
