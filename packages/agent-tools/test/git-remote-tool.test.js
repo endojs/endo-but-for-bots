@@ -100,10 +100,20 @@ const toolsByName = () => {
   return byName;
 };
 
-test('makeGitRemoteTool emits inspect/fetch/pull/push records', t => {
+test('makeGitRemoteTool emits a record for every advertised GitRemote verb', t => {
   const byName = toolsByName();
-  t.deepEqual(Object.keys(byName).sort(), ['fetch', 'inspect', 'pull', 'push']);
-  for (const name of ['inspect', 'fetch', 'pull', 'push']) {
+  // Derived from the runtime guard rather than restated, so a method added to
+  // `GitRemoteInterface` and left out of `gitRemoteToolSchemas` fails here
+  // instead of silently leaving the JSON-tool surface behind the code-mode one.
+  // `help` is the interface's own documentation verb, not a remote operation.
+  const advertised = Object.keys(
+    getInterfaceGuardPayload(/** @type {InterfaceGuard} */ (GitRemoteInterface))
+      .methodGuards,
+  )
+    .filter(name => name !== 'help')
+    .sort();
+  t.deepEqual(Object.keys(byName).sort(), advertised);
+  for (const name of advertised) {
     t.is(typeof byName[name].invoke, 'function', name);
     // The schema is reused verbatim as the MCP inputSchema.
     t.is(byName[name].inputSchema, byName[name].parameters, name);
@@ -155,7 +165,7 @@ const checkAgreement = (t, tool, records) => {
   t.true(checked > 0);
 };
 
-for (const name of ['inspect', 'fetch', 'pull', 'push']) {
+for (const name of ['inspect', 'credentialHealth', 'fetch', 'pull', 'push']) {
   test(`schema <-> guard agree for gitRemote.${name}`, t => {
     checkAgreement(t, toolsByName()[name], optionRecords);
   });
