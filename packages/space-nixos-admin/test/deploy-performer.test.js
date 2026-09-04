@@ -44,10 +44,15 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
  * @param {import('ava').ExecutionContext} t
- * @param {{ shell?: string }} [options] - `shell` stands in for the lock
- *   holder's `/bin/sh`, so a test can model a holder that dies mid-transaction.
+ * @param {{ shell?: string, watchLimitMs?: number }} [options] - `shell`
+ *   stands in for the lock holder's `/bin/sh`, so a test can model a holder
+ *   that dies mid-transaction. `watchLimitMs` lets a test that must actually
+ *   reach the cap do so in milliseconds rather than seconds.
  */
-const makeHarness = async (t, { shell = '/bin/sh' } = {}) => {
+const makeHarness = async (
+  t,
+  { shell = '/bin/sh', watchLimitMs = 5000 } = {},
+) => {
   const dir = await mkdtemp(join(tmpdir(), 'nixos-deploy-'));
   t.teardown(() => rm(dir, { recursive: true, force: true }));
   const configDir = join(dir, 'config');
@@ -94,7 +99,7 @@ const makeHarness = async (t, { shell = '/bin/sh' } = {}) => {
     ENDO_NIXOS_POLL_MS: '10',
     // Bound abandoned watchers so a failing test cannot hold the worker
     // open for the production 24h cap.
-    ENDO_NIXOS_WATCH_LIMIT_MS: '5000',
+    ENDO_NIXOS_WATCH_LIMIT_MS: String(watchLimitMs),
   };
   // A second `make` over the same directories stands in for the caplet's
   // next incarnation after a daemon restart.
@@ -1200,4 +1205,131 @@ test('stageFiles refuses when a previous capture is unreadable', async t => {
   await t.throwsAsync(() => readFile(join(configDir, 'other.nix')), {
     code: 'ENOENT',
   });
+});
+
+test('an id-less NONTERMINAL status holds the slot, never stacking a switch', async t => {
+  // The module header promises that a status file without an `id` makes the
+  // caplet "refuse to submit rather than risk an uncorrelatable
+  // root-equivalent action". `awaitOutcome` did enforce that — but only after
+  // `driveOperation` had already published the second request, which is the
+  // one thing the refusal exists to prevent. Reachable in the upgrade window
+  // this protocol was written for: a pre-v2 applier is mid-`switch`, wrote an
+  // id-less status and consumed the request slot; activation installs the v2
+  // service; a re-dispatch then finds no outcome, no request, and an id-less
+  // status. The sibling test above uses `phase: 'ok'` — terminal, and
+  // legitimately free — so only a nonterminal one exercises this.
+  t.timeout(20_000);
+  // The default watch limit, so the bounded id-less grace expires before the
+  // cap does and the operator gets the actionable upgrade message rather than
+  // a generic timeout. Both refuse to submit; only one says why.
+  const { admin, statusPath, requestBytes, spoolDir } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(
+    statusPath,
+    JSON.stringify({ action: 'switch', phase: 'building' }),
+    'utf8',
+  );
+
+  await t.throwsAsync(() => admin.apply('second switch', 'k-idless-1'), {
+    message: /echoes no request id/,
+  });
+  t.is(
+    await requestBytes(),
+    undefined,
+    'no root-equivalent request reached the spool',
+  );
+});
+
+test('an id-less nonterminal status that goes terminal releases the slot', async t => {
+  // The hold must be a WAIT, not a permanent refusal: when the pre-contract
+  // applier finishes and writes a terminal status, the queued operation has
+  // to proceed. Otherwise the fix above would trade a double-apply for a
+  // wedge.
+  t.timeout(20_000);
+  const { admin, statusPath, spoolDir, processNext } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(
+    statusPath,
+    JSON.stringify({ action: 'switch', phase: 'building' }),
+    'utf8',
+  );
+
+  const settled = admin.build('after the old applier finishes', 'k-idless-2');
+  await delay(60);
+  await writeFile(statusPath, JSON.stringify({ phase: 'ok' }), 'utf8');
+  await processNext();
+  t.true((await settled).ok);
+});
+
+test('a JSON null in the status file fails legibly, not as a TypeError', async t => {
+  // `apply-status.json` is the only spool file with no validator of its own.
+  // `JSON.parse('null')` parses fine, survives every `!== undefined` guard,
+  // and then threw a bare `Cannot read properties of null (reading 'id')`
+  // from inside the submit lock — fail-closed, but telling an operator
+  // nothing about which file is malformed.
+  const { admin, statusPath, requestBytes, spoolDir } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(statusPath, 'null', 'utf8');
+
+  await t.throwsAsync(() => admin.build('note', 'k-null-1'), {
+    message: /Refusing to decide against unreadable .*expected a JSON object/,
+  });
+  t.is(await requestBytes(), undefined, 'nothing was submitted');
+});
+
+test('a JSON array in the status file is rejected the same way', async t => {
+  const { admin, statusPath, spoolDir } = await makeHarness(t);
+  await mkdir(spoolDir, { recursive: true });
+  await writeFile(statusPath, '[]', 'utf8');
+
+  await t.throwsAsync(() => admin.build('note', 'k-null-2'), {
+    message: /expected a JSON object/,
+  });
+});
+
+test('a watch inherits the wait deadline instead of restarting it', async t => {
+  // `driveOperation` and `awaitOutcome` each used to compute their own
+  // `Date.now() + watchLimitMs`, so an operation that spent most of its
+  // window waiting for the slot then got a second full window to watch —
+  // a 2x bound on a queue that is held for the whole time, delaying every
+  // later verb including `rollback`.
+  t.timeout(20_000);
+  const watchLimitMs = 1000;
+  const { admin, statusPath, spoolDir } = await makeHarness(t, {
+    watchLimitMs,
+  });
+  await mkdir(spoolDir, { recursive: true });
+  // A foreign NONTERMINAL status with an id and no outcome: slot-busy, so the
+  // operation waits rather than submitting.
+  await writeFile(
+    statusPath,
+    JSON.stringify({ id: 'other', phase: 'building' }),
+    'utf8',
+  );
+
+  const started = Date.now();
+  const attempt = admin.build('inherits the deadline', 'k-deadline-1');
+  // Free the slot late in the window, so most of the one permitted limit is
+  // already spent; the caplet then submits and watches for an outcome that
+  // never comes. Inheriting, it must give up at ~1x. Restarting, it would run
+  // to ~1.8x, which is what the 1.3x bound below separates — the margin is
+  // ~300ms on either side, so this does not turn into a timing flake.
+  //
+  // The replacement status keeps a foreign `id` on purpose. Dropping the id
+  // would free the slot just as well, but `awaitOutcome` would then hit the
+  // bounded id-less grace after ~30 polls and this would time the GRACE
+  // rather than the deadline — passing under a mutation that restores the
+  // fresh deadline, which is exactly the regression it must catch.
+  await delay(watchLimitMs * 0.8);
+  await writeFile(
+    statusPath,
+    JSON.stringify({ id: 'other', phase: 'ok' }),
+    'utf8',
+  );
+  await t.throwsAsync(() => attempt, { message: /within the watch limit/ });
+  const elapsed = Date.now() - started;
+  t.true(
+    elapsed < watchLimitMs * 1.3,
+    `gave up after ${elapsed}ms; one watch limit is ${watchLimitMs}ms`,
+  );
 });

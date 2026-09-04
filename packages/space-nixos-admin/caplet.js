@@ -207,14 +207,30 @@ harden(resolveWithin);
  * every component except the last, so a lexical check alone lets a captured
  * entry under a tracked link unlink a file outside the checkout.
  *
+ * `allowFinalLink` relaxes the LAST component only, for removal. `rm`/`unlink`
+ * never follow a final-component symlink — they delete the link itself,
+ * whether it points at a file or a directory — so refusing there protects
+ * nothing, while a stray `result` link from a manual `nix build`, or a
+ * symlink carried by the config repo, would otherwise brick the capability:
+ * `fingerprintConfig` refuses to fingerprint it, so no build or apply can be
+ * submitted, and no verb here could delete it either. Parent components are
+ * still checked, so this cannot reach outside the checkout.
+ *
  * @param {string} baseDir
  * @param {string} target
+ * @param {boolean} [allowFinalLink]
  */
-const assertNoSymlinkTraversal = async (baseDir, target) => {
+const assertNoSymlinkTraversal = async (
+  baseDir,
+  target,
+  allowFinalLink = false,
+) => {
   await null;
   const rel = relative(resolve(baseDir), target);
   let cursor = resolve(baseDir);
-  for (const component of rel.split(sep)) {
+  const components = rel.split(sep);
+  for (let index = 0; index < components.length; index += 1) {
+    const component = components[index];
     cursor = join(cursor, component);
     let info;
     try {
@@ -233,6 +249,10 @@ const assertNoSymlinkTraversal = async (baseDir, target) => {
       throw error;
     }
     if (info.isSymbolicLink()) {
+      if (allowFinalLink && index === components.length - 1) {
+        // Nothing below it will be resolved; the unlink removes this link.
+        return;
+      }
       throw new Error(`Refusing to follow config symlink: ${q(cursor)}`);
     }
   }
@@ -601,6 +621,20 @@ export const make = async (_powers, _context, options = {}) => {
   };
 
   /**
+   * As `resolveConfigPath`, but tolerating a symlink as the FINAL component.
+   * Only the removal paths may use this: `rm` deletes such a link rather than
+   * following it, and without it a symlink inside the checkout is
+   * unremovable through the capability yet fatal to `fingerprintConfig`.
+   *
+   * @param {string} path
+   */
+  const resolveConfigPathForRemoval = async path => {
+    const target = resolveWithin(configDir, path);
+    await assertNoSymlinkTraversal(configDir, target, true);
+    return target;
+  };
+
+  /**
    * Read a config file without following a final-component symlink. Parent
    * components are protected by `assertNoSymlinkTraversal` while the shared
    * checkout lock excludes every compliant writer.
@@ -865,9 +899,28 @@ export const make = async (_powers, _context, options = {}) => {
         return undefined;
       }
       if (result.state === 'ok') {
-        return result.value;
+        // Every spool file this reads is a JSON OBJECT. A scalar, `null`, or
+        // an array is not a decision this code can make: `null` in particular
+        // survives every `!== undefined` guard and then throws a bare
+        // TypeError on the first property read, from inside the submit lock,
+        // telling an operator nothing about which file is malformed. Fail the
+        // same way an unparseable file does.
+        const { value } = result;
+        if (
+          typeof value === 'object' &&
+          value !== null &&
+          !Array.isArray(value)
+        ) {
+          return value;
+        }
+        lastError = new Error(
+          `expected a JSON object, got ${q(
+            value === null ? null : typeof value,
+          )}`,
+        );
+      } else {
+        lastError = result.error;
       }
-      lastError = result.error;
       // eslint-disable-next-line no-await-in-loop
       await delay(pollMs);
     }
@@ -1350,6 +1403,11 @@ export const make = async (_powers, _context, options = {}) => {
    * @param {string} message
    * @param {string} protocolFingerprint
    * @param {string | null} configFingerprint
+   * @param {number} deadline - the caller's watch deadline. Inherited rather
+   *   than restarted: an operation that waited for the slot has already spent
+   *   part of the one watch limit its docstring advertises, and the queue is
+   *   held for the whole time, so a fresh deadline here would let a single
+   *   verb block every later one for twice `ENDO_NIXOS_WATCH_LIMIT_MS`.
    */
   const awaitOutcome = async (
     id,
@@ -1357,10 +1415,10 @@ export const make = async (_powers, _context, options = {}) => {
     message,
     protocolFingerprint,
     configFingerprint,
+    deadline,
   ) => {
     await null;
     const outcomePath = outcomePathFor(id);
-    const deadline = Date.now() + watchLimitMs;
     let idlessPolls = 0;
     for (;;) {
       // eslint-disable-next-line no-await-in-loop
@@ -1511,6 +1569,7 @@ export const make = async (_powers, _context, options = {}) => {
   const driveOperation = async (action, message, id) => {
     await null;
     const deadline = Date.now() + watchLimitMs;
+    let idlessPolls = 0;
     for (;;) {
       // The entire empty-slot check and publication is one cross-process
       // transaction. The local queue preserves call order within this object;
@@ -1600,6 +1659,24 @@ export const make = async (_powers, _context, options = {}) => {
             // operation settled and must never free the single request slot.
             assertOutcomeRecord(foreign, pending.id, protocolFingerprint);
           }
+          // A nonterminal status with NO usable id is the pre-contract shape
+          // the module header promises to refuse on: the machine may be
+          // mid-`switch`, and because there is no id there is no outcome
+          // record that could ever release the slot. `awaitOutcome` does
+          // refuse it — but only AFTER this function has already published a
+          // second root-equivalent request onto the spool, which is the one
+          // thing the refusal exists to prevent. Hold the slot here instead,
+          // under the same bounded grace, so a genuinely stale terminal-less
+          // file still surfaces as an actionable upgrade error rather than a
+          // silent wait to the cap.
+          if (
+            status !== undefined &&
+            (typeof status.id !== 'string' || status.id === '') &&
+            status.phase !== 'ok' &&
+            status.phase !== 'error'
+          ) {
+            return { kind: 'wait-idless' };
+          }
           // An EMPTY request slot is not evidence of an idle applier. The
           // service may consume `apply-request.json` once its status echoes
           // the id, so from that moment until the terminal record the status
@@ -1670,7 +1747,22 @@ export const make = async (_powers, _context, options = {}) => {
           message,
           protocolFingerprint,
           configFingerprint,
+          deadline,
         );
+      }
+      if (decision.kind === 'wait-idless') {
+        idlessPolls += 1;
+        if (idlessPolls > NO_ID_GRACE_POLLS) {
+          throw new Error(
+            'The nixos applier left a nonterminal status that echoes no ' +
+              'request id, so nothing can prove whether the machine is ' +
+              'mid-operation; refusing to submit. Update ' +
+              'endo-nixos-admin.nix to the id-echo spool contract, or clear ' +
+              'the stale status file.',
+          );
+        }
+      } else {
+        idlessPolls = 0;
       }
       if (Date.now() > deadline) {
         throw new Error(
@@ -2091,15 +2183,16 @@ export const make = async (_powers, _context, options = {}) => {
             for (let index = attempted - 1; index >= 0; index -= 1) {
               const { path, text } = previous[index];
               try {
-                // Removal is confined exactly like writing: `resolveWithin`
-                // is only lexical, so without the symlink check a captured
-                // `link//name` under a tracked symlink would unlink a file
-                // OUTSIDE the checkout. `rm` resolves every component but the
-                // last, so the final-component O_NOFOLLOW trick does not
-                // apply here.
-                // eslint-disable-next-line no-await-in-loop
-                const target = await resolveConfigPath(path);
                 if (text === null) {
+                  // Removal is confined like writing: `resolveWithin` is only
+                  // lexical, so without the symlink check a captured
+                  // `link//name` under a tracked symlink would unlink a file
+                  // OUTSIDE the checkout. `rm` resolves every component but
+                  // the last, so the final-component O_NOFOLLOW trick does
+                  // not apply — and by the same token the last component may
+                  // itself be a link, which `rm` deletes rather than follows.
+                  // eslint-disable-next-line no-await-in-loop
+                  const target = await resolveConfigPathForRemoval(path);
                   try {
                     // eslint-disable-next-line no-await-in-loop
                     await rm(target, { force: true });
@@ -2114,6 +2207,8 @@ export const make = async (_powers, _context, options = {}) => {
                     }
                   }
                 } else {
+                  // eslint-disable-next-line no-await-in-loop
+                  const target = await resolveConfigPath(path);
                   // eslint-disable-next-line no-await-in-loop
                   await mkdir(dirname(target), { recursive: true });
                   // eslint-disable-next-line no-await-in-loop
@@ -2184,10 +2279,13 @@ export const make = async (_powers, _context, options = {}) => {
           await null;
           const paths = [];
           for (const { path, text } of previous) {
-            // Removal is confined exactly like writing; see stageFiles.
-            // eslint-disable-next-line no-await-in-loop
-            const target = await resolveConfigPath(path);
             if (text === null) {
+              // Removal is confined like writing; see stageFiles. A stray
+              // symlink IS removable here — that is the only in-band way to
+              // clear one, and `fingerprintConfig` refuses to fingerprint a
+              // checkout that still holds it.
+              // eslint-disable-next-line no-await-in-loop
+              const target = await resolveConfigPathForRemoval(path);
               try {
                 // eslint-disable-next-line no-await-in-loop
                 await rm(target, { force: true });
@@ -2198,6 +2296,8 @@ export const make = async (_powers, _context, options = {}) => {
                 }
               }
             } else {
+              // eslint-disable-next-line no-await-in-loop
+              const target = await resolveConfigPath(path);
               // eslint-disable-next-line no-await-in-loop
               await mkdir(dirname(target), { recursive: true });
               // eslint-disable-next-line no-await-in-loop
