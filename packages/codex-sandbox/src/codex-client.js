@@ -270,11 +270,17 @@ export const makeCodexClient = ({
   let threadReady = false;
   // Codex app-server 0.152.0 refuses `thread/turns/list` on a thread that has
   // had no user message: a thread is not materialized until its first turn
-  // starts. A saved recovery marker proves a turn was dispatched on the saved
-  // thread, so a resumed session may ask; a freshly started one may not, and
-  // its write-ahead base checkpoint is `null` because there is nothing before
-  // its first turn.
-  let threadHasTurns = Boolean(savedThreadId && savedRecovery);
+  // starts. A freshly started thread therefore may not be asked, and its
+  // write-ahead base checkpoint is `null` because there is nothing before its
+  // first turn. A saved marker naming *some* turn — the base it built on, or
+  // the turn itself — proves the saved thread was materialized; a marker with
+  // neither was written between the write-ahead and `turn/start`, so that
+  // thread still has no turns to list.
+  let threadHasTurns = Boolean(
+    savedThreadId &&
+    savedRecovery &&
+    (savedRecovery.turnId || savedRecovery.baseTurnId),
+  );
   // The write-ahead / settle-once / reconcile protocol is @endo/hosted-agent's,
   // not this adapter's: it is the same for every hosted backend and it is where
   // durability bugs live. Only the two Codex-specific operations —
