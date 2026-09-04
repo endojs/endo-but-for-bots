@@ -98,7 +98,7 @@ test('resolveRegistryTree preserves eager MVS and same-vat traversal', async t =
     sha256: async bytes => `hash:${decodeUtf8(bytes)}`,
   });
   t.deepEqual(resolution.keys, ['alpha@1.2.0', 'shared@1.0.0']);
-  // The preimage is the shared injective `JSON.stringify([[key, integrity]…])`
+  // The preimage is the shared injective `JSON.stringify([[key, integrity]...])`
   // encoding (registry keys/integrity may contain `\t`/`\n`, so the former
   // tab/newline join collided distinct closures onto one cache key).
   t.is(
