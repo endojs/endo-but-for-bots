@@ -513,14 +513,15 @@ from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
 
-This update adds [inspect-package](inspect-package.md) (Not Started) to M10
-(Capability Confinement and Ecosystem): an `@endo/inspect` package plus an
-`@endo/inspect/shim.js` that SES can incorporate in its base so tamed console
-and assertion quoting render through it instead of `bestEffortStringify`. Its
-faithful portable safety contract is blocked on the missing SES Proxy brand
-check, surfaced as a dependency ([endojs/endo#1756](https://github.com/endojs/endo/issues/1756),
-[#819](https://github.com/endojs/endo/issues/819)). Not Started goes 49 -> 50
-and the design count 196 -> 197.
+The 2026-09-04 update adds [inspect-package](inspect-package.md) (Not Started)
+to M10 (Capability Confinement and Ecosystem): an `@endo/inspect` package plus
+an `@endo/inspect/shim.js` that SES can incorporate in its base so the
+assertion-detail quoting (`quote()`, the sole reader of `bestEffortStringify`)
+renders through it. Its faithful portable safety contract is blocked on the
+missing SES Proxy brand check, surfaced as a dependency
+([endojs/endo#1756](https://github.com/endojs/endo/issues/1756),
+[endojs/endo#819](https://github.com/endojs/endo/issues/819)). Not Started goes
+49 -> 50 and the design count 196 -> 197.
 
 ## Roadmap
 
@@ -1363,7 +1364,7 @@ ecosystem.
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
-| [inspect-package](inspect-package.md) | Not Started | `@endo/inspect` + `@endo/inspect/shim.js`; condition-parameterized (node VT-100-iff-TTY / browser rich-console / xs plain); faithful safety contract **blocked on** a portable Proxy brand check: the stamping power ([endojs/endo#1756](https://github.com/endojs/endo/issues/1756), twin [Agoric/agoric-sdk#3905](https://github.com/Agoric/agoric-sdk/issues/3905)) or the non-trapping integrity trait ([tc39/proposal-stabilize](https://github.com/tc39/proposal-stabilize) via [endojs/endo#2673](https://github.com/endojs/endo/pull/2673) / [#2675](https://github.com/endojs/endo/pull/2675)), with [endojs/endo#819](https://github.com/endojs/endo/issues/819) as the soundness precondition. PR [#715](https://github.com/endojs/endo-but-for-bots/pull/715) |
+| inspect-package | Not Started | `@endo/inspect` + `@endo/inspect/shim.js`; condition-parameterized (node VT-100-iff-TTY / browser rich-console / xs plain); faithful safety contract **blocked on** a portable Proxy brand check: the stamping power ([endojs/endo#1756](https://github.com/endojs/endo/issues/1756), twin [Agoric/agoric-sdk#3905](https://github.com/Agoric/agoric-sdk/issues/3905)) or the non-trapping integrity trait ([tc39/proposal-stabilize](https://github.com/tc39/proposal-stabilize) via [endojs/endo#2673](https://github.com/endojs/endo/pull/2673) / [endojs/endo#2675](https://github.com/endojs/endo/pull/2675)), with [endojs/endo#819](https://github.com/endojs/endo/issues/819) as the soundness precondition. PR [endojs/endo-but-for-bots#715](https://github.com/endojs/endo-but-for-bots/pull/715) |
 | npm-dev-publisher-attenuation | Proposed | Capability-attenuated npm dev-release publishing: an agent-facing proxy accepting only allowlisted packages with prerelease versions under `dev-*` dist-tags (behind `PublishGrant` capabilities), and a deterministic promoter (no agent/LLM in path) holding the only upstream npm token, revalidating and promoting byte-identical artifacts with hash-chained audit ledgers. Write-path sibling of the registry-capability / endor-npm-registry-proxy read stack; demo target `npm.minion.town`. Owns the staging boundary and outbound promoter for the chronological `llm` source layer in llm-dev-publish (PR #853), which supplies the FIFO ordering, commit-derived prerelease versions, and manifest recovery; the two designs reconcile into one continuous dev-publishing system |
 
 **Exit criterion:** AI coding agent runs with principle of least
