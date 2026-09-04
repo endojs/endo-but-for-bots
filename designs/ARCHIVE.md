@@ -10,7 +10,14 @@ and moves the prior current-totals block into **Superseded totals**.
 
 *Newest first. The live count is the current-totals block in [`README.md`](README.md).*
 
-**Current totals (2026-08-29, rolling index refresh):** 48 Complete/Implemented, 36 In Progress, 49 Not Started, 37 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (196 designs). Superseded by the 2026-09-04 reconciliation refresh, which re-tallied the summary table's Status column to 201 rows (Complete/Implemented 48 -> 49, In Progress 36 -> 39, Proposed 37 -> 38) and folded in the layered per-rebase delta notes below. Those notes, layered in the index after this block, each incremented a running design count that had already fallen behind the table, so the header buckets and the delta lineage stopped agreeing: 2026-08-25 added [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed, Proposed 36 -> 37, count 191 -> 192); 2026-08-27 (PR #89) re-added [genie-integration](genie-integration.md) as a retrospective after `@endo/genie` was retired (`42bc7d516`, 2026-08-13), trimmed to what its three headline facets became (the pi engine as `@endo/agentry`, memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`, scheduling as the `@endo/reminder` plugin, [endo-reminder](endo-reminder.md) superseding [endoclaw-timer](endoclaw-timer.md)) plus the residual `lal`/`fae` consolidation backlog; the 2026-08-27 rebase added [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed 37 -> 38); the 2026-08-29 rebase added [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed 38 -> 39); the 2026-09-01 rebase added [endo-workflow](endo-workflow.md) to M3 (Proposed 39 -> 40), then flipped it Proposed -> In Progress as `packages/workflow` landed (Proposed 40 -> 39); and 2026-09-03 added [daemon-secret-manager](daemon-secret-manager.md) to M10 as *Implemented (local backend)* — its local backend and Secret Blobs Space implemented, operation-journal, XS encryption-power, and production KMS/HSM hardening remaining, its estimate decomposing the existing `daemon-capability-bank` secret-storage slice without increasing the milestone aggregate.
+**Current totals (2026-08-29, rolling index refresh):** 48 Complete/Implemented, 36 In Progress, 49 Not Started, 37 Proposed, 2 Active, 13 Reference, 3 Deprecated, 1 Draft, 4 Superseded, 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phase 1 implemented* and [genie-integration](genie-integration.md) at *Largely realized* (196 designs). This supersedes every count above, including the running **Totals:** line; the buckets are reproducible by tallying the Status column of the summary table. This pass added six previously-unindexed design files to the summary table: the Ironhorse trio [ironhorse-engine](ironhorse-engine.md) (Approved), [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) (Not Started), and [ironhorse-test262-convergence](ironhorse-test262-convergence.md) (In Progress) — also folded into the M11 (Rust Daemon `endor`) table alongside their `ironhorse-snapshot-store-seam` / `ironhorse-debugger-recovery-and-uncaught` siblings — plus [platform-neutral-hash](platform-neutral-hash.md) (In Progress), [conservative-regexp-subset](conservative-regexp-subset.md) (Not Started), and [readableblob-range-attenuation](readableblob-range-attenuation.md) (Proposed). It also reconciled stale Status cells against each design file's own Status field: the four-layer importLocation stack ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md), [registry-capability](registry-capability.md), [mvs-resolver](mvs-resolver.md), [snapshot-mapper](snapshot-mapper.md)) Proposed -> Not Started (applying the 2026-07-10 flip the prose above already recorded but the table never carried); the git trio ([daemon-git-capability](daemon-git-capability.md), [daemon-git-remotes](daemon-git-remotes.md), [daemon-git-next-steps](daemon-git-next-steps.md)) Proposed -> In Progress (accepted 2026-07-11, phases landed); [daemon-agent-network-identity](daemon-agent-network-identity.md) and [daemon-locator-terminology](daemon-locator-terminology.md) Not Started -> In Progress; [agentry-git-verb-gaps](agentry-git-verb-gaps.md) and [endopi-edit-tool](endopi-edit-tool.md) Proposed -> In Progress; and [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) Proposed -> **Complete**. The 2026-08-23 pass flips [cli-edit-verb](cli-edit-verb.md) from Proposed to In Progress because its daemon-side pure core landed in #796. Superseded by the 2026-09-04 reconciliation refresh (see that pass's groom note below); the per-rebase delta notes that layered beneath this block in the index are folded in here as history, preserved as each pass recorded them:
+
+- 2026-08-25 added [hardener-indexed-cardinality](hardener-indexed-cardinality.md) (Proposed; Proposed 36 -> 37, count 191 -> 192).
+- 2026-08-27 (PR #89) re-added [genie-integration](genie-integration.md) as a retrospective (+1 design -> 192) after `@endo/genie` was retired (`42bc7d516`, 2026-08-13), trimmed to what its three headline facets became: the pi engine as `@endo/agentry`; memory as `EndoDirectory`/`Mount` over `@endo/platform/fs/extended`; scheduling as the `@endo/reminder` plugin ([endo-reminder](endo-reminder.md), superseding [endoclaw-timer](endoclaw-timer.md)); plus the residual `lal`/`fae` consolidation backlog.
+- 2026-08-27 added [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) (Proposed; Proposed 37 -> 38, count 192 -> 193).
+- 2026-08-29 added [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) (Proposed; Proposed 38 -> 39, count 193 -> 194).
+- 2026-09-01 added [endo-workflow](endo-workflow.md) to M3 (Proposed; Proposed 39 -> 40, count 194 -> 195), then flipped it Proposed -> In Progress as `packages/workflow` landed (Proposed 40 -> 39).
+- 2026-09-03 added [daemon-secret-manager](daemon-secret-manager.md) to M10 as *Implemented (local backend)*: its local backend and Secret Blobs Space implemented; operation-journal, XS encryption-power, and production KMS/HSM hardening remaining; its estimate decomposes the existing `daemon-capability-bank` secret-storage slice without increasing the milestone aggregate.
 
 **Current totals (2026-08-16, post-2026-07-20-grooming rebase):** 43 Complete/Implemented, 22 In Progress, 40 Not Started, 32 Proposed, 2 Active, 7 Reference, 2 Deprecated, 3 Superseded (151 designs). This supersedes the counts in the historical summaries above. The 2026-08-16 pass adds [endo-claude](endo-claude.md) (Not Started), so Not Started goes 39 -> 40 and the design count 150 -> 151. The 2026-07-29 `pass-style-promise` rebase added [pass-style-promise](pass-style-promise.md) (Proposed), so Proposed went 31 → 32 and the design count 149 → 150; the 2026-07-20 grooming pass then flips [chat-pending-commands](chat-pending-commands.md) from In Progress to Complete (PR #133 merged to `llm` 2026-07-13), so Complete goes 42 → 43 and In Progress 23 → 22.
 
@@ -25,19 +32,22 @@ after filing the 17 unattended documents and recording the merged
 ## Historical groom notes
 
 *Layered on 2026-09-04 (totals reconciliation refresh): the index's current-totals
-block had drifted out of agreement with the per-rebase delta notes layered beneath
-it. The 2026-08-29 header carried 196 designs (48 Complete/Implemented, 36 In
-Progress, 37 Proposed), while the 2026-08-25 → 2026-09-03 delta notes each
-incremented a running design count that had already fallen behind the summary
-table — so neither the header buckets nor the running count reconciled with the
-table they claim to summarize. Re-tallying the Status column of the summary table
-(the block's own reproducible method) yields 201 rows: Complete/Implemented 48 ->
-49, In Progress 36 -> 39, Proposed 37 -> 38, every other bucket unchanged. Collapsed
-the header plus the six layered delta notes into a single 2026-09-04 current-totals
-block per the index's single-current-totals-block rule, moved the superseded
-2026-08-29 block (with the delta lineage folded into it) to **Superseded totals**
-above, and left the summary table, milestone tables, and per-design estimates
-untouched — this pass changed only the totals prose, not any design's Status.*
+block had drifted out of agreement with both the summary table it claims to
+summarize and the per-rebase delta notes layered beneath it. The 2026-08-29 header
+claimed 196 designs (48 Complete/Implemented, 36 In Progress, 37 Proposed), but at
+its own authoring commit the summary table already held 198 rows (Proposed 39): the
+header was never a function of the table. The per-rebase delta notes covering
+2026-08-25 through 2026-09-03 then incremented a running design count off that
+already-stale header rather than re-tallying, so neither the header buckets nor the
+running count reconciled with the table. Re-tallying the Status column of the summary
+table (the block's own reproducible method) yields 201 rows against the header's
+claimed 196: Complete/Implemented 49, In Progress 39, Not Started 49, Proposed 38,
+with every other bucket unchanged. Collapsed the 2026-08-29 header and its delta notes
+into a single 2026-09-04 current-totals block per the index's
+single-current-totals-block rule, moved the superseded 2026-08-29 block (with its
+delta lineage folded in) to **Superseded totals** above, and left the summary table,
+milestone tables, and per-design estimates untouched: this pass changed only the
+totals prose, not any design's Status.*
 
 *Layered on 2026-09-03 (client-side-bridge carve): re-worded **M3 (Remote
 Access and Coding Capabilities)** — the first unfinished milestone, M1 and M2
