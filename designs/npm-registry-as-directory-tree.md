@@ -382,8 +382,14 @@ node kinds reports.
 
 `list()` is a live read at the moment it is called.
 A single `resolveRegistryTree` pass (defined below in § Resolver, mapper,
-and mockability) walks `list()` once per
-transitively-discovered dependency, so those calls land at different
+and mockability) issues `list()` a small constant number of times per
+transitively-discovered dependency — once when it selects the version and
+again inside `makeVersionLeaf` when it re-reads the published-version list to
+validate the selected version — not exactly once. Both reads hit the backend's
+memoized packument (a table read, not a fresh network fetch), so the cost is
+re-sorting the version list, not repeated egress; the per-dependency `provide`
+(tarball fetch + CAS write) is what the round-trip budget bounds, and it stays
+at one. Those `list()` calls land at different
 wall-clock moments, and a version published mid-resolution may be seen by
 a later dependency's `list()` and not an earlier one; a resolution is not
 guaranteed to observe one coherent point-in-time snapshot of the whole
@@ -457,15 +463,18 @@ hundreds of packages costs no per-dependency transport.
 
 Because `resolveRegistryTree` is an ordinary mockable library function
 with no brand check that would catch a future caller wiring it against a
-remote (`E()`-wrapped) tree, this colocation is enforced mechanically
-rather than by code-review vigilance.
+remote (`E()`-wrapped) tree, this colocation is primarily a **design
+constraint**, reinforced — not fully proven — by test.
 The resolver test harness injects a tree whose methods count their
-invocations and asserts the resolver issues only synchronous same-vat
-dispatch (no eventual-send crossing a worker or vat boundary) for a
-multi-dependency fixture, so a later refactor that moves the traversal
-into the worker (the design's own predicted erosion) fails this
-dispatch-shape assertion instead of silently regressing into
-O(dependency count) round trips.
+invocations and asserts the resolver drives a multi-dependency traversal to
+completion through direct same-vat dispatch over a local root.
+That guard is honest about its limit: it reddens if the resolver stops
+traversing the tree directly, but it cannot by itself catch the specific
+erosion below (a worker-side resolver over an `E()`-wrapped Presence), because
+the local fixture it hands the resolver is not a remote Presence.
+Catching that erosion mechanically would require a Presence/`E()`-observable
+fixture; until one exists, the constraint rests on the design statement here
+plus review of any change that relocates the resolver across a vat boundary.
 This test guards specifically against the change the platform's own
 invariants would *not* already surface loudly.
 A naive relocation that called a tree method directly on a genuine
@@ -510,13 +519,20 @@ Its traversal cost is therefore bounded by the count of late-bound
 packages, which is normally zero, rather than by total dependency count,
 so it needs no separate round-trip accounting beyond inheriting the same
 colocation guarantee.
-`resolutionHash` keeps its shipped input unchanged: `hashResolution` in
-`packages/exo-npm/src/mvs-resolver.js` hashes each canonical package key
-together with that package's npm `dist.integrity`, exactly as
-[mvs-resolver](mvs-resolver.md) specifies, so this presentation-layer
-migration produces byte-identical `resolutionHash` values and does not
-invalidate any pinned `RegistryResolution`, reproducibility record, or
-`resolutionHash`-keyed cache entry.
+`resolutionHash` continues to fold each canonical package key together with
+that package's npm `dist.integrity`, as [mvs-resolver](mvs-resolver.md)
+specifies, but its **preimage format changes** in this migration.
+`resolutionHashPreimage` in `packages/exo-npm/src/mvs-resolver.js` now hashes a
+`JSON.stringify` of the `[key, integrity]` pairs rather than the former
+`${key}\t${integrity}` newline-join: package keys and integrity strings are
+registry-controlled and may contain the `\t`/`\n` the join delimited on, so the
+old preimage was non-injective and two distinct closures could collide onto one
+content-addressed cache key (substituting one closure's trees for another's).
+Because the preimage bytes differ, this migration does **not** produce
+byte-identical `resolutionHash` values: any pinned `RegistryResolution`,
+reproducibility record, or `resolutionHash`-keyed cache entry recomputes under
+the new format — a one-time cache miss, not a correctness regression. The
+changeset records this cache-invalidation obligation.
 For this byte-identical guarantee to hold, `resolveRegistryTree` must be
 able to read each selected version's `dist.integrity` through the tree
 interface, because that npm packument attestation is distinct from the
