@@ -1437,21 +1437,35 @@ test('a decisive read does not sleep after its final attempt', async t => {
   // including the last, so it held the lock a whole extra poll interval —
   // two seconds at the production default — before throwing an answer that
   // could not change. Three attempts should cost two intervals, not three.
-  t.timeout(20_000);
-  const pollMs = 300;
-  const { admin, statusPath, spoolDir } = await makeHarness(t, { pollMs });
-  await mkdir(spoolDir, { recursive: true });
-  await writeFile(statusPath, '{not json', 'utf8');
+  //
+  // Timed as a SLOPE across two poll intervals rather than as an absolute
+  // bound. Elapsed is `overhead + sleeps * pollMs`, and the overhead is
+  // platform-dependent: on Linux every `withKernelLock` spawns a real
+  // `flock`, which an absolute threshold tuned on macOS (where the lock is a
+  // no-op) charges to the sleeps. Subtracting two runs cancels it, leaving
+  // only the term under test.
+  t.timeout(30_000);
+  /** @param {number} pollMs */
+  const timeFailedRead = async pollMs => {
+    const { admin, statusPath, spoolDir } = await makeHarness(t, { pollMs });
+    await mkdir(spoolDir, { recursive: true });
+    await writeFile(statusPath, '{not json', 'utf8');
+    const started = Date.now();
+    await t.throwsAsync(() => admin.build('note', `r-13:${pollMs}-0`), {
+      message: /Refusing to decide/,
+    });
+    return Date.now() - started;
+  };
 
-  const started = Date.now();
-  await t.throwsAsync(() => admin.build('note', 'r-13:0-0'), {
-    message: /Refusing to decide/,
-  });
-  const elapsed = Date.now() - started;
-  // 2 intervals = 600ms; a trailing sleep would make it 3 = 900ms. The 750ms
-  // bound sits between with 150ms of margin either side.
+  const fast = await timeFailedRead(100);
+  const slow = await timeFailedRead(400);
+  const perInterval = (slow - fast) / (400 - 100);
+  // 2 sleeps => slope 2; a trailing sleep => slope 3. Assert below 2.5, which
+  // leaves half an interval of slack on either side and does not depend on
+  // how long a `flock` spawn takes.
   t.true(
-    elapsed < pollMs * 2.5,
-    `gave up after ${elapsed}ms; ${pollMs}ms per poll interval`,
+    perInterval < 2.5,
+    `${fast}ms at 100ms/poll and ${slow}ms at 400ms/poll implies ` +
+      `${perInterval.toFixed(2)} sleeps per decisive read; expected 2`,
   );
 });
