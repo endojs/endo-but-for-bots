@@ -8,6 +8,7 @@ import {
   provisionFaeAgent,
   releaseFaeAgent,
   subagentAgentName,
+  subagentNamesIn,
 } from '../src/subagent-host.js';
 
 /**
@@ -180,7 +181,89 @@ test('a subagent may not take a name the enumeration keys on', async t => {
   t.is(subagentAgentName('parent', 'helper'), 'parent-sub-helper');
 });
 
-test('the subagent count bound cannot be evaded by an unenumerable name', async t => {
+test('a subagent named "driver" is not enumerated as a phantom', t => {
+  // `p`'s subagent `driver` has the *handle* `p-sub-driver`, which ends in
+  // `-driver` just as a driver caplet does. A suffix test reported it as a
+  // subagent named `''`: one that counted against the bound, could never be
+  // stopped, and whose teardown recursed into an agent that does not exist —
+  // cancelling the live subagent's handle on the way.
+  t.deepEqual(
+    subagentNamesIn(
+      ['p-sub-driver', 'p-sub-driver-driver', 'p-sub-x-driver'],
+      'p',
+    ),
+    ['driver', 'x'],
+  );
+  // A grandchild's driver carries the prefix too, and belongs to its own
+  // parent's listing.
+  t.deepEqual(subagentNamesIn(['p-sub-x-sub-y-driver'], 'p'), []);
+  t.deepEqual(subagentNamesIn(['p-sub-x-sub-y-driver'], 'p-sub-x'), ['y']);
+  // Nothing that is not a driver is a subagent.
+  t.deepEqual(
+    subagentNamesIn(['p-sub-x', 'p-sub-x-spawner', 'other'], 'p'),
+    [],
+  );
+});
+
+test('provisioning refuses a name that would take one already in use', async t => {
+  const { hostAgent, names } = makeFakeHost();
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'fae',
+    depth: 0,
+    maxDepth: 1,
+    ...provisionOptions,
+  });
+  const before = [...names.keys()].sort();
+
+  // `provideGuest` returns whatever a name already holds, of any type, so a
+  // collision used to fail several steps later — and the rollback then removed
+  // a name this call never bound. Here that would have unbound the live `fae`
+  // agent's own guest.
+  await t.throwsAsync(
+    provisionFaeAgent({
+      hostAgent,
+      name: 'profile-for-fae',
+      depth: 0,
+      maxDepth: 1,
+      ...provisionOptions,
+    }),
+    { message: /name "profile-for-fae" is already taken/ },
+  );
+  t.deepEqual([...names.keys()].sort(), before, 'nothing may be unbound');
+});
+
+test('a name whose formula could not be cancelled is left reachable', async t => {
+  const { hostAgent, names } = makeFakeHost();
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'parent',
+    depth: 0,
+    maxDepth: 1,
+    ...provisionOptions,
+  });
+  const stubborn = Far('HostAgent', {
+    ...hostAgent,
+    async cancel(name) {
+      if (name === 'parent-spawner') throw Error('graph lock unavailable');
+      return hostAgent.cancel(name);
+    },
+  });
+
+  await t.throwsAsync(
+    releaseFaeAgent({ hostAgent: stubborn, name: 'parent' }),
+    {
+      instanceOf: AggregateError,
+      message: /retry once the cause is cleared/,
+    },
+  );
+  // Not every cancel failure means the formula survived, but some do, and the
+  // name is the only way back to a running spawner caplet holding `host-agent`.
+  t.true(names.has('parent-spawner'));
+  t.false(names.has('parent-driver'));
+});
+
+test('the subagent count bound is enforced', async t => {
   const { hostAgent } = makeFakeHost();
   const spawner = makeSubagentSpawner({
     provideContext: async () =>

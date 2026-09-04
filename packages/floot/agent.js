@@ -50,14 +50,6 @@ import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
 // produces a spoken reply.
 const MAX_TOOL_ROUNDS = 8;
-
-/**
- * Mail-triggered turns that may be waiting for their reply at once.
- *
- * The inbox loop hands a turn to a serial chain instead of awaiting it, so
- * nothing else bounds how far that chain can grow under a flood of mail.
- */
-const MAX_QUEUED_MAIL_TURNS = 16;
 const AGENT_SHUTDOWN_TIMEOUT_MS = 30_000;
 
 const execFileAsync = promisify(execFile);
@@ -1092,17 +1084,83 @@ export const makeStreamingAgent = async (
       // to the topic the drain later consumes. Process each number once, or the
       // second dismiss() of an already-removed message throws and kills the loop.
       const handled = new Set();
-      // A mail turn is handed to this chain rather than awaited in the loop.
+      // A mail turn is run by the worker below rather than awaited in the loop.
       //
       // `askSubagent` blocks inside a turn until `delegations.claim` observes
       // the subagent's reply, and the only reader that feeds `claim` is this
       // loop. Awaiting the turn here therefore waits on a message the loop can
-      // no longer read: every ask from a mail-triggered turn times out. The
-      // chain keeps replies in message order — turns themselves are already
-      // serialized by `turnChain` — while leaving the pump free to run.
-      /** @type {Promise<void>} */
-      let mailChain = Promise.resolve();
-      let queuedMailTurns = 0;
+      // no longer read: every ask from a mail-triggered turn times out.
+      //
+      // The queue is deliberately unbounded. What it holds is a reference to a
+      // message the daemon is holding anyway, and it drains monotonically.
+      // Declining past a bound would be worse: `followMessages` first drains
+      // the whole live mailbox, far faster than the model answers, so a
+      // backlog — a restart with unread mail, say — would be refused wholesale
+      // even though the session goes idle moments later.
+      /** @type {Array<{ number: any, text: string, fromName: any }>} */
+      const pendingMail = [];
+      /** @type {(() => void) | undefined} */
+      let wakeMailWorker;
+      let pumpEnded = false;
+      const wakeMail = () => {
+        const notify = wakeMailWorker;
+        wakeMailWorker = undefined;
+        if (notify) notify();
+      };
+
+      const mailWorker = (async () => {
+        for (;;) {
+          if (pendingMail.length === 0) {
+            if (pumpEnded || stopped) return;
+            // eslint-disable-next-line no-await-in-loop
+            await new Promise(resolve => {
+              wakeMailWorker = resolve;
+            });
+            // eslint-disable-next-line no-continue
+            continue;
+          }
+          const { number, text, fromName } = /** @type {any} */ (
+            pendingMail.shift()
+          );
+          try {
+            if (stopped || quarantineError) return;
+            const { writer, done: turnDone } = makeBufferingWriter();
+            // Route through converse so the turn joins turnChain and shares
+            // context. Tag the turn as mail so getHistory can mark it (and the
+            // UI can show the sender) rather than render it like local input.
+            // The turn's outcome is read from the writer, so the promise itself
+            // is deliberately unused — but it must still be observed, or a turn
+            // that rejects before reaching the writer becomes an unhandled
+            // rejection in the daemon worker.
+            // eslint-disable-next-line no-void
+            void converse(text, writer, { mail: { from: fromName } }).catch(
+              () => undefined,
+            );
+            // eslint-disable-next-line no-await-in-loop
+            const result = await turnDone;
+            // A turn that finished is answered and dismissed whatever else is
+            // happening: its history is committed and the model was paid for.
+            // Only a turn shutdown aborted is left in the inbox, for the next
+            // incarnation — an aborted turn commits nothing, so replaying it
+            // cannot duplicate anything.
+            if (!result.ok && stopped) return;
+            const replyText = result.ok
+              ? result.text || ''
+              : `Error: ${result.error}`;
+            // eslint-disable-next-line no-await-in-loop
+            await E(powers).reply(number, [replyText], [], []);
+            // Dismiss after handling so the message leaves the inbox and is not
+            // reprocessed when followMessages replays on the next daemon restart.
+            // eslint-disable-next-line no-await-in-loop
+            await E(powers).dismiss(number);
+          } catch (error) {
+            console.error(
+              `[floot] could not complete mail turn #${number}:`,
+              error instanceof Error ? error.message : String(error),
+            );
+          }
+        }
+      })();
       for (;;) {
         const { value: message, done } = await messages.next();
         if (done) break;
@@ -1191,67 +1249,18 @@ export const makeStreamingAgent = async (
         }
 
         if (stopped || quarantineError) break;
-
-        // Awaiting the turn used to be this loop's backpressure. Bound the
-        // queue that replaced it, and tell the sender rather than growing an
-        // unbounded chain of pending turns under a flood of mail.
-        if (queuedMailTurns >= MAX_QUEUED_MAIL_TURNS) {
-          console.error(
-            `[floot] ${queuedMailTurns} mail turns already queued; declining message #${number}`,
-          );
-          await E(powers).reply(
-            number,
-            [
-              `This session already has ${queuedMailTurns} messages waiting. Please resend once it has caught up.`,
-            ],
-            [],
-            [],
-          );
-          await E(powers).dismiss(number);
-          // eslint-disable-next-line no-continue
-          continue;
-        }
-
-        const { writer, done: turnDone } = makeBufferingWriter();
-        // Route through converse so the turn joins turnChain and shares
-        // context. Tag the turn as mail so getHistory can mark it (and the
-        // UI can show the sender) rather than render it like local input.
-        // The turn's outcome is read from the writer below, so the promise
-        // itself is deliberately unused — but it must still be observed,
-        // or a turn that rejects before reaching the writer becomes an
-        // unhandled rejection in the daemon worker.
-        void converse(text, writer, { mail: { from: fromName } }).catch(
-          () => undefined,
-        );
-        queuedMailTurns += 1;
-        mailChain = mailChain.then(async () => {
-          try {
-            const result = await turnDone;
-            // A shutting-down session neither answers nor dismisses: the turn
-            // commits its history as a unit, so an aborted one committed
-            // nothing, and leaving the message in the inbox lets the next
-            // incarnation handle it instead of losing it behind an error.
-            if (stopped) return;
-            const replyText = result.ok
-              ? result.text || ''
-              : `Error: ${result.error}`;
-            await E(powers).reply(number, [replyText], [], []);
-            // Dismiss after handling so the message leaves the inbox and is not
-            // reprocessed when followMessages replays on the next daemon restart.
-            await E(powers).dismiss(number);
-          } catch (error) {
-            console.error(
-              `[floot] could not complete mail turn #${number}:`,
-              error instanceof Error ? error.message : String(error),
-            );
-          } finally {
-            queuedMailTurns -= 1;
-          }
-        });
+        pendingMail.push({ number, text, fromName });
+        wakeMail();
       }
+      // Nothing can feed `claim` once the stream has ended, so an ask that kept
+      // waiting would hold the queue open for its whole timeout — five minutes
+      // by default — for a reply that can no longer arrive.
+      pumpEnded = true;
+      delegations.close(Error('Floot session mailbox closed'));
+      wakeMail();
       // Let queued replies finish before the loop resolves, so a shutdown that
       // awaits `inboxLoop` waits for mail this session already answered.
-      await mailChain;
+      await mailWorker;
     })().catch(error => {
       inboxStarted = false;
       if (stopped) return;
@@ -1590,6 +1599,32 @@ export const make = (hostPowers, _context, { env } = {}) => {
     return accountOracleP;
   };
 
+  /**
+   * The model id a session's usage is priced against.
+   *
+   * An unpinned session — the default — records no model and follows the
+   * factory's configured one, so asking `entry.model` alone yields `''` and
+   * nothing can be priced. Both the `accountStatus` tool and the session
+   * facet's `getAccount` must answer the same way, or a user gets a cost from
+   * the model and a blank from the UI panel beside it.
+   *
+   * @param {any} entry
+   * @returns {Promise<string>}
+   */
+  const sessionModelId = async entry => {
+    if (entry?.backendId) {
+      return hostedModelId(entry.backendId, entry.modelId || '');
+    }
+    if (entry?.model) return `${entry.model}`;
+    try {
+      return `${(await getProviderConfig()).model || ''}`;
+    } catch {
+      // Pricing is a nicety; a session that cannot read its provider config has
+      // a larger problem, and it will surface on its next turn.
+      return '';
+    }
+  };
+
   /** @type {Map<string, any>} */
   const backendAdmins = new Map();
   const terminatedBackends = new Set();
@@ -1597,30 +1632,34 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // One streaming provider per model. Sessions that don't pin a model share the
   // entry under the empty-string key (the factory's configured default model).
   //
-  // The auth token is read from the `SecretBlob` at construction, never held in
-  // the config value. A provider therefore pins the token as of the moment it
-  // was built: `refreshCredentials()` drops the cache so the next turn reads
-  // the secret again, which is how a rotation or revocation takes effect
-  // without restarting the daemon.
-  /** @type {Map<string, Promise<any>>} */
+  // The auth token is read from the `SecretBlob`, never held in the config
+  // value, and re-read for every turn: a provider pins the token it was built
+  // with, so a cache keyed on the model alone would go on presenting a revoked
+  // credential until somebody thought to call `refreshCredentials()`. Keyed on
+  // the bytes as well, a rotation or revocation takes effect by itself on the
+  // next turn, and an unrotated deployment still reuses the provider it built.
+  /** @type {Map<string, { token: string, providerP: Promise<any> }>} */
   const providersByModel = new Map();
-  const getProvider = model => {
+  const getProvider = async model => {
     const key = model || '';
-    let providerP = providersByModel.get(key);
-    if (!providerP) {
-      providerP = (async () => {
-        const cfg = await getProviderConfig();
-        return createStreamingProvider({
-          FLOOT_PROVIDER: cfg.provider,
-          FLOOT_MODEL: model || cfg.model,
-          FLOOT_AUTH_TOKEN: await resolveAuthToken({ powers, config: cfg }),
-        });
-      })().catch(error => {
+    const cfg = await getProviderConfig();
+    // A revoked secret rejects here, which fails the turn rather than letting
+    // a cached provider answer it.
+    const token = await resolveAuthToken({ powers, config: cfg });
+    const cached = providersByModel.get(key);
+    if (cached && cached.token === token) return cached.providerP;
+    const providerP = (async () =>
+      createStreamingProvider({
+        FLOOT_PROVIDER: cfg.provider,
+        FLOOT_MODEL: model || cfg.model,
+        FLOOT_AUTH_TOKEN: token,
+      }))().catch(error => {
+      if (providersByModel.get(key)?.token === token) {
         providersByModel.delete(key);
-        throw error;
-      });
-      providersByModel.set(key, providerP);
-    }
+      }
+      throw error;
+    });
+    providersByModel.set(key, { token, providerP });
     return providerP;
   };
 
@@ -1814,16 +1853,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),
             ...(oracle
-              ? {
-                  accountOracle: oracle,
-                  // An unpinned session follows the factory's configured
-                  // default model. Reporting no model id at all left the
-                  // account tool unable to price the session, with nothing
-                  // said about why.
-                  modelId: entry?.backendId
-                    ? hostedModelId(entry.backendId, entry.modelId || '')
-                    : entry?.model || (await getProviderConfig()).model || '',
-                }
+              ? { accountOracle: oracle, modelId: await sessionModelId(entry) }
               : {}),
           }),
         );
@@ -1948,9 +1978,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
             E(oracle).getRateCard(),
             agent.getUsage(),
           ]);
-          const modelId = entry.backendId
-            ? hostedModelId(entry.backendId, entry.modelId || '')
-            : entry.model || '';
+          const modelId = await sessionModelId(entry);
           const cost = modelId
             ? await E(oracle).estimateCost(
                 harden({
@@ -2676,7 +2704,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     async refreshCredentials() {
       providersByModel.clear();
       console.error(
-        '[floot-factory] Cleared cached providers; the next turn re-reads the auth secret.',
+        '[floot-factory] Dropped cached providers; the next turn rebuilds them.',
       );
     },
 

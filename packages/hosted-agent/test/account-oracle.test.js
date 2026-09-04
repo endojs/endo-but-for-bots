@@ -300,6 +300,7 @@ test('a declared section is never journalled beside an observed one', async t =>
 
 test('a partial live read does not erase an earlier reading of another section', async t => {
   const memory = makeMemoryJournal();
+  /** @type {any} */
   let payload = harden({
     plan: { planId: 'max', title: 'Max', state: 'active', seats: 1n },
     rateLimits: {
@@ -369,14 +370,19 @@ test('an unreadable journal is not overwritten from a partial view', async t => 
   // With no idea what is already stored, writing would have replaced a real
   // rate-limit reading with nothing.
   t.deepEqual(Object.keys(memory.peek()).sort(), ['rateLimits']);
+
+  // Once the journal is readable again the oracle resumes writing, so the
+  // outage is transient rather than terminal.
   failReads = false;
+  await E(oracle).refresh();
+  t.deepEqual(Object.keys(memory.peek()).sort(), ['plan', 'rateLimits']);
 });
 
 test('a source cannot stamp its own provenance', async t => {
   const oracle = makeAccountOracle({
     providerId: 'anthropic',
-    // A declared profile claiming to be a live reading, from a provider it
-    // does not describe, taken at a time it chose.
+    // A declared profile claiming to be a live reading, of an account it does
+    // not describe.
     provideDeclared: async () =>
       harden({
         plan: {
@@ -394,5 +400,42 @@ test('a source cannot stamp its own provenance', async t => {
   const plan = await E(oracle).getPlan();
   t.is(plan.source, 'declared');
   t.is(plan.providerId, 'anthropic');
-  t.is(plan.observedAt, T0);
+  // `observedAt` is the source's to report, though: only it knows when the
+  // figure was taken, and a backend that caches provider quota would otherwise
+  // have hour-old numbers presented as measured just now.
+  t.is(plan.observedAt, T1);
+});
+
+test('the oracle clock supplies observedAt only when the source does not', async t => {
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    provideDeclared: async () =>
+      harden({
+        plan: { planId: 'max', title: 'Max', state: 'active', seats: 1n },
+      }),
+    now: () => T0,
+  });
+  t.is((await E(oracle).getPlan()).observedAt, T0);
+});
+
+test('a stored section no normalizer can read is replaced, not wedged', async t => {
+  const memory = makeMemoryJournal();
+  // A plan written before the normalizer required `state`: it passes the raw
+  // `source === 'observed'` filter and then fails normalization.
+  memory.seed(harden({ plan: { planId: 'max', source: 'observed' } }));
+  const oracle = makeAccountOracle({
+    providerId: 'anthropic',
+    provideObserved: async () =>
+      harden({
+        rateLimits: { windows: [{ windowId: 'weekly', limit: 9n, used: 1n }] },
+      }),
+    journal: memory.journal,
+    now: () => T0,
+  });
+  t.is((await E(oracle).getRateLimits()).source, 'observed');
+  t.is((await E(oracle).getPlan()).source, 'unavailable');
+  // Gating the write on the *read* would have made one bad entry terminal:
+  // nothing prunes the journal, so the only way past a bad entry is to write a
+  // newer one.
+  t.deepEqual(Object.keys(memory.peek()).sort(), ['rateLimits']);
 });

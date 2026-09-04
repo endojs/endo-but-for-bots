@@ -11,9 +11,10 @@ import { createProvider } from '@endo/lal/providers/index.js';
  * the daemon runs — so a revoked secret stops the next *provisioning* rather
  * than the next turn, which is the opposite of what revocation is for.
  *
- * The token is therefore read per turn, and the provider rebuilt only when the
- * bytes change: an unrotated deployment pays one secret read per turn and
- * nothing else.
+ * The token is therefore read once per turn — the caller resolves this before
+ * the turn's first model call, not for every tool round — and the provider is
+ * rebuilt only when the bytes change, so an unrotated deployment pays one
+ * secret read per turn and nothing else.
  *
  * @param {object} options
  * @param {{ provider?: any, host?: string, model?: string, authToken?: string }} options.config
@@ -36,9 +37,19 @@ export const makeRotatingProvider = ({
     // An injected provider (a test double, or a caller that built its own) is
     // the whole configuration; there is no token to follow.
     if (config.provider) return config.provider;
-    const authToken = provideAuthToken
-      ? await provideAuthToken()
-      : config.authToken;
+    /** @type {string | undefined} */
+    let authToken;
+    try {
+      authToken = provideAuthToken
+        ? await provideAuthToken()
+        : config.authToken;
+    } catch (error) {
+      // A revoked secret must not leave the token it replaced sitting in this
+      // closure, nor a provider still holding it: drop both and fail the call.
+      cachedProvider = undefined;
+      cachedToken = undefined;
+      throw error;
+    }
     if (cachedProvider === undefined || authToken !== cachedToken) {
       cachedProvider = buildProvider({
         LAL_HOST: config.host,

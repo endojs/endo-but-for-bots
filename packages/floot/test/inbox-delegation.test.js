@@ -47,35 +47,45 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   const push = message => {
     if (closed) return;
     const waiter = waiters.shift();
-    if (waiter) waiter({ value: message, done: false });
+    if (waiter) waiter(harden({ value: message, done: false }));
     else queue.push(message);
   };
   const close = () => {
     closed = true;
     for (const waiter of waiters.splice(0)) {
-      waiter({ value: undefined, done: true });
+      waiter(harden({ value: undefined, done: true }));
     }
   };
 
-  async function* stream() {
-    for (;;) {
-      if (queue.length > 0) {
-        yield queue.shift();
-        // eslint-disable-next-line no-continue
-        continue;
-      }
-      if (closed) return;
-      let resolve;
-      const promise = new Promise(settle => {
-        resolve = settle;
-      });
-      waiters.push(/** @type {any} */ (resolve));
-      // eslint-disable-next-line no-await-in-loop
-      const next = await promise;
-      if (next.done) return;
-      yield next.value;
-    }
-  }
+  // A hand-rolled iterator rather than an async generator: `return()` on a
+  // generator parked at an `await` does not complete until that await settles,
+  // so a consumer cancelling a stream that has gone quiet would hang. The
+  // daemon's reader can be closed while idle, and a stub that cannot would let
+  // a shutdown bug pass unnoticed here.
+  const stream = () => {
+    const settleWaiters = value => {
+      for (const waiter of waiters.splice(0)) waiter(value);
+    };
+    return harden({
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+      async next() {
+        if (queue.length > 0) {
+          return harden({ value: queue.shift(), done: false });
+        }
+        if (closed) return harden({ value: undefined, done: true });
+        return new Promise(resolve => {
+          waiters.push(resolve);
+        });
+      },
+      async return() {
+        closed = true;
+        settleWaiters(harden({ value: undefined, done: true }));
+        return harden({ value: undefined, done: true });
+      },
+    });
+  };
 
   const mailbox = { close, sent, dismissed, store };
 
@@ -187,10 +197,13 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   return { ...mailbox, deliver, powers };
 };
 
-const inertTimers = harden({
-  setTimeout: () => 0,
-  clearTimeout: () => {},
-});
+/** Timers that never fire, so a test asserts on the answer, not the deadline. */
+const inertTimers = /** @type {any} */ (
+  harden({
+    setTimeout: () => 0,
+    clearTimeout: () => undefined,
+  })
+);
 
 const stubSpawner = Far('SubagentSpawner', {
   spawn: async name => harden({ name, locator: locatorFor(CHILD) }),
@@ -275,6 +288,10 @@ test('a mail turn blocked on askSubagent still observes the reply', async t => {
     harden({ spawner: stubSpawner, timers: inertTimers }),
   );
   agent.startInbox();
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
   mailbox.deliver({ from: locatorFor(HOST), strings: ['please delegate'] });
 
   t.true(
@@ -316,6 +333,10 @@ test('a partial message does not swallow its settled revision', async t => {
     harden({ timers: inertTimers }),
   );
   agent.startInbox();
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
   mailbox.deliver({
     from: locatorFor(HOST),
     strings: ['half a th'],
@@ -338,4 +359,95 @@ test('a partial message does not swallow its settled revision', async t => {
 
   mailbox.close();
   await agent.shutdown();
+});
+
+test('a backlog larger than any bound is answered, not declined', async t => {
+  t.timeout(30_000);
+  const mailbox = makeLiveMailbox();
+  let turns = 0;
+  const provider = makeScriptedProvider([
+    () => {
+      turns += 1;
+      return harden({
+        message: { role: 'assistant', content: `ack ${turns}` },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      });
+    },
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { provider },
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  agent.startInbox();
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+
+  // `followMessages` first drains the whole live mailbox, far faster than the
+  // model answers. A bound on the queue would decline the tail of any backlog
+  // — and, worse, dismiss it, so the messages were destroyed rather than
+  // deferred.
+  for (let index = 0; index < 20; index += 1) {
+    mailbox.deliver({
+      from: locatorFor(HOST),
+      strings: [`message ${index}`],
+    });
+  }
+
+  t.true(
+    await until(
+      () =>
+        mailbox.sent.filter(record => record.replyTo !== undefined).length ===
+        20,
+    ),
+    'every queued message must eventually be answered',
+  );
+  t.is(turns, 20);
+  t.is(mailbox.dismissed.length >= 20, true);
+});
+
+test('a completed turn is answered even if shutdown starts mid-drain', async t => {
+  t.timeout(30_000);
+  const mailbox = makeLiveMailbox();
+  const provider = makeScriptedProvider([
+    () =>
+      harden({
+        message: { role: 'assistant', content: 'answered' },
+        usage: { inputTokens: 1, outputTokens: 1 },
+      }),
+  ]);
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    { provider },
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  agent.startInbox();
+  t.teardown(() => mailbox.close());
+
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['first'] });
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['second'] });
+
+  // Shutting down while the queue drains must not throw away a turn that
+  // already ran: its history is committed and the model was paid for, so the
+  // sender gets the answer. Only a turn shutdown aborted is left in the inbox,
+  // and an aborted turn commits nothing, so replaying it duplicates nothing.
+  await until(() => mailbox.sent.some(record => record.replyTo !== undefined));
+  const shutdown = agent.shutdown();
+  // The daemon ends the stream as the session goes away; a reader parked on a
+  // quiet source is not cancellable until it yields, so the stub must do the
+  // same thing the daemon does rather than pretend otherwise.
+  mailbox.close();
+  await shutdown;
+
+  const replies = mailbox.sent.filter(record => record.replyTo !== undefined);
+  t.true(replies.length >= 1);
+  for (const reply of replies) {
+    t.false(`${reply.strings.join('')}`.startsWith('Error:'));
+  }
 });

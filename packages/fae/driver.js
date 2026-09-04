@@ -38,6 +38,9 @@ import { resolveAuthToken } from './src/credentials.js';
  */
 export const make = async (powers, context, { env } = {}) => {
   const systemPrompt = env?.FAE_SYSTEM_PROMPT || undefined;
+  // Written by this agent's parent, not by the operator, so the loop appends it
+  // to the standing prompt rather than letting it take its place.
+  const delegatedPrompt = env?.FAE_SUBAGENT_PROMPT || undefined;
 
   const startLoop = async () => {
     const storedConfig =
@@ -59,6 +62,7 @@ export const make = async (powers, context, { env } = {}) => {
       systemPrompt,
       harden({
         ...(spawner ? { spawner } : {}),
+        ...(delegatedPrompt ? { delegatedPrompt } : {}),
         provideAuthToken: () =>
           resolveAuthToken({ powers, config: storedConfig }),
       }),
