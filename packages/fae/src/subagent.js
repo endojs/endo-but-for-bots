@@ -17,6 +17,32 @@ import { parseLocator } from '@endo/daemon/locator.js';
 export const SUBAGENT_DIRECTORY = 'subagents';
 
 /**
+ * Infix that makes a subagent's names in the factory host derivable from its
+ * parent's: agent `p`'s subagent `x` is the host agent `p-sub-x`. Enumeration
+ * and teardown key on it, which is why a subagent name may not contain it.
+ */
+export const SUBAGENT_INFIX = '-sub-';
+
+/** Suffixes appended to an agent's name for the formulas it owns. */
+export const DRIVER_SUFFIX = '-driver';
+export const SPAWNER_SUFFIX = '-spawner';
+export const HANDLE_SUFFIX = '-handle';
+
+/**
+ * Endings a subagent name may not have.
+ *
+ * Every formula an agent owns is named by appending one of these to the
+ * agent's own name, so a subagent named `x-driver` would take the host name
+ * sibling `x`'s driver already holds: `provideGuest` would collide with a live
+ * caplet, and enumeration would report a driver as if it were an agent.
+ */
+const reservedSubagentSuffixes = harden([
+  DRIVER_SUFFIX,
+  SPAWNER_SUFFIX,
+  HANDLE_SUFFIX,
+]);
+
+/**
  * Subagent names become pet names in the parent's directory and a segment of
  * the child's names in the factory host, so they are restricted to a shape
  * that is unambiguous in both and never collides with a special name.
@@ -36,7 +62,19 @@ const MAX_ANSWER_LENGTH = 262_144;
 export const assertSubagentName = name => {
   (typeof name === 'string' && subagentNamePattern.test(name)) ||
     Fail`Subagent name ${q(name)} must match ${q(subagentNamePattern.source)}`;
-  return /** @type {string} */ (name);
+  const text = /** @type {string} */ (name);
+  // `p`'s subagent `a-sub-b` would take the host name `p-sub-a-sub-b`, which
+  // is also what `p-sub-a`'s spawner would mint for its own subagent `b`. Both
+  // enumerations skip a name with an interior infix rather than report it
+  // under the wrong parent, so such an agent counts against no bound and no
+  // teardown reaches it.
+  !text.includes(SUBAGENT_INFIX) ||
+    Fail`Subagent name ${q(text)} must not contain ${q(SUBAGENT_INFIX)}, which names the parent-child relation`;
+  for (const suffix of reservedSubagentSuffixes) {
+    !text.endsWith(suffix) ||
+      Fail`Subagent name ${q(text)} must not end with ${q(suffix)}, which names a formula an agent owns`;
+  }
+  return text;
 };
 harden(assertSubagentName);
 
@@ -224,24 +262,39 @@ export const makeSubagentDelegations = ({
     !pendingByName.has(name) ||
       Fail`Subagent ${q(name)} already has a question in flight`;
 
-    const path = harden([SUBAGENT_DIRECTORY, name]);
-    // `locate` takes the path as separate name arguments — unlike `lookup` and
-    // `send`, whose guards accept an array.
-    const recipient = await E(powers).locate(...path);
-    typeof recipient === 'string' ||
-      Fail`No subagent named ${q(name)} — spawn it first`;
-
     /** @type {import('@endo/promise-kit').PromiseKit<{ text: string, number: bigint, edgeNames: string[] }>} */
     const answerKit = makePromiseKit();
     /** @type {PendingDelegation} */
     const delegation = {
       name,
-      recipient: /** @type {string} */ (recipient),
+      // Filled in below, once `locate` has resolved. Until then the entry
+      // exists only to hold the slot; `claim` cannot match an empty recipient
+      // because `isSameFormula` rejects a non-locator.
+      recipient: '',
       text: task,
       outboundId: undefined,
       settle: answerKit.resolve,
     };
+    // Claim the slot before the first `await`. Checked-then-awaited, two
+    // concurrent asks for one subagent both passed the guard and the second
+    // overwrote the first, whose caller then waited out its whole timeout for
+    // an answer nothing would ever deliver to it.
     pendingByName.set(name, delegation);
+
+    const path = harden([SUBAGENT_DIRECTORY, name]);
+    /** @type {unknown} */
+    let recipient;
+    try {
+      // `locate` takes the path as separate name arguments — unlike `lookup`
+      // and `send`, whose guards accept an array.
+      recipient = await E(powers).locate(...path);
+      typeof recipient === 'string' ||
+        Fail`No subagent named ${q(name)} — spawn it first`;
+    } catch (error) {
+      forget(delegation);
+      throw error;
+    }
+    delegation.recipient = /** @type {string} */ (recipient);
 
     /** @type {any} */
     let timer;
