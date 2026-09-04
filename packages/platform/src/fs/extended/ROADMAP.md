@@ -95,9 +95,9 @@ covering leaf symlinks, mid-tree symlink swap, and `O_NOFOLLOW` on
   Cross-side delivery is `queueMicrotask` (or `setTimeout` for the
   latency variant) — there is no socket, no syscall, no IPC.
   The transcripts capture every `@endo/captp` wire message, so the
-  *message-order properties* the snapshots pin (pipelined chain ↔
-  N consecutive `CTP_CALL`s; CAS cache hit ↔ no `CTP_CALL` for
-  `fetch`) are real.
+  *message-order properties* the snapshots pin (pipelined chain <->
+  N consecutive `CTP_CALL`s; CAS cache hit <-> no `CTP_CALL` for
+  `streamBase64`) are real.
   What the tests *don't* prove: real wire latency, real bytes-on-the-
   wire savings, or behavior under a real transport's failure modes.
   Same convention as `@endo/captp`'s own tests.
@@ -143,7 +143,7 @@ current behavior so the gap doesn't regress silently.
   in `optimal-querying.test.js`.
 
 - _(closed)_ **`watch + list` TOCTOU.**
-  Resolved by the new `Directory.watchFrom() → { cursor, watcher }`
+  Resolved by the new `Directory.watchFrom() -> { cursor, watcher }`
   primitive (DESIGN.md §4.3): the entries cursor and the event
   watcher are both minted inside a single exo method invocation,
   so any mutation observable after `watchFrom` returns is in the
@@ -204,7 +204,7 @@ Owned by `@endo/endo-fs`. None of these are blocking the current PR.
   formerly).
   Server-side lookup-or-create across N segments; one CapTP RTT
   regardless of depth.
-- **`Directory.watchFrom() → { cursor, watcher }`** (§1.7
+- **`Directory.watchFrom() -> { cursor, watcher }`** (§1.7
   formerly).
   Atomic snapshot + subscribe; closes the `list + watch` TOCTOU
   race.
@@ -309,7 +309,7 @@ The refactor naturally splits into phases that can land independently:
    Per kumavis review (PR #326): "we should consider deleting this
    file. instead we can look to replace mount with this filesystem
    in an upcoming change."
-   The from-mount adapter exists only to bridge old → new;
+   The from-mount adapter exists only to bridge old -> new;
    once Mount is gone, it has no purpose.
 
 Each phase is its own PR; nothing about phase N forces phase N+1.

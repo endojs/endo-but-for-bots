@@ -126,9 +126,10 @@ type GitWorktreeEntry = {
     locked: boolean;
     prunable: boolean;
 };
-type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => unknown | undefined;
+type GitRichReadableBlob = GitLiteReadableBlob & {
+    getInfo: () => Promise<GitBlobInfo>;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
 };
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
@@ -277,6 +278,10 @@ type GitWatchFromResult = {
     cursor: GitCursor;
     watcher: GitNodeWatcher;
 };
+type GitPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
+};
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
     streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
@@ -287,10 +292,12 @@ type GitBlobRef = {
         hash: string;
         size: bigint;
     };
-    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     help: (method?: string) => string;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
 };
 type GitFilesystemStats = {
     blockSize?: bigint;
@@ -335,11 +342,7 @@ type GitReadableTree = GitLiteReadableTree;
 type GitDirectoryWriteSource = GitReadableBlobSource | GitLiteReadableTree;
 type GitSnapshotTree = GitLiteReadableTree & {
     sha256: () => string;
-    getInfo: () => Promise<{
-        algorithm: string;
-        hash: string;
-        size: bigint;
-    }>;
+    getInfo: () => Promise<GitBlobInfo>;
 };
 type GitLitePathEntry = {
     segments: () => string[];
@@ -371,6 +374,17 @@ type GitLitePathEntryIssuer = {
 };
 type GitNodeKind = 'file' | 'directory';
 type GitReadOnlyGitWorktree = GitReadableTree;
+type GitLiteReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    help: (method?: string) => string;
+};
+type GitBlobInfo = {
+    algorithm: string;
+    hash: string;
+    size: bigint;
+};
 type GitStreamYieldNode<Y = unknown, R = undefined> = {
     value: Y;
     promise: Promise<GitStreamNode<Y, R>>;
@@ -507,15 +521,20 @@ type GitWorktreeEntry = {
     locked: boolean;
     prunable: boolean;
 };
-type GitERef<T> = T | Promise<T>;
-type GitPassableBytesReader<TReadReturn = undefined> = {
-    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
-    readReturnPattern: () => unknown | undefined;
+type GitRichReadableBlob = GitLiteReadableBlob & {
+    getInfo: () => Promise<{
+        algorithm: string;
+        hash: string;
+        size: bigint;
+    }>;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
 };
 type GitDirectoryPage = {
     entries: GitDirectoryEntry[];
     atEnd: boolean;
 };
+type GitERef<T> = T | Promise<T>;
 type GitPassableReader<TRead = unknown, TReadReturn = unknown> = {
     stream: (synPromise: GitERef<GitStreamNode<undefined, TReadReturn>>) => Promise<GitStreamNode<TRead, TReadReturn>>;
     readPattern: () => unknown | undefined;
@@ -638,6 +657,10 @@ type GitWatchFromResult = {
     cursor: GitCursor;
     watcher: GitNodeWatcher;
 };
+type GitPassableBytesReader<TReadReturn = undefined> = {
+    streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
+    readReturnPattern: () => unknown | undefined;
+};
 type GitPassableBytesWriter<TWriteReturn = undefined> = {
     streamBase64: (synPromise: GitERef<GitStreamNode<string, TWriteReturn>>) => Promise<GitStreamNode<undefined, TWriteReturn>>;
     writeReturnPattern: () => unknown | undefined;
@@ -648,10 +671,12 @@ type GitBlobRef = {
         hash: string;
         size: bigint;
     };
-    fetch: (offset: bigint, length: bigint) => GitERef<GitPassableBytesReader>;
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
     text: () => Promise<string>;
     json: () => Promise<unknown>;
     help: (method?: string) => string;
+    range: (start: bigint, end?: bigint) => Promise<GitRichReadableBlob>;
+    textRange: (startLine: number, endLine: number) => Promise<GitRichReadableBlob>;
 };
 type GitFilesystemStats = {
     blockSize?: bigint;
@@ -714,6 +739,12 @@ type GitLiteReadableTree = {
         path: string[];
         type: 'file' | 'directory';
     }[]>;
+};
+type GitLiteReadableBlob = {
+    streamBase64: (synPromise: unknown) => Promise<unknown>;
+    text: () => Promise<string>;
+    json: () => Promise<any>;
+    help: (method?: string) => string;
 };
 type GitStreamYieldNode<Y = unknown, R = undefined> = {
     value: Y;

@@ -271,7 +271,7 @@ surface used by content-addressed readers.
 
 Get documentation for this interface or a specific method.
 - help() returns an overview of the interface
-- help("fetch") returns documentation for the fetch method
+- help("range") returns documentation for byte-range attenuation
 
 ## streamBase64(syndicationPromise) -> Promise
 
@@ -292,10 +292,15 @@ Get the blob's content-address identity and byte length.
 The result carries `algorithm` ("sha256"), a base64 `hash`, and `size` as a
 bigint.
 
-## fetch(offset, length) -> Promise<PassableBytesReader>
+## range(start, end?) -> Promise<ReadableBlob>
 
-Read a byte window from the blob.
-The range is `[offset, offset + length)`, clamped at end of file.
+Attenuate the blob to the half-open byte interval `[start, end)`.
+Omitting `end` selects through end of content, and bounds clamp there.
+
+## textRange(startLine, endLine) -> Promise<ReadableBlob>
+
+Attenuate the blob to zero-based, end-exclusive lines.
+Line bounds clamp at the end of the blob.
 
 # GitRemote - A policy-bound remote fetch, pull, and push capability.
 

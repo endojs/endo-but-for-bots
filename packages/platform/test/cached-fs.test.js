@@ -15,10 +15,11 @@
  *
  *   - **Cache miss** — first read of a file. The transcript shows
  *     `snapshot` + `getInfo` + `read` issued in one batch, then the
- *     background cache populate (`fetch` + `streamBase64`). The
- *     speculative `read`'s bytes flow to the caller; the
- *     populating `fetch` runs after the caller has already received
- *     the response.
+ *     background cache populate (`streamBase64` — the ranged `fetch`
+ *     primitive is retired, so the populate streams the whole blob
+ *     through the whole-value surface). The speculative `read`'s
+ *     bytes flow to the caller; the populating `streamBase64` runs
+ *     after the caller has already received the response.
  *
  *   - **Cache hit** — second read of a file whose hash is in the
  *     CAS. The transcript shows `snapshot` + `getInfo` + a
@@ -136,8 +137,30 @@ test('withCachedReads: miss serves speculative read in one RTT batch, populates 
     `speculative read in pipelined batch, got ${callsBefore.join(', ')}`,
   );
 
+  // The full-blob stream and watcher subscription are independent. The raw
+  // byte-reader adapter can let the stream return settle on either side of the
+  // watcher `events` call, so canonicalize that pair without dropping either
+  // event from the transcript.
+  const streamCall = transcript.find(
+    event => event.type === 'CTP_CALL' && event.method === 'streamBase64',
+  );
+  const stableTranscript = [...transcript];
+  if (streamCall?.questionID !== undefined) {
+    const streamReturnAt = stableTranscript.findIndex(
+      event =>
+        event.type === 'CTP_RETURN' && event.answerID === streamCall.questionID,
+    );
+    const eventsCallAt = stableTranscript.findIndex(
+      event => event.type === 'CTP_CALL' && event.method === 'events',
+    );
+    if (streamReturnAt > eventsCallAt && eventsCallAt >= 0) {
+      const [streamReturn] = stableTranscript.splice(streamReturnAt, 1);
+      stableTranscript.splice(eventsCallAt, 0, streamReturn);
+    }
+  }
+
   t.snapshot(
-    transcript,
+    stableTranscript,
     'miss transcript: speculative read + background populate',
   );
 });

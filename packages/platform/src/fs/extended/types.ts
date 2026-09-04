@@ -14,6 +14,7 @@ import type {
   PassableBytesWriter,
   PassableReader,
 } from '@endo/exo-stream';
+import type { RichReadableBlob } from '@endo/platform/fs/lite/types';
 
 export type { ERef };
 export type { PassableBytesReader, PassableBytesWriter, PassableReader };
@@ -237,10 +238,17 @@ export type BlobInfo = {
  */
 export type BlobRef = {
   getInfo: () => BlobInfo;
-  fetch: (offset: bigint, length: bigint) => ERef<PassableBytesReader>;
+  streamBase64: (synPromise: unknown) => Promise<unknown>;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
   help: (method?: string) => string;
+  // A derived range is a generic attenuated `RichReadableBlob`, *not* a
+  // `BlobRef` (its `getInfo` is async, and it carries no snapshot identity), so
+  // it is typed as such rather than as `Promise<BlobRef>` — the shared
+  // attenuator is the single source of that contract. `end` is optional:
+  // omitting it selects from `start` to end-of-content.
+  range: (start: bigint, end?: bigint) => Promise<RichReadableBlob>;
+  textRange: (startLine: number, endLine: number) => Promise<RichReadableBlob>;
 };
 
 export type LockType = 'shared' | 'exclusive';

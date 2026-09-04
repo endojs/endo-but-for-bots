@@ -39,12 +39,15 @@ another design are called out below and left as follow-ups.
   Directory guards spread them instead of repeating the shapes.
 - **C3 (done) / C4 (done for the daemon blob).** `EndoReadableTree` is now
   `{ ...readableTreeMethodGuards, sha256 }` (the `SnapshotTree` shape).
-  `EndoBlob` is aligned *up* to the richer `BlobRef` range-I/O shape: it carries
-  `{ ...readableBlobMethodGuards, ...rangeReadMethodGuards }`, i.e. the
+  `EndoBlob` is aligned *up* to the richer `BlobRef` range shape: it carries
+  `{ ...readableBlobMethodGuards, ...rangeAttenuationMethodGuards }`, i.e. the
   whole-value `text`/`json`/`streamBase64` accessors **plus**
   `getInfo()` (the `{ algorithm, hash, size }` triple in one round-trip) and
-  `fetch(offset, length)` (a windowed read) — the surface that makes remote
-  reads optimal. The Node/XS powers gained `readFileRange` and the content
+  `range(start, end)` / `textRange(startLine, endLine)` (attenuation to a byte or
+  line interval, each returning a new `ReadableBlob` — originally the one-shot
+  `fetch(offset, length)` windowed read, since replaced per
+  [readableblob-range-attenuation.md](readableblob-range-attenuation.md)) — the
+  surface that makes remote reads optimal. The Node/XS powers gained `readFileRange` and the content
   store surfaces `size`/`readRange` to back it. Remaining C4 follow-ups (extend
   the other blob implementers, mirror conveniences onto `BlobRef`) are optional
   — see § C4.
@@ -97,7 +100,7 @@ names:
 
 Duplication is not free: it is where drift accumulates (the daemon comment
 already worries about it), it forces adapters that would otherwise be
-unnecessary (the unbuilt `BlobRef → SnapshotBlob` adapter, fs-reconciliation
+unnecessary (the unbuilt `BlobRef -> SnapshotBlob` adapter, fs-reconciliation
 F7/D3, is a *symptom* of two shapes for one concept), and it multiplies the
 surface a viewer must learn to dispatch over.
 
@@ -229,15 +232,18 @@ because the read surface is small and stable, but still daemon-deep.
 `BlobRef` shape**, not down to the whole-value `SnapshotBlob`. The daemon
 read-surface convergence (`EndoBlob` spreads `readableBlobMethodGuards`) is the
 whole-value half; the remaining work was to give the content-addressed blob the
-**range-I/O surface** `BlobRef` already has, because that surface is what makes
-remote reads optimal:
+**range-selection surface** `BlobRef` already has, because that surface is what
+makes remote reads optimal:
 
-- `getInfo() → { algorithm, hash, size }` lets a caller learn the content hash
+- `getInfo() -> { algorithm, hash, size }` lets a caller learn the content hash
   and size in **one** round-trip and consult a local CAS before fetching bytes
   (see `extended/cas.js`, `extended/cached-fs.js`: zero-RTT on a cache hit).
-- `fetch(offset, length) → PassableBytesReader` is a **range** read — head/tail
-  and partial reads without streaming the whole blob (see
-  `extended/optimal-querying.test.js`).
+- `range(start, end)` / `textRange(startLine, endLine)` attenuate to a byte or
+  line interval, each returning a new `ReadableBlob` confined to that window —
+  head/tail and partial reads without streaming the whole blob (see
+  `extended/optimal-querying.test.js`). (This replaced the earlier one-shot
+  `fetch(offset, length) -> PassableBytesReader` windowed read; see
+  [readableblob-range-attenuation.md](readableblob-range-attenuation.md).)
 
 `SnapshotBlob`'s `text` / `json` / `streamBase64` are whole-value conveniences
 layered *on top of* this; the unified rich blob keeps them. The earlier "retire
@@ -258,23 +264,25 @@ scoped as a follow-up PR but **landed in this one**; the four layers, as built:
    public hash accessor (`getInfo().hash`, and the `sha256()` on `SnapshotBlob` /
    `SnapshotTree` / `EndoReadableTree`) returns base64. Hex survives only as the
    internal `store-sha256/<hex>` address and the tree-manifest child references;
-   callers convert base64↔hex via `@endo/hex` + `@endo/base64` at the store
+   callers convert base64<->hex via `@endo/hex` + `@endo/base64` at the store
    boundary. `EndoBlob.sha256()` was **removed** outright (a remote-only
    accessor now subsumed by `getInfo().hash`), so the daemon blob no longer
    carries a redundant hex spelling at all. (Earlier drafts of this list
    recommended *hex* as the canonical encoding to match the store filenames;
    that was reversed — base64 is the portable on-the-wire spelling and the store
    key is an internal detail.)
-3. *Blob exos:* `getInfo` + `fetch` were added to every content-addressed blob
-   exo — the persisted `makeReadableBlob` and transient `makeBytesBlob`
-   (`daemon.js`), the mount file and its `readOnly()` blob view (`mount.js`), and
-   the platform `LocalBlob` / git `GitBlob`.
-4. *Interface:* the range-I/O surface is the shared `rangeReadMethodGuards`
-   (`getInfo` / `fetch`) record, and the pre-assembled
-   `ReadableBlobRangeInterface` (`readableBlobMethodGuards` +
-   `rangeReadMethodGuards`) that implementers adopt without re-spreading; the
+3. *Blob exos:* `getInfo` + the range surface were added to every
+   content-addressed blob exo — the persisted `makeReadableBlob` and transient
+   `makeBytesBlob` (`daemon.js`), the mount file and its `readOnly()` blob view
+   (`mount.js`), and the platform `LocalBlob` / git `GitBlob`. (The surface
+   originally added `fetch(offset, length)`; it was later reshaped into the
+   `range` / `textRange` attenuation methods.)
+4. *Interface:* the range surface is the shared `rangeAttenuationMethodGuards`
+   (`getInfo` / `range` / `textRange`) record, and the pre-assembled
+   `RichReadableBlobInterface` (`readableBlobMethodGuards` +
+   `rangeAttenuationMethodGuards`) that implementers adopt without re-spreading; the
    extended `BlobRef` gained the `text` / `json` conveniences so there is a
-   single rich shape. The `BlobRef → SnapshotBlob` adapter disappears because the
+   single rich shape. The `BlobRef -> SnapshotBlob` adapter disappears because the
    shapes converge from below.
 
 *Blast radius:* the widest — content-store powers, the CAS cache, every blob
@@ -300,10 +308,10 @@ flagged ones and their resolutions:
 
 | Concept | Divergence | Resolution |
 |---|---|---|
-| **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }` — and `getInfo().size` is bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it; `kind` is kept (the mount stats a path); XS approximates `atime ← mtime` (host stat lacks it). |
-| **Content hash** | `EndoBlob` exposed both `sha256()` (hex) and `getInfo().hash` (base64); blob vs tree hash encodings differed | **Every public hash accessor is now base64; hex is internal-only.** `EndoBlob.sha256()` was **removed** (the daemon never reads a hash off a cap — it always holds the hex from `contentStore.store()` / the formula — so it was a remote-only accessor, now served by `getInfo().hash`); `EndoBlob` collapses to `ReadableBlobRangeInterface`. The remaining `sha256()` accessors (`SnapshotBlob` / `SnapshotTree` / `EndoReadableTree`, which have no `getInfo`) now return **base64** too. Hex survives only as the on-disk `store-sha256/<hex>` address and the tree-manifest child references; callers convert base64→hex via `@endo/hex` + `@endo/base64` where the store key is needed. |
+| **File stat** | Daemon `EndoMountStat` `{ kind, sizeBytes: number, modifiedMs: ms }` vs extended platform `NodeStat` `{ size: bigint, mtime: bigint ns, atime }` — and `getInfo().size` is bigint, colliding with `stat().sizeBytes` within the daemon mount | **Fields aligned, ownership remains separate:** daemon `EndoMountStat` is `{ kind, size: bigint, mtime: bigint ns, atime: bigint }`; platform owns `NodeStat`, while the daemon owns the named mount-stat record because no platform operation consumes it; `kind` is kept (the mount stats a path); XS approximates `atime <- mtime` (host stat lacks it). |
+| **Content hash** | `EndoBlob` exposed both `sha256()` (hex) and `getInfo().hash` (base64); blob vs tree hash encodings differed | **Every public hash accessor is now base64; hex is internal-only.** `EndoBlob.sha256()` was **removed** (the daemon never reads a hash off a cap — it always holds the hex from `contentStore.store()` / the formula — so it was a remote-only accessor, now served by `getInfo().hash`); `EndoBlob` collapses to `RichReadableBlobInterface`. The remaining `sha256()` accessors (`SnapshotBlob` / `SnapshotTree` / `EndoReadableTree`, which have no `getInfo`) now return **base64** too. Hex survives only as the on-disk `store-sha256/<hex>` address and the tree-manifest child references; callers convert base64->hex via `@endo/hex` + `@endo/base64` where the store key is needed. |
 | **Dir-change record** | NameHub `{ add, value: idRecord }` vs mount `{ add, type }` vs extended `WatchEvent { kind, name }` — three shapes | **Live mount feed, separate record.** `followNameChanges` returns the daemon-local `{ add, type } \| { remove }` reader; a common record remains deferred until a shared operation establishes common semantics. |
-| **Listing** | daemon/lite `list()` → `string[]` vs extended `Cursor`/`DirEntry[]` (name + qid) | **Intentional layer split** (the reconciliation chose names for lite/daemon, rich `Cursor` for the cap-FS engine). Not aligned. |
+| **Listing** | daemon/lite `list()` -> `string[]` vs extended `Cursor`/`DirEntry[]` (name + qid) | **Intentional layer split** (the reconciliation chose names for lite/daemon, rich `Cursor` for the cap-FS engine). Not aligned. |
 
 Other audited items (`getStat`/`getAttrs` narrow-vs-wide, `mkdir`/`unlink`
 aliases, `Qid` vs `getInfo`, `has`/`exists`, symlink scoping) are
@@ -321,17 +329,17 @@ After C1–C5 the fs/name-hub interface set collapses roughly as:
   portable blob-or-tree payload accepted by the runtime's remotable guard, so
   the TypeScript contract no longer advertises arbitrary `unknown` writes.
 - **Immutable trees:** one `SnapshotTree` / `ReadableTree` shape (C3).
-- **Immutable bytes:** one rich range-I/O shape (C4). The convergence went the
+- **Immutable bytes:** one rich range shape (C4). The convergence went the
   other way from the early "retire `BlobRef`" framing: `BlobRef` is the *richest*
   shape, so the daemon/lite blobs aligned **up** to it via the shared
-  `rangeReadMethodGuards` / `ReadableBlobRangeInterface`. The `BlobRef →
+  `rangeAttenuationMethodGuards` / `RichReadableBlobInterface`. The `BlobRef ->
   SnapshotBlob` adapter is gone because the shapes now converge from below;
   `BlobRef` itself remains (enriched with `text` / `json`).
 - **Vocabulary:** records exported from `lite`; the catalog doc is the prose
   vocabulary (C5).
 
 Net: roughly a third fewer fs-shaped guards, no hand-copied method shapes, and
-no `BlobRef → SnapshotBlob` adapter.
+no `BlobRef -> SnapshotBlob` adapter.
 
 ## Sequencing
 
@@ -365,7 +373,7 @@ no `BlobRef → SnapshotBlob` adapter.
   through their own additional methods (`EndoMount.entry()`), not by widening
   the shared method. This keeps the shared contract honest.
 - **No big-bang.** Unlike the reconciliation's D3, this is sequenced
-  (C1 → C5) because each phase is independently validatable and the blast radii
+  (C1 -> C5) because each phase is independently validatable and the blast radii
   differ by an order of magnitude (C1 is daemon-local; C4 touches the CAS path).
 
 ## Dependencies
@@ -398,25 +406,29 @@ no `BlobRef → SnapshotBlob` adapter.
       `@endo/platform/fs/lite`; consume them in the lite + daemon read surfaces.
 - [x] C3 / C4: `EndoReadableTree` converged onto the shared records + `sha256`
       (the `SnapshotTree` shape); `EndoBlob` converged onto the shared records +
-      the range-I/O surface. `EndoBlob.sha256()` was **removed** — the daemon
-      blob is `{ ...readableBlobMethodGuards, ...rangeReadMethodGuards }`, with
-      the content hash served by `getInfo().hash`.
-- [x] C4: align the daemon `EndoBlob` *up* to the richer `BlobRef` range-I/O
-      shape — `rangeReadMethodGuards` (getInfo / fetch) exported from
+      the range surface. `EndoBlob.sha256()` was **removed** — the daemon
+      blob is `{ ...readableBlobMethodGuards, ...rangeAttenuationMethodGuards }`,
+      with the content hash served by `getInfo().hash`.
+- [x] C4: align the daemon `EndoBlob` *up* to the richer `BlobRef` range
+      shape — `rangeAttenuationMethodGuards` (getInfo / range / textRange, the
+      last two reshaped from the original `fetch`) exported from
       `@endo/platform/fs`; `EndoBlob` carries them plus the whole-value
       accessors; Node/XS powers gain `readFileRange`; content store surfaces
       `size` / `readRange`. Every public hash accessor is base64 (matches
       `BlobRef`); hex survives only as the internal content-store address.
 - [x] C4: mirror the whole-value `text`/`json` conveniences onto the extended
       `BlobRef` (now mutually interchangeable with `EndoBlob` across `getInfo` /
-      `fetch` / `text` / `json`; `streamBase64` stays daemon-only as `fetch` is
-      the common streaming primitive).
+      `range` / `textRange` / `text` / `json`; the `range` / `textRange`
+      attenuation replaced the earlier `fetch` streaming primitive).
 - [x] C4: extend `LocalBlob` (platform) and `GitBlob` to the rich shape via a
-      shared `ReadableBlobRangeInterface` (readable-blob + `getInfo`/`fetch`).
+      shared `RichReadableBlobInterface` (readable-blob + `getInfo` / `range` /
+      `textRange`).
 - [x] C4: extend the daemon mount-file `readOnly()` view — `FilePowers` gains
       `sha256`, `EndoMountFile` + the `EndoMountReadableBlob` view gain
-      `getInfo`/`fetch` over the *live* file (a write-disabled face, not a
-      snapshot — content changes are observed, only writes are refused).
+      `getInfo` / `range` / `textRange` over the *live* file (a write-disabled
+      face, not a snapshot — content changes are observed, only writes are
+      refused; the `range` / `textRange` attenuation replaced the earlier
+      `fetch` streaming primitive per readableblob-range-attenuation.md).
 - [x] C1 layering: hoist `readableNameHubMethodGuards` /
       `directoryFileMethodGuards` from `@endo/daemon` to `@endo/platform/fs`;
       genie now imports them from platform (no daemon-internals reach).
@@ -427,4 +439,4 @@ no `BlobRef → SnapshotBlob` adapter.
 
 > where's the doc that describes what interfaces exist and how they relate to
 > each other. are there good candidates for reducing overlap and simplifying the
-> inventory of interfaces? … do all
+> inventory of interfaces? ... do all
