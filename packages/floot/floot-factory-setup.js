@@ -1,5 +1,7 @@
 // @ts-check
 /* global process */
+
+/** @import { ERef } from '@endo/eventual-send' */
 // endo run --UNCONFINED floot-factory-setup.js --powers @agent \
 //   -E ANTHROPIC_API_KEY=sk-...   (optionally -E FLOOT_DIR=floot)
 //
@@ -41,7 +43,7 @@ const resolveCodePath = () => {
  * Provision (or revive) the floot-factory: its guest, its provider handle, the
  * pinned factory caplet, and a default session if none exist yet.
  *
- * @param {import('@endo/eventual-send').ERef<object>} agent
+ * @param {ERef<object>} agent
  */
 export const main = async agent => {
   // Everything lives under a single `floot/` inventory directory rather than
@@ -59,6 +61,7 @@ export const main = async agent => {
   const authToken =
     process.env.ANTHROPIC_API_KEY || process.env.FLOOT_AUTH_TOKEN || '';
   const systemPrompt = process.env.FLOOT_SYSTEM_PROMPT || '';
+  const sessionTtlMs = process.env.FLOOT_SESSION_TTL_MS || '';
   const codePath = resolveCodePath();
 
   if (provider === 'anthropic' && !authToken) {
@@ -101,6 +104,7 @@ export const main = async agent => {
     resultName: controllerPath,
     env: harden({
       FLOOT_SYSTEM_PROMPT: systemPrompt,
+      FLOOT_SESSION_TTL_MS: sessionTtlMs,
       FLOOT_CODE_PATH: codePath,
     }),
   });

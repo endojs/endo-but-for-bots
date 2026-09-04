@@ -1,5 +1,8 @@
 // @ts-nocheck - E() generics don't work well with JSDoc types for remote objects
 /* eslint-disable no-await-in-loop */
+/* global clearInterval, setInterval */
+
+/** @import { FarRef } from '@endo/eventual-send' */
 
 // Floot — a streaming agent harness for the Endo daemon.
 //
@@ -21,6 +24,7 @@ import { promisify } from 'node:util';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
+import { makeEnvironmentCaptor } from '@endo/env-options';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import {
   makeConversationTree,
@@ -40,6 +44,7 @@ import {
 
 import { createStreamingProvider } from './providers/index.js';
 import { runClaudeTurn } from './src/claude-turn.js';
+import { makeSessionLifecycle } from './src/session-lifecycle.js';
 import { makeReplyChannel } from './src/stream.js';
 
 // Cap the tool-call loop so a misbehaving model can't spin forever before it
@@ -341,7 +346,8 @@ const isKnownModel = id => MODELS.some(m => m.id === id);
  * untouched, so this is safe to call on every revival.
  *
  * @param {any} host - the factory's own host powers
- * @param {string} agentName - petname (in the host) of the session's guest agent
+ * @param {string | string[]} agentName - name or path (in the host) of the
+ *   session's guest agent
  * @param {any} sessionGuest - the resolved guest facet (for `has` checks)
  * @param {string} id - session id (used to namespace temporary host petnames)
  * @param {Array<{ kind: string, petName: string }>} objects
@@ -357,6 +363,7 @@ const provisionPresetObjects = async (
   objects,
   codePath,
 ) => {
+  const agentPath = Array.isArray(agentName) ? agentName : [agentName];
   for (const obj of objects) {
     const alreadyPresent = await E(sessionGuest).has(obj.petName);
     if (alreadyPresent) {
@@ -384,7 +391,7 @@ const provisionPresetObjects = async (
       const repoRoot = await E(host).provideHostPath(mount);
       await initGitRepo(repoRoot);
       await E(host).provideGit(mount, gitTmp);
-      await E(host).move([gitTmp], [agentName, obj.petName]);
+      await E(host).move([gitTmp], [...agentPath, obj.petName]);
       await E(host).remove(scratchTmp);
     } else if (obj.kind === 'host-powers') {
       // Copy the factory's own host agent (@agent — the full host powers, not
@@ -392,7 +399,7 @@ const provisionPresetObjects = async (
       // session full daemon control. The host outlives every session, so this
       // only adds a name in the guest; deleting the session drops that name and
       // reaps nothing else.
-      await E(host).copy(['@agent'], [agentName, obj.petName]);
+      await E(host).copy(['@agent'], [...agentPath, obj.petName]);
     } else if (obj.kind === 'code-mount') {
       // Mount the Endo codebase read-only so the session can read the source it
       // runs inside. Skip silently when no path was configured (the daemon host
@@ -410,7 +417,7 @@ const provisionPresetObjects = async (
         const mountTmp = `_floot-codemount-${id}`;
         if (await E(host).has(mountTmp)) await E(host).remove(mountTmp);
         await E(host).provideMount(codePath, mountTmp, { readOnly: true });
-        await E(host).move([mountTmp], [agentName, obj.petName]);
+        await E(host).move([mountTmp], [...agentPath, obj.petName]);
       }
     } else {
       console.warn(
@@ -473,6 +480,7 @@ const provisionPresetObjects = async (
  *   getHistory: () => Promise<Array<Record<string, any>>>,
  *   getUsage: () => Promise<{ inputTokens: number, outputTokens: number, turns: number }>,
  *   startInbox: () => void,
+ *   stop: () => Promise<void>,
  * }>}
  */
 export const makeStreamingAgent = async (
@@ -846,20 +854,46 @@ export const makeStreamingAgent = async (
     writer.end();
   };
 
+  let stopped = false;
+  /** @type {Set<{ controller: AbortController, writer: object, signal: AbortSignal | undefined, onAbort: () => void }>} */
+  const activeTurns = new Set();
+
   const converse = (input, writer, meta, signal) => {
+    if (stopped) {
+      writer.abort('Session ended');
+      return Promise.resolve();
+    }
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal?.aborted) {
+      onAbort();
+    } else {
+      signal?.addEventListener('abort', onAbort, { once: true });
+    }
+    const activeTurn = { controller, writer, signal, onAbort };
+    activeTurns.add(activeTurn);
     const result = turnChain.then(() =>
-      runTurn(input, writer, meta, signal).catch(err => {
-        // A consumer that stopped pulling (reply reader closed) aborts `signal`,
-        // tearing down the in-flight provider stream. That's a clean stop, not a
-        // failure, and the writer is already settled, so swallow it.
-        if (signal?.aborted) return;
-        // runTurn has no internal catch, so on failure the writer is still
-        // unsettled — abort it here or every consumer (UI stream and the mail
-        // inbox's turnDone) would hang forever. Rethrow so callers still see it.
-        writer.abort(err instanceof Error ? err.message : String(err));
-        throw err;
-      }),
+      controller.signal.aborted
+        ? undefined
+        : runTurn(input, writer, meta, controller.signal).catch(err => {
+            // A consumer that stopped pulling (reply reader closed) aborts
+            // `signal`, tearing down the in-flight provider stream.
+            // That's a clean stop, and the writer is already settled, so
+            // swallow it.
+            if (controller.signal.aborted) return;
+            // runTurn has no internal catch, so on failure the writer is still
+            // unsettled — abort it here or every consumer (UI stream and the mail
+            // inbox's turnDone) would hang forever.
+            // Rethrow so callers still see it.
+            writer.abort(err instanceof Error ? err.message : String(err));
+            throw err;
+          }),
     );
+    const finish = () => {
+      activeTurns.delete(activeTurn);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    result.then(finish, finish);
     // Keep the chain alive even if a turn rejects.
     turnChain = result.catch(() => {});
     return result;
@@ -872,12 +906,18 @@ export const makeStreamingAgent = async (
   // message via reply(). Streaming-over-mail is a later phase; for now the
   // reply is the assembled final text.
   let inboxStarted = false;
+  /** @type {ReturnType<typeof iterateReader> | undefined} */
+  let inboxIterator;
+  /** @type {Promise<void> | undefined} */
+  let inboxLoop;
   const startInbox = () => {
-    if (inboxStarted) return;
+    if (stopped || inboxStarted) return;
     inboxStarted = true;
-    (async () => {
+    inboxLoop = (async () => {
       const selfLocator = await E(powers).locate('@self');
+      if (stopped) return;
       const messages = iterateReader(E(powers).followMessages());
+      inboxIterator = messages;
       // followMessages can deliver the same message twice: its initial drain
       // iterates a *live* Map that our own reply() mutates (so the iterator
       // re-yields the freshly-added reply), and that reply is also republished
@@ -942,13 +982,40 @@ export const makeStreamingAgent = async (
           await E(powers).dismiss(number);
         }
       }
-    })().catch(error => {
-      inboxStarted = false;
-      console.error(
-        '[floot] inbox loop error:',
-        error instanceof Error ? error.message : String(error),
-      );
-    });
+    })()
+      .catch(error => {
+        inboxStarted = false;
+        if (!stopped) {
+          console.error(
+            '[floot] inbox loop error:',
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      })
+      .finally(() => {
+        inboxIterator = undefined;
+      });
+  };
+
+  /** @type {Promise<void> | undefined} */
+  let stopP;
+  const stop = () => {
+    if (stopP === undefined) {
+      stopped = true;
+      stopP = (async () => {
+        await null;
+        for (const { controller, writer } of activeTurns) {
+          writer.abort('Session ended');
+          controller.abort();
+        }
+        if (inboxIterator !== undefined) {
+          await inboxIterator.return();
+        }
+        await inboxLoop;
+        await turnChain;
+      })();
+    }
+    return stopP;
   };
 
   // Replay the conversation for UI repaint: user prompts, the assistant's spoken
@@ -996,7 +1063,7 @@ export const makeStreamingAgent = async (
 
   const getUsage = async () => harden({ ...(await loadUsage()) });
 
-  return harden({ converse, getHistory, getUsage, startInbox });
+  return harden({ converse, getHistory, getUsage, startInbox, stop });
 };
 harden(makeStreamingAgent);
 
@@ -1007,9 +1074,46 @@ harden(makeStreamingAgent);
 // Petname (in the factory guest's own petstore) where the session registry —
 // an array of { id, title, createdAt } — is persisted.
 const REGISTRY_NAME = 'floot-sessions';
+const SESSION_REAP_INTERVAL_MS = 60_000;
 
-const newSessionId = () =>
-  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+// These ambient bindings are deliberately confined to the factory edge.
+// Lifecycle code receives the services as parameters, which lets callers in
+// SES environments supply their own clock and timer implementations.
+const ambientClock = harden({ now: () => Date.now() });
+const ambientTimer = harden({
+  /**
+   * @param {() => void} callback
+   * @param {number} delay
+   */
+  setInterval(callback, delay) {
+    return setInterval(callback, delay);
+  },
+  /** @param {unknown} handle */
+  clearInterval(handle) {
+    clearInterval(handle);
+  },
+});
+
+/** @param {Record<string, string> | undefined} env */
+const parseSessionTtl = env => {
+  const { getEnvironmentOption } = makeEnvironmentCaptor(
+    { process: { env: env || {} } },
+    true,
+  );
+  const value = getEnvironmentOption('FLOOT_SESSION_TTL_MS', '');
+  if (value === '') return 0;
+  const ttl = Number(value);
+  if (!Number.isSafeInteger(ttl) || ttl < 0) {
+    throw new TypeError(
+      `FLOOT_SESSION_TTL_MS must be a non-negative safe integer; got ${JSON.stringify(value)}`,
+    );
+  }
+  return ttl;
+};
+
+/** @param {{ now: () => number }} clock */
+const newSessionId = clock =>
+  `${clock.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 /**
  * The Floot factory — a single long-lived, pinned caplet that owns every chat
@@ -1033,12 +1137,23 @@ const newSessionId = () =>
  * host, or it deadlocks with the provision chain creating this very formula.
  * So the provider, registry, and per-session guests are all resolved lazily.
  *
- * @param {import('@endo/eventual-send').FarRef<object>} hostPowers
+ * @param {FarRef<object>} hostPowers
  * @param {Promise<object> | object | undefined} _context
- * @param {{ env?: Record<string, string> }} [options]
+ * @param {{
+ *   env?: Record<string, string>,
+ *   clock?: { now: () => number },
+ *   timer?: {
+ *     setInterval: (callback: () => void, delay: number) => unknown,
+ *     clearInterval: (handle: unknown) => void,
+ *   },
+ * }} [options]
  * @returns {object}
  */
-export const make = (hostPowers, _context, { env } = {}) => {
+export const make = (
+  hostPowers,
+  _context,
+  { env, clock = ambientClock, timer = ambientTimer } = {},
+) => {
   /** @type {any} */
   const powers = hostPowers;
   const systemPrompt = env?.FLOOT_SYSTEM_PROMPT || undefined;
@@ -1046,6 +1161,11 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // sessions (see the `code-mount` preset object). Resolved by the setup script
   // and passed through env; empty when the daemon host has no source on disk.
   const codePath = env?.FLOOT_CODE_PATH || undefined;
+  // Zero (the default) retains sessions until explicit deletion.
+  // A positive value gives every new session an absolute lifetime; the
+  // factory's durable sweep removes expired sessions even if no client returns
+  // to delete them.
+  const sessionTtlMs = parseSessionTtl(env);
 
   // The factory runs with its own host powers, so it provisions session guests
   // directly — no introduced `host-agent` reference (that rehydrates as a
@@ -1162,7 +1282,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, model?: string }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, expiresAt?: number, presetId?: string, systemPrompt?: string, model?: string }> | undefined} */
   let registry;
   const loadRegistry = async () => {
     if (registry) return registry;
@@ -1195,21 +1315,58 @@ export const make = (hostPowers, _context, { env } = {}) => {
   // session guest and revives an existing one after a restart.
   /** @type {Map<string, Promise<any>>} */
   const agents = new Map();
+  /** @type {Map<string, object>} */
+  const facets = new Map();
+
+  /** @param {string[]} ids */
+  const removeRegistryEntries = async ids => {
+    await loadRegistry();
+    const idSet = new Set(ids);
+    const next = (registry || []).filter(entry => !idSet.has(entry.id));
+    if (next.length === (registry || []).length) return;
+    registry = next;
+    await saveRegistry();
+  };
+
+  const sessionLifecycle = makeSessionLifecycle({
+    host: getHost(),
+    getRegistry: loadRegistry,
+    removeRegistryEntries,
+    clock,
+    onCleanup: async id => {
+      const agentP = agents.get(id);
+      agents.delete(id);
+      facets.delete(id);
+      await null;
+      if (agentP !== undefined) {
+        try {
+          const agent = await agentP;
+          await agent.stop();
+        } catch (error) {
+          console.warn(
+            `[floot-factory] could not stop session ${id}:`,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    },
+  });
+
   const getAgent = id => {
     let agentP = agents.get(id);
     if (!agentP) {
       agentP = (async () => {
+        const entries = await loadRegistry();
+        const entry = entries.find(session => session.id === id);
+        if (entry === undefined) {
+          throw new Error(`Unknown session "${id}".`);
+        }
         const host = getHost();
-        const handleName = `session-${id}`;
-        const agentName = `session-agent-${id}`;
-        // provideGuest is idempotent (create-or-revive). The petname we pass
-        // (and provideGuest's return value) bind to the guest's *handle* — a
-        // mail-only facet that, after a restart, has none of the petstore/mail
-        // control methods. So we pass an explicit agentName and look the
-        // controlling *agent* up by that name to get the full guest facet for
-        // the session's powers (the same agent fae runs its driver against).
-        await E(host).provideGuest(handleName, { agentName });
-        const sessionGuest = await E(host).lookup(agentName);
+        // The lifecycle manager creates (or revives) both guest facets inside
+        // one session-owned directory and returns the controlling agent facet.
+        // Dropping that directory is therefore the only cleanup operation.
+        const { guest: sessionGuest, agentName } =
+          await sessionLifecycle.provideSessionGuest(id);
         // Introduce the user to the session under the petname "user" so the
         // agent can mail them directly (send/reply target "user"). The factory
         // host's own "@host" is the user — the @agent that provisioned the
@@ -1219,7 +1376,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // (the guest's petstore survives restarts).
         try {
           if (!(await E(sessionGuest).has('user'))) {
-            await E(host).copy(['@host'], [agentName, 'user']);
+            await E(host).copy(['@host'], [...agentName, 'user']);
           }
         } catch (err) {
           console.warn(
@@ -1232,8 +1389,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // (so catalog edits don't retroactively change live sessions); the
         // object set is read from the catalog by id (objects are provisioned
         // once and idempotency makes re-reads harmless).
-        await loadRegistry();
-        const entry = (registry || []).find(s => s.id === id);
         const preset = getPreset(entry?.presetId || DEFAULT_PRESET_ID);
         const sessionPrompt =
           entry?.systemPrompt || systemPrompt || preset.systemPrompt;
@@ -1280,8 +1435,6 @@ export const make = (hostPowers, _context, { env } = {}) => {
 
   // Opaque session facet handed to the UI. It exposes a streaming conversation
   // and a history replay, but never reveals the backing guest.
-  /** @type {Map<string, object>} */
-  const facets = new Map();
   const getFacet = id => {
     let facet = facets.get(id);
     if (!facet) {
@@ -1289,12 +1442,15 @@ export const make = (hostPowers, _context, { env } = {}) => {
         async getInfo() {
           await loadRegistry();
           const entry = (registry || []).find(s => s.id === id);
+          if (entry === undefined) {
+            throw new Error(`Unknown session "${id}".`);
+          }
           return harden({
             id,
-            title: entry?.title || '',
-            createdAt: entry?.createdAt || 0,
-            presetId: entry?.presetId || DEFAULT_PRESET_ID,
-            model: entry?.model || '',
+            title: entry.title || '',
+            createdAt: entry.createdAt || 0,
+            presetId: entry.presetId || DEFAULT_PRESET_ID,
+            model: entry.model || '',
           });
         },
         /**
@@ -1354,12 +1510,56 @@ export const make = (hostPowers, _context, { env } = {}) => {
       });
     }
   };
-  startAllInboxes().catch(error => {
-    console.error(
-      '[floot-factory] inbox revival error:',
-      error instanceof Error ? error.message : String(error),
-    );
-  });
+  const reapSessions = async () => {
+    const reaped = await sessionLifecycle.sweep();
+    if (reaped.length > 0) {
+      console.error(
+        `[floot-factory] Reaped ${reaped.length} ended or expired session${
+          reaped.length === 1 ? '' : 's'
+        }`,
+      );
+    }
+  };
+
+  const startSessionLifecycle = () => {
+    // Reap before revival so expired entries and crash-orphaned guest
+    // directories cannot start another inbox loop. A failed sweep is logged
+    // independently so it cannot suppress revival for the whole incarnation.
+    (async () => {
+      try {
+        await reapSessions();
+      } catch (error) {
+        console.error(
+          '[floot-factory] startup session sweep error:',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+      try {
+        await startAllInboxes();
+      } catch (error) {
+        console.error(
+          '[floot-factory] startup inbox revival error:',
+          error instanceof Error ? error.message : String(error),
+        );
+      }
+    })();
+    const reaperTimer = timer.setInterval(() => {
+      reapSessions().catch(error => {
+        console.error(
+          '[floot-factory] session reaper error:',
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    }, SESSION_REAP_INTERVAL_MS);
+    reaperTimer?.unref?.();
+    if (_context) {
+      E(_context)
+        .whenCancelled()
+        .catch(() => timer.clearInterval(reaperTimer));
+    }
+  };
+
+  startSessionLifecycle();
 
   return makeExo('FlootFactory', FlootFactoryInterface, {
     /**
@@ -1371,7 +1571,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
     async createSession(title, presetId, model) {
       await loadRegistry();
       const preset = getPreset(presetId || DEFAULT_PRESET_ID);
-      const id = newSessionId();
+      const id = newSessionId(clock);
+      const createdAt = clock.now();
       // Snapshot the preset's id and prompt so later catalog edits don't change
       // a live session. The object set is re-read from the catalog by id in
       // getAgent (objects are provisioned once, idempotently). A model is pinned
@@ -1380,7 +1581,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
       const entry = harden({
         id,
         title: title || 'New chat',
-        createdAt: Date.now(),
+        createdAt,
+        ...(sessionTtlMs > 0 ? { expiresAt: createdAt + sessionTtlMs } : {}),
         presetId: preset.id,
         systemPrompt: preset.systemPrompt,
         ...(isKnownModel(model) ? { model } : {}),
@@ -1485,27 +1687,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
      * @param {string} id
      */
     async deleteSession(id) {
-      await loadRegistry();
-      registry = (registry || []).filter(s => s.id !== id);
-      await saveRegistry();
-      agents.delete(id);
-      facets.delete(id);
-      // Best-effort removal of the backing session guest's persistence (both
-      // the handle and the controlling agent petnames).
-      try {
-        const host = getHost();
-        for (const name of [`session-${id}`, `session-agent-${id}`]) {
-          if (await E(host).has(name)) {
-            await E(host).remove(name);
-          }
-        }
-      } catch (error) {
-        console.warn(
-          `[floot-factory] could not remove guest session-${id}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
+      await sessionLifecycle.endSession(id);
       console.error(`[floot-factory] Deleted session "${id}"`);
     },
 
