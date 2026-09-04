@@ -163,8 +163,19 @@ and `assertValidSegment` throws; `lookup` even re-throws with a friendlier hint
 
 What is *not* yet an error is the **non-slash single string**: `readText("foo")`,
 `lookup("foo")`, and `remove("foo")` all silently coerce to `["foo"]`. That residue
-keeps two spellings of a one-segment path in the surface and keeps the bare
-`M.string()` arm in every guard, which is what this design removes.
+keeps two spellings of a one-segment path in the surface. This design removes the
+**coercion** — the silent treatment of a bare string as a one-segment path — at
+every path-method boundary. It deliberately does **not** remove the runtime guard's
+`M.string()` arm: as [The Proposed Rule](#the-proposed-rule-paths-are-always-arrays-of-segments)
+explains, that arm is retained as a *routing affordance* so the method body can throw
+a legible directive rather than an unreadable union pattern dump. What *is* narrowed
+to array-only is the **declared** path type — the hand-authored `types.d.ts` union and
+the generated code-mode declarations — so the surface no longer *advertises* "a string
+is a path here" even though the runtime guard still structurally admits a string in
+order to reject it with a good message. The guard shape and the declared type
+therefore diverge on purpose; where that divergence is compensated for each consumer
+is spelled out under
+[The Declared Type Versus the Guard Shape](#the-declared-type-versus-the-guard-shape).
 
 ## The Search Family (`glob` / `grep` / `glorp`)
 
@@ -243,13 +254,18 @@ Concretely:
    single normative rejection site: it throws the directive message for any string.
    Array and `EndoMountEntry` inputs are validated by the guard exactly as today.
    This is one rule at one enforcement point, tested at that point.
-2. **The coercion sites delete their string branch.** `segmentsFromPathArg`
+2. **The mount-side coercion sites delete their string branch.** `segmentsFromPathArg`
    (`mount.js:638`) stops wrapping a string as `[pathArg]` and throws the directive;
-   `namePathFrom` (`pet-name.js:149`) drops its ternary; the readable-tree wrapper
-   (`mount.js:1397`) and the platform-fs / exo-unzip / space-chat sites enumerated
-   above drop theirs. Because the mount methods now reject strings in the body, the
-   `segmentsFromPathArg` throw *is* that body throw for the mount surface; the other
-   sites become defense in depth behind their own boundaries.
+   the readable-tree wrapper (`mount.js:1397`) and the platform-fs / exo-unzip /
+   space-chat sites enumerated above drop theirs. Because the mount methods now reject
+   strings in the body, the `segmentsFromPathArg` throw *is* that body throw for the
+   mount surface; the other sites become defense in depth behind their own boundaries.
+   The registry-side coercion — `namePathFrom` (`pet-name.js:149`) dropping its
+   ternary — is **not** committed here: whether the petname registry migrates in
+   lockstep with the mount is
+   [open question 4 (Registry Symmetry)](#open-questions), and this step touches
+   `namePathFrom` **only if OQ4 resolves the registry into scope**. Scoping §2 to the
+   mount keeps that decision genuinely open rather than pre-empting it.
 3. **Variadic-segment methods are unaffected, and here is why.** `has("dir", "file")`,
    `list("subdir")`, and the `...petNamePath` registry forms already take one
    *segment* per argument, not a joined path. A single variadic argument like
@@ -307,6 +323,43 @@ not the friendly `Must be a copyArray` an earlier draft quoted (that message is 
 a *single* `M.arrayOf(M.string())` arm gives; the union does not give it). A pattern
 dump is worse for a human and worse for a code-mode model. The body throw is both
 readable and testable, which is why it is the normative site.
+
+### The Declared Type Versus the Guard Shape
+
+Retaining the guard's `M.string()` arm for routing (above) creates a deliberate
+divergence: the guard's **declared shape** structurally admits a string, but the
+**value set the method actually honors** is array-or-`EndoMountEntry` only — a string
+is always thrown back. A design that widens a declared shape past what it accepts must
+say where that gap is compensated for **every** consumer of the guard, or the "string
+is never a path" invariant leaks back in through the type surfaces the very audience
+this design serves reads. The three consumers and their treatment:
+
+- **Hand-authored TypeScript (`types.d.ts:1342-1428`).** Narrowed to
+  `readonly string[] | EndoMountEntry` — the `string` arm is **dropped**. This is the
+  edit that closes the second residual defect named in
+  [What Is the Problem Being Solved?](#what-is-the-problem-being-solved) item 2: a
+  typed caller now gets a compile-time signal that a bare string is not a path,
+  rather than a type that silently permits a value the runtime always rejects. It is
+  narrowed independently of the guard because it is hand-maintained, not generated.
+- **Generated code-mode declarations (`fs-declarations.js`).** These are produced by a
+  generator, so narrowing them cannot rely on narrowing the guard (the guard keeps its
+  string arm). The generator input or a post-generation step must emit the array-only
+  shape directly, so the model-facing declarations read `readonly string[] |
+  MountEndoMountEntry` with no `string` arm; see
+  [Help-Text Requirements](#help-text-requirements) item 5, which is worded to match.
+- **CapTP / `M.interface()` introspection.** This reflects the live guard, so it will
+  continue to show the `M.string()` arm — a consumer introspecting the interface sees
+  a shape that accepts a string the method then rejects. This design accepts that
+  residual as the cost of the readable-error mechanism. The cleaner alternative —
+  a guard-level combinator that keeps the declared shape array-only *and* intercepts
+  the `M.or` rejection to substitute the directive message, collapsing the divergence
+  entirely — is recorded as [open question 7](#open-questions); it is preferable in
+  principle but out of scope for this design's recommended (B).
+
+The net rule: the runtime guard is wide-and-rejecting for the sake of a good error;
+every *declared* surface a human or model reads is narrow (array-only); the one place
+the two cannot be reconciled without a new combinator (CapTP introspection) is named
+and deferred, not left implicit.
 
 ### The Escape-Hatch Evaluation
 
@@ -424,9 +477,15 @@ directly and which no amount of `help.md` editing reaches on its own:
    shape to the model: `packages/agent-tools/generated/code-mode-globals/fs-declarations.js`
    types paths as `string | readonly string[]` at lines 40, 42, 50, 259, 283, and
    `string | string[] | MountEndoMountEntry` at 325-326, and the adjacent extended
-   `Filesystem` / `Directory` surface coerces the same way. These declarations are
-   regenerated from the guards, so narrowing the guards (and the generator inputs)
-   updates them; the design must list them so the regeneration is not forgotten.
+   `Filesystem` / `Directory` surface coerces the same way. Because the runtime guard
+   **keeps** its `M.string()` arm (see
+   [The Declared Type Versus the Guard Shape](#the-declared-type-versus-the-guard-shape)),
+   these declarations **cannot** be narrowed simply by narrowing the guard; the
+   generator input or a post-generation step must emit the array-only shape
+   (`readonly string[] | MountEndoMountEntry`, dropping the `string` arm) directly, so
+   the model-facing declarations advertise "path is an array" even though the guard
+   still routes a string to a body rejection. The design must list them so this
+   narrowing is not forgotten.
 
 ## Migration and Backward Compatibility
 
@@ -463,7 +522,8 @@ unaffected.
 
 **Test impact.** The tests that build paths via `mount.entry("a/b")` or a bare
 string path (an earlier draft estimated about 60; the true count depends on how much
-of the registry OQ4 pulls in, and the implementation PR should report the grep)
+of the registry [open question 4 (Registry Symmetry)](#open-questions) pulls in, and
+the implementation PR should report the grep)
 re-express as arrays or `entry(["a", "b"])`. Add tests that a string argument to each
 path method throws the directive message (these assert the *break* is enforced), and
 tests that variadic, array, and `entry` forms still succeed (these assert valid forms
@@ -476,7 +536,13 @@ reworded help.
 1. **Array-only path arguments, string rejection in the method body.** The exo guard
    keeps an `M.string()` arm as a routing affordance so the body can throw one
    human-legible directive message; dropping the arm produces an unusable union
-   pattern dump. The body is the single normative, tested rejection site.
+   pattern dump. The body is the single normative, tested rejection site. The
+   *declared* type surfaces diverge from the guard on purpose: the hand-authored
+   `types.d.ts` union and the generated code-mode declarations are both narrowed to
+   array-only (`readonly string[] | EndoMountEntry`), so no human- or model-facing type
+   advertises a string as a path even though the runtime guard still admits one to
+   reject it well (see
+   [The Declared Type Versus the Guard Shape](#the-declared-type-versus-the-guard-shape)).
 2. **`glob` / `grep` / `glorp` keep their string *pattern* arguments; their path
    *strings* get a named seam.** A glob pattern is a DSL, not a path. But glob's
    results and grep's `paths` are slash-joined path strings, so the design names
@@ -540,10 +606,26 @@ reworded help.
    call works uniformly across both families; afterward the same one-segment call
    spells oppositely per method. Do we accept that, or make all path methods variadic
    (`readText("src", "foo.js")`), which yields the same array-only invariant with a
-   cheaper common case and a uniform spelling?
+   cheaper common case and a uniform spelling? **Recommended:** accept the split for
+   this design and keep the array-taking / variadic-`.rest()` families as they are. The
+   uniform-variadic alternative is attractive but is a *strictly larger* interface
+   change (every array-taking method's guard and TypeScript face rewritten to
+   `.rest(PathSegmentsShape)`, plus every array call site migrated to spread form) that
+   would balloon the blast radius past the one the migration section scopes; the
+   spelling incoherence is a legibility wart, not a correctness one, and is best paid
+   down separately if the uniform-variadic direction is later adopted wholesale.
 6. **Deprecation window.** Reject strings immediately (clean, breaking), or first ship
    a phase that still coerces but logs a warning, giving out-of-repo consumers a
    migration window before the hard error?
+7. **Guard-level combinator versus wide-guard-plus-narrow-declaration.** This design
+   keeps the guard's `M.string()` arm and narrows the declared surfaces separately (see
+   [The Declared Type Versus the Guard Shape](#the-declared-type-versus-the-guard-shape)),
+   accepting that CapTP / `M.interface()` introspection still shows a string arm the
+   method rejects. The cleaner alternative is a custom guard combinator that declares an
+   array-only shape *and* intercepts the underlying `M.or` rejection to substitute the
+   directive message — collapsing the guard-vs-declaration divergence at every consumer
+   at once, at the cost of a new pattern-combinator primitive. Is that primitive worth
+   building now, or is the wide-guard/narrow-declaration split an acceptable interim?
 
 ## Prompt
 
