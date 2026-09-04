@@ -552,15 +552,26 @@ struct MemReadStream<'a> {
     pos: usize,
 }
 
+// Snapshot-stream `extern "C"` callbacks (`mem_*`/`file_*`) are invoked by
+// XS's `fxWriteSnapshot`/`fxReadSnapshot` from C, exactly like the `host_*`
+// worker callbacks, so an unguarded panic here aborts the whole daemon
+// process too — not just on the guest-command path but on snapshot save and
+// restore, which can panic on a corrupted or truncated snapshot with no
+// attacker involved. Each routes its body through `guard_ffi_ret`, returning
+// the stream error sentinel (`1`) on a caught panic so the snapshot op fails
+// closed rather than unwinding past the C frame (design
+// `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort hazard").
 unsafe extern "C" fn mem_write(
     stream: *mut c_void,
     ptr: *mut c_void,
     size: usize,
 ) -> c_int {
-    let s = &mut *(stream as *mut MemWriteStream);
-    let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
-    s.data.extend_from_slice(bytes);
-    0
+    worker_io::guard_ffi_ret(1, || unsafe {
+        let s = &mut *(stream as *mut MemWriteStream);
+        let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
+        s.data.extend_from_slice(bytes);
+        0
+    })
 }
 
 unsafe extern "C" fn mem_read(
@@ -568,14 +579,21 @@ unsafe extern "C" fn mem_read(
     ptr: *mut c_void,
     size: usize,
 ) -> c_int {
-    let s = &mut *(stream as *mut MemReadStream);
-    if s.pos + size > s.data.len() {
-        return 1; // error: not enough data
-    }
-    let dst = std::slice::from_raw_parts_mut(ptr as *mut u8, size);
-    dst.copy_from_slice(&s.data[s.pos..s.pos + size]);
-    s.pos += size;
-    0
+    worker_io::guard_ffi_ret(1, || unsafe {
+        let s = &mut *(stream as *mut MemReadStream);
+        // `checked_add`: a corrupted `size` from a bad snapshot must not wrap
+        // (release-mode `usize` overflow) into a small end that passes the
+        // bounds check and then indexes out of range.
+        match s.pos.checked_add(size) {
+            Some(end) if end <= s.data.len() => {
+                let dst = std::slice::from_raw_parts_mut(ptr as *mut u8, size);
+                dst.copy_from_slice(&s.data[s.pos..end]);
+                s.pos = end;
+                0
+            }
+            _ => 1, // error: not enough data (or an overflowing length)
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -604,19 +622,21 @@ unsafe extern "C" fn file_write(
     ptr: *mut c_void,
     size: usize,
 ) -> c_int {
-    let s = &mut *(stream as *mut FileWriteStream);
-    if s.err.is_some() {
-        return 1;
-    }
-    let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
-    s.hasher.update(bytes);
-    match s.file.write_all(bytes) {
-        Ok(()) => 0,
-        Err(e) => {
-            s.err = Some(e);
-            1
+    worker_io::guard_ffi_ret(1, || unsafe {
+        let s = &mut *(stream as *mut FileWriteStream);
+        if s.err.is_some() {
+            return 1;
         }
-    }
+        let bytes = std::slice::from_raw_parts(ptr as *const u8, size);
+        s.hasher.update(bytes);
+        match s.file.write_all(bytes) {
+            Ok(()) => 0,
+            Err(e) => {
+                s.err = Some(e);
+                1
+            }
+        }
+    })
 }
 
 unsafe extern "C" fn file_read(
@@ -624,18 +644,20 @@ unsafe extern "C" fn file_read(
     ptr: *mut c_void,
     size: usize,
 ) -> c_int {
-    use std::io::Read;
-    let s = &mut *(stream as *mut FileReadStream);
-    let dst = std::slice::from_raw_parts_mut(ptr as *mut u8, size);
-    let mut total = 0;
-    while total < size {
-        match s.file.read(&mut dst[total..]) {
-            Ok(0) => return 1, // unexpected EOF
-            Ok(n) => total += n,
-            Err(_) => return 1,
+    worker_io::guard_ffi_ret(1, || unsafe {
+        use std::io::Read;
+        let s = &mut *(stream as *mut FileReadStream);
+        let dst = std::slice::from_raw_parts_mut(ptr as *mut u8, size);
+        let mut total = 0;
+        while total < size {
+            match s.file.read(&mut dst[total..]) {
+                Ok(0) => return 1, // unexpected EOF
+                Ok(n) => total += n,
+                Err(_) => return 1,
+            }
         }
-    }
-    0
+        0
+    })
 }
 
 impl Machine {
@@ -958,7 +980,15 @@ pub const MANAGER_CREATION: ffi::XsCreation = ffi::XsCreation {
 };
 
 /// Errors that can escape from the xsnap entry points.
+///
+/// `#[non_exhaustive]`: this is the public, cross-crate error surface (`endo`
+/// matches it in `inproc.rs`/`execute.rs`/`bin/endor.rs`), and — like the
+/// sibling `Halt`/`PanicKind` families this design also hardens — its
+/// worker-death set is documented as likely to grow. Marking it now keeps a
+/// future variant from silently breaking an external exhaustive match, the
+/// same protection `Halt` gained in this change.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum XsnapError {
     MachineInit(String),
     Io(String),
@@ -1233,14 +1263,20 @@ unsafe extern "C" fn metering_callback(
     _the: *mut ffi::XsMachine,
     index: u64,
 ) -> i32 {
-    CRANK_LIMIT.with(|limit| {
-        let lim = limit.get();
-        if lim > 0 && index > lim {
-            METERING_ABORTED.with(|a| a.set(true));
-            0 // abort — XS will call fxAbort(TOO_MUCH_COMPUTATION)
-        } else {
-            1 // continue
-        }
+    // Guarded like every other XS-invoked `extern "C"` callback: fires only
+    // every `DEFAULT_METERING_INTERVAL` computrons, so the guard's cost is
+    // negligible, and a caught panic fails **closed** by returning 0 (abort)
+    // rather than unwinding past the C frame and aborting the whole daemon.
+    worker_io::guard_ffi_ret(0, || {
+        CRANK_LIMIT.with(|limit| {
+            let lim = limit.get();
+            if lim > 0 && index > lim {
+                METERING_ABORTED.with(|a| a.set(true));
+                0 // abort — XS will call fxAbort(TOO_MUCH_COMPUTATION)
+            } else {
+                1 // continue
+            }
+        })
     })
 }
 
@@ -1763,7 +1799,7 @@ pub fn run_xs_program(
 
     // A guarded `extern "C"` callback can panic during *bootstrap eval*
     // above — the bundle's own guest JS calls `hostBase64Decode`,
-    // `hostUrlParse`, `host_trace`, `install_archive`, … before the loop
+    // `hostUrlParse`, `host_trace`, `install_archive`, ... before the loop
     // exists. Drain that poison *now*, before the supervised loop's first
     // act is a **blocking** `recv_raw_envelope`: a bootstrap-time death
     // would otherwise leave the worker registered and hung forever (dead but
@@ -1859,11 +1895,43 @@ pub fn run_xs_program(
                     break;
                 }
 
+                // A guarded host callback may have poisoned this worker while
+                // draining promise jobs above. Stop the pump *before*
+                // dispatching any further envelope this iteration:
+                // `handle_envelope` issues supervisor-side effects (a
+                // `suspend` snapshots the machine, a `debug` replies) that are
+                // NOT `guard_ffi`-wrapped, so a poisoned, mid-mutation worker
+                // could otherwise commit a real effect (e.g. persist a
+                // corrupted snapshot) before its death is observed at the
+                // crank boundary below. Poison must bracket every
+                // side-effecting call inside this multi-round pump, not only
+                // the crank's outer entry/exit (design
+                // `designs/ironhorse-panic.md` § Scope: "The already-live FFI
+                // abort hazard").
+                if worker_io::ffi_panicked() {
+                    ffi_death = worker_io::take_ffi_panic();
+                    eprintln!("{label}: worker died from an FFI-guarded panic (mid-pump)");
+                    break 'outer;
+                }
+
                 // Drain any envelopes that arrived while JS was running.
                 let mut got_envelope = false;
                 loop {
                     match worker_io::with_transport(|t| t.try_recv_raw_envelope()) {
                         Ok(Some(data)) => {
+                            // A prior `handle_envelope` in *this* drain can
+                            // itself run guest JS that panics in a guarded
+                            // callback and poisons the worker; never dispatch
+                            // another effect-bearing envelope on a dead,
+                            // mid-mutation machine.
+                            if worker_io::ffi_panicked() {
+                                ffi_death = worker_io::take_ffi_panic();
+                                eprintln!(
+                                    "{label}: worker died from an FFI-guarded \
+                                     panic (mid-pump, before envelope dispatch)"
+                                );
+                                break 'outer;
+                            }
                             got_envelope = true;
                             if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
                                 eprintln!("{label}: suspended (during pump)");

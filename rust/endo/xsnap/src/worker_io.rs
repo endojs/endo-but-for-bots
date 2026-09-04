@@ -458,23 +458,27 @@ pub fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
     }
 }
 
-/// Run one `extern "C"` callback body under panic isolation.
+/// Run one `extern "C"` callback body that returns a value under panic
+/// isolation, returning `on_panic` to the C caller if it panics.
 ///
-/// If `f` panics, the panic is caught *before* it can unwind past the
-/// enclosing `extern "C"` frame (which would abort the process); the message
-/// and location are recorded as this thread's pending [`FfiPanic`], and the
-/// callback returns normally to XS. Once poisoned, further guarded callbacks
-/// short-circuit (do no effect work) until the run entry drains the marker and
-/// kills the worker.
-pub fn guard_ffi<F: FnOnce()>(f: F) {
+/// The value-returning core of [`guard_ffi`]. If `f` panics, the panic is
+/// caught *before* it can unwind past the enclosing `extern "C"` frame (which
+/// would abort the process); the message and location are recorded as this
+/// thread's pending [`FfiPanic`], and `on_panic` is returned to XS instead of
+/// unwinding. Once poisoned, further guarded callbacks short-circuit (do no
+/// effect work, returning `on_panic`) until the run entry drains the marker
+/// and kills the worker. `on_panic` is the fail-closed sentinel each C caller
+/// reads as "this callback did not succeed" (e.g. the snapshot-stream error
+/// code `1`, or the metering-abort `0`).
+pub fn guard_ffi_ret<R, F: FnOnce() -> R>(on_panic: R, f: F) -> R {
     if ffi_panicked() {
         // Already dying — do not run further host effects for this worker.
-        return;
+        return on_panic;
     }
     install_capture_hook();
     // Save and restore `CAPTURING` (not set-then-clear): a guarded callback
     // can re-enter JS that calls another `host_*` (e.g. `host_import_archive`
-    // → `install_archive`, `host_debug_poll` → `run_debugger`), nesting
+    // -> `install_archive`, `host_debug_poll` -> `run_debugger`), nesting
     // `guard_ffi`. Clearing the flag on the inner guard's exit would disarm
     // capture for the outer body, so a later panic there would lose its
     // location and leak the default hook's abort-style dump.
@@ -484,13 +488,29 @@ pub fn guard_ffi<F: FnOnce()>(f: F) {
     PANIC_LOCATION.with(|slot| *slot.borrow_mut() = None);
     let result = panic::catch_unwind(AssertUnwindSafe(f));
     CAPTURING.with(|c| c.set(was_capturing));
-    if let Err(payload) = result {
-        let message = panic_payload_message(payload.as_ref());
-        let location = PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
-        FFI_PANIC.with(|cell| {
-            *cell.borrow_mut() = Some(FfiPanic { message, location });
-        });
+    match result {
+        Ok(value) => value,
+        Err(payload) => {
+            let message = panic_payload_message(payload.as_ref());
+            let location = PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
+            FFI_PANIC.with(|cell| {
+                *cell.borrow_mut() = Some(FfiPanic { message, location });
+            });
+            on_panic
+        }
     }
+}
+
+/// Run one `extern "C"` callback body (returning `()`) under panic isolation.
+///
+/// If `f` panics, the panic is caught *before* it can unwind past the
+/// enclosing `extern "C"` frame (which would abort the process); the message
+/// and location are recorded as this thread's pending [`FfiPanic`], and the
+/// callback returns normally to XS. Once poisoned, further guarded callbacks
+/// short-circuit (do no effect work) until the run entry drains the marker and
+/// kills the worker. Thin `()`-returning wrapper over [`guard_ffi_ret`].
+pub fn guard_ffi<F: FnOnce()>(f: F) {
+    guard_ffi_ret((), f)
 }
 
 /// Whether this worker thread has a pending FFI-panic death.
@@ -1283,6 +1303,47 @@ mod tests {
         let location = p.location.expect("a location was captured");
         assert!(location.contains("worker_io.rs"), "location was {location:?}");
         assert!(!ffi_panicked(), "take clears the marker");
+    }
+
+    #[test]
+    fn panic_payload_message_falls_back_for_non_string_payloads() {
+        // A panic payload that is neither `&str` nor `String` (e.g. a
+        // dependency's `panic_any(non_string)`) must still yield a message
+        // rather than panic the recovery path itself.
+        let payload: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_payload_message(payload.as_ref()), "unknown panic");
+    }
+
+    #[test]
+    fn guard_ffi_records_a_non_string_panic_payload() {
+        assert!(take_ffi_panic().is_none(), "start clean");
+        guard_ffi(|| std::panic::panic_any(7u8));
+        let p = take_ffi_panic().expect("a non-string panic is still recorded");
+        assert_eq!(p.message, "unknown panic");
+    }
+
+    #[test]
+    fn guard_ffi_ret_returns_sentinel_on_panic_and_value_otherwise() {
+        assert!(take_ffi_panic().is_none(), "start clean");
+        // Happy path: the closure's own value is returned, no poison.
+        assert_eq!(guard_ffi_ret(1, || 0), 0);
+        assert!(!ffi_panicked(), "a clean run leaves no poison");
+        // Panic path: the fail-closed sentinel is returned and the worker is
+        // poisoned (the snapshot-stream callbacks read `1` as "failed").
+        assert_eq!(guard_ffi_ret(1, || panic!("stream boom")), 1);
+        assert!(ffi_panicked(), "a panicking body poisons the worker");
+        // Once poisoned, a further guarded call short-circuits to the sentinel
+        // without running its body.
+        let mut ran = false;
+        assert_eq!(
+            guard_ffi_ret(1, || {
+                ran = true;
+                0
+            }),
+            1,
+        );
+        assert!(!ran, "a poisoned worker must not run further guarded bodies");
+        let _ = take_ffi_panic();
     }
 
     #[test]
