@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-30 |
+| **Updated** | 2026-09-04 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -50,9 +51,29 @@ const ledger = issuerZone.makeOnce('ledger', () => balances);
 
 The public surface stays compatible with the existing `@agoric/zone` shape:
 `exo`, `exoClass`, `exoClassKit`, `subZone`, `makeOnce`, `watchPromise`,
-`mapStore`, `setStore`, `weakMapStore`, `weakSetStore`, and `isStorable`.
-Every Zone is a capability, so passing a sub-zone gives a consumer a separate
-label namespace rather than access to its parent store.
+`mapStore`, `setStore`, `weakMapStore`, `weakSetStore`, `isStorable`, and
+`detached` — with one deliberate narrowing: `detached()` stays on the exported
+`Zone` type for compatibility (a `zone.detached().mapStore(...)` caller keeps
+working), but its result carries the restricted contract described under
+[Naming and `makeOnce`](#naming-and-makeonce) below. It is the only member whose
+contract differs from `@agoric/zone`'s; every other member matches.
+
+Every Zone and every value a Zone mints is hardened before it is returned, as
+this repo's own `@endo/exo` already enforces
+([`packages/exo/src/exo-makers.js`](../packages/exo/src/exo-makers.js) hardens
+`self` and `methods`): the Zone from `makeHeapZone`/`makeAdapterZone`, the exos
+`exoClass`/`exoClassKit` produce, their `methods` and `init` results, the stores,
+and the `makeAdapterZone({...})` options bag are all hardened. Every Zone is a
+capability, and a capability that is not hardened is a mutation channel for any
+consumer that receives a sub-zone, so hardening is part of the contract, not an
+implementation nicety.
+
+A Zone and its sub-zones are `Passable` remotables: `isStorable(subZone)` holds,
+and a sub-zone survives the marshal boundary Phase 3's daemon host puts between
+every consumer-facing value. Passing a sub-zone therefore gives a consumer a
+separate label namespace rather than access to its parent store — the isolation
+claim below relies on this, so it is stated here rather than left to the
+implementation.
 
 `makeHeapZone(baseLabel?)` is the first concrete implementation. It uses
 `@endo/exo` and Endo-owned in-memory collection implementations with the
@@ -68,12 +89,18 @@ positional arguments: `makeAdapterZone({ exoMakers, storeProviders,
 isStorable, makeSubZone, baseLabel? })`. A host supplies its exo makers,
 named-store providers, a storable predicate, and a sub-zone maker; the
 constructor supplies label scoping, one-use enforcement, and the common surface.
-The `isStorable` option is the host's override of the same admission-check
-responsibility the core exports as its default `isStorable`: a host that
-persists values passes its own stricter predicate (a durable adapter must reject
-non-durable values), and a host with no extra rule passes the core default. They
-are one concept — the provider's storable-value admission check — with a
-default-and-override relationship, not two independent surfaces. Thus the Endo
+The `isStorable` option refines the same admission-check responsibility the core
+exports as its default `isStorable`. It **composes as a conjunction, never a
+replacement**: the effective predicate is `coreIsStorable(v) && hostIsStorable(v)`,
+so a host predicate can only *narrow* what is admitted, never widen it. A durable
+adapter passes a predicate that additionally rejects non-durable values; a host
+with no extra rule passes nothing and gets the core default alone. Framing it as a
+plain override would let a lax host pass `() => true` and silently drop the core
+floor, so the contract fixes the composition rather than trusting adapter
+discipline. The checked value is the already-hardened value (hardening happens
+before admission), and the backing store re-reads nothing between the check and
+the write, so an accessor-bearing or proxied value cannot present one shape to the
+check and another to persistence. Thus the Endo
 daemon can provide a durable Zone over its formula and SQLite MapStores without
 teaching `@endo/zone` about SQLite, and Agoric can continue to provide its
 baggage-backed adapters without a reverse dependency.
@@ -96,42 +123,98 @@ flowchart LR
 ### Naming and `makeOnce`
 
 Named allocation is a correctness boundary, not a convenience. `makeOnce(key,
-maker)` uses a backing map when the host supplies one: an existing value is
-returned after restart or upgrade, otherwise the maker's storable result is
-initialized under the key. A detached, per-incarnation set records every key
-used by `makeOnce` and every wrapped provider. Reusing a key in one
-incarnation fails before the provider runs. This detects accidental duplicate
-kind, singleton, store, and sub-zone definitions rather than silently creating
-incompatible state.
+maker)` is synchronous and uses a backing map when the host supplies one. The
+core tracks each key through three states — **free**, **in-progress**, and
+**used** — in a heap `Set` (a plain in-memory set, not a Zone store; its lifetime
+is exactly the incarnation) keyed by the key's **fully scoped label**, so two
+sibling sub-zones that each declare `mapStore('balances')` occupy distinct
+entries and do not collide. The state machine on a call:
 
-The key is marked used only after the maker returns a storable value and the
-backing store has accepted it. If the maker itself throws on first use — or the
-storable check rejects its result — the key is released, not poisoned: the
-exception propagates to the caller and a later call with the same key may retry
-the maker within the same incarnation. Marking the key on entry would strand a
-name after any transient maker failure; marking it only on success keeps the
-one-use rule aimed at *successful duplicate* definitions, its stated purpose.
-"Maker throws on first use" is therefore an explicit Phase-1 test scenario
-alongside labels, `makeOnce` revival, store failures, weak-store restrictions,
-sub-zone isolation, and watchers.
+1. **Revival.** If the backing map already holds a value under the key (restart
+   or upgrade), return it *and mark the key **used*** in the same step. The maker
+   does not run on this path, so marking on the maker's success alone would leave
+   a revived key unmarked and let a second `makeOnce(sameKey, …)` in the revived
+   incarnation succeed silently — the exact duplicate this boundary exists to
+   catch. Duplicate detection must hold on every path that yields a value, so the
+   revival path marks the key too.
+2. **Collision.** If the key is already **in-progress** or **used**, fail before
+   the maker runs. The **in-progress** state is what closes the reentrancy
+   window: a maker that re-enters `makeOnce` on the same key — directly, or
+   through a sub-zone or exo it constructs — finds the key **in-progress** and
+   fails, rather than recursing or double-defining a kind.
+3. **First creation.** Otherwise mark the key **in-progress**, run the maker,
+   check its result against the composed `isStorable`, and hand it to the backing
+   store. On acceptance, mark the key **used**. If the maker throws or the result
+   is non-storable, return the key to **free** and propagate the exception.
+
+Retry after a released key is guaranteed **only for makers that allocate nothing
+in the Zone and leave no persisted effect**. A maker that itself calls
+`exoClass`/`mapStore`/`subZone` (the shape of the example at
+[the top of this section](#a-portable-allocation-contract)) has already marked
+*those inner keys* **used** before it threw, and under a durable adapter it may
+have already reserved a durable kind handle in the backing store that the caught
+throw does not unwind; retrying then collides on the inner key or orphans the
+kind. So the contract is: a durable adapter either makes the maker's provider
+writes atomic with the maker (rolled back on throw), or the retry guarantee is
+scoped to allocation-free makers — and the adapter states which. "Maker throws on
+first use" and "maker allocates, then throws, then retries" are both Phase-1
+scenarios for the heap Zone, where no maker has a persisted effect; the durable
+partial-effect case moves to the Phase-3 adapter suite.
+
+Revival is **eager, not lazy**, for durable adapters. SwingSet requires every
+durable kind with prior-incarnation instances to be re-defined before the first
+delivery of the new incarnation completes, so a durable adapter's `makeOnce`
+calls run at incarnation start, not on first access; a lazily-revived durable
+`exoClass` would fail upgrade on any kind not yet reconnected. The heap Zone has
+one incarnation and no revival, so a Phase-1 revival test simulates the
+incarnation boundary by constructing a **second Zone over a pre-populated backing
+map** rather than restarting anything. Revival returns the stored value as-is; it
+does **not** re-validate the value against the current maker's kind or interface
+guard, so key-space integrity (below) is the sole defense against a stale or
+mis-scoped value being cashed at a name — an adapter that needs revalidation adds
+it, and the design says plainly that the core does not.
 
 The core package owns only category-to-key policy: classes and class kits use a
 stable kind key; singleton exos reserve both that kind key and a singleton key;
-stores and sub-zones reserve their labels. Backends do not expose their
-vatstore-key encoding through the public API. A host that has legacy durable
-keys supplies its own key mapper so back-porting preserves existing data.
+stores and sub-zones reserve their labels. The parent→child label derivation is
+**injective**: labels are drawn from a restricted alphabet that excludes the
+scope separator (or are length-prefixed), so `subZone('a').mapStore('b/c')`
+cannot alias `subZone('a/b').mapStore('c')` and no child label can reconstruct a
+sibling's or parent's prefix. A host that supplies its own key mapper for legacy
+durable keys must preserve injectivity — the used-key set runs pre-mapping and
+cannot catch a mapper-induced alias. "Sub-zone isolation" in the Phase-1 list is
+specifically the separator-collision case (a sibling-alias test), not merely two
+distinct labels. Backends do not expose their vatstore-key encoding through the
+public API; a host with legacy durable keys supplies its key mapper so
+back-porting preserves existing data.
 
-`detached()` remains available to the implementation and adapter providers for
-the ephemeral used-key set, but detached stores are explicitly anonymous: they
-must not be used as a durable Zone's system of record. This is enforced by the
-value's own shape, not by prose alone. A detached store carries a distinct
-brand (a `detached` tag on its type, absent from zone-scoped stores), and the
-one path that writes a store into durable state — the adapter's named-store
-provider — rejects any value carrying that brand before it can be persisted. An
-adapter that tries to squirrel a `detached()` result into its own durable
-record fails the same admission check that guards every other durable write, so
-"must not be a system of record" is a checkable property of the store, not a
-convention a reviewer must police.
+`detached()` stays on the exported `Zone` type, but a detached store is
+explicitly anonymous: it may not be a Zone's **named, revivable system of
+record**. That is the whole of the restriction — embedding a detached store as a
+value inside another durable object *is* legal and is the intended
+per-instance-collection idiom (Agoric's ERTP holds a per-purse recovery set this
+way, `zone.detached().setStore('recovery set')` returned from a purse kit's
+`init`; the store is durable *through its containing exo*, revived with it, never
+independently by name). The rejected case is registering a detached store under a
+*name* the Zone would revive on its own — a named-store provider slot or a
+`makeOnce` result — because nothing then reconstructs it across an upgrade.
+
+The restriction is enforced by a **runtime-observable, core-held** brand, not a
+type-level tag and not prose. The core holds a per-incarnation `WeakSet` of the
+detached stores it makes (house precedent:
+[`packages/agentry/src/code-mode-grants.js`](../packages/agentry/src/code-mode-grants.js));
+the TypeScript `detached` tag on the store's type is the compile-time *reflection*
+of that membership, not the check itself. Because the brand lives in a WeakSet the
+core owns, a look-alike store that merely omits a tag is not in the set and a
+type cast cannot forge membership. Enforcement is **core-side**: the core wraps
+each host-supplied named-store provider and its `makeOnce` machinery, and rejects
+a value in the detached set *before delegating* to the host — the host's own
+provider never gets the chance to persist it, so a buggy or lax adapter cannot
+satisfy the property by construction. This makes "may not be a named system of
+record" a checkable property of the store rather than a convention a reviewer
+must police. The negative test — "an adapter tries to register a `detached()`
+store as a named store or `makeOnce` result → core rejects it" — is a Phase-1
+scenario.
 
 ## Design Regrets and Constraints
 
@@ -167,8 +250,13 @@ heap implementation.
 
 1. **Portable core and heap Zone.** Add `packages/zone` as `@endo/zone`, with
    types, `makeOnce`, category key policy, promise-watcher fallback, and heap
-   exos/stores. Port focused compatibility tests for labels, `makeOnce`, store
-   failures, weak-store restrictions, sub-zone isolation, and watchers.
+   exos/stores. Port focused compatibility tests for: labels; `makeOnce` revival
+   (a second Zone over a pre-populated backing map); the maker-throws and
+   maker-allocates-then-throws-then-retries release cases; **same-label
+   cross-category collisions** and the sub-zone **separator-collision**
+   (sibling-alias) case; the core rejection of a `detached()` store registered as
+   a named store or `makeOnce` result; store failures; weak-store restrictions;
+   and watchers.
 2. **Agoric compatibility adapter.** *Propose* to `@agoric/zone` — which lives
    in `agoric-sdk`, a separate repository under Agoric's governance, not this
    one — that it depend on and re-export the Endo contract while retaining its
@@ -186,17 +274,34 @@ heap implementation.
    formula/SQLite substrate. Test restart and collection-retention behavior
    through the Zone surface, not by inspecting tables.
 4. **ERTP adoption.** Make `@endo/ertp` accept a Zone, use a heap Zone for its
-   initial kit, and add durable-kit tests against both daemon and Agoric
-   adapters. `@endo/ertp` does not import either adapter.
+   initial kit, and add durable-kit tests against the adapters that landed.
+   Because Phase 2 may be declined (above), Phase 4's **runnable exit criterion**
+   is the two-Zone case — heap plus the daemon durable adapter — which this
+   repository can land on its own; the Agoric adapter is added to the matrix only
+   if Phase 2 lands upstream. `@endo/ertp` does not import either adapter.
 
 ## Testing Considerations
 
-The portable suite runs each semantic test against the heap Zone. Adapter suites
-add the properties their host alone can promise: an Agoric upgrade returns the
-same `makeOnce` value and a daemon restart retains a strong-store value without
-retaining a weak key. A cross-adapter ERTP fixture must show that a kit's
-observable API is the same under all three Zones; identity preservation during
-the Agoric migration remains an ERTP test, not a Zone test.
+The portable suite is a **shared conformance suite** each implementation runs,
+not a heap-only suite plus host extras: the store contract properties (duplicate
+`init`/`add` rejection, absent-key-vs-`has`, weak-store non-enumeration, and
+`M.key()` equality and rank iteration order) are owed by every provider, so each
+adapter runs the same suite against its own Zone. Because the central claim ("a
+kit's observable API is the same under every Zone") is universally quantified
+over operation sequences, the suite is model-based rather than a single example
+fixture: fast-check `fc.commands` over `{mapStore.init/get/set/delete/has,
+setStore.add, subZone, makeOnce, exoClass}` checked against an in-memory model,
+run once per implementation (`packages/exo-git/test/kit-conformance.test.js` is
+the in-repo precedent). Adapter suites then add the properties their host alone
+can promise: an Agoric upgrade returns the same `makeOnce` value, and a daemon
+restart retains a strong-store value **without** retaining a weak key — a
+negative-retention assertion, so the test must force the host's collection point
+(the `daemon-persistent-stores` collection trigger) and then observe the weak
+key's absence through the Zone surface, or it passes whether or not the key
+leaks. The cross-adapter ERTP fixture covers **whichever Zones landed** — heap
+plus daemon at minimum, and the Agoric Zone if Phase 2 landed upstream; it does
+not require the Agoric adapter to be runnable. Identity preservation during the
+Agoric migration remains an ERTP test, not a Zone test.
 
 ## Open Questions
 
@@ -214,9 +319,16 @@ the Agoric migration remains an ERTP test, not a Zone test.
 
 ## Prompt
 
-> Back-port `@endo/zone` as a prerequisite for the ERTP migration. Research
-> design regrets for zones, including related work from dckc and especially
-> MapStores. Produce a parallel design exercise before the ERTP migration
-> proceeds.
+The review that requested this design carried its instruction in two inline
+comments, quoted verbatim below.
 
-(kriskowal, review of [endojs/endo-but-for-bots#778](https://github.com/endojs/endo-but-for-bots/pull/778#pullrequestreview-4815067371), 2026-07-30.)
+> We should back-port `@endo/zone` as a prerequisite. Please post a job to do a
+> parallel exercise for the creation of an `@endo/zone` researching all design
+> regrets for zones. Post a link to the new design PR here.
+
+(kriskowal, [endojs/endo-but-for-bots#778 (comment)](https://github.com/endojs/endo-but-for-bots/pull/778#discussion_r3679796366), 2026-07-30.)
+
+> We have options. Please look at related work in the garden from dckc and
+> especially MapStores.
+
+(kriskowal, [endojs/endo-but-for-bots#778 (comment)](https://github.com/endojs/endo-but-for-bots/pull/778#discussion_r3679800383), 2026-07-30.)
