@@ -621,12 +621,18 @@ export const makeOcapn = async ({
     // triggers — which unplugs the session first (so no further message is
     // sent), then closes the connection (flipping `isDestroyed` so the
     // pump stops feeding frames) and clears the bookkeeping. It closes via
-    // the transport's generic disconnect, naming nothing. The severance is
-    // deferred one turn so the in-flight `bootstrap.fetch` that crossed the
-    // bound still flushes its uniform `secret not found` rejection first:
-    // the bound-crossing miss must look exactly like any other miss (the
-    // locator has already refused, synchronously, to serve anything
-    // further on this session).
+    // the transport's generic disconnect, naming nothing.
+    //
+    // The severance is deferred one turn as a best-effort courtesy so an
+    // already-computed reply on the crossing turn has a chance to flush
+    // before the connection closes. The security property does NOT depend
+    // on that ordering, and turn-counting here would be refactor- and
+    // engine-dependent: what the bound guarantees is that every
+    // presentation *below* it is a uniform miss and that the locator has
+    // already refused, synchronously, to serve anything further on this
+    // session. The severance at the crossing is observable to the peer —
+    // it reveals only that the peer exceeded the miss bound (which it made
+    // that many misses to reach), never anything about any identifier.
     /** @type {ReturnType<typeof makeOcapnCore> | undefined} */
     let core;
     const abortSession = () => {

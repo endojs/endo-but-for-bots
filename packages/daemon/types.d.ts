@@ -2,6 +2,7 @@ import type { CapTPOptions } from '@endo/captp';
 import type {
   Config,
   EndoMount,
+  EndoMountControl,
   EndoMountEntry,
   EndoMountFile,
   EndoMountStat,
@@ -59,6 +60,7 @@ import type {
 export type {
   Config,
   EndoMount,
+  EndoMountControl,
   EndoMountEntry,
   EndoMountFile,
   EndoMountStat,
