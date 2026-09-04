@@ -22,22 +22,25 @@ after filing the 17 unattended documents and recording the merged
 
 ## Historical groom notes
 
-*Layered on 2026-08-16: added
-[worker-constraint-model](README.md) (Proposed) to M11 (Rust Daemon `endor`):
-an open, multi-axis worker-selection constraint schema (runtime, persistence,
-version, platform/arch — each independently optional and flexible-by-default)
-that replaces the closed `kind: 'locked' | 'node'` union threaded through
-`manager.js` and all three supervisor backends. Today's two kinds migrate onto
-the runtime axis with zero behavior change and zero formula-identity churn (the
-two seed values keep their legacy `kind` formula bytes; a `constraints` field
-appears only for genuinely new axes), and the durable/orthogonal persistence
-(thixotrope #786 / #989 / #281 / #984 / #813), version-pin, and platform/arch
-binary-fetch categories land as typed `Not Started` extension points naming the
-exact seam each plugs into. Summary-table row added and folded into the
-"Recently added or revised" list; this addition is Proposed +1, design count
-+1 against the live current-totals block (the maintainer's next grooming pass
-reconciles the running totals). Also flags (informational, not this doc's work)
-that `worker-rust-xs.md` needs a status sync after PR #600 merged.*
+*Layered on 2026-09-04 (created 2026-08-16, landed 2026-09-04): added
+[worker-constraint-model](worker-constraint-model.md) (Proposed) to M11 (Rust
+Daemon `endor`): an open, multi-axis worker-selection constraint schema
+(runtime, persistence, version, target os/arch — each independently optional and
+flexible-by-default) that replaces the closed `kind: 'locked' | 'node'` union
+threaded through `manager.js`, the two `defaultWorkerKind`-reading resolution
+sites, and the four supervisor `makeWorker` backends. Today's two kinds migrate
+onto the runtime axis with zero behavior change and zero persisted-formula churn
+(the migration is stated over the caller's explicit input — the predicate
+today's `...(kind ? { kind } : undefined)` already uses — so the two seed values
+keep their legacy `kind` record bytes and a `constraints` field appears only for
+genuinely new axes), and the durable/orthogonal persistence (thixotrope #786 /
+#989 / #281 / #984 / #813), version-pin, and target binary-fetch categories land
+as typed `Not Started` extension points naming the exact seam each plugs into.
+Summary-table row, the M11 (Rust Daemon `endor`) constituent-table row, and the
+"Recently added or revised" list synced; this addition is Proposed +1, design
+count +1 against the live current-totals block (a delta line records it in
+`README.md`; the maintainer's next grooming pass reconciles the absolute running
+totals, which had drifted before this pass).*
 
 *Layered on 2026-09-03 (client-side-bridge carve): re-worded **M3 (Remote
 Access and Coding Capabilities)** — the first unfinished milestone, M1 and M2
