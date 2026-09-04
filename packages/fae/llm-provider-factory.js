@@ -6,6 +6,8 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
+import { provideAuthSecret } from './src/credentials.js';
+
 const ProviderFactoryInterface = M.interface('LLMProviderFactory', {
   help: M.call().optional(M.string()).returns(M.string()),
 });
@@ -13,9 +15,10 @@ const ProviderFactoryInterface = M.interface('LLMProviderFactory', {
 /**
  * Caplet that presents a form for creating LLM provider configs.
  *
- * On each form submission, stores `{ host, model, authToken }` as a
- * named value in the HOST agent's petstore so it's accessible to
- * everything.
+ * On each form submission, stores `{ host, model, authSecretName }` as a named
+ * value in the HOST agent's petstore so it's accessible to everything, and puts
+ * the submitted token in the daemon's secret manager under `secrets/<name>-auth`
+ * so the credential itself never becomes a readable pet-store value.
  *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
@@ -87,15 +90,56 @@ export const make = (guestPowers, _context) => {
 
           const { name, host, model, authToken } = config;
 
+          // The token goes to the daemon's secret manager, not into the config
+          // value: a value in the pet store is plaintext, cannot be rotated or
+          // revoked, and every reader of the config would hold the credential.
+          // The config keeps only the *name* the blob was bound to; whoever
+          // provisions an agent resolves that name to a capability and
+          // delegates the capability.
+          /** @type {string | undefined} */
+          let authSecretName;
+          if (authToken) {
+            try {
+              ({ secretName: authSecretName } = await provideAuthSecret({
+                hostAgent,
+                name: `${name}-auth`,
+                description: `LLM auth token for provider "${name}"`,
+                token: authToken,
+              }));
+            } catch (secretError) {
+              // `@secrets` is carried only by the root host. Say so rather than
+              // silently storing a plaintext token as if nothing happened.
+              console.error(
+                `[llm-provider-factory] secret manager unavailable (${
+                  secretError instanceof Error
+                    ? secretError.message
+                    : String(secretError)
+                }); storing a plaintext token for "${name}"`,
+              );
+            }
+          }
+
           await E(hostAgent).storeValue(
-            harden({ host, model, authToken }),
+            harden({
+              host,
+              model,
+              ...(authSecretName
+                ? { authSecretName }
+                : authToken
+                  ? { authToken }
+                  : {}),
+            }),
             name,
           );
 
           console.log(`[llm-provider-factory] Provider "${name}" stored.`);
           await E(powers).reply(
             msg.number,
-            [`Provider "${name}" created successfully.`],
+            [
+              authSecretName
+                ? `Provider "${name}" created successfully; its token is held as secrets/${authSecretName}.`
+                : `Provider "${name}" created successfully.`,
+            ],
             [],
             [],
           );

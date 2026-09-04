@@ -15,6 +15,15 @@ model allowlist, expiration, and quota.
 It exposes no account, billing, organization, login, logout, token, session
 administration, remote-control, or arbitrary proxy operations.
 
+The broker's own durable material — refresh tokens, enterprise access tokens,
+signing keys — belongs in the daemon secret manager (`@secrets`), which gives it
+envelope-encrypted storage, a read capability delegable separately from the
+administration facet, in-place replacement, revocation, and an audit trail.
+That covers storage and lifecycle only.
+A `SecretBlob` hands its holder the bytes by design, so it is not itself a
+lease: origin, method, path, model allowlist, expiry, and quota enforcement are
+the broker's, and none of them can be expressed as a secret record.
+
 The real bearer or refresh token cannot be exported through the endpoint.
 Provider reachability is process-scoped: the app-server process can use the
 lease, but model-launched commands and descendants cannot connect to the broker

@@ -2,6 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 
+import { AUTH_SECRET_PETNAME } from './src/credentials.js';
 import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   DEFAULT_MAX_SUBAGENTS,
@@ -20,8 +21,10 @@ import {
  *
  * Its own namespace holds two capability references written at creation time:
  *
- *   - `llm-provider` – the provider config every agent it creates will use
- *   - `host-agent`   – host authority over the agent namespace
+ *   - `llm-provider`     – the provider config every agent it creates will use
+ *   - `host-agent`       – host authority over the agent namespace
+ *   - `llm-auth-secret`  – optional; the `SecretBlob` holding the provider auth
+ *     token, delegated onward to each agent it creates
  *
  * The exo it returns is the whole of the authority a parent agent gets: create,
  * list, and release agents named beneath itself. `host-agent` never leaves.
@@ -59,21 +62,26 @@ export const make = async (powers, _context, { env } = {}) => {
   // Resolved on first use, not here: this formula is reincarnated by the very
   // lookup a reviving driver performs, and awaiting our own guest inside
   // `make()` would join that provision chain (see driver.js).
-  /** @type {Promise<{ hostAgent: any, providerLocator: string, hostAgentLocator: string }> | undefined} */
+  /** @type {Promise<{ hostAgent: any, providerLocator: string, hostAgentLocator: string, authSecretLocator?: string }> | undefined} */
   let contextP;
   const provideContext = () => {
     if (!contextP) {
       contextP = (async () => {
-        const [hostAgent, providerLocator, hostAgentLocator] =
+        const [hostAgent, providerLocator, hostAgentLocator, hasAuthSecret] =
           await Promise.all([
             E(powers).lookup('host-agent'),
             E(powers).locate('llm-provider'),
             E(powers).locate('host-agent'),
+            E(powers).has(AUTH_SECRET_PETNAME),
           ]);
+        const authSecretLocator = hasAuthSecret
+          ? /** @type {string} */ (await E(powers).locate(AUTH_SECRET_PETNAME))
+          : undefined;
         return harden({
           hostAgent,
           providerLocator: /** @type {string} */ (providerLocator),
           hostAgentLocator: /** @type {string} */ (hostAgentLocator),
+          ...(authSecretLocator ? { authSecretLocator } : {}),
         });
       })().catch(error => {
         contextP = undefined;

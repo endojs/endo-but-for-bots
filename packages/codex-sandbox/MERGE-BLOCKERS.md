@@ -51,6 +51,19 @@ The old `codex-auth-seeder`, shared `CODEX_HOME`,
 `CLAUDE_CODE_OAUTH_TOKEN` environment injection, and credential materialization
 from PR #994 must not land underneath this feature.
 
+The daemon secret manager (`@secrets`) now supplies the *storage* half of this
+requirement: durable envelope-encrypted bytes, a delegable read capability
+separate from the administration facet, replacement without re-delegation,
+revocation, and a complete audit trail.
+Floot's own API-provider token already moves through it.
+That is not the broker.
+A `SecretBlob` hands its holder the bytes on request by design, so it cannot
+bound a credential to a provider origin, model allowlist, quota, or session
+lease, and it cannot refresh OAuth state.
+The broker remains external and must hold the upstream credential itself; the
+secret manager is where the broker's own durable material belongs, not a way to
+put a bearer token inside the slice.
+
 ## Runtime mount replacement
 
 Endo APIs are exposed to Codex now as app-server dynamic tools through a pinned

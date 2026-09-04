@@ -6,6 +6,7 @@ import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 
+import { AUTH_SECRET_PETNAME } from './credentials.js';
 import { SubagentSpawnerInterface, assertSubagentName } from './subagent.js';
 
 /**
@@ -55,6 +56,9 @@ harden(subagentAgentName);
  * @param {string} options.spawnerSpecifier
  * @param {number} options.depth - Delegation depth of the agent being created.
  * @param {number} options.maxDepth
+ * @param {string} [options.authSecretLocator] - `SecretBlob` holding the
+ *   provider auth token. Absent when the deployment still carries a plaintext
+ *   token in the provider config.
  * @param {string} [options.systemPrompt]
  * @param {boolean} [options.pin]
  * @returns {Promise<{ name: string, profileName: string, locator: string }>}
@@ -68,6 +72,7 @@ export const provisionFaeAgent = async ({
   spawnerSpecifier,
   depth,
   maxDepth,
+  authSecretLocator,
   systemPrompt,
   pin = false,
 }) => {
@@ -97,6 +102,12 @@ export const provisionFaeAgent = async ({
     });
     await E(spawnerGuest).storeLocator('llm-provider', providerLocator);
     await E(spawnerGuest).storeLocator('host-agent', hostAgentLocator);
+    if (authSecretLocator !== undefined) {
+      await E(spawnerGuest).storeLocator(
+        AUTH_SECRET_PETNAME,
+        authSecretLocator,
+      );
+    }
     await E(hostAgent).makeUnconfined('@main', spawnerSpecifier, {
       powersName: spawnerProfileName,
       resultName: spawnerResultName,
@@ -123,6 +134,9 @@ export const provisionFaeAgent = async ({
   );
   if (spawnerLocator !== undefined) {
     await E(driverGuest).storeLocator('subagent-spawner', spawnerLocator);
+  }
+  if (authSecretLocator !== undefined) {
+    await E(driverGuest).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
   }
 
   await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
@@ -219,7 +233,7 @@ harden(releaseFaeAgent);
  * provision chain.
  *
  * @param {object} options
- * @param {() => Promise<{ hostAgent: any, providerLocator: string, hostAgentLocator: string }>} options.provideContext
+ * @param {() => Promise<{ hostAgent: any, providerLocator: string, hostAgentLocator: string, authSecretLocator?: string }>} options.provideContext
  * @param {string} options.parentName
  * @param {string} options.driverSpecifier
  * @param {string} options.spawnerSpecifier
@@ -269,8 +283,12 @@ export const makeSubagentSpawner = ({
       systemPrompt === undefined ||
         (typeof systemPrompt === 'string' && systemPrompt.length <= 32_768) ||
         Fail`Subagent system prompt must be a string of at most 32768 characters`;
-      const { hostAgent, providerLocator, hostAgentLocator } =
-        await provideContext();
+      const {
+        hostAgent,
+        providerLocator,
+        hostAgentLocator,
+        authSecretLocator,
+      } = await provideContext();
       const existing = await listNames(hostAgent);
       existing.length < maxSubagents ||
         Fail`Subagent limit of ${q(maxSubagents)} reached; stop one first`;
@@ -283,6 +301,7 @@ export const makeSubagentSpawner = ({
         spawnerSpecifier,
         depth,
         maxDepth,
+        authSecretLocator,
         systemPrompt,
         // Subagents are working memory, not infrastructure: a daemon restart
         // should not resurrect a tree of them behind the user's back.
