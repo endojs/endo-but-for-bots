@@ -154,3 +154,46 @@ fn json_stringify_array_indices_are_raw_exact() {
     // it is gated on result agreement rather than raw equality.
     agrees("JSON.stringify({a:[1,2]})");
 }
+
+/// `String.prototype.lastIndexOf` step 6 maps **any** position that coerces to
+/// NaN to `+INFINITY`, so the whole string is searched. Step 5 only asserts
+/// that an `undefined` position is NaN; it is not the only way to get one.
+/// Sharing `ToIntegerOrInfinity`'s NaN-to-zero rule started these searches at 0
+/// and diverged from the pinned oracle, which is correct here.
+#[test]
+fn last_index_of_treats_every_nan_position_as_infinity() {
+    for source in [
+        r#""abcabc".lastIndexOf("a", NaN)"#,
+        r#""abcabc".lastIndexOf("a", "zzz")"#,
+        r#""abcabc".lastIndexOf("a", {})"#,
+        r#""aaa".lastIndexOf("", NaN)"#,
+        r#""".lastIndexOf("", NaN)"#,
+        // The coercion stays observable and runs exactly once.
+        r#"var n=0;"abcabc".lastIndexOf("a",{valueOf:function(){n++;return NaN}})+':'+n"#,
+        // ToNumber, not ToNumeric: a BigInt position is a catchable TypeError.
+        r#"try{"abcabc".lastIndexOf("a",1n)}catch(e){e.constructor.name}"#,
+    ] {
+        agrees(source);
+    }
+}
+
+/// The positions that were already right stay right, and `indexOf` genuinely
+/// does want NaN to mean 0.
+#[test]
+fn index_of_position_coercion_is_unchanged() {
+    for source in [
+        r#""abcabc".indexOf("a", NaN)"#,
+        r#""abcabc".indexOf("a", "zzz")"#,
+        r#""abcabc".lastIndexOf("a")"#,
+        r#""abcabc".lastIndexOf("a", undefined)"#,
+        r#""abcabc".lastIndexOf("a", 0)"#,
+        r#""abcabc".lastIndexOf("a", 3)"#,
+        r#""abcabc".lastIndexOf("a", -1)"#,
+        r#""abcabc".lastIndexOf("a", Infinity)"#,
+        r#""abcabc".lastIndexOf("a", null)"#,
+        r#""abcabc".lastIndexOf("a", false)"#,
+        r#""abcabc".lastIndexOf("a", "2")"#,
+    ] {
+        agrees(source);
+    }
+}
