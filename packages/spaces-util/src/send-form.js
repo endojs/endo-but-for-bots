@@ -684,8 +684,17 @@ export const sendFormComponent = ({
       });
 
       setSubmitting(true);
+      // The daemon treats a recipient STRING as a single pet-name segment
+      // (namePathFrom does not split on "/"), so a nested recipient like
+      // `floot/controller-profile/session-…` must be handed over as a path
+      // array or it fails with `Invalid name`. Mirror the `identify` calls
+      // below, which already split on "/".
+      const conversationRecipient =
+        typeof conversationPetName === 'string'
+          ? conversationPetName.split('/')
+          : conversationPetName;
       E(powers)
-        .send(conversationPetName, messageStrings, edgeNames, petNames)
+        .send(conversationRecipient, messageStrings, edgeNames, petNames)
         .then(
           () => {
             // `lastRecipient` is consumed downstream as a string (token
@@ -773,8 +782,11 @@ export const sendFormComponent = ({
     const navigateAfterSend = firstStringEmpty && petNames.length > 0;
 
     setSubmitting(true);
+    // Split the recipient into a path so nested targets (e.g.
+    // `floot/controller-profile/session-…`) resolve — the daemon validates a
+    // recipient string as a single name segment and rejects embedded "/".
     E(powers)
-      .send(to, messageStrings, messageEdgeNames, messagePetNames)
+      .send(to.split('/'), messageStrings, messageEdgeNames, messagePetNames)
       .then(
         () => {
           lastRecipient = to;
