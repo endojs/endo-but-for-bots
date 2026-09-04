@@ -203,7 +203,7 @@ export const makeAuditJournal = ({
     }
   };
 
-  const recover = async () => {
+  const recoverOnce = async () => {
     await null;
     if (recovered) return;
     const loaded = [...(await readEntries())];
@@ -271,6 +271,31 @@ export const makeAuditJournal = ({
       'totalBytes' in verification
         ? /** @type {number} */ (verification.totalBytes)
         : 0;
+  };
+
+  /**
+   * Recovery is idempotent only if it happens once.
+   *
+   * `recovered` is set at the end of a long asynchronous walk, so two readers
+   * that both arrive before it flips — a health check racing the next append,
+   * say — each took the write-ahead replay branch and each called
+   * `appendEntry` for the same head entry. Against a strict entry store the
+   * second rejects, and because `verify()` wraps only the head read, that
+   * rejection escaped as a throw instead of the `{ ok: false }` record its
+   * contract promises. Memoizing the in-flight promise makes concurrent
+   * callers share one recovery; a failure clears it so a later call retries.
+   *
+   * @type {Promise<void> | undefined}
+   */
+  let recovering;
+  const recover = () => {
+    if (recovered) return Promise.resolve();
+    if (!recovering) {
+      recovering = recoverOnce().finally(() => {
+        recovering = undefined;
+      });
+    }
+    return recovering;
   };
 
   const writer = makeExo('AgentAuditWriter', AuditWriterInterface, {

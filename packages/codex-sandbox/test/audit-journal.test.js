@@ -475,3 +475,61 @@ test('petstore anchor storage has an independent durable byte bound', async t =>
   });
   t.is(values.size, 0, 'entry is not exposed unless its anchor is durable');
 });
+
+test('concurrent readers share one recovery of a prepared append', async t => {
+  const values = new Map();
+  const anchors = new Map();
+  let entryWrites = 0;
+  const makePowers = (valuesMap, count = false) =>
+    harden({
+      async list() {
+        return [...valuesMap.keys()];
+      },
+      async has(name) {
+        return valuesMap.has(name);
+      },
+      async lookup(name) {
+        return valuesMap.get(name);
+      },
+      async storeValue(value, name) {
+        // The real petstore rejects a duplicate name, which is what turned a
+        // doubled replay into a thrown integrity check rather than a silent
+        // one.
+        if (valuesMap.has(name)) throw Error('already exists');
+        if (count) entryWrites += 1;
+        valuesMap.set(name, value);
+      },
+    });
+  const powers = makePowers(values, true);
+  const anchorPowers = makePowers(anchors);
+  const journal = makePetstoreAuditJournal(powers, {
+    journalId: 'operator-journal',
+    sessionId: 'session-4',
+    anchorPowers,
+  });
+  await journal.writer.append('session-open', { policyVersion: 'v1' });
+
+  // Simulate a crash between the write-ahead head and the entry append: drop
+  // the tail entry, leaving the anchor as the only record of it.
+  const tail = [...values.keys()].sort().at(-1);
+  values.delete(tail);
+  entryWrites = 0;
+
+  // Two readers arrive at once — an operator health check racing the next
+  // append. Both used to take the replay branch and both call appendEntry.
+  const reopened = makePetstoreAuditJournal(powers, {
+    journalId: 'operator-journal',
+    sessionId: 'session-4',
+    anchorPowers,
+  });
+  const [verification, entries] = await Promise.all([
+    reopened.reader.verify(),
+    reopened.reader.entries(),
+  ]);
+  t.true(verification.ok, 'the integrity check reports rather than throwing');
+  t.deepEqual(
+    entries.map(entry => entry.sequence),
+    [0n],
+  );
+  t.is(entryWrites, 1, 'the prepared entry is replayed exactly once');
+});
