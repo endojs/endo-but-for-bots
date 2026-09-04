@@ -38,6 +38,23 @@ export type CompartmentMapDescriptor<
   tags: Array<string>;
   entry: EntryDescriptor<EntryName>;
   compartments: CompartmentDescriptors<T, Name>;
+  /**
+   * Import-attributes schema-version marker (probe skeleton of #264).
+   *
+   * Written (value `'v1'`) only when the archive carries a *non-JS*
+   * attribute-bearing import, so a purely-JavaScript archive stays
+   * byte-identical to today's. A reader lacking attribute support fails
+   * fast at `assertFileCompartmentMap` instead of mis-loading a non-JS
+   * module as code. Deliberately a dedicated field, never a `tags` entry
+   * (`tags` holds the package.json condition set and is mid-migration under
+   * endojs/endo#2388).
+   *
+   * gap: the *shape* of this marker — a dedicated `'v1'` string vs. a
+   * numeric `compartmentMapVersion` — is unresolved. See PR body §Gap "Schema
+   * version marker shape" (design Open Q §2). The `'v1'` literal here is a
+   * placeholder pending the maintainer's pick.
+   */
+  importAttributes?: 'v1';
 };
 
 /**
@@ -252,6 +269,30 @@ export interface ExitModuleConfiguration extends BaseModuleConfiguration {
 }
 
 /**
+ * Persisted (JSON) form of a single resolved import (probe skeleton of #264).
+ *
+ * One canonical wire shape, the same union `## Per-import attribute record in
+ * the compartment-map descriptor` and `## Compartment-map JSON schema` both
+ * describe:
+ *
+ * - An attribute-free import serializes as the **bare resolved-specifier
+ *   string** (legacy collapse); a reader reconstructs the SES
+ *   `EMPTY_ATTRIBUTES` sentinel for it.
+ * - An attribute-bearing import serializes as the object arm, whose
+ *   `attributes` bag is non-empty by construction. The target field is named
+ *   `default` (not `specifier`, PR #264 review) so a reader that ignores
+ *   `attributes` still recovers the target as an ordinary `default` condition.
+ *
+ * gap: this type is inert until the SES surface it depends on exists. See PR
+ * body §Gap "SES surface unimplemented" — no `EMPTY_ATTRIBUTES`, no
+ * `normalizeImportAttributes`, and `@endo/module-source` still emits bare-string
+ * imports, so nothing populates this field on the map leg yet.
+ */
+export type PersistedImport =
+  | string
+  | { default: string; attributes: Record<string, string> };
+
+/**
  * A module configuration representing a file on disk
  */
 export interface FileModuleConfiguration extends BaseModuleConfiguration {
@@ -259,6 +300,17 @@ export interface FileModuleConfiguration extends BaseModuleConfiguration {
   parser: Language;
   /** in base 16, hex */
   sha512?: string;
+  /**
+   * Resolved imports (the persisted {@link PersistedImport} union), with
+   * optional per-import attributes (probe skeleton of #264). Omitted entirely
+   * for a compartment with no attribute-bearing import, so a purely-JavaScript
+   * archive is byte-identical to today's.
+   *
+   * gap: the persisted field *name* (`imports`, one letter from the in-memory
+   * `resolvedImports`) is not final. See PR body §Gap "Persisted field name"
+   * (design Open Q §6a).
+   */
+  imports?: Record<string, PersistedImport>;
 }
 
 /**
