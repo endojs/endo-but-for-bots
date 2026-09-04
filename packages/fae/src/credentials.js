@@ -176,7 +176,7 @@ export const provideAuthSecret = async ({
     await E(importer).createBase64(name, description, payload);
     created = true;
   }
-  const locator = await E(hostAgent).locate(['secrets', name]);
+  const locator = await E(hostAgent).locate('secrets', name);
   typeof locator === 'string' ||
     Fail`Secret ${q(name)} was provisioned but could not be located`;
   return harden({

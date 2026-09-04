@@ -225,7 +225,9 @@ export const makeSubagentDelegations = ({
       Fail`Subagent ${q(name)} already has a question in flight`;
 
     const path = harden([SUBAGENT_DIRECTORY, name]);
-    const recipient = await E(powers).locate(path);
+    // `locate` takes the path as separate name arguments — unlike `lookup` and
+    // `send`, whose guards accept an array.
+    const recipient = await E(powers).locate(...path);
     typeof recipient === 'string' ||
       Fail`No subagent named ${q(name)} — spawn it first`;
 
