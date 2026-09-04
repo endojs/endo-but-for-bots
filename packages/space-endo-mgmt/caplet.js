@@ -57,6 +57,10 @@ const assertBranch = branch => {
     Fail`Branch name may only contain letters, digits, and ${q('._/-')}: ${q(branch)}`;
   !branch.includes('..') ||
     Fail`Branch name must not contain ${q('..')}: ${q(branch)}`;
+  // git rejects a ref whose whole name ends in a dot, though an interior
+  // component may (`a./b` is a valid ref, `a/b.` is not).
+  !branch.endsWith('.') ||
+    Fail`Branch name must not end with ${q('.')}: ${q(branch)}`;
   for (const part of branch.split('/')) {
     part.length > 0 ||
       Fail`Branch name must not have an empty path component: ${q(branch)}`;
@@ -196,10 +200,19 @@ export const make = async (_powers, _context, options = {}) => {
         // return a few kilobytes puts the daemon's heap at the mercy of the
         // log's size.
         const bytes = new Uint8Array(length);
-        await handle.read(bytes, 0, length, size - length);
+        // Decode only what was actually read. The deployer may rotate or
+        // truncate the log between the stat and the read, which leaves the
+        // offset past the new end; trusting `length` would return the
+        // untouched tail of the buffer as a run of NUL characters.
+        const { bytesRead } = await handle.read(
+          bytes,
+          0,
+          length,
+          size - length,
+        );
         // A tail that begins mid-character decodes to a replacement character,
         // which is the right trade for a diagnostic tail.
-        return new TextDecoder().decode(bytes);
+        return new TextDecoder().decode(bytes.subarray(0, bytesRead));
       } catch {
         return '';
       } finally {

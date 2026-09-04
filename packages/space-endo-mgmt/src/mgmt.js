@@ -1,5 +1,6 @@
 // @ts-check
 
+import harden from '@endo/harden';
 import { E } from '@endo/far';
 import { h } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
