@@ -283,23 +283,6 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   /** @type {unknown[]} */
   const failures = [];
 
-  const names = await E(hostAgent).list();
-  const directory = Array.isArray(names) ? names : [];
-  for (const child of subagentNamesIn(directory, name)) {
-    try {
-      await releaseFaeAgent({
-        hostAgent,
-        name: subagentAgentName(name, child),
-      });
-    } catch (error) {
-      // One stubborn grandchild must not leave this agent's own driver,
-      // spawner and guest running — the spawner holds `host-agent`, and an
-      // agent whose teardown stopped at a child goes on answering mail while
-      // the error names only the child.
-      failures.push(error);
-    }
-  }
-
   const driverResultName = `${name}${DRIVER_SUFFIX}`;
   const spawnerResultName = `${name}${SPAWNER_SUFFIX}`;
   const driverHandleName = `${driverResultName}${HANDLE_SUFFIX}`;
@@ -313,10 +296,7 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
    * spawner caplet is cancelled along with the guest whose powers it holds.
    * Cancelling it separately would be a second cancel of a dead formula — and
    * `cancel` is not idempotent. `cancelValue` deletes the controller, so
-   * `provideController` re-runs the formula before cancelling the fresh one:
-   * a Fae driver reincarnated that way mails "Fae agent ready." to the
-   * operator's host on the way past, and a spawner reincarnated that way holds
-   * `host-agent` again for a window.
+   * `provideController` re-runs the formula before cancelling the fresh one.
    *
    * The guest's own name is dropped *first*, because it is the sentinel a
    * retry tests. Left for last, a removal loop interrupted partway would leave
@@ -325,18 +305,20 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
    *
    * A cancel that fails drops nothing: those names are the only way back.
    *
-   * @param {string} guestName - The powers guest to cancel. Must be the first
-   *   entry of `owned`.
-   * @param {string[]} owned
+   * @param {string} guestName - The powers guest to cancel.
+   * @param {string[]} owned - `guestName` first, then everything it owns.
    */
   const releaseGuest = async (guestName, owned) => {
+    // The retry argument above rests on this ordering, so it is asserted
+    // rather than left to a comment.
+    owned[0] === guestName ||
+      Fail`releaseGuest must drop ${q(guestName)} first, not ${q(owned[0])}`;
     try {
       if (await E(hostAgent).has(guestName)) {
         await E(hostAgent).cancel(guestName);
       }
     } catch (error) {
-      // Keep going: the rest of the tree still has to come down, and the
-      // caller is told what failed at the end.
+      // Keep going where it is safe to: the caller is told what failed.
       failures.push(error);
       return;
     }
@@ -351,14 +333,22 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
     }
   };
 
-  const failuresBeforeDriver = failures.length;
-  const removedDriverNames = () => failures.length === failuresBeforeDriver;
+  // Quiesce this agent before looking at what it owns.
+  //
+  // Its subtree is enumerated from the host directory, once. Releasing the
+  // children first — the obvious depth-first order — left the agent answering
+  // mail and its spawner minting agents throughout, so a subagent created
+  // during the recursion was not in the snapshot, was never released, and
+  // afterwards was reachable by nothing: its parent's spawner was gone, and
+  // the grandparent's enumeration rejects a name a level too deep. Nothing in
+  // the recursion needs this agent's spawner — teardown drives `hostAgent`
+  // directly — so depth-first buys nothing and costs quiescence.
   await releaseGuest(profileNameFor(driverHandleName), [
     profileNameFor(driverHandleName),
     driverHandleName,
     driverResultName,
   ]);
-  if (removedDriverNames()) {
+  if (failures.length === 0) {
     // A pin is a name, not a formula. Dropped with the driver it pins, and
     // kept if that driver would not go down, so a restart before a successful
     // retry still revives an agent somebody is trying to save.
@@ -375,6 +365,33 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
     spawnerHandleName,
     spawnerResultName,
   ]);
+
+  // Still live means still spawning, so do not enumerate: a retry starts from
+  // the top, and this agent is still enumerable by its own parent because its
+  // handle is dropped last.
+  if (failures.length > 0) {
+    throw new AggregateError(
+      failures,
+      `Releasing agent "${name}" could not stop it; nothing beneath it was touched, so retry once the cause is cleared`,
+    );
+  }
+
+  const names = await E(hostAgent).list();
+  const directory = Array.isArray(names) ? names : [];
+  for (const child of subagentNamesIn(directory, name)) {
+    try {
+      await releaseFaeAgent({
+        hostAgent,
+        name: subagentAgentName(name, child),
+      });
+    } catch (error) {
+      // One stubborn grandchild must not leave this agent's own guest bound
+      // and its names half-dropped; the error names the child and a retry
+      // reaches it, because this agent's handle stays bound below.
+      failures.push(error);
+    }
+  }
+
   await releaseGuest(profileNameFor(name), [profileNameFor(name)]);
 
   // The agent's handle is what its parent enumerates by, so it goes last and
@@ -394,7 +411,7 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   if (failures.length > 0) {
     throw new AggregateError(
       failures,
-      `Releasing agent "${name}" did not complete; what could not be cancelled is still bound and the agent is still enumerable, so retry once the cause is cleared`,
+      `Releasing agent "${name}" did not complete; what could not be released is still bound and still enumerable, so retry once the cause is cleared`,
     );
   }
 };
@@ -450,6 +467,27 @@ export const makeSubagentSpawner = ({
     return subagentNamesIn(Array.isArray(names) ? names : [], parentName);
   };
 
+  // `spawn` and `stop` are serialized against each other.
+  //
+  // Both read the host directory and then act on it, so concurrent calls
+  // interleave between the check and the act: two spawns of one name both pass
+  // the pre-check and the second silently reuses the first's guest, and two
+  // stops of one agent both see the guest bound and both cancel it — which the
+  // daemon answers by re-incarnating the formula before cancelling it again.
+  // A model can issue both, since tool calls within a turn are not ordered.
+  /** @type {Promise<any>} */
+  let inTurn = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} operation
+   * @returns {Promise<T>}
+   */
+  const serially = operation => {
+    const result = inTurn.then(operation);
+    inTurn = result.catch(() => undefined);
+    return result;
+  };
+
   return makeExo('SubagentSpawner', SubagentSpawnerInterface, {
     /**
      * @param {string} name
@@ -457,44 +495,48 @@ export const makeSubagentSpawner = ({
      */
     async spawn(name, options = {}) {
       assertSubagentName(name);
-      const { systemPrompt } = options;
-      systemPrompt === undefined ||
-        (typeof systemPrompt === 'string' && systemPrompt.length <= 32_768) ||
-        Fail`Subagent system prompt must be a string of at most 32768 characters`;
-      const {
-        hostAgent,
-        providerLocator,
-        hostAgentLocator,
-        authSecretLocator,
-      } = await provideContext();
-      const existing = await listNames(hostAgent);
-      existing.length < maxSubagents ||
-        Fail`Subagent limit of ${q(maxSubagents)} reached; stop one first`;
-      const { locator } = await provisionFaeAgent({
-        hostAgent,
-        name: subagentAgentName(parentName, name),
-        providerLocator,
-        hostAgentLocator,
-        driverSpecifier,
-        spawnerSpecifier,
-        depth,
-        maxDepth,
-        authSecretLocator,
-        delegatedPrompt: systemPrompt,
-        // Subagents are working memory, not infrastructure: a daemon restart
-        // should not resurrect a tree of them behind the user's back.
-        pin: false,
+      return serially(async () => {
+        const { systemPrompt } = options;
+        systemPrompt === undefined ||
+          (typeof systemPrompt === 'string' && systemPrompt.length <= 32_768) ||
+          Fail`Subagent system prompt must be a string of at most 32768 characters`;
+        const {
+          hostAgent,
+          providerLocator,
+          hostAgentLocator,
+          authSecretLocator,
+        } = await provideContext();
+        const existing = await listNames(hostAgent);
+        existing.length < maxSubagents ||
+          Fail`Subagent limit of ${q(maxSubagents)} reached; stop one first`;
+        const { locator } = await provisionFaeAgent({
+          hostAgent,
+          name: subagentAgentName(parentName, name),
+          providerLocator,
+          hostAgentLocator,
+          driverSpecifier,
+          spawnerSpecifier,
+          depth,
+          maxDepth,
+          authSecretLocator,
+          delegatedPrompt: systemPrompt,
+          // Subagents are working memory, not infrastructure: a daemon restart
+          // should not resurrect a tree of them behind the user's back.
+          pin: false,
+        });
+        return harden({ name, locator });
       });
-      return harden({ name, locator });
     },
 
     /** @param {string} name */
     async stop(name) {
       assertSubagentName(name);
-      const { hostAgent } = await provideContext();
-      await releaseFaeAgent({
-        hostAgent,
-        name: subagentAgentName(parentName, name),
+      return serially(async () => {
+        const { hostAgent } = await provideContext();
+        await releaseFaeAgent({
+          hostAgent,
+          name: subagentAgentName(parentName, name),
+        });
       });
     },
 

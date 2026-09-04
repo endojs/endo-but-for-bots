@@ -512,18 +512,25 @@ export const spawnWorkerLoop = async (
     /** @type {string | undefined} */
     const selfLocator = await E(powers).locate('@self');
     const cancelled = await getCancelled();
+    // `whenCancelled` is a `Promise<never>`: it never fulfills, and a
+    // *rejection* is the ordinary deliberate-cancellation path, carrying the
+    // daemon's reason. Two other rejections reach the same arm — the
+    // connection dropped, or the context does not implement the method — and
+    // all three mean stop, so the reason is logged rather than classified.
+    // Something must be: `runAgent` returns normally afterwards, so the
+    // driver's own `.catch` never fires and an agent that simply goes quiet is
+    // otherwise indistinguishable from one that was never wired up.
     const cancelledSignal = cancelled
       ? cancelled.promise.then(
-          () => ({ cancelled: true }),
-          reason => {
-            // Not being able to *observe* cancellation is a different event
-            // from being cancelled, and both stop this loop. Say which: an
-            // agent that goes quiet because its context never implemented
-            // `whenCancelled` looks exactly like one that was cancelled on
-            // purpose, and neither prints anything otherwise — `runAgent`
-            // returns normally, so the driver's own `.catch` never fires.
+          () => {
             console.error(
-              '[fae] cancellation signal lost; stopping the inbox loop:',
+              '[fae] cancellation signal fulfilled, which it never should; stopping the inbox loop',
+            );
+            return { cancelled: true };
+          },
+          reason => {
+            console.error(
+              '[fae] stopping the inbox loop:',
               /** @type {Error} */ (reason)?.message ?? reason,
             );
             return { cancelled: true };
@@ -767,7 +774,6 @@ export const spawnWorkerLoop = async (
           void Promise.resolve(messageIterator.return?.()).catch(
             () => undefined,
           );
-          console.error('[fae] inbox loop stopped');
           return;
         }
         const { value: message, done } = raced.result;
@@ -948,7 +954,7 @@ export const make = async (guestPowers, _context) => {
         pin,
       });
 
-      console.log(`[fae-factory] Created agent "${name}"`);
+      console.error(`[fae-factory] Created agent "${name}"`);
       return profileName;
     },
 

@@ -402,3 +402,87 @@ test('the subagent count bound is enforced', async t => {
   t.deepEqual(await spawner.list(), ['one', 'two']);
   await t.throwsAsync(spawner.spawn('three'), { message: /Subagent limit/ });
 });
+
+test('a subagent spawned during a teardown is not stranded', async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 2,
+  });
+  await spawner.spawn('c');
+
+  // Releasing children first left the agent answering mail and its spawner
+  // minting agents throughout the recursion, so a subagent created in that
+  // window was not in the snapshot, was never released, and afterwards was
+  // reachable by nothing: its parent's spawner was gone, and the
+  // grandparent's enumeration rejects a name a level too deep. Issuing both
+  // at once is something a model can do — tool calls within a turn are not
+  // ordered.
+  const childSpawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p.sub.c',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 2,
+    maxDepth: 2,
+  });
+  const stopping = spawner.stop('c');
+  const spawning = childSpawner.spawn('h').catch(() => 'refused');
+  await stopping;
+  const spawnOutcome = await spawning;
+
+  const stranded = [...names.keys()].filter(name => name.startsWith('p.sub.c'));
+  t.deepEqual(
+    stranded,
+    [],
+    `nothing of the released subtree may survive (spawn: ${spawnOutcome})`,
+  );
+});
+
+test('two stops of one subagent do not cancel it twice', async t => {
+  const { hostAgent, cancelled } = makeFakeHost();
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+  await spawner.spawn('c');
+
+  // Both calls used to see the guest bound and both cancelled it. `cancel` is
+  // not idempotent: the daemon deletes the controller, so the second call
+  // re-incarnates the formula — a fresh pet store, mailbox and worker — before
+  // cancelling it again.
+  const [first, second] = await Promise.allSettled([
+    spawner.stop('c'),
+    spawner.stop('c'),
+  ]);
+  t.is(first.status, 'fulfilled');
+  t.is(second.status, 'fulfilled');
+  t.is(
+    cancelled.filter(entry => entry === 'profile-for-p.sub.c-driver-handle')
+      .length,
+    1,
+  );
+});

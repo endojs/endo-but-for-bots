@@ -446,11 +446,15 @@ test('cancellation closes delegations without waiting for the reader', async t =
     },
   ]);
 
+  // `whenCancelled` is a `Promise<never>`: the daemon *rejects* it with the
+  // cancellation reason and never fulfills it. A fixture that resolved instead
+  // exercised the one arm production never takes.
   /** @type {() => void} */
   let cancel = () => {};
-  const cancelled = new Promise(resolve => {
-    cancel = () => resolve(undefined);
+  const cancelled = new Promise((_resolve, reject) => {
+    cancel = () => reject(Error('Cancelled'));
   });
+  cancelled.catch(() => undefined);
   const loop = spawnWorkerLoop(
     mailbox.powers,
     Far('Context', { whenCancelled: () => cancelled }),
