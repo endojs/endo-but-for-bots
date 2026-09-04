@@ -15,6 +15,7 @@ import {
   SubagentSpawnerInterface,
   agentNamePattern,
   assertSubagentName,
+  reservedSubagentSuffixes,
 } from './subagent.js';
 
 /**
@@ -39,17 +40,19 @@ harden(subagentAgentName);
 /**
  * The direct subagents of `parentName` visible in a host directory listing.
  *
- * Matching is anchored rather than `startsWith`/`endsWith`: an agent's *handle*
- * is `p.sub.X`, and if X is itself `driver` that handle ends in `-driver` too.
- * A suffix test therefore reported a phantom subagent named `''` — one that
- * counted against the bound, could never be stopped (the empty string is not a
- * legal name), and whose teardown recursed into an agent that does not exist,
- * cancelling a live sibling's handle on the way. Requiring an inner name that
- * is itself a legal agent name distinguishes the two.
+ * Keyed on the agent's own handle — `p.sub.X` — rather than on its driver
+ * caplet. Teardown cancels several formulas, and any of them can fail; keying
+ * on the driver meant a child whose driver went down but whose spawner would
+ * not vanished from its parent's listing the moment the first step succeeded.
+ * It then counted against no bound, no retry revisited it, and `spawn` refused
+ * the name forever because the pre-check still saw the leftovers. The handle
+ * is dropped last, and only when everything beneath it is gone, so a child in
+ * that state stays enumerable and a retry finishes the job.
  *
- * A grandchild's driver matches the prefix as well; its inner segment carries
- * the infix, and since an agent name may not contain the infix's delimiter,
- * `agentNamePattern` rejects it. That is the whole of the depth check.
+ * Matching is anchored at both ends. `p.sub.X-driver` and `p.sub.X-handle` are
+ * `p.sub.<something>` too, so the inner segment must be a name a subagent
+ * could legally have — which excludes the reserved suffixes — and an agent
+ * name may not contain the infix's delimiter, which excludes a grandchild.
  *
  * @param {string[]} directory
  * @param {string} parentName
@@ -60,13 +63,12 @@ export const subagentNamesIn = (directory, parentName) => {
   /** @type {string[]} */
   const names = [];
   for (const entry of directory) {
-    if (
-      typeof entry === 'string' &&
-      entry.startsWith(childPrefix) &&
-      entry.endsWith(DRIVER_SUFFIX)
-    ) {
-      const inner = entry.slice(childPrefix.length, -DRIVER_SUFFIX.length);
-      if (agentNamePattern.test(inner)) {
+    if (typeof entry === 'string' && entry.startsWith(childPrefix)) {
+      const inner = entry.slice(childPrefix.length);
+      if (
+        agentNamePattern.test(inner) &&
+        !reservedSubagentSuffixes.some(suffix => inner.endsWith(suffix))
+      ) {
         names.push(inner);
       }
     }
@@ -304,26 +306,33 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
   const spawnerHandleName = `${spawnerResultName}${HANDLE_SUFFIX}`;
 
   /**
-   * Cancel a formula and drop the names that reach it, in that order.
+   * Cancel one powers guest and drop the names it owns.
    *
-   * Paired, because `cancel` is *not* idempotent: `cancelValue` deletes the
-   * controller, so a second cancel of the same id re-runs the formula before
-   * cancelling it again. Retrying a teardown that had left a cancelled
-   * caplet's name bound would therefore reincarnate it — including the
-   * spawner caplet holding `host-agent`, which is the authority this whole
-   * path exists to reclaim. Dropping the name in the same step is what makes
-   * `has()` false on the retry and the retry safe.
+   * The *guest* is what is cancelled, never the caplet running on it:
+   * `makeUnconfined` registers `thisDiesIfThatDies(powersId)`, so a driver or
+   * spawner caplet is cancelled along with the guest whose powers it holds.
+   * Cancelling it separately would be a second cancel of a dead formula — and
+   * `cancel` is not idempotent. `cancelValue` deletes the controller, so
+   * `provideController` re-runs the formula before cancelling the fresh one:
+   * a Fae driver reincarnated that way mails "Fae agent ready." to the
+   * operator's host on the way past, and a spawner reincarnated that way holds
+   * `host-agent` again for a window.
    *
-   * A cancel that fails keeps its names: they are the only way back to a
-   * formula that may still be running, and the caller is told to retry.
+   * The guest's own name is dropped *first*, because it is the sentinel a
+   * retry tests. Left for last, a removal loop interrupted partway would leave
+   * the sentinel bound over a formula that is already gone, and the retry
+   * would cancel — and so reincarnate — it.
    *
-   * @param {string} capletName - The formula to cancel.
-   * @param {string[]} reachedBy - Names to drop once it is gone.
+   * A cancel that fails drops nothing: those names are the only way back.
+   *
+   * @param {string} guestName - The powers guest to cancel. Must be the first
+   *   entry of `owned`.
+   * @param {string[]} owned
    */
-  const releaseCaplet = async (capletName, reachedBy) => {
+  const releaseGuest = async (guestName, owned) => {
     try {
-      if (await E(hostAgent).has(capletName)) {
-        await E(hostAgent).cancel(capletName);
+      if (await E(hostAgent).has(guestName)) {
+        await E(hostAgent).cancel(guestName);
       }
     } catch (error) {
       // Keep going: the rest of the tree still has to come down, and the
@@ -331,47 +340,61 @@ export const releaseFaeAgent = async ({ hostAgent, name }) => {
       failures.push(error);
       return;
     }
-    try {
-      for (const petName of reachedBy) {
+    for (const petName of owned) {
+      try {
         if (await E(hostAgent).has(petName)) {
           await E(hostAgent).remove(petName);
         }
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  };
+
+  const failuresBeforeDriver = failures.length;
+  const removedDriverNames = () => failures.length === failuresBeforeDriver;
+  await releaseGuest(profileNameFor(driverHandleName), [
+    profileNameFor(driverHandleName),
+    driverHandleName,
+    driverResultName,
+  ]);
+  if (removedDriverNames()) {
+    // A pin is a name, not a formula. Dropped with the driver it pins, and
+    // kept if that driver would not go down, so a restart before a successful
+    // retry still revives an agent somebody is trying to save.
+    try {
+      if (await E(hostAgent).has('@pins', driverResultName)) {
+        await E(hostAgent).remove('@pins', driverResultName);
       }
     } catch (error) {
       failures.push(error);
     }
-  };
-
-  // Caplets first, then the guests whose powers they run on, then the agent's
-  // own guest. Dropping a name does not cancel what it named, so removing
-  // these without cancelling would leave every guest incarnated for the life
-  // of the daemon — inbox and all — reachable by anyone still holding it.
-  await releaseCaplet(driverResultName, [driverResultName]);
-  await releaseCaplet(spawnerResultName, [spawnerResultName]);
-  await releaseCaplet(profileNameFor(driverHandleName), [
-    driverHandleName,
-    profileNameFor(driverHandleName),
-  ]);
-  await releaseCaplet(profileNameFor(spawnerHandleName), [
-    spawnerHandleName,
+  }
+  await releaseGuest(profileNameFor(spawnerHandleName), [
     profileNameFor(spawnerHandleName),
+    spawnerHandleName,
+    spawnerResultName,
   ]);
-  await releaseCaplet(profileNameFor(name), [name, profileNameFor(name)]);
+  await releaseGuest(profileNameFor(name), [profileNameFor(name)]);
 
-  try {
-    // Removed unconditionally: a pin is a name, not a formula, and
-    // provisioning refused to start if this one was already taken.
-    if (await E(hostAgent).has('@pins', driverResultName)) {
-      await E(hostAgent).remove('@pins', driverResultName);
+  // The agent's handle is what its parent enumerates by, so it goes last and
+  // only when nothing of this agent — or anything beneath it — is left. A
+  // half-released agent that had already lost this name would be invisible to
+  // the recursion that is supposed to come back for it.
+  if (failures.length === 0) {
+    try {
+      if (await E(hostAgent).has(name)) {
+        await E(hostAgent).remove(name);
+      }
+    } catch (error) {
+      failures.push(error);
     }
-  } catch (error) {
-    failures.push(error);
   }
 
   if (failures.length > 0) {
     throw new AggregateError(
       failures,
-      `Releasing agent "${name}" did not complete; what could not be cancelled is still bound, so retry once the cause is cleared`,
+      `Releasing agent "${name}" did not complete; what could not be cancelled is still bound and the agent is still enumerable, so retry once the cause is cleared`,
     );
   }
 };

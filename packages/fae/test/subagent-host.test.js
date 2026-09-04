@@ -28,11 +28,30 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   const removed = [];
   let nextId = 0;
 
+  /** Caplet result names keyed by the powers guest they die with. */
+  /** @type {Map<string, string[]>} */
+  const dependents = new Map();
+
   const bind = name => {
     nextId += 1;
     const id = `${name}-id-${nextId}`;
     names.set(name, id);
     return id;
+  };
+
+  /**
+   * The daemon's `thisDiesIfThatDies(powersId)`: cancelling a powers guest
+   * cancels the caplet running on it. Modelled here because teardown relies on
+   * it — cancelling the caplet separately would be a second cancel, which
+   * reincarnates rather than being idempotent.
+   *
+   * @param {string} name
+   */
+  const cascadeFrom = name => {
+    for (const dependent of dependents.get(name) || []) {
+      if (!cancelled.includes(dependent)) cancelled.push(dependent);
+      cascadeFrom(dependent);
+    }
   };
 
   const hostAgent = Far('HostAgent', {
@@ -59,6 +78,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
     async makeUnconfined(_worker, _specifier, options = {}) {
       onStep({ op: 'makeUnconfined', name: options.resultName });
       bind(options.resultName);
+      const siblings = dependents.get(options.powersName) || [];
+      siblings.push(options.resultName);
+      dependents.set(options.powersName, siblings);
       return Far('Caplet', {});
     },
     async copy(from, to) {
@@ -69,6 +91,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
     },
     async cancel(name) {
       cancelled.push(name);
+      cascadeFrom(name);
     },
     async remove(...petNamePath) {
       const key = petNamePath.join('/');
@@ -181,34 +204,39 @@ test('a subagent may not take a name the enumeration keys on', async t => {
   t.is(subagentAgentName('parent', 'helper'), 'parent.sub.helper');
 });
 
-test('a subagent named "driver" is not enumerated as a phantom', t => {
-  // `p`'s subagent `driver` has the *handle* `p.sub.driver` and the driver
-  // caplet `p.sub.driver-driver`. Only the second is a driver; a suffix test
-  // over a hyphenated infix reported the first as a subagent named `''` —
-  // one that counted against the bound, could never be stopped, and whose
-  // teardown cancelled the live subagent's handle on the way.
+test('an agent is enumerated by its own handle, not by its driver', t => {
+  // Keying the listing on `<child>-driver` meant a child whose driver was
+  // cancelled first vanished from its parent's listing the moment that step
+  // succeeded — even if a later step failed. It then counted against no bound,
+  // no retry revisited it, and `spawn` refused the name forever because the
+  // pre-check still saw the leftovers.
+  //
+  // `p`'s subagent `driver` has the handle `p.sub.driver`; the driver *caplet*
+  // of subagent `x` is `p.sub.x-driver`, and the reserved suffix tells them
+  // apart.
   t.deepEqual(
     subagentNamesIn(
-      ['p.sub.driver', 'p.sub.driver-driver', 'p.sub.x-driver'],
+      [
+        'p.sub.driver',
+        'p.sub.driver-driver',
+        'p.sub.x',
+        'p.sub.x-driver',
+        'p.sub.x-spawner-handle',
+      ],
       'p',
     ),
     ['driver', 'x'],
   );
-  // A grandchild's driver carries the prefix too, and belongs to its own
-  // parent's listing. The inner segment carries the infix, and an agent name
-  // may not contain the infix's delimiter.
-  t.deepEqual(subagentNamesIn(['p.sub.x.sub.y-driver'], 'p'), []);
-  t.deepEqual(subagentNamesIn(['p.sub.x.sub.y-driver'], 'p.sub.x'), ['y']);
-  // Nothing that is not a driver is a subagent.
-  t.deepEqual(
-    subagentNamesIn(['p.sub.x', 'p.sub.x-spawner', 'other'], 'p'),
-    [],
-  );
+  // A grandchild belongs to its own parent's listing: the inner segment
+  // carries the infix, and an agent name may not contain its delimiter.
+  t.deepEqual(subagentNamesIn(['p.sub.x.sub.y'], 'p'), []);
+  t.deepEqual(subagentNamesIn(['p.sub.x.sub.y'], 'p.sub.x'), ['y']);
+  t.deepEqual(subagentNamesIn(['other', 'profile-for-p.sub.x'], 'p'), []);
   // The delimiter is what makes the parse unambiguous. With a hyphenated
-  // infix, root agents `p` and `p-sub` both claimed `p-sub-sub-x-driver`, and
-  // `p` could enumerate — and tear down — `p-sub`'s subagent.
-  t.deepEqual(subagentNamesIn(['p-sub.sub.x-driver'], 'p'), []);
-  t.deepEqual(subagentNamesIn(['p-sub.sub.x-driver'], 'p-sub'), ['x']);
+  // infix, root agents `p` and `p-sub` both claimed `p-sub-sub-x`, and `p`
+  // could enumerate — and tear down — `p-sub`'s subagent.
+  t.deepEqual(subagentNamesIn(['p-sub.sub.x'], 'p'), []);
+  t.deepEqual(subagentNamesIn(['p-sub.sub.x'], 'p-sub'), ['x']);
 });
 
 test('provisioning refuses a name that would take one already in use', async t => {
@@ -251,7 +279,9 @@ test('a formula that could not be cancelled keeps the names that reach it', asyn
   const stubborn = Far('HostAgent', {
     ...hostAgent,
     async cancel(name) {
-      if (name === 'parent-spawner') throw Error('graph lock unavailable');
+      if (name === 'profile-for-parent-spawner-handle') {
+        throw Error('graph lock unavailable');
+      }
       return hostAgent.cancel(name);
     },
   });
@@ -266,20 +296,25 @@ test('a formula that could not be cancelled keeps the names that reach it', asyn
   // Not every cancel failure means the formula survived, but some do, and a
   // name is the only way back to whatever did — a running spawner caplet holds
   // `host-agent`.
+  t.true(names.has('profile-for-parent-spawner-handle'));
   t.true(names.has('parent-spawner'));
   // What *was* cancelled loses its names in the same step, because `cancel` is
   // not idempotent: the daemon deletes the controller, so a second cancel of
   // the same id re-runs the formula before cancelling it again. A retry that
-  // found these names still bound would reincarnate a driver — and a spawner —
-  // it had already destroyed.
+  // found these names still bound would reincarnate a driver it had already
+  // destroyed.
+  t.false(names.has('profile-for-parent-driver-handle'));
   t.false(names.has('parent-driver'));
-  t.false(names.has('parent'));
+  // The handle is what a parent enumerates by, so it survives a partial
+  // teardown: an agent nothing can find is an agent no retry comes back for.
+  t.true(names.has('parent'));
 
   // Retry once the cause has cleared.
   await releaseFaeAgent({ hostAgent, name: 'parent' });
   t.deepEqual([...names.keys()], []);
   t.is(
-    cancelled.filter(entry => entry === 'parent-driver').length,
+    cancelled.filter(entry => entry === 'profile-for-parent-driver-handle')
+      .length,
     1,
     'a retry must not re-cancel — and so reincarnate — what is already gone',
   );
@@ -311,7 +346,9 @@ test('a stubborn grandchild leaves a retryable tree, not a resurrectable one', a
   const stubborn = Far('HostAgent', {
     ...hostAgent,
     async cancel(name) {
-      if (name === 'p.sub.x.sub.c-driver') throw Error('graph lock');
+      if (name === 'profile-for-p.sub.x.sub.c-driver-handle') {
+        throw Error('graph lock');
+      }
       return hostAgent.cancel(name);
     },
   });
@@ -323,15 +360,18 @@ test('a stubborn grandchild leaves a retryable tree, not a resurrectable one', a
     },
   );
   // The parent's own caplets come down regardless — a spawner left running
-  // holds `host-agent` — and what came down loses its names. Only the
-  // grandchild's driver, which would not cancel, keeps one, which is what a
-  // retry needs to reach it.
+  // holds `host-agent` — and what came down loses its names.
   t.true(cancelled.includes('p.sub.x-spawner'));
-  t.true(names.has('p.sub.x.sub.c-driver'));
-  t.false(names.has('p.sub.x'));
+  t.false(names.has('p.sub.x-spawner'));
+  // Both the grandchild and its parent stay enumerable. Keying the listing on
+  // the driver meant a child whose driver went down first disappeared from it,
+  // so no retry ever came back and `spawn` refused the name forever.
+  t.deepEqual(subagentNamesIn([...names.keys()], 'p'), ['x']);
+  t.deepEqual(subagentNamesIn([...names.keys()], 'p.sub.x'), ['c']);
 
   await releaseFaeAgent({ hostAgent, name: 'p.sub.x' });
-  t.false(names.has('p.sub.x.sub.c-driver'));
+  t.deepEqual(subagentNamesIn([...names.keys()], 'p'), []);
+  t.false(names.has('p.sub.x.sub.c'));
   t.is(
     cancelled.filter(entry => entry === 'p.sub.x-spawner').length,
     1,
