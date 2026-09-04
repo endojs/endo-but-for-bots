@@ -3263,6 +3263,49 @@ pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
     v
 }
 
+/// The self-contained shape gate for an `Iterator.from` wrapper cursor (kind
+/// 8): it wraps a live iterable, retains a result slot, and carries none of the
+/// index/done/key/text state the other cursor kinds use.
+///
+/// Shared by [`decode_iterators`] and [`check_image_slot_bounds`] so the
+/// encoding has exactly one definition and a change to it cannot land in one
+/// gate while missing the other.
+fn iterator_from_wrapper_malformed(
+    iterable: u32,
+    result: u32,
+    index: u32,
+    done: bool,
+    enum_keys_empty: bool,
+    str_bytes_empty: bool,
+) -> bool {
+    iterable == u32::MAX
+        || result == u32::MAX
+        || index != 0
+        || done
+        || !enum_keys_empty
+        || !str_bytes_empty
+}
+
+/// The self-contained shape gate for a RegExp String Iterator cursor (kind 9):
+/// it wraps a live iterable, retains a result slot, keeps its mode bits in
+/// `index`, carries no for-in keys, and holds whole UTF-16 code units.
+///
+/// Shared by both gates for the same reason as
+/// [`iterator_from_wrapper_malformed`].
+fn regexp_string_iterator_malformed(
+    iterable: u32,
+    result: u32,
+    index: u32,
+    enum_keys_empty: bool,
+    str_bytes_len: usize,
+) -> bool {
+    iterable == u32::MAX
+        || result == u32::MAX
+        || index > 3
+        || !enum_keys_empty
+        || str_bytes_len % 2 != 0
+}
+
 pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "iterator cursors");
     let count = c.u32()? as usize;
@@ -3312,12 +3355,28 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
                 "iterator cursors: for-in cursor past its key list",
             ));
         }
+        if kind == 8
+            && iterator_from_wrapper_malformed(
+                iterable,
+                result,
+                index,
+                done,
+                enum_keys.is_empty(),
+                str_bytes.is_empty(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed Iterator.from wrapper",
+            ));
+        }
         if kind == 9
-            && (iterable == u32::MAX
-                || result == u32::MAX
-                || index > 3
-                || !enum_keys.is_empty()
-                || str_bytes.len() % 2 != 0)
+            && regexp_string_iterator_malformed(
+                iterable,
+                result,
+                index,
+                enum_keys.is_empty(),
+                str_bytes.len(),
+            )
         {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: invalid RegExp String Iterator",
@@ -4192,23 +4251,27 @@ pub(crate) fn check_image_slot_bounds(
             }
         }
         if r.kind == 8
-            && (r.iterable == u32::MAX
-                || r.result == u32::MAX
-                || r.index != 0
-                || r.done
-                || !r.enum_keys.is_empty()
-                || !r.str_bytes.is_empty())
+            && iterator_from_wrapper_malformed(
+                r.iterable,
+                r.result,
+                r.index,
+                r.done,
+                r.enum_keys.is_empty(),
+                r.str_bytes.is_empty(),
+            )
         {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: malformed Iterator.from wrapper",
             ));
         }
         if r.kind == 9
-            && (r.iterable == u32::MAX
-                || r.result == u32::MAX
-                || r.index > 3
-                || !r.enum_keys.is_empty()
-                || r.str_bytes.len() % 2 != 0)
+            && regexp_string_iterator_malformed(
+                r.iterable,
+                r.result,
+                r.index,
+                r.enum_keys.is_empty(),
+                r.str_bytes.len(),
+            )
         {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: invalid RegExp String Iterator",

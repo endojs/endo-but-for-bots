@@ -1188,7 +1188,14 @@ fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter
                     Ok(source) => source,
                     Err(reason) => return preskip(&reason),
                 };
-                run_accepted_module(cfg, fm, &assembled)
+                // `assemble` returns `src` unchanged for a `raw`-flagged
+                // module. There the compile above already produced the exact
+                // bytes `run_accepted_module` would recompute, and (under
+                // `--oracle`) already byte-checked them, so hand them over
+                // rather than paying a second IronHorse compile and a second
+                // fork of the pinned oracle compiler per case.
+                let precompiled = (assembled == src).then_some((bytes, symbols));
+                run_accepted_module(cfg, fm, &assembled, precompiled)
             }
         }
         Ok(Ok(_)) if cfg.oracle => {
@@ -1334,20 +1341,33 @@ fn module_dual_run(
 /// single-file shapes in IronHorse, and only then invoke XS for the executable
 /// differential. Running IronHorse first avoids asking the one-file oracle
 /// fixture to resolve imports that this tranche deliberately does not claim.
-fn run_accepted_module(cfg: &Config, fm: &Frontmatter, source: &str) -> Verdict {
-    let (bytecode, symbols) = match ironhorse_compile::compile_module_atoms(source) {
-        Ok(compiled) => compiled,
-        Err(error)
-            if matches!(
-                error.kind,
-                ironhorse_compile::parser::ParseErrorKind::Unsupported
-            ) =>
-        {
-            return Verdict::RunSkip("compiler-unimplemented:module-harness".into())
-        }
-        Err(_) => return Verdict::RunSkip("module:harness-compiler-rejected".into()),
+fn run_accepted_module(
+    cfg: &Config,
+    fm: &Frontmatter,
+    source: &str,
+    // The `(bytecode, symbols)` the caller already compiled from a source
+    // byte-identical to `source`, and already byte-checked against the oracle.
+    // `Some` skips both compiles and the divergence gate, all three of which
+    // are known to reproduce the same answers on identical bytes.
+    precompiled: Option<(Vec<u8>, Vec<u8>)>,
+) -> Verdict {
+    let carried = precompiled.is_some();
+    let (bytecode, symbols) = match precompiled {
+        Some(compiled) => compiled,
+        None => match ironhorse_compile::compile_module_atoms(source) {
+            Ok(compiled) => compiled,
+            Err(error)
+                if matches!(
+                    error.kind,
+                    ironhorse_compile::parser::ParseErrorKind::Unsupported
+                ) =>
+            {
+                return Verdict::RunSkip("compiler-unimplemented:module-harness".into())
+            }
+            Err(_) => return Verdict::RunSkip("module:harness-compiler-rejected".into()),
+        },
     };
-    if cfg.oracle {
+    if cfg.oracle && !carried {
         let oracle_compile = match xs_oracle::compile_module(source) {
             Some(compiled) => compiled,
             None => return Verdict::RunSkip("oracle-machine-error".into()),
@@ -1601,15 +1621,25 @@ impl XstReport {
         // whole verdict is the named strict skip); every other case's primary
         // run is sloppy, with strict recorded as a separate named skip when the
         // case has a strict mode not yet implemented.
-        let outcome = match &result.verdict {
-            Verdict::Covered => Outcome::Pass,
-            Verdict::Fail(_) => Outcome::Fail,
-            Verdict::PreSkip(reason) | Verdict::RunSkip(reason) => Outcome::Skip(reason.clone()),
-        };
+        let outcome = expectation_outcome(&result.verdict);
         if !result.mode_outcomes.is_empty() {
+            let mut saw_strict = false;
             for (mode, mode_outcome) in &result.mode_outcomes {
+                saw_strict |= matches!(mode, Mode::Strict);
                 self.observed
                     .insert((path.to_string(), *mode), mode_outcome.clone());
+            }
+            // A mode policy can omit the strict variant while still recording
+            // sloppy mode outcomes -- the exact-metering corpus sets
+            // `strict_skipped` and then clears `run_strict`, so `mode_outcomes`
+            // holds only the sloppy row. The named strict skip still belongs in
+            // the observed list; without it the two-directional ratchet quietly
+            // stops covering strict mode for every case in that corpus.
+            if result.strict_skipped && !saw_strict {
+                self.observed.insert(
+                    (path.to_string(), Mode::Strict),
+                    Outcome::Skip("strict-unimplemented".to_string()),
+                );
             }
         } else {
             let only_strict = matches!(
