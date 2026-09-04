@@ -56,6 +56,15 @@ const MAX_TASK_LENGTH = 32_768;
 const MAX_ANSWER_LENGTH = 262_144;
 
 /**
+ * Timed-out asks whose reply is still worth intercepting if it turns up.
+ *
+ * Bounded because nothing prunes the set otherwise; past the bound the oldest
+ * abandoned ask is forgotten and a very late reply to it lands in the inbox as
+ * ordinary mail.
+ */
+const MAX_ABANDONED_ASKS = 32;
+
+/**
  * @param {unknown} name
  * @returns {string}
  */
@@ -148,6 +157,8 @@ harden(SubagentSpawnerInterface);
  * @property {string | undefined} outboundId - `messageId` of the delegation,
  *   learned when the daemon echoes it into this agent's own mailbox.
  * @property {(answer: { text: string, number: bigint, edgeNames: string[] }) => void} settle
+ * @property {boolean} settled - Whether a reply has already been delivered, so
+ *   the ask's `finally` can tell "answered" from "gave up".
  */
 
 /**
@@ -177,6 +188,28 @@ export const makeSubagentDelegations = ({
   const pendingByName = new Map();
   /** @type {Map<string, PendingDelegation>} */
   const pendingByOutboundId = new Map();
+  /**
+   * Delegations whose ask gave up waiting.
+   *
+   * A reply that arrives after the timeout has nobody to hand it to, and left
+   * to fall through it becomes an ordinary inbound message: the parent answers
+   * its subagent, the subagent answers back, and two models bill an unbounded
+   * exchange nobody asked for. Claiming it consumes it instead — the harness
+   * declines to make a turn of it, exactly as for an answered ask.
+   *
+   * Bounded and oldest-first, because nothing else prunes it.
+   * @type {Set<string>}
+   */
+  const abandonedOutboundIds = new Set();
+
+  /** @param {string} outboundId */
+  const abandon = outboundId => {
+    abandonedOutboundIds.add(outboundId);
+    while (abandonedOutboundIds.size > MAX_ABANDONED_ASKS) {
+      const [oldest] = abandonedOutboundIds;
+      abandonedOutboundIds.delete(oldest);
+    }
+  };
 
   /** @param {PendingDelegation} delegation */
   const forget = delegation => {
@@ -190,7 +223,9 @@ export const makeSubagentDelegations = ({
    * Offer one mailbox message to the delegation registry.
    *
    * @param {any} message
-   * @returns {{ claimed: boolean }}
+   * @returns {{ claimed: boolean }} `claimed` means the harness must not turn
+   *   this message into a conversation turn — either because it answered a
+   *   pending ask, or because it answered one that had already given up.
    */
   const claim = message => {
     const unclaimed = harden({ claimed: false });
@@ -220,6 +255,13 @@ export const makeSubagentDelegations = ({
     }
 
     if (typeof replyTo !== 'string') return unclaimed;
+    if (abandonedOutboundIds.has(replyTo)) {
+      abandonedOutboundIds.delete(replyTo);
+      console.error(
+        `[subagent] discarding a reply to an ask that had already given up`,
+      );
+      return harden({ claimed: true });
+    }
     const delegation = pendingByOutboundId.get(replyTo);
     // `replyTo` can only name a message its sender took part in, but matching
     // the sender as well keeps the guarantee local to this module.
@@ -232,6 +274,7 @@ export const makeSubagentDelegations = ({
       )
     );
     forget(delegation);
+    delegation.settled = true;
     delegation.settle({
       text: messageText(message),
       number,
@@ -274,6 +317,7 @@ export const makeSubagentDelegations = ({
       text: task,
       outboundId: undefined,
       settle: answerKit.resolve,
+      settled: false,
     };
     // Claim the slot before the first `await`. Checked-then-awaited, two
     // concurrent asks for one subagent both passed the guard and the second
@@ -319,8 +363,12 @@ export const makeSubagentDelegations = ({
       );
     } finally {
       timers.clearTimeout(timer);
-      // A late reply is no longer claimable, so it lands in the inbox as an
-      // ordinary message rather than resolving a question nobody is asking.
+      // A reply that arrives after this point has nobody waiting for it. It is
+      // still consumed rather than delivered — see `abandonedOutboundIds` —
+      // because answering it would start an exchange between two models.
+      if (!delegation.settled && delegation.outboundId !== undefined) {
+        abandon(delegation.outboundId);
+      }
       forget(delegation);
     }
   };

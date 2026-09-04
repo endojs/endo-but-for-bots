@@ -277,7 +277,7 @@ test('a reply from a different sender does not settle the delegation', async t =
   await t.throwsAsync(answerP, { message: /did not reply within/ });
 });
 
-test('a late reply is no longer claimable and falls through to the inbox', async t => {
+test('a late reply is consumed rather than answered', async t => {
   const mailbox = makeMailbox({
     names: { 'subagents/helper': locatorFor(CHILD) },
   });
@@ -298,12 +298,56 @@ test('a late reply is no longer claimable and falls through to the inbox', async
   // The timer is released, so a timed-out ask leaves nothing behind.
   t.is(pendingCount(), 0);
 
+  // Nobody is waiting for this reply, but letting it fall through to the inbox
+  // makes it an ordinary message: the parent answers its subagent, the subagent
+  // answers back, and two models bill an unbounded exchange nobody asked for.
   const late = mailbox.deliverReply({
     from: locatorFor(CHILD),
     replyTo: 'out-1',
     text: 'sorry, took a while',
   });
+  t.deepEqual(delegations.claim(late), { claimed: true });
+
+  // Only once. A second message naming the same reply — an edit, or a replay
+  // after a restart — is ordinary mail again.
   t.deepEqual(delegations.claim(late), { claimed: false });
+});
+
+test('the set of abandoned asks is bounded', async t => {
+  const mailbox = makeMailbox({ names: {} });
+  const { timers, fireAll } = makeManualTimers();
+  const delegations = makeSubagentDelegations({
+    powers: mailbox.powers,
+    timers,
+  });
+  // 33 asks, one more than the bound, each timed out with its reply still
+  // outstanding.
+  for (let index = 0; index < 33; index += 1) {
+    mailbox.names[`subagents/helper${index}`] = locatorFor(CHILD);
+    const answerP = delegations.ask({
+      name: `helper${index}`,
+      task: `task ${index}`,
+      timeoutSeconds: 1,
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await mailbox.whenSent();
+    delegations.claim(mailbox.stream[mailbox.stream.length - 1]);
+    fireAll();
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(answerP, { message: /did not reply within/ });
+  }
+  const first = mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-1',
+    text: 'the oldest, long forgotten',
+  });
+  t.deepEqual(delegations.claim(first), { claimed: false });
+  const last = mailbox.deliverReply({
+    from: locatorFor(CHILD),
+    replyTo: 'out-33',
+    text: 'the newest',
+  });
+  t.deepEqual(delegations.claim(last), { claimed: true });
 });
 
 test('two questions raced at one subagent are refused, not silently dropped', async t => {

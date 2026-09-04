@@ -258,3 +258,13 @@ The provider is rebuilt only when the bytes actually change.
 A deployment still carrying a plaintext `authToken` in its provider config keeps
 working, with a warning: that arrangement cannot be rotated, revoked, or
 audited.
+
+Going the other way — replacing a managed secret with a plaintext token — takes
+more than re-running setup.
+Setup drops the factory's own `llm-auth-secret`, so newly created agents get
+none, but every agent already provisioned holds the `SecretBlob` in its own
+namespace and the resolver prefers a capability over a config value.
+A `SecretBlob` hands its holder the bytes by design, so the way to stop those
+agents using the old token is to **revoke the secret**, which is what the secret
+manager is for; removing the pet name from the provider config is not a
+revocation.
