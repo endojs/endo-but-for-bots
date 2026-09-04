@@ -67,19 +67,21 @@ the end user installs a prebuilt bundle and never runs the builder.
 
 ### Where the Familiar's Data Lives
 
-This section argues in vocabulary the manifest sections below define in
-full, so two definitions up front: the **manifest**
-(`org.endojs.Familiar.json`, § Manifest Shape) is the Flatpak build's
-declaration of the app, and its **`finish-args`** list (§ Finish-Args) is
-the set of sandbox holes the app is *granted* at runtime — each entry a
-**grant**, and a `--filesystem=<token>` grant in particular maps a host
-directory into the otherwise-private sandbox. The claim of this section is
-that the Familiar's data needs *no* `--filesystem` grant; the sections
-below justify each grant it *does* take.
+This section argues in vocabulary that the manifest sections below define
+in full, so two definitions up front.
+The **manifest** (`org.endojs.Familiar.json`, § Manifest Shape) is the
+Flatpak build's declaration of the app.
+Its **`finish-args`** list (§ Finish-Args) is the set of sandbox holes the
+app is *granted* at runtime: each entry a **grant**, and a
+`--filesystem=<token>` grant in particular maps a host directory into the
+otherwise-private sandbox.
+The claim of this section is that the Familiar's data needs *no*
+`--filesystem` grant.
+The sections below justify each grant it *does* take.
 
 This is the single load-bearing statement of the packaged Familiar's
-storage model; every claim about grants, reset gestures, and smoke
-steps below derives from it.
+storage model; every claim about grants, reset gestures, and smoke steps
+below derives from it.
 
 **The Flatpak Familiar is its own isolated Endo on the filesystem.**
 Its state, cache, CapTP socket (the daemon's control socket, at
@@ -111,58 +113,79 @@ manifest omits `--filesystem=home`:
   create directories in that private tmpfs: app-private, ephemeral, and
   needing no grant.
 
-One consequence cuts the other way and is worth stating plainly. The per-app
-`$HOME` (`~/.var/app/org.endojs.Familiar`) is shared across *instances* of the
-same app, while Flatpak's `$XDG_RUNTIME_DIR` is per-*instance*. A second
-`flatpak run` therefore does not see the first instance's CapTP socket (it lives
-in the first instance's private runtime dir) and can start a **second daemon
-over the same per-app state directory**. The `.zip` status quo cannot produce
-this (its shared host runtime dir lets the second launch find the socket).
+One consequence cuts the other way and is worth stating plainly.
+The per-app `$HOME` (`~/.var/app/org.endojs.Familiar`) is shared across
+*instances* of the same app, while Flatpak's `$XDG_RUNTIME_DIR` is
+per-*instance*.
+A second `flatpak run` therefore does not see the first instance's CapTP
+socket, which lives in the first instance's private runtime dir.
+The `.zip` status quo cannot produce this split, because its shared host
+runtime dir lets the second launch find the socket.
 
 **This is a normal quit-and-relaunch hazard, not a deliberate-double-launch
 edge case, because the daemon deliberately outlives the window.**
 `daemon-manager.js` spawns the daemon `detached: true` and `unref()`s it
 ([daemon-manager.js](../packages/familiar/src/daemon-manager.js)), and
-`electron-main.js`'s quit path is explicit that "Daemon continues running after
-quit; nothing to clean up"
-([electron-main.js](../packages/familiar/electron-main.js)). Under Flatpak a
-running member process keeps the app *instance* alive, so closing the window
-does **not** tear the instance down: the detached daemon survives, and its
-per-instance `$XDG_RUNTIME_DIR` (socket and PID files) survives with it — the
-ephemeral tmpfs is *not* reclaimed at window-close on the ordinary path. A
-relaunch then spawns a *new* instance with a *new* runtime dir that cannot see
-the surviving daemon's socket, and starts the second daemon over the shared
-per-app state. So ordinary quit-then-reopen, not a deliberate double `flatpak
-run`, is what triggers the two-daemon collision. The MVR posture accepts a
-single-instance usage assumption for the interim, but the hardening (an Electron
-`requestSingleInstanceLock`, or an `ENDO_ADDR`/socket liveness check in
-`launcher.sh`) is therefore a normal-path defect to close, not an edge-case
-nicety; it is tracked in § Known Gaps and TODOs below.
+`electron-main.js`'s quit path is explicit that "Daemon continues running
+after quit; nothing to clean up"
+([electron-main.js](../packages/familiar/electron-main.js)).
+Under Flatpak a running member process keeps the app *instance* alive, so
+closing the window does **not** tear the instance down.
+The detached daemon survives, and its per-instance `$XDG_RUNTIME_DIR`
+(socket and PID files) survives with it; the ephemeral tmpfs is *not*
+reclaimed at window-close on the ordinary path.
+A relaunch then spawns a *new* instance with a *new* runtime dir that
+cannot see the surviving daemon's socket.
+So ordinary quit-then-reopen, not a deliberate double `flatpak run`, is
+what triggers the collision.
 
-The consequence for the manifest is decisive: adding
-`--filesystem=xdg-run/endo` or `xdg-cache/endo`
-would be not merely unnecessary but **harmful**, because those grants
-map the *host's* directories into the sandbox, sharing the CapTP
-socket with any host-run daemon and reintroducing the `EADDRINUSE`
-documented in
+**What the collision produces depends on whether the gateway port is still
+fixed, and the shipped manifest and the ephemeral-`ENDO_ADDR` hardening
+produce opposite symptoms, so the two TODOs below are ordered.**
+On the shipped manifest the relaunched daemon's gateway TCP bind is the
+fixed `127.0.0.1:8920` on the host loopback (`--share=network`;
+§ Finish-Args), which the surviving first daemon already holds, so the
+second daemon rejects at start on that bind (`manager-node.js`'s
+start-time bind invariant; § Finish-Args, the `--share=network` row).
+The user-visible symptom is therefore *loud*: the app fails to reopen after
+close until the orphan daemon is killed, a worse regression than the `.zip`
+status quo but a self-announcing one, not silent state corruption.
+Landing the ephemeral-`ENDO_ADDR` pin (§ Known Gaps and TODOs, first item)
+*alone* removes that bind collision, and in doing so converts the loud
+fail-to-reopen into exactly the silent second-daemon-over-one-state
+corruption the runtime-dir split would otherwise cause.
+So the single-instance lock (or socket liveness check) must land *with or
+before* the ephemeral-`ENDO_ADDR` pin, never after it: reversing the order
+trades a loud, recoverable failure for silent state corruption.
+The MVR posture accepts a single-instance usage assumption for the interim,
+but this hardening is a normal-path defect to close, not an edge-case
+nicety, and its ordering constraint is recorded with the two TODOs in
+§ Known Gaps and TODOs below.
+
+The consequence for the manifest is decisive.
+Adding `--filesystem=xdg-run/endo` or `xdg-cache/endo` would be not merely
+unnecessary but **harmful**, because those grants map the *host's*
+directories into the sandbox, sharing the CapTP socket with any host-run
+daemon and reintroducing the `EADDRINUSE` documented in
 [packages/familiar/README.md](../packages/familiar/README.md)
 § Unix Socket Leftovers.
-(`--filesystem=xdg-state/endo` is a third case: it is *inert* rather than
+`--filesystem=xdg-state/endo` is a third case: it is *inert* rather than
 harmful, because Flatpak's documented `--filesystem=` token list has no
-`xdg-state` token at all; § Finish-Args states this same disposition.)
+`xdg-state` token at all (§ Finish-Args states this same disposition).
 The manifest therefore grants none of the three `--filesystem` tokens, and
 `launcher.sh` pins no filesystem path: those defaults are already correct.
 The one pin the design *does* contemplate is network-side: an ephemeral
 `ENDO_ADDR` port so the gateway does not collide on the host's fixed
 `127.0.0.1:8920` (§ Finish-Args, `--share=network`; § Known Gaps and TODOs).
 The reset gesture is `flatpak uninstall --user org.endojs.Familiar` plus
-`rm -rf ~/.var/app/org.endojs.Familiar`; the CI clean-state step is the same
-`rm -rf`. (The per-instance socket / PID tmpfs is reclaimed only when the
-instance ends, i.e. when the detached daemon exits — not at window-close, since
-the daemon deliberately survives quit, per the two-instance note above. The
-`rm -rf` targets the persistent per-app `$HOME`, which is what a reset must
-clear; the ephemeral runtime dir is torn down with the last surviving daemon and
-needs no separate wipe.)
+`rm -rf ~/.var/app/org.endojs.Familiar`, and the CI clean-state step is the
+same `rm -rf`.
+The per-instance socket and PID tmpfs is reclaimed only when the instance
+ends, that is, when the detached daemon exits, not at window-close, since
+the daemon deliberately survives quit (per the two-instance note above).
+The `rm -rf` targets the persistent per-app `$HOME`, which is what a reset
+must clear; the ephemeral runtime dir is torn down with the last surviving
+daemon and needs no separate wipe.
 
 ## Status Quo
 
@@ -190,24 +213,30 @@ GitHub-Release upload.
 
 ```mermaid
 flowchart TD
-  P[step 5: package-app.mjs<br/>out/Familiar-linux-x64/] --> A
-  A[step 6a: stage Flatpak inputs<br/>scripts/make-flatpak.mjs] --> B
-  B[step 6b: flatpak-builder<br/>--repo=repo build org.endojs.Familiar.json] --> C
-  C[step 6c: flatpak build-bundle<br/>repo to .flatpak single file] --> D
-  D[out/make/Familiar-&lt;version&gt;-linux-x64.flatpak]
-  P --> Z[step 6: existing zip<br/>retained for unsigned download]
+  P[step 5: package-app.mjs<br/>out/Familiar-linux-x64/] --> Z[step 6: make-distributables.mjs<br/>existing .zip, retained for plain download]
+  P --> A[stage: make-flatpak.mjs<br/>stage Flatpak inputs]
+  A --> B[build: flatpak-builder<br/>--repo=repo org.endojs.Familiar.json]
+  B --> C[bundle: flatpak build-bundle<br/>repo to .flatpak single file]
+  C --> D[out/make/Familiar-&lt;version&gt;-linux-x64.flatpak]
 ```
 
-Step 5 (`package-app.mjs`) is the `@electron/packager` step
-documented in [familiar-release.md](familiar-release.md) Status Quo;
-it produces the packaged-app directory tree under
-`out/Familiar-linux-x64/`.
-Steps 6a, 6b, and 6c are all driven by a single script
-(`scripts/make-flatpak.mjs`); the diagram names the conceptual
-phases 6a/6b/6c for readability, and they run inside that one script
-rather than as three separate CI steps.
-The existing zip step ("step 6" in the diagram) also reads step 5's
-directory and is untouched.
+Step 5 (`package-app.mjs`) is the `@electron/packager` step documented in
+[familiar-release.md](familiar-release.md) Status Quo; it produces the
+packaged-app directory tree under `out/Familiar-linux-x64/`.
+Step 6 (`make-distributables.mjs`) is the existing `.zip` emission and is
+untouched; it is the one thing numbered step 6.
+The Flatpak path branches independently off step 5's directory and does
+*not* take a step number: its three phases (*stage*, *build*, *bundle*) are
+conceptual labels for readability, all driven by the single script
+`scripts/make-flatpak.mjs`, not separate build steps.
+Where that script runs differs by driver, and the difference is stated here
+so § CI Workflow Integration and § Build Script do not read as a
+contradiction.
+In CI it runs as its own `step:flatpak` step after the step-6 `make` (zip)
+step (§ CI Workflow Integration).
+In a developer's top-level `build.mjs` it is chained after step 6 (the zip)
+on Linux, so one build produces both artifacts without a second command
+(§ Build Script).
 
 The existing `.zip` output stays for the plain-download case; the
 Flatpak adds a sandboxed alternative (unsigned in the MVR-followups
@@ -422,9 +451,10 @@ A future PR that registers a `x-scheme-handler=` adds the matching
 for listing; the schema is documented in the
 [AppStream documentation](https://www.freedesktop.org/software/appstream/docs/).
 The `<releases>` entry is **not** hand-maintained: `make-flatpak.mjs`
-stamps `version` and `date` from `package.json` at stage time (see
+stamps the `version` from `package.json` and the `date` from
+`SOURCE_DATE_EPOCH` (or a committed `releaseDate`) at stage time (see
 § Build Script), so the store page never drifts from the bundle
-filename.
+filename and the same commit reproduces the same `<release>` date.
 The checked-in file carries a placeholder the stage step overwrites:
 
 ```xml
@@ -622,11 +652,11 @@ Shape and § CI Workflow Integration), branching independently off the
 step-5 packaged-app directory rather than being called from inside
 `make-distributables.mjs`; the existing zip emission in `make` is
 untouched.
-So that a developer running the top-level build never has to discover a second
-command, `build.mjs`'s step 6 invokes `step:flatpak` after the zip step on
+So that a developer running the top-level build never has to discover a
+second command, `build.mjs` runs `step:flatpak` after step 6 (the zip) on
 Linux (skipping loudly, with the toolchain-install remedy, when
-`flatpak-builder` is absent), and its `Build complete. Distributables:` listing
-then names the `.flatpak` beside the `.zip`.
+`flatpak-builder` is absent), and its `Build complete. Distributables:`
+listing then names the `.flatpak` beside the `.zip`.
 Adding the script to `package.json`:
 
 ```json
@@ -680,8 +710,17 @@ The Flatpak steps then graft onto the same job after `step:make`:
   # continue-on-error here is intentional. A Flatpak build failure
   # must fail the Linux `make` matrix entry. Do not add continue-on-error
   # to silence a flaky flatpak-builder run without revisiting that policy.
+  #
+  # SOURCE_DATE_EPOCH is REQUIRED, not optional: make-flatpak.mjs exits 1
+  # when neither SOURCE_DATE_EPOCH nor a committed package.json `releaseDate`
+  # supplies the AppStream <release> date (see § Build Script), so without
+  # it this release-blocking step reds every run. Deriving it from the HEAD
+  # commit date (not `date +%s`) keeps the same commit producing the same
+  # bundle and the same <release> date on every rebuild.
   if: matrix.target-os == 'linux'
-  run: yarn workspace @endo/familiar step:flatpak
+  run: |
+    SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" \
+      yarn workspace @endo/familiar step:flatpak
 
 # The metadata-validation and sandbox-engagement gates named in
 # § Validation Gates and § Release-Blocking Policy run as their own
@@ -795,8 +834,8 @@ terminal path on a host that has never seen Flathub.
 
 ### Flathub Listing (Deferred)
 
-Posting to Flathub is the right channel for non-developer Linux
-users. Once the manifest is settled and the icon and AppStream
+Posting to Flathub is the right channel for non-developer Linux users.
+Once the manifest is settled and the icon and AppStream
 metadata pass `appstreamcli validate` and Flathub's own
 `org.flatpak.Builder` linter (run via `flatpak run org.flatpak.Builder//stable`),
 the project submits to `flathub/flathub` per the Flathub submission guide.
@@ -820,10 +859,13 @@ flatpak install --user --noninteractive flathub \
   org.freedesktop.Sdk//24.08 \
   org.electronjs.Electron2.BaseApp//24.08
 
-# Build and package the Electron app first, then the Flatpak.
+# Build and package the Electron app first, then the Flatpak. step:flatpak
+# needs a release date for the AppStream <release> entry (see § Build Script);
+# supply it from the HEAD commit date, matching what CI sets, so a local
+# rebuild reproduces the same bundle.
 cd packages/familiar
 yarn build:package
-yarn step:flatpak
+SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" yarn step:flatpak
 
 # Install and run.
 flatpak install --user --bundle \
@@ -931,15 +973,18 @@ before phase 4 wires it release-blocking.
 
 ### CI Smoke (matches familiar-release.md § G16)
 
-This smoke matches [familiar-release.md](familiar-release.md) § G16. The G16
-test builds the app, launches it under a clean state directory, exercises the
-form, and observes the Primer tree appear (the Primer tree is the CAS-migrated
-starter file set `familiar-release.md` names). It ports to the Flatpak target
-with two changes. First, the clean-state step becomes
-`rm -rf ~/.var/app/org.endojs.Familiar` rather than `rm -rf ~/.local/state/endo/`,
-because all of the Familiar's state is app-private under `~/.var/app/<app-id>/`
-per § Where the Familiar's Data Lives. Second, the Primer tree is observed inside
-that per-app root, not the host namespace, for the same reason.
+This smoke matches [familiar-release.md](familiar-release.md) § G16.
+The G16 test builds the app, launches it under a clean state directory,
+exercises the form, and observes the Primer tree appear (the Primer tree is
+the content-addressed-storage-migrated starter file set
+`familiar-release.md` names).
+It ports to the Flatpak target with two changes.
+First, the clean-state step becomes `rm -rf ~/.var/app/org.endojs.Familiar`
+rather than `rm -rf ~/.local/state/endo/`, because all of the Familiar's
+state is app-private under `~/.var/app/<app-id>/` per § Where the Familiar's
+Data Lives.
+Second, the Primer tree is observed inside that per-app root, not the host
+namespace, for the same reason.
 
 A Linux runner with `xvfb-run` (Electron under headless X11) can host the same
 test the macOS G16 smoke runs.
@@ -976,29 +1021,33 @@ The policy for a build that emits the zip but not the Flatpak
 (`flatpak-builder` fails, an `appstreamcli` or `desktop-file-validate`
 gate fails, the sandbox-engagement assertion fails):
 
-- **The Linux `make` matrix entry fails.** The Linux Flatpak failure is
-  treated identically to a Linux zip failure: the entry's step exits
-  non-zero and the `release` job (which `needs: make`) does not run. The
-  reasoning is that a Linux release that ships only the zip silently
-  regresses the sandbox story this design exists to fix; shipping
-  zip-only is worse than shipping nothing. The inference the reader needs: the
-  retained `.zip` (§ Pipeline Shape) is acceptable only *alongside* a Flatpak,
-  because the zip alone re-exposes the unsandboxed-Chromium failure this document
-  opened with. The README and release notes therefore steer a non-developer to
-  the `.flatpak` and name the `.zip` as the developer / plain-download artifact.
+- **The Linux `make` matrix entry fails.**
+  The Linux Flatpak failure is treated identically to a Linux zip failure:
+  the entry's step exits non-zero and the `release` job (which `needs:
+  make`) does not run.
+  The reasoning is that a Linux release that ships only the zip silently
+  regresses the sandbox story this design exists to fix; shipping zip-only
+  is worse than shipping nothing.
+  The inference the reader needs: the retained `.zip` (§ Pipeline Shape) is
+  acceptable only *alongside* a Flatpak, because the zip alone re-exposes
+  the unsandboxed-Chromium failure this document opened with.
+  The README and release notes therefore steer a non-developer to the
+  `.flatpak` and name the `.zip` as the developer / plain-download artifact.
 
 - **Blast radius, and the third-party dependency it introduces.**
   Because `release` needs the whole `make` job, a red Linux entry blocks
   every platform's release, macOS included, even though the failure is
-  Linux-only. The Flatpak build also reaches Flathub at build time
-  (`flatpak remote-add` + multi-GB runtime installs), so a Flathub
-  outage or a `24.08` EOL can turn a green codebase red. Two mitigations
-  are in scope for the implementation PR and called out here so the
-  policy names its own cost: (a) cache/pin the Flathub runtime install so
-  a CDN blip does not fail the build, and (b) if cross-platform coupling
-  proves painful, gate only the Linux artifact rather than the whole
-  release job. The MVR-followups default is the simple whole-job gate;
-  (a) and (b) are the escape hatches if it bites.
+  Linux-only.
+  The Flatpak build also reaches Flathub at build time (`flatpak
+  remote-add` + multi-GB runtime installs), so a Flathub outage or a
+  `24.08` EOL can turn a green codebase red.
+  Two mitigations are in scope for the implementation PR and called out
+  here so the policy names its own cost: (a) cache/pin the Flathub runtime
+  install so a CDN blip does not fail the build, and (b) if cross-platform
+  coupling proves painful, gate only the Linux artifact rather than the
+  whole release job.
+  The MVR-followups default is the simple whole-job gate; (a) and (b) are
+  the escape hatches if it bites.
 
 This whole-job gate is carried by the `make` job's default
 fail-on-step semantics: the Flatpak steps run without
@@ -1101,8 +1150,8 @@ Out of scope (intentional):
   (defaulting to the runner's `process.arch`; see § Build Script), so building an
   `aarch64` bundle still requires an arm-native runner (or qemu/binfmt): the
   target is decoupled from the host, but the toolchain still runs where the
-  binaries do. The CI matrix supplies that runner rather than cross-building on
-  x86_64.
+  binaries do.
+  The CI matrix supplies that runner rather than cross-building on x86_64.
 
 ## Phased Implementation
 
@@ -1119,19 +1168,38 @@ MVR-followups phase budget; phase 5 is post-MVR-followups.
 
 ## Known Gaps and TODOs
 
+These first two TODOs are **ordered**, and the order is a hard
+constraint, not a preference (§ Where the Familiar's Data Lives, the
+two-instance note derives it).
+The single-instance lock (the second item) must land *with or before* the
+ephemeral-`ENDO_ADDR` pin (the first item), never after it: on the shipped
+fixed-port manifest the two-instance collision fails *loud* (the second
+daemon rejects at start on the `127.0.0.1:8920` bind, so the app cannot
+reopen until the orphan is killed), and landing the ephemeral-`ENDO_ADDR`
+pin alone removes that bind collision and silently converts the loud
+failure into second-daemon-over-one-state corruption.
+
+- [ ] Add an Electron `requestSingleInstanceLock`, or a socket/`ENDO_ADDR`
+  liveness check in `launcher.sh`, to handle the two-instance case
+  (§ Where the Familiar's Data Lives).
+  This is a **normal quit-and-relaunch defect**, not a
+  deliberate-double-launch edge case: the daemon is spawned
+  `detached`/`unref()` and outlives quit, so an ordinary reopen makes a new
+  instance whose per-instance `$XDG_RUNTIME_DIR` cannot see the surviving
+  daemon's CapTP socket.
+  On the shipped manifest the reopen fails loud on the fixed-port gateway
+  bind; this lock is what makes reopen find the running instance instead.
+  It must land first (see the ordering note above), and should land with
+  (or ahead of) the shipping Flatpak, since the trigger is the common usage
+  path.
 - [ ] Pin an ephemeral `ENDO_ADDR` gateway port in `launcher.sh` so the
   sandboxed daemon's `--share=network` loopback bind cannot collide with a host
   `endo` daemon on the fixed `127.0.0.1:8920` (§ Finish-Args, `--share=network`).
   `getGatewayAddress` already reads the daemon-written `gateway` file, so the UI
   follows the pinned port.
-- [ ] Handle the two-instance case (§ Where the Familiar's Data Lives). This is a
-  **normal quit-and-relaunch defect**, not a deliberate-double-launch edge case:
-  the daemon is spawned `detached`/`unref()` and outlives quit, so an ordinary
-  reopen makes a new instance whose per-instance `$XDG_RUNTIME_DIR` cannot see
-  the surviving daemon's CapTP socket, starting a second daemon over the shared
-  per-app state. Add an Electron `requestSingleInstanceLock`, or a
-  socket/`ENDO_ADDR` liveness check in `launcher.sh`. Should land with (or ahead
-  of) the shipping Flatpak, since the trigger is the common usage path.
+  Land this only *after* the single-instance lock above: on its own it
+  converts the loud two-instance fail-to-reopen into silent state corruption
+  (see the ordering note above).
 - [ ] Confirm on a real clean Linux host that Flatpak's per-app `$HOME`
   and `$XDG_RUNTIME_DIR` make the daemon's full write surface
   app-private, that is, that no daemon path resolves through `whereEndoData`
