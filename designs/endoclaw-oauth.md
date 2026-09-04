@@ -50,6 +50,12 @@ type Response = {
 };
 ```
 
+> **Binary media (planned).** `text()`/`json()` and a `string`-only `body` cover
+> text payloads only. Binary media in both directions (a `bytes()` accessor, a
+> `stream()` accessor, and `ByteArray` request bodies) is planned in
+> [endoclaw-fetch-bytes-stream](endoclaw-fetch-bytes-stream.md); this document's
+> `FetchOptions` / `Response` widen in lockstep when that lands.
+
 ## How It Works
 
 1. Host initiates OAuth flow (browser redirect or device code grant)

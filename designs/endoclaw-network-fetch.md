@@ -63,6 +63,12 @@ interface HttpClientControl {
 }
 ```
 
+> **Binary media (planned).** The `Response` above is text-oriented. A `bytes()`
+> accessor, a `stream()` accessor, and `ByteArray` request bodies (buffered and
+> streaming) are planned on this same `@endo/http-confine` /
+> `@endo/exo-http-client` implementation site in
+> [endoclaw-fetch-bytes-stream](endoclaw-fetch-bytes-stream.md).
+
 ## How It Works
 
 1. Host creates an `HttpClient` / `HttpClientControl` pair with an
