@@ -31,16 +31,32 @@
     "build": "exit 0",
     "lint": "yarn lint:eslint",
     "lint-fix": "yarn lint:eslint --fix",
-    "lint:eslint": "eslint '**/*.js'"
+    "lint:eslint": "eslint '**/*.js'",
+    "test": "ava",
+    "test:c8": "c8 ${C8_OPTIONS:-} ses-ava"
   },
   "dependencies": {
+    "@endo/errors": "workspace:^",
     "@endo/exo": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/patterns": "workspace:^",
-    "preact": "^10.29.2"
+    "preact": "^10.29.8"
   },
   "devDependencies": {
+    "@endo/init": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
     "eslint": "catalog:dev"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m",
+    "environmentVariables": {
+      "LOCKDOWN_OPTIONS": "{\"errorTaming\":\"unsafe\",\"overrideTaming\":\"severe\",\"domainTaming\":\"unsafe\"}"
+    }
   }
 }
