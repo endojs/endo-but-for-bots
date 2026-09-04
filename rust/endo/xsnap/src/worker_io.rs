@@ -29,12 +29,15 @@
 
 use crate::envelope::{self, Envelope, Handle};
 use crate::ffi::*;
-use std::cell::RefCell;
+use std::any::Any;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::CStr;
 use std::io::{self, BufReader, BufWriter};
 use std::os::unix::io::FromRawFd;
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::mpsc as std_mpsc;
+use std::sync::Once;
 
 // ---------------------------------------------------------------------------
 // WorkerTransport trait
@@ -366,6 +369,128 @@ where
 }
 
 // ---------------------------------------------------------------------------
+// FFI panic guard
+// ---------------------------------------------------------------------------
+//
+// The in-process XS worker invokes the `host_*` callbacks below through
+// `unsafe extern "C"` frames: XS (C) calls back into Rust. Since Rust 1.71 a
+// panic that unwinds *past* an `extern "C"` frame aborts the whole process —
+// which, because the daemon co-locates many workers in one process, would kill
+// every vat rather than the one that faulted, the opposite of per-vat
+// isolation (design `designs/ironhorse-panic.md` § Scope: "The already-live FFI
+// abort hazard"). Several of these callbacks already contain panicking calls
+// today (e.g. `with_transport`'s `.expect(..)`), so the hazard is live, not
+// hypothetical.
+//
+// The guard converts a Rust panic into a **worker-death value before it
+// crosses the FFI boundary**: `guard_ffi` wraps each callback body in
+// `catch_unwind`, and on a caught panic records a thread-local poison marker
+// instead of unwinding. The XS run entry (`run_xs_program`) observes the
+// marker at the next crank boundary — a pure-Rust frame with no intervening C
+// — and returns `XsnapError::Panicked`, so the *one* worker thread tears down
+// (its `unregister`) while its co-resident siblings on other threads keep
+// serving. The poison is a **thread-local**, which is exactly what confines the
+// death to one worker: each in-process XS machine runs on its own dedicated
+// `std::thread`, so poisoning one thread cannot touch another.
+
+/// A caught Rust panic from an `extern "C"` callback, recorded as this
+/// worker's pending death. Mirrors the prospective Ironhorse
+/// `PanicKind::EngineFault` payload (message + optional physical location);
+/// the C-XS worker surfaces it as `XsnapError::Panicked` rather than a
+/// `Halt`, since this path has no `Halt` return.
+#[derive(Debug, Clone)]
+pub struct FfiPanic {
+    /// The caught panic's message.
+    pub message: String,
+    /// The panic's `file:line:col`, when the capture hook recovered it.
+    pub location: Option<String>,
+}
+
+thread_local! {
+    /// This worker thread's pending death from a caught FFI panic. `Some`
+    /// once a guarded callback panicked; the run entry drains it.
+    static FFI_PANIC: RefCell<Option<FfiPanic>> = const { RefCell::new(None) };
+    /// Scratch slot the capture hook writes the panic location into while a
+    /// guarded body is unwinding, read back by `guard_ffi`.
+    static PANIC_LOCATION: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// True on this thread only while inside `guard_ffi`'s `catch_unwind`, so
+    /// the process-wide hook records the location for *our* handled panic and
+    /// suppresses its default abort-noise, while leaving every other panic to
+    /// the previously-installed hook untouched.
+    static CAPTURING: Cell<bool> = const { Cell::new(false) };
+}
+
+static HOOK_INIT: Once = Once::new();
+
+/// Install (once, process-wide) a panic hook that records a guarded panic's
+/// source location into a thread-local. It chains to the previously-installed
+/// hook for every panic *not* inside `guard_ffi`, so ordinary panic reporting
+/// elsewhere is unchanged.
+fn install_capture_hook() {
+    HOOK_INIT.call_once(|| {
+        let prev = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if CAPTURING.with(|c| c.get()) {
+                let loc = info
+                    .location()
+                    .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
+                PANIC_LOCATION.with(|slot| *slot.borrow_mut() = loc);
+                // Handled: the guard turns this into a Panicked worker-death,
+                // so suppress the default hook's abort-style stderr dump.
+                return;
+            }
+            prev(info);
+        }));
+    });
+}
+
+fn panic_payload_message(payload: &(dyn Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
+/// Run one `extern "C"` callback body under panic isolation.
+///
+/// If `f` panics, the panic is caught *before* it can unwind past the
+/// enclosing `extern "C"` frame (which would abort the process); the message
+/// and location are recorded as this thread's pending [`FfiPanic`], and the
+/// callback returns normally to XS. Once poisoned, further guarded callbacks
+/// short-circuit (do no effect work) until the run entry drains the marker and
+/// kills the worker.
+pub fn guard_ffi<F: FnOnce()>(f: F) {
+    if ffi_panicked() {
+        // Already dying — do not run further host effects for this worker.
+        return;
+    }
+    install_capture_hook();
+    CAPTURING.with(|c| c.set(true));
+    let result = panic::catch_unwind(AssertUnwindSafe(f));
+    CAPTURING.with(|c| c.set(false));
+    if let Err(payload) = result {
+        let message = panic_payload_message(payload.as_ref());
+        let location = PANIC_LOCATION.with(|slot| slot.borrow_mut().take());
+        FFI_PANIC.with(|cell| {
+            *cell.borrow_mut() = Some(FfiPanic { message, location });
+        });
+    }
+}
+
+/// Whether this worker thread has a pending FFI-panic death.
+pub fn ffi_panicked() -> bool {
+    FFI_PANIC.with(|cell| cell.borrow().is_some())
+}
+
+/// Take this worker thread's pending FFI-panic death, if any, clearing it.
+pub fn take_ffi_panic() -> Option<FfiPanic> {
+    FFI_PANIC.with(|cell| cell.borrow_mut().take())
+}
+
+// ---------------------------------------------------------------------------
 // XS host functions
 // ---------------------------------------------------------------------------
 
@@ -415,57 +540,67 @@ pub(crate) unsafe fn xs_string_to_utf8(ptr: *const std::os::raw::c_char) -> Stri
 /// Blocks until the next CapTP frame arrives from the supervisor.
 /// Returns the frame payload as a hex string, or undefined on EOF.
 pub unsafe extern "C" fn host_recv_frame(the: *mut XsMachine) {
-    let result = with_transport(|t| t.recv_frame());
-    match result {
-        Ok(Some(data)) => {
-            set_result_string(the, &hex::encode(&data));
+    guard_ffi(|| unsafe {
+        let result = with_transport(|t| t.recv_frame());
+        match result {
+            Ok(Some(data)) => {
+                set_result_string(the, &hex::encode(&data));
+            }
+            Ok(None) => {
+                // EOF — leave result as undefined
+            }
+            Err(e) => {
+                let msg = format!("Error: {}", e);
+                set_result_string(the, &msg);
+            }
         }
-        Ok(None) => {
-            // EOF — leave result as undefined
-        }
-        Err(e) => {
-            let msg = format!("Error: {}", e);
-            set_result_string(the, &msg);
-        }
-    }
+    });
 }
 
 /// `sendFrame(hexData: string) -> undefined`
 pub unsafe extern "C" fn host_send_frame(the: *mut XsMachine) {
-    let hex_data = arg_str(the, 0);
-    match hex::decode(hex_data) {
-        Ok(data) => {
-            let _ = with_transport(|t| t.send_frame(&data));
+    guard_ffi(|| unsafe {
+        let hex_data = arg_str(the, 0);
+        match hex::decode(hex_data) {
+            Ok(data) => {
+                let _ = with_transport(|t| t.send_frame(&data));
+            }
+            Err(_) => {}
         }
-        Err(_) => {}
-    }
+    });
 }
 
 /// `getDaemonHandle() -> number`
 pub unsafe extern "C" fn host_get_daemon_handle(the: *mut XsMachine) {
-    let handle = with_transport(|t| t.daemon_handle());
-    fxInteger(the, &mut (*the).scratch, handle as i32);
-    *(*the).frame.add(1) = (*the).scratch;
+    guard_ffi(|| unsafe {
+        let handle = with_transport(|t| t.daemon_handle());
+        fxInteger(the, &mut (*the).scratch, handle as i32);
+        *(*the).frame.add(1) = (*the).scratch;
+    });
 }
 
 /// `issueCommand(uint8Array) -> undefined`
 pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
-    let slot = (*the).frame.sub(1);
-    if let Some(buf) = read_typed_array_bytes(the, slot) {
-        if let Err(e) = with_transport(|t| t.send_frame(&buf)) {
-            eprintln!("endor: issueCommand error: {}", e);
+    guard_ffi(|| unsafe {
+        let slot = (*the).frame.sub(1);
+        if let Some(buf) = read_typed_array_bytes(the, slot) {
+            if let Err(e) = with_transport(|t| t.send_frame(&buf)) {
+                eprintln!("endor: issueCommand error: {}", e);
+            }
         }
-    }
+    });
 }
 
 /// `sendRawFrame(uint8Array) -> undefined`
 pub unsafe extern "C" fn host_send_raw_frame(the: *mut XsMachine) {
-    let slot = (*the).frame.sub(1);
-    if let Some(buf) = read_typed_array_bytes(the, slot) {
-        if let Err(e) = with_transport(|t| t.send_raw_frame(&buf)) {
-            eprintln!("endor: sendRawFrame error: {}", e);
+    guard_ffi(|| unsafe {
+        let slot = (*the).frame.sub(1);
+        if let Some(buf) = read_typed_array_bytes(the, slot) {
+            if let Err(e) = with_transport(|t| t.send_raw_frame(&buf)) {
+                eprintln!("endor: sendRawFrame error: {}", e);
+            }
         }
-    }
+    });
 }
 
 /// Read bytes from a TypedArray (e.g. Uint8Array) argument slot.
@@ -555,34 +690,38 @@ pub unsafe fn write_typed_array_bytes(
 
 /// `importArchive(uint8Array) -> boolean`
 pub unsafe extern "C" fn host_import_archive(the: *mut XsMachine) {
-    let slot = (*the).frame.sub(1);
-    let buf = match read_typed_array_bytes(the, slot) {
-        Some(b) => b,
-        None => {
-            fxBoolean(the, &mut (*the).scratch, 0);
-            *(*the).frame.add(1) = (*the).scratch;
-            return;
+    guard_ffi(|| unsafe {
+        let slot = (*the).frame.sub(1);
+        let buf = match read_typed_array_bytes(the, slot) {
+            Some(b) => b,
+            None => {
+                fxBoolean(the, &mut (*the).scratch, 0);
+                *(*the).frame.add(1) = (*the).scratch;
+                return;
+            }
+        };
+        let cursor = std::io::Cursor::new(buf);
+        match crate::archive::load_archive(cursor) {
+            Ok(loaded) => {
+                let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
+                let ok = crate::archive::install_archive(&machine, &loaded);
+                fxBoolean(the, &mut (*the).scratch, if ok { 1 } else { 0 });
+                *(*the).frame.add(1) = (*the).scratch;
+            }
+            Err(_) => {
+                fxBoolean(the, &mut (*the).scratch, 0);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
         }
-    };
-    let cursor = std::io::Cursor::new(buf);
-    match crate::archive::load_archive(cursor) {
-        Ok(loaded) => {
-            let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
-            let ok = crate::archive::install_archive(&machine, &loaded);
-            fxBoolean(the, &mut (*the).scratch, if ok { 1 } else { 0 });
-            *(*the).frame.add(1) = (*the).scratch;
-        }
-        Err(_) => {
-            fxBoolean(the, &mut (*the).scratch, 0);
-            *(*the).frame.add(1) = (*the).scratch;
-        }
-    }
+    });
 }
 
 /// `trace(msg: string) -> undefined`
 pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
-    let msg = arg_str(the, 0);
-    eprintln!("endor: [trace] {}", msg);
+    guard_ffi(|| unsafe {
+        let msg = arg_str(the, 0);
+        eprintln!("endor: [trace] {}", msg);
+    });
 }
 
 /// `stdoutLine(msg: string) -> undefined`
@@ -592,8 +731,10 @@ pub unsafe extern "C" fn host_trace(the: *mut XsMachine) {
 /// program's own output is separable from the runner's stderr
 /// diagnostics.
 pub unsafe extern "C" fn host_stdout_line(the: *mut XsMachine) {
-    let msg = arg_str(the, 0);
-    println!("{}", msg);
+    guard_ffi(|| unsafe {
+        let msg = arg_str(the, 0);
+        println!("{}", msg);
+    });
 }
 
 /// `getPendingEnvelope() -> ArrayBuffer | undefined`
@@ -603,31 +744,8 @@ pub unsafe extern "C" fn host_stdout_line(the: *mut XsMachine) {
 /// Used by `dispatch_envelope` to pass binary data to JS without
 /// hex-encoding (which is O(n²) for large payloads).
 pub unsafe extern "C" fn host_get_pending_envelope(the: *mut XsMachine) {
-    if let Some(mut data) = take_pending_envelope() {
-        fxArrayBuffer(
-            the,
-            &mut (*the).scratch,
-            data.as_mut_ptr() as *mut std::ffi::c_void,
-            data.len() as i32,
-            data.len() as i32,
-        );
-        *(*the).frame.add(1) = (*the).scratch;
-    }
-    // If no pending envelope, result stays undefined.
-}
-
-/// `hostBase64Decode(string) -> ArrayBuffer`
-///
-/// Decode a base64-encoded string and return the raw bytes as an
-/// ArrayBuffer. This provides the native `Base64.decode` that
-/// `@endo/base64` checks for, avoiding the pure-JS fallback which is
-/// orders of magnitude too slow in XS for large inputs.
-pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
-    let input = arg_str(the, 0);
-    // Use the base64 standard engine with padding.
-    use base64::Engine as _;
-    match base64::engine::general_purpose::STANDARD.decode(input) {
-        Ok(mut data) => {
+    guard_ffi(|| unsafe {
+        if let Some(mut data) = take_pending_envelope() {
             fxArrayBuffer(
                 the,
                 &mut (*the).scratch,
@@ -637,25 +755,54 @@ pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
             );
             *(*the).frame.add(1) = (*the).scratch;
         }
-        Err(e) => {
-            let msg = format!("Error: invalid base64: {}", e);
-            set_result_string(the, &msg);
+        // If no pending envelope, result stays undefined.
+    });
+}
+
+/// `hostBase64Decode(string) -> ArrayBuffer`
+///
+/// Decode a base64-encoded string and return the raw bytes as an
+/// ArrayBuffer. This provides the native `Base64.decode` that
+/// `@endo/base64` checks for, avoiding the pure-JS fallback which is
+/// orders of magnitude too slow in XS for large inputs.
+pub unsafe extern "C" fn host_base64_decode(the: *mut XsMachine) {
+    guard_ffi(|| unsafe {
+        let input = arg_str(the, 0);
+        // Use the base64 standard engine with padding.
+        use base64::Engine as _;
+        match base64::engine::general_purpose::STANDARD.decode(input) {
+            Ok(mut data) => {
+                fxArrayBuffer(
+                    the,
+                    &mut (*the).scratch,
+                    data.as_mut_ptr() as *mut std::ffi::c_void,
+                    data.len() as i32,
+                    data.len() as i32,
+                );
+                *(*the).frame.add(1) = (*the).scratch;
+            }
+            Err(e) => {
+                let msg = format!("Error: invalid base64: {}", e);
+                set_result_string(the, &msg);
+            }
         }
-    }
+    });
 }
 
 /// `hostBase64Encode(uint8Array) -> string`
 ///
 /// Encode raw bytes as a base64 string. Paired with `hostBase64Decode`.
 pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
-    let slot = (*the).frame.sub(1);
-    if let Some(buf) = read_typed_array_bytes(the, slot) {
-        use base64::Engine as _;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
-        let c_str = std::ffi::CString::new(encoded).unwrap_or_default();
-        fxString(the, &mut (*the).scratch, c_str.as_ptr());
-        *(*the).frame.add(1) = (*the).scratch;
-    }
+    guard_ffi(|| unsafe {
+        let slot = (*the).frame.sub(1);
+        if let Some(buf) = read_typed_array_bytes(the, slot) {
+            use base64::Engine as _;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
+            let c_str = std::ffi::CString::new(encoded).unwrap_or_default();
+            fxString(the, &mut (*the).scratch, c_str.as_ptr());
+            *(*the).frame.add(1) = (*the).scratch;
+        }
+    });
 }
 
 /// `hostDecodeUtf8(uint8Array) -> string`
@@ -665,20 +812,22 @@ pub unsafe extern "C" fn host_base64_encode(the: *mut XsMachine) {
 /// buffers (>100KB), causing the daemon to hang on large CapTP
 /// payloads like bundled source code in storeBlob.
 pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
-    let slot = (*the).frame.sub(1);
-    if let Some(buf) = read_typed_array_bytes(the, slot) {
-        match std::str::from_utf8(&buf) {
-            Ok(s) => {
-                // The input is valid UTF-8.  XS expects CESU-8, so
-                // re-encode supplementary characters as surrogate pairs.
-                set_result_string(the, s);
-            }
-            Err(e) => {
-                let msg = format!("Error: invalid UTF-8: {}", e);
-                set_result_string(the, &msg);
+    guard_ffi(|| unsafe {
+        let slot = (*the).frame.sub(1);
+        if let Some(buf) = read_typed_array_bytes(the, slot) {
+            match std::str::from_utf8(&buf) {
+                Ok(s) => {
+                    // The input is valid UTF-8.  XS expects CESU-8, so
+                    // re-encode supplementary characters as surrogate pairs.
+                    set_result_string(the, s);
+                }
+                Err(e) => {
+                    let msg = format!("Error: invalid UTF-8: {}", e);
+                    set_result_string(the, &msg);
+                }
             }
         }
-    }
+    });
 }
 
 /// `hostEncodeUtf8(string) -> ArrayBuffer`
@@ -688,18 +837,20 @@ pub unsafe extern "C" fn host_decode_utf8(the: *mut XsMachine) {
 /// for large strings (>100KB), causing the daemon to hang when
 /// serializing large CapTP payloads like bundled source code.
 pub unsafe extern "C" fn host_encode_utf8(the: *mut XsMachine) {
-    let s = arg_str(the, 0);
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut data = bytes.to_vec();
-    fxArrayBuffer(
-        the,
-        &mut (*the).scratch,
-        data.as_mut_ptr() as *mut std::ffi::c_void,
-        len as i32,
-        len as i32,
-    );
-    *(*the).frame.add(1) = (*the).scratch;
+    guard_ffi(|| unsafe {
+        let s = arg_str(the, 0);
+        let bytes = s.as_bytes();
+        let len = bytes.len();
+        let mut data = bytes.to_vec();
+        fxArrayBuffer(
+            the,
+            &mut (*the).scratch,
+            data.as_mut_ptr() as *mut std::ffi::c_void,
+            len as i32,
+            len as i32,
+        );
+        *(*the).frame.add(1) = (*the).scratch;
+    });
 }
 
 /// Serialize a parsed URL as the JSON record the JS `URL` veneer
@@ -735,18 +886,20 @@ fn url_error_json(message: &str) -> String {
 /// the no-base sentinel) and return a JSON url record, or
 /// `{"error": ...}` when the input does not parse.
 pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
-    let href = arg_str(the, 0);
-    let base = arg_str(the, 1);
-    let parsed = if base.is_empty() {
-        url::Url::parse(&href)
-    } else {
-        url::Url::parse(&base).and_then(|b| b.join(&href))
-    };
-    let json = match parsed {
-        Ok(u) => url_record_json(&u),
-        Err(e) => url_error_json(&e.to_string()),
-    };
-    set_result_string(the, &json);
+    guard_ffi(|| unsafe {
+        let href = arg_str(the, 0);
+        let base = arg_str(the, 1);
+        let parsed = if base.is_empty() {
+            url::Url::parse(&href)
+        } else {
+            url::Url::parse(&base).and_then(|b| b.join(&href))
+        };
+        let json = match parsed {
+            Ok(u) => url_record_json(&u),
+            Err(e) => url_error_json(&e.to_string()),
+        };
+        set_result_string(the, &json);
+    });
 }
 
 /// `hostUrlSet(href, field, value) -> string`
@@ -756,42 +909,44 @@ pub unsafe extern "C" fn host_url_parse(the: *mut XsMachine) {
 /// (the JS side ignores that, per the spec's setter semantics, except
 /// for `href` which throws).
 pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
-    let href = arg_str(the, 0);
-    let field = arg_str(the, 1);
-    let value = arg_str(the, 2);
-    let json = match url::Url::parse(&href) {
-        Ok(mut u) => {
-            let ok = match field.as_str() {
-                "href" => url::quirks::set_href(&mut u, &value).is_ok(),
-                "protocol" => url::quirks::set_protocol(&mut u, &value).is_ok(),
-                "username" => url::quirks::set_username(&mut u, &value).is_ok(),
-                "password" => url::quirks::set_password(&mut u, &value).is_ok(),
-                "host" => url::quirks::set_host(&mut u, &value).is_ok(),
-                "hostname" => url::quirks::set_hostname(&mut u, &value).is_ok(),
-                "port" => url::quirks::set_port(&mut u, &value).is_ok(),
-                "pathname" => {
-                    url::quirks::set_pathname(&mut u, &value);
-                    true
+    guard_ffi(|| unsafe {
+        let href = arg_str(the, 0);
+        let field = arg_str(the, 1);
+        let value = arg_str(the, 2);
+        let json = match url::Url::parse(&href) {
+            Ok(mut u) => {
+                let ok = match field.as_str() {
+                    "href" => url::quirks::set_href(&mut u, &value).is_ok(),
+                    "protocol" => url::quirks::set_protocol(&mut u, &value).is_ok(),
+                    "username" => url::quirks::set_username(&mut u, &value).is_ok(),
+                    "password" => url::quirks::set_password(&mut u, &value).is_ok(),
+                    "host" => url::quirks::set_host(&mut u, &value).is_ok(),
+                    "hostname" => url::quirks::set_hostname(&mut u, &value).is_ok(),
+                    "port" => url::quirks::set_port(&mut u, &value).is_ok(),
+                    "pathname" => {
+                        url::quirks::set_pathname(&mut u, &value);
+                        true
+                    }
+                    "search" => {
+                        url::quirks::set_search(&mut u, &value);
+                        true
+                    }
+                    "hash" => {
+                        url::quirks::set_hash(&mut u, &value);
+                        true
+                    }
+                    _ => false,
+                };
+                if ok {
+                    url_record_json(&u)
+                } else {
+                    url_error_json(&format!("cannot set {field}"))
                 }
-                "search" => {
-                    url::quirks::set_search(&mut u, &value);
-                    true
-                }
-                "hash" => {
-                    url::quirks::set_hash(&mut u, &value);
-                    true
-                }
-                _ => false,
-            };
-            if ok {
-                url_record_json(&u)
-            } else {
-                url_error_json(&format!("cannot set {field}"))
             }
-        }
-        Err(e) => url_error_json(&e.to_string()),
-    };
-    set_result_string(the, &json);
+            Err(e) => url_error_json(&e.to_string()),
+        };
+        set_result_string(the, &json);
+    });
 }
 
 /// `hostFormUrlDecode(query) -> string`
@@ -799,12 +954,14 @@ pub unsafe extern "C" fn host_url_set(the: *mut XsMachine) {
 /// Parse an application/x-www-form-urlencoded string into a JSON
 /// array of `[name, value]` pairs.
 pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
-    let input = arg_str(the, 0);
-    let pairs: Vec<(String, String)> = url::form_urlencoded::parse(input.as_bytes())
-        .into_owned()
-        .collect();
-    let json = serde_json::to_string(&pairs).unwrap_or_else(|_| "[]".to_string());
-    set_result_string(the, &json);
+    guard_ffi(|| unsafe {
+        let input = arg_str(the, 0);
+        let pairs: Vec<(String, String)> = url::form_urlencoded::parse(input.as_bytes())
+            .into_owned()
+            .collect();
+        let json = serde_json::to_string(&pairs).unwrap_or_else(|_| "[]".to_string());
+        set_result_string(the, &json);
+    });
 }
 
 /// `hostFormUrlEncode(pairsJson) -> string`
@@ -812,14 +969,16 @@ pub unsafe extern "C" fn host_form_urlencoded_decode(the: *mut XsMachine) {
 /// Serialize a JSON array of `[name, value]` pairs as an
 /// application/x-www-form-urlencoded string.
 pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
-    let input = arg_str(the, 0);
-    let pairs: Vec<(String, String)> = serde_json::from_str(&input).unwrap_or_default();
-    let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-    for (name, value) in &pairs {
-        serializer.append_pair(name, value);
-    }
-    let encoded = serializer.finish();
-    set_result_string(the, &encoded);
+    guard_ffi(|| unsafe {
+        let input = arg_str(the, 0);
+        let pairs: Vec<(String, String)> = serde_json::from_str(&input).unwrap_or_default();
+        let mut serializer = url::form_urlencoded::Serializer::new(String::new());
+        for (name, value) in &pairs {
+            serializer.append_pair(name, value);
+        }
+        let encoded = serializer.finish();
+        set_result_string(the, &encoded);
+    });
 }
 
 /// `debugPoll() -> undefined`
@@ -831,9 +990,11 @@ pub unsafe extern "C" fn host_form_urlencoded_encode(the: *mut XsMachine) {
 ///
 /// When mxDebug is not compiled in, `run_debugger()` is a no-op.
 pub unsafe extern "C" fn host_debug_poll(the: *mut XsMachine) {
-    let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
-    machine.run_debugger();
-    crate::flush_debug_outbound();
+    guard_ffi(|| {
+        let machine = std::mem::ManuallyDrop::new(crate::Machine { raw: the, registered_callbacks: std::cell::RefCell::new(Vec::new()) });
+        machine.run_debugger();
+        crate::flush_debug_outbound();
+    });
 }
 
 /// All worker I/O host callbacks in registration order.
@@ -1089,5 +1250,90 @@ mod tests {
 
         let frame = t.recv_frame().unwrap();
         assert!(frame.is_none());
+    }
+
+    // -- FFI panic guard (design `designs/ironhorse-panic.md` § Scope: "The
+    //    already-live FFI abort hazard") --------------------------------
+
+    #[test]
+    fn ffi_guard_catches_panic_and_records_message_and_location() {
+        assert!(take_ffi_panic().is_none(), "start clean");
+        guard_ffi(|| panic!("boom in a callback"));
+        assert!(ffi_panicked(), "the guard must record a pending death");
+        let p = take_ffi_panic().expect("a panic was recorded");
+        assert!(
+            p.message.contains("boom in a callback"),
+            "message was {:?}",
+            p.message
+        );
+        // The capture hook recovers the panic!'s source position.
+        let loc = p.location.expect("a location was captured");
+        assert!(loc.contains("worker_io.rs"), "location was {loc:?}");
+        assert!(!ffi_panicked(), "take clears the marker");
+    }
+
+    #[test]
+    fn ffi_guard_catches_the_missing_transport_expect() {
+        // The design's named live example: `with_transport`'s
+        // `.expect("WorkerTransport not installed on this thread")` panics on
+        // any thread with no transport installed (this test thread has none).
+        // The guard must catch it rather than let it abort the process at the
+        // `extern "C"` boundary.
+        assert!(take_ffi_panic().is_none());
+        guard_ffi(|| {
+            with_transport(|_t| unreachable!("no transport is installed"));
+        });
+        let p = take_ffi_panic().expect("the expect() panic was caught");
+        assert!(
+            p.message.contains("WorkerTransport not installed"),
+            "message was {:?}",
+            p.message
+        );
+    }
+
+    #[test]
+    fn ffi_guard_short_circuits_once_poisoned() {
+        assert!(take_ffi_panic().is_none());
+        guard_ffi(|| panic!("first"));
+        assert!(ffi_panicked());
+        // A poisoned worker must not run further host effects: the second
+        // body must not execute while the death is pending.
+        let mut ran_after_poison = false;
+        guard_ffi(|| ran_after_poison = true);
+        assert!(
+            !ran_after_poison,
+            "guarded bodies must short-circuit while poisoned"
+        );
+        let _ = take_ffi_panic();
+    }
+
+    #[test]
+    fn ffi_panic_is_confined_to_one_worker_thread() {
+        // Models the design's acceptance scenario — two co-resident workers
+        // in one daemon process, one panicking — at the unit level: each
+        // in-process XS worker runs on its own dedicated `std::thread`, and
+        // the poison is a thread-local, so a panic in one worker's callback
+        // cannot touch a sibling. Worker A panics and dies; worker B runs its
+        // callback normally and keeps serving, proving the death is confined
+        // to one worker rather than aborting the shared process.
+        let a = std::thread::spawn(|| {
+            guard_ffi(|| panic!("boom in worker A"));
+            ffi_panicked()
+        });
+        let b = std::thread::spawn(|| {
+            let mut served = false;
+            guard_ffi(|| served = true);
+            (served, ffi_panicked())
+        });
+
+        let a_poisoned = a.join().expect("worker A thread joins");
+        let (b_served, b_poisoned) = b.join().expect("worker B thread joins");
+
+        assert!(a_poisoned, "the panicking worker A must be poisoned");
+        assert!(b_served, "the sibling worker B must still run its callback");
+        assert!(
+            !b_poisoned,
+            "worker A's panic must not poison the sibling worker B"
+        );
     }
 }

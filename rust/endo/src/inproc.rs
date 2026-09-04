@@ -237,7 +237,25 @@ pub fn spawn_inproc_xs_peer(
                 sup_to_machine_rx,
                 machine_to_sup_tx,
             ));
-        let result = run(transport);
+        // Wrap the run entry so a Rust panic that escaped *past* the
+        // per-callback FFI guards — a panic in pure-Rust crank code, or the
+        // prospective Ironhorse arena-index panic that unwinds the machine
+        // thread — becomes this one worker's death (its `unregister` below)
+        // rather than a bare thread-panic. The per-callback guards in
+        // `worker_io` stop a panic from aborting the *process* at the C
+        // boundary; this is the outer net for panics that never crossed an
+        // `extern "C"` frame (design `designs/ironhorse-panic.md` § Scope:
+        // "The already-live FFI abort hazard", "the machine-thread run
+        // entry").
+        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+            || run(transport),
+        )) {
+            Ok(r) => r,
+            Err(_) => Err(xsnap::XsnapError::Panicked {
+                message: format!("{label_for_thread}: run entry panicked"),
+                location: None,
+            }),
+        };
         if let Err(e) = result {
             eprintln!("inproc: {label_for_thread} exited with error: {e}");
         } else {

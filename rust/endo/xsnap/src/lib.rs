@@ -964,6 +964,19 @@ pub enum XsnapError {
     Io(String),
     Archive(String),
     Bootstrap(String),
+    /// A Rust panic in an `extern "C"` worker callback was caught at the
+    /// FFI boundary and converted into this worker's death, instead of
+    /// aborting the whole daemon process (design `designs/ironhorse-panic.md`
+    /// § Scope: "The already-live FFI abort hazard"). Carries the caught
+    /// panic's message and optional `file:line:col`. The daemon seam maps
+    /// this to `ExecutionOutcome::Panicked` alongside a prospective
+    /// Ironhorse `Halt::Panic(PanicKind::EngineFault)`; here on the live
+    /// C-XS path there is no `Halt` to carry, so the worker-death value is
+    /// this error.
+    Panicked {
+        message: String,
+        location: Option<String>,
+    },
 }
 
 impl std::fmt::Display for XsnapError {
@@ -973,6 +986,10 @@ impl std::fmt::Display for XsnapError {
             XsnapError::Io(s) => write!(f, "io: {s}"),
             XsnapError::Archive(s) => write!(f, "archive: {s}"),
             XsnapError::Bootstrap(s) => write!(f, "bootstrap: {s}"),
+            XsnapError::Panicked { message, location } => match location {
+                Some(loc) => write!(f, "worker panicked (FFI-guarded) at {loc}: {message}"),
+                None => write!(f, "worker panicked (FFI-guarded): {message}"),
+            },
         }
     }
 }
@@ -1735,6 +1752,13 @@ pub fn run_xs_program(
         eprintln!("{label}: bootstrap eval complete");
     }
 
+    // This worker's pending death from an FFI-guarded panic, if one fired
+    // in an `extern "C"` callback during the run (design
+    // `designs/ironhorse-panic.md` § Scope: "The already-live FFI abort
+    // hazard"). Observed at a pure-Rust frame below and converted into
+    // `XsnapError::Panicked`, so only this one worker dies.
+    let mut ffi_death: Option<worker_io::FfiPanic> = None;
+
     if supervised {
         eprintln!("{label}: entering main loop");
 
@@ -1851,6 +1875,20 @@ pub fn run_xs_program(
             let steps = machine.current_computrons();
             set_crank_limit(0);
 
+            // A Rust panic in an `extern "C"` worker callback was caught at
+            // the FFI boundary this crank (the guard forbade it from
+            // unwinding past the C frame and aborting the whole daemon).
+            // Now that control is back in a pure-Rust frame, convert the
+            // poison marker into this worker's death.
+            if worker_io::ffi_panicked() {
+                ffi_death = worker_io::take_ffi_panic();
+                eprintln!(
+                    "{label}: worker died from an FFI-guarded panic \
+                     (used {steps} computrons)"
+                );
+                break 'outer;
+            }
+
             if metering_abort {
                 send_meter_report(steps, "terminated");
                 eprintln!("{label}: terminated by metering (used {steps} computrons)");
@@ -1874,8 +1912,20 @@ pub fn run_xs_program(
         machine.run_loop();
     }
 
+    // Catch a poison left by the non-metered (`run_loop`) path too.
+    if ffi_death.is_none() && worker_io::ffi_panicked() {
+        ffi_death = worker_io::take_ffi_panic();
+    }
+
     unsafe { drop(Box::from_raw(powers_ptr)) };
     drop(machine);
+
+    if let Some(p) = ffi_death {
+        return Err(XsnapError::Panicked {
+            message: p.message,
+            location: p.location,
+        });
+    }
     Ok(())
 }
 
