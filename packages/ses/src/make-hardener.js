@@ -70,17 +70,20 @@ assert(getTypedArrayToStringTag);
 /**
  * Duplicates packages/pass-style/src/passStyle-helpers.js to avoid a dependency.
  *
- * Deliberately a genuine TypedArray brand check via the `%TypedArray%`
+ * A genuine TypedArray brand check via the `%TypedArray%`
  * `[Symbol.toStringTag]` getter, NOT `ArrayBuffer.isView`. Both are
  * unspoofable internal-slot checks, but `isView` is also true for a
- * `DataView`, whereas only a TypedArray is an integer-indexed exotic whose
- * permanently-writable indexed elements make `Object.freeze` throw. That
- * freeze-throw is the sole reason `harden` special-cases here (see
- * `freezeTypedArray`); a `DataView` freezes normally and must take the
- * ordinary `freeze` path, so the DataView-inclusive `isView` would be the
- * wrong, less-precise test. (`byteArray.js` commits to `isView` for a
- * different question — emulated-vs-native shape on an already-known
- * `Uint8Array` — where DataViews are already excluded.)
+ * `DataView`, whereas only a TypedArray is an integer-indexed exotic object.
+ * `harden` gates the `freezeTypedArray` carve-out on this check (see below):
+ * the carve-out exists because a TypedArray over a mutable ArrayBuffer has
+ * permanently-writable indexed elements that make a plain `Object.freeze`
+ * throw, whereas a `DataView` freezes normally and must take the ordinary
+ * `freeze` path — so the DataView-inclusive `isView` would be the wrong,
+ * less-precise test. This copy routes every genuine TypedArray through
+ * `freezeTypedArray`, whether its backing buffer is mutable or immutable.
+ * (`byteArray.js` commits to `isView` for a different question —
+ * emulated-vs-native shape on an already-known `Uint8Array` — where DataViews
+ * are already excluded.)
  *
  * @param {unknown} object
  */

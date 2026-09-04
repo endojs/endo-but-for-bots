@@ -268,17 +268,11 @@ assert(getTypedArrayToStringTag);
 /**
  * Duplicates packages/pass-style/src/passStyle-helpers.js to avoid a dependency.
  *
- * Deliberately a genuine TypedArray brand check via the `%TypedArray%`
- * `[Symbol.toStringTag]` getter, NOT `ArrayBuffer.isView`. Both are
- * unspoofable internal-slot checks, but `isView` is also true for a
- * `DataView`, whereas only a TypedArray is an integer-indexed exotic whose
- * permanently-writable indexed elements make `Object.freeze` throw. That
- * freeze-throw is the sole reason `harden` special-cases here (see
- * `freezeTypedArray`); a `DataView` freezes normally and must take the
- * ordinary `freeze` path, so the DataView-inclusive `isView` would be the
- * wrong, less-precise test. (`byteArray.js` commits to `isView` for a
- * different question — emulated-vs-native shape on an already-known
- * `Uint8Array` — where DataViews are already excluded.)
+ * A pure, unspoofable brand check for a genuine TypedArray, via the
+ * `%TypedArray%` `[Symbol.toStringTag]` getter — which reads an internal slot
+ * that no ordinary object can forge. It answers only "is this a TypedArray?"
+ * and makes no freeze decision; whether a given TypedArray needs `harden`'s
+ * special freeze path is decided by `isMutableTypedArray` below.
  *
  * @param {unknown} object
  */
@@ -309,10 +303,18 @@ const getArrayBufferImmutable =
   arrayBufferImmutable === undefined ? undefined : arrayBufferImmutable.get;
 
 /**
+ * Decides whether `harden` must take the `freezeTypedArray` carve-out rather
+ * than an ordinary `Object.freeze` for `object`.
+ *
  * A genuine TypedArray backed by a mutable ArrayBuffer is the only shape whose
  * permanently-writable indexed elements make `Object.freeze` throw and so
- * needs the `freezeTypedArray` carve-out. A TypedArray over an immutable
- * ArrayBuffer has non-writable elements and freezes normally.
+ * needs the carve-out. A TypedArray over an immutable ArrayBuffer has
+ * non-writable elements and freezes normally, as does a `DataView` — which is
+ * why the brand check is `isTypedArray` (via the `%TypedArray%`
+ * `[Symbol.toStringTag]` getter) and NOT the DataView-inclusive
+ * `ArrayBuffer.isView`. (`byteArray.js` commits to `isView` for a different
+ * question — emulated-vs-native shape on an already-known `Uint8Array` — where
+ * DataViews are already excluded.)
  *
  * @param {unknown} object
  */
