@@ -6,7 +6,8 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
-[guest-native-invitations](guest-native-invitations.md) (added 2026-09-02;
+[guest-native-invitations](guest-native-invitations.md) (added 2026-09-02 and
+revised 2026-09-04;
 guest-native `invite`/`accept` so an `EndoGuest` onboards another guest with its
 own authority, accepting as its own handle with no minted replacement guest and
 reciprocal pet-name binding; daemon-node locator authority with
@@ -292,7 +293,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
-| [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-09-02 | Not Started |
+| [guest-native-invitations](guest-native-invitations.md) | 2026-09-02 | 2026-09-04 | Not Started |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
