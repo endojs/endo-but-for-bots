@@ -283,6 +283,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [inspect-package](inspect-package.md) | 2026-07-12 | 2026-09-04 | Not Started |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
@@ -511,6 +512,21 @@ This update flips [endor-npm-registry-proxy](endor-npm-registry-proxy.md) in M11
 from In Progress to **Complete** (finish line reverified 2026-08-01), so
 Complete/Implemented goes 48 -> 49 and In Progress 36 -> 35; the design count is
 unchanged.
+
+The 2026-09-04 update adds [inspect-package](inspect-package.md) (Not Started)
+to M10: an `@endo/inspect` package plus
+an `@endo/inspect/shim.js` that SES can incorporate in its base so the
+assertion-detail quoting (`quote()`, the sole reader of `bestEffortStringify`)
+renders through it. `@endo/inspect`'s faithful portable safety contract is
+blocked on the missing SES Proxy brand check, surfaced as a dependency
+([endojs/endo#1756](https://github.com/endojs/endo/issues/1756),
+[endojs/endo#819](https://github.com/endojs/endo/issues/819)). Not Started goes
+49 -> 50 and the design count 196 -> 197. This item lands in M10, so M10's
+milestone rollup below goes 7 -> 8 items and the **Total remaining** row goes
+65 -> 66; M10's 14-20 week effort band and the Gantt's 20w M10 bar are
+deliberately unchanged, because the addition is a single M-sized 2-to-3-day
+(~0.5 week) item that is absorbed within that band's whole-week rounding
+rather than shifting the band.
 
 ## Roadmap
 
@@ -1353,6 +1369,7 @@ ecosystem.
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
+| inspect-package | Not Started | `@endo/inspect` + `@endo/inspect/shim.js`; condition-parameterized (node VT-100-iff-TTY / browser rich-console / xs plain); faithful safety contract **blocked on** a portable Proxy brand check: the stamping power ([endojs/endo#1756](https://github.com/endojs/endo/issues/1756), twin [Agoric/agoric-sdk#3905](https://github.com/Agoric/agoric-sdk/issues/3905)) or the non-trapping integrity trait ([tc39/proposal-stabilize](https://github.com/tc39/proposal-stabilize) via [endojs/endo#2673](https://github.com/endojs/endo/pull/2673) / [endojs/endo#2675](https://github.com/endojs/endo/pull/2675)), with [endojs/endo#819](https://github.com/endojs/endo/issues/819) as the soundness precondition. PR [#715](https://github.com/endojs/endo-but-for-bots/pull/715) |
 | npm-dev-publisher-attenuation | Proposed | Capability-attenuated npm dev-release publishing: an agent-facing proxy accepting only allowlisted packages with prerelease versions under `dev-*` dist-tags (behind `PublishGrant` capabilities), and a deterministic promoter (no agent/LLM in path) holding the only upstream npm token, revalidating and promoting byte-identical artifacts with hash-chained audit ledgers. Write-path sibling of the registry-capability / endor-npm-registry-proxy read stack; demo target `npm.minion.town`. Owns the staging boundary and outbound promoter for the chronological `llm` source layer in llm-dev-publish (PR #853), which supplies the FIFO ordering, commit-derived prerelease versions, and manifest recovery; the two designs reconcile into one continuous dev-publishing system |
 
 **Exit criterion:** AI coding agent runs with principle of least
@@ -1707,6 +1724,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | endoclaw-channel-bridges | M | 4-5 days | 10 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 3 days | 10 | Skills directory with capability declarations; PR #105 open |
 | npm-dev-publisher-attenuation | M | 4-5 days | 10 | Two small deterministic services (proxy ~1.5-2.5k LOC + promoter ~1k) plus demo ops config; no Endo-repo code in the first cut (repo placement is an open question in the design). References to registry-capability / endor-npm-registry-proxy are reconciliation seams, not build dependencies |
+| inspect-package | M | 2-3 days | 10 | `@endo/inspect` portable core + node/browser/xs condition entries + the SES `setInspector` seam and shim; the deferred faithful-Proxy phase is excluded (blocked on endojs/endo#1756 or the non-trapping trait, endojs/endo#2673 / #2675) |
 | endor-git-bindings | L | 2-3 weeks | 11 | Re-derived up from the pre-revision `M \| 4-5 days` (which sized the pure-Rust `gix` scope): the revision adds unsafe FFI over custom `git_odb_backend`/`git_refdb_backend` callbacks, Miri/sanitizer gates, a four-lane native-run Zig cross-build matrix with a hand-maintained Windows toolchain wrapper, pack resource-bound testing, and ongoing fixture/API sync with a separate external repository. Shared `GitObjectDb` contract, Rust `git2` wrapper, vendored-libgit2 FFI boundary, Endor-tree adapter, corruption coverage, and Zig cross-build checks. Minion Town supplies its own smart-HTTP and CAS-and-SQLite adapters against the same crate and fixtures. |
 | endor-registry-proxy-worker | M-L | 1.5-2 weeks | 11 | XS mapper bundle, virtual CAS read powers, normalized package-resolution archive tables, Rust loader simplification, and the three-adapter packaged-application fixture corpus. |
 | daemon-endor-sqlite-iterate-streaming | M | 4-5 days | 11 | Native SQLite cursor map, one-row host ABI, hardened shim iterator, lifecycle cleanup, and real XS plus pet-store large-set coverage. |
@@ -1748,9 +1766,9 @@ date of this pass.
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
-| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M10: Confinement & Ecosystem (was M5) | 8 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`, `inspect-package`) | 14-20 weeks | 16-22 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
-| **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
+| **Total remaining** | **66** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
 The 2026-05-20 reconciliation corrects a counting gap in the prior
 snapshot's narrative: M1, M3, and M4 had absorbed new rows since the
