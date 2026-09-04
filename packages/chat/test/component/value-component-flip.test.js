@@ -70,8 +70,13 @@ const waitFor = async (predicate, { timeout = 3000, step = 20 } = {}) => {
 /**
  * Mock powers that record calls and return a synthetic FormulaRecord for
  * getFormula.
+ *
+ * @param {object} [opts]
+ * @param {unknown[]} [opts.retentionPaths]
+ *   The `RetentionPath[]` snapshot `listRetentionPaths` resolves to
+ *   (defaults to an empty snapshot).
  */
-const makeMockPowers = () => {
+const makeMockPowers = ({ retentionPaths = [] } = {}) => {
   /** @type {Array<{ method: string, args: unknown[] }>} */
   const calls = [];
   const powers = Far('MockHostPowers', {
@@ -96,6 +101,12 @@ const makeMockPowers = () => {
     lookupById(id) {
       calls.push({ method: 'lookupById', args: [id] });
       return Far('Resolved', {});
+    },
+    // #284 host API — the retention-paths table's data source. Records the
+    // locator the back face derives from the inspected formula id + type.
+    listRetentionPaths(locator) {
+      calls.push({ method: 'listRetentionPaths', args: [locator] });
+      return harden(retentionPaths);
     },
     reverseIdentify(_id) {
       return [];
@@ -213,6 +224,89 @@ test.serial(
     pressKey('Escape');
     await tick(10);
     t.true(isDismissed(), 'modal dismissed on second Escape');
+  },
+);
+
+// A well-formed formula id (`<64hex>:<64hex>`) so the back face can derive an
+// `endo://` locator from it via `formatLocator`; the LOCAL_NODE sentinel (all
+// zeros) stands in for "this host".
+const VALID_ID = `${'a'.repeat(64)}:${'0'.repeat(64)}`;
+
+test.serial(
+  'flipping to the back face fetches retention paths and renders the table',
+  async t => {
+    // endo (root) →pins  pins (pet-store) "shared-file"  shared-file (eval),
+    // delivered leaf-to-root as `listRetentionPaths` returns it.
+    const retentionPaths = [
+      [
+        {
+          groupMembers: ['shared-file-id'],
+          formulaTypes: ['eval'],
+          referencedBy: 'pins-id',
+          labels: ['pet:shared-file'],
+        },
+        {
+          groupMembers: ['pins-id'],
+          formulaTypes: ['pet-store'],
+          referencedBy: 'endo-id',
+          labels: ['pins'],
+        },
+        { groupMembers: ['endo-id'], type: 'root', formulaTypes: ['endo'] },
+      ],
+    ];
+    const { powers, calls } = makeMockPowers({ retentionPaths });
+    const { $parent, api } = setupWith(powers);
+    await api.showValue(harden({}), VALID_ID);
+    await tick(10);
+
+    pressKey('F');
+    // Wait for the retention snapshot to resolve and repaint the table.
+    await waitFor(() => !!$parent.querySelector('.retention-paths-list'));
+
+    // The back face called the #284 host API with a locator derived from the
+    // inspected formula id.
+    const pathCalls = calls.filter(c => c.method === 'listRetentionPaths');
+    t.is(pathCalls.length, 1, 'listRetentionPaths called once');
+    t.regex(
+      String(pathCalls[0].args[0]),
+      /^endo:\/\//,
+      'called with an endo:// locator, not the bare id',
+    );
+
+    // The table rendered the snapshot: one path, count 1, with the pet-store
+    // edge and the highlighted target segment.
+    t.is($parent.querySelectorAll('.retention-path').length, 1);
+    t.is($parent.querySelector('.retention-paths-count').textContent, '1');
+    t.is(
+      $parent.querySelector('.retention-path-edge-pet').textContent,
+      '"shared-file"',
+    );
+    t.regex(
+      $parent.querySelector('.retention-path-segment-target').textContent,
+      /shared-file-id/,
+    );
+  },
+);
+
+test.serial(
+  'the back face shows the empty state when a value is unretained',
+  async t => {
+    const { powers } = makeMockPowers({ retentionPaths: [] });
+    const { $parent, api } = setupWith(powers);
+    await api.showValue(harden({}), VALID_ID);
+    await tick(10);
+
+    pressKey('F');
+    await waitFor(() => !!$parent.querySelector('.retention-paths-message'));
+
+    t.falsy(
+      $parent.querySelector('.retention-path'),
+      'no path rows for an unretained value',
+    );
+    t.regex(
+      $parent.querySelector('.retention-paths-message').textContent,
+      /unretained/,
+    );
   },
 );
 
