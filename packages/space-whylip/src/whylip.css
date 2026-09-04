@@ -1,9 +1,21 @@
 /* Whylip - Dark literary aesthetic */
 
+/* The host's mount child. The space fills the box the host gives it, so the
+   layout below can size in percentages; sizing it here rather than in the
+   component keeps the whole chain in one file. */
+#whylip-root {
+  width: 100%;
+  height: 100%;
+}
+
+/* Fills its host box rather than the window. The host mounts each whole-page
+   space below the app header and beside the spaces bar, so viewport units
+   would overhang that box by the header's height and the bar's width — and
+   the host clips rather than scrolls, which put the overhang out of reach. */
 .whylip-layout {
   display: flex;
-  width: 100vw;
-  height: 100vh;
+  width: 100%;
+  height: 100%;
   background: #1a1714;
   color: #d4c9b8;
   font-family: 'Georgia', 'Times New Roman', serif;
