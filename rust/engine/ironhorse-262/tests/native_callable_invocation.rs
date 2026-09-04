@@ -94,6 +94,38 @@ fn native_apply_forwards_dense_array() {
     );
 }
 
+/// An `arguments` object is backed by the same `arrays` side table as a real
+/// Array, so every apply-side fast path keyed on that table used to answer out
+/// of raw compact storage. `Get(arguments, "length")` is an ordinary own data
+/// property: assigning, deleting, or redefining it has to be honoured, and a
+/// mapped parameter cell has to be dereferenced rather than forwarded.
+#[test]
+fn apply_reads_arguments_length_through_the_property_mop() {
+    // Deleted: `length` falls off the object entirely, so the walk is empty.
+    agrees("(function(){delete arguments.length;return Math.max.apply(null,arguments)})(3,9)");
+    // Redefined as a shorter data property: the tail argument is dropped.
+    agrees(
+        "(function(){Object.defineProperty(arguments,'length',{value:1}); \
+         return Math.max.apply(null,arguments)})(3,9)",
+    );
+    // Assigned past the arity: the walk reads absent indices as `undefined`.
+    agrees("(function(){arguments.length=3;return String(Math.max.apply(null,arguments))})(3,9)");
+    // A throwing `length` accessor propagates out of CreateListFromArrayLike.
+    agrees(
+        "(function(){Object.defineProperty(arguments,'length',{get:function(){ \
+         throw new RangeError('x')}}); \
+         try{Math.max.apply(null,arguments)}catch(e){return e instanceof RangeError}})(3,9)",
+    );
+    // The same reads through the other CreateListFromArrayLike callers: an
+    // abstract `Reflect.apply`, an Array generic, and a Proxy over arguments.
+    agrees("(function(){arguments.length=1;return Reflect.apply(Math.max,null,arguments)})(3,9)");
+    agrees("(function(a){a=9;return Array.prototype.concat.apply([],arguments)[0]})(3)");
+    agrees(
+        "(function(a){a=9;var p=new Proxy(arguments,{}); \
+         return (function(x){return x}).apply(null,p)})(3)",
+    );
+}
+
 #[test]
 fn apply_array_like_reads_are_computron_exact() {
     for source in [
