@@ -331,6 +331,7 @@ credential; otherwise the result carries `kind`, `audience`, `available`,
 and `revoked`.
 This reports health only and never the credential material, which is why
 it is separate from inspect(), whose snapshot is policy alone.
+Throws once the remote has been revoked.
 
 ## fetch(options?) -> Promise<RemoteOperationResult>
 
