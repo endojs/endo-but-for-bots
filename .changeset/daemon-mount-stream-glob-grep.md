@@ -14,11 +14,10 @@ Unlike `glob`/`grep`, the streams have no result cap: the consumer's pull-based 
 Each accepts a `buffer` option (default `0`, clamped to `1024`) — a pre-acknowledge window for high-latency links.
 A non-zero `buffer` widens the revocation-latency window: after `EndoMountControl.revoke()`, up to `buffer` already-acknowledged elements may still deliver before the next pull rejects; use `buffer: 0` for a hard revocation cutoff.
 The search readers are minted once-only, so this window is bounded per reader — a grantee cannot open a second concurrent stream over the reader to multiply it.
-An over-long line no longer aborts the stream: the element patterns opt out of the default `stringLengthLimit`, matching eager `grep`'s no-limit behavior (a single line past a fixed ceiling would otherwise drop every later match).
-The clamp ceiling `STREAM_BUFFER_MAX` is newly exported from `@endo/daemon`'s `mount.js`.
+A matched line of any length streams whole, matching eager `grep`: the element patterns opt out of the default `stringLengthLimit`, so no fixed ceiling can drop the matches after a long line.
 
 `@endo/agent-tools`: the generated code-mode declarations are regenerated so the model-facing `fs`/`workspace` code-mode surface gains `streamGlob`/`streamGrep`.
 
-`@endo/exo-stream`: `readerFromIterator` accepts a `once` option that latches the reader to a single active `stream()` (a second call rejects rather than starting a second walk over the shared iterator).
+`@endo/exo-stream`: `readerFromIterator` accepts a `once` option that latches the reader to a single `stream()` call (a second call rejects rather than starting a second walk over the shared iterator).
 
-`@endo/platform`: `globPaths` gains a `sorted` option (default `true`, glob's UTF-16 sorted-path contract). With `sorted: false` the engine yields matched paths in walk order as it discovers them — no global-sort barrier before the first batch — over the same single walker, confinement, and denial filtering; this is what makes `streamGrep`'s directory walk incremental.
+`@endo/platform`: `globPaths` gains a `sorted` option (default `true`, glob's UTF-16 sorted-path contract). With `sorted: false` the engine yields matched paths in walk order as it discovers them — no global-sort barrier before the first batch — over the same single walker, confinement, and denial filtering. This is the substrate for a future walk-order path producer; no shipped surface passes `sorted: false` yet (`streamGlob` keeps `sorted: true`), so the directory walk stays eager as described above.

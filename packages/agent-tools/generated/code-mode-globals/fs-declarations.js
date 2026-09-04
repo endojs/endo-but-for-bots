@@ -273,6 +273,7 @@ type MountEndoMountStat = {
     mtime: bigint;
     atime: bigint;
 };
+type MountERef<T> = T | Promise<T>;
 type MountDirectoryWriteSource = MountReadableBlobSource | MountReadableTree;
 type MountReadableBlobSource = {
     streamBase64: (...args: any[]) => PromiseLike<unknown>;
@@ -291,7 +292,6 @@ type MountPathEntry = {
     child: (name: string) => MountPathEntry;
     help: (method?: string) => string;
 };
-type MountERef<T> = T | Promise<T>;
 type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> | {
     value: R;
     promise: null;
@@ -353,7 +353,7 @@ type MountStreamYieldNode<Y = unknown, R = undefined> = {
     streamGlob: (pattern: string, options?: {
         buffer?: number;
     }) => MountPassableReader<string, undefined>;
-    streamGrep: (pattern: string, files: unknown, options?: {
+    streamGrep: (pattern: string, files: MountERef<MountPassableReader<string, any>>, options?: {
         buffer?: number;
     }) => MountPassableReader<MountGrepMatch, undefined>;
     subView: (path: string | string[] | MountEndoMountEntry) => Promise<typeof workspace>;

@@ -129,11 +129,14 @@ const STREAM_STRING_LENGTH_LIMIT = Infinity;
 // matching the tolerance of every other `GrepMatch` surface. `text` carries one
 // whole matched line, so it opts out of the default 100,000 `stringLengthLimit`
 // (see `STREAM_STRING_LENGTH_LIMIT`) rather than aborting the stream on a long
-// line. `streamGlob`'s element pattern is `M.string()` with the same opt-out (a
-// path never approaches the default, but the symmetry keeps both stream surfaces
-// uniform), inlined at the call site.
+// line. `file` is a mount-relative path that can itself run past the default
+// (a deep tree of long segments), so it opts out on the same reasoning — a
+// single over-limit path would otherwise abort the whole stream and drop every
+// later match. `streamGlob`'s element pattern is `M.string()` with the same
+// opt-out (the symmetry keeps both stream surfaces uniform), inlined at the call
+// site.
 const grepMatchPattern = M.splitRecord({
-  file: M.string(),
+  file: M.string({ stringLengthLimit: STREAM_STRING_LENGTH_LIMIT }),
   line: M.number(),
   text: M.string({ stringLengthLimit: STREAM_STRING_LENGTH_LIMIT }),
 });

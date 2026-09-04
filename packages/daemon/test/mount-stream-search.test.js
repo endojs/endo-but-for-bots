@@ -645,6 +645,14 @@ test('streamGrep readPattern is { file, line, text } and every element matches i
     undefined,
     'a mistyped record is rejected',
   );
+  t.notThrows(
+    () =>
+      mustMatch(
+        harden({ file: 'a'.repeat(100_001), line: 1, text: 't' }),
+        pattern,
+      ),
+    'a path past the default 100,000 string-length limit is accepted, not aborted',
+  );
   for (const element of await collect(reader)) {
     mustMatch(element, pattern);
   }

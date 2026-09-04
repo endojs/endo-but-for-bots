@@ -1540,18 +1540,24 @@ const extractTsAliasesIR = ({ rootModule, rootType, memberFilter }) => {
         /** @param {ts.Node} current */
         const visit = current => {
           if (ts.isImportTypeNode(current)) {
-            const found = importedDeclaration(current, fromFile);
+            const qualifier = current.qualifier?.getText() ?? '';
+            // `import('@endo/eventual-send').ERef<T>` written inline resolves
+            // to no followable type source, but ERef is the one eventual-send
+            // anchor the guard renderer already prints as `ERef<T>`; resolve it
+            // the same way a bare `ERef` reference does, so a parameter typed
+            // `ERef<PassableReader<...>>` keeps its shape instead of collapsing
+            // to `unknown`.
+            const found =
+              importedDeclaration(current, fromFile) ??
+              (qualifier === 'ERef'
+                ? resolveReference('ERef', fromFile)
+                : undefined);
             // Code mode is intentionally self-contained: a type no `@endo/*`
             // declaration source can supply retains a valid prompt type
             // rather than a dangling reference.
             return found === undefined
               ? unknownType()
-              : referenceTo(
-                  found,
-                  current.typeArguments,
-                  visit,
-                  current.qualifier?.getText() ?? '',
-                );
+              : referenceTo(found, current.typeArguments, visit, qualifier);
           }
           if (
             ts.isTypeReferenceNode(current) &&
