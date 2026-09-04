@@ -231,15 +231,6 @@ export type GitRemoteCredential =
   | { kind: 'basic'; material: { username: string; password: string } };
 
 /**
- * The reusable "authority to talk to this remote" half of a
- * GitRemote.
- *
- * `GitRemote` composes `GitRemoteEndpoint` with an existing `Git`, and
- * clone composes `GitRemoteEndpoint` with an empty destination mount.
- * This is host-private because `ensureCredentialUsable()` exposes
- * native credential material.
- */
-/**
  * What a holder can learn about the credential a remote would push with,
  * without spending it. `required: false` is the whole record for a remote
  * that needs no credential; the remaining fields are present only when one
@@ -255,6 +246,15 @@ export type RemoteCredentialHealth =
       revoked: boolean;
     };
 
+/**
+ * The reusable "authority to talk to this remote" half of a
+ * GitRemote.
+ *
+ * `GitRemote` composes `GitRemoteEndpoint` with an existing `Git`, and
+ * clone composes `GitRemoteEndpoint` with an empty destination mount.
+ * This is host-private because `ensureCredentialUsable()` exposes
+ * native credential material.
+ */
 export type GitRemoteEndpoint = {
   url: string;
   origin: string;
@@ -344,6 +344,7 @@ export type RemoteSnapshot = NormalizedRemotePolicy & { name: string };
 export type GitRemote = {
   help: (method?: string) => string;
   inspect: () => Promise<RemoteSnapshot>;
+  credentialHealth: () => Promise<RemoteCredentialHealth>;
   fetch: (options?: {
     prune?: boolean;
     tags?: boolean;

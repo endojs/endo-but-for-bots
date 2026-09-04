@@ -445,6 +445,7 @@ test('GitRemote reports credential health before a push fails on it', async t =>
     JSON.stringify(await E(remote).credentialHealth()).includes('test-token'),
   );
 });
+
 test('GitRemote passes HTTPS credential material to backend transport only', async t => {
   /** @type {object[]} */
   const fetchCalls = [];
