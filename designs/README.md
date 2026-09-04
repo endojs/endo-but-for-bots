@@ -6,6 +6,18 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[eliminate-single-segment-string-paths](eliminate-single-segment-string-paths.md)
+(added 2026-09-04; proposes that a petname path is ALWAYS an array of segments and
+a bare-string argument to any path-taking mount/registry method is rejected at the
+exo boundary, so `readText("src/foo.js")` and even `readText("config.json")` error
+rather than coercing to one literal segment; draws the glob/grep/glorp string DSLs
+as the deliberate, help-flagged exception — a string there is a glob pattern or
+RegExp, never a path — and reconciles the PR #897 `entry()` question by keeping
+`entry()` as an array-taking, lineage-verified `EndoMountEntry` minter for
+`@endo/exo-git` while deleting its slash-splitting job; carries open questions —
+the string escape-hatch fork, the `entry()`/`EndoMountEntry` disposition, glob-DSL
+ergonomics, registry symmetry, and the deprecation window — so it lands as a
+review-PR surface rather than settled documentation),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
@@ -283,6 +295,7 @@ LLM-agent stack).*
 
 | Design | Created | Updated | Status |
 |--------|---------|---------|--------|
+| [eliminate-single-segment-string-paths](eliminate-single-segment-string-paths.md) | 2026-09-04 | 2026-09-04 | Proposed |
 | [npm-dev-publisher-attenuation](npm-dev-publisher-attenuation.md) | 2026-07-30 | 2026-08-29 | Proposed |
 | [cap-std-watch](cap-std-watch.md) | 2026-07-18 | 2026-07-18 | Proposed |
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
