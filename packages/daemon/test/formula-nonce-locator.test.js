@@ -226,6 +226,92 @@ test('the per-session miss bound aborts one session without touching another', a
   t.is(bAborts, 0, 'B is untouched by A crossing its bound');
 });
 
+test('a pipelined burst cannot clear the gate before the misses settle', async t => {
+  // The central production property of the per-session gate: a peer that
+  // fires many `fetch` frames concurrently — without awaiting one before
+  // sending the next — must not clear the pre-lookup guard `missBound`
+  // times before the first miss increments the counter. Every prior unit
+  // and wire test awaits each `get` before the next, so nothing here
+  // pipelines; this test fires `missBound + K` presentations at once.
+  //
+  // On the unserialized body (each `get` independently reading the counter
+  // with no in-flight term) all K clear the guard and the bound never
+  // bites: the session aborts more than once and a valid id after the
+  // burst still resolves. On the in-flight-counted body it aborts exactly
+  // once and the session latches closed.
+  const guest = makeGuest();
+  const missBound = 3;
+  const K = 3;
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async id =>
+      id === localId ? guest : t.fail('unexpected id'),
+    localNodeNumber: localNode,
+    missBound,
+  });
+  let aborts = 0;
+  const session = locator.makeLocatorForSession({
+    remoteDesignator: 'burst-peer',
+    abortSession: () => {
+      aborts += 1;
+    },
+  });
+
+  // Fire missBound + K miss presentations synchronously, without awaiting
+  // between them — the pipelined burst.
+  const bursts = [];
+  for (let i = 0; i < missBound + K; i += 1) {
+    bursts.push(session.get(`miss-${i}`));
+  }
+  const outcomes = await Promise.all(bursts);
+  for (const outcome of outcomes) {
+    t.is(outcome, undefined, 'every burst presentation is a miss');
+  }
+  t.is(aborts, 1, 'the burst aborts the session exactly once');
+
+  // A valid identifier presented after the burst is refused: the session
+  // has latched closed, so no capability can be redeemed on it even though
+  // `provideLocalFormula` would return `guest` for `localId`.
+  t.is(
+    await session.get(localId),
+    undefined,
+    'a valid id after the bound is refused on the latched session',
+  );
+  t.is(aborts, 1, 'no re-abort after the burst');
+});
+
+test('a throwing abortSession never becomes an oracle', async t => {
+  // The README and endpoint wiring both invite an embedder to wrap
+  // `abortSession`; such a wrapper can throw. If that throw escaped
+  // `sessionGet`, the crossing presentation would reject with the
+  // embedder's error instead of the uniform `undefined` miss — a
+  // distinguishable oracle for "this is the presentation that crossed the
+  // bound". With `missBound: 1` the very first miss crosses.
+  const locator = makeFormulaNonceLocator({
+    provideLocalFormula: async () => {
+      throw new ReferenceError('absent');
+    },
+    localNodeNumber: localNode,
+    missBound: 1,
+    logger: { error: () => {} },
+  });
+  const session = locator.makeLocatorForSession({
+    remoteDesignator: 'peer',
+    abortSession: () => {
+      throw new Error('embedder teardown blew up');
+    },
+  });
+  await null;
+  // The crossing presentation resolves to the uniform miss, not the
+  // embedder's thrown error.
+  t.is(
+    await session.get('miss-1'),
+    undefined,
+    'the crossing miss stays a uniform undefined despite abortSession throwing',
+  );
+  // And the session still latched closed.
+  t.is(await session.get('miss-2'), undefined, 'the session remains latched');
+});
+
 test('hits do not count toward the miss bound', async t => {
   const guest = makeGuest();
   const locator = makeFormulaNonceLocator({

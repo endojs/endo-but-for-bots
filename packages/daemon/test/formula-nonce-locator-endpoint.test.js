@@ -9,11 +9,32 @@ import { cborCodec } from '@endo/ocapn/cbor';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { makeFormulaNonceLocator } from '../src/networks/formula-nonce-locator.js';
+import { netListenAllowed } from './_net-permission.js';
+
+// This suite is the daemon's first loopback-*listening* test: every case
+// binds a TCP netlayer. A sandboxed checkout that forbids `listen(0)`
+// should skip rather than fail, so gate on the same probe the rest of the
+// daemon suite uses for its listeners.
+const netTest = netListenAllowed ? test : test.skip;
 
 const localNode = 'b'.repeat(64);
 const formulaNumber = 'a'.repeat(64);
 const guestId = `${formulaNumber}:${localNode}`;
 const foreignId = `${formulaNumber}:${'c'.repeat(64)}`;
+
+// Poll a predicate until it holds or the budget runs out. Used to await a
+// transport severance that propagates across the loopback socket
+// asynchronously (the abort is deferred a turn on the far side and the
+// socket close is itself async).
+const waitFor = async (predicate, { tries = 200, delayMs = 10 } = {}) => {
+  for (let i = 0; i < tries; i += 1) {
+    if (predicate()) {
+      return;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise(resolve => setTimeout(resolve, delayMs));
+  }
+};
 
 const codecs = [
   ['syrup', syrupCodec],
@@ -53,254 +74,266 @@ const makeClient = async ({
 };
 
 for (const [codecName, codec] of codecs) {
-  test(`[${codecName}] a local guest formula fetches the guest capability, not host/gateway`, async t => {
-    const guest = Far('Guest', {
-      greet: name => `hello ${name} from the guest`,
-    });
-    const endpoint = makeFormulaNonceLocator({
-      provideLocalFormula: async (id, node) => {
-        t.is(id, guestId, 'the presented identifier reaches provide verbatim');
-        t.is(node, localNode);
-        return guest;
-      },
-      localNodeNumber: localNode,
-    });
+  netTest(
+    `[${codecName}] a local guest formula fetches the guest capability, not host/gateway`,
+    async t => {
+      const guest = Far('Guest', {
+        greet: name => `hello ${name} from the guest`,
+      });
+      const locator = makeFormulaNonceLocator({
+        provideLocalFormula: async (id, node) => {
+          t.is(
+            id,
+            guestId,
+            'the presented identifier reaches provide verbatim',
+          );
+          t.is(node, localNode);
+          return guest;
+        },
+        localNodeNumber: localNode,
+      });
 
-    const server = await makeClient({
-      codec,
-      designator: `server-${codecName}`,
-      makeLocatorForSession: endpoint.makeLocatorForSession,
-    });
-    const client = await makeClient({
-      codec,
-      designator: `client-${codecName}`,
-      locator: new Map(),
-    });
+      const server = await makeClient({
+        codec,
+        designator: `server-${codecName}`,
+        makeLocatorForSession: locator.makeLocatorForSession,
+      });
+      const client = await makeClient({
+        codec,
+        designator: `client-${codecName}`,
+        locator: new Map(),
+      });
 
-    const sturdyRef = client.client.makeSturdyRef(server.location, guestId);
-    const fetched = await client.client.enlivenSturdyRef(sturdyRef);
+      const sturdyRef = client.client.makeSturdyRef(server.location, guestId);
+      const fetched = await client.client.enlivenSturdyRef(sturdyRef);
 
-    // The fetched surface is the guest's — its own method resolves...
-    t.is(
-      await E(fetched).greet('friend'),
-      'hello friend from the guest',
-      'guest method is reachable',
-    );
-    // ...and it is not the protocol bootstrap or a gateway: a method
-    // that only those would carry is absent.
-    await t.throwsAsync(
-      () => E(fetched).fetch(guestId),
-      undefined,
-      'no bootstrap fetch on the guest',
-    );
-    await t.throwsAsync(
-      () => E(fetched).provide(guestId),
-      undefined,
-      'no gateway provide on the guest',
-    );
-
-    client.client.shutdown();
-    server.client.shutdown();
-  });
-
-  test(`[${codecName}] every miss class produces the same peer-visible rejection`, async t => {
-    // The endpoint provides only the one guest; every other presentation
-    // must be an indistinguishable miss.
-    const guest = Far('Guest', { greet: () => 'hi' });
-    const endpoint = makeFormulaNonceLocator({
-      provideLocalFormula: async id => {
-        if (id === guestId) return guest;
-        // Absent / never-formulated: the real daemon path rejects here.
-        throw new ReferenceError(`No formula exists for number ${id}`);
-      },
-      localNodeNumber: localNode,
-    });
-    const server = await makeClient({
-      codec,
-      designator: `server2-${codecName}`,
-      makeLocatorForSession: endpoint.makeLocatorForSession,
-    });
-    const client = await makeClient({
-      codec,
-      designator: `client2-${codecName}`,
-      locator: new Map(),
-    });
-
-    const missSecrets = [
-      'not-a-formula-identifier', // malformed ASCII
-      `${formulaNumber.toUpperCase()}:${localNode}`, // noncanonical
-      foreignId, // foreign node
-      `${'d'.repeat(64)}:${localNode}`, // absent local formula
-      'endo-bootstrap', // old fixed name
-      'endo-peer-entry', // old fixed name
-    ];
-
-    const messages = [];
-    for (const secret of missSecrets) {
-      const sturdyRef = client.client.makeSturdyRef(server.location, secret);
-      // eslint-disable-next-line no-await-in-loop
-      const error = await t.throwsAsync(() =>
-        client.client.enlivenSturdyRef(sturdyRef),
+      // The fetched surface is the guest's — its own method resolves...
+      t.is(
+        await E(fetched).greet('friend'),
+        'hello friend from the guest',
+        'guest method is reachable',
       );
-      messages.push(error.message);
-    }
+      // ...and it is not the protocol bootstrap or a gateway: a method
+      // that only those would carry is absent.
+      await t.throwsAsync(
+        () => E(fetched).fetch(guestId),
+        undefined,
+        'no bootstrap fetch on the guest',
+      );
+      await t.throwsAsync(
+        () => E(fetched).provide(guestId),
+        undefined,
+        'no gateway provide on the guest',
+      );
 
-    // The equivalence is the security property: not "each threw", but
-    // "all threw the identical message", so no miss class is an oracle.
-    const [first, ...rest] = messages;
-    for (const message of rest) {
-      t.is(message, first, 'all miss classes share one rejection message');
-    }
-    // And the message names nothing about the presentation.
-    for (const secret of missSecrets) {
-      if (typeof secret === 'string' && secret !== 'endo-bootstrap') {
-        t.false(
-          first.includes(secret),
-          'the rejection never echoes the presented secret',
+      client.client.shutdown();
+      server.client.shutdown();
+    },
+  );
+
+  netTest(
+    `[${codecName}] every miss class produces the same peer-visible rejection`,
+    async t => {
+      // The locator provides only the one guest; every other presentation
+      // must be an indistinguishable miss.
+      const guest = Far('Guest', { greet: () => 'hi' });
+      const locator = makeFormulaNonceLocator({
+        provideLocalFormula: async id => {
+          if (id === guestId) return guest;
+          // Absent / never-formulated: the real daemon path rejects here.
+          throw new ReferenceError(`No formula exists for number ${id}`);
+        },
+        localNodeNumber: localNode,
+      });
+      const server = await makeClient({
+        codec,
+        designator: `server2-${codecName}`,
+        makeLocatorForSession: locator.makeLocatorForSession,
+      });
+      const client = await makeClient({
+        codec,
+        designator: `client2-${codecName}`,
+        locator: new Map(),
+      });
+
+      const missSecrets = [
+        'not-a-formula-identifier', // malformed ASCII
+        `${formulaNumber.toUpperCase()}:${localNode}`, // noncanonical
+        foreignId, // foreign node
+        `${'d'.repeat(64)}:${localNode}`, // absent local formula
+        'endo-bootstrap', // well-known word, not a formula identifier
+        'endo-peer-entry', // live peer-entry swissnum, not a formula identifier
+      ];
+
+      const messages = [];
+      for (const secret of missSecrets) {
+        const sturdyRef = client.client.makeSturdyRef(server.location, secret);
+        // eslint-disable-next-line no-await-in-loop
+        const error = await t.throwsAsync(() =>
+          client.client.enlivenSturdyRef(sturdyRef),
         );
+        messages.push(error.message);
       }
-    }
 
-    // A valid presentation on the same endpoint still succeeds, proving
-    // the misses were genuine misses and not a dead endpoint.
-    const goodRef = client.client.makeSturdyRef(server.location, guestId);
-    const good = await client.client.enlivenSturdyRef(goodRef);
-    t.is(await E(good).greet(), 'hi');
+      // The equivalence is the security property: not "each threw", but
+      // "all threw the identical message", so no miss class is an oracle.
+      const [first, ...rest] = messages;
+      for (const message of rest) {
+        t.is(message, first, 'all miss classes share one rejection message');
+      }
+      // And the message names nothing about the presentation.
+      for (const secret of missSecrets) {
+        if (typeof secret === 'string' && secret !== 'endo-bootstrap') {
+          t.false(
+            first.includes(secret),
+            'the rejection never echoes the presented secret',
+          );
+        }
+      }
 
-    client.client.shutdown();
-    server.client.shutdown();
-  });
+      // A valid presentation on the same locator still succeeds, proving
+      // the misses were genuine misses and not a dead locator.
+      const goodRef = client.client.makeSturdyRef(server.location, guestId);
+      const good = await client.client.enlivenSturdyRef(goodRef);
+      t.is(await E(good).greet(), 'hi');
 
-  test(`[${codecName}] completing a session without fetch grants no application capability`, async t => {
-    const guest = Far('Guest', { greet: () => 'hi' });
-    const endpoint = makeFormulaNonceLocator({
-      provideLocalFormula: async () => guest,
-      localNodeNumber: localNode,
-    });
-    const server = await makeClient({
-      codec,
-      designator: `server3-${codecName}`,
-      makeLocatorForSession: endpoint.makeLocatorForSession,
-    });
-    const client = await makeClient({
-      codec,
-      designator: `client3-${codecName}`,
-      locator: new Map(),
-    });
+      client.client.shutdown();
+      server.client.shutdown();
+    },
+  );
 
-    // Open a session (connect) but never fetch. The only thing the peer
-    // exposes at export position 0 is the protocol bootstrap; it carries
-    // no guest method, so connecting alone yields nothing applicative.
-    // eslint-disable-next-line no-underscore-dangle
-    const session = await client.client._debug.provideInternalSession(
-      server.location,
-    );
-    const bootstrap = session.ocapn.getRemoteBootstrap();
-    await t.throwsAsync(
-      () => E(bootstrap).greet(),
-      undefined,
-      'the bootstrap has no guest method; the session conveys no application capability',
-    );
+  netTest(
+    `[${codecName}] completing a session without fetch grants no application capability`,
+    async t => {
+      const guest = Far('Guest', { greet: () => 'hi' });
+      const locator = makeFormulaNonceLocator({
+        provideLocalFormula: async () => guest,
+        localNodeNumber: localNode,
+      });
+      const server = await makeClient({
+        codec,
+        designator: `server3-${codecName}`,
+        makeLocatorForSession: locator.makeLocatorForSession,
+      });
+      const client = await makeClient({
+        codec,
+        designator: `client3-${codecName}`,
+        locator: new Map(),
+      });
 
-    client.client.shutdown();
-    server.client.shutdown();
-  });
+      // Open a session (connect) but never fetch. The only thing the peer
+      // exposes at export position 0 is the protocol bootstrap; it carries
+      // no guest method, so connecting alone yields nothing applicative.
+      // eslint-disable-next-line no-underscore-dangle
+      const session = await client.client._debug.provideInternalSession(
+        server.location,
+      );
+      const bootstrap = session.ocapn.getRemoteBootstrap();
+      await t.throwsAsync(
+        () => E(bootstrap).greet(),
+        undefined,
+        'the bootstrap has no guest method; the session conveys no application capability',
+      );
+
+      client.client.shutdown();
+      server.client.shutdown();
+    },
+  );
 }
 
-test('the per-session miss bound aborts the abusive session but not a valid peer, over the wire', async t => {
-  const guest = Far('Guest', { greet: () => 'hi' });
-  const endpoint = makeFormulaNonceLocator({
-    provideLocalFormula: async id => {
-      if (id === guestId) return guest;
-      throw new ReferenceError('absent');
-    },
-    localNodeNumber: localNode,
-    missBound: 3,
-  });
-  // Wrap the endpoint's session factory to observe that crossing the
-  // bound actually reaches the session-teardown callback over the wire
-  // (the callback the ocapn client binds to a real connection-severing
-  // abort, not a bookkeeping-only deregister). A mere "each fetch throws"
-  // assertion cannot tell a torn-down session from one that kept
-  // answering, so we count the aborts the transport path triggers.
-  let wireAborts = 0;
-  const observedMakeLocatorForSession = context =>
-    endpoint.makeLocatorForSession({
-      ...context,
-      abortSession: () => {
-        wireAborts += 1;
-        context.abortSession();
+netTest(
+  'the per-session miss bound severs the abusive session over the wire, but not a valid peer',
+  async t => {
+    const guest = Far('Guest', { greet: () => 'hi' });
+    const missBound = 3;
+    const locator = makeFormulaNonceLocator({
+      provideLocalFormula: async id => {
+        if (id === guestId) return guest;
+        throw new ReferenceError('absent');
       },
+      localNodeNumber: localNode,
+      missBound,
     });
-  const server = await makeClient({
-    codec: syrupCodec,
-    designator: 'server-bound',
-    makeLocatorForSession: observedMakeLocatorForSession,
-  });
-  const prober = await makeClient({
-    codec: syrupCodec,
-    designator: 'prober',
-    locator: new Map(),
-  });
-  const holder = await makeClient({
-    codec: syrupCodec,
-    designator: 'holder',
-    locator: new Map(),
-  });
+    const server = await makeClient({
+      codec: syrupCodec,
+      designator: 'server-bound',
+      makeLocatorForSession: locator.makeLocatorForSession,
+    });
+    const prober = await makeClient({
+      codec: syrupCodec,
+      designator: 'prober',
+      locator: new Map(),
+    });
+    const holder = await makeClient({
+      codec: syrupCodec,
+      designator: 'holder',
+      locator: new Map(),
+    });
 
-  // The prober misses repeatedly; each below-bound miss is the same
-  // rejection, and crossing the bound aborts its session. Collect the
-  // peer-visible messages so we can observe the crossing directly: every
-  // presentation *below* the bound (probes 1..missBound-1) must be the
-  // identical uniform miss over the wire, and crossing the bound must
-  // sever the session (asserted via `wireAborts` below). The security
-  // property is uniformity of the below-bound misses plus severance at
-  // the crossing — not that the crossing reply is byte-identical, which
-  // would rest on engine-dependent teardown ordering.
-  const proberMessages = [];
-  for (let i = 0; i < 4; i += 1) {
-    const ref = prober.client.makeSturdyRef(
+    // Hold ONE prober session explicitly so the severance assertion targets
+    // a single transport rather than whatever a reconnect might mint. This
+    // is the assertion the previous test could not make: it wrapped the
+    // locator's `abortSession` and counted its own callback, which only
+    // proved the locator *called* its callback — exactly what the unit test
+    // already proves — and could not see whether the ocapn client actually
+    // severed the connection. A mechanism that only deregistered the session
+    // (bookkeeping-only `endSession`, with `core.abort()` stubbed out) would
+    // pass a callback-counting test yet leave the socket alive. We instead
+    // assert the prober's own connection is destroyed once the bound is
+    // crossed — which only a real transport severance produces.
+    // eslint-disable-next-line no-underscore-dangle
+    const proberSession = await prober.client._debug.provideInternalSession(
       server.location,
-      `${'e'.repeat(64)}:${localNode}`,
     );
-    // eslint-disable-next-line no-await-in-loop
-    const error = await t.throwsAsync(() =>
-      prober.client.enlivenSturdyRef(ref),
+
+    // The prober misses repeatedly on the held session. Probes below the
+    // bound (1..missBound-1) are the identical uniform rejection over the
+    // wire; the bound-crossing miss severs the session. We assert
+    // uniformity of the below-bound misses (no oracle) and severance at the
+    // crossing (below), not that the crossing reply is byte-identical, which
+    // would rest on engine-dependent teardown ordering.
+    const missId = `${'e'.repeat(64)}:${localNode}`;
+    const proberMessages = [];
+    for (let i = 0; i < missBound; i += 1) {
+      const ref = prober.client.makeSturdyRef(server.location, missId);
+      // eslint-disable-next-line no-await-in-loop
+      const error = await t.throwsAsync(() =>
+        prober.client.enlivenSturdyRef(ref),
+      );
+      proberMessages.push(error.message);
+    }
+    const [firstMiss, secondMiss] = proberMessages;
+    t.is(
+      secondMiss,
+      firstMiss,
+      'below-bound misses share one uniform rejection over the wire',
     );
-    proberMessages.push(error.message);
-  }
 
-  // Probes 1 and 2 are below the bound (missBound is 3): they share one
-  // uniform message, so no below-bound miss is an oracle over the wire.
-  const [firstMiss, secondMiss] = proberMessages;
-  t.is(
-    secondMiss,
-    firstMiss,
-    'below-bound misses share one uniform rejection over the wire',
-  );
+    // Crossing the bound actually severed the transport: the prober's
+    // connection is destroyed. The severance propagates across the loopback
+    // socket asynchronously (deferred a turn on the far side, then a socket
+    // close), so wait for it before asserting.
+    await waitFor(() => proberSession.connection.isDestroyed);
+    t.true(
+      proberSession.connection.isDestroyed,
+      'the abusive session was actually severed over the wire, not merely rejected',
+    );
 
-  // Crossing the bound reached the real session-teardown callback over
-  // the wire — the abuse is actually severed, not merely rejected each
-  // time. (The bound is per-connection: a fresh dial re-handshakes into a
-  // new session with its own counter, which is why the prober's 4th probe
-  // still throws rather than the process wedging — cross-reconnect
-  // aggregation is left to an embedder keying on `remoteDesignator`.)
-  t.true(
-    wireAborts >= 1,
-    'the abusive session was torn down over the wire, not just rejected',
-  );
+    // The holder, a different authenticated peer, fetches its valid guest
+    // capability unaffected by the prober crossing its bound. (This also
+    // shows the bound is per-connection: the prober could re-dial into a
+    // fresh session with its own counter; cross-reconnect aggregation is
+    // left to an embedder keying on the session's verified public key.)
+    const goodRef = holder.client.makeSturdyRef(server.location, guestId);
+    const good = await holder.client.enlivenSturdyRef(goodRef);
+    t.is(
+      await E(good).greet(),
+      'hi',
+      'a valid peer is untouched by another peer hitting the bound',
+    );
 
-  // The holder, a different authenticated peer, fetches its valid guest
-  // capability unaffected by the prober crossing its bound.
-  const goodRef = holder.client.makeSturdyRef(server.location, guestId);
-  const good = await holder.client.enlivenSturdyRef(goodRef);
-  t.is(
-    await E(good).greet(),
-    'hi',
-    'a valid peer is untouched by another peer hitting the bound',
-  );
-
-  prober.client.shutdown();
-  holder.client.shutdown();
-  server.client.shutdown();
-});
+    prober.client.shutdown();
+    holder.client.shutdown();
+    server.client.shutdown();
+  },
+);
