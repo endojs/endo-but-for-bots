@@ -42,11 +42,13 @@ export type ToolCallArgs = {
   fileName?: string;
   content?: string;
   // Arguments to the `glob`/`grep` search tools: a glob or regexp `pattern`,
-  // an optional `glob` filter restricting `grep` to matching paths, and an
-  // optional `maxResults` cap on returned matches.
+  // an optional `glob` filter restricting `grep` to matching paths, an
+  // optional `maxResults` cap on returned matches, and `followSymlinks` to let
+  // the enumerating walk descend through directory symlinks (`rg -L`).
   pattern?: string;
   glob?: string;
   maxResults?: number;
+  followSymlinks?: boolean;
   slots?: Record<string, { label: string }>;
 };
 

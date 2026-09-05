@@ -1329,15 +1329,7 @@ mod tests {
     }
 
     #[test]
-    fn bound_function_in_call_apply_position_self_names_never_diverges() {
-        // The loaded gun (`FuncInfo::default().body_start = 0`): a bound
-        // function reshaped through `.call`/`.apply` used to dispatch at pc 0
-        // — a SILENT completion divergence (never an abort, so worse than a
-        // crash for the never-a-wrong-value invariant). Exactness is not
-        // affordable now (the correct trampoline stacks the `.call`/`.apply`
-        // re-dispatch onto the bound re-dispatch, two calibrated overheads),
-        // so each must self-name `Halt::Unsupported("bind:bound-callback")` —
-        // an honest skip, never a wrong value and never a dispatch at pc 0.
+    fn bound_function_in_call_apply_position_agrees() {
         let programs = [
             "var b=function(v){return v;}.bind(null); b.call(null)",
             "var b=function(v){return 7;}.bind(null); b.apply(null,[])",
@@ -1346,16 +1338,13 @@ mod tests {
         ];
         for p in programs {
             let r = dual_run(p).expect("oracle machine available");
-            assert!(
-                matches!(&r.ironhorse_halt, Halt::Unsupported(name) if *name == "bind:bound-callback"),
-                "{p:?}: expected an honest bind:bound-callback skip (no abort, no wrong value), got halt={:?} result_agrees={} computrons_agree={}",
-                r.ironhorse_halt, r.result_agrees, r.computrons_agree,
-            );
+            assert_eq!(r.agreement, Agreement::BothComplete, "{p:?}");
+            assert!(r.result_agrees, "{p:?}");
         }
     }
 
     #[test]
-    fn stage4_daemon_boot_bundle_never_diverges_and_names_its_gaps() {
+    fn stage4_daemon_boot_bundle_agrees_with_the_pin() {
         // The stage-4 closure boot-bundle bar (child 5/5; design
         // `daemon-endor-architecture.md` § Unified runner). Dual-run the
         // COMMITTED daemon boot-bundle sources (`polyfills.js`,
@@ -1366,20 +1355,11 @@ mod tests {
         // accept one the pin rejects. Every program either agrees with the
         // pin or aborts with a SELF-NAMED halt.
         //
-        // Verdict at this closure point: the committed bundle still does
-        // **not** run identically on ironhorse — but the `globalThis` binding it
-        // reads first has now LANDED (stage-7 child 1: a live global-object
-        // binding), so every bundle advances PAST that read and stops at the
-        // next real post-stage-4 engine gap: `polyfills.js` and the boot
-        // prefix at the `to_instance` surface, `host_aliases.js` at the
-        // computed-`at` property surface. Each remains a **named, ledgered
-        // engine gap** (the downstream gaps the bundle would keep hitting —
-        // `Reflect`, typed-array-from-iterable, symbol-keyed `defineProperty`,
-        // class-instance construction — enumerated in the README stage-4
-        // evidence block and reported to s10), NOT a divergence: ironhorse never
-        // lies about the boot bundle, it honestly declines it. This test is
-        // the regression guard on that safety property AND the ledger anchor
-        // that advances as each successive gap lands.
+        // The computed-name intrinsic installation gap was the final named
+        // stop in these committed sources. All three programs now complete
+        // with the oracle result, while the verdict machinery remains the
+        // regression guard against either a wrong completion or a newly
+        // introduced self-named gap.
         let bundles = daemon_boot_bundle_sources();
         assert!(!bundles.is_empty(), "boot-bundle sources must be present");
         let mut divergences = Vec::new();
@@ -1411,16 +1391,9 @@ mod tests {
             divergences.is_empty(),
             "boot-bundle divergence(s) forbidden by the accuracy-over-parity doctrine: {divergences:?}"
         );
-        // (2) The ledger anchor, ADVANCED (stage-7 child 1): the `globalThis`
-        // global-object binding now LANDS, so no committed bundle stops at that
-        // gap any more — each advances past its first `globalThis` read to the
-        // next real post-stage-4 engine gap. Those gaps stay honest, self-named
-        // `Halt::Unsupported` aborts (never divergences, per assertion (1)):
-        // `host_aliases.js` reaches the computed-`at` property surface. The
-        // `to_instance` (ToObject) surface `polyfills.js` and the boot prefix
-        // used to stop at LANDED (js-04 functions/constructors/base-classes),
-        // then at the `class` opcode. Class definition now lands too, so the
-        // remaining two probes reach the same computed-`at` surface.
+        // (2) Historical ledger anchors remain explicit so a regression gets
+        // attributed to the surface that returned, rather than merely lowering
+        // the aggregate agreement count.
         assert_eq!(
             gaps.get("boot:no-globalThis-global-object-binding")
                 .copied(),
@@ -1434,14 +1407,20 @@ mod tests {
             "the `to_instance` (ToObject) surface landed (js-04); no committed bundle should \
              still stop at that gap, but got {gaps:?}"
         );
-        let expected_gaps: std::collections::BTreeMap<String, usize> =
-            [("boot:unsupported:at".to_string(), 2usize)]
-                .into_iter()
-                .collect();
         assert_eq!(
-            gaps, expected_gaps,
-            "expected the committed boot bundles to stop at the advanced gap \
-             (2× at); got {gaps:?} (if a gap closed, advance the ledger)"
+            gaps.get("boot:unsupported:at").copied(),
+            None,
+            "computed default-key access now lands; no committed bundle should \
+             stop at `at`, but got {gaps:?}"
+        );
+        assert!(
+            gaps.is_empty(),
+            "all committed boot bundles must now run end-to-end; got {gaps:?}"
+        );
+        assert_eq!(
+            agree,
+            bundles.len(),
+            "every committed boot bundle must agree with the pin"
         );
     }
 

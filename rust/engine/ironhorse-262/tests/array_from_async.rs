@@ -124,6 +124,15 @@ fn mapfn_throw_rejects_and_closes_iterator() {
 }
 
 #[test]
+fn mapfn_throw_preserves_rejection_object_identity() {
+    assert_signal(
+        "var g=''; var marker={tag:9}; Array.fromAsync([1], function(){ throw marker; }).then(\
+         function(){ g='OK'; }, function(e){ g=(e===marker)+':'+e.tag; }); undefined",
+        "true:9",
+    );
+}
+
+#[test]
 fn iteration_error_rejects() {
     assert_signal(
         "var g=''; async function* f(){ throw {tag:5}; } \

@@ -617,11 +617,11 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
     // The promise cluster (`PRMS`): generated to satisfy the decoder's
     // cross-checks -- a resolving pair per emitted guard (dense guard
     // coverage), a `Combine` reaction naming each combinator (dense
-    // combinator coverage), derived promises with rows of their own,
-    // `remaining` covering the pending element reactions, results
-    // naming a real `ARRY` row, and NO null name chunks (the mint
-    // always interns a real empty chunk, and the bounds gate refuses
-    // the null it tolerates on other rows).
+    // combinator coverage), callable capability slots, `remaining`
+    // covering the pending element reactions, results naming a real
+    // `ARRY` row, and NO null name chunks (the mint always interns a
+    // real empty chunk, and the bounds gate refuses the null it
+    // tolerates on other rows).
     let mut next_owner = 0u32;
     let mut prms_promises: Vec<ironhorse_vm::PromiseRow> = Vec::new();
     for _ in 0..(c.byte() % 4) {
@@ -652,13 +652,13 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
             .map(|(i, _)| i)
             .collect();
         // The results Array must have a POSITIVE carried length (the
-        // element index is bounded below it), and an undone
-        // combinator's derived promise must be PENDING — drawing the
-        // derived from the pending list satisfies the gate for either
-        // `done` value, an honest shape either way.
+        // element index is bounded below it). The generated guest
+        // function is an honest callable capability callback; using
+        // it for both slots also exercises arbitrary custom
+        // capabilities rather than assuming a native resolving pair.
         let sized: Vec<&ironhorse_snapshot::image::ArrayImage> =
             arrays.iter().filter(|a| a.length > 0).collect();
-        if !pending.is_empty() && !sized.is_empty() {
+        if !pending.is_empty() && !sized.is_empty() && has_function {
             for _ in 0..(c.byte() % 3) {
                 let ci = prms_combinators.len() as u32;
                 let host = pending[(c.byte() as usize) % pending.len()];
@@ -685,12 +685,13 @@ pub fn gen_machine_image(data: &[u8]) -> MachineImage {
                 } else {
                     1 + c.u32() % results.length
                 };
+                let callback = Slot::of(Kind::Reference, Payload::Reference(func_owner));
                 prms_combinators.push(ironhorse_vm::CombinatorRow {
                     kind,
-                    derived: prms_promises[pending[(c.byte() as usize) % pending.len()]].owner,
+                    resolve: callback,
+                    reject: callback,
                     remaining,
                     results: results.owner,
-                    done: c.byte() % 2 == 0,
                 });
             }
         }

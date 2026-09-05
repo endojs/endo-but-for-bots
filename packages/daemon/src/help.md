@@ -332,6 +332,14 @@ A host has all guest capabilities plus:
 - Store blobs and values
 - Make unconfined or bundled caplets
 - Manage network peers
+- Manage secret blobs through `@secrets` without revealing them in inventory
+
+`@secrets/create`, `@secrets/catalog`, and `@secrets/audit` are management
+facets on the daemon's root host only; a host made with provideHost does not
+carry `@secrets`.
+Created read capabilities are bound beneath the ordinary `secrets` directory.
+Prefer endowing a formula with a secret capability instead of calling its
+`readBase64()` method in an agent session.
 
 Use help("methodName") for details on specific methods.
 
@@ -761,6 +769,59 @@ List directory entries at the given path.
 Each argument is one path segment: list("subdir").
 Call with no arguments to list the root.
 Entries with symlinks escaping the mount root are excluded.
+
+## glob(pattern, options?) -> Promise<string[]>
+
+Recursively enumerate paths matching a glob pattern, relative to this mount face.
+pattern: string — Slash-separated segments. The only metacharacters are `*` and `**`.
+`*` matches zero or more characters within one segment (never `/`, and it does match
+leading-dot names); `**` as a whole segment matches zero or more directory levels,
+and a trailing `**` additionally matches file descendants, not only directories.
+Every other character, including `?`, `[`, `]`, `{`, `}`, and `+`, is a literal.
+Denied names (such as .ssh, .aws, .env) never appear, even when named literally.
+Entries whose symlinks escape the mount root are excluded. Results include
+directories as well as files, are sorted by UTF-16 code unit, and are capped at
+10,000 with silent truncation.
+`**` reports a symlink to a directory but does not descend through it, so the walk
+covers the tree and not the link graph; a segment that names a path still follows one,
+so glob("node_modules/@endo/*/src/**/*.js") reaches through workspace links.
+options.followSymlinks: boolean — Let `**` descend through directory symlinks too
+(default false). This is `rg -L`, and like it, the sweep can become very large: in a
+workspace checkout every node_modules link points back into the tree, so the walk
+enumerates every route to every package rather than every file.
+Example: glob("**/*.js") → all JavaScript files at any depth.
+Example: glob("src/*") → the immediate children of src.
+
+## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
+
+Search file contents for a regular expression across selected files.
+pattern: string — An ECMAScript RegExp source, evaluated as new RegExp(pattern) with no flags.
+paths: string[] | Promise<string[]> — Which files to search. Pass a glob result to compose
+the two — grep(pattern, glob("src/**/*.js")) — since glob is an independent producer of
+paths (the promise is awaited for you). Omit it to search every file under the mount face.
+options.maxResults: number — Cap on the number of match records (default 1000).
+options.followSymlinks: boolean — Applies only when paths is omitted, to the implicit
+walk that finds the files (see glob); a path you pass in is named, so it is always read.
+Each matching line yields one { file, line, text } record: file is the mount-face-relative
+path, line is 1-based, and text is the whole line with any trailing carriage return stripped
+(CRLF normalization). A path that is denied, escapes the mount, is a directory, or cannot
+be read is skipped silently.
+Example: grep("TODO", glob("src/**/*.js")) → every TODO line under src.
+Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+
+## glorp(glob, grep, options?) -> Promise<Array<{ file, line, text }>>
+
+Fused glob+grep: enumerate the files matching the glob pattern, then search them for the grep pattern.
+glob: string — A glob pattern (same dialect as glob()); the files it matches are the search set.
+grep: string — An ECMAScript RegExp source (same as grep()); the pattern each matched file is searched for.
+Both patterns are required, so the whole operation is one call whose two patterns a native filesystem
+layer can push down and fuse into a single enumerate-and-scan pass. It returns the same
+{ file, line, text } records as grep and honors the same confinement and deny-pattern filtering.
+options.maxResults: number — Cap on the number of match records (default 1000).
+options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
+receives the enumerated paths, which are named and so always read.
+glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
+Example: glorp("src/**/*.js", "TODO") → every TODO line under src.
 
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 

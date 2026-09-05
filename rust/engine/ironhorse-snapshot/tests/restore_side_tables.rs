@@ -122,3 +122,137 @@ fn symbol_tables_rebuilt_at_restore() {
         "the inverse symbol_ids map is rebuilt at restore: the global reads back by name",
     );
 }
+
+/// Array descriptor state deliberately straddles both persisted substrates:
+/// materialized non-default index descriptors live in the slot chain, while
+/// the Array exotic's non-writable `length` bit lives on the instance slot and
+/// its compact elements/length remain in the Arrays side-table row. A real
+/// byte snapshot must restore all three pieces coherently.
+#[test]
+fn array_define_property_state_survives_suspend_resume() {
+    let (crank1, names1) = compile(
+        "var a = [1]; Object.defineProperty(a, 'length', { writable: false }); \
+         Object.defineProperty(a, '0', { value: 7, writable: false, configurable: false }); 0",
+    );
+    let (crank2, names2) = compile(
+        "'' + Reflect.defineProperty(a, '1', { value: 2 }) + ',' + \
+         Reflect.defineProperty(a, '0', { value: 9 }) + ',' + a.length + ',' + a[0]",
+    );
+
+    let run_second = |machine: &mut Interp| {
+        let relinked = machine
+            .relink_crank(&crank2, &names2)
+            .expect("second crank relinks onto the persisted name table");
+        machine.run(&relinked)
+    };
+
+    let mut uninterrupted = Interp::new();
+    uninterrupted.link_intrinsics(&names1);
+    assert!(uninterrupted.run(&crank1).completed, "baseline crank 1");
+    let baseline = run_second(&mut uninterrupted);
+    assert!(baseline.completed, "baseline crank 2");
+    assert_eq!(baseline.result, "false,false,1,7");
+
+    let mut before_snapshot = Interp::new();
+    before_snapshot.link_intrinsics(&names1);
+    assert!(before_snapshot.run(&crank1).completed, "snapshot crank 1");
+    let bytes = before_snapshot
+        .write_snapshot(&sig())
+        .expect("array descriptor state snapshots");
+    drop(before_snapshot);
+
+    let mut restored =
+        from_snapshot_bytes(&bytes, &sig()).expect("array descriptor state restores");
+    let resumed = run_second(&mut restored);
+    assert!(resumed.completed, "resumed crank 2");
+    assert_eq!(resumed.result, baseline.result);
+    assert_eq!(resumed.computrons, baseline.computrons);
+}
+
+/// An arguments object's ordinary, configurable `length` slot and its
+/// arguments-exotic brand must survive together. If restore retained only the
+/// compact indexed storage, `length` would incorrectly reappear as Array's
+/// non-configurable side-table length and deletion would fail after resume.
+#[test]
+fn arguments_length_attributes_survive_suspend_resume() {
+    let (crank1, names1) = compile(
+        "var saved; function capture() { saved = arguments; } capture(3, 4); \
+         Object.defineProperty(saved, 'length', { value: 7 }); 0",
+    );
+    let (crank2, names2) = compile(
+        "var before = saved.length; var deleted = delete saved.length; \
+         '' + before + ',' + deleted + ',' + saved.hasOwnProperty('length') + ',' + saved[1]",
+    );
+
+    let run_second = |machine: &mut Interp| {
+        let relinked = machine
+            .relink_crank(&crank2, &names2)
+            .expect("second crank relinks onto the persisted name table");
+        machine.run(&relinked)
+    };
+
+    let mut uninterrupted = Interp::new();
+    uninterrupted.link_intrinsics(&names1);
+    assert!(uninterrupted.run(&crank1).completed, "baseline crank 1");
+    let baseline = run_second(&mut uninterrupted);
+    assert!(baseline.completed, "baseline crank 2");
+    assert_eq!(baseline.result, "7,true,false,4");
+
+    let mut before_snapshot = Interp::new();
+    before_snapshot.link_intrinsics(&names1);
+    assert!(before_snapshot.run(&crank1).completed, "snapshot crank 1");
+    let bytes = before_snapshot
+        .write_snapshot(&sig())
+        .expect("arguments descriptor state snapshots");
+    drop(before_snapshot);
+
+    let mut restored =
+        from_snapshot_bytes(&bytes, &sig()).expect("arguments descriptor state restores");
+    let resumed = run_second(&mut restored);
+    assert!(resumed.completed, "resumed crank 2");
+    assert_eq!(resumed.result, baseline.result);
+    assert_eq!(resumed.computrons, baseline.computrons);
+}
+
+/// A sloppy arguments object's indexed aliases are compact ARRY entries whose
+/// values are closure-cell references. The blob writer and decoder must retain
+/// those semantic edges so writes through an index still update the captured
+/// formal after a complete byte-snapshot reconstruction.
+#[test]
+fn mapped_arguments_cells_survive_blob_restore() {
+    let (crank1, names1) = compile(
+        "var saved, read; function capture(a,b) { saved=arguments; \
+         read=function(){return a+':'+b+':'+saved[0]+':'+saved[1]}; b='z'; } \
+         capture(1,2); 0",
+    );
+    let (crank2, names2) = compile("saved[0]='q'; read()");
+
+    let run_second = |machine: &mut Interp| {
+        let relinked = machine
+            .relink_crank(&crank2, &names2)
+            .expect("second crank relinks onto the persisted name table");
+        machine.run(&relinked)
+    };
+
+    let mut uninterrupted = Interp::new();
+    uninterrupted.link_intrinsics(&names1);
+    assert!(uninterrupted.run(&crank1).completed, "baseline crank 1");
+    let baseline = run_second(&mut uninterrupted);
+    assert!(baseline.completed, "baseline crank 2");
+    assert_eq!(baseline.result, "q:z:q:z");
+
+    let mut before_snapshot = Interp::new();
+    before_snapshot.link_intrinsics(&names1);
+    assert!(before_snapshot.run(&crank1).completed, "snapshot crank 1");
+    let bytes = before_snapshot
+        .write_snapshot(&sig())
+        .expect("mapped arguments snapshot");
+    drop(before_snapshot);
+
+    let mut restored =
+        from_snapshot_bytes(&bytes, &sig()).expect("mapped arguments restore from bytes");
+    let resumed = run_second(&mut restored);
+    assert!(resumed.completed, "resumed crank 2");
+    assert_eq!(resumed.result, baseline.result);
+    assert_eq!(resumed.computrons, baseline.computrons);
+}

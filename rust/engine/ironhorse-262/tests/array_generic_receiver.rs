@@ -1,12 +1,12 @@
 //! Behavioral gate for the generic (array-like / sparse / proxy `this`) path of
-//! the non-allocating read-only `Array.prototype` methods — the arrays child of
+//! `Array.prototype` methods — the arrays child of
 //! the Ironhorse JS completion arc (garden issue 51). The dense fast path in
 //! `call_native_method` handles a packed array; this suite exercises the MOP
 //! fallback that `forEach`/`some`/`every`/`find*`/`indexOf`/`lastIndexOf`/
-//! `includes`/`reduce`/`reduceRight`/`at` take for a receiver that is NOT a
-//! fully-dense array: a sparse array (holes, possibly filled through the
-//! prototype chain), a plain array-*like* object (`{length, 0:…}`), an accessor
-//! (getter) receiver, and a `Proxy` observed through its traps.
+//! `includes`/`reduce`/`reduceRight`/`at`/`map`/`filter` take for a receiver
+//! that is NOT a fully-dense array: a sparse array (holes, possibly filled
+//! through the prototype chain), a plain array-*like* object (`{length, 0:…}`),
+//! an accessor (getter) receiver, and a `Proxy` observed through its traps.
 //!
 //! Each snippet is dual-run against the XS differential oracle; the gate is
 //! **result agreement where the oracle accepts the program** (`BothComplete` +
@@ -44,7 +44,16 @@ fn array_like_iteration_family() {
         "var o = {length: 3, 0: 'a', 1: 'b', 2: 'c'}; var out = []; \
          Array.prototype.forEach.call(o, function (v, i) { out.push(i + ':' + v); }); out.join(',')",
     );
-    // map is intentionally NOT in the generic set (species) — but forEach/reduce are.
+    agrees(
+        "var o = {length: 3, 0: 2, 2: 4}; var r = Array.prototype.map.call(o, \
+         function (v, i, source) { return v + i + source.length; }); \
+         '' + r.length + ',' + r[0] + ',' + r.hasOwnProperty('1') + ',' + r[2]",
+    );
+    agrees(
+        "var o = {length: 4, 0: 1, 2: 3, 3: 4}; var r = Array.prototype.filter.call(o, \
+         function (v) { return v % 2; }); \
+         '' + r.length + ',' + r[0] + ':' + r[1]",
+    );
     agrees(
         "var o = {length: 4, 0: 1, 1: 2, 2: 3, 3: 4}; \
          Array.prototype.reduce.call(o, function (a, b) { return a + b; }, 0)",
@@ -91,6 +100,8 @@ fn array_like_search_family_with_from_index() {
     agrees("Array.prototype.includes.call({length: 3, 0: 1, 1: NaN, 2: 3}, NaN)");
     agrees("Array.prototype.includes.call({length: 3, 0: 1, 1: 2, 2: 3}, 2, -1)");
     agrees("Array.prototype.includes.call({length: 3, 0: 1, 1: 2, 2: 3}, 4)");
+    agrees("try { Array.prototype.indexOf.call({length: 1, 0: 'x'}, 'x', 0n); false } catch (e) { e instanceof TypeError }");
+    agrees("try { Array.prototype.at.call({length: 1, 0: 'x'}, {valueOf:function(){return 0n}}); false } catch (e) { e instanceof TypeError }");
 }
 
 #[test]
@@ -136,6 +147,39 @@ fn sparse_lastIndexOf_over_preallocated() {
 }
 
 #[test]
+fn large_sparse_arrays_skip_holes_without_losing_live_semantics() {
+    agrees(
+        "var a = []; a[0] = 0; a[999999] = 9; var seen = []; \
+         a.forEach(function (v, i) { seen.push(i); if (i === 0) a[500000] = 5; }); \
+         seen.join(',')",
+    );
+    agrees(
+        "var a = []; a[0] = 1; a[999999] = 2; \
+         a.every(function (v, i) { if (i === 0) a[500000] = 3; return v > 0; }) + ':' + \
+         a.some(function (v) { return v === 3; })",
+    );
+    agrees(
+        "var a = []; a[999999] = 'far'; \
+         a.indexOf('far') + ':' + a.lastIndexOf('far') + ':' + a.indexOf('missing')",
+    );
+    agrees(
+        "var a = new Array(1000000); Object.defineProperty(a, '0', { \
+           configurable: true, get: function () { a[500000] = 'made'; return 'first'; } \
+         }); a.indexOf('made')",
+    );
+    agrees(
+        "var a = new Array(1000000); a[500000] = 'delete-me'; \
+         Object.defineProperty(a, '999999', { configurable: true, get: function () { \
+           delete a[500000]; return 'last'; \
+         }}); a.lastIndexOf('delete-me')",
+    );
+    agrees(
+        "var a = new Array(1000000); Array.prototype[750000] = 'inherited'; \
+         var result = a.indexOf('inherited'); delete Array.prototype[750000]; result",
+    );
+}
+
+#[test]
 fn prototype_inherited_hole_is_visited() {
     // A hole whose index resolves through the prototype chain IS present to
     // HasProperty, so forEach visits it and indexOf can find it.
@@ -148,6 +192,33 @@ fn prototype_inherited_hole_is_visited() {
     agrees(
         "var a = [0, , 2]; Array.prototype[1] = 'p'; var r = a.indexOf('p'); \
          delete Array.prototype[1]; r",
+    );
+    agrees(
+        "var a = [1, , 3]; Array.prototype[1] = 2; \
+         var r = a.map(function (v) { return v * 10; }); delete Array.prototype[1]; \
+         '' + r.length + ',' + r[0] + ',' + r[1] + ',' + r[2]",
+    );
+}
+
+#[test]
+fn map_and_filter_observe_callback_mutation_and_species() {
+    agrees(
+        "var a = [1, , 3]; var r = a.map(function (v, i) { \
+         if (i === 0) a[1] = 2; return v * 10; }); \
+         '' + r.length + ',' + r[0] + ',' + r[1] + ',' + r[2]",
+    );
+    agrees(
+        "function C(len) { this.createdLength = len; } var a = [1, , 3]; \
+         a.constructor = {}; a.constructor[Symbol.species] = C; \
+         var r = a.map(function (v) { return v + 1; }); \
+         '' + (r instanceof C) + ',' + r.createdLength + ',' + r[0] + ',' + \
+         r.hasOwnProperty('1') + ',' + r[2]",
+    );
+    agrees(
+        "function C(len) { this.createdLength = len; } var a = [1, 2, 3]; \
+         a.constructor = {}; a.constructor[Symbol.species] = C; \
+         var r = a.filter(function (v) { return v > 1; }); \
+         '' + (r instanceof C) + ',' + r.createdLength + ',' + r[0] + ',' + r[1]",
     );
 }
 

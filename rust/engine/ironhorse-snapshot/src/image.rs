@@ -248,10 +248,11 @@ pub struct WrapperImage {
 }
 
 /// One RegExp instance's serialized side-table row (the `REGX` atom /
-/// small-state regexps section): the owning slot, the pattern source,
-/// the flags, and the `lastIndex` internal store as raw f64 bits. The
-/// COMPILED program does not travel — it is a pure function of
-/// `(source, flags)` and the restore recompiles it. Ascending by owner.
+/// small-state regexps section): the owning slot, pattern source, flags, and
+/// the legacy schema-11 numeric `lastIndex` fallback. Current snapshots carry
+/// the authoritative arbitrary-valued property and its attributes in HEAP;
+/// the fallback keeps older stores readable. The compiled program does not
+/// travel — restore recompiles it from `(source, flags)`. Ascending by owner.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RegExpImage {
     pub owner: u32,
@@ -1525,7 +1526,7 @@ pub(crate) fn decode_wrappers(p: &[u8]) -> Result<Vec<WrapperImage>, SnapshotErr
 
 /// Encode the regexp side table (the `REGX` payload / small-state
 /// regexps section). Wire form per row: `u32 owner`, `u32 source_len` +
-/// bytes, `u32 flags_len` + bytes, `u64 lastIndex bits`.
+/// bytes, `u32 flags_len` + bytes, `u64 legacy lastIndex bits`.
 pub(crate) fn encode_regexps(regexps: &[RegExpImage]) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&(regexps.len() as u32).to_be_bytes());
@@ -2334,10 +2335,10 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
     v.extend_from_slice(&(c.combinators.len() as u32).to_be_bytes());
     for row in &c.combinators {
         v.push(row.kind);
-        v.extend_from_slice(&row.derived.to_be_bytes());
+        crate::slot_codec::encode_slot(&row.resolve, &mut v);
+        crate::slot_codec::encode_slot(&row.reject, &mut v);
         v.extend_from_slice(&row.remaining.to_be_bytes());
         v.extend_from_slice(&row.results.to_be_bytes());
-        v.push(row.done as u8);
     }
     v
 }
@@ -2350,16 +2351,21 @@ pub(crate) fn encode_promise_cluster(c: &ironhorse_vm::PromiseClusterSnapshot) -
 ///
 /// - an async-flavored reaction kind (bytes 3–10) is refused by name —
 ///   it would resume machinery no atom carries, and the persist gate
-///   refuses the machine before an honest writer can emit one;
+///   refuses the machine before an honest writer can emit one; byte 11 is the
+///   resumable second half of `Promise.prototype.finally`, and byte 12 is a
+///   synchronous combinator element callback retained by a custom `then`;
 /// - a settled promise carries no reactions (settlement drains them,
 ///   and quiescence requires the job queue empty);
-/// - a `Combine` reaction indexes a combinator row; a resolving
-///   function indexes a guard and names a promise row; a combinator's
-///   derived promise names a promise row;
+/// - a `Combine`/`CombineDirect` reaction indexes a combinator row; a resolving
+///   function indexes a guard and names a promise row; a capability executor
+///   or persisted finally closure uses one of the three reserved high guard
+///   tags and names its hidden home object; a
+///   combinator carries reference-shaped capability callbacks whose callability
+///   is rechecked after function restoration;
 /// - both arenas are DENSELY referenced (the writer emits the
 ///   compacted form, so an unreferenced entry can only be crafted —
 ///   the segments-not-densely-referenced rule);
-/// - a live (`!done`, non-`Race`) combinator's `remaining` covers its
+/// - a live non-`Race` combinator's `remaining` covers its
 ///   pending element reactions — each drain decrements it once, so a
 ///   smaller count would underflow at resume.
 pub(crate) fn decode_promise_cluster(
@@ -2406,7 +2412,7 @@ pub(crate) fn decode_promise_cluster(
             let resolve = c.slot()?;
             let reject = c.slot()?;
             let kind = c.u8()?;
-            if kind > 2 {
+            if kind > 2 && kind != 11 && kind != 12 {
                 return Err(SnapshotError::Corrupt(
                     "promise cluster: reaction kind does not resume",
                 ));
@@ -2457,7 +2463,7 @@ pub(crate) fn decode_promise_cluster(
     }
     let count = c.u32()? as usize;
     let mut combinators: Vec<ironhorse_vm::CombinatorRow> =
-        Vec::with_capacity(count.min(p.len() / 14));
+        Vec::with_capacity(count.min(p.len() / (2 * SLOT_RECORD_BYTES + 9)));
     for _ in 0..count {
         let kind = c.u8()?;
         if kind > 3 {
@@ -2467,10 +2473,10 @@ pub(crate) fn decode_promise_cluster(
         }
         combinators.push(ironhorse_vm::CombinatorRow {
             kind,
-            derived: c.u32()?,
+            resolve: c.slot()?,
+            reject: c.slot()?,
             remaining: c.u32()?,
             results: c.u32()?,
-            done: boolean(&mut c)?,
         });
     }
     c.done()?;
@@ -2478,12 +2484,6 @@ pub(crate) fn decode_promise_cluster(
     // The cross-references, all four tables now in hand.
     let owners: std::collections::BTreeSet<u32> =
         promises.iter().map(|row| row.owner).collect();
-    let state_of = |owner: u32| -> Option<u8> {
-        promises
-            .binary_search_by_key(&owner, |row| row.owner)
-            .ok()
-            .map(|i| promises[i].state)
-    };
     // A guard is the `[[AlreadyResolved]]` boolean of exactly ONE
     // resolving pair (`fxPushPromiseFunctions` mints two rows per
     // guard: opposite polarity, one promise). The collector may sweep
@@ -2492,7 +2492,21 @@ pub(crate) fn decode_promise_cluster(
     // and a guard spanning promises or doubling a polarity can only
     // be crafted (its trip would then gate the WRONG settlement).
     let mut guard_rows: Vec<Option<(u32, u8)>> = vec![None; guards.len()];
+    let mut runtime_homes = std::collections::BTreeSet::new();
     for row in &functions {
+        if row.guard >= u32::MAX - 2 {
+            if (row.guard == u32::MAX && row.reject)
+                || row.promise == row.function
+                || !runtime_homes.insert(row.promise)
+            {
+                return Err(SnapshotError::Corrupt(if row.guard == u32::MAX {
+                    "promise cluster: malformed capability executor home"
+                } else {
+                    "promise cluster: malformed finally function home"
+                }));
+            }
+            continue;
+        }
         if !owners.contains(&row.promise) {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: resolving function names no promise row",
@@ -2521,79 +2535,90 @@ pub(crate) fn decode_promise_cluster(
             "promise cluster: guards not densely referenced",
         ));
     }
-    // A reaction's capability slots. `User` and `FinallyReturn`
-    // reactions always carry a full `new_promise_capability` pair —
-    // both halves alive while the reaction is pending (the reaction's
-    // own slots mark them), both naming one promise and one guard with
-    // opposite polarity. The drain recovers the DERIVED promise
-    // through `resolve` alone, so a cross-wired capability would
-    // silently settle whatever promise the crafted slot binds. A
-    // `Combine` reaction carries NO capability — its payload is its
-    // kind — so any populated slot on one can only be crafted.
-    let fn_row_of = |slot: &Slot| -> Option<&ironhorse_vm::PromiseFnRow> {
-        if slot.kind != Kind::Reference {
-            return None;
-        }
-        match slot.value {
-            Payload::Reference(r) => functions
-                .binary_search_by_key(&r.0, |row| row.function)
-                .ok()
-                .map(|i| &functions[i]),
-            _ => None,
-        }
-    };
+    // A user reaction's capability slots may be arbitrary callable references
+    // supplied by a custom constructor. A queued combinator reaction carries
+    // no callbacks; a direct one carries the private bridge's exact resolving
+    // pair so a crafted kind byte cannot turn an ordinary promise reaction into
+    // synchronous execution. Guest-function callability is checked after all
+    // persisted function populations have restored.
     let mut comb_pending = vec![0u32; combinators.len()];
     let mut elem_seen = std::collections::BTreeSet::<(u32, u32)>::new();
-    for r in promises.iter().flat_map(|row| row.reactions.iter()) {
-        if r.kind == 2 {
-            match comb_pending.get_mut(r.a as usize) {
-                Some(n) => *n += 1,
-                None => {
-                    return Err(SnapshotError::Corrupt(
-                        "promise cluster: combinator index out of range",
-                    ))
+    let direct_pair_ok = |owner: u32, resolve: &Slot, reject: &Slot| -> bool {
+        let row_for = |slot: &Slot| match slot.value {
+            Payload::Reference(function) if slot.kind == Kind::Reference => functions
+                .binary_search_by_key(&function.0, |row| row.function)
+                .ok()
+                .map(|index| &functions[index]),
+            _ => None,
+        };
+        matches!((row_for(resolve), row_for(reject)), (Some(a), Some(b))
+            if a.promise == owner
+                && b.promise == owner
+                && !a.reject
+                && b.reject
+                && a.guard < u32::MAX - 2
+                && a.guard == b.guard)
+    };
+    for promise in &promises {
+        for r in &promise.reactions {
+            if r.kind == 2 || r.kind == 12 {
+                match comb_pending.get_mut(r.a as usize) {
+                    Some(n) => *n += 1,
+                    None => {
+                        return Err(SnapshotError::Corrupt(
+                            "promise cluster: combinator index out of range",
+                        ))
+                    }
                 }
-            }
-            // One reaction per element: the combinator registers each
-            // element index exactly once at creation, so a duplicate
-            // `(combinator, element)` pair can only be crafted — and
-            // draining both would count one element twice, settling
-            // the combinator short of its real total.
-            if !elem_seen.insert((r.a, r.b)) {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: duplicate element reaction",
-                ));
-            }
-            if [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
-                .iter()
-                .any(|slot| slot.kind != Kind::Undefined)
-            {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: combinator reaction carries capability slots",
-                ));
-            }
-        } else {
-            let (Some(res), Some(rej)) = (fn_row_of(&r.resolve), fn_row_of(&r.reject)) else {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: reaction capability names no resolving function",
-                ));
-            };
-            if res.reject
-                || !rej.reject
-                || res.promise != rej.promise
-                || res.guard != rej.guard
-            {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: reaction capability is not one resolving pair",
-                ));
-            }
-            // The `a`/`b` payload belongs to `Combine` alone; the
-            // writer zeroes it on every other kind, so a non-zero
-            // value is a second encoding of the same machine.
-            if r.a != 0 || r.b != 0 {
-                return Err(SnapshotError::Corrupt(
-                    "promise cluster: unused reaction payload not zero",
-                ));
+                // One reaction per element: the combinator registers each
+                // element index exactly once at creation, so a duplicate
+                // `(combinator, element)` pair can only be crafted — and
+                // draining both would count one element twice, settling
+                // the combinator short of its real total.
+                if !elem_seen.insert((r.a, r.b)) {
+                    return Err(SnapshotError::Corrupt(
+                        "promise cluster: duplicate element reaction",
+                    ));
+                }
+                let callback_shape = if r.kind == 2 {
+                    [r.on_fulfilled, r.on_rejected, r.resolve, r.reject]
+                        .iter()
+                        .all(|slot| slot.kind == Kind::Undefined)
+                } else {
+                    r.on_fulfilled.kind == Kind::Undefined
+                        && r.on_rejected.kind == Kind::Undefined
+                        && direct_pair_ok(promise.owner, &r.resolve, &r.reject)
+                };
+                if !callback_shape {
+                    return Err(SnapshotError::Corrupt(if r.kind == 2 {
+                        "promise cluster: combinator reaction carries capability slots"
+                    } else {
+                        "promise cluster: malformed direct combinator callback"
+                    }));
+                }
+            } else {
+                let both_references =
+                    r.resolve.kind == Kind::Reference && r.reject.kind == Kind::Reference;
+                if !both_references {
+                    return Err(SnapshotError::Corrupt(
+                        "promise cluster: reaction capability names no resolving function",
+                    ));
+                }
+                // `FinallyAwait.a` is its original-rejection boolean. The
+                // `a`/`b` payload is otherwise zero outside combinator kinds,
+                // so a different value is a second encoding of the machine.
+                let payload_ok = if r.kind == 11 {
+                    r.a <= 1 && r.b == 0 && r.on_rejected.kind == Kind::Undefined
+                } else if r.kind == 1 {
+                    r.a == 0 && r.b == 0 && r.on_rejected.kind == Kind::Reference
+                } else {
+                    r.a == 0 && r.b == 0
+                };
+                if !payload_ok {
+                    return Err(SnapshotError::Corrupt(
+                        "promise cluster: unused reaction payload not zero",
+                    ));
+                }
             }
         }
     }
@@ -2603,24 +2628,13 @@ pub(crate) fn decode_promise_cluster(
                 "promise cluster: combinators not densely referenced",
             ));
         }
-        if !owners.contains(&row.derived) {
+        if row.resolve.kind != Kind::Reference || row.reject.kind != Kind::Reference {
             return Err(SnapshotError::Corrupt(
-                "promise cluster: combinator's derived promise has no row",
-            ));
-        }
-        // An undone combinator has not settled its derived promise yet
-        // — that is the one thing `done` latches — so an undone row
-        // whose derived is already settled can only be crafted, and
-        // the drain would RE-settle it: `settle_promise` overwrites
-        // state and result unconditionally (its Pending gates live in
-        // the resolving-function and `done` paths, not here).
-        if !row.done && state_of(row.derived) != Some(0) {
-            return Err(SnapshotError::Corrupt(
-                "promise cluster: undone combinator's derived promise is settled",
+                "promise cluster: combinator capability names no function",
             ));
         }
         // kind byte 2 is Race, which never decrements `remaining`.
-        if row.kind != 2 && !row.done && row.remaining < pending {
+        if row.kind != 2 && row.remaining < pending {
             return Err(SnapshotError::Corrupt(
                 "promise cluster: remaining below its pending reactions",
             ));
@@ -3249,6 +3263,49 @@ pub(crate) fn encode_iterators(rows: &[IteratorRow]) -> Vec<u8> {
     v
 }
 
+/// The self-contained shape gate for an `Iterator.from` wrapper cursor (kind
+/// 8): it wraps a live iterable, retains a result slot, and carries none of the
+/// index/done/key/text state the other cursor kinds use.
+///
+/// Shared by [`decode_iterators`] and [`check_image_slot_bounds`] so the
+/// encoding has exactly one definition and a change to it cannot land in one
+/// gate while missing the other.
+fn iterator_from_wrapper_malformed(
+    iterable: u32,
+    result: u32,
+    index: u32,
+    done: bool,
+    enum_keys_empty: bool,
+    str_bytes_empty: bool,
+) -> bool {
+    iterable == u32::MAX
+        || result == u32::MAX
+        || index != 0
+        || done
+        || !enum_keys_empty
+        || !str_bytes_empty
+}
+
+/// The self-contained shape gate for a RegExp String Iterator cursor (kind 9):
+/// it wraps a live iterable, retains a result slot, keeps its mode bits in
+/// `index`, carries no for-in keys, and holds whole UTF-16 code units.
+///
+/// Shared by both gates for the same reason as
+/// [`iterator_from_wrapper_malformed`].
+fn regexp_string_iterator_malformed(
+    iterable: u32,
+    result: u32,
+    index: u32,
+    enum_keys_empty: bool,
+    str_bytes_len: usize,
+) -> bool {
+    iterable == u32::MAX
+        || result == u32::MAX
+        || index > 3
+        || !enum_keys_empty
+        || str_bytes_len % 2 != 0
+}
+
 pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotError> {
     let mut c = Cursor::new(p, "iterator cursors");
     let count = c.u32()? as usize;
@@ -3261,9 +3318,10 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
             ));
         }
         let kind = c.u8()?;
-        // The engine's cursor kinds are 0..=7 (array values/keys/
-        // entries, for-in, string, collection keys/values/entries).
-        if kind > 7 {
+        // The engine's cursor kinds are 0..=9 (array values/keys/entries,
+        // for-in, string, collection keys/values/entries, Iterator.from
+        // generic wrappers, and RegExp String Iterator).
+        if kind > 9 {
             return Err(SnapshotError::Corrupt("iterator cursors: unknown kind"));
         }
         let iterable = c.u32()?;
@@ -3295,6 +3353,33 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
         if kind == 3 && index as usize > enum_keys.len() {
             return Err(SnapshotError::Corrupt(
                 "iterator cursors: for-in cursor past its key list",
+            ));
+        }
+        if kind == 8
+            && iterator_from_wrapper_malformed(
+                iterable,
+                result,
+                index,
+                done,
+                enum_keys.is_empty(),
+                str_bytes.is_empty(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed Iterator.from wrapper",
+            ));
+        }
+        if kind == 9
+            && regexp_string_iterator_malformed(
+                iterable,
+                result,
+                index,
+                enum_keys.is_empty(),
+                str_bytes.len(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: invalid RegExp String Iterator",
             ));
         }
         out.push(IteratorRow {
@@ -3573,14 +3658,15 @@ pub(crate) fn check_image_slot_bounds(
     // The typed-array family carries CROSS-table geometry, checked here
     // where all three tables are in hand (the SYMB-vs-NAME precedent):
     // every buffer's backing extent lies inside the chunk arena, and
-    // every view names a buffer ROW whose length covers the view. A
-    // view that merely named an in-bounds SLOT with no buffer row
-    // would restore, then read through a geometry no allocation backs.
-    let buffer_length = |slot: u32| -> Option<u32> {
+    // every live view names a buffer ROW whose length covers the view.
+    // Detached buffers retain the former view geometry, whose observable
+    // accessors project zero lengths. A view that merely named an in-bounds
+    // SLOT with no buffer row would restore without a backing allocation.
+    let buffer_shape = |slot: u32| -> Option<(u32, bool)> {
         buffers
             .binary_search_by_key(&slot, |b| b.owner)
             .ok()
-            .map(|i| buffers[i].length)
+            .map(|i| (buffers[i].length, buffers[i].flags & 1 != 0))
     };
     for b in buffers {
         owned(b.owner)?;
@@ -3600,8 +3686,9 @@ pub(crate) fn check_image_slot_bounds(
             .ok_or(SnapshotError::Corrupt(
                 "typed-arrays side table: unknown element kind",
             ))?;
-        let covered = buffer_length(t.buffer)
-            .is_some_and(|len| t.offset as u64 + ((t.length as u64) << shift) <= len as u64);
+        let covered = buffer_shape(t.buffer).is_some_and(|(len, detached)| {
+            detached || t.offset as u64 + ((t.length as u64) << shift) <= len as u64
+        });
         if !covered {
             return Err(SnapshotError::Corrupt(
                 "typed-arrays side table: view geometry past its buffer",
@@ -3611,8 +3698,9 @@ pub(crate) fn check_image_slot_bounds(
     for d in data_views {
         owned(d.owner)?;
         owned(d.buffer)?;
-        let covered =
-            buffer_length(d.buffer).is_some_and(|len| d.offset as u64 + d.size as u64 <= len as u64);
+        let covered = buffer_shape(d.buffer).is_some_and(|(len, detached)| {
+            detached || d.offset as u64 + d.size as u64 <= len as u64
+        });
         if !covered {
             return Err(SnapshotError::Corrupt(
                 "data-views side table: view geometry past its buffer",
@@ -4019,8 +4107,8 @@ pub(crate) fn check_image_slot_bounds(
     // because `make_resolving_functions` always interns a real empty
     // chunk and reading a NULL one faults. A combinator's results
     // Array must name an `ARRY` row (the element drain writes through
-    // the dense store), the view-names-a-buffer-row discipline; its
-    // derived promise was proved against the promise rows at decode.
+    // the dense store), the view-names-a-buffer-row discipline. Its
+    // capability callbacks are bounded like every other carried Slot.
     for row in &lang.promise_cluster.promises {
         owned(row.owner)?;
         check(&row.result)?;
@@ -4041,7 +4129,8 @@ pub(crate) fn check_image_slot_bounds(
     }
     let mut results_lengths = Vec::with_capacity(lang.promise_cluster.combinators.len());
     for row in &lang.promise_cluster.combinators {
-        owned(row.derived)?;
+        check(&row.resolve)?;
+        check(&row.reject)?;
         owned(row.results)?;
         let Ok(k) = arrays.binary_search_by_key(&row.results, |a| a.owner) else {
             return Err(SnapshotError::Corrupt(
@@ -4062,7 +4151,7 @@ pub(crate) fn check_image_slot_bounds(
         }
         results_lengths.push(len);
     }
-    // A `Combine` reaction's element index writes the results Array at
+    // A combinator reaction's element index writes the results Array at
     // the drain (`array_set_dense` grows `length` to cover it) — and on
     // the `any` path the AggregateError builder then iterates
     // `0..length`. The combinator presets `length` to its ELEMENT COUNT
@@ -4078,7 +4167,7 @@ pub(crate) fn check_image_slot_bounds(
         .iter()
         .flat_map(|row| row.reactions.iter())
     {
-        if r.kind == 2
+        if (r.kind == 2 || r.kind == 12)
             && results_lengths
                 .get(r.a as usize)
                 .is_none_or(|len| r.b >= *len)
@@ -4140,8 +4229,9 @@ pub(crate) fn check_image_slot_bounds(
     // The iterator cursors: weak owner and result slots bounded; a
     // collection cursor must name a COVERING collections row (its
     // `next()` indexes the table unconditionally) with the carried
-    // ordinal inside the compacted live list; a for-in cursor's key
-    // ids must live in the restored name table.
+    // ordinal inside the compacted live list; a RegExp String Iterator must
+    // carry valid mode bits and UTF-16; a for-in cursor's key ids must live in
+    // the restored name table.
     for r in iterators {
         owned(r.owner)?;
         owned(r.result)?;
@@ -4159,6 +4249,33 @@ pub(crate) fn check_image_slot_bounds(
                     "iterator cursors: collection cursor names no covering row",
                 ));
             }
+        }
+        if r.kind == 8
+            && iterator_from_wrapper_malformed(
+                r.iterable,
+                r.result,
+                r.index,
+                r.done,
+                r.enum_keys.is_empty(),
+                r.str_bytes.is_empty(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: malformed Iterator.from wrapper",
+            ));
+        }
+        if r.kind == 9
+            && regexp_string_iterator_malformed(
+                r.iterable,
+                r.result,
+                r.index,
+                r.enum_keys.is_empty(),
+                r.str_bytes.len(),
+            )
+        {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: invalid RegExp String Iterator",
+            ));
         }
         if r.kind == 3
             && r.enum_keys
@@ -5176,7 +5293,7 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[row(5), row(3)])).is_err());
         // Unknown kind.
         let mut bad = row(1);
-        bad.kind = 8;
+        bad.kind = 10;
         assert!(decode_iterators(&encode_iterators(&[bad])).is_err());
         // A string cursor splitting a UTF-16 unit, and one past its text.
         let mut odd = row(1);
@@ -5186,6 +5303,23 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[odd.clone()])).is_err());
         odd.index = 6;
         assert!(decode_iterators(&encode_iterators(&[odd])).is_err());
+        // A RegExp String Iterator must carry a matcher, an arena anchor, an
+        // even-sized UTF-16 payload, and only its two mode bits in `index`.
+        let mut regexp = row(1);
+        regexp.kind = 9;
+        regexp.index = 4;
+        assert!(decode_iterators(&encode_iterators(&[regexp.clone()])).is_err());
+        regexp.index = 3;
+        regexp.str_bytes = vec![0];
+        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
+        let mut regexp = row(1);
+        regexp.kind = 9;
+        regexp.iterable = u32::MAX;
+        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
+        let mut regexp = row(1);
+        regexp.kind = 9;
+        regexp.enum_keys.push((1, 0));
+        assert!(decode_iterators(&encode_iterators(&[regexp])).is_err());
         // A for-in cursor past its key list.
         let mut over = row(1);
         over.kind = 3;

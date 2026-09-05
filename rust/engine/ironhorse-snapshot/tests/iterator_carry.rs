@@ -2,8 +2,10 @@
 //! atom): the `iterators` side table — array values/keys/entries
 //! cursors, string iterators (UTF-16 byte cursors, surrogate pairs
 //! stepped whole), for-in enumerators (inert across cranks: the
-//! covered grammar cannot hold one), and Map/Set cursors. All pure
-//! data plus weak slot references; every `next()` is a native on
+//! covered grammar cannot hold one), Map/Set cursors, and the generic
+//! wrappers created by `Iterator.from`, and RegExp String Iterators. All pure
+//! data plus weak slot
+//! references; every `next()` is a native on
 //! rooted boot structure, so a resumed iterator CONTINUES its walk —
 //! the `lastIndex` discipline the segment-iterator carry set.
 //!
@@ -113,6 +115,39 @@ fn resumed_array_iterators_continue_their_walk() {
 }
 
 #[test]
+fn resumed_iterators_are_consumed_by_terminal_helpers() {
+    assert_twin(
+        "ih-iter-twin-terminal-helpers",
+        "var it = 0; var found = 0; var t = 0; \
+         it = [1, 2, 3, 4].values(); it.next(); \
+         found = [5, 6, 7].values(); t = 7; t",
+        &[
+            "var it; var t; t = it.reduce(function (a, v) { return a + v; }, 10); t",
+            "var found; var t; t = found.find(function (v) { return v === 6; }); t",
+        ],
+        &["19", "6"],
+    );
+}
+
+#[test]
+fn resumed_iterator_from_wrapper_keeps_its_iterated_object_and_cached_next() {
+    assert_twin(
+        "ih-iter-twin-from-wrapper",
+        "var base = 0; var wrapped = 0; var t = 0; \
+         base = { n: 0, next: function () { return this.n < 3 ? \
+             { value: ++this.n } : { done: true }; } }; \
+         wrapped = Iterator.from(base); t = wrapped.next().value; t",
+        &[
+            "var wrapped; var t; t = wrapped.toArray().join(','); t",
+            "var base; var wrapped; var t; base.return = function () { \
+                 return { value: 9, done: true }; }; \
+             var r = wrapped.return(); t = r.value + ':' + r.done; t",
+        ],
+        &["2,3", "9:true"],
+    );
+}
+
+#[test]
 fn resumed_string_iterator_steps_surrogate_pairs_whole() {
     // 'ab😀c': crank 1 consumes 'a'; the resumed cursor must yield 'b',
     // then the astral character as ONE two-unit string (the byte
@@ -127,6 +162,35 @@ fn resumed_string_iterator_steps_surrogate_pairs_whole() {
             "var si; var t; var r = 0; r = si.next(); t = r.value + ':' + r.done; t",
         ],
         &["b:false", "2:false", "c:false"],
+    );
+}
+
+#[test]
+fn resumed_regexp_string_iterator_continues_matching() {
+    assert_twin(
+        "ih-iter-twin-regexp-string",
+        "var ri = 0; var t = 0; \
+         ri = 'a1b22'.matchAll(/(\\d+)/g); ri.next(); t = 7; t",
+        &[
+            "var ri; var t; var r = ri.next(); \
+             t = r.value[0] + ':' + r.value[1] + ':' + r.value.index + ':' + r.done; t",
+            "var ri; var t; var r = ri.next(); t = r.value + ':' + r.done; t",
+        ],
+        &["22:22:3:false", "undefined:true"],
+    );
+}
+
+#[test]
+fn resumed_unicode_regexp_string_iterator_keeps_empty_match_advancement() {
+    assert_twin(
+        "ih-iter-twin-regexp-unicode-empty",
+        "var ri = 0; var t = 0; \
+         ri = '\u{1F600}'.matchAll(/(?:)/gu); ri.next(); t = 7; t",
+        &[
+            "var ri; var t; var r = ri.next(); t = r.value.index + ':' + r.done; t",
+            "var ri; var t; var r = ri.next(); t = r.value + ':' + r.done; t",
+        ],
+        &["2:false", "undefined:true"],
     );
 }
 

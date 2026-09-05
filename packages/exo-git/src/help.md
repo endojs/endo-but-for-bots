@@ -101,6 +101,21 @@ Get a read-only Filesystem pinned to the tree a revision resolves to.
 Later movement of the ref does not affect the returned view, and two
 revisions with the same tree share one memoized capability.
 
+## followRootChanges(options?) -> PassableReader<GitRootChange>
+
+Follow every published commit that replaces the repository root.
+The first value is a snapshot of the current commit, or `position: null` for
+an unborn repository. Later values are chained transitions carrying the commit
+object id, complete-tree identity, and an immutable filesystem rooted at that
+tree. A rejected `options.cancelled` promise closes only this follower.
+
+## followLatestRoot(options?) -> PassableReader<GitRootSnapshot>
+
+Follow the latest published repository root with bounded retention.
+The first value is the current snapshot. A slow reader may skip intermediate
+commits and observes the skipped range as a revision jump. A rejected
+`options.cancelled` promise closes only this follower.
+
 ## readOnly() -> Git
 
 Attenuate to the read-only facet of this same repository.

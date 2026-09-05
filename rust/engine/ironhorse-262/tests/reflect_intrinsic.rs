@@ -151,6 +151,22 @@ fn reflect_get() {
     );
 }
 
+#[test]
+fn reflect_get_and_has_dispatch_array_exotics() {
+    assert_result_agrees(
+        "var a=[1,,3]; [Reflect.get(a,'length'),Reflect.get(a,'0'),Reflect.has(a,'1'),Reflect.has(a,'2')].join(',')",
+    );
+    assert_result_agrees(
+        "var a=[]; Object.defineProperty(Array.prototype,'answer',{get:function(){return this.mark},configurable:true}); var value=Reflect.get(a,'answer',{mark:7}); delete Array.prototype.answer; value",
+    );
+    assert_result_agrees(
+        "(function(){return Reflect.get(arguments,'length')+','+Reflect.has(arguments,'0')})(1)",
+    );
+    assert_result_agrees(
+        "var s=Object('ab'); Reflect.get(s,'1')+','+Reflect.has(s,'0')+','+Reflect.get(s,'length')",
+    );
+}
+
 // -------------------------------------------------------------------------
 // §5  `set` / `deleteProperty` — the mutating reflections, boolean-returning.
 // -------------------------------------------------------------------------

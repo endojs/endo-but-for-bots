@@ -101,6 +101,12 @@ const GitCommitShape = M.splitRecord(
   },
 );
 
+const FollowRootOptionsShape = M.splitRecord(
+  {},
+  { cancelled: M.promise() },
+  harden({}),
+);
+
 const GitWorktreeEntryShape = M.splitRecord(
   {
     path: M.string(),
@@ -319,6 +325,12 @@ export const GIT_METHOD_GUARDS = harden({
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.string()),
   filesystemAt: M.callWhen(RefArgShape).returns(M.remotable('Filesystem')),
+  followLatestRoot: M.callWhen()
+    .optional(FollowRootOptionsShape)
+    .returns(M.remotable('PassableReader')),
+  followRootChanges: M.callWhen()
+    .optional(FollowRootOptionsShape)
+    .returns(M.remotable('PassableReader')),
   help: HelpMethod,
   log: M.callWhen()
     .optional(M.recordOf(M.string(), M.any()))
@@ -375,6 +387,8 @@ export const GIT_READER_METHODS = harden([
   'currentBranch',
   'diff',
   'filesystemAt',
+  'followLatestRoot',
+  'followRootChanges',
   'help',
   'log',
   'readOnly',

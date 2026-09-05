@@ -1,22 +1,13 @@
-//! The subject/pattern byte codec, a faithful port of the XS UTF-8
+//! The subject/pattern byte codec, a faithful port of the XS CESU-8/UTF-8
 //! helpers in `xsCommon.c` that `xsre.c` relies on.
 //!
 //! The matcher and the compiler both walk their inputs one *character*
 //! at a time over a NUL-terminated byte string, exactly as XS does:
-//! `fxUTF8Decode` decodes one code point, `fxFindCharacter` advances or
-//! retreats by whole multi-byte sequences (skipping `0x80..=0xBF`
-//! continuation bytes). We operate in the same UTF-8 byte-offset space
-//! the C engine does (design's resolved question 6), so offsets compare
-//! directly against the oracle shim with no UTF-16 conversion.
-//!
-//! Scope note: XS's `u`/`v` codec (`mxStringByteDecode` = `fxCESU8Decode`,
-//! and the `XS_REGEXP_UV` branches of `fxFindCharacter`/`fxGetCharacter`)
-//! differs from the plain path only when the bytes encode a surrogate as its
-//! own sub-sequence (CESU-8) — which a well-formed UTF-8 subject never does.
-//! For every input this engine is actually fed, the `u`/`v` decode and the
-//! plain decode yield the identical scalar and the identical byte stride, so
-//! [`find_character`] needs no `UV` branch and [`get_character`] differs only
-//! in which case-fold table the `i` flag consults.
+//! `fxUTF8Decode` decodes one encoded UTF-16 code unit, while
+//! `fxCESU8Decode` combines a valid surrogate pair for `u`/`v` matching.
+//! `fxFindCharacter` advances or retreats by one code unit normally and one
+//! code point under `u`/`v`. Offsets remain byte offsets inside the matcher;
+//! the VM maps them to ECMAScript UTF-16 indices at its boundary.
 
 /// XS `C_EOF` (`EOF`, `-1`): the sentinel `fxUTF8Decode` returns at the
 /// terminating NUL.
@@ -100,6 +91,21 @@ pub fn utf8_decode(bytes: &[u8], offset: usize) -> (i64, usize) {
     (c as i64, p)
 }
 
+/// Port of `fxCESU8Decode`: decode one CESU-8 code point, combining a leading
+/// surrogate followed immediately by a trailing surrogate. A lone surrogate
+/// remains a standalone value and consumes only its own byte sequence.
+pub fn cesu8_decode(bytes: &[u8], offset: usize) -> (i64, usize) {
+    let (mut character, next) = utf8_decode(bytes, offset);
+    if (0xD800..=0xDBFF).contains(&character) {
+        let (surrogate, after) = utf8_decode(bytes, next);
+        if (0xDC00..=0xDFFF).contains(&surrogate) {
+            character = 0x10000 + ((character & 0x3FF) << 10) + (surrogate & 0x3FF);
+            return (character, after);
+        }
+    }
+    (character, next)
+}
+
 /// `c_read8`: byte at `offset`, or `0` at/after the terminating NUL (the
 /// subject slice always carries a trailing NUL, mirroring an XS string).
 #[inline]
@@ -107,10 +113,37 @@ fn read8(bytes: &[u8], offset: usize) -> u8 {
     bytes.get(offset).copied().unwrap_or(0)
 }
 
-/// Port of `fxFindCharacter` (the non-`UV` branch): move `offset` by one
-/// whole UTF-8 sequence in `direction` (`+1` forward, `-1` backward),
-/// skipping continuation bytes (`(byte & 0xC0) == 0x80`).
-pub fn find_character(bytes: &[u8], offset: usize, direction: i32) -> usize {
+/// Port of `fxFindCharacter`: move `offset` by one character in `direction`
+/// (`+1` forward, `-1` backward). Normally that is one CESU-8 sequence (one
+/// UTF-16 code unit); under `u`/`v`, a valid surrogate pair is one character.
+pub fn find_character(bytes: &[u8], offset: usize, direction: i32, flags: u32) -> usize {
+    use crate::flags::{XS_REGEXP_U, XS_REGEXP_V};
+
+    if flags & (XS_REGEXP_U | XS_REGEXP_V) != 0 {
+        if direction > 0 {
+            return cesu8_decode(bytes, offset).1.min(bytes.len());
+        }
+        if offset == 0 {
+            return 0;
+        }
+        let mut p = offset - 1;
+        while p > 0 && read8(bytes, p) & 0xC0 == 0x80 {
+            p -= 1;
+        }
+        let (character, _) = utf8_decode(bytes, p);
+        if (0xDC00..=0xDFFF).contains(&character) && p > 0 {
+            let mut q = p - 1;
+            while q > 0 && read8(bytes, q) & 0xC0 == 0x80 {
+                q -= 1;
+            }
+            let (former, _) = utf8_decode(bytes, q);
+            if (0xD800..=0xDBFF).contains(&former) {
+                p = q;
+            }
+        }
+        return p;
+    }
+
     let mut p = offset as i64 + direction as i64;
     loop {
         let c = if p < 0 { 0 } else { read8(bytes, p as usize) };
@@ -133,18 +166,41 @@ pub fn find_character(bytes: &[u8], offset: usize, direction: i32) -> usize {
 /// the `u`/`v` path folds lower-ward and folds astral, the plain `i` path
 /// folds upper-ward over the BMP only.
 ///
-/// For a well-formed UTF-8 subject (all this engine is fed), the `u`/`v`
-/// CESU-8 decode (`mxStringByteDecode`) and the plain `fxUTF8Decode` produce
-/// the identical scalar — a lone/paired surrogate byte sequence cannot occur
-/// — so the codec branch collapses to one `utf8_decode`; only the fold table
-/// differs between the two modes.
 pub fn get_character(bytes: &[u8], offset: usize, flags: u32) -> i64 {
     use crate::flags::{XS_REGEXP_I, XS_REGEXP_U, XS_REGEXP_V};
-    let c = utf8_decode(bytes, offset).0;
+    let unicode = flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
+    let c = if unicode {
+        cesu8_decode(bytes, offset).0
+    } else {
+        utf8_decode(bytes, offset).0
+    };
     if flags & XS_REGEXP_I != 0 && c >= 0 {
-        let fold = flags & (XS_REGEXP_U | XS_REGEXP_V) != 0;
-        crate::charcase::canonicalize(c, fold)
+        crate::charcase::canonicalize(c, unicode)
     } else {
         c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::flags::XS_REGEXP_U;
+
+    const GRIN_CESU8: &[u8] = &[0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80];
+
+    #[test]
+    fn cesu8_decode_combines_only_valid_pairs() {
+        assert_eq!(cesu8_decode(GRIN_CESU8, 0), (0x1F600, 6));
+        assert_eq!(utf8_decode(GRIN_CESU8, 0), (0xD83D, 3));
+        assert_eq!(cesu8_decode(&GRIN_CESU8[..3], 0), (0xD83D, 3));
+    }
+
+    #[test]
+    fn find_character_observes_unicode_mode() {
+        assert_eq!(find_character(GRIN_CESU8, 0, 1, 0), 3);
+        assert_eq!(find_character(GRIN_CESU8, 3, 1, 0), 6);
+        assert_eq!(find_character(GRIN_CESU8, 0, 1, XS_REGEXP_U), 6);
+        assert_eq!(find_character(GRIN_CESU8, 6, -1, XS_REGEXP_U), 0);
+        assert_eq!(find_character(GRIN_CESU8, 6, -1, 0), 3);
     }
 }

@@ -248,11 +248,21 @@ object node `8` steps + one instance slot for the `fxNewInstance` keys holder,
 one `XS_AT_KIND` slot per own key, `65528` for the non-empty setup, `4` steps +
 the `fxPushKeyString` chunk (`rup8(len+1)`) per key body; primitives the `1`-step
 leaf; the wobble the child-4 measurements saw is entirely the final result
-`fxNewChunk(offset)` (output length + NUL), metered once by `new_string_metered`.
-A **callable value** (function) — whose reference branch runs an unmodeled
-`mxGetID(_toJSON)` probe — and the `toJSON`/wrapper/replacer/space corners remain
-honest named skips (`JSON.stringify:callable-value`, …), never a wrong value or a
-divergence.
+`fxNewChunk(offset)` (output length + NUL), metered once by `new_string_units`.
+The later compatibility pass completes the observable algorithm: live property
+reads and descriptor filtering through the object MOP, Array and object Proxy
+handling, `toJSON` before the replacer, callable and Array replacers, the
+deduplicated PropertyList, Number/String/Boolean/BigInt wrappers, BigInt errors,
+UTF-16 Gap truncation and pretty printing, post-hook cycle detection, and
+well-formed escaping that preserves valid surrogate pairs while escaping lone
+halves.
+The original no-hook structured corpus remains bit-exact; callback, Proxy, and
+coercion paths are covered for observable agreement rather than exact
+computrons.
+The focused official `built-ins/JSON/stringify` subtree now covers 60 of 63
+files with zero failures. Two remaining skips require cross-realm abort-value
+support, and the ASCII stress case reaches an unrelated front-end binding
+regression after serialization rather than a stringifier gap.
 
 The same child implements **`JSON.parse`** (`fx_JSON_parse` — the tokenizer,
 recursive value construction, and per-node allocation metering), bit-exact
@@ -265,16 +275,18 @@ slots + one linked `fxNewSlot` (`33024` fixed body) per element + the one-time
 object's `fxNewObjectInstance` slot + per member a `65792` body + the key-name
 intern (a novel name one `fxNewSlot`) + the key-string chunk + the recursive
 value. Numbers classify exactly as XS (`INTEGER` iff integral, in `txInteger`
-range, and non-zero). Honest named skips: a reviver argument
-(`JSON.parse:reviver`), a non-string argument needing coercion
-(`JSON.parse:non-string`), a surrogate/astral `\u` escape (`JSON.parse:astral`),
-malformed input whose `SyntaxError` partial metering is unmodeled
-(`JSON.parse:syntax`), and re-serializing a parsed object's runtime-interned key
-(`JSON.stringify:interned-key`, child-5's interned-key rendering gap). Together
-this lifts `built-ins/JSON` to `total=138 covered=15 divergent=0` (from 2 before
-this child), and the curated `stage3b-json-metering.js` corpus + the
-`gen_json_structured_program` and `gen_json_parse_program` differential fuzz arms
-all agree bit-exactly.
+range, and non-zero).
+The later compatibility pass adds the complete post-order reviver walk:
+mutation-sensitive array/object traversal, child deletion and replacement,
+abrupt completion, the correct holder receiver, and the modern third-argument
+context whose `source` property preserves the original primitive token.
+The no-reviver path retains its bit-exact metering; callback traversal is
+covered for observable agreement rather than exact computrons.
+Remaining honest named skips include a surrogate/astral `\u` escape in
+`JSON.parse` (`JSON.parse:astral`) and malformed input whose `SyntaxError`
+partial metering is unmodeled (`JSON.parse:syntax`). The curated
+`stage3b-json-metering.js` corpus plus the `gen_json_structured_program` and
+`gen_json_parse_program` differential fuzz arms remain bit-exact.
 
 One neighbouring **pre-existing** observation the parse child (or an object-
 literal child) should note: a *large/deep* nested **object literal**
@@ -824,6 +836,19 @@ honest interpreter skips `module:dynamic-import` / `module:import-meta`, and
 to a true module dual-run against this new oracle authority is the follow-up the
 seam now unblocks.
 
+**Update (synchronous single-file Module-goal execution).** That follow-up is
+now landed. `ironhorse-vm` executes the compiler's `TRANSFER`/`MODULE` envelope,
+runs module declaration initialization before the strict evaluator body, and
+wires both functions to shared lexical cells so local and exported bindings
+preserve TDZ, mutability, and const assignment semantics. `endot-ih` assembles
+the standard Test262 harness as a Module goal, requires byte-identical module
+compilation against XS, and dual-runs supported single-file modules through
+`xs_oracle::run_module_dir`. The authoritative `language/module-code` slice is
+**181 covered, 0 failed of 534**. Loader-dependent static imports/re-exports,
+top-level await, dynamic `import()`, and `import.meta` remain exact named gaps;
+the graph oracle tests above continue to define the authority for the next
+linker tranche.
+
 The stage-4b **compartment** child (3/5) grows the stage-1 `Compartment.evaluate`
 seam into the full **native `Compartment`** the SES suites probe
 (`ironhorse_vm::compartment`, `xsModule.c`'s compartment half): **per-compartment
@@ -890,7 +915,9 @@ are queued, each reached instance marked `XS_DONT_MARSHALL_FLAG` (the visited
 set), so the object graph is walked once; it returns its argument, and a
 non-reference / already-hardened / no-arg call passes through per XS.
 **`petrify(x)`** (`fx_petrify`) is the single-object, non-transitive freeze (no
-prototype walk, `XS_DONT_MARSHALL_FLAG` left clear). The **oracle shim** is
+prototype walk, `XS_DONT_MARSHALL_FLAG` left clear); its read-only internal
+data marker is persisted for Date, ArrayBuffer, and keyed collections. The
+**oracle shim** is
 extended minimally to install the harden/lockdown/petrify/mutabilities globals
 `xst.c`/`xstFuzz.c` install (the bare `fxCreateMachine` boot does not, so an
 `harden(x)` program was an undefined-reference throw) — the audited FFI-seam
@@ -952,11 +979,14 @@ covered=176 divergent=0 skipped=2951` (unchanged from child 1). **Scope fold
 shared intrinsics, the error/`Date.now`/`Math.random` compartment-safety
 taming, and the repeated-lockdown idempotence throw — and **`mutabilities`**
 (the `fxVerify*` mutable-residue report) are sized as a follow-up child on this
-now-landed harden substrate; an **exotic receiver** (array/typed-array/
-collection/wrapper/error) to `harden`/`petrify` self-names
-`harden:exotic-object`/`petrify:exotic-object` rather than mis-freeze. GC roots
-were not touched (no run-loop/allocation-pressure wiring), so the GC-roots
-ledger note carries forward untouched.
+now-landed harden substrate. Arrays, TypedArrays, collections, buffers/views,
+wrappers, and proxies now route through the complete internal-method seam,
+including the two observable own-key passes and failure cleanup XS performs.
+RegExp's `lastIndex` is a real ordinary heap data property (arbitrary-valued,
+writable/non-enumerable/non-configurable until frozen), so descriptor
+operations and the throwing internal updates performed by stateful matching
+participate too. GC roots were not touched (no run-loop/allocation-pressure
+wiring), so the GC-roots ledger note carries forward untouched.
 
 ### Stage-4 acceptance evidence (closure child 5/5)
 
@@ -1055,7 +1085,6 @@ this closure point).**
 | `Compartment` intrinsic global surface | 4b-3 | `compartment:intrinsic-surface` (confirmed by the ses-xs-parity `ironhorse-aborted` skip above) |
 | `await`-in-`try` | 4b-2 | `await:await-in-try` |
 | `lockdown()` + `mutabilities` | 4b-4 | `Halt::Unsupported` (Ironhorse); `oracle-shim-unsafe:lockdown` (oracle shim); confirmed by the ses-xs-parity guard above |
-| `harden`/`petrify` exotic receiver | 4b-4 | `harden:exotic-object` / `petrify:exotic-object` |
 | daemon boot bundle (`globalThis` + downstream) | 4b-5 | boot-bundle gap ledger above |
 
 The stage-3 built-ins reach
@@ -1172,14 +1201,13 @@ to the union of its folded singletons (`fxCharSetRange`), `\w` drops
 `a`..`z` (the folded subject reaches its `A`..`Z` form), and the match loop
 folds every decoded character (`fxGetCharacter`) — all pinned bit-exact.
 
-**Honest, named skips (the stage bar).** This increment ports the core
-grammar over the non-`u`/`v` subset (the `i` flag included). Every deferred
-surface compiles to a **named** `CompileError::Unsupported`, never a wrong
-meter or a wrong value: the `u`/`v` flags (CESU-8 surrogate walk, unicode
-property escapes, V-mode string sets, and their `u`/`v` fold tables),
-`\p{}`/`\P{}`, named captures (`(?<name>)` / `\k<name>`), inline modifiers
-(`(?flags:)`), and astral (`> 0xFFFF`) code points. The crate is
-`#![forbid(unsafe_code)]` and Miri-clean
+**Unicode execution.** The matcher accepts the same CESU-8 spelling XS uses
+for JavaScript strings. Outside `u`/`v`, it advances one UTF-16 code unit at a
+time; under `u`/`v`, `fxCESU8Decode` and `fxFindCharacter` combine and traverse
+valid surrogate pairs as one code point. Astral pattern literals are likewise
+split into surrogates only outside Unicode mode. Unicode properties, V-mode
+string sets, named captures, and inline modifiers are all part of the executed
+surface. The crate is `#![forbid(unsafe_code)]` and Miri-clean
 (`cargo +nightly miri test -p ironhorse-regexp --lib`).
 
 ### The JavaScript RegExp surface (stage-3b, child 9)
@@ -1198,17 +1226,22 @@ whole-program run, not just the matcher:
   across every pattern shape.
 - **`exec`/`test`**: the match drive from `lastIndex` (g/y), the `[whole,
   ...captures]` result array with `index`/`input`/`groups`, `lastIndex`
-  advance; `test` drives the full `exec` as XS's `fxExecuteRegExp` does.
+  advance, and `d`-flag `.indices`/`.indices.groups`; `test` drives the full
+  `exec` as XS's `fxExecuteRegExp` does. Stateful indices are translated
+  between matcher CESU-8 byte offsets and ECMAScript UTF-16 code-unit offsets,
+  including embedded NULs, BMP non-ASCII text, astral pairs, and lone
+  surrogates.
 - **Accessors**: `source` (escape-on-read), the composite `flags` (the
   eight per-flag cascade), the per-flag getters, `lastIndex` get/set, and
   `toString` (the three growing `fxConcatString` chunks) — special-cased by id
   in `GET`/`SET_PROPERTY` over the side table.
 - **`String.prototype.{search,match,replace,split}`** via the
   `Symbol.{search,match,replace,split}` protocol to the RegExp workers:
-  `search` (index or −1), non-global `match` (the exec array), non-global
-  literal-replacement `replace` (the segment-list assembly), and `split` (the
-  sticky-splitter walk). Each carries its calibrated protocol-dispatch +
-  worker residual, raw-exact.
+  `search` (index or −1), global and non-global `match`, string/function
+  `replace` with the `$`-substitution grammar, and `split` (the sticky-splitter
+  walk). Empty-match advancement and slicing operate on UTF-16 indices and
+  honor the `u`/`v` code-point mode. Each carries its calibrated
+  protocol-dispatch + worker residual.
 
 **Corpus + fuzz.** `ironhorse-262/corpora/stage3b-regexp.js` (a curated corpus,
 `stage3b_regexp_corpus_is_bit_exact_against_oracle`) and a whole-program
@@ -1222,13 +1255,13 @@ already earned its keep, driving out a sub-computron construction-metering gap
 `built-ins/String/prototype/{search,match,replace,split}` sections
 **divergent=0** with growth.
 
-**Honest, named skips** (each a named `Halt::Unsupported`, never a wrong value
-or a fitted meter): named-group result shaping, a RegExp-valued pattern arg,
-a syntax-error / unsupported-feature throw, a non-ASCII stateful (g/y) subject;
-global `match`/`replace` collection, the `$`-substitution grammar and function
-replacement in `replace`; a limit that truncates, an empty-matching separator,
-and a non-ASCII subject in `split`; and a string (non-RegExp) argument to the
-String methods (the `withoutRegexp` coerce path).
+The named-capture replacement paths retain per-match groups for global `$<name>`
+substitution and pass the groups object to functional replacers. A
+RegExp-valued `RegExp` constructor argument supports the ordinary call-identity,
+copy, and flags-override paths. The prototype `exec`/`test`/`toString` methods
+implement their generic receiver and observable coercion paths, and the
+ordinary String-method coercion plus `Symbol.{search,match,replace,split}`
+dispatch paths execute.
 
 ## Decoder-hang trophy: a malformed backward branch that never terminated (stage-4b)
 

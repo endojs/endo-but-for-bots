@@ -10,11 +10,10 @@
 //! bit-exact and the emitted graph is structurally identical, which in
 //! turn makes the matcher's per-step meter bit-exact.
 //!
-//! Honest scope (the stage bar names deferred surfaces): astral
-//! (`> 0xFFFF`) code points outside unicode mode are compiled to a
-//! named [`CompileError::Unsupported`], never to a wrong meter or a wrong
-//! value. Inline modifiers (`(?ims-ims:...)`), the `i` flag, and named
-//! captures (`(?<name>)` / `\k<name>`) ARE
+//! Astral (`> 0xFFFF`) code points remain scalar values under `u`/`v` and are
+//! split into their UTF-16 surrogate pair outside Unicode mode, matching
+//! `fxPatternParserNext`. Inline modifiers (`(?ims-ims:...)`), the `i` flag,
+//! and named captures (`(?<name>)` / `\k<name>`) are
 //! ported: a named group codegens identically to its numbered peer, plus a
 //! name-slot operand the matcher records into its runtime `names[]` array.
 
@@ -153,6 +152,9 @@ struct Compiler {
     pattern: Vec<u8>, // NUL-terminated
     offset: usize,
     character: i64,
+    /// Pending low surrogate after `fxPatternParserNext` splits an astral
+    /// scalar outside `u`/`v` and capture-name parsing.
+    surrogate: i64,
     flags: u32,
     capture_index: i32,
     name_index: i32,
@@ -161,13 +163,6 @@ struct Compiler {
     size: i64, // parser->size, in bytes
     nodes: Vec<Node>,
     code: Vec<i32>,
-    /// A pin feature whose SYNTAX this parser validates but whose matcher
-    /// code it does not emit yet (a non-unicode astral code point). Set
-    /// during the parse; when set, [`compile`]
-    /// returns it as `Unsupported` *after* the full accept/reject decision,
-    /// so a syntactically invalid such pattern is still a `Syntax` error
-    /// (the lexer needs the accept/reject verdict; the matcher does not run).
-    unsupported: Option<&'static str>,
     /// The `fxCaptureNamePut` table: every UNIQUE named-capture name, in
     /// first-seen order. A name slot (`code[5 + slot]`) is a name's position
     /// here, so **duplicate** group names (legal across mutually-exclusive
@@ -230,6 +225,7 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         pattern: pattern_bytes,
         offset: 0,
         character: 0,
+        surrogate: 0,
         flags: parser_flags,
         capture_index: 0,
         name_index: 0,
@@ -238,7 +234,6 @@ pub fn compile(pattern: &str, flags: &str) -> PResult<Program> {
         size: 0,
         nodes: Vec::new(),
         code: Vec::new(),
-        unsupported: None,
         capture_names: Vec::new(),
         participate_slot: Vec::new(),
         participate_next: Vec::new(),
@@ -309,15 +304,6 @@ impl Compiler {
                 *name_slot = slot;
             }
         }
-        // A syntactically valid pattern that uses a matcher surface this
-        // stage has not ported (a non-unicode astral code point) is accepted by
-        // the oracle at parse time; the
-        // lexer treats this `Unsupported` as accept. Bail here, AFTER the
-        // full accept/reject decision, so an invalid such pattern is still
-        // a `Syntax` error above.
-        if let Some(msg) = self.unsupported {
-            return Err(CompileError::Unsupported(msg));
-        }
         // parser->size = (5 + nameIndex) * sizeof(txInteger).
         self.size = (5 + self.name_index as i64) * 4;
         self.measure(term, 1);
@@ -359,22 +345,25 @@ impl Compiler {
         self.pattern.get(offset).copied().unwrap_or(0)
     }
 
-    /// `fxPatternParserNext`, the non-`UV` BMP path. Astral code points
-    /// (which C splits into surrogates) are the named skip here.
+    /// `fxPatternParserNext`: decode the next scalar and, outside `u`/`v` or
+    /// capture-name parsing, expose an astral scalar as its two UTF-16
+    /// surrogate code units on successive calls.
     fn next(&mut self) -> PResult<()> {
+        if self.surrogate != 0 {
+            self.character = self.surrogate;
+            self.surrogate = 0;
+            return Ok(());
+        }
         let (ch, p) = utf8_decode(&self.pattern, self.offset);
         if ch != C_EOF {
             self.offset = p;
-            // XS (`fxPatternParserNext`) splits an astral code point into
-            // surrogates only outside `UV`/name context; inside `UV` or a
-            // group `<name>` it keeps the whole scalar. Ironhorse has not ported
-            // the surrogate-split matcher path, so it stays a named
-            // Unsupported there, but a name/`UV` scalar is delivered so the
-            // group-name `ID_Start`/`ID_Continue` check can rule on it.
             if ch > 0xFFFF && self.flags & (XS_REGEXP_U | XS_REGEXP_V | XS_REGEXP_NAME) == 0 {
-                return Err(CompileError::Unsupported("astral code point in pattern"));
+                let scalar = ch - 0x10000;
+                self.surrogate = 0xDC00 | (scalar & 0x3FF);
+                self.character = 0xD800 | (scalar >> 10);
+            } else {
+                self.character = ch;
             }
-            self.character = ch;
         } else {
             self.character = C_EOF;
         }
@@ -400,10 +389,11 @@ impl Compiler {
 
     /// Reset the parse cursor and per-parse tables for `fxCompileRegExp`'s
     /// second pass (the non-`UV` named-capture re-parse). `flags` (now
-    /// carrying `XS_REGEXP_N`) and `unsupported` are kept.
+    /// carrying `XS_REGEXP_N`) is kept.
     fn reset_for_reparse(&mut self) {
         self.offset = 0;
         self.character = 0;
+        self.surrogate = 0;
         self.capture_index = 0;
         self.name_index = 0;
         self.assertion_index = 0;

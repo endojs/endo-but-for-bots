@@ -801,3 +801,28 @@
     padding: 0.75rem;
   }
 }
+
+/* ── Narrow screens, continued ─────────────────────────────────────────────
+   The drawer sidebar above handles navigation; these are about the transcript
+   itself. A bubble capped at 80% of a 390px screen wastes a third of the width
+   it needs most.
+
+   Scoped to the classes this branch's transcript actually emits. The round
+   this block came from also carried rules for an action-group and pending-
+   action UI (`.floot-action*`, `.floot-pending-*`) that arrives with a later
+   change; those selectors match nothing here, so they are left for the change
+   that brings the markup rather than kept as rules no one can see working. */
+@media (max-width: 640px) {
+  .floot-msg,
+  .floot-tool {
+    max-width: 92%;
+  }
+
+  /* Code and results: wrap rather than scroll sideways, and give them more of
+     the screen than a desktop pane would need. */
+  .floot-tool-pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 40vh;
+  }
+}

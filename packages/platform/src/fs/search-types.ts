@@ -45,17 +45,27 @@ export type GlobOptions = {
    * order* as they are discovered, with no global-sort barrier — so the first
    * batch can be emitted before the whole tree is walked. Confinement and
    * denial filtering are unchanged; only the terminal sort is dropped. The
-   * substrate for a walk-order path *producer* (e.g. a future unsorted
-   * `streamGlob`); decoupled `streamGrep` greps whatever file stream it is
+   * substrate for a walk-order path *producer* (the daemon's `streamGlob` /
+   * `streamGrep`); decoupled `streamGrep` greps whatever file stream it is
    * handed and needs no sort of its own (see the engine header).
    */
   sorted?: boolean;
+  /**
+   * Let `**` descend through symbolic links to directories (default `false`).
+   * A link is reported as an entry either way; this governs only recursion
+   * through it, which turns the walk from a tree into a link graph. Segments
+   * that name a path follow links regardless, being bounded by pattern depth.
+   * Corresponds to `rg -L`.
+   */
+  followSymlinks?: boolean;
 };
 
 export type GrepOptions = {
   deniedSegments?: Array<string>;
   confinementRoot?: string;
   batchSize?: number;
+  /** Applies to the implicit `**` walk when `paths` is omitted. */
+  followSymlinks?: boolean;
   /** Stop after this many matches; `undefined` means unbounded (streaming). */
   maxResults?: number;
 };

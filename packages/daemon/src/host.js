@@ -6,6 +6,7 @@
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
 /** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeHostOrGuestOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
 import { E } from '@endo/eventual-send';
@@ -342,6 +343,8 @@ harden(normalizeHttpClientPolicy);
  *   Optional. When provided, `host.traces()` returns an Exo whose
  *   methods proxy to this aggregator. Without it, `host.traces()`
  *   throws.
+ * @param {ReturnType<typeof makeSecretManager>} args.secretManager
+ * @param {(hubId: FormulaIdentifier, path: NamePath, bind: (id: FormulaIdentifier) => Promise<void>) => Promise<void>} args.formulateSecretLookup
  */
 export const makeHostMaker = ({
   provide,
@@ -424,6 +427,8 @@ export const makeHostMaker = ({
     return undefined;
   },
   traceAggregator = undefined,
+  secretManager,
+  formulateSecretLookup,
 }) => {
   /**
    * @param {FormulaIdentifier} hostId
@@ -486,6 +491,15 @@ export const makeHostMaker = ({
     // The id no longer participates in any special-name lookup;
     // `getFormula(identifier)` is the user-facing replacement.
     // See `designs/formula-inspector.md` "Removing the `@info` name hub".
+    // Only the daemon's root host manages secrets. `formulateEndo` omits
+    // `hostHandleId`, which `formulateNumberedHost` then defaults to the
+    // host's own handle, while `makeChildHost` always passes the parent's —
+    // so this is exhaustive. Withholding `@secrets` from a child host is
+    // namespace hygiene, not containment: a child already reaches the root
+    // host through its ambient `@endo`, so it is a full-authority peer.
+    // See designs/daemon-secret-manager.md § Summary.
+    const isRootHost = hostHandleId === undefined || hostHandleId === handleId;
+
     /** @type {Record<string, FormulaIdentifier>} */
     const specialNames = {
       ...platformNames,
@@ -501,6 +515,9 @@ export const makeHostMaker = ({
       '@pins': pinsDirectoryId,
       '@none': leastAuthorityId,
     };
+    if (isRootHost) {
+      specialNames['@secrets'] = hostId;
+    }
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
     }
@@ -517,6 +534,88 @@ export const makeHostMaker = ({
       getNetworkAddresses,
       getContentSources,
     );
+    /**
+     * Inspect one inventory path without resolving its value.
+     * @param {Name[]} path
+     * @returns {Promise<{ grantId: string, path: Name[] } | undefined>}
+     */
+    const identifySecretGrantPath = async path => {
+      const id = await E(directory).identify(...path);
+      if (id === undefined) return undefined;
+      try {
+        const formula = await getFormulaForId(
+          /** @type {FormulaIdentifier} */ (id),
+        );
+        if (
+          formula.type === 'lookup' &&
+          formula.hub === hostId &&
+          formula.path.length === 3 &&
+          formula.path[0] === '@secrets' &&
+          formula.path[1] === 'use'
+        ) {
+          return harden({ grantId: formula.path[2], path: [...path] });
+        }
+      } catch {
+        // A foreign or collected formula is not a locally known secret grant.
+      }
+      return undefined;
+    };
+
+    const listKnownGrantPaths = async () => {
+      await null;
+      const rootNames = (await E(directory).list()).filter(
+        name => !name.startsWith('@'),
+      );
+      /** @type {Name[][]} */
+      const paths = rootNames.map(name => [name]);
+      if (await E(directory).has('secrets')) {
+        try {
+          const secretNames = await E(directory).list('secrets');
+          paths.push(
+            ...secretNames.map(name => namePathFrom(['secrets', name])),
+          );
+        } catch {
+          // `secrets` is an ordinary mutable pet name and may no longer name a
+          // directory. Direct host aliases remain discoverable in that case.
+        }
+      }
+      const entries = await Promise.all(paths.map(identifySecretGrantPath));
+      return harden(entries.filter(entry => entry !== undefined));
+    };
+
+    const removeKnownGrantPaths = async entries => {
+      await null;
+      for (const entry of entries) {
+        // Re-check immediately before removal so a concurrent rename or
+        // overwrite cannot turn catalog cleanup into deletion of another cap.
+        // eslint-disable-next-line no-await-in-loop
+        const current = await identifySecretGrantPath(entry.path);
+        if (current?.grantId === entry.grantId) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(directory).remove(...entry.path);
+        }
+      }
+    };
+
+    // Undefined on a non-root host, which is what the `@secrets` routing
+    // below tests before intercepting a path.
+    const secretManagerDirectory = !isRootHost
+      ? undefined
+      : secretManager.makeHostDirectory({
+          bindGrant: async (grantId, name) => {
+            await null;
+            if (!(await directory.has('secrets'))) {
+              await directory.makeDirectory(['secrets']);
+            }
+            await formulateSecretLookup(
+              hostId,
+              /** @type {NamePath} */ (['@secrets', 'use', grantId]),
+              id => directory.storeIdentifier(['secrets', name], id),
+            );
+          },
+          listKnownGrantPaths,
+          removeKnownGrantPaths,
+        });
     const mailbox = await makeMailbox({
       petStore: specialStore,
       agentNodeNumber,
@@ -2260,13 +2359,13 @@ export const makeHostMaker = ({
 
     const { reverseIdentify } = specialStore;
     const {
-      has,
+      has: directoryHas,
       identify,
-      lookup,
-      maybeLookup,
+      lookup: directoryLookup,
+      maybeLookup: directoryMaybeLookup,
       locate,
       reverseLocate,
-      list,
+      list: directoryList,
       listIdentifiers,
       listLocators,
       locateContent,
@@ -2287,6 +2386,48 @@ export const makeHostMaker = ({
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
     } = directory;
+
+    /** @type {EndoHost['has']} */
+    const has = async (...petNamePath) => {
+      if (petNamePath[0] === '@secrets' && secretManagerDirectory) {
+        if (petNamePath.length === 1) return true;
+        return E(secretManagerDirectory).has(petNamePath[1]);
+      }
+      return directoryHas(...petNamePath);
+    };
+
+    /** @type {EndoHost['lookup']} */
+    const lookup = petNameOrPath => {
+      const path = namePathFrom(petNameOrPath);
+      if (path[0] === '@secrets' && secretManagerDirectory) {
+        if (path.length === 1) return Promise.resolve(secretManagerDirectory);
+        return E(secretManagerDirectory).lookup(path.slice(1));
+      }
+      return directoryLookup(petNameOrPath);
+    };
+
+    /** @type {EndoHost['maybeLookup']} */
+    const maybeLookup = petNameOrPath => {
+      const path = namePathFrom(petNameOrPath);
+      if (path[0] === '@secrets' && secretManagerDirectory) {
+        if (path.length === 1) return Promise.resolve(secretManagerDirectory);
+        return E(secretManagerDirectory)
+          .lookup(path.slice(1))
+          .catch(() => undefined);
+      }
+      return directoryMaybeLookup(petNameOrPath);
+    };
+
+    /** @type {EndoHost['list']} */
+    const list = async (...petNamePath) => {
+      if (petNamePath[0] === '@secrets' && secretManagerDirectory) {
+        if (petNamePath.length !== 1) throw new TypeError('Unknown path');
+        return /** @type {Promise<Name[]>} */ (
+          E(secretManagerDirectory).list()
+        );
+      }
+      return directoryList(...petNamePath);
+    };
 
     const makeDirectory = async petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);

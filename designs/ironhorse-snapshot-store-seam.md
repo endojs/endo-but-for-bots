@@ -3574,6 +3574,18 @@ with segments. The design points that fell out of building it:
   unused payload, a stripped `STAC` on a current-version container,
   and a valid-but-empty `TMPR` splice. Reader-only again; both pins
   stand.
+- **Post-landing continuation** (2026-09-01): the `done` latch check
+  above was still one-sided. An honest combinator has `done` exactly
+  when its derived promise is settled. The converse crafted shape — a
+  done combinator with a Pending derived promise — caused every
+  surviving element reaction to short-circuit and stranded the derived
+  forever. Decode now requires agreement in both directions, and the
+  vm restore re-proves it. The `remaining >= pending` floor now also
+  applies after `done`: completion makes later reactions short-circuit
+  but never rewrites the counter below the reactions still carried.
+  Both shapes extend the existing crafted-row lock; container and
+  SQLite backend suites remain green, and the reader-only change leaves
+  both golden pins standing.
 
 ##### P2-5 — `SavedJumpRow.call_depth_offset` is decoded but never bounded
 

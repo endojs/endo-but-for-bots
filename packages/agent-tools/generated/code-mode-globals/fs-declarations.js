@@ -325,12 +325,16 @@ type MountStreamYieldNode<Y = unknown, R = undefined> = {
     copy: (from: string | string[] | MountEndoMountEntry, to: string | string[] | MountEndoMountEntry) => Promise<void>;
     entry: (path: string | string[]) => MountEndoMountEntry;
     followNameChanges: (...pathSegments: string[]) => MountPassableReader<MountNameChange, undefined>;
-    glob: (pattern: string) => Promise<string[]>;
+    glob: (pattern: string, options?: {
+        followSymlinks?: boolean;
+    }) => Promise<string[]>;
     glorp: (globPattern: string, grepPattern: string, options?: {
         maxResults?: number;
+        followSymlinks?: boolean;
     }) => Promise<Array<MountGrepMatch>>;
     grep: (pattern: string, paths?: string[] | Promise<string[]>, options?: {
         maxResults?: number;
+        followSymlinks?: boolean;
     }) => Promise<Array<MountGrepMatch>>;
     has: {
         (...pathSegments: string[]): Promise<boolean>;

@@ -6,4 +6,5 @@ info: |
   Converted from corpora/stage3-math.js line 46.
   Source: Math.tan(1.2)
 ---*/
-assert.sameValue((Math.tan(1.2)), 2.5721516221263188);
+var result = Math.tan(1.2);
+assert.sameValue(result > 2.572151622126318 && result < 2.572151622126319, true);

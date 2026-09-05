@@ -18,6 +18,20 @@ fn agrees(source: &str) {
     );
 }
 
+fn agrees_exact(source: &str) {
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+    assert!(run.result_agrees, "{source}: {run:?}");
+    assert!(
+        run.computrons_agree,
+        "{source}: oracle={} ({}) ironhorse={} ({})",
+        run.oracle_computrons,
+        run.oracle_meter_raw,
+        run.ironhorse_computrons,
+        run.ironhorse_meter_raw,
+    );
+}
+
 #[test]
 fn collection_methods_validate_their_internal_slot() {
     agrees(
@@ -36,6 +50,38 @@ fn collection_methods_validate_their_internal_slot() {
         "var ok = false; try { WeakSet.prototype.add.call(new Set(), {}); } \
          catch (e) { ok = e instanceof TypeError; } ok",
     );
+
+    for source in [
+        "try { Map.prototype.clear.call(new WeakMap()); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.forEach.call(new WeakMap(), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.keys.call(new WeakMap()); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.clear.call(new WeakSet()); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.forEach.call(new WeakSet(), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.values.call(new WeakSet()); false } catch (e) { e instanceof TypeError }",
+    ] {
+        agrees(source);
+    }
+}
+
+#[test]
+fn shared_collection_methods_retain_their_declaring_brand() {
+    for source in [
+        "try { Map.prototype.clear.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.clear.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.forEach.call(new Set([1]), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.forEach.call(new Map([[1,2]]), function(){}); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.entries.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.entries.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.keys.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.keys.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "try { Map.prototype.values.call(new Set([1])); false } catch (e) { e instanceof TypeError }",
+        "try { Set.prototype.values.call(new Map([[1,2]])); false } catch (e) { e instanceof TypeError }",
+        "var s=new Set([1]),f=Map.prototype.clear.bind(s);try{f();false}catch(e){e instanceof TypeError&&s.size===1}",
+        "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.call(s);false}catch(e){e instanceof TypeError&&s.size===1}",
+        "var s=new Set([1]),f=new Proxy(Map.prototype.clear,{});try{f.apply(s,[]);false}catch(e){e instanceof TypeError&&s.size===1}",
+    ] {
+        agrees_exact(source);
+    }
 }
 
 #[test]
@@ -59,6 +105,68 @@ fn dense_array_iterables_populate_all_collection_kinds() {
          w.get(a) + w.get(b)",
     );
     agrees("var a = {}, b = {}; var w = new WeakSet([a, b, a]); w.has(a) && w.has(b)");
+}
+
+#[test]
+fn collection_constructors_consume_general_and_sparse_iterables() {
+    agrees("var s=new Set(function*(){yield 1;yield 2;yield 1}());s.size+':'+s.has(2)");
+    agrees(
+        "var m=new Map(function*(){yield ['a',1];yield ['b',2]}()); \
+         m.size+':'+m.get('b')",
+    );
+    agrees("var s=new Set([,1]);s.size+':'+s.has(undefined)");
+    agrees("new Map([[,2]]).get(undefined)");
+    agrees("var s=new Set('a\\u{1F600}a');s.size+':'+s.has('\\u{1F600}')");
+    agrees(
+        "var a={},b={};var w=new WeakMap(function*(){yield [a,1];yield [b,2]}()); \
+         w.get(a)+w.get(b)",
+    );
+}
+
+#[test]
+fn collection_constructor_observes_protocol_order_and_closing() {
+    agrees(
+        "var log=[];var old=Set.prototype.add;Set.prototype.add=function(v){log.push('add'+v);return old.call(this,v)}; \
+         var a=[1,2];a[Symbol.iterator]=function(){log.push('iter');return [3][Symbol.iterator]()}; \
+         var s=new Set(a);Set.prototype.add=old;log.join(',')+':'+s.has(3)",
+    );
+    agrees(
+        "var closed=0,i=0;var it={ [Symbol.iterator]:function(){return { \
+           next:function(){return i++?{done:true}:{value:1,done:false}}, \
+           return:function(){closed++;return {}}}}}; \
+         var ok=false;try{new Map(it)}catch(e){ok=e instanceof TypeError}ok+':'+closed",
+    );
+    agrees(
+        "var closed=0;var it={ [Symbol.iterator]:function(){return { \
+           next:function(){throw 7},return:function(){closed++;return {}}}}}; \
+         var caught;try{new Set(it)}catch(e){caught=e}caught+':'+closed",
+    );
+    agrees(
+        "var closed=0,i=0;var it={ [Symbol.iterator]:function(){return { \
+           next:function(){return i++?{done:true}:{value:1,done:false}}, \
+           return:function(){closed++;return {}}}}}; \
+         var old=Set.prototype.add;Set.prototype.add=function(){throw 8};var caught; \
+         try{new Set(it)}catch(e){caught=e}Set.prototype.add=old;caught+':'+closed",
+    );
+    agrees(
+        "var p=Object.getPrototypeOf([][Symbol.iterator]()),old=p.next,calls=0; \
+         p.next=function(){calls++;return old.call(this)};var s=new Set([1,2]); \
+         p.next=old;calls+':'+s.size",
+    );
+    agrees(
+        "var log=[],entry=[];Object.defineProperty(entry,'0',{get:function(){log.push('k');return 'a'}}); \
+         Object.defineProperty(entry,'1',{get:function(){log.push('v');return 3}}); \
+         var m=new Map([entry]);log.join(',')+':'+m.get('a')",
+    );
+    agrees(
+        "var old=Set.prototype.add,ok=false;Set.prototype.add=Map.prototype.set; \
+         try{new Set([1])}catch(e){ok=e instanceof TypeError}Set.prototype.add=old;ok",
+    );
+    agrees(
+        "var a=[1,2],old=Set.prototype.add;Object.defineProperty(Set.prototype,'add',{ \
+         configurable:true,get:function(){delete a[1];return old}});var s=new Set(a); \
+         delete Set.prototype.add;Set.prototype.add=old;s.size+':'+s.has(undefined)",
+    );
 }
 
 #[test]

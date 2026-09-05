@@ -9,9 +9,9 @@
 //! match. That is what certifies the bridge reproduces XS semantics — string
 //! compilation, completion values, syntax-error catchability, nested
 //! execution, realm-local errors, and the function lifetime — rather than a
-//! bespoke interpretation. Direct eval whose scope is a function frame is a
-//! deliberate named gap (`eval:direct-scope`), so those shapes are not
-//! asserted here.
+//! bespoke interpretation. Direct eval shares compiler-published caller
+//! bindings and instantiates sloppy `var`/function declarations into the
+//! caller's variable environment.
 
 use ironhorse_262::{dual_run, Agreement};
 
@@ -20,9 +20,18 @@ use ironhorse_262::{dual_run, Agreement};
 /// isolation: the oracle is the reference.
 fn assert_oracle_result(source: &str, expected: &str) {
     let run = dual_run(source).expect("pinned XS oracle is available");
-    assert_eq!(run.agreement, Agreement::BothComplete, "agreement for {source}");
+    assert_eq!(
+        run.agreement,
+        Agreement::BothComplete,
+        "agreement for {source}: oracle_error={:?}, ironhorse_halt={:?}",
+        run.oracle_error,
+        run.ironhorse_halt
+    );
     assert_eq!(run.oracle_result, expected, "oracle result for {source}");
-    assert_eq!(run.ironhorse_result, expected, "ironhorse result for {source}");
+    assert_eq!(
+        run.ironhorse_result, expected,
+        "ironhorse result for {source}"
+    );
 }
 
 // ---- string compilation + completion values --------------------------------
@@ -58,6 +67,81 @@ fn top_level_direct_eval_shares_program_scope() {
     // eval is faithful and its declarations are visible to later top-level code.
     assert_oracle_result("eval('var d = 9'); d", "9");
     assert_oracle_result("eval('7 * 6')", "42");
+}
+
+#[test]
+fn nested_direct_eval_reads_and_writes_caller_bindings() {
+    assert_oracle_result(
+        "function f(a) { var x = 2; let y = 3; return eval('a + x + y'); } f(1)",
+        "6",
+    );
+    assert_oracle_result(
+        "function f() { let x = 1; eval('x = 9'); return x; } f()",
+        "9",
+    );
+    assert_oracle_result(
+        "function f(a) { return eval('arguments[0] + a'); } f(21)",
+        "42",
+    );
+}
+
+#[test]
+fn nested_direct_eval_retains_this_and_eval_local_lexicals() {
+    assert_oracle_result(
+        "var obj = { x: 40, f: function() { return eval('this.x + 2'); } }; obj.f()",
+        "42",
+    );
+    assert_oracle_result(
+        "function f(x) { return eval('let y = 2; x + y'); } f(40)",
+        "42",
+    );
+    assert_oracle_result("(0, eval)(\"let x = 40; eval('x + 2')\")", "42");
+    assert_oracle_result(
+        "function f(x) { 'use strict'; return eval('x + (this === undefined)'); } f(41)",
+        "42",
+    );
+}
+
+#[test]
+fn indirect_eval_does_not_inherit_a_direct_eval_environment() {
+    assert_oracle_result(
+        "function f() { let x = 1; if (false) eval('x'); return (0, eval)('typeof x'); } f()",
+        "undefined",
+    );
+}
+
+#[test]
+fn nested_direct_eval_instantiates_caller_variables() {
+    assert_oracle_result(
+        "function f() { 'use strict'; return eval('var x = 42; x'); } f()",
+        "42",
+    );
+    assert_oracle_result("function f() { eval('var x = 42'); return x; } f()", "42");
+    assert_oracle_result(
+        "function f() { eval('function g() { return 42; }'); return g(); } f()",
+        "42",
+    );
+    // Pinned XS incorrectly leaves the parameter at 0 here. IronHorse follows
+    // EvalDeclarationInstantiation and reuses the parameter binding.
+    let parameter_var =
+        dual_run("function f(a) { var x = 1; eval('var x = 40; var a = 2'); return x + a; } f(0)")
+            .expect("pinned XS oracle is available");
+    assert_eq!(parameter_var.agreement, Agreement::BothComplete);
+    assert_eq!(parameter_var.oracle_result, "40");
+    assert_eq!(parameter_var.ironhorse_result, "42");
+    assert!(!parameter_var.result_agrees);
+    assert_oracle_result(
+        "function f() { eval('var x = 40; function g() { return x + 2; }'); return g; } f()()",
+        "42",
+    );
+    assert_oracle_result(
+        "function f() { var x = 1; var o = {x: 10}; with (o) { eval('var y = 2; x = 40'); } return x + ':' + o.x + ':' + y; } f()",
+        "1:40:2",
+    );
+    assert_oracle_result(
+        "function f() { let x; try { eval('var x'); } catch (e) { return e instanceof SyntaxError; } } f()",
+        "true",
+    );
 }
 
 // ---- syntax errors are catchable in the realm -------------------------------

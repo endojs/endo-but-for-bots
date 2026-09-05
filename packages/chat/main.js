@@ -48,7 +48,33 @@ import '@endo/space-workflow/workflow.css';
 // eslint-disable-next-line import/no-unresolved
 import '@endo/space-channel/channel.css';
 
-const RECONNECT_INTERVAL_MS = 5000;
+// The hosted-Endo management view (`@endo/space-endo-mgmt`) ships its
+// stylesheet via the `./mgmt.css` package export; the host bundles it here.
+// Vite-only — no test loads `main.js`.
+// eslint-disable-next-line import/no-unresolved
+import '@endo/space-endo-mgmt/mgmt.css';
+
+// Delays before each reconnect attempt, walked in order and then held at the
+// last. The first reattempt is immediate: the overwhelmingly common cause of a
+// dropped gateway connection is a daemon that restarted and is already
+// listening again, and sitting out a fixed interval to discover that turns a
+// blink into a visibly broken app. Later attempts back off so a daemon that is
+// genuinely down is not hammered.
+const RECONNECT_DELAYS_MS = [0, 1000, 2000, 5000, 10_000, 30_000];
+
+let reconnectAttempt = 0;
+
+// Only a connection that actually came up is evidence that the backoff is no
+// longer needed, so success resets it — not merely having tried.
+const resetReconnectBackoff = () => {
+  reconnectAttempt = 0;
+};
+
+const nextReconnectDelayMs = () => {
+  const index = Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1);
+  reconnectAttempt += 1;
+  return RECONNECT_DELAYS_MS[index];
+};
 
 // Detect whether we are running inside the Familiar Electron shell.
 // In Electron, preload exposes `window.familiar`; the protocol is file://.
@@ -142,6 +168,34 @@ const setReconnectStatus = text => {
 };
 
 /**
+ * Wait out the next backoff delay, then run `attempt`.
+ *
+ * A zero delay fires synchronously rather than counting down from zero, so the
+ * first reattempt costs nothing and the overlay goes straight to "Reconnecting…".
+ *
+ * @param {() => void} attempt
+ */
+const scheduleAttempt = attempt => {
+  const delayMs = nextReconnectDelayMs();
+  if (delayMs === 0) {
+    setReconnectStatus('Reconnecting…');
+    attempt();
+    return;
+  }
+  let remaining = Math.round(delayMs / 1000);
+  const tick = () => {
+    if (remaining <= 0) {
+      attempt();
+      return;
+    }
+    setReconnectStatus(`Retrying in ${remaining}s`);
+    remaining -= 1;
+    setTimeout(tick, 1000);
+  };
+  tick();
+};
+
+/**
  * Poll /health until the Vite dev server is reachable, then navigate
  * to /dev to pick up fresh credentials for the (possibly restarted) daemon.
  *
@@ -151,8 +205,6 @@ const setReconnectStatus = text => {
  * Only used in Vite dev-server mode.
  */
 function pollHealthThenReconnect() {
-  const totalSeconds = RECONNECT_INTERVAL_MS / 1000;
-
   const poll = () => {
     setReconnectStatus('Reconnecting…');
     fetch('/health')
@@ -161,29 +213,15 @@ function pollHealthThenReconnect() {
           console.log('[Chat] Server healthy, reconnecting via /dev...');
           window.location.href = '/dev';
         } else {
-          countdown();
+          scheduleAttempt(poll);
         }
       })
       .catch(() => {
-        countdown();
+        scheduleAttempt(poll);
       });
   };
 
-  const countdown = () => {
-    let remaining = totalSeconds;
-    const tick = () => {
-      if (remaining <= 0) {
-        poll();
-        return;
-      }
-      setReconnectStatus(`Retrying in ${remaining}s`);
-      remaining -= 1;
-      setTimeout(tick, 1000);
-    };
-    tick();
-  };
-
-  countdown();
+  scheduleAttempt(poll);
 }
 
 /**
@@ -193,7 +231,6 @@ function pollHealthThenReconnect() {
  * preload bridge, then retry.
  */
 function reconnectInElectronMode() {
-  const totalSeconds = RECONNECT_INTERVAL_MS / 1000;
   let attempts = 0;
   const MAX_ATTEMPTS_BEFORE_RESTART = 3;
 
@@ -220,25 +257,11 @@ function reconnectInElectronMode() {
       // Re-run the full connect-and-run flow.
       await connectAndRun(); // eslint-disable-line no-use-before-define
     } catch {
-      countdown(); // eslint-disable-line no-use-before-define
+      scheduleAttempt(tryConnect);
     }
   };
 
-  const countdown = () => {
-    let remaining = totalSeconds;
-    const tick = () => {
-      if (remaining <= 0) {
-        tryConnect();
-        return;
-      }
-      setReconnectStatus(`Retrying in ${remaining}s`);
-      remaining -= 1;
-      setTimeout(tick, 1000);
-    };
-    tick();
-  };
-
-  countdown();
+  scheduleAttempt(tryConnect);
 }
 
 // A gateway is "local" when it points at this machine's loopback. Only then
@@ -279,6 +302,7 @@ async function connectAndRun() {
   let powers;
   try {
     powers = await connection.powers;
+    resetReconnectBackoff();
     console.log('[Chat] Host powers received, initializing UI...');
   } catch (error) {
     console.error('[Chat] Failed to connect:', error);

@@ -49,7 +49,7 @@ pub enum Verdict {
     /// negative abort).
     Covered,
     /// Skipped before running — a declared-unimplemented feature or an
-    /// unmodelable structural shape (`module`, `onlyStrict`, an SES mode).
+    /// unmodelable host shape (`CanBlockIsFalse`, an SES mode).
     PreSkip,
     /// Skipped after attempting the run, named by the exact opcode/value/reason
     /// that stopped it — the honest coverage-gap split.
@@ -98,8 +98,8 @@ pub enum Category {
     /// — a genuine language-implementation gap (the actionable backlog).
     Unsupported,
     /// Declared or structural skip the run never attempted (a `feature:` on the
-    /// skip list, a `module`/`async`/`can-block` shape). Note that `onlyStrict`
-    /// and the SES lockdown/compartment modes are *engine gaps* classed as
+    /// skip list or a host shape such as multi-agent blocking). Note that the
+    /// SES lockdown/compartment modes are *engine gaps* classed as
     /// [`Category::Unsupported`], not skips — see [`classify`].
     Skipped,
     /// The oracle, the harness, or the infrastructure could not produce a
@@ -1091,7 +1091,7 @@ pub fn to_html(report: &RunReport) -> String {
         " Hardened JavaScript (SES) is not exercised: no lockdown() or Compartment cases are run."
     };
     s.push_str(&format!(
-        "<p class=\"lede\">{} run against the Ironhorse engine{}, excluding staging, harness support files, and module cases; strict-mode executions are not implemented.{} {} cases, {} required strict-mode executions skipped, {} covered cases with advisory computron drift.</p>\n",
+        "<p class=\"lede\">{} run against the Ironhorse engine{}, excluding staging and harness support files. Supported Script-goal and synchronous single-file Module-goal cases run; loader-dependent module shapes remain named per-case gaps.{} {} cases, {} required strict-mode executions skipped, {} covered cases with advisory computron drift.</p>\n",
         scope, oracle_description, ses_description, total, strict_skipped, computron_gaps
     ));
 

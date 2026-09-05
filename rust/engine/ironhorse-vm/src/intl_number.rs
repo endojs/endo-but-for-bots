@@ -278,6 +278,19 @@ impl Decimal {
         }
     }
 
+    /// An exact non-negative decimal integer. `digits` contains only ASCII
+    /// decimal digits and may contain leading or trailing zeroes.
+    fn from_integer_ascii(digits: &str) -> Decimal {
+        let digits = digits.trim_start_matches('0');
+        if digits.is_empty() {
+            return Decimal::zero();
+        }
+        let exponent = digits.len() as i32 - 1;
+        let mut digits: Vec<u8> = digits.bytes().map(|b| b - b'0').collect();
+        trim_trailing_zeros(&mut digits);
+        Decimal { digits, exponent }
+    }
+
     /// Multiply by `10^shift` — just moves the point.
     fn scale_pow10(&mut self, shift: i32) {
         if !self.is_zero() {
@@ -880,10 +893,10 @@ fn compute_notation_exponent(opts: &NfResolved, dec: &Decimal) -> i32 {
     }
 }
 
-/// Partition a finite number into typed parts (PartitionNumberPattern, the
-/// number portion; affixes for currency/unit are layered by the caller). This
-/// covers decimal, percent, scientific and engineering; the mantissa is scaled
-/// then rendered, and the exponent (if any) appended.
+/// Partition a finite number into typed parts (PartitionNumberPattern). This
+/// covers decimal, percent, currency, unit, scientific and engineering; the
+/// mantissa is scaled then rendered, and the resolved style pattern is applied
+/// around the resulting number body.
 pub fn partition_number(opts: &NfResolved, x: f64) -> Vec<Part> {
     // NaN carries no numeric sign; every other value's sign follows its sign
     // bit (so `-0` is negative).
@@ -914,7 +927,7 @@ pub fn partition_number(opts: &NfResolved, x: f64) -> Vec<Part> {
         ));
     }
     parts.append(&mut body);
-    parts
+    apply_style_pattern(opts, parts)
 }
 
 /// Build the unsigned number-body parts (integer/group/decimal/fraction/
@@ -928,17 +941,27 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
         return (with_percent_suffix(opts, parts), false);
     }
 
-    let mut value = x.abs();
-    if opts.style == Style::Percent {
-        value *= 100.0;
-    }
-
+    let value = x.abs();
     if value.is_infinite() {
         parts.push(Part::new(PartType::Infinity, "∞"));
         return (with_percent_suffix(opts, parts), false);
     }
 
-    let mut dec = Decimal::from_f64(value);
+    finite_body_parts(opts, Decimal::from_f64(value), negative)
+}
+
+/// Build the body for an exact finite decimal magnitude. Keeping this path
+/// independent of `f64` lets BigInt locale formatting preserve every digit.
+fn finite_body_parts(
+    opts: &NfResolved,
+    mut dec: Decimal,
+    negative: bool,
+) -> (Vec<Part>, bool) {
+    let mut parts = Vec::new();
+    if opts.style == Style::Percent {
+        dec.scale_pow10(2);
+    }
+    let original = dec.clone();
     let notation_exp = if dec.is_zero() {
         0
     } else {
@@ -955,7 +978,7 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
     let mut notation_exp = notation_exp;
     if opts.notation == Notation::Scientific && rendered.int_digits.len() > 1 {
         notation_exp += rendered.int_digits.len() as i32 - 1;
-        let mut d2 = Decimal::from_f64(value);
+        let mut d2 = original;
         d2.scale_pow10(-notation_exp);
         rendered = render_magnitude(opts, &d2, negative);
     }
@@ -1010,6 +1033,27 @@ fn number_body_parts(opts: &NfResolved, x: f64, negative: bool) -> (Vec<Part>, b
     (with_percent_suffix(opts, parts), rounded_is_zero)
 }
 
+/// Partition an exact BigInt magnitude into locale-aware parts.
+fn partition_bigint(opts: &NfResolved, negative: bool, digits: &str) -> Vec<Part> {
+    let dec = Decimal::from_integer_ascii(digits);
+    let is_zero = dec.is_zero();
+    let (mut body, rounded_is_zero) = finite_body_parts(opts, dec, negative);
+    let sign = resolve_sign(opts.sign_display, negative && !is_zero, rounded_is_zero);
+    let mut parts = Vec::new();
+    if let Some(minus) = sign {
+        parts.push(Part::new(
+            if minus {
+                PartType::MinusSign
+            } else {
+                PartType::PlusSign
+            },
+            if minus { "-" } else { "+" },
+        ));
+    }
+    parts.append(&mut body);
+    apply_style_pattern(opts, parts)
+}
+
 /// Append the percent sign for a percent-style number (en/latin placement:
 /// suffix with no space).
 fn with_percent_suffix(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
@@ -1019,11 +1063,344 @@ fn with_percent_suffix(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
     parts
 }
 
+/// Apply the frozen locale profile's resolved currency or unit pattern to an
+/// already signed number. The affixes remain typed parts so `formatToParts`
+/// and string formatting share exactly the same path.
+fn apply_style_pattern(opts: &NfResolved, mut parts: Vec<Part>) -> Vec<Part> {
+    match opts.style {
+        Style::Currency => {
+            let code = opts.currency.as_deref().unwrap_or("USD");
+            let label = currency_label(opts, code, rendered_value_is_one(opts, &parts));
+            let language = locale_language(&opts.locale);
+            let suffix = opts.currency_display == CurrencyDisplay::Name
+                || matches!(
+                    language.as_str(),
+                    "de" | "es" | "fr" | "it" | "nl" | "pt" | "ru" | "tr"
+                );
+            if suffix {
+                let separator = if opts.currency_display == CurrencyDisplay::Name
+                    && language == "en"
+                {
+                    " "
+                } else {
+                    "\u{00a0}"
+                };
+                parts.push(Part::new(PartType::Literal, separator));
+                parts.push(Part::new(PartType::Currency, label));
+                return parts;
+            }
+
+            let insert_at = usize::from(matches!(
+                parts.first().map(|part| part.kind),
+                Some(PartType::MinusSign | PartType::PlusSign)
+            ));
+            let mut prefix = vec![Part::new(PartType::Currency, label)];
+            if opts.currency_display == CurrencyDisplay::Code {
+                prefix.push(Part::new(PartType::Literal, "\u{00a0}"));
+            }
+            parts.splice(insert_at..insert_at, prefix);
+
+            // In the English frozen profile, accounting replaces a displayed
+            // minus sign with parentheses for prefix currency patterns.
+            if opts.currency_sign == CurrencySign::Accounting
+                && language == "en"
+                && matches!(parts.first().map(|part| part.kind), Some(PartType::MinusSign))
+            {
+                parts[0] = Part::new(PartType::Literal, "(");
+                parts.push(Part::new(PartType::Literal, ")"));
+            }
+            parts
+        }
+        Style::Unit => {
+            let unit = opts.unit.as_deref().unwrap_or("meter");
+            let label = unit_label(unit, opts.unit_display, rendered_value_is_one(opts, &parts));
+            let separator = unit_separator(opts, unit);
+            if !separator.is_empty() {
+                parts.push(Part::new(PartType::Literal, separator));
+            }
+            parts.push(Part::new(PartType::Unit, label));
+            parts
+        }
+        Style::Decimal | Style::Percent => parts,
+    }
+}
+
+/// Whether the rendered value is exactly the integer one. Currency-name and
+/// long-unit plural selection follows the rounded display value and its
+/// visible fraction count: `1.2` rounded to `1` is singular, an explicitly
+/// rendered `1.00` is plural, and `1E0` remains singular.
+fn rendered_value_is_one(opts: &NfResolved, parts: &[Part]) -> bool {
+    if opts.notation == Notation::Compact
+        || parts.iter().any(|part| part.kind == PartType::Fraction)
+    {
+        return false;
+    }
+    let mapped_integer = parts
+        .iter()
+        .filter(|part| part.kind == PartType::Integer)
+        .map(|part| part.value.as_str())
+        .collect::<String>();
+    let Some(integer) = unmap_digits(&mapped_integer, &opts.numbering_system) else {
+        return false;
+    };
+    let integer = integer.trim_start_matches('0');
+    if integer.is_empty()
+        || !integer.starts_with('1')
+        || !integer[1..].bytes().all(|digit| digit == b'0')
+    {
+        return false;
+    }
+
+    let mapped_exponent = parts
+        .iter()
+        .filter(|part| part.kind == PartType::ExponentInteger)
+        .map(|part| part.value.as_str())
+        .collect::<String>();
+    let exponent = if mapped_exponent.is_empty() {
+        0
+    } else {
+        let Some(ascii) = unmap_digits(&mapped_exponent, &opts.numbering_system) else {
+            return false;
+        };
+        let Ok(mut exponent) = ascii.parse::<i32>() else {
+            return false;
+        };
+        if parts
+            .iter()
+            .any(|part| part.kind == PartType::ExponentMinusSign)
+        {
+            exponent = -exponent;
+        }
+        exponent
+    };
+    exponent == -(integer.len() as i32 - 1)
+}
+
+/// Convert digits from a supported numbering system back to ASCII for the
+/// small amount of exact-value reasoning required by plural selection.
+fn unmap_digits(value: &str, nu: &str) -> Option<String> {
+    let map = numbering_digits(nu)
+        .unwrap_or(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+    let mut ascii = String::with_capacity(value.len());
+    for ch in value.chars() {
+        let digit = map
+            .iter()
+            .position(|mapped| mapped.chars().eq(std::iter::once(ch)))?;
+        ascii.push(char::from(b'0' + digit as u8));
+    }
+    Some(ascii)
+}
+
+fn currency_label(opts: &NfResolved, code: &str, singular: bool) -> String {
+    match opts.currency_display {
+        CurrencyDisplay::Code => code.to_string(),
+        CurrencyDisplay::Name => currency_name(code, singular),
+        CurrencyDisplay::Symbol | CurrencyDisplay::NarrowSymbol => {
+            let narrow = opts.currency_display == CurrencyDisplay::NarrowSymbol;
+            let language = locale_language(&opts.locale);
+            let region = locale_region(&opts.locale);
+            match code {
+                "USD" if language == "fr" && !narrow => "$US".to_string(),
+                "USD" if language == "en" && region.as_deref() == Some("GB") && !narrow => {
+                    "US$".to_string()
+                }
+                "USD" => "$".to_string(),
+                "EUR" => "€".to_string(),
+                "GBP" => "£".to_string(),
+                "JPY" => "¥".to_string(),
+                "CNY" if narrow => "¥".to_string(),
+                "CNY" => "CN¥".to_string(),
+                "KRW" => "₩".to_string(),
+                "INR" => "₹".to_string(),
+                "CAD" if narrow => "$".to_string(),
+                "CAD" => "CA$".to_string(),
+                "AUD" if narrow => "$".to_string(),
+                "AUD" => "A$".to_string(),
+                "CHF" => "CHF".to_string(),
+                _ => code.to_string(),
+            }
+        }
+    }
+}
+
+fn currency_name(code: &str, singular: bool) -> String {
+    match (code, singular) {
+        ("USD", true) => "US dollar".to_string(),
+        ("USD", false) => "US dollars".to_string(),
+        ("EUR", true) => "euro".to_string(),
+        ("EUR", false) => "euros".to_string(),
+        ("GBP", true) => "British pound".to_string(),
+        ("GBP", false) => "British pounds".to_string(),
+        ("JPY", _) => "Japanese yen".to_string(),
+        ("CNY", _) => "Chinese yuan".to_string(),
+        ("KRW", _) => "South Korean won".to_string(),
+        ("INR", true) => "Indian rupee".to_string(),
+        ("INR", false) => "Indian rupees".to_string(),
+        ("CAD", true) => "Canadian dollar".to_string(),
+        ("CAD", false) => "Canadian dollars".to_string(),
+        ("AUD", true) => "Australian dollar".to_string(),
+        ("AUD", false) => "Australian dollars".to_string(),
+        ("CHF", true) => "Swiss franc".to_string(),
+        ("CHF", false) => "Swiss francs".to_string(),
+        _ => code.to_string(),
+    }
+}
+
+fn unit_separator(opts: &NfResolved, unit: &str) -> &'static str {
+    if opts.unit_display == UnitDisplay::Narrow {
+        ""
+    } else if locale_language(&opts.locale) == "fr" && opts.unit_display == UnitDisplay::Short {
+        "\u{202f}"
+    } else if opts.unit_display == UnitDisplay::Short && matches!(unit, "percent" | "celsius") {
+        ""
+    } else {
+        " "
+    }
+}
+
+fn unit_label(unit: &str, display: UnitDisplay, singular: bool) -> String {
+    if let Some((numerator, denominator)) = unit.split_once("-per-") {
+        return match display {
+            UnitDisplay::Long => format!(
+                "{} per {}",
+                long_unit_name(numerator, singular),
+                long_unit_name(denominator, true),
+            ),
+            UnitDisplay::Short => format!(
+                "{}/{}",
+                short_unit_name(numerator, singular),
+                denominator_unit_name(denominator),
+            ),
+            UnitDisplay::Narrow => format!(
+                "{}/{}",
+                narrow_unit_name(numerator),
+                narrow_unit_name(denominator),
+            ),
+        };
+    }
+    match display {
+        UnitDisplay::Long => long_unit_name(unit, singular),
+        UnitDisplay::Short => short_unit_name(unit, singular).to_string(),
+        UnitDisplay::Narrow => narrow_unit_name(unit).to_string(),
+    }
+}
+
+fn denominator_unit_name(unit: &str) -> &str {
+    match unit {
+        "day" => "d",
+        "hour" => "h",
+        "second" => "s",
+        _ => short_unit_name(unit, true),
+    }
+}
+
+fn short_unit_name(unit: &str, singular: bool) -> &str {
+    if !singular {
+        match unit {
+            "day" => return "days",
+            "week" => return "wks",
+            "month" => return "mths",
+            "year" => return "yrs",
+            _ => {}
+        }
+    }
+    match unit {
+        "acre" => "ac",
+        "bit" => "bit",
+        "byte" => "byte",
+        "celsius" => "°C",
+        "centimeter" => "cm",
+        "day" => "day",
+        "degree" => "deg",
+        "fahrenheit" => "°F",
+        "fluid-ounce" => "fl oz",
+        "foot" => "ft",
+        "gallon" => "gal",
+        "gigabit" => "Gb",
+        "gigabyte" => "GB",
+        "gram" => "g",
+        "hectare" => "ha",
+        "hour" => "hr",
+        "inch" => "in",
+        "kilobit" => "kb",
+        "kilobyte" => "kB",
+        "kilogram" => "kg",
+        "kilometer" => "km",
+        "liter" => "L",
+        "megabit" => "Mb",
+        "megabyte" => "MB",
+        "meter" => "m",
+        "microsecond" => "μs",
+        "mile" => "mi",
+        "mile-scandinavian" => "smi",
+        "milliliter" => "mL",
+        "millimeter" => "mm",
+        "millisecond" => "ms",
+        "minute" => "min",
+        "month" => "mo",
+        "nanosecond" => "ns",
+        "ounce" => "oz",
+        "percent" => "%",
+        "petabyte" => "PB",
+        "pound" => "lb",
+        "second" => "sec",
+        "stone" => "st",
+        "terabit" => "Tb",
+        "terabyte" => "TB",
+        "week" => "wk",
+        "yard" => "yd",
+        "year" => "yr",
+        _ => unit,
+    }
+}
+
+fn narrow_unit_name(unit: &str) -> &str {
+    match unit {
+        "byte" => "B",
+        "day" => "d",
+        "degree" => "°",
+        "foot" => "′",
+        "hour" => "h",
+        "inch" => "″",
+        "minute" | "month" => "m",
+        "second" => "s",
+        "week" => "w",
+        "year" => "y",
+        _ => short_unit_name(unit, true),
+    }
+}
+
+fn long_unit_name(unit: &str, singular: bool) -> String {
+    match (unit, singular) {
+        ("celsius", true) => "degree Celsius".to_string(),
+        ("celsius", false) => "degrees Celsius".to_string(),
+        ("fahrenheit", true) => "degree Fahrenheit".to_string(),
+        ("fahrenheit", false) => "degrees Fahrenheit".to_string(),
+        ("fluid-ounce", true) => "fluid ounce".to_string(),
+        ("fluid-ounce", false) => "fluid ounces".to_string(),
+        ("foot", false) => "feet".to_string(),
+        ("inch", false) => "inches".to_string(),
+        ("mile-scandinavian", true) => "mile-scandinavian".to_string(),
+        ("mile-scandinavian", false) => "miles-scandinavian".to_string(),
+        ("percent", _) => "percent".to_string(),
+        (_, true) => unit.to_string(),
+        (_, false) => format!("{unit}s"),
+    }
+}
+
 /// Format a finite-or-not number to its display string.
 pub fn format_to_string(opts: &NfResolved, x: f64) -> String {
     partition_number(opts, x)
         .into_iter()
         .map(|p| p.value)
+        .collect()
+}
+
+/// Format an exact BigInt magnitude without narrowing through `f64`.
+pub fn format_bigint_to_string(opts: &NfResolved, negative: bool, digits: &str) -> String {
+    partition_bigint(opts, negative, digits)
+        .into_iter()
+        .map(|part| part.value)
         .collect()
 }
 
@@ -1083,6 +1460,24 @@ mod tests {
     }
 
     #[test]
+    fn bigint_formatting_preserves_all_digits() {
+        let mut f = decimal("en-IN");
+        assert_eq!(
+            format_bigint_to_string(&f, false, "123456789012345678901234567890"),
+            "1,23,45,67,89,01,23,45,67,89,01,23,45,67,890",
+        );
+        assert_eq!(
+            format_bigint_to_string(&f, true, "123456789012345678901234567890"),
+            "-1,23,45,67,89,01,23,45,67,89,01,23,45,67,890",
+        );
+        f.numbering_system = "thai".to_string();
+        assert_eq!(
+            format_bigint_to_string(&f, false, "12345678901234567890"),
+            "๑,๒๓,๔๕,๖๗,๘๙,๐๑,๒๓,๔๕,๖๗,๘๙๐",
+        );
+    }
+
+    #[test]
     fn negative_zero_and_signdisplay() {
         let mut f = decimal("en-US");
         f.sign_display = SignDisplay::Always;
@@ -1107,6 +1502,56 @@ mod tests {
         f.style = Style::Percent;
         assert_eq!(format_to_string(&f, 0.20), "20%");
         assert_eq!(format_to_string(&f, 0.011), "1.1%");
+    }
+
+    #[test]
+    fn currency_and_unit_patterns_are_typed_and_shared_by_bigint() {
+        let mut currency = decimal("en-US");
+        currency.style = Style::Currency;
+        currency.currency = Some("USD".to_string());
+        currency.min_fraction_digits = 2;
+        currency.max_fraction_digits = 2;
+        assert_eq!(format_to_string(&currency, 1.0), "$1.00");
+        assert_eq!(format_bigint_to_string(&currency, false, "1"), "$1.00");
+        assert_eq!(
+            partition_number(&currency, -1.0)
+                .into_iter()
+                .map(|part| (part.kind, part.value))
+                .collect::<Vec<_>>(),
+            vec![
+                (PartType::MinusSign, "-".to_string()),
+                (PartType::Currency, "$".to_string()),
+                (PartType::Integer, "1".to_string()),
+                (PartType::Decimal, ".".to_string()),
+                (PartType::Fraction, "00".to_string()),
+            ],
+        );
+        currency.currency_sign = CurrencySign::Accounting;
+        assert_eq!(format_to_string(&currency, -1.0), "($1.00)");
+        currency.currency_sign = CurrencySign::Standard;
+        currency.currency_display = CurrencyDisplay::Name;
+        assert_eq!(format_to_string(&currency, 1.0), "1.00 US dollars");
+
+        let mut unit = decimal("en-US");
+        unit.style = Style::Unit;
+        unit.unit = Some("meter".to_string());
+        assert_eq!(format_to_string(&unit, 1.0), "1 m");
+        assert_eq!(format_bigint_to_string(&unit, false, "2"), "2 m");
+        unit.unit_display = UnitDisplay::Long;
+        assert_eq!(format_to_string(&unit, 1.0), "1 meter");
+        assert_eq!(format_to_string(&unit, 2.0), "2 meters");
+        unit.notation = Notation::Scientific;
+        assert_eq!(format_to_string(&unit, 1.0), "1E0 meter");
+        unit.notation = Notation::Engineering;
+        assert_eq!(format_to_string(&unit, 1.0), "1E0 meter");
+        unit.notation = Notation::Standard;
+        unit.min_fraction_digits = 2;
+        assert_eq!(format_to_string(&unit, 1.0), "1.00 meters");
+        unit.min_fraction_digits = 0;
+        unit.unit = Some("percent".to_string());
+        assert_eq!(format_to_string(&unit, 12.0), "12 percent");
+        unit.unit = Some("celsius".to_string());
+        assert_eq!(format_to_string(&unit, 12.0), "12 degrees Celsius");
     }
 
     #[test]

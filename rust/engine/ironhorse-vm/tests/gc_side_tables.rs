@@ -91,6 +91,38 @@ fn disposable_stack_resources_survive_a_full_collection() {
     assert_eq!(out.result, "true");
 }
 
+#[test]
+fn iterator_from_wrapper_keeps_its_iterated_object_and_next_method_alive() {
+    // Drop the guest-visible references to both the direct iterator and its
+    // cached method. The wrapper's kind-8 iterator row is then their only
+    // owner across the collection.
+    let crank1 = "var wrapped = 0; var base = 0; var next = 0; var churn = 0; \
+                  churn = []; base = { n: 0 }; \
+                  next = function () { return { value: ++this.n }; }; \
+                  base.next = next; wrapped = Iterator.from(base); \
+                  base = 0; next = 0; 0;";
+    let crank2 = &format!(
+        "var wrapped; var churn; var t = 0; {CHURN} t = wrapped.next().value; t"
+    );
+    let out = run_two_cranks_with_gc(crank1, crank2);
+    assert!(out.completed, "crank 2: {:?}", out.halt);
+    assert_eq!(out.result, "1");
+}
+
+#[test]
+fn regexp_string_iterator_keeps_its_cloned_matcher_alive() {
+    // The cloned RegExp is not guest-visible. After the original literal is
+    // dropped, the kind-9 iterator row is its only owner across collection.
+    let crank1 = "var it = 0; var churn = 0; churn = []; \
+                  it = 'a1b22'.matchAll(/(\\d+)/g); it.next(); 0;";
+    let crank2 = &format!(
+        "var it; var churn; var t = 0; {CHURN} t = it.next().value[0]; t"
+    );
+    let out = run_two_cranks_with_gc(crank1, crank2);
+    assert!(out.completed, "crank 2: {:?}", out.halt);
+    assert_eq!(out.result, "22");
+}
+
 /// The mainline's `dates` table (Date epoch-ms records, 2026-08-28
 /// rebase) joins the same net from both directions: a LIVE Date's
 /// record survives a full collection, and a DEAD Date's record is
@@ -119,9 +151,10 @@ fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
     // consume the freed slots), so the churn's first allocation
     // deterministically reuses the dead Date's slot. `new Date(value)`
     // reads a branded argument's time DIRECTLY (no property lookup
-    // shields it): a healthy engine halts each probe at the plain
-    // object's unsupported ToPrimitive; a stale row instead COMPLETES
-    // with the dead Date's 123456 — the silent-wrong signature.
+    // shields it): a healthy engine coerces each plain object through
+    // Object.prototype.toString and produces an invalid Date (`NaN`);
+    // a stale row instead completes with the dead Date's 123456 — the
+    // silent-wrong signature.
     let (b1, n1) = compile(
         "var churn = 0; churn = []; \
          (function () { var dead = new Date(123456); })(); 0;",
@@ -147,10 +180,10 @@ fn a_recycled_slot_does_not_inherit_a_dead_dates_brand() {
             &mut m,
             &format!("var churn; var t = 0; t = '' + new Date(churn[{i}]).getTime(); t"),
         );
-        assert!(
-            !o.completed,
-            "churn[{i}] answered as a branded Date: {} (the dead row leaked)",
-            o.result
+        assert!(o.completed, "churn[{i}] coercion failed: {:?}", o.halt);
+        assert_eq!(
+            o.result, "NaN",
+            "churn[{i}] inherited the dead Date's stale brand"
         );
     }
 }

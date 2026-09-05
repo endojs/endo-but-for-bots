@@ -2,7 +2,7 @@
 //! cross-referencing side tables — `promises`, `promise_functions`,
 //! `promise_guards`, `combinators` — PERSIST across a suspend/resume,
 //! so a resumed machine's promises keep their identity, settlement
-//! state, pending reactions, resolving functions, and combinator
+//! state, pending reactions, runtime-minted functions, and combinator
 //! progress. This retires the round-3 P1: a resumed settled promise
 //! rendered `[object Object]` (its `promises` row silently dropped)
 //! where the uninterrupted machine rendered `[object Promise]`, and a
@@ -134,6 +134,106 @@ fn a_resolver_called_after_resume_settles_its_promise() {
     );
 }
 
+/// A custom `NewPromiseCapability` executor can escape its constructor. Its
+/// hidden resolve/reject capture and non-constructable native identity must
+/// survive both snapshot backends, including the already-initialized guard
+/// that rejects a second non-empty capture.
+#[test]
+fn a_custom_capability_executor_survives_resume() {
+    assert_twin(
+        "ih-prms-capability-executor",
+        "var ex = 0; var log = ''; var t = 0; \
+         function C(e) { ex = e; e(function (v) { log = 'r' + v; }, \
+                                    function (v) { log = 'j' + v; }); return {}; } \
+         Promise.resolve.call(C, 5); t = 7; t",
+        &[
+            "var ex; var log; var t; typeof ex + ':' + ex.name + ':' + ex.length + ':' + log",
+            "var ex; var log; var t; try { ex(function () {}, function () {}); false } \
+             catch (e) { e instanceof TypeError }",
+        ],
+        &[(true, "function::2:r5"), (true, "true")],
+    );
+}
+
+/// A custom receiver may retain either anonymous callable that `finally`
+/// passes to its `then`. The closure's handler/constructor capture and later
+/// value thunk must survive both snapshot backends without losing function
+/// metadata or the original completion.
+#[test]
+fn a_generic_finally_wrapper_survives_resume() {
+    assert_twin(
+        "ih-prms-generic-finally-wrapper",
+        "var saved=0;var g='';var result={};var o={constructor:Promise,then:function(a,b){saved=a;return result}};var t=0; \
+         t=Promise.prototype.finally.call(o,function(){g+='h';return 1})===result;t",
+        &[
+            "var saved;var g;var result;var o;var t;typeof saved+':'+saved.name+':'+saved.length+':'+g",
+            "var saved;var g;var result;var o;var t;saved(8).then(function(v){g+=':'+v});0",
+            "var saved;var g;var result;var o;var t;g",
+        ],
+        &[
+            (true, "function::1:"),
+            (true, "0"),
+            (true, "h:8"),
+        ],
+    );
+}
+
+/// A custom species promise may retain the nested value/throw thunk made when
+/// an escaped finally handler eventually runs. Those length-0 closures carry
+/// the original completion independently of the outer finally wrappers.
+#[test]
+fn generic_finally_value_thunks_survive_resume() {
+    assert_twin(
+        "ih-prms-generic-finally-value-thunks",
+        "var savedF=0;var savedR=0;var marker={};var phase=0;var result={};function C(exec){exec(function(){},function(){});return {then:function(f){if(phase++===0){savedF=f}else{savedR=f}return result}}}Object.defineProperty(C,Symbol.species,{value:C});var of={constructor:C,then:function(a){return a(8)}};var or={constructor:C,then:function(a,b){return b(marker)}};var ok=Promise.prototype.finally.call(of,function(){return 1})===result&&Promise.prototype.finally.call(or,function(){return 2})===result;ok",
+        &[
+            "var savedF;var savedR;var marker;typeof savedF+':'+savedF.name+':'+savedF.length+':'+typeof savedR+':'+savedR.name+':'+savedR.length",
+            "var savedF;var savedR;var marker;var caught=false;var value=savedF();try{savedR()}catch(e){caught=e===marker}value+':'+caught",
+        ],
+        &[(true, "function::0:function::0"), (true, "8:true")],
+    );
+}
+
+/// A pending `.then` reaction can carry resolve/reject callbacks supplied by a
+/// custom species constructor. The callbacks and the arbitrary result object
+/// must retain identity and behavior across both snapshot backends.
+#[test]
+fn a_custom_species_reaction_survives_resume() {
+    assert_twin(
+        "ih-prms-custom-species-reaction",
+        "var p=0;var res=0;var q=0;var result={tag:9};var log='';var t=0; \
+         function C(executor){executor(function(v){log='r'+v},function(e){log='j'+e});return result} \
+         p=new Promise(function(resolve){res=resolve});p.constructor={}; \
+         p.constructor[Symbol.species]=C;q=p.then(function(v){return v+1});t=7;t",
+        &[
+            "var p;var res;var q;var result;var log;var t;(q===result)+':'+q.tag+':'+log",
+            "var p;var res;var q;var result;var log;var t;res(41);0",
+            "var p;var res;var q;var result;var log;var t;log",
+        ],
+        &[(true, "true:9:"), (true, "0"), (true, "r42")],
+    );
+}
+
+/// A custom Promise subclass selected by `finally` remains threaded through
+/// the pending callback-result await, including its outer capability and the
+/// subclass prototype, across a checkpoint boundary.
+#[test]
+fn a_custom_species_finally_await_survives_resume() {
+    assert_twin(
+        "ih-prms-custom-species-finally",
+        "var P=class extends Promise{};var gate=0;var release=0;var q=0;var g='';var t=0; \
+         gate=new Promise(function(resolve){release=resolve});var p=Promise.resolve(5); \
+         p.constructor={};p.constructor[Symbol.species]=P; \
+         q=p.finally(function(){return gate});t=7;t",
+        &[
+            "var P;var gate;var release;var q;var g;var t;(q instanceof P)+':'+(q.constructor===P)+':'+g",
+            "var P;var gate;var release;var q;var g;var t;q.then(function(v){g='r'+v},function(e){g='j'+e});release(1);0",
+            "var P;var gate;var release;var q;var g;var t;g",
+        ],
+        &[(true, "true:true:"), (true, "0"), (true, "r5")],
+    );
+}
+
 /// A `.then` reaction registered BEFORE the split fires after it: the
 /// pending reaction row (handler + derived capability) travels.
 #[test]
@@ -210,6 +310,49 @@ fn promise_all_mid_flight_completes_after_resume() {
     );
 }
 
+/// A static combinator can retain callbacks supplied by an arbitrary result
+/// constructor. The custom result object and the pending accumulator survive
+/// both snapshot backends, then the restored callback receives the final Array.
+#[test]
+fn a_custom_capability_combinator_survives_resume() {
+    assert_twin(
+        "ih-prms-custom-combinator",
+        "var p=0;var res=0;var q=0;var result={tag:9};var log='';var t=0; \
+         function C(executor){executor(function(v){log='r'+v[0]}, \
+                                       function(e){log='j'+e});return result} \
+         C.resolve=function(v){return Promise.resolve(v)}; \
+         p=new Promise(function(resolve){res=resolve}); \
+         q=Promise.all.call(C,[p]);t=7;t",
+        &[
+            "var p;var res;var q;var result;var log;var t;(q===result)+':'+q.tag+':'+log",
+            "var p;var res;var q;var result;var log;var t;res(42);0",
+            "var p;var res;var q;var result;var log;var t;log",
+        ],
+        &[(true, "true:9:"), (true, "0"), (true, "r42")],
+    );
+}
+
+/// A custom `then` may retain the engine's per-element callback beyond the
+/// combinator call. Its one-shot guard and direct combinator reaction must
+/// survive a checkpoint before the guest eventually invokes it.
+#[test]
+fn a_retained_custom_then_element_callback_survives_resume() {
+    assert_twin(
+        "ih-prms-direct-combinator",
+        "var fulfill=0;var result={};var log='';var t=0; \
+         function C(executor){executor(function(v){log='r'+v[0]}, \
+                                       function(e){log='j'+e});return result} \
+         C.resolve=function(){return {then:function(resolve){fulfill=resolve}}}; \
+         Promise.all.call(C,[1]);t=7;t",
+        &[
+            "var fulfill;var result;var log;var t;typeof fulfill+':'+fulfill.name+':'+fulfill.length+':'+log",
+            "var fulfill;var result;var log;var t;fulfill(42);fulfill(9);0",
+            "var fulfill;var result;var log;var t;log",
+        ],
+        &[(true, "function::1:"), (true, "0"), (true, "r42")],
+    );
+}
+
 /// `Promise.race` and `Promise.any` mid-flight, in one machine: the
 /// race settles with whichever element settles first after the split;
 /// the `any` — one element already rejected before it — rejects only
@@ -256,6 +399,27 @@ fn a_finally_reaction_passes_through_across_the_split() {
             "var p; var res; var ran; var g; var t; g",
         ],
         &[(true, "0"), (true, "v:5,ran:1")],
+    );
+}
+
+/// The second half of `finally` crosses the split too: `onFinally` has run and
+/// returned a still-pending promise, so the carried `FinallyAwait` reaction
+/// must retain both the original settlement and the derived capability until
+/// the returned promise settles after resume.
+#[test]
+fn a_finally_await_reaction_restores_the_original_value_after_resume() {
+    assert_twin(
+        "ih-prms-finally-await",
+        "var gate = 0; var release = 0; var g = 0; var t = 0; \
+         gate = new Promise(function (rs) { release = rs; }); \
+         Promise.resolve(5).finally(function () { return gate; }) \
+          .then(function (v) { g = 'v:' + v; }, function (e) { g = 'e:' + e; }); \
+         t = 7; t",
+        &[
+            "var gate; var release; var g; var t; release(9); 0",
+            "var gate; var release; var g; var t; g",
+        ],
+        &[(true, "0"), (true, "v:5")],
     );
 }
 

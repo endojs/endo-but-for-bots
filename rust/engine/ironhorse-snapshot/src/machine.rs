@@ -504,10 +504,10 @@ fn restore_side_tables(
         ));
     }
     // The data-only language rows (schema 11). Wrapper values were
-    // bounds-walked with the heap; a regexp that fails to RECOMPILE
-    // from its persisted (source, flags) cannot come from an honest
-    // snapshot (construction compiled the same pair), and a plain
-    // record's kind was validated at decode.
+    // bounds-walked with the heap; a regexp must recompile from its persisted
+    // (source, flags) and carry either the standard current lastIndex heap
+    // descriptor or the legacy numeric fallback; a plain record's kind was
+    // validated at decode.
     interp.restore_wrapper_data(
         wrappers.into_iter().map(|w| (w.owner, w.value)).collect(),
     );
@@ -519,7 +519,7 @@ fn restore_side_tables(
     );
     if !ok {
         return Err(SnapshotError::Corrupt(
-            "side-table restore: persisted regexp does not recompile",
+            "side-table restore: invalid persisted regexp state",
         ));
     }
     interp.restore_dates(
@@ -574,6 +574,11 @@ fn restore_side_tables(
             "side-table restore: malformed retained function state",
         ));
     }
+    if !interp.restored_promise_capabilities_are_valid() {
+        return Err(SnapshotError::Corrupt(
+            "side-table restore: malformed promise capability",
+        ));
+    }
     if !interp.restore_generators(generators) {
         return Err(SnapshotError::Corrupt(
             "side-table restore: malformed generator state",
@@ -612,6 +617,11 @@ fn restore_side_tables(
             "side-table restore: malformed iterator cursor",
         ));
     }
+    // Semantic migrations run only after the persisted name floor, symbol-key
+    // map, and arguments brands have all been reinstated. They can therefore
+    // distinguish a never-installed implicit intrinsic from a guest deletion,
+    // and a legacy arguments layout from current guest customization.
+    interp.migrate_restored_layout();
     Ok(())
 }
 

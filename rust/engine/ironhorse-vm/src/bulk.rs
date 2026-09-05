@@ -127,6 +127,12 @@ impl ArrayData {
         &self.items
     }
 
+    /// Mutable access for integrity-level transitions that change only an
+    /// element's descriptor flags, never its value or reference topology.
+    pub(crate) fn items_mut(&mut self) -> &mut std::collections::BTreeMap<u32, Slot> {
+        &mut self.items
+    }
+
     pub(crate) fn insert_item(
         &mut self,
         index: u32,

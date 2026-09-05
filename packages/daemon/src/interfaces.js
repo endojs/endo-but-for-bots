@@ -134,6 +134,61 @@ export const contentLocatorMethodGuards = harden({
 
 export const EnvelopeInterface = M.interface('EndoEnvelope', {});
 
+// A pattern mismatch reports the offending specimen verbatim, so the default
+// `M.string()` length limit of 100000 would interpolate an oversize secret
+// into an error that crosses CapTP and lands in logs. The limit is disabled
+// here so that `decodeSecret` in secret-manager.js — which is written never to
+// echo its input, and which enforces the real MAX_SECRET_BYTES bound — is the
+// sole rejecter of secret payloads. The default also sits below the base64
+// length of a maximum-size secret, so it would reject valid input.
+const SecretBase64Shape = M.string({
+  stringLengthLimit: Number.MAX_SAFE_INTEGER,
+});
+
+export const SecretBlobInterface = M.interface('SecretBlob', {
+  help: M.call().returns(M.string()),
+  getDescription: M.call().returns(M.promise()),
+  // Uint8Array is mutable and therefore not passable. Base64 is the wire
+  // envelope only; the backend and manager continue to store arbitrary bytes.
+  readBase64: M.call().returns(M.promise()),
+});
+
+export const SecretAdminInterface = M.interface('SecretAdmin', {
+  getSummary: M.call().returns(M.promise()),
+  replaceBase64: M.call(SecretBase64Shape).returns(M.promise()),
+  setDescription: M.call(M.string()).returns(M.promise()),
+  revoke: M.call().returns(M.promise()),
+  delete: M.call().returns(M.promise()),
+});
+
+export const SecretImporterInterface = M.interface('SecretImporter', {
+  createBase64: M.call(M.string(), M.string(), SecretBase64Shape).returns(
+    M.promise(),
+  ),
+});
+
+export const SecretCatalogInterface = M.interface('SecretCatalog', {
+  list: M.call().returns(M.promise()),
+});
+
+export const SecretAuditReaderInterface = M.interface('SecretAuditReader', {
+  list: M.call().optional(M.bigint()).returns(M.promise()),
+});
+
+export const SecretManagerDirectoryInterface = M.interface(
+  'SecretManagerDirectory',
+  {
+    help: M.call().returns(M.string()),
+    has: M.call(M.string()).returns(M.promise()),
+    list: M.call().returns(M.promise()),
+    // Guarded like every other directory `lookup` in this file. `M.any()`
+    // would forward a non-string path segment straight into the SQLite bind
+    // layer, surfacing a driver TypeError instead of this module's fixed
+    // error codes.
+    lookup: M.call(NameOrPathShape).returns(M.promise()),
+  },
+);
+
 export const DismisserInterface = M.interface('EndoDismisser', {
   dismiss: M.call().returns(M.promise()),
 });
@@ -669,20 +724,30 @@ export const MountInterface = M.interface('EndoMount', {
   has: M.call().rest(M.any()).returns(M.promise()),
   list: M.call().rest(PathSegmentsShape).returns(M.promise()),
   // Recursive glob search, delegated to the platform engine. Daemon-local
-  // extension beyond the ReadableTree surface.
-  glob: M.call(M.string()).returns(M.promise()),
+  // extension beyond the ReadableTree surface. `options.followSymlinks` lets
+  // `**` descend through directory symlinks (`rg -L`); the default is off,
+  // because an unbounded pattern crossing links walks the link graph rather
+  // than the tree, which no result cap can rescue.
+  glob: M.call(M.string())
+    .optional(M.splitRecord({}, { followSymlinks: M.boolean() }))
+    .returns(M.promise()),
   // Content search, delegated to the platform engine. `paths` is optional and
   // consumed with an implied `await` (`M.callWhen` + `M.await`), so a caller
   // may pipe a `glob` promise straight in — `grep(pattern, glob(g))` — and the
   // exo awaits and shape-checks it to a `string[]` before the method runs.
   // Omitting `paths` searches every file under the face's root. `options`
-  // carries `maxResults` (there is no `glob` option: glob is decoupled, an
-  // independent producer of the `paths` array). See
+  // carries `maxResults` and `followSymlinks` (there is no `glob` option: glob
+  // is decoupled, an independent producer of the `paths` array).
+  // `followSymlinks` governs the implicit walk taken when `paths` is omitted;
+  // a supplied path is named, so it is followed either way. See
   // designs/platform-search-pushdown.md § "The Array surface".
   grep: M.callWhen(M.string())
     .optional(
       M.await(M.arrayOf(M.string())),
-      M.splitRecord({}, { maxResults: M.number() }),
+      M.splitRecord(
+        {},
+        { maxResults: M.number(), followSymlinks: M.boolean() },
+      ),
     )
     .returns(M.array()),
   // Fused glob+grep composition. Both patterns are required positionals (unlike
@@ -690,8 +755,15 @@ export const MountInterface = M.interface('EndoMount', {
   // as a single fused enumerate-and-scan call. The reference implementation
   // composes the delegated surface: `grep(grepPattern, glob(globPattern))`. See
   // designs/platform-search-pushdown.md § "The Array surface".
+  // `followSymlinks` reaches the enumeration half only; grep's half receives an
+  // explicit path array, which is followed regardless.
   glorp: M.call(M.string(), M.string())
-    .optional(M.splitRecord({}, { maxResults: M.number() }))
+    .optional(
+      M.splitRecord(
+        {},
+        { maxResults: M.number(), followSymlinks: M.boolean() },
+      ),
+    )
     .returns(M.promise()),
   // Streaming search (glob). Returns a `PassableReader` synchronously (guard
   // `M.remotable('PassableReader')`, not `M.promise()`), so

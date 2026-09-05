@@ -31,6 +31,37 @@ fn agrees(source: &str) {
     );
 }
 
+fn agrees_exact(source: &str) {
+    let run = dual_run(source).expect("the XS oracle machine must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{source}: {run:?}");
+    assert!(run.result_agrees, "{source}: {run:?}");
+    assert!(
+        run.computrons_agree,
+        "{source}: oracle={} ({}) ironhorse={} ({})",
+        run.oracle_computrons,
+        run.oracle_meter_raw,
+        run.ironhorse_computrons,
+        run.ironhorse_meter_raw,
+    );
+}
+
+#[test]
+fn callable_proxy_dispatch_is_metered_at_each_call_layer() {
+    for source in [
+        "var p=new Proxy(function(a){return a+1},{});p.call(null,1)",
+        "var p=new Proxy(function(a){return a+1},{});p.apply(null,[1])",
+        "var p=new Proxy(function(a){return a+1},{});p(1)",
+        "var p=new Proxy(new Proxy(function(a){return a+1},{}),{});p(1)",
+        "var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p.call(null,1)",
+        "var p=new Proxy(function(a){return a+1},{apply:function(t,s,a){return Reflect.apply(t,s,a)}});p(1)",
+        "var b=(function(a){return a+1}).bind(null),p=new Proxy(b,{});p(1)",
+        "var p=new Proxy(Math.max,{});p(1,2)",
+        "var p=new Proxy(Math.max,{});p.call(null,1,2)",
+    ] {
+        agrees_exact(source);
+    }
+}
+
 // -------------------------------------------------------------------------
 // §1  Function.prototype.apply over a native receiver (dense-array forwarding).
 // -------------------------------------------------------------------------
@@ -45,6 +76,19 @@ fn native_apply_forwards_dense_array() {
     agrees("Math.max.apply(null)");
     agrees("Math.max.apply(null, undefined)");
     agrees("Math.max.apply(null, null)");
+    // CreateListFromArrayLike also accepts ordinary objects and reads holes or
+    // materialized accessors through the full property MOP.
+    agrees("Math.max.apply(null, {length:3,0:2,1:9,2:4})");
+    agrees("Math.max.apply(null, [,7])");
+    agrees(
+        "var log=[];var a=[];a.length=2;Object.defineProperty(a,'0',{get:function(){log.push(0);return 8}}); \
+         Math.max.apply(null,a)+':'+log.join(',')",
+    );
+    agrees("(function(){return Math.max.apply(null,arguments)})(2,9,4)");
+    agrees(
+        "var log=[];var args=new Proxy({length:2,0:3,1:8},{get:function(t,k){log.push(k);return t[k]}}); \
+         Math.max.apply(null,args)+':'+log.join(',')",
+    );
 }
 
 #[test]
@@ -104,6 +148,14 @@ fn new_on_call_apply_throws_type_error() {
     agrees(
         "var ok; try { new Function.prototype.apply(); ok = false; } \
          catch (e) { ok = e instanceof TypeError; } ok",
+    );
+}
+
+#[test]
+fn reflect_construct_rejects_every_non_constructor_function_shape() {
+    agrees(
+        "var n=0;var values=[()=>{},function*(){},async function(){},async function*(){},({m(){}}).m,(()=>{}).bind(null),new Proxy(()=>{},{})];\
+         for(var v of values){try{Reflect.construct(v,[])}catch(e){n+=e instanceof TypeError}}n",
     );
 }
 
@@ -183,19 +235,38 @@ fn new_on_bound_function_constructs_target() {
 
 #[test]
 fn primitive_this_boxing_via_call_apply() {
-    // Sloppy callee: a Number/Boolean `this` is boxed to an object wrapper.
+    // Sloppy callee: every primitive `this` is boxed to its object wrapper.
     agrees("function f() { return typeof this; } f.call(5)");
     agrees("function f() { return typeof this; } f.call(true)");
+    agrees("function f() { return typeof this; } f.call('abc')");
+    agrees("function f() { return typeof this; } f.call(Symbol('s'))");
+    agrees("function f() { return typeof this; } f.call(12n)");
     agrees("function f() { return typeof this; } f.apply(42, [])");
+    agrees("function f() { return this[1] + ':' + this.length; } f.apply('abc', [])");
     // The wrapped primitive round-trips through `valueOf` / coercion.
     agrees("function f(x) { return this.valueOf() + x; } f.call(10, 5)");
+    agrees("function f() { return this.valueOf(); } f.call('abc')");
+    agrees("var s=Symbol('s');function f(){return this.valueOf()===s}f.call(s)");
+    agrees("function f() { return this.valueOf() + 1n; } f.call(12n)");
     agrees("function f(a, b) { return typeof this + ':' + (a + b); } f.apply(5, [2, 3])");
     agrees("function f() { return this instanceof Number; } f.call(7)");
     agrees("function f() { return this instanceof Boolean; } f.call(false)");
+    agrees("function f() { return this instanceof String; } f.call('abc')");
+    agrees("function f() { return this instanceof Symbol; } f.call(Symbol())");
+    agrees("function f() { return this instanceof BigInt; } f.call(1n)");
+    agrees("String.prototype.f=function(){return this[0]+this[1]};'abc'.f()");
+    agrees("Symbol.prototype.f=function(){return this.valueOf()};var s=Symbol('s');s.f()===s");
+    agrees("BigInt.prototype.f=function(){return this.valueOf()+1n};12n.f()");
+    agrees("function f(){return this[1]}Reflect.apply(f,'abc',[])");
+    agrees("function f(){return this[1]}f.bind('abc')()");
     // Strict callee: the primitive `this` is kept as-is (no boxing).
     agrees("function f() { 'use strict'; return typeof this; } f.call(5)");
     agrees("function f() { 'use strict'; return this; } f.call(5)");
     agrees("function f() { 'use strict'; return typeof this; } f.apply(true, [])");
+    agrees("function f(){'use strict';return typeof this}f.call('abc')");
+    agrees("function f(){'use strict';return typeof this}f.call(Symbol())");
+    agrees("function f(){'use strict';return typeof this}f.call(1n)");
+    agrees("String.prototype.f=function(){'use strict';return typeof this};'a'.f()");
     // `undefined` / `null` `this` in a sloppy callee binds to the global.
     agrees("function f() { return this === globalThis; } f.call(undefined)");
     agrees("function f() { return this === globalThis; } f.call(null)");
@@ -264,6 +335,14 @@ fn apply_array_like_arg_array() {
         "function f() { return String(arguments[0]) + '/' + arguments.length; } \
          f.apply(null, {length: 2})",
     );
+    agrees(
+        "function f(a,b){return String(a)+':'+b}var args=[,2];f.apply(null,args)",
+    );
+    agrees(
+        "function f(a){return a}var old=Array.prototype[0];Array.prototype[0]=6; \
+         var args=new Array(1),r=f.apply(null,args); \
+         old===undefined?delete Array.prototype[0]:Array.prototype[0]=old;r",
+    );
     // The `arguments` object of another call forwards through apply.
     agrees(
         "function g() { return function () { return arguments[0] + arguments[1]; }.apply(null, arguments); } \
@@ -274,6 +353,14 @@ fn apply_array_like_arg_array() {
         "function f() {} var o = { get length() { throw new RangeError('L'); } }; \
          var ok; try { f.apply(null, o); ok = false; } catch (e) { ok = e instanceof RangeError; } ok",
     );
+    // `length` applies the observable ToNumber/ToLength path before any index
+    // read, including object coercion and the BigInt TypeError boundary.
+    agrees(
+        "var log=[];function f(x){return x}var o={get length(){log.push('g');return {valueOf(){log.push('v');return 1}}},0:7};f.apply(null,o)+':'+log.join('')",
+    );
+    agrees(
+        "var ok=false;try{(function(){}).apply(null,{length:1n})}catch(e){ok=e instanceof TypeError}ok",
+    );
     // An abrupt index getter propagates.
     agrees(
         "function f() {} var o = { length: 1, get 0() { throw new TypeError('I'); } }; \
@@ -281,3 +368,52 @@ fn apply_array_like_arg_array() {
     );
 }
 
+// -------------------------------------------------------------------------
+// §11  BoundFunction exotic dispatch composes through every Call site.
+// -------------------------------------------------------------------------
+
+#[test]
+fn bound_function_call_chains() {
+    // The innermost binding supplies `this`; bound arguments accumulate from
+    // the innermost function outward and precede ordinary call arguments.
+    agrees(
+        "function f(a,b,c){return this.x+':'+a+':'+b+':'+c} \
+         var b=f.bind({x:1},2).bind({x:9},3); b(4)",
+    );
+    // Chained wrappers can terminate at either a user or native callable.
+    agrees("var f=Math.max.bind(null,3).bind(null,5); f(4,9)");
+    // Binding the call/apply built-ins themselves performs their abstract
+    // redispatch rather than entering a native-method placeholder body.
+    agrees("Function.prototype.call.bind(function(a){return this.x+a})({x:2},3)");
+    agrees("Function.prototype.apply.bind(Math.max)(null,[2,7,3])");
+}
+
+#[test]
+fn bound_function_chains_work_at_abstract_call_sites() {
+    // Array iteration invokes callbacks through the abstract Call operation.
+    agrees(
+        "function f(a,b,v){return a+b+v} \
+         [3].map(f.bind(null,1).bind(null,2))[0]",
+    );
+    agrees("[3].map(Number.bind(null).bind(null))[0]");
+    // `.call`/`.apply` ignore their explicit thisArg when the receiver is
+    // bound, while preserving bound-leading then forwarded argument order.
+    agrees(
+        "function f(a,b){return this.x+a+b} \
+         f.bind({x:1},2).call({x:9},3)",
+    );
+    agrees(
+        "function f(a,b,c){return this.x+a+b+c} \
+         f.bind({x:1},2).apply({x:9},{length:2,0:3,1:4})",
+    );
+    // Abrupt completion from the ultimate target still reaches the caller's
+    // handler through both direct and callback re-entry.
+    agrees(
+        "var b=(function(){throw new RangeError('x')}).bind(null).bind(null); \
+         var ok=false;try{b.call(null)}catch(e){ok=e instanceof RangeError}ok",
+    );
+    agrees(
+        "var b=(function(){throw new RangeError('x')}).bind(null).bind(null); \
+         var ok=false;try{[1].map(b)}catch(e){ok=e instanceof RangeError}ok",
+    );
+}

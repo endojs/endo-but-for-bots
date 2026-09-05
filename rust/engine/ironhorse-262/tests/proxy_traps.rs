@@ -90,6 +90,11 @@ fn has_trap_and_in_operator() {
     agrees("'foo' in new Proxy({}, { has: function () { return true; } })");
     agrees("'missing' in new Proxy({}, { has: function () { return false; } })");
     agrees("'k' in new Proxy({ k: 1 }, {})"); // forward
+    agrees(
+        "var target = Object.create([14]); var handler = { has: function (t, k) { \
+         return this === handler && t === target && k === '1' ? false : true; } }; \
+         var array = []; Object.setPrototypeOf(array, new Proxy(target, handler)); 1 in array",
+    );
 }
 
 #[test]
@@ -137,6 +142,19 @@ fn own_keys_trap_and_object_keys() {
         "var p = new Proxy({}, { ownKeys: function () { return [true]; } }); \
          var e; try { Object.keys(p); } catch (x) { e = x instanceof TypeError; } e",
     );
+}
+
+#[test]
+fn array_is_array_transparently_unwraps_proxies() {
+    for source in [
+        "Array.isArray(new Proxy([],{}))",
+        "Array.isArray(new Proxy(new Proxy([],{}),{}))",
+        "Array.isArray(new Proxy({},{}))",
+        "var hits=0;var p=new Proxy([],{get:function(){hits++}});Array.isArray(p)+':'+hits",
+        "var r=Proxy.revocable([],{});r.revoke();try{Array.isArray(r.proxy);false}catch(e){e instanceof TypeError}",
+    ] {
+        agrees(source);
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -226,6 +244,16 @@ fn nested_proxy_forwarding() {
     agrees(
         "var inner = new Proxy({}, { get: function () { return 'inner'; } }); \
          new Proxy(inner, {}).anything",
+    );
+    agrees(
+        "var inner = new Proxy({ foo: 2 }, {}); \
+         var outer = new Proxy(inner, { has: undefined }); \
+         ['foo' in outer, 'bar' in outer, Reflect.has(outer, 'foo')].join(',')",
+    );
+    agrees(
+        "var inner = new Proxy([1, 2], {}); \
+         var outer = new Proxy(inner, { has: undefined }); \
+         ['length' in Object.create(outer), '1' in outer, '2' in outer].join(',')",
     );
 }
 

@@ -70,3 +70,19 @@ fn json_parse_coerces_input_and_stringify_rejects_cycles_catchably() {
         agrees(source);
     }
 }
+
+#[test]
+fn json_parse_supports_utf16_strings_and_astral_keys() {
+    for source in [
+        r#"JSON.parse('"😀"') === '😀'"#,
+        r#"JSON.parse('"\\ud83d\\ude00"') === '😀'"#,
+        r#"JSON.parse('"\\ud800"').charCodeAt(0) === 0xd800"#,
+        r#"JSON.parse('"\\udfff"').charCodeAt(0) === 0xdfff"#,
+        r#"var s=JSON.parse('"\\ud800A\\udfff"'); s.length===3 && s.charCodeAt(0)===0xd800 && s.charCodeAt(2)===0xdfff"#,
+        r#"JSON.parse('{"😀":"𝒜"}')["😀"] === "𝒜""#,
+        r#"JSON.parse('{"\\ud83d\\ude00":1}')["😀"] === 1"#,
+        r#"var source; JSON.parse('"\\ud83d\\ude00"', function(k,v,c){ if(k==='') source=c.source; return v }); source"#,
+    ] {
+        agrees(source);
+    }
+}

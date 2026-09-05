@@ -33,6 +33,7 @@ fn fill_coerces_once_and_respects_element_domain() {
     assert_result_agrees("var a=new BigInt64Array(3); a.fill('7',-2); a[0]===0n && a[1]===7n && a[2]===7n");
     assert_result_agrees("var a=new Uint8Array(1); try { a.fill(1n); false } catch(e) { e instanceof TypeError }");
     assert_result_agrees("var a=new BigInt64Array(1); try { a.fill(1); false } catch(e) { e instanceof TypeError }");
+    assert_result_agrees("var a=new BigInt64Array(3); var n=1n; a.fill({valueOf:function(){return n++}}); n+':'+a[0]+':'+a[1]+':'+a[2]");
 }
 
 #[test]
@@ -72,4 +73,19 @@ fn detachment_during_coercion_or_array_like_get_throws() {
     assert_result_agrees("var a=new Uint8Array(2); var x={valueOf:function(){$262.detachArrayBuffer(a.buffer);return 0}}; try { a.copyWithin(x,0); false } catch(e) { e instanceof TypeError }");
     assert_result_agrees("var a=new Uint8Array(2); var x={valueOf:function(){$262.detachArrayBuffer(a.buffer);return 1}}; try { a.fill(x); false } catch(e) { e instanceof TypeError }");
     assert_result_agrees("var a=new Uint8Array(2); var x={valueOf:function(){$262.detachArrayBuffer(a.buffer);return 0}}; try { a.set([],x); false } catch(e) { e instanceof TypeError }");
+}
+
+#[test]
+fn set_checks_detachment_after_each_array_like_get() {
+    let source = "var a=new Uint8Array([1,2,3]); var x={length:3,0:42}; Object.defineProperty(x,1,{get:function(){$262.detachArrayBuffer(a.buffer)}}); Object.defineProperty(x,2,{get:function(){throw 'late read'}}); try { a.set(x); 'none' } catch(e) { e instanceof TypeError ? 'type' : e }";
+    let run = dual_run(source).expect("the pinned XS oracle must start");
+    assert_eq!(run.agreement, Agreement::BothComplete, "{run:?}");
+    assert_eq!(
+        run.oracle_result, "late read",
+        "pinned XS defect changed: {run:?}"
+    );
+    assert_eq!(
+        run.ironhorse_result, "type",
+        "IronHorse must follow SetTypedArrayFromArrayLike detachment order: {run:?}"
+    );
 }

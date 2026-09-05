@@ -7,9 +7,9 @@
 //!
 //! Scope locked here: style decimal and percent; notation standard, scientific
 //! and engineering; grouping (en-US/de-DE/en-IN); all nine rounding modes;
-//! significant/fraction digits; roundingIncrement; signDisplay; resolvedOptions
-//! shape and key values; and the toStringTag. Currency/unit affixes, compact
-//! notation, formatRange, and the toLocaleString bridges are staged follow-ups.
+//! significant/fraction digits; roundingIncrement; signDisplay; currency and
+//! unit affixes; resolvedOptions shape and key values; and the toStringTag.
+//! Compact notation and formatRange remain staged follow-ups.
 
 use ironhorse_262::{dual_run, Agreement};
 
@@ -76,6 +76,78 @@ fn percent_scales_by_hundred() {
     intl_result(
         "new Intl.NumberFormat('en-US',{style:'percent',maximumFractionDigits:1}).format(0.011)",
         "1.1%",
+    );
+}
+
+#[test]
+fn currency_and_unit_patterns_are_exact() {
+    for (source, expected) in [
+        (
+            "new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).format(1)",
+            "$1.00",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',currencySign:'accounting'}).format(-1)",
+            "($1.00)",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',currencyDisplay:'name'}).format(2)",
+            "2.00 US dollars",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',currencyDisplay:'name'}).format(1)",
+            "1.00 US dollars",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter'}).format(1)",
+            "1 m",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long'}).format(2)",
+            "2 meters",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',minimumFractionDigits:2}).format(1)",
+            "1.00 meters",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',notation:'scientific'}).format(1)",
+            "1E0 meter",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',notation:'engineering'}).format(1)",
+            "1E0 meter",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter',unitDisplay:'long',notation:'scientific',minimumFractionDigits:1}).format(1)",
+            "1.0E0 meters",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'percent',unitDisplay:'long'}).format(12)",
+            "12 percent",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'celsius',unitDisplay:'long'}).format(12)",
+            "12 degrees Celsius",
+        ),
+        (
+            "new Intl.NumberFormat('fr-FR',{style:'unit',unit:'percent'}).format(12)",
+            "12\u{202f}%",
+        ),
+        (
+            "new Intl.NumberFormat('en-US',{style:'unit',unit:'kilometer-per-hour'}).format(3)",
+            "3 km/h",
+        ),
+    ] {
+        intl_result(source, expected);
+    }
+    intl_result(
+        "new Intl.NumberFormat('en-US',{style:'currency',currency:'USD'}).formatToParts(1).map(p=>p.type+':'+p.value).join('|')",
+        "currency:$|integer:1|decimal:.|fraction:00",
+    );
+    intl_result(
+        "new Intl.NumberFormat('en-US',{style:'unit',unit:'meter'}).formatToParts(1).map(p=>p.type+':'+p.value).join('|')",
+        "integer:1|literal: |unit:m",
     );
 }
 

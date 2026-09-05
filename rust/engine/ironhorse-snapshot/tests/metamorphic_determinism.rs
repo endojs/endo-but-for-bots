@@ -156,7 +156,117 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for format version 12, marking the promise cluster
         // (`PRMS`). This fixture holds no promise, so the atom is
         // absent and only the VERS payload changes.
-        "3ff87db04dc44e6096e3c16de42e83f8d78ec232be9f4a521cd8753265327b37",
+        // Re-pinned 2026-09-01 for a boot-heap CONTENT move: the
+        // intrinsic Array iterator is now the same function object as
+        // Array.prototype.values, as required by JavaScript. Format
+        // unchanged.
+        // Re-pinned 2026-09-01 for another boot-heap CONTENT move:
+        // `%BigInt%`, its prototype methods, and its `asIntN`/`asUintN`
+        // statics are now real realm intrinsics. Format unchanged.
+        // Re-pinned 2026-09-01 because String.prototype.split now has
+        // its standard observable name and arity and Math carries its
+        // standard Symbol.toStringTag in the linked heap. Format unchanged.
+        // Re-pinned 2026-09-02 for a boot-heap CONTENT move: the
+        // OrdinaryToPrimitive fallback names `toString` and `valueOf`
+        // are now linked even when the guest source never names them,
+        // so wrappers and ordinary objects coerce correctly. Format
+        // unchanged.
+        // Re-pinned 2026-09-02 for a boot-heap CONTENT move:
+        // `%Function.prototype%` is now a callable native and its
+        // `@@hasInstance` method identity is boot-minted (the symbol-keyed
+        // property itself remains lazy). Format unchanged.
+        // Re-pinned 2026-09-02 for the abstract `%TypedArray%` constructor
+        // and prototype added to the boot heap. Format unchanged.
+        // Re-pinned 2026-09-02 for the realm's hidden tagged-template cache
+        // object added to the boot heap. Its ordinary property chain carries
+        // cached template objects through snapshots. Format unchanged.
+        // Re-pinned 2026-09-02 for the completed shared `%TypedArray%`
+        // surface: four accessor functions, `from`/`of`, and the
+        // `@@toStringTag` getter are now boot-minted. Format unchanged.
+        // Re-pinned 2026-09-02 for the shared `%TypedArray%.prototype.join`
+        // native added to the boot heap. Format unchanged.
+        // Re-pinned 2026-09-02 for the shared TypedArray iterator and readonly
+        // method natives added to the boot heap. Format unchanged.
+        // Re-pinned 2026-09-02 for the shared TypedArray allocating and sort
+        // method natives added to the boot heap. Format unchanged.
+        // Re-pinned 2026-09-02 for the Object, Number, BigInt, and TypedArray
+        // locale-string natives added to the boot heap. Format unchanged.
+        // Re-pinned 2026-09-02 because Array's sort and toSorted natives now
+        // carry their standard observable names and arities. This moves boot
+        // heap content only; the snapshot format remains unchanged.
+        // Re-pinned 2026-09-02 because Array's with, toReversed, and
+        // toSpliced natives now likewise carry their standard names and
+        // arities. This is another boot-heap content move; format unchanged.
+        // Re-pinned 2026-09-02 because Array.prototype.slice now carries its
+        // standard name and arity. Boot-heap content only; format unchanged.
+        // Re-pinned 2026-09-02 because Array.prototype.concat now carries its
+        // standard name and arity. Boot-heap content only; format unchanged.
+        // Re-pinned 2026-09-02 because Array.prototype.push and pop now carry
+        // their standard names and arities. Boot-heap content only; format
+        // unchanged.
+        // Re-pinned 2026-09-02 because Array.prototype.shift and unshift now
+        // carry their standard names and arities. Boot-heap content only;
+        // format unchanged.
+        // Re-pinned 2026-09-02 because Array.prototype.flat and flatMap now
+        // carry their standard names and arities. Boot-heap content only;
+        // format unchanged.
+        // Re-pinned 2026-09-02 because
+        // Symbol.prototype[Symbol.toPrimitive] is now boot-minted. The
+        // symbol-keyed property remains lazy; format unchanged.
+        // Re-pinned 2026-09-02 for the fourteen Date calendar/time setter
+        // natives added to the boot heap. Format unchanged.
+        // Re-pinned 2026-09-02 because Array.prototype.join is now installed
+        // as an implicit dependency of ordinary Array string coercion. Boot
+        // heap content only; format unchanged.
+        // Re-pinned 2026-09-02 for Date's three locale-string aliases and
+        // boot-minted `@@toPrimitive` method identity. The symbol-keyed
+        // property remains lazy; snapshot format unchanged.
+        // Re-pinned 2026-09-02 for the internal arguments-layout generation
+        // marker carried by the symbol-key table. It lets restore distinguish
+        // legacy layouts from same-version guest edits without a
+        // container-format change.
+        // Re-pinned 2026-09-03 because the standard own `@@toPrimitive`
+        // properties on Symbol.prototype and Date.prototype are now installed
+        // during the initial link, before guest reflection can enumerate them.
+        // This moves boot-heap content only; the snapshot format is unchanged.
+        // Re-pinned for the engine-owned boot-layout signature generation.
+        // The heap and wire schema are unchanged; the SIGN payload moved.
+        // Re-pinned for Object.assign/Object.hasOwn boot function identities
+        // and boot-layout signature generation 3.
+        // Re-pinned because JSON.parse/stringify now carry their standard
+        // function names and arities, with boot-layout signature generation 4.
+        // Boot-heap content only; format unchanged.
+        // Re-pinned for Promise method metadata and the boot-minted
+        // `@@species` getter. Boot-heap content only; format unchanged.
+        // Re-pinned for the four `%Iterator.prototype%` accessor functions
+        // and boot-layout signature generation 5. Boot-heap content only;
+        // format unchanged.
+        // Re-pinned for generator instances inheriting the shared Iterator
+        // helper surface and boot-layout signature generation 6. Boot-heap
+        // content only; format unchanged.
+        // Re-pinned for `%WrapForValidIteratorPrototype%` and boot-layout
+        // signature generation 7. Boot-heap content only; format unchanged.
+        // Re-pinned for Array.of's standard name metadata and boot-layout
+        // signature generation 8. Boot-heap content only; format unchanged.
+        // Re-pinned for String built-in metadata and boot-layout signature
+        // generation 9. Boot-heap content only; format unchanged.
+        // Re-pinned for String.prototype.normalize and boot-layout signature
+        // generation 10. Boot-heap content only; format unchanged.
+        // Re-pinned for String.prototype.replaceAll, RegExp @@replace, and
+        // boot-layout signature generation 11. Boot-heap content only; format
+        // unchanged.
+        // Re-pinned for the complete RegExp `@@match`/`@@search` protocol
+        // methods and boot-layout signature generation 14. Boot-heap content
+        // only; format unchanged.
+        // Re-pinned for RegExp `@@split` and boot-layout signature generation
+        // 15. Boot-heap content only; format unchanged.
+        // Re-pinned for ArrayBuffer `slice` metadata, `@@species`, and
+        // `@@toStringTag`, with boot-layout signature generation 16.
+        // Boot-heap content only; format unchanged.
+        // Re-pinned for ArrayBuffer transfer methods and fixed-buffer
+        // accessors, with boot-layout signature generation 17. Boot-heap
+        // content only; format unchanged.
+        "b822f2d6c69c21e6db96f7e97b0fe10f6187b1b2b155f65486bb6d6dcbf4747a",
         "canonical final blob hash"
     );
     // Seal re-pinned 2026-08-11 as the schema evolved, once per
@@ -249,7 +359,103 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         // Re-pinned for schema 23 and format 12: the small state gains
         // the (empty here) promise-cluster section and VERS marks
         // `PRMS`, so the small leaf, the root and the seal all move.
-        "e44eed990c5fab722d0504341e37213df0d51a4262d56cbfc8180e3b58ab0310",
+        // Re-pinned with the blob on 2026-09-01: Array's intrinsic
+        // iterator/values identity changes the boot page rows, so the
+        // manifest root and seal move with that content.
+        // Re-pinned with the blob for the complete `%BigInt%` boot-heap
+        // content addition. Schema and format remain unchanged.
+        // Re-pinned with the blob for String.prototype.split's standard
+        // name and arity and Math's standard Symbol.toStringTag. Schema
+        // and format remain unchanged.
+        // Re-pinned with the blob for the OrdinaryToPrimitive fallback
+        // names now linked into every boot heap. Schema and format
+        // remain unchanged.
+        // Re-pinned with the blob because callable
+        // `%Function.prototype%` and the boot-minted identity for its lazy
+        // `@@hasInstance` method move the boot page rows. Schema and format
+        // remain unchanged.
+        // Re-pinned with the blob for the abstract `%TypedArray%` constructor
+        // and prototype boot-heap addition. Schema and format remain unchanged.
+        // Re-pinned with the blob for the tagged-template cache boot object;
+        // its new page content moves the manifest root and seal. Schema and
+        // format remain unchanged.
+        // Re-pinned with the blob for the completed shared `%TypedArray%`
+        // boot surface. Schema and format remain unchanged.
+        // Re-pinned with the blob for `%TypedArray%.prototype.join`; its
+        // boot-native row moves the manifest root and seal. Schema and format
+        // remain unchanged.
+        // Re-pinned with the blob for the shared TypedArray iterator and
+        // readonly method natives. Schema and format remain unchanged.
+        // Re-pinned with the blob for the shared TypedArray allocating and
+        // sort method natives. Schema and format remain unchanged.
+        // Re-pinned with the blob for the locale-string natives. Schema and
+        // format remain unchanged.
+        // Re-pinned with the blob for Array sort/toSorted's standard function
+        // metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for Array with/toReversed/toSpliced's
+        // standard function metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for Array.prototype.slice's standard
+        // function metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for Array.prototype.concat's standard
+        // function metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for Array.prototype.push and pop's standard
+        // function metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for Array.prototype.shift and unshift's
+        // standard function metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for Array.prototype.flat and flatMap's
+        // standard function metadata. Schema and format remain unchanged.
+        // Re-pinned with the blob for the boot-minted
+        // Symbol.prototype[Symbol.toPrimitive] method. Schema and format
+        // remain unchanged.
+        // Re-pinned with the blob for the Date setter native functions.
+        // Schema and format remain unchanged.
+        // Re-pinned with the blob for the implicit Array.prototype.join
+        // installation. Schema and format remain unchanged.
+        // Re-pinned with the blob for Date's locale aliases and
+        // `@@toPrimitive` identity. Schema and format remain unchanged.
+        // Re-pinned with the blob for the persisted arguments-layout marker.
+        // Schema and format remain unchanged.
+        // Re-pinned with the blob for eager installation of the standard own
+        // Symbol.prototype and Date.prototype `@@toPrimitive` properties.
+        // Schema and format remain unchanged.
+        // Re-pinned for the engine-owned boot-layout signature generation.
+        // Re-pinned with the blob for Object.assign/Object.hasOwn and boot
+        // generation 3.
+        // Re-pinned with the blob for JSON.parse/stringify's standard function
+        // metadata and boot-layout signature generation 4. Schema and format
+        // remain unchanged.
+        // Re-pinned with the blob for Promise method metadata and the
+        // `@@species` getter. Schema and format remain unchanged.
+        // Re-pinned with the blob for the `%Iterator.prototype%` accessors and
+        // boot-layout signature generation 5. Schema and format remain
+        // unchanged.
+        // Re-pinned with the blob for generator inheritance from
+        // `%Iterator.prototype%` and boot-layout signature generation 6.
+        // Schema and format remain unchanged.
+        // Re-pinned with the blob for `%WrapForValidIteratorPrototype%` and
+        // boot-layout signature generation 7. Schema and format remain
+        // unchanged.
+        // Re-pinned with the blob for Array.of's standard name metadata and
+        // boot-layout signature generation 8. Schema and format remain
+        // unchanged.
+        // Re-pinned with the blob for String built-in metadata and boot-layout
+        // signature generation 9. Schema and format remain unchanged.
+        // Re-pinned with the blob for String.prototype.normalize and boot
+        // generation 10. Schema and format remain unchanged.
+        // Re-pinned with the blob for String.prototype.replaceAll, RegExp
+        // @@replace, and boot generation 11. Schema and format remain
+        // unchanged.
+        // Re-pinned with the blob for RegExp `@@match`/`@@search` and boot
+        // generation 14. Schema and format remain unchanged.
+        // Re-pinned with the blob for RegExp `@@split` and boot generation 15.
+        // Schema and format remain unchanged.
+        // Re-pinned with the blob for ArrayBuffer `slice` metadata,
+        // `@@species`, and `@@toStringTag`, with boot generation 16.
+        // Schema and format remain unchanged.
+        // Re-pinned with the blob for ArrayBuffer transfer methods and
+        // fixed-buffer accessors, with boot generation 17. Schema and format
+        // remain unchanged.
+        "75a40e1654433c36b66a8d4d5dffd5a425ed10df4d0b8d152c6cd445c353eb08",
         "epoch-3 seal chain"
     );
 }

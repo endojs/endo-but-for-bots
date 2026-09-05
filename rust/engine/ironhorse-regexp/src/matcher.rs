@@ -11,9 +11,9 @@
 //! `truncate`. This is behaviorally identical and needs no `unsafe`.
 
 use crate::compile::Program;
+use crate::encoding::{find_character, get_character};
 use crate::flags::*;
 use crate::opcode::*;
-use crate::encoding::{find_character, get_character};
 
 /// `gxLineCharacters` (xsre.c): the line terminators, as charset ranges.
 const LINE_CHARACTERS: [i32; 7] = [6, 0x000A, 0x000A + 1, 0x000D, 0x000D + 1, 0x2028, 0x2029 + 1];
@@ -88,8 +88,9 @@ fn match_character(chars: &[i32], base_at: usize, count: i32, character: i64) ->
     false
 }
 
-/// Match a compiled `program` against `subject` (raw UTF-8 bytes, no
-/// trailing NUL needed) starting at byte offset `start`.
+/// Match a compiled `program` against `subject` (the caller's UTF-8 or XS
+/// CESU-8 byte spelling, no trailing NUL needed) starting at byte offset
+/// `start`.
 pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutcome {
     let code = &program.code;
     let stop = subject.len() as i32;
@@ -216,6 +217,24 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         let cap = captures[e as usize];
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
+                            // Deliberately still `offset - (to - from)`, the
+                            // byte arithmetic `fxMatchRegExp` uses (xsre.c
+                            // `f = e - (to - from)`), even though the forward
+                            // step above had to stop doing this.
+                            //
+                            // Stepping back one character per captured
+                            // character instead looks more principled and is
+                            // wrong: XS's byte arithmetic can legitimately land
+                            // on a surrogate boundary *inside* a pair, which a
+                            // code-point walk skips over. It regresses plain
+                            // `u`/`v` mode with no folding at all --
+                            // `/(?<=\1(\uDC28))x/u.test("𐐨\uDC28x")`
+                            // is `true` on the pin and `false` under the walk.
+                            // The length asymmetry this arithmetic mishandles
+                            // is real but has no known reproducer that reaches
+                            // the code-unit assertion, and XS mishandles it the
+                            // same way, so faithfulness wins here. See
+                            // designs/ironhorse-known-defects.md.
                             let target = offset - (to - from);
                             if target < 0 {
                                 pop = true;
@@ -227,8 +246,9 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                         ok = false;
                                         break;
                                     }
-                                    g = find_character(subject, g as usize, 1) as i32;
-                                    from = find_character(subject, from as usize, 1) as i32;
+                                    g = find_character(subject, g as usize, 1, flags as u32) as i32;
+                                    from = find_character(subject, from as usize, 1, flags as u32)
+                                        as i32;
                                 }
                                 if ok {
                                     offset = target;
@@ -252,25 +272,36 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         let cap = captures[e as usize];
                         let (mut from, to) = (cap.0, cap.1);
                         if from >= 0 && to >= 0 {
-                            let target = offset + (to - from);
-                            if target > stop {
-                                pop = true;
+                            // The matched text need not occupy the same number
+                            // of code units as the capture: under `iu`/`v`
+                            // case folding a one-unit `k` matches the
+                            // three-unit U+212A. So the endpoint is wherever
+                            // the comparison cursor actually lands, never
+                            // `offset + (to - from)` -- adopting that
+                            // arithmetic endpoint puts `offset` mid-character
+                            // and panics the code-unit boundary assertion on
+                            // the next capture read. `stop` bounds the walk
+                            // for the same reason: the arithmetic target could
+                            // not.
+                            let mut g = offset;
+                            let mut ok = true;
+                            while from < to {
+                                if g >= stop {
+                                    ok = false;
+                                    break;
+                                }
+                                if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
+                                    ok = false;
+                                    break;
+                                }
+                                g = find_character(subject, g as usize, 1, flags as u32) as i32;
+                                from = find_character(subject, from as usize, 1, flags as u32)
+                                    as i32;
+                            }
+                            if ok {
+                                offset = g;
                             } else {
-                                let mut g = offset;
-                                let mut ok = true;
-                                while from < to {
-                                    if get_character(subject, g as usize, flags as u32) != get_character(subject, from as usize, flags as u32) {
-                                        ok = false;
-                                        break;
-                                    }
-                                    g = find_character(subject, g as usize, 1) as i32;
-                                    from = find_character(subject, from as usize, 1) as i32;
-                                }
-                                if ok {
-                                    offset = target;
-                                } else {
-                                    pop = true;
-                                }
+                                pop = true;
                             }
                         }
                     }
@@ -280,7 +311,8 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                         if offset == 0 {
                             pop = true;
                         } else {
-                            let e = find_character(subject, offset as usize, -1) as i32;
+                            let e = find_character(subject, offset as usize, -1, flags as u32)
+                                as i32;
                             let count = code[p];
                             if !match_character(code, p + 1, count, get_character(subject, e as usize, flags as u32)) {
                                 pop = true;
@@ -299,7 +331,8 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                             if !match_character(code, p + 1, count, get_character(subject, offset as usize, flags as u32)) {
                                 pop = true;
                             } else {
-                                offset = find_character(subject, offset as usize, 1) as i32;
+                                offset = find_character(subject, offset as usize, 1, flags as u32)
+                                    as i32;
                             }
                         }
                     }
@@ -321,7 +354,11 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
                                 &LINE_CHARACTERS,
                                 1,
                                 LINE_CHARACTERS[0],
-                                get_character(subject, find_character(subject, offset as usize, -1), flags as u32),
+                                get_character(
+                                    subject,
+                                    find_character(subject, offset as usize, -1, flags as u32),
+                                    flags as u32,
+                                ),
                             )
                         {
                             // ok
@@ -484,7 +521,7 @@ pub fn match_regexp(program: &Program, subject: &[u8], start: i32) -> MatchOutco
             if start == stop {
                 break 'scan;
             }
-            start = find_character(subject, start as usize, 1) as i32;
+            start = find_character(subject, start as usize, 1, base_flags as u32) as i32;
         }
     }
 
@@ -500,7 +537,7 @@ fn word_at(subject: &[u8], offset: i32, boundary: i32, flags: i32) -> bool {
         return false;
     }
     let at = if boundary == 0 {
-        find_character(subject, offset as usize, -1)
+        find_character(subject, offset as usize, -1, flags as u32)
     } else {
         offset as usize
     };

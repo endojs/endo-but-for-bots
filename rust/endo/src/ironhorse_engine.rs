@@ -236,9 +236,11 @@ pub mod engine {
         /// The heap database path. Created when absent; resumed (with
         /// full succession validation) when present.
         pub path: std::path::PathBuf,
-        /// The worker's callback-table signature. The store and the
-        /// blob format both gate on it, so a database from a worker
-        /// with a different host surface is refused, not adopted.
+        /// The worker's callback-table signature. The snapshot layer
+        /// appends its engine-owned boot-layout generation, and the
+        /// store and blob formats gate on the combined signature. A
+        /// database from an incompatible host or engine layout is
+        /// refused rather than adopted.
         pub signature: String,
         /// Checkpoint/collect scheduling (store seam deferred item I).
         /// The default is the stated per-crank minimum; anything

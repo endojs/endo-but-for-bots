@@ -106,12 +106,6 @@
 //!   which the persist gate refuses by kind, and an unanchored entry is
 //!   unreachable (the next arena compaction drops it), so a resume that
 //!   rebuilds the table empty is observationally exact.
-//! - `regexp_last_names` — the last-match named-group scratch (a global
-//!   `Vec<i32>`, not slot-keyed): per-crank match state consumed by the
-//!   legacy result accessors within the crank; its primary row
-//!   (`RegExps`) is Serialized since schema 11 (source/flags/lastIndex
-//!   travel; the program recompiles), while this scratch stays honest
-//!   per-crank state.
 //! - `arguments_objects` — the arguments-exotic brand set, riding its
 //!   primary row (`Arrays`, Serialized). Since store schema 11 the brand
 //!   itself TRAVELS (the `ARGB` atom / small-state arguments section), so
@@ -239,7 +233,8 @@ pub enum SideTable {
     DataViews,
     /// `iterators` — the built-in iterator cursors (array
     /// values/keys/entries, for-in enumerators, string iterators,
-    /// Map/Set cursors). Serialized in the `ITER` atom / small-state
+    /// Map/Set cursors, and `Iterator.from` generic wrappers). Serialized in
+    /// the `ITER` atom / small-state
     /// iterators section (store schema 13), owner-ascending, with two
     /// boundary normalizations that make the row pure data: a
     /// collection cursor travels as its LIVE-ENTRY ordinal (the `COLL`
@@ -253,7 +248,8 @@ pub enum SideTable {
 
     /// `promises` — per-instance settlement STATUS/RESULT/THENS.
     Promises,
-    /// `promise_functions` — a resolve/reject function's bound home data.
+    /// `promise_functions` — bound state for runtime-minted Promise callables:
+    /// resolve/reject pairs, capability executors, and `finally` closures.
     PromiseFunctions,
     /// `promise_guards` — the per-pair `[[AlreadyResolved]]` flags.
     PromiseGuards,
@@ -561,9 +557,10 @@ impl SideTable {
             SideTable::TemporalRecords => {
                 ("temporal_instants/temporal_durations/temporal_plains/temporal_zoneds", Serialized)
             }
-            // Date `[[DateValue]]` records travel as raw IEEE-754 bits
-            // in `DATE` (schema 14). The untouched Date.prototype seed
-            // is re-derived by boot; a guest-mutated seed is emitted.
+            // Date-instance `[[DateValue]]` records travel as raw IEEE-754
+            // bits in `DATE` (schema 14). `%Date.prototype%` has no Date
+            // brand; restore drops its row when migrating a snapshot written
+            // by the former seeded-prototype representation.
             SideTable::Dates => ("dates", Serialized),
             SideTable::AsyncGenerators => ("async_generators/async_gen_run_stack", Pending),
             SideTable::PrivateElements => ("private_values/private_accessors", Serialized),
@@ -586,10 +583,11 @@ impl SideTable {
             SideTable::Modules => ("module::ModuleGraph", Pending),
             // Wave-6 W6-25: the ledger UNDERSTATED this coverage — the
             // engine keeps hardened-ness purely as slot FLAGS
-            // (`XS_DONT_MARSHALL`/`PATCH`/`DELETE`/`SET` on the slots
-            // themselves, `harden_freeze_and_traverse`); there is no
-            // side-table field at all, so the state rides the HEAP atom
-            // structurally and a resumed hardened graph stays hardened.
+            // (`XS_DONT_MARSHALL`/`PATCH`/`MODIFY` on instance heads and
+            // `DELETE`/`SET` on property slots themselves,
+            // `harden_freeze_and_traverse`); there is no side-table field at
+            // all, so the state rides the HEAP atom structurally and a resumed
+            // hardened or petrified graph retains its integrity state.
             SideTable::HardenState => ("harden slot flags (no side table)", InArena),
             // The installed-names floor (`NFLR`, store schema 12): the
             // W6-7 register travels so a resumed machine's partial
@@ -711,10 +709,10 @@ mod tests {
         const ARENAS: &[&str] = &["slots", "chunks", "stack"];
         const SATELLITES: &[&str] = &[
             "detached_buffers", "shared_buffers", "deleted_fn_meta", "from_async",
-            "regexp_last_names", "arguments_objects", "side_refs",
+            "arguments_objects", "side_refs",
         ];
         const TRANSIENTS: &[&str] = &[
-            "args", "this_val", "cur_func", "cur_target", "target_func",
+            "args", "this_val", "this_captures", "cur_func", "cur_target", "target_func",
             "pending_new_target", "exception", "frame_slots", "locals", "id_map",
             "resume_status", "callback_return_depth", "env", "direct_eval_hoist",
             "eval_direct", "active_segment", "top_level_code", "result", "strict",
@@ -722,6 +720,10 @@ mod tests {
             // every return decrements it before control can reach a
             // persistence boundary.
             "dispatch_depth",
+            // Array Iterator Proxy-Get context is installed only around one
+            // synchronous trap call and restored on both success and throw.
+            // `is_quiescent` additionally refuses a leaked context.
+            "array_iterator_proxy_get_context",
             // Poison latch for the property-key id-space meet: provably
             // never set at a persistable boundary — the dispatch loop
             // halts on it before the next instruction and `is_quiescent`
@@ -738,6 +740,11 @@ mod tests {
             "boot_slot_count",
             "well_known_symbols", "proto_methods", "proto_data", "proto_accessors",
             "proto_value_data", "string_iterator_method", "async_iterator_identity",
+            // Boot-minted identities for well-known-symbol properties whose
+            // property ids remain lazy. They are explicit roots until first
+            // materialization and are re-derived at identical slots on resume.
+            "function_has_instance_method", "symbol_to_primitive_method",
+            "date_to_primitive_method",
             // The three `@@iterator` natives that used to be minted
             // during `link_intrinsics` (above `boot_slot_count`, so
             // resume re-derived neither their `FuncInfo` nor their name
@@ -753,13 +760,21 @@ mod tests {
             // property install is link-time and its side-table entry
             // rides `ACCS` like any other.
             "error_stack_accessor",
+            // The registry head is reproduced at the same boot index; its
+            // generated-site properties and template-array references travel
+            // in the ordinary slot arena rooted through that head.
+            "template_cache",
             "object_proto", "function_proto", "array_proto",
             "map_proto", "set_proto", "weakmap_proto", "weakset_proto",
             "arraybuffer_proto", "dataview_proto", "array_iterator_proto",
-            "string_proto", "number_proto", "symbol_proto", "promise_proto",
+            "string_proto", "number_proto", "symbol_proto", "bigint_proto",
+            "promise_proto",
             "generator_proto", "generator_function_proto", "async_function_proto",
             "async_generator_proto", "async_generator_function_proto", "regexp_proto",
-            "iterator_proto", "map_iterator_proto", "set_iterator_proto", "date_proto",
+            "regexp_replace_method", "regexp_match_method", "regexp_match_all_method",
+            "regexp_search_method", "regexp_split_method",
+            "iterator_proto", "iterator_wrapper_proto", "map_iterator_proto",
+            "set_iterator_proto", "regexp_string_iterator_proto", "date_proto",
             "locale_proto", "collator_proto", "list_format_proto",
             "plural_rules_proto", "segmenter_proto", "segments_proto",
             "segment_iterator_proto", "date_time_format_proto", "number_format_proto",

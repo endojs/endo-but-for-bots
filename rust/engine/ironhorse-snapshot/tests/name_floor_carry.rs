@@ -126,3 +126,17 @@ fn a_deleted_seed_accessor_stays_deleted_across_resume() {
         &["undefined"],
     );
 }
+
+/// A computed boot-default name goes through the same floor-gated intrinsic
+/// installation path as reflection. Once the guest deletes the installed
+/// property, neither a non-growing relink nor restore may recreate it.
+#[test]
+fn a_computed_intrinsic_name_and_its_deletion_survive_resume() {
+    assert_twin(
+        "ih-floor-twin-computed-deletion",
+        "var k = 'to' + 'String'; var t = 0; \
+         delete Object.prototype[k]; t = 7; t",
+        &["var k; var t; t = typeof ({})[k]; t"],
+        &["undefined"],
+    );
+}

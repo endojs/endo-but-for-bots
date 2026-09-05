@@ -23,10 +23,11 @@ use crate::expectations::{Mode, Outcome};
 use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
 use crate::{dual_run, dual_run_async, Agreement, AsyncDualRun, DualRun, IronhorseCompile};
-use ironhorse_vm::Halt;
+use ironhorse_vm::{Halt, RunOutcome};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// The ironhorse not-yet-implemented feature skip list — the analogue of
 /// `xst262.c`'s 13-entry `gxFeatures`. A test whose frontmatter `features:`
@@ -244,8 +245,8 @@ pub enum Verdict {
     /// the oracle; negative: the expected-type abort). The report's covered
     /// tally.
     Covered,
-    /// Skipped before running — a declared-unimplemented feature, a
-    /// structural shape (`module`) or an unavailable SES mode. The report's
+    /// Skipped before running — a declared-unimplemented feature, an
+    /// unavailable host shape, or an unavailable SES mode. The report's
     /// `skip:` section (xst's feature/flag skips).
     PreSkip(String),
     /// Skipped after attempting the run, named by the exact opcode / value /
@@ -270,6 +271,18 @@ pub struct CaseResult {
     /// oracle's — advisory telemetry, never a failure by itself (design §
     /// Metering, accuracy-over-parity). Feeds the `advisory:` section.
     pub computron_gap: bool,
+    /// Outcomes retained before the sloppy/strict pair is folded into the
+    /// file-level verdict. Empty for legacy/single-mode callers, for which the
+    /// report keeps its historical inference.
+    pub mode_outcomes: Vec<(Mode, Outcome)>,
+}
+
+fn expectation_outcome(verdict: &Verdict) -> Outcome {
+    match verdict {
+        Verdict::Covered => Outcome::Pass,
+        Verdict::Fail(_) => Outcome::Fail,
+        Verdict::PreSkip(reason) | Verdict::RunSkip(reason) => Outcome::Skip(reason.clone()),
+    }
 }
 
 fn preskip(reason: &str) -> CaseResult {
@@ -277,6 +290,7 @@ fn preskip(reason: &str) -> CaseResult {
         verdict: Verdict::PreSkip(reason.to_string()),
         strict_skipped: false,
         computron_gap: false,
+        mode_outcomes: Vec::new(),
     }
 }
 
@@ -294,8 +308,8 @@ fn effective_skip_features(cfg: &Config) -> HashSet<String> {
 /// Strict-mode selection from a case's `flags` — ironhorse's mirror of
 /// `xst262.c`'s default two-run (sloppy then strict) with the `onlyStrict` /
 /// `noStrict` / `raw` selectors. Returns `(run_sloppy, run_strict,
-/// only_strict)`. `module` is handled as a structural pre-skip before this
-/// is consulted.
+/// only_strict)`. Module-goal cases use their own single execution mode before
+/// this is consulted.
 pub fn strict_mode_status(flags: &[String]) -> (bool, bool, bool) {
     let has = |name: &str| flags.iter().any(|f| f == name);
     if has("onlyStrict") {
@@ -542,9 +556,54 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
                     // The pinned official Moddable XS build has no ECMA-402
                     // host at all. Ironhorse can therefore execute Intl cases,
                     // but this exact oracle cannot certify their values. Keep
-                    // the host-only exclusion precise: any other oracle throw
-                    // remains an over-acceptance failure.
+                    // the host-only exclusion precise.
                     Verdict::RunSkip("oracle-host-missing-intl".into())
+                } else if oracle_fails_const_assignment_test(run) {
+                    // The generated const-assignment cases execute their
+                    // official assertion on both engines. Ironhorse completes
+                    // after observing the required TypeError; pinned XS throws
+                    // the harness's Test262Error. Keep this exact oracle gap
+                    // from forcing Ironhorse to reproduce the reference
+                    // engine's failing behavior.
+                    Verdict::RunSkip("oracle-xs-const-assignment".into())
+                } else if oracle_loses_with_reference(run) {
+                    // Pinned XS re-resolves a `with` reference at PutValue
+                    // after a getter/RHS deletes the property, then throws a
+                    // ReferenceError. ECMA-262 retains the Reference produced
+                    // by evaluating the LHS; the official cases complete on
+                    // Ironhorse. Keep that exact oracle defect from becoming a
+                    // false over-acceptance while preserving all other runtime
+                    // ReferenceError divergences as failures.
+                    Verdict::RunSkip("oracle-xs-with-reference".into())
+                } else if oracle_skips_super_arguments(run) {
+                    // Pinned XS checks whether the super constructor is
+                    // constructible before evaluating the argument list. The
+                    // specification requires the opposite order, and the
+                    // official case observes that ordering through a side
+                    // effect. Do not make Ironhorse reproduce the XS defect.
+                    Verdict::RunSkip("oracle-xs-super-arguments".into())
+                } else if oracle_misses_typed_array_set_detachment(run) {
+                    // Pinned XS continues reading an array-like source after a
+                    // getter detaches the target TypedArray's buffer. The spec
+                    // requires a TypeError immediately after coercing that
+                    // element; IronHorse follows that order and passes the
+                    // official assertion. Keep this exact oracle defect from
+                    // becoming a false over-acceptance.
+                    Verdict::RunSkip("oracle-xs-typedarray-set-detach".into())
+                } else if oracle_misses_typed_array_sort_detachment(run) {
+                    // Pinned XS continues sorting after a guest comparator
+                    // detaches the receiver. The specification and official
+                    // assertion require an immediate TypeError; IronHorse
+                    // follows that rule. Keep this exact XS defect from
+                    // becoming a false over-acceptance.
+                    Verdict::RunSkip("oracle-xs-typedarray-sort-detach".into())
+                } else if oracle_misses_typed_array_sort_post_coercion_detachment(run) {
+                    // Pinned XS does coerce the guest comparator result, then
+                    // returns without performing the required post-coercion
+                    // detachment check. The official case observes both facts.
+                    Verdict::RunSkip(
+                        "oracle-xs-typedarray-sort-post-coercion-detach".into(),
+                    )
                 } else if oracle_host_aborted(run) {
                     Verdict::RunSkip("oracle-host-stack-limit".into())
                 } else {
@@ -603,6 +662,94 @@ fn oracle_missing_temporal(run: &DualRun) -> bool {
     run.oracle_parsed
         && run.source.contains("Temporal")
         && (!run.result_agrees || run.oracle_error.contains("Temporal: undefined variable"))
+}
+
+/// The pinned XS failure on the generated destructuring/for-of const-assignment
+/// corpus. Restrict the Test262Error exclusion to the exact frontmatter phrase
+/// shared by those cases; an arbitrary oracle Test262Error remains a gating
+/// failure because it may expose Ironhorse skipping or misexecuting assertions.
+fn oracle_fails_const_assignment_test(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && constructor_name(&run.oracle_error) == "Test262Error"
+        && run
+            .source
+            .contains("assignment target should obey `const` semantics.")
+}
+
+/// The pinned XS `with`-environment PutValue defect exercised by the ES5
+/// `*_A5_T4` family: evaluation resolves `x` against the object environment,
+/// then the RHS/getter deletes `scope.x`; PutValue must still use the original
+/// Reference, but XS re-resolves and throws. The exact error plus both source
+/// ingredients make this substantially narrower than a generic ReferenceError
+/// oracle exclusion.
+fn oracle_loses_with_reference(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.oracle_error == "ReferenceError: set x: undefined property"
+        && run.source.contains("with (")
+        && run.source.contains("delete")
+}
+
+/// The pinned XS `super()` ordering defect in the official
+/// `call-proto-not-ctor` case. ECMA-262 evaluates the argument list before
+/// checking whether the super constructor is constructible; XS checks first,
+/// leaves the argument side effect false, and fails the official assertion.
+/// Match both the exact assertion error and the distinctive source operations
+/// so no unrelated Test262 failure is hidden.
+fn oracle_skips_super_arguments(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.oracle_error == "Test262Error: performs ArgumentsListEvaluation"
+        && run.source.contains("super(evaluatedArg = true)")
+        && run.source.contains("Object.setPrototypeOf(C, parseInt)")
+}
+
+/// The pinned XS `%TypedArray.prototype.set%` detachment-order defect exercised
+/// by the official array-like source case. `Get(src, "1")` detaches the target
+/// buffer, after which the specification requires a TypeError before reading
+/// index 2. XS performs that later read and fails the harness assertion;
+/// IronHorse observes the required TypeError. Restrict the exclusion to the
+/// harness's Test262Error plus the distinctive detach, late-read sentinel, and
+/// `set` call so unrelated TypedArray failures remain gating.
+fn oracle_misses_typed_array_set_detachment(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.oracle_error
+            == "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)"
+        && run.source.contains("$DETACHBUFFER(sample.buffer)")
+        && run.source.contains("Should not get other values")
+        && run.source.contains("sample.set(obj)")
+}
+
+/// The pinned XS `%TypedArray.prototype.sort%` comparator-detachment defect.
+/// The official Number and BigInt cases detach the receiver in the first
+/// comparator call and require a TypeError before any later comparison. XS
+/// instead calls the comparator repeatedly and fails the harness assertion;
+/// IronHorse throws at the specified checkpoint. Match the assertion shape and
+/// all distinctive source operations so no unrelated sort failure is hidden.
+fn oracle_misses_typed_array_sort_detachment(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && matches!(
+            run.oracle_error.as_str(),
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)"
+                | "Test262Error: Expected a TypeError but got a Test262Error (Testing with BigInt64Array.)"
+        )
+        && run.source.contains("$DETACHBUFFER(sample.buffer)")
+        && run.source.contains("sample.sort(comparefn)")
+        && run.source.contains("assert.throws(TypeError")
+}
+
+/// Pinned XS ToNumber-coerces the `%TypedArray%.prototype.sort%` comparator
+/// result, but then omits the required detachment throw. The official case's
+/// `Symbol.toPrimitive` flips a sentinel before `assert.throws` reports that no
+/// exception occurred. Restrict this exclusion to that exact outcome and
+/// source shape.
+fn oracle_misses_typed_array_sort_post_coercion_detachment(run: &DualRun) -> bool {
+    run.oracle_parsed
+        && run.oracle_error
+            == "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all (Testing with Float64Array.)"
+        && run.source.contains("$DETACHBUFFER(ab)")
+        && run.source.contains("[Symbol.toPrimitive]() { called = true; }")
+        && run.source.contains("ta.sort(function(a, b)")
+        && run.source.contains("assert.throws(TypeError")
+        && run.source.contains("assert.sameValue(true, called)")
 }
 
 fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
@@ -801,7 +948,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     // complete executions of the applicable phase; accepted modules proceed
     // to the explicitly named linker/evaluator boundary below.
     if fm.flags.iter().any(|f| f == "module") {
-        return run_module_case(cfg, src, &fm);
+        return run_module_case(cfg, harness_dir, src, &fm);
     }
     // `CanBlockIsFalse` marks the `$262.agent`/Atomics blocking-agent tests,
     // which need a threading story ironhorse does not have — a named structural
@@ -854,6 +1001,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
             verdict: Verdict::PreSkip(reason.into()),
             strict_skipped: run_strict,
             computron_gap: false,
+            mode_outcomes: Vec::new(),
         };
     }
 
@@ -909,6 +1057,14 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         None
     };
 
+    let mut mode_outcomes = Vec::new();
+    if let Some(eval) = &sloppy {
+        mode_outcomes.push((Mode::Sloppy, expectation_outcome(&eval.outcome)));
+    }
+    if let Some(eval) = &strict {
+        mode_outcomes.push((Mode::Strict, expectation_outcome(&eval.outcome)));
+    }
+
     let (verdict, computron_gap) = match (sloppy, strict) {
         (Some(sloppy), Some(strict)) => {
             let verdict = match (&sloppy.outcome, &strict.outcome) {
@@ -933,6 +1089,7 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
         verdict,
         strict_skipped,
         computron_gap,
+        mode_outcomes,
     }
 }
 
@@ -943,11 +1100,12 @@ pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
 /// makes parse-negative coverage a genuine XS differential rather than a
 /// frontmatter-based relabel.
 ///
-/// Static resolution and evaluation remain separate, honestly named run
-/// skips.  In particular, compiling a positive module is never called
-/// "covered": fixture loading, namespace creation, top-level-await ordering,
-/// and dynamic import must all execute before that claim is available.
-fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
+/// Synchronous, single-file modules execute end-to-end after the compile
+/// differential succeeds. Loader-dependent shapes remain honestly named run
+/// skips: static imports/re-exports, dynamic import, `import.meta`, and
+/// top-level await need graph/linker or asynchronous host support before they
+/// can contribute coverage.
+fn run_module_case(cfg: &Config, harness_dir: &Path, src: &str, fm: &Frontmatter) -> CaseResult {
     let oracle = match xs_oracle::compile_module(src) {
         Some(outcome) => outcome,
         None => {
@@ -955,6 +1113,7 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
                 verdict: Verdict::RunSkip("oracle-machine-error".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             };
         }
     };
@@ -975,6 +1134,7 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
                             verdict: Verdict::RunSkip("compiler-unimplemented:parse".into()),
                             strict_skipped: false,
                             computron_gap: false,
+                            mode_outcomes: Vec::new(),
                         };
                     }
                     true
@@ -984,6 +1144,7 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
                         verdict: Verdict::RunSkip("compiler-unimplemented:parse".into()),
                         strict_skipped: false,
                         computron_gap: false,
+                        mode_outcomes: Vec::new(),
                     };
                 }
                 Ok(Ok(_)) => false,
@@ -1004,6 +1165,7 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
                 verdict,
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             };
         }
 
@@ -1012,6 +1174,7 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
                 verdict: Verdict::RunSkip("module:resolution-linking".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             };
         }
     }
@@ -1021,7 +1184,18 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
             if cfg.oracle && (bytes != oracle.bytecode || symbols != oracle.symbols) {
                 Verdict::RunSkip("module:compiler-byte-divergence".into())
             } else {
-                Verdict::RunSkip("module:evaluation".into())
+                let assembled = match assemble(harness_dir, src, fm) {
+                    Ok(source) => source,
+                    Err(reason) => return preskip(&reason),
+                };
+                // `assemble` returns `src` unchanged for a `raw`-flagged
+                // module. There the compile above already produced the exact
+                // bytes `run_accepted_module` would recompute, and (under
+                // `--oracle`) already byte-checked them, so hand them over
+                // rather than paying a second IronHorse compile and a second
+                // fork of the pinned oracle compiler per case.
+                let precompiled = (assembled == src).then_some((bytes, symbols));
+                run_accepted_module(cfg, fm, &assembled, precompiled)
             }
         }
         Ok(Ok(_)) if cfg.oracle => {
@@ -1044,7 +1218,196 @@ fn run_module_case(cfg: &Config, src: &str, fm: &Frontmatter) -> CaseResult {
         verdict,
         strict_skipped: false,
         computron_gap: false,
+        mode_outcomes: Vec::new(),
     }
+}
+
+/// Monotonic suffix for per-case module-oracle directories. Bounded runner
+/// workers can overlap after a timeout, so process id alone is not unique.
+static MODULE_ORACLE_RUN: AtomicU64 = AtomicU64::new(0);
+
+/// Execute a module on an interpreter retained long enough to observe the same
+/// `globalThis.result` value the XS module oracle exposes. The module envelope
+/// itself completes with `undefined`; the follow-up reader is a separate crank
+/// in the same realm and is excluded from the module halt classification.
+fn run_ironhorse_module(bytecode: &[u8], symbols: &[u8]) -> RunOutcome {
+    let names = ironhorse_vm::parse_symbols(symbols);
+    let mut machine = crate::interp_with_source_bridge(&names);
+    let mut outcome = machine.run(bytecode);
+    if !outcome.completed {
+        return outcome;
+    }
+
+    let (reader, reader_symbols) = match ironhorse_compile::compile_atoms("globalThis.result") {
+        Ok(compiled) => compiled,
+        Err(_) => {
+            outcome.completed = false;
+            outcome.halt = Halt::Unsupported("module:result-reader-compile");
+            return outcome;
+        }
+    };
+    let reader_names = ironhorse_vm::parse_symbols(&reader_symbols);
+    let reader = match machine.relink_crank(&reader, &reader_names) {
+        Ok(reader) => reader,
+        Err(_) => {
+            outcome.completed = false;
+            outcome.halt = Halt::Unsupported("module:result-reader-link");
+            return outcome;
+        }
+    };
+    let observed = machine.run(&reader);
+    if observed.completed {
+        outcome.result = observed.result;
+    } else {
+        outcome.completed = false;
+        outcome.halt = observed.halt;
+    }
+    outcome
+}
+
+/// Materialize one source as `main.mjs`, run it through the pinned XS module
+/// loader, and remove only the file/directory created here. The unique suffix
+/// avoids sharing filesystem state between bounded case workers.
+fn run_oracle_single_module(source: &str) -> Result<xs_oracle::ModuleRunOutcome, String> {
+    let dir = loop {
+        let serial = MODULE_ORACLE_RUN.fetch_add(1, Ordering::Relaxed);
+        let candidate = std::env::temp_dir().join(format!(
+            "ironhorse-262-module-{}-{serial}",
+            std::process::id()
+        ));
+        match std::fs::create_dir(&candidate) {
+            Ok(()) => break candidate,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("oracle-module-temp:{error}")),
+        }
+    };
+    let main = dir.join("main.mjs");
+    if let Err(error) = std::fs::write(&main, source) {
+        let _ = std::fs::remove_dir(&dir);
+        return Err(format!("oracle-module-write:{error}"));
+    }
+    let outcome = xs_oracle::run_module_dir(&dir, "main.mjs");
+    let _ = std::fs::remove_file(&main);
+    let _ = std::fs::remove_dir(&dir);
+    outcome.ok_or_else(|| "oracle-machine-error".into())
+}
+
+/// Convert the executable module pair into the runner's existing four-valued
+/// differential record so positive and runtime-negative verdict rules stay
+/// identical to Script-goal cases. Module-oracle metering includes parsing and
+/// linking, so it remains diagnostic and never arms the exact-meter gate.
+fn module_dual_run(
+    source: &str,
+    bytecode: Vec<u8>,
+    oracle: xs_oracle::ModuleRunOutcome,
+    ironhorse: RunOutcome,
+) -> DualRun {
+    let agreement = match (oracle.completed, ironhorse.completed) {
+        (true, true) => Agreement::BothComplete,
+        (false, false) => Agreement::BothAbort,
+        (false, true) => Agreement::IronhorseOnlyComplete,
+        (true, false) => Agreement::OracleOnlyComplete,
+    };
+    let ironhorse_error = match &ironhorse.halt {
+        Halt::Throw(error) => error.clone(),
+        _ => String::new(),
+    };
+    DualRun {
+        source: source.into(),
+        agreement,
+        result_agrees: oracle.completed && ironhorse.completed && oracle.result == ironhorse.result,
+        oracle_result: oracle.result,
+        ironhorse_result: ironhorse.result,
+        computrons_agree: false,
+        oracle_computrons: oracle.computrons,
+        ironhorse_computrons: ironhorse.computrons,
+        error_agrees: !oracle.completed
+            && !ironhorse.completed
+            && matches!(ironhorse.halt, Halt::Throw(_))
+            && oracle.error == ironhorse_error,
+        oracle_error: oracle.error,
+        ironhorse_error,
+        oracle_meter_raw: oracle.meter_raw as u64,
+        ironhorse_meter_raw: ironhorse.meter_raw,
+        ironhorse_dispatched: ironhorse.dispatched,
+        ironhorse_halt: ironhorse.halt,
+        ironhorse_compile: IronhorseCompile::Accepted,
+        bytecode,
+        oracle_parsed: true,
+    }
+}
+
+/// Compile the exact assembled module in both front ends, run supported
+/// single-file shapes in IronHorse, and only then invoke XS for the executable
+/// differential. Running IronHorse first avoids asking the one-file oracle
+/// fixture to resolve imports that this tranche deliberately does not claim.
+fn run_accepted_module(
+    cfg: &Config,
+    fm: &Frontmatter,
+    source: &str,
+    // The `(bytecode, symbols)` the caller already compiled from a source
+    // byte-identical to `source`, and already byte-checked against the oracle.
+    // `Some` skips both compiles and the divergence gate, all three of which
+    // are known to reproduce the same answers on identical bytes.
+    precompiled: Option<(Vec<u8>, Vec<u8>)>,
+) -> Verdict {
+    let carried = precompiled.is_some();
+    let (bytecode, symbols) = match precompiled {
+        Some(compiled) => compiled,
+        None => match ironhorse_compile::compile_module_atoms(source) {
+            Ok(compiled) => compiled,
+            Err(error)
+                if matches!(
+                    error.kind,
+                    ironhorse_compile::parser::ParseErrorKind::Unsupported
+                ) =>
+            {
+                return Verdict::RunSkip("compiler-unimplemented:module-harness".into())
+            }
+            Err(_) => return Verdict::RunSkip("module:harness-compiler-rejected".into()),
+        },
+    };
+    if cfg.oracle && !carried {
+        let oracle_compile = match xs_oracle::compile_module(source) {
+            Some(compiled) => compiled,
+            None => return Verdict::RunSkip("oracle-machine-error".into()),
+        };
+        if !oracle_compile.compiled {
+            return Verdict::RunSkip("module:harness-oracle-rejected".into());
+        }
+        if bytecode != oracle_compile.bytecode || symbols != oracle_compile.symbols {
+            return Verdict::RunSkip("module:harness-byte-divergence".into());
+        }
+    }
+
+    let ironhorse = run_ironhorse_module(&bytecode, &symbols);
+    match &ironhorse.halt {
+        Halt::Unsupported(op) => {
+            return Verdict::RunSkip(format!("unsupported-opcode:{op}"));
+        }
+        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        _ => {}
+    }
+
+    let oracle = if cfg.oracle {
+        match run_oracle_single_module(source) {
+            Ok(outcome) => outcome,
+            Err(reason) => return Verdict::RunSkip(reason),
+        }
+    } else {
+        xs_oracle::ModuleRunOutcome {
+            completed: ironhorse.completed,
+            result: ironhorse.result.clone(),
+            error: match &ironhorse.halt {
+                Halt::Throw(error) => error.clone(),
+                _ => String::new(),
+            },
+            computrons: ironhorse.computrons,
+            meter_raw: ironhorse.meter_raw as u32,
+        }
+    };
+    let run = module_dual_run(source, bytecode, oracle, ironhorse);
+    verdict_for(cfg, &run, fm, false)
 }
 
 /// Run one `async`-flagged case: prepend the [`ASYNC_PRELUDE`] to the standard
@@ -1073,6 +1436,7 @@ fn run_async_case(
                 verdict: Verdict::PreSkip(reason),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
     };
@@ -1085,6 +1449,7 @@ fn run_async_case(
                 verdict: Verdict::RunSkip("oracle-machine-error".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
     };
@@ -1117,6 +1482,7 @@ fn run_async_case(
         verdict,
         strict_skipped: false,
         computron_gap,
+        mode_outcomes: Vec::new(),
     }
 }
 
@@ -1125,6 +1491,13 @@ fn run_async_case(
 /// a failure, and a strict-only gap is labelled so reports retain the causal
 /// mode instead of silently treating the sloppy pass as file coverage.
 fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) -> CaseResult {
+    let mut mode_outcomes = Vec::new();
+    if let Some(result) = &sloppy {
+        mode_outcomes.push((Mode::Sloppy, expectation_outcome(&result.verdict)));
+    }
+    if let Some(result) = &strict {
+        mode_outcomes.push((Mode::Strict, expectation_outcome(&result.verdict)));
+    }
     match (sloppy, strict) {
         (Some(sloppy), Some(strict)) => {
             let verdict = match (&sloppy.verdict, &strict.verdict) {
@@ -1143,9 +1516,13 @@ fn combine_mode_results(sloppy: Option<CaseResult>, strict: Option<CaseResult>) 
                 verdict,
                 strict_skipped: false,
                 computron_gap: sloppy.computron_gap || strict.computron_gap,
+                mode_outcomes,
             }
         }
-        (Some(result), None) | (None, Some(result)) => result,
+        (Some(mut result), None) | (None, Some(mut result)) => {
+            result.mode_outcomes = mode_outcomes;
+            result
+        }
         (None, None) => unreachable!("strict_mode_status always selects a mode"),
     }
 }
@@ -1244,24 +1621,45 @@ impl XstReport {
         // whole verdict is the named strict skip); every other case's primary
         // run is sloppy, with strict recorded as a separate named skip when the
         // case has a strict mode not yet implemented.
-        let outcome = match &result.verdict {
-            Verdict::Covered => Outcome::Pass,
-            Verdict::Fail(_) => Outcome::Fail,
-            Verdict::PreSkip(reason) | Verdict::RunSkip(reason) => Outcome::Skip(reason.clone()),
-        };
-        let only_strict =
-            matches!(&result.verdict, Verdict::PreSkip(reason) if reason.starts_with("onlyStrict"));
-        if only_strict {
-            self.observed
-                .insert((path.to_string(), Mode::Strict), outcome.clone());
-        } else {
-            self.observed
-                .insert((path.to_string(), Mode::Sloppy), outcome.clone());
-            if result.strict_skipped {
+        let outcome = expectation_outcome(&result.verdict);
+        if !result.mode_outcomes.is_empty() {
+            let mut saw_strict = false;
+            for (mode, mode_outcome) in &result.mode_outcomes {
+                saw_strict |= matches!(mode, Mode::Strict);
+                self.observed
+                    .insert((path.to_string(), *mode), mode_outcome.clone());
+            }
+            // A mode policy can omit the strict variant while still recording
+            // sloppy mode outcomes -- the exact-metering corpus sets
+            // `strict_skipped` and then clears `run_strict`, so `mode_outcomes`
+            // holds only the sloppy row. The named strict skip still belongs in
+            // the observed list; without it the two-directional ratchet quietly
+            // stops covering strict mode for every case in that corpus.
+            if result.strict_skipped && !saw_strict {
                 self.observed.insert(
                     (path.to_string(), Mode::Strict),
                     Outcome::Skip("strict-unimplemented".to_string()),
                 );
+            }
+        } else {
+            let only_strict = matches!(
+                &result.verdict,
+                Verdict::PreSkip(reason) if reason.starts_with("onlyStrict")
+            );
+            if only_strict {
+                self.observed.insert(
+                    (path.to_string(), Mode::Strict),
+                    outcome.clone(),
+                );
+            } else {
+                self.observed
+                    .insert((path.to_string(), Mode::Sloppy), outcome.clone());
+                if result.strict_skipped {
+                    self.observed.insert(
+                        (path.to_string(), Mode::Strict),
+                        Outcome::Skip("strict-unimplemented".to_string()),
+                    );
+                }
             }
         }
         match result.verdict {
@@ -1433,6 +1831,7 @@ fn run_case_bounded(
                 verdict,
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
         Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
@@ -1443,6 +1842,7 @@ fn run_case_bounded(
                 verdict: Verdict::Fail("ironhorse-worker-panic".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             }
         }
     }
@@ -1572,12 +1972,19 @@ mod tests {
     }
 
     #[test]
-    fn accepted_module_reaches_named_evaluation_boundary() {
-        let source = "/*---\nflags: [module]\n---*/\nexport const value = 1;";
+    fn accepted_single_file_module_executes_end_to_end() {
+        let source = "/*---\nflags: [module, raw]\n---*/\nexport const value = 1;";
+        let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(result.verdict, Verdict::Covered);
+    }
+
+    #[test]
+    fn loader_dependent_module_keeps_named_boundary() {
+        let source = "/*---\nflags: [module, raw]\n---*/\nimport './fixture.js';";
         let result = run_case(&Config::default(), Path::new("."), source);
         assert_eq!(
             result.verdict,
-            Verdict::RunSkip("module:evaluation".into())
+            Verdict::RunSkip("unsupported-opcode:module:static-linking".into())
         );
     }
 
@@ -1612,6 +2019,36 @@ mod tests {
         assert_eq!(
             constructor_name("Test262Error: Expected a TypeError"),
             "Test262Error"
+        );
+    }
+
+    #[test]
+    fn expectation_observations_retain_both_default_modes() {
+        let Some((_, harness)) = crate::test262::locate_test262() else {
+            eprintln!("test262 subset absent; skipping two-mode expectation regression");
+            return;
+        };
+        let source = "/*---\n---*/\n1 + 1;";
+        let result = run_case(&Config::default(), &harness, source);
+        assert_eq!(result.verdict, Verdict::Covered);
+        assert_eq!(
+            result.mode_outcomes,
+            vec![(Mode::Sloppy, Outcome::Pass), (Mode::Strict, Outcome::Pass)]
+        );
+
+        let mut report = XstReport::default();
+        report.record("language/both-modes.js", result);
+        assert_eq!(
+            report
+                .observed
+                .get(&("language/both-modes.js".into(), Mode::Sloppy)),
+            Some(&Outcome::Pass)
+        );
+        assert_eq!(
+            report
+                .observed
+                .get(&("language/both-modes.js".into(), Mode::Strict)),
+            Some(&Outcome::Pass)
         );
     }
 
@@ -1850,13 +2287,239 @@ mod tests {
             );
         }
 
-        for error in [
-            "ReferenceError: another missing binding",
-            "Test262Error: Expected a RangeError but got a TypeError",
-        ] {
+        for error in ["ReferenceError: another missing binding"] {
             let run = synthetic_ironhorse_only_complete(true, error);
             assert!(!oracle_missing_intl(&run));
-            assert!(matches!(evaluate_positive(&cfg, &run, false), Verdict::Fail(_)));
+            assert!(matches!(
+                evaluate_positive(&cfg, &run, false),
+                Verdict::Fail(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn oracle_const_assignment_failure_is_a_precise_exclusion() {
+        let cfg = Config::default();
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a RangeError but got a TypeError",
+        );
+        run.source =
+            "description: The assignment target should obey `const` semantics.".to_string();
+        assert!(oracle_fails_const_assignment_test(&run));
+        assert_eq!(
+            evaluate_positive(&cfg, &run, false),
+            Verdict::RunSkip("oracle-xs-const-assignment".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-const-assignment"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source.clear();
+        assert!(!oracle_fails_const_assignment_test(&run));
+        assert!(matches!(
+            evaluate_positive(&cfg, &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_with_reference_deletion_bug_is_a_precise_exclusion() {
+        let source = "var scope = {x: 1}; with (scope) { (function() { \
+            'use strict'; x = (delete scope.x, 2); })(); } \
+            if (scope.x !== 2) { throw new Error('wrong'); }";
+        let run = dual_run(source).expect("oracle machine");
+        assert!(oracle_loses_with_reference(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-with-reference".into())
+        );
+
+        let ordinary =
+            synthetic_ironhorse_only_complete(true, "ReferenceError: set x: undefined property");
+        assert!(!oracle_loses_with_reference(&ordinary));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &ordinary, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_super_argument_ordering_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: performs ArgumentsListEvaluation",
+        );
+        run.source = "class C extends Object { constructor() { \
+            super(evaluatedArg = true); } } \
+            Object.setPrototypeOf(C, parseInt);"
+            .to_string();
+        assert!(oracle_skips_super_arguments(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-super-arguments".into())
+        );
+        assert_eq!(
+            crate::report::classify(crate::report::Verdict::RunSkip, "oracle-xs-super-arguments"),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source = "super(evaluatedArg = true)".to_string();
+        assert!(!oracle_skips_super_arguments(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_typed_array_set_detachment_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)",
+        );
+        run.source = "Object.defineProperty(obj, 1, { get: function() { \
+            $DETACHBUFFER(sample.buffer); } }); \
+            Object.defineProperty(obj, 2, { get: function() { \
+            throw new Test262Error('Should not get other values'); } }); \
+            sample.set(obj);"
+            .to_string();
+        assert!(oracle_misses_typed_array_set_detachment(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-typedarray-set-detach".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-typedarray-set-detach"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        run.source = "$DETACHBUFFER(sample.buffer); sample.set(obj);".to_string();
+        assert!(!oracle_misses_typed_array_set_detachment(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+
+        run.oracle_error = "Test262Error: a different assertion failed".to_string();
+        run.source = "Object.defineProperty(obj, 1, { get: function() { \
+            $DETACHBUFFER(sample.buffer); } }); \
+            Object.defineProperty(obj, 2, { get: function() { \
+            throw new Test262Error('Should not get other values'); } }); \
+            sample.set(obj);"
+            .to_string();
+        assert!(!oracle_misses_typed_array_set_detachment(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_typed_array_sort_detachment_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with Float64Array.)",
+        );
+        run.source = "var calls = 0; var comparefn = function() { \
+            if (calls++) throw new Test262Error('second comparator call'); \
+            $DETACHBUFFER(sample.buffer); }; \
+            assert.throws(TypeError, function() { sample.sort(comparefn); });"
+            .to_string();
+        assert!(oracle_misses_typed_array_sort_detachment(&run));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-typedarray-sort-detach".into())
+        );
+        assert_eq!(
+            crate::report::classify(
+                crate::report::Verdict::RunSkip,
+                "oracle-xs-typedarray-sort-detach"
+            ),
+            crate::report::Category::Infrastructure
+        );
+
+        run.oracle_error =
+            "Test262Error: Expected a TypeError but got a Test262Error (Testing with BigInt64Array.)"
+                .to_string();
+        assert!(oracle_misses_typed_array_sort_detachment(&run));
+
+        run.oracle_error = "Test262Error: a different assertion failed".to_string();
+        assert!(!oracle_misses_typed_array_sort_detachment(&run));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn oracle_typed_array_sort_post_coercion_detachment_bug_is_a_precise_exclusion() {
+        let mut run = synthetic_ironhorse_only_complete(
+            true,
+            "Test262Error: Expected a TypeError to be thrown but no exception was thrown at all (Testing with Float64Array.)",
+        );
+        run.source = "assert.throws(TypeError, function() { \
+            ta.sort(function(a, b) { $DETACHBUFFER(ab); return { \
+            [Symbol.toPrimitive]() { called = true; } }; }); }); \
+            assert.sameValue(true, called);"
+            .to_string();
+        assert!(oracle_misses_typed_array_sort_post_coercion_detachment(
+            &run
+        ));
+        assert_eq!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::RunSkip("oracle-xs-typedarray-sort-post-coercion-detach".into())
+        );
+
+        run.oracle_error = "Test262Error: a different assertion failed".to_string();
+        assert!(!oracle_misses_typed_array_sort_post_coercion_detachment(
+            &run
+        ));
+        assert!(matches!(
+            evaluate_positive(&Config::default(), &run, false),
+            Verdict::Fail(_)
+        ));
+    }
+
+    #[test]
+    fn assembled_typed_array_oracle_exclusions_include_constructor_suffixes() {
+        let Some((test_root, harness)) = crate::test262::locate_test262() else {
+            eprintln!("test262 subset absent; skipping assembled oracle-exclusion regression");
+            return;
+        };
+        for (relative, expected_skip) in [
+            (
+                "built-ins/TypedArray/prototype/set/array-arg-targetbuffer-detached-on-get-src-value-throws.js",
+                "oracle-xs-typedarray-set-detach",
+            ),
+            (
+                "built-ins/TypedArray/prototype/sort/detached-buffer-comparefn.js",
+                "oracle-xs-typedarray-sort-detach",
+            ),
+            (
+                "built-ins/TypedArray/prototype/sort/BigInt/detached-buffer-comparefn.js",
+                "oracle-xs-typedarray-sort-detach",
+            ),
+            (
+                "built-ins/TypedArray/prototype/sort/sort-tonumber.js",
+                "oracle-xs-typedarray-sort-post-coercion-detach",
+            ),
+        ] {
+            let source = std::fs::read_to_string(test_root.join(relative))
+                .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+            let result = run_case(&Config::default(), &harness, &source);
+            assert_eq!(
+                result.verdict,
+                Verdict::RunSkip(expected_skip.to_string()),
+                "assembled official case {relative}",
+            );
         }
     }
 
@@ -2098,6 +2761,7 @@ mod tests {
                 verdict: Verdict::Covered,
                 strict_skipped: true,
                 computron_gap: true,
+                mode_outcomes: Vec::new(),
             },
         );
         rep.record(
@@ -2106,6 +2770,7 @@ mod tests {
                 verdict: Verdict::RunSkip("unsupported-opcode:XS_CODE_FOO".into()),
                 strict_skipped: true,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             },
         );
         rep.record(
@@ -2114,6 +2779,7 @@ mod tests {
                 verdict: Verdict::PreSkip("feature:Temporal".into()),
                 strict_skipped: false,
                 computron_gap: false,
+                mode_outcomes: Vec::new(),
             },
         );
         let y = rep.to_yaml();

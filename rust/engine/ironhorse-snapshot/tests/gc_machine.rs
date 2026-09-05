@@ -327,7 +327,11 @@ fn small_state_stays_small_with_a_large_free_list() {
     assert!(manifest.free_len > 3000, "free list is genuinely large");
     let small_len = store.read_small_state().unwrap().len();
     assert!(
-        small_len < 512,
+        // The Promise/RegExp/ArrayBuffer species getters, matchAll iterator
+        // natives, and ArrayBuffer slice metadata add only fixed boot state;
+        // keep a tight constant ceiling while allowing those constant-sized
+        // rows.
+        small_len < 600,
         "small state is O(1) in heap size, got {small_len} bytes for \
          {} free entries",
         manifest.free_len

@@ -1,7 +1,6 @@
 //! Date `[[DateValue]]` records persist in `DATE` (store schema v14).
-//! Values travel as raw IEEE-754 bits, and a guest-mutated
-//! `%Date.prototype%` travels while its untouched NaN seed is rebuilt
-//! by boot.
+//! Values travel as raw IEEE-754 bits. `%Date.prototype%` itself has no
+//! `[[DateValue]]` internal slot and therefore never emits a row.
 
 mod common;
 
@@ -79,9 +78,13 @@ fn resumed_date_values_and_mutations_match_uninterrupted() {
     let observations = [
         "var d; var t; t = d.getTime() + ':' + d.toISOString(); t",
         "var invalid; var t; t = invalid.getTime() !== invalid.getTime(); t",
-        "var d; var t; d.setTime(42); t = d.getTime(); t",
+        "var d; var t; d.setUTCFullYear(2000); d.setUTCMonth(1, 29); t = d.toISOString(); t",
     ];
-    let expected = ["86400000:1970-01-02T00:00:00.000Z", "true", "42"];
+    let expected = [
+        "86400000:1970-01-02T00:00:00.000Z",
+        "true",
+        "2000-02-29T00:00:00.000Z",
+    ];
 
     let mut memory = MemoryStore::new();
     let seen = twin(crank1, &observations, &mut memory);
@@ -96,14 +99,14 @@ fn resumed_date_values_and_mutations_match_uninterrupted() {
 }
 
 #[test]
-fn guest_mutated_date_prototype_value_persists() {
+fn invalid_date_can_be_recovered_after_resume() {
     let mut store = MemoryStore::new();
     let seen = twin(
-        "var t = 0; Date.prototype.setTime(1234); t = 7; t",
-        &["var t; t = Date.prototype.getTime(); t"],
+        "var d = new Date(NaN); var t = 7; t",
+        &["var d; d.setUTCFullYear(2000); d.toISOString()"],
         &mut store,
     );
-    assert_eq!(seen[0].2, "1234");
+    assert_eq!(seen[0].2, "2000-01-01T00:00:00.000Z");
 }
 
 #[test]

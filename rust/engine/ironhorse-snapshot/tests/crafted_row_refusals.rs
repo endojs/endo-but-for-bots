@@ -427,6 +427,44 @@ fn combinator_fixture() -> Interp {
     )
 }
 
+/// A callable `finally` whose returned promise is still pending after the job
+/// drain, leaving one honest `FinallyAwait` row in the promise cluster.
+fn finally_await_fixture() -> Interp {
+    quiescent_machine(
+        "var release = 0; var gate = new Promise(function (rs) { release = rs; }); \
+         Promise.resolve(5).finally(function () { return gate; }); 0",
+    )
+}
+
+/// A `FinallyReturn` reaction still waiting on its source promise, with an
+/// unrelated Array for corrupting the carried species constructor.
+fn pending_finally_fixture() -> Interp {
+    quiescent_machine(
+        "var p=0;var resolve=0;var spare=[];var t=0; \
+         p=new Promise(function(r){resolve=r});p.finally(function(){});t=7;t",
+    )
+}
+
+/// A custom `NewPromiseCapability` constructor that retains its executor,
+/// plus an unrelated Array whose owner provides an honest in-bounds object
+/// for the missing-home-fields corruption arm below.
+fn capability_executor_fixture() -> Interp {
+    quiescent_machine(
+        "var ex = 0; var spare = []; var t = 0; \
+         function C(e) { ex = e; e(function () {}, function () {}); return {}; } \
+         Promise.resolve.call(C, 1); t = 7; t",
+    )
+}
+
+/// A generic receiver whose custom `then` retains both anonymous finally
+/// wrappers, plus an unrelated Array for malformed-home substitutions.
+fn finally_wrapper_fixture() -> Interp {
+    quiescent_machine(
+        "var saved=[];var spare=[];var o={constructor:Promise,then:function(a,b){saved=[a,b];return {}}}; \
+         Promise.prototype.finally.call(o,function(){});0",
+    )
+}
+
 fn expect_container_refusal(image: &ironhorse_snapshot::image::MachineImage, msg: &str) {
     let crafted = write_machine(image);
     match from_snapshot_bytes(&crafted, &sig()) {
@@ -459,6 +497,45 @@ fn an_async_flavored_reaction_kind_is_refused_and_the_store_path_shares_the_gate
         ))) => {}
         other => panic!("the store path must share the reaction-kind gate: {other:?}"),
     }
+}
+
+#[test]
+fn a_finally_await_reaction_requires_a_boolean_payload() {
+    let m = finally_await_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let reaction = image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 11)
+        .expect("the fixture holds a pending FinallyAwait reaction");
+    reaction.a = 2;
+    expect_container_refusal(&image, "promise cluster: unused reaction payload not zero");
+}
+
+#[test]
+fn a_finally_reaction_requires_a_constructor_after_restore() {
+    let m = pending_finally_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let mut image = read_machine(&bytes, &sig()).expect("reads");
+    let array = image.arrays[0].owner;
+    image
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 1)
+        .expect("the fixture holds a pending FinallyReturn reaction")
+        .on_rejected = ironhorse_vm::Slot::of(
+            ironhorse_vm::Kind::Reference,
+            ironhorse_vm::Payload::Reference(ironhorse_vm::SlotIndex(array)),
+        );
+    expect_container_refusal(
+        &image,
+        "side-table restore: malformed promise capability",
+    );
 }
 
 #[test]
@@ -512,6 +589,111 @@ fn a_resolving_function_with_a_crafted_guard_or_promise_is_refused() {
 }
 
 #[test]
+fn a_crafted_capability_executor_home_is_refused() {
+    let m = capability_executor_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    let executor = image
+        .promise_cluster
+        .functions
+        .iter()
+        .position(|row| row.guard == u32::MAX)
+        .expect("the retained custom constructor executor persists");
+
+    let mut rejecting = image.clone();
+    rejecting.promise_cluster.functions[executor].reject = true;
+    expect_container_refusal(
+        &rejecting,
+        "promise cluster: malformed capability executor home",
+    );
+
+    let mut self_homed = image.clone();
+    self_homed.promise_cluster.functions[executor].promise =
+        self_homed.promise_cluster.functions[executor].function;
+    expect_container_refusal(
+        &self_homed,
+        "promise cluster: malformed capability executor home",
+    );
+
+    // Two executor functions cannot share one capture record: a call through
+    // either would mutate the other's `[[Resolve]]`/`[[Reject]]` pair. The
+    // decoder catches this before the cloned row's function identity matters.
+    let mut duplicate = image.clone();
+    let mut cloned = duplicate.promise_cluster.functions[executor];
+    cloned.function = duplicate.arrays[0].owner;
+    duplicate.promise_cluster.functions.push(cloned);
+    duplicate
+        .promise_cluster
+        .functions
+        .sort_unstable_by_key(|row| row.function);
+    expect_container_refusal(
+        &duplicate,
+        "promise cluster: malformed capability executor home",
+    );
+
+    // A merely in-bounds object is not a capability record. Adoption must
+    // verify both hidden capture fields rather than resurrecting a callable
+    // executor that reads unrelated heap state.
+    let mut missing_fields = image;
+    missing_fields.promise_cluster.functions[executor].promise =
+        missing_fields.arrays[0].owner;
+    expect_container_refusal(
+        &missing_fields,
+        "side-table restore: malformed promise cluster",
+    );
+}
+
+#[test]
+fn a_crafted_finally_wrapper_home_is_refused() {
+    let m = finally_wrapper_fixture();
+    let bytes = m.write_snapshot(&sig()).expect("writes");
+    let image = read_machine(&bytes, &sig()).expect("reads");
+    let wrappers: Vec<usize> = image
+        .promise_cluster
+        .functions
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| (row.guard == u32::MAX - 1).then_some(i))
+        .collect();
+    assert_eq!(wrappers.len(), 2, "both retained finally handlers persist");
+
+    let mut self_homed = image.clone();
+    self_homed.promise_cluster.functions[wrappers[0]].promise =
+        self_homed.promise_cluster.functions[wrappers[0]].function;
+    expect_container_refusal(
+        &self_homed,
+        "promise cluster: malformed finally function home",
+    );
+
+    let mut shared_home = image.clone();
+    shared_home.promise_cluster.functions[wrappers[1]].promise =
+        shared_home.promise_cluster.functions[wrappers[0]].promise;
+    expect_container_refusal(
+        &shared_home,
+        "promise cluster: malformed finally function home",
+    );
+
+    // A structurally in-bounds object is not a valid capture home. The image
+    // decoder establishes shape; adoption verifies the required hidden fields.
+    let mut missing_fields = image.clone();
+    missing_fields.promise_cluster.functions[wrappers[0]].promise =
+        missing_fields.arrays[0].owner;
+    expect_container_refusal(
+        &missing_fields,
+        "side-table restore: malformed promise cluster",
+    );
+
+    // Retagging a handler home as a value thunk must not resurrect a callable
+    // that reads a missing `[[PromiseFinallyValue]]` capture.
+    let mut wrong_kind = image;
+    wrong_kind.promise_cluster.functions[wrappers[0]].guard = u32::MAX - 2;
+    expect_container_refusal(
+        &wrong_kind,
+        "side-table restore: malformed promise cluster",
+    );
+}
+
+#[test]
 fn a_crafted_combinator_row_is_refused() {
     let m = combinator_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
@@ -536,10 +718,10 @@ fn a_crafted_combinator_row_is_refused() {
 
     // The results accumulator must name an `ARRY` row — the element
     // drain writes through the dense store (the view-names-a-buffer-row
-    // discipline). The derived promise's slot is live and in bounds,
-    // but it is a promise, not an Array.
+    // discipline). A promise owner's slot is live and in bounds, but it is
+    // not an Array.
     let mut results = image;
-    results.promise_cluster.combinators[0].results = results.promise_cluster.combinators[0].derived;
+    results.promise_cluster.combinators[0].results = results.promise_cluster.promises[0].owner;
     expect_container_refusal(&results, "promise cluster: combinator's results Array has no row");
 }
 
@@ -596,6 +778,23 @@ fn a_crafted_combine_element_shape_is_refused() {
     r.b = u32::MAX;
     expect_container_refusal(&oor, "promise cluster: element index outside the results Array");
 
+    // A kind-byte mutation cannot turn an ordinary queued reaction into a
+    // synchronous callback. A direct callback must carry the private bridge's
+    // exact resolving pair, both naming its owning promise row.
+    let mut direct = image.clone();
+    direct
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 2)
+        .expect("a queued element reaction")
+        .kind = 12;
+    expect_container_refusal(
+        &direct,
+        "promise cluster: malformed direct combinator callback",
+    );
+
     // A duplicate (combinator, element) pair: draining both counts one
     // element twice, settling the combinator short of its total.
     let mut dup = image;
@@ -614,43 +813,38 @@ fn a_crafted_combine_element_shape_is_refused() {
 }
 
 #[test]
-fn an_undone_combinator_with_a_settled_derived_promise_is_refused() {
-    // No `.then` on the combinator, so the derived promise carries no
-    // reactions and the settled-retains-reactions gate stays out of
-    // the way — isolating the done/derived-state cross-check.
-    let m = quiescent_machine(
-        "var p1 = 0; var p2 = 0; var r1 = 0; var r2 = 0; var all = 0; var t = 0; \
-         p1 = new Promise(function (rs, rj) { r1 = rs; }); \
-         p2 = new Promise(function (rs, rj) { r2 = rs; }); \
-         all = Promise.all([p1, p2]); t = 7; t",
-    );
+fn a_crafted_combinator_capability_is_refused() {
+    use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
+
+    let m = combinator_fixture();
     let bytes = m.write_snapshot(&sig()).expect("writes");
-    let mut image = read_machine(&bytes, &sig()).expect("reads");
-    let derived = image.promise_cluster.combinators[0].derived;
-    assert!(
-        !image.promise_cluster.combinators[0].done,
-        "the fixture's combinator is mid-flight"
-    );
-    let row = image
-        .promise_cluster
-        .promises
-        .iter_mut()
-        .find(|p| p.owner == derived)
-        .expect("the derived promise's row");
-    row.state = 1; // Fulfilled — but `done` never latched, so the
-                   // drain would RE-settle it.
+    let image = read_machine(&bytes, &sig()).expect("reads");
+
+    // Capability callbacks are reference-shaped in the atom itself.
+    let mut primitive = image.clone();
+    primitive.promise_cluster.combinators[0].resolve = Slot::undefined();
     expect_container_refusal(
-        &image,
-        "promise cluster: undone combinator's derived promise is settled",
+        &primitive,
+        "promise cluster: combinator capability names no function",
+    );
+
+    // Cross-atom restoration must then prove actual callability after `FUNC`
+    // has restored guest functions. An Array reference is bounded but cannot
+    // serve as the callback the pending element reaction will invoke.
+    let mut non_callable = image;
+    let array = non_callable.arrays[0].owner;
+    non_callable.promise_cluster.combinators[0].reject =
+        Slot::of(Kind::Reference, Payload::Reference(SlotIndex(array)));
+    expect_container_refusal(
+        &non_callable,
+        "side-table restore: malformed promise capability",
     );
 }
 
-/// The capability-graph review round: a `User`/`FinallyReturn`
-/// reaction's capability must be ONE resolving pair (the drain
-/// recovers the derived promise through `resolve` alone, so a
-/// cross-wired capability silently settles whatever the crafted slot
-/// binds); a `Combine` reaction carries no capability at all; and a
-/// guard belongs to exactly one pair.
+/// The capability-graph review round: a reaction's arbitrary custom
+/// resolve/reject callbacks must remain callable after every function table is
+/// restored; a `Combine` reaction carries no capability at all; and a native
+/// resolving guard belongs to exactly one pair.
 #[test]
 fn a_crafted_reaction_capability_is_refused() {
     use ironhorse_vm::{Kind, Payload, Slot, SlotIndex};
@@ -676,15 +870,29 @@ fn a_crafted_reaction_capability_is_refused() {
         "promise cluster: reaction capability names no resolving function",
     );
 
-    // (b) Two references that are not one pair (here: the resolve half
-    // twice, a polarity clash; a mixed-pair splice fails the same way
-    // on promise or guard).
-    let mut mismatched = image.clone();
-    let r = reaction_of(&mut mismatched);
-    r.reject = r.resolve;
+    // (b) Custom species callbacks are ordinary persisted functions, so their
+    // callability can only be checked after `FUNC` restore. Replacing one with
+    // an in-bounds Array must still fail closed at that second-phase gate.
+    let custom = quiescent_machine(
+        "var p=0;var res=0;var spare=[];var result={};var t=0; \
+         function C(executor){executor(function(){},function(){});return result} \
+         p=new Promise(function(resolve){res=resolve});p.constructor={}; \
+         p.constructor[Symbol.species]=C;p.then(function(v){return v});t=7;t",
+    );
+    let bytes = custom.write_snapshot(&sig()).expect("writes");
+    let mut non_callable = read_machine(&bytes, &sig()).expect("reads");
+    let array = non_callable.arrays[0].owner;
+    non_callable
+        .promise_cluster
+        .promises
+        .iter_mut()
+        .flat_map(|p| p.reactions.iter_mut())
+        .find(|r| r.kind == 0)
+        .expect("the fixture holds a custom user reaction")
+        .resolve = Slot::of(Kind::Reference, Payload::Reference(SlotIndex(array)));
     expect_container_refusal(
-        &mismatched,
-        "promise cluster: reaction capability is not one resolving pair",
+        &non_callable,
+        "side-table restore: malformed promise capability",
     );
 
     // (c) A guard spliced across two pairs: the fixture mints one pair

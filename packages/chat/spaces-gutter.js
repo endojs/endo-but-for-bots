@@ -28,6 +28,8 @@ const KNOWN_MODES = new Set([
   'files',
   'floot',
   'workflow',
+  'secrets',
+  'management',
 ]);
 
 /**
@@ -40,7 +42,7 @@ const KNOWN_MODES = new Set([
  * @property {string} name - display name (shown on hover)
  * @property {string} icon - emoji character
  * @property {string[]} profilePath - pet-name path to the agent
- * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow'} mode - interaction mode
+ * @property {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} mode - interaction mode
  * @property {ColorScheme} [scheme] - color scheme preference (default: 'auto')
  * @property {string} [channelPetName] - pet name of the channel object (for channel mode)
  * @property {string} [proposedName] - display name for the channel creator
@@ -53,6 +55,9 @@ const KNOWN_MODES = new Set([
  * @property {string[]} [audioPath] - pet-name path to an audio object (floot mic input)
  * @property {string[]} [ttsPath] - pet-name path to a text-to-speech object (floot spoken replies)
  * @property {string[]} [workflowPath] - pet-name path to a workflow service (workflow space)
+ * @property {string} [defaultSpaceId] - system-wide default space to open on
+ *   load. Only meaningful on the home config (spaces/0), where it is a global
+ *   preference shared by everyone; '' or absent means "open Home".
  */
 
 /**
@@ -64,6 +69,8 @@ const KNOWN_MODES = new Set([
  * @property {(id: string, updates: Partial<Pick<SpaceConfig, 'name' | 'icon' | 'scheme' | 'viewMode' | 'lastChannelPetName' | 'channelOrder' | 'bookmarks'>>) => Promise<void>} updateSpace - Update a space
  * @property {(id: string) => Promise<void>} removeSpace - Remove a space
  * @property {() => string} getActiveSpaceId - Get currently active space ID
+ * @property {(path: string[]) => void} setActivePath - Report a navigation that
+ *   did not come from the gutter, so the highlight follows it
  */
 
 /** @type {SpaceConfig} */
@@ -99,6 +106,132 @@ const pathsEqual = (a, b) => {
 };
 harden(pathsEqual);
 
+// Per-device default space (this browser). Overrides the system-wide default
+// (stored on the home config). '' means "no per-device preference".
+const DEVICE_DEFAULT_KEY = 'chat-default-space';
+
+// Everything needed to OPEN the default space, cached beside the preference.
+//
+// The preference names a space; opening one needs its profile path and mode,
+// which live on the daemon. Waiting for them meant the app mounted Home first
+// and tore it down a round trip later — the default space was the second thing
+// you saw, after paying to build something you did not ask for. Remembering
+// where the space was last time makes it the first thing built instead.
+//
+// Strictly a cache: absent, stale, or unparseable, it is ignored and the
+// original post-refresh path applies. `refresh()` rewrites it from the loaded
+// configuration, so a space that moved or changed mode is corrected on the load
+// after the change, and one that was removed is corrected during that load.
+const BOOT_DEFAULT_KEY = 'chat-default-space-boot';
+
+// Whether this browser shows the gutter. Absent means showing, so a device that
+// has never touched the toggle — and one whose storage is unavailable — gets the
+// bar rather than a page with no way back to the other spaces.
+const GUTTER_VISIBLE_KEY = 'chat-spaces-gutter-hidden';
+
+/**
+ * Whether the spaces gutter should be showing on this device.
+ *
+ * Synchronous, like the boot cache, because the shell applies it before the
+ * first paint rather than letting the gutter appear and then vanish.
+ *
+ * @returns {boolean}
+ */
+export const readGutterVisible = () => {
+  try {
+    return window.localStorage.getItem(GUTTER_VISIBLE_KEY) !== 'true';
+  } catch {
+    return true;
+  }
+};
+harden(readGutterVisible);
+
+/**
+ * Remember whether the gutter is showing on this device.
+ *
+ * @param {boolean} visible
+ */
+export const writeGutterVisible = visible => {
+  try {
+    window.localStorage.setItem(GUTTER_VISIBLE_KEY, String(!visible));
+  } catch {
+    // A device that cannot remember the choice still honors it for this page.
+  }
+};
+harden(writeGutterVisible);
+
+const loadDeviceDefaultSpaceId = () => {
+  try {
+    return window.localStorage.getItem(DEVICE_DEFAULT_KEY) || '';
+  } catch {
+    return '';
+  }
+};
+
+/**
+ * Whether a mode read back out of the boot cache is one this build mounts.
+ *
+ * `KNOWN_MODES` lists only the modes that are *not* the default: its one other
+ * caller, `parseSpaceConfig`, uses it to normalize anything else to 'inbox'.
+ * A cached descriptor records a mode that has already been through that
+ * normalization, so 'inbox' is the commonest value here and belongs in the set
+ * the cache accepts — testing `KNOWN_MODES` alone would reject every
+ * inbox-mode space and quietly send it to Home.
+ *
+ * @param {unknown} mode
+ */
+const isCachedMode = mode =>
+  typeof mode === 'string' && (mode === 'inbox' || KNOWN_MODES.has(mode));
+harden(isCachedMode);
+
+/**
+ * The cached descriptor of the space to open on load, if one was cached.
+ *
+ * Synchronous by design: the caller uses it to choose what to mount before the
+ * first paint, so anything asynchronous here would defeat the purpose.
+ *
+ * @returns {{ id: string, profilePath: string[], spaceInfo: object, scheme?: ColorScheme } | undefined}
+ */
+export const readBootDefaultSpace = () => {
+  try {
+    const raw = window.localStorage.getItem(BOOT_DEFAULT_KEY);
+    if (!raw) return undefined;
+    const parsed = JSON.parse(raw);
+    // A cache written by another version is not worth interpreting.
+    if (
+      !parsed ||
+      typeof parsed.id !== 'string' ||
+      !Array.isArray(parsed.profilePath) ||
+      !parsed.profilePath.every(segment => typeof segment === 'string') ||
+      parsed.profilePath.length === 0 ||
+      typeof parsed.spaceInfo !== 'object' ||
+      parsed.spaceInfo === null ||
+      // The mode picks which component the shell mounts, so a cache naming one
+      // this build does not have — a downgrade, or a space kind since removed —
+      // is rejected here rather than mounted as whatever falls through.
+      !isCachedMode(parsed.spaceInfo.mode)
+    ) {
+      return undefined;
+    }
+    // The scheme is applied by setting an attribute before the first paint,
+    // ahead of any of the gutter's own checks, so it is screened here too.
+    // Dropping just the scheme rather than the whole entry: the space is still
+    // the right one to open, and `refresh()` applies its real scheme shortly.
+    const scheme = validSchemes.includes(parsed.scheme)
+      ? parsed.scheme
+      : undefined;
+    return {
+      id: parsed.id,
+      profilePath: parsed.profilePath,
+      spaceInfo: parsed.spaceInfo,
+      ...(scheme === undefined ? {} : { scheme }),
+    };
+  } catch {
+    return undefined;
+  }
+};
+harden(readBootDefaultSpace);
+
 // ── Confined Preact view ──────────────────────────────────────────────────
 //
 // The gutter's chrome (the space icons, the add-space button, and the
@@ -114,6 +247,8 @@ harden(pathsEqual);
  * @property {string} name
  * @property {string} icon
  * @property {boolean} isHome
+ * @property {boolean} isDeviceDefault - the per-device default (this browser)
+ * @property {boolean} isSystemDefault - the system-wide default (everyone)
  * @property {number} [shortcut] - 1..9 Cmd-shortcut number, if any
  */
 
@@ -128,6 +263,8 @@ harden(pathsEqual);
  * @property {string} spaceId
  * @property {string} name
  * @property {boolean} isHome
+ * @property {boolean} isDeviceDefault
+ * @property {boolean} isSystemDefault
  * @property {number} x
  * @property {number} y
  */
@@ -140,6 +277,8 @@ harden(pathsEqual);
  * @property {(id: string) => void} selectSpace
  * @property {(id: string) => void} editSpace
  * @property {(id: string) => void} deleteSpace
+ * @property {(id: string, on: boolean) => void} setDeviceDefault
+ * @property {(id: string, on: boolean) => void} setSystemDefault
  * @property {() => void} addSpace
  */
 
@@ -192,8 +331,17 @@ harden(SpaceItem);
  * @param {() => void} props.onClose
  * @param {(id: string) => void} props.onEdit
  * @param {(id: string) => void} props.onDelete
+ * @param {(id: string, on: boolean) => void} props.onSetDeviceDefault
+ * @param {(id: string, on: boolean) => void} props.onSetSystemDefault
  */
-const SpaceContextMenu = ({ menu, onClose, onEdit, onDelete }) =>
+const SpaceContextMenu = ({
+  menu,
+  onClose,
+  onEdit,
+  onDelete,
+  onSetDeviceDefault,
+  onSetSystemDefault,
+}) =>
   h(
     Fragment,
     null,
@@ -216,6 +364,52 @@ const SpaceContextMenu = ({ menu, onClose, onEdit, onDelete }) =>
         onClick: e => e.stopPropagation(),
       },
       h('div', { class: 'context-menu-title' }, menu.name),
+      h(
+        'button',
+        {
+          class: `context-menu-item${menu.isDeviceDefault ? ' checked' : ''}`,
+          'data-action': 'default-device',
+          onClick: () => {
+            onClose();
+            onSetDeviceDefault(menu.spaceId, !menu.isDeviceDefault);
+          },
+        },
+        h(
+          'span',
+          { class: 'context-menu-icon' },
+          menu.isDeviceDefault ? '✓' : '📌',
+        ),
+        h(
+          'span',
+          null,
+          menu.isDeviceDefault
+            ? 'Default on this device'
+            : 'Set default on this device',
+        ),
+      ),
+      h(
+        'button',
+        {
+          class: `context-menu-item${menu.isSystemDefault ? ' checked' : ''}`,
+          'data-action': 'default-system',
+          onClick: () => {
+            onClose();
+            onSetSystemDefault(menu.spaceId, !menu.isSystemDefault);
+          },
+        },
+        h(
+          'span',
+          { class: 'context-menu-icon' },
+          menu.isSystemDefault ? '✓' : '🌐',
+        ),
+        h(
+          'span',
+          null,
+          menu.isSystemDefault
+            ? 'Default for everyone'
+            : 'Set default for everyone',
+        ),
+      ),
       h(
         'button',
         {
@@ -284,6 +478,8 @@ const SpacesGutterView = ({ controller }) => {
       spaceId: space.id,
       name: space.name,
       isHome: space.isHome,
+      isDeviceDefault: space.isDeviceDefault,
+      isSystemDefault: space.isSystemDefault,
       x,
       y,
     });
@@ -323,6 +519,8 @@ const SpacesGutterView = ({ controller }) => {
           onClose: () => setMenu(null),
           onEdit: controller.editSpace,
           onDelete: controller.deleteSpace,
+          onSetDeviceDefault: controller.setDeviceDefault,
+          onSetSystemDefault: controller.setSystemDefault,
         })
       : null,
   );
@@ -337,7 +535,7 @@ harden(SpacesGutterView);
  * @param {HTMLElement} options.$modalContainer - Container for the add space modal
  * @param {ERef<EndoHost>} options.powers - Endo host powers
  * @param {string[]} options.currentProfilePath - Current profile path for initial selection
- * @param {(profilePath: string[], spaceInfo?: { mode: 'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow', channelPetName?: string, proposedName?: string, whylipSystemPrompt?: string, viewMode?: 'chat' | 'forum' | 'outliner' | 'microblog', channelOrder?: string[], bookmarks?: Array<{key: string, channelPetName: string, label: string}>, audioPath?: string[], ttsPath?: string[], workflowPath?: string[] }) => void} options.onNavigate - Navigate callback
+ * @param {(profilePath: string[], spaceInfo?: { mode: 'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management', channelPetName?: string, proposedName?: string, whylipSystemPrompt?: string, viewMode?: 'chat' | 'forum' | 'outliner' | 'microblog', channelOrder?: string[], bookmarks?: Array<{key: string, channelPetName: string, label: string}>, audioPath?: string[], ttsPath?: string[], workflowPath?: string[] }) => void} options.onNavigate - Navigate callback
  * @returns {SpacesGutterAPI}
  */
 export const createSpacesGutter = ({
@@ -347,12 +545,35 @@ export const createSpacesGutter = ({
   currentProfilePath,
   onNavigate,
 }) => {
+  // The gutter outlives every space change, so the path it highlights is
+  // state rather than a construction-time fact. `setActivePath` below is how
+  // navigation that did not come from here — a deep link, the header's home
+  // control, a space that closed itself — keeps the highlight honest.
+  let activePath = currentProfilePath;
+
   /** @type {Map<string, SpaceConfig>} */
   const spacesMap = new Map();
   /** @type {SpaceConfig} */
   let homeSpaceConfig = HOME_SPACE_DEFAULTS;
   /** @type {string} */
   let activeSpaceId = 'home'; // Will be updated after loading spaces
+  // Whether the one-time "open the default space on load" has run, so a later
+  // API-triggered refresh() (e.g. reconnect) never yanks the user elsewhere.
+  let appliedInitialDefault = false;
+
+  let deviceDefaultSpaceId = loadDeviceDefaultSpaceId();
+  const systemDefaultSpaceId = () => homeSpaceConfig.defaultSpaceId || '';
+
+  // Whether the app opened straight into the boot-cached default space, in
+  // which case the one-shot default navigation below is already satisfied and
+  // only needs checking against the spaces that actually loaded. Recognized by
+  // the path rather than by a flag threaded down from the entry point, so the
+  // cache's two readers cannot disagree about what was opened.
+  const booted = readBootDefaultSpace();
+  const bootedDefaultSpaceId =
+    booted !== undefined && pathsEqual(booted.profilePath, activePath)
+      ? booted.id
+      : '';
 
   /**
    * Get spaces as sorted array.
@@ -390,7 +611,7 @@ export const createSpacesGutter = ({
    * Update active space based on current profile path.
    */
   const syncActiveSpaceToPath = () => {
-    activeSpaceId = findSpaceForPath(currentProfilePath);
+    activeSpaceId = findSpaceForPath(activePath);
   };
 
   /**
@@ -521,7 +742,7 @@ export const createSpacesGutter = ({
    * Update an existing space's configuration.
    *
    * @param {string} id
-   * @param {Partial<Pick<SpaceConfig, 'name' | 'icon' | 'scheme' | 'viewMode'>>} updates
+   * @param {Partial<Pick<SpaceConfig, 'name' | 'icon' | 'scheme' | 'viewMode' | 'defaultSpaceId'>>} updates
    * @returns {Promise<void>}
    */
   const updateSpace = async (id, updates) => {
@@ -591,6 +812,26 @@ export const createSpacesGutter = ({
   };
 
   /**
+   * The navigation descriptor for a space — what `onNavigate` needs to mount
+   * it. Shared by `selectSpace` and the boot cache so a space opened from the
+   * cache is mounted exactly as clicking it would have mounted it.
+   *
+   * @param {SpaceConfig} space
+   */
+  const spaceInfoFor = space => ({
+    mode: space.mode,
+    channelPetName: space.lastChannelPetName || space.channelPetName,
+    proposedName: space.proposedName,
+    whylipSystemPrompt: space.whylipSystemPrompt,
+    viewMode: space.viewMode,
+    channelOrder: space.channelOrder,
+    bookmarks: space.bookmarks,
+    audioPath: space.audioPath,
+    ttsPath: space.ttsPath,
+    workflowPath: space.workflowPath,
+  });
+
+  /**
    * Select and activate a space.
    *
    * @param {string} id
@@ -611,18 +852,104 @@ export const createSpacesGutter = ({
     activeSpaceId = id;
     applyScheme(space.scheme);
     pushState();
-    onNavigate(space.profilePath, {
-      mode: space.mode,
-      channelPetName: space.lastChannelPetName || space.channelPetName,
-      proposedName: space.proposedName,
-      whylipSystemPrompt: space.whylipSystemPrompt,
-      viewMode: space.viewMode,
-      channelOrder: space.channelOrder,
-      bookmarks: space.bookmarks,
-      audioPath: space.audioPath,
-      ttsPath: space.ttsPath,
-      workflowPath: space.workflowPath,
-    });
+    onNavigate(space.profilePath, spaceInfoFor(space));
+  };
+
+  /**
+   * Write (or clear) the boot cache for whichever space would be opened on the
+   * next load. Called wherever the answer can change: after `refresh()` has the
+   * configurations, and when either default preference is set.
+   */
+  const updateBootDefaultSpace = () => {
+    const target = deviceDefaultSpaceId || systemDefaultSpaceId();
+    const space =
+      target && target !== 'home' ? spacesMap.get(target) : undefined;
+    try {
+      if (space === undefined) {
+        // No default, or one that no longer resolves: the next load opens Home,
+        // and a stale entry would send it somewhere the user did not choose.
+        window.localStorage.removeItem(BOOT_DEFAULT_KEY);
+      } else {
+        window.localStorage.setItem(
+          BOOT_DEFAULT_KEY,
+          JSON.stringify({
+            id: space.id,
+            profilePath: space.profilePath,
+            spaceInfo: spaceInfoFor(space),
+            scheme: space.scheme,
+          }),
+        );
+      }
+    } catch {
+      // localStorage unavailable (private mode); the app just pays the round
+      // trip on the next load, as it did before the cache existed.
+    }
+  };
+
+  /**
+   * Set (or clear) the per-device default space. Persisted in localStorage, so
+   * it is scoped to this browser and overrides the system-wide default.
+   *
+   * @param {string} id
+   * @param {boolean} on
+   */
+  const setDeviceDefaultSpace = (id, on) => {
+    deviceDefaultSpaceId = on ? id : '';
+    try {
+      if (deviceDefaultSpaceId) {
+        window.localStorage.setItem(DEVICE_DEFAULT_KEY, deviceDefaultSpaceId);
+      } else {
+        window.localStorage.removeItem(DEVICE_DEFAULT_KEY);
+      }
+    } catch {
+      // localStorage unavailable (private mode); the in-memory value still
+      // drives this session's view.
+    }
+    updateBootDefaultSpace();
+    pushState();
+  };
+
+  /**
+   * Set (or clear) the system-wide default space. Persisted on the home config
+   * (spaces/0) so it is shared across everyone and every device; the per-device
+   * default, when set, still wins on load.
+   *
+   * @param {string} id
+   * @param {boolean} on
+   */
+  const setSystemDefaultSpace = (id, on) => {
+    updateSpace('home', { defaultSpaceId: on ? id : '' })
+      .then(updateBootDefaultSpace)
+      .catch(window.reportError);
+  };
+
+  /**
+   * Open the configured default space on first load — the per-device default
+   * (this browser) if set, otherwise the system-wide default. Runs once, and
+   * only when the app opened at Home, so an explicit deep-link is never
+   * overridden.
+   */
+  const applyInitialDefaultSpace = () => {
+    if (appliedInitialDefault) return;
+    appliedInitialDefault = true;
+    // The app already opened this space from the boot cache, so there is
+    // nothing to redirect — unless the cache was stale, in which case we are
+    // showing a space that no longer exists and Home is where we belong.
+    if (bootedDefaultSpaceId) {
+      if (!spacesMap.has(bootedDefaultSpaceId)) {
+        selectSpace('home');
+      }
+      return;
+    }
+    // Only redirect a plain Home open; a deep-linked path stays put. This
+    // runs once per gutter, and the gutter is built once per page load, so
+    // returning to Home later is never mistaken for a fresh open.
+    if (activePath.length !== 0) return;
+    const target = deviceDefaultSpaceId || systemDefaultSpaceId();
+    // '' and 'home' both mean "stay on Home", which is where we already are.
+    if (!target || target === 'home') return;
+    if (!spacesMap.has(target)) return; // stale / since-removed
+    selectSpace(target);
   };
 
   /**
@@ -634,6 +961,7 @@ export const createSpacesGutter = ({
    */
   const buildViewState = () => {
     const allSpaces = [homeSpaceConfig, ...getSpacesArray()];
+    const systemDefault = systemDefaultSpaceId();
     return {
       activeSpaceId,
       spaces: allSpaces.map((space, index) => {
@@ -644,6 +972,8 @@ export const createSpacesGutter = ({
           name: space.name,
           icon: space.icon,
           isHome: space.id === 'home',
+          isDeviceDefault: space.id === deviceDefaultSpaceId,
+          isSystemDefault: space.id === systemDefault,
         };
         if (shortcutNum >= 1 && shortcutNum <= 9) {
           view.shortcut = shortcutNum;
@@ -675,6 +1005,8 @@ export const createSpacesGutter = ({
     deleteSpace: id => {
       removeSpace(id).catch(window.reportError);
     },
+    setDeviceDefault: setDeviceDefaultSpace,
+    setSystemDefault: setSystemDefaultSpace,
     addSpace: () => showAddSpaceDialog(),
   };
 
@@ -707,7 +1039,7 @@ export const createSpacesGutter = ({
         name: data.name,
         icon: data.icon,
         profilePath: data.profilePath,
-        mode: /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow'} */ (
+        mode: /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} */ (
           KNOWN_MODES.has(data.layout) ? data.layout : 'inbox'
         ),
         scheme: data.scheme || 'auto',
@@ -843,7 +1175,7 @@ export const createSpacesGutter = ({
     if (!obj.profilePath.every(p => typeof p === 'string')) return null;
     // Mode is optional, default to 'inbox'
     const mode =
-      /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow'} */ (
+      /** @type {'inbox' | 'channel' | 'whylip' | 'graph' | 'peers' | 'files' | 'floot' | 'workflow' | 'secrets' | 'management'} */ (
         typeof obj.mode === 'string' && KNOWN_MODES.has(obj.mode)
           ? obj.mode
           : 'inbox'
@@ -896,6 +1228,9 @@ export const createSpacesGutter = ({
       obj.ttsPath.every(p => typeof p === 'string')
     ) {
       result.ttsPath = obj.ttsPath;
+    }
+    if (typeof obj.defaultSpaceId === 'string') {
+      result.defaultSpaceId = obj.defaultSpaceId;
     }
     if (
       Array.isArray(obj.workflowPath) &&
@@ -955,6 +1290,9 @@ export const createSpacesGutter = ({
           ...HOME_SPACE_DEFAULTS,
           icon: config.icon,
           scheme: config.scheme,
+          ...(config.defaultSpaceId
+            ? { defaultSpaceId: config.defaultSpaceId }
+            : {}),
         });
         if (activeSpaceId === 'home') {
           applyScheme(homeSpaceConfig.scheme);
@@ -1056,11 +1394,15 @@ export const createSpacesGutter = ({
           loadSpaceConfig(id).then(config => {
             if (config) {
               if (id === '0') {
-                // Space 0 is the home config — merge icon/scheme only
+                // Space 0 is the home config — merge icon/scheme plus the
+                // system-wide default-space preference.
                 homeSpaceConfig = harden({
                   ...HOME_SPACE_DEFAULTS,
                   icon: config.icon,
                   scheme: config.scheme,
+                  ...(config.defaultSpaceId
+                    ? { defaultSpaceId: config.defaultSpaceId }
+                    : {}),
                 });
               } else {
                 spacesMap.set(id, config);
@@ -1076,6 +1418,10 @@ export const createSpacesGutter = ({
 
     // Set active space based on current profile path
     syncActiveSpaceToPath();
+    // Now that the configurations are known, record where the next load should
+    // start. This is also what corrects a cache for a space that has since
+    // moved, changed mode, or been removed.
+    updateBootDefaultSpace();
     pushState();
   };
 
@@ -1092,6 +1438,33 @@ export const createSpacesGutter = ({
    * @returns {string}
    */
   const getActiveSpaceId = () => activeSpaceId;
+
+  /**
+   * Point the gutter at a profile path something else navigated to.
+   *
+   * Advisory on purpose: when the space already open still matches the path,
+   * the highlight stays where it is. Several spaces can share one profile path
+   * — a chat and a file view of the same host, say — and re-deriving from the
+   * path alone would quietly move the highlight to whichever of them was
+   * created first.
+   *
+   * @param {string[]} path
+   */
+  const setActivePath = path => {
+    activePath = path;
+    const open =
+      activeSpaceId === 'home' ? homeSpaceConfig : spacesMap.get(activeSpaceId);
+    if (open && pathsEqual(open.profilePath, path)) {
+      return;
+    }
+    activeSpaceId = findSpaceForPath(path);
+    const opened =
+      activeSpaceId === 'home' ? homeSpaceConfig : spacesMap.get(activeSpaceId);
+    if (opened) {
+      applyScheme(opened.scheme);
+    }
+    pushState();
+  };
 
   /**
    * Handle keyboard shortcuts (Cmd+1..9).
@@ -1145,8 +1518,9 @@ export const createSpacesGutter = ({
   // Mount the confined view once; subsequent repaints go through pushState().
   renderConfined(h(SpacesGutterView, { controller }), $container);
 
-  // Load spaces and start watching
+  // Load spaces, open the configured default space (once), then start watching.
   refresh()
+    .then(() => applyInitialDefaultSpace())
     .then(() => watchSpaces())
     .catch(window.reportError);
 
@@ -1158,6 +1532,7 @@ export const createSpacesGutter = ({
     updateSpace,
     removeSpace,
     getActiveSpaceId,
+    setActivePath,
   });
 };
 harden(createSpacesGutter);
