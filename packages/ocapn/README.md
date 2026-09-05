@@ -62,6 +62,64 @@ single concrete pluggable that `makeOcapn` runs against. Import
 `syrupCodec` from `@endo/ocapn/syrup` or `cborCodec` from `@endo/ocapn/cbor`,
 and pair it with a network whose `codec` matches.
 
+### Per-session locators
+
+By default every session shares the one injected `locator`. To scope a
+peer's incoming `bootstrap.fetch` resolution to that authenticated peer —
+so miss counters or rate limits cannot leak across peers — pass an
+optional `makeLocatorForSession` factory alongside `locator`:
+
+```js
+const ocapn = await makeOcapn({
+  codec: syrupCodec,
+  network,
+  locator, // still used for the daemon's own outgoing SturdyRef resolution
+  makeLocatorForSession: ({ remoteDesignator, peerPublicKey, abortSession }) => {
+    // Return a fresh `NonceLocator` for this session. `remoteDesignator`
+    // is the peer's *claimed* designator; it is transport-authenticated
+    // only when the netlayer supplies `verifyPeerLocation` (e.g. iroh's
+    // QUIC-verified EndpointId), and is otherwise self-asserted and
+    // therefore spoofable — so durable per-peer accounting should key on
+    // `peerPublicKey`, the session's handshake-verified public key (its
+    // stable `peerPublicKey.id`), not on `remoteDesignator`.
+    // `abortSession()` severs this session — a
+    // locator that has seen too many misses can call it to enforce a
+    // per-session bound without revealing which presentation crossed it.
+    return makeMyPerSessionLocator({ peerPublicKey, abortSession });
+  },
+});
+```
+
+`@endo/daemon`'s `makeFormulaNonceLocator` (from
+`@endo/daemon/formula-nonce-locator.js`) is a ready-made pairing. It returns
+`{ get, makeLocatorForSession }`, and **both** members must be wired for
+incoming peer traffic to be safe:
+
+```js
+const formulaLocator = makeFormulaNonceLocator({ provideLocalFormula, localNodeNumber });
+const ocapn = await makeOcapn({
+  codec: syrupCodec,
+  network,
+  // `get` is UNBOUNDED — safe as the shared `locator` only for the
+  // daemon's own outgoing self-local `enlivenSturdyRef`.
+  locator: formulaLocator,
+  // This is the member that bounds each peer's failed presentations
+  // against a formula-identifier oracle. Passing only `locator` (the
+  // historical single-locator wiring) is INERT against a prober: it
+  // exposes an unlimited, un-torn-down probing surface.
+  makeLocatorForSession: formulaLocator.makeLocatorForSession,
+});
+```
+
+Note the formula locator refuses every well-known swissnum *word* (e.g.
+`endo-peer-entry`) by construction, and — being the locator for incoming
+fetches — displaces any plain `locator` that serves one. A deployment that
+keeps a live well-known swissnum must **compose** (route the fixed
+swissnum(s) through a thin outer locator that delegates the rest to the
+formula locator) rather than replace its locator wholesale. See the
+`makeFormulaNonceLocator` docstring and
+`designs/daemon-ocapn-external-connectivity.md` §2.
+
 ## Status
 
 This package is a work in progress and is not yet published to npm.
