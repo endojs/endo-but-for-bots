@@ -14,8 +14,8 @@ name away.
 This design gives every guest the package-registry directory tree from
 [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) under the
 special name `@registry`, present when the guest is first formulated, surviving
-daemon reincarnation, and impossible for the guest to remove, rename, rebind, or
-shadow.
+daemon reincarnation, and impossible for the guest to remove, rename, overwrite,
+or shadow.
 
 The mechanism is a dedicated indelible slot: `GuestFormula` gains a required
 `registry` formula identifier, and guest construction projects that identifier
@@ -33,7 +33,7 @@ The Node-hosted Endo daemon projects this name today; Rust-hosted Endor matches
 the underlying tree contract now and the inventory projection once it grows an
 agent and guest model.
 
-## What is the Problem Being Solved?
+## The problem being solved
 
 The directory-tree registry design settles the capability shape but places its
 root only at the host's `@registry` special name.
@@ -56,7 +56,7 @@ The registry needs both properties together.
 
 1. `E(guest).lookup('@registry')` succeeds for every newly formulated or
    migrated guest without a provisioning grant.
-2. The guest cannot remove, rename, replace, copy over, or shadow `@registry`,
+2. The guest cannot remove, rename, overwrite, or shadow `@registry`,
    while ordinary inventory names remain mutable.
 3. The capability grants public registry reads and immutable package-tree reads,
    never publish authority or registry credentials.
@@ -177,6 +177,18 @@ Other inventory entries remain ordinary mutable pet names, and the guest may
 still store another registry-like capability under another valid name.
 The guest cannot make that capability replace what `lookup('@registry')` means.
 
+The chokepoint guarantees only *name indelibility*: that the `@registry` binding
+cannot be removed, renamed, overwritten, or shadowed by the guest.
+It does not, and cannot, guarantee the second headline property: that the seated
+root is a guest-safe public view carrying no publish authority or credentials.
+That property is enforced instead at formulation time (the operator seats a
+guest-safe root, per Authority and attenuation) and checked by the negative
+authority tests below; it is a formulation-policy and test guarantee, not a
+special-name-grammar one.
+A future per-guest attenuating-root path (see Placement and name) must therefore
+preserve that formulation contract itself, since the chokepoint will not catch a
+mis-seated root.
+
 ## Authority and attenuation
 
 Indelibility does not turn a read capability into a write capability, but a
@@ -195,6 +207,13 @@ of these constraints:
   internal effect that yields no CAS writer or eviction authority;
 - daemon-owned cancellation, size, concurrency, and resource limits remain
   outside the guest capability and cannot be relaxed through tree calls.
+
+Where every guest shares one default root (the common case in Placement and
+name), that root's lookup traffic is not attributable per guest, so per-caller
+rate and resource accounting is not a property this design provides. Those limits
+are owned by [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)
+(see Non-goals); an operator needing per-guest accounting seats a distinct
+attenuating root per guest rather than the shared default.
 
 The first configured child is `npm`, backed by unauthenticated public reads.
 A daemon may add another child to the mandatory root only if that child satisfies
@@ -283,16 +302,22 @@ the tree contract both backends already satisfy.
 **garbage-collection reachability**, not cancellation propagation, as its
 lifecycle mechanism.
 The `guest` case of `extractLabeledDeps` emits the registry identifier so the
-formula graph keeps the root reachable while the guest exists; the root is not
-wired through `thisDiesIfThatDies`, so a shared root is never cancelled by any one
-guest's cancellation.
+formula graph keeps the root reachable while the guest exists; the root is
+deliberately not wired through `thisDiesIfThatDies`.
+That wiring registers *this* context to be cancelled when its dependency dies, so
+wiring it would let a shared root's reformulation or cancellation cascade a
+cancellation into every guest that named the root, never the reverse.
+This is an intentional departure from the sibling `HostFormula.registry`, which
+*is* wired through `thisDiesIfThatDies` today; the host holds its own registry
+root, whereas one guest-safe root is shared across many guests, so the host's
+cascade semantics are wrong for the guest slot.
 The parallel normalized formula record used by `getFormula` and inspection also
 reports the field.
 Any equivalent Rust dependency and inspection table does the same once Endor
 carries the field.
 
-Because the root is kept reachable rather than cancelling the guest, it does not
-disappear underneath a live guest.
+Because the root is kept reachable rather than tied to the guest's cancellation,
+it does not disappear underneath a live guest.
 If a root nonetheless fails to formulate at construction, construction fails
 closed (the guest is not exposed without the slot).
 A backend fault reached through an already-live root surfaces as the
@@ -372,16 +397,20 @@ The tests cover:
   and inspection reports the dependency;
 - migration fills a missing field once, preserves an existing field, and never
   exposes an unmigrated guest;
+- a migration interrupted mid-pass (a fault or restart after some but not all
+  guest formulas are rewritten) exposes no half-migrated guest on the next start:
+  the pass resumes and every guest is either fully migrated or unexposed, with no
+  partially-rewritten record reaching the agent map;
 - a credential-capturing registry stub observes no authorization material on a
   guest lookup, and a private-only package is reported as absent through the
   mandatory root, indistinguishable from an unpublished package (the deliberate
-  confidentiality choice recorded under Design Decisions);
+  confidentiality choice recorded under Design decisions);
 - reflection and method-guard tests find no publish, grant, credential,
   configuration, raw HTTP, registry-table mutation, or CAS-write method; and
 - Node returns the tree contract's names, path objects, ordering, content
   identity, and failures for the shared fixture.
 
-## Design Decisions
+## Design decisions
 
 1. **Use `@registry`, not `registry` or `@intro-registry`.** The host already
    establishes the concept under `@registry`; the `@` grammar gives the guest an
@@ -399,7 +428,7 @@ The tests cover:
    external authority and would defeat attenuation.
 5. **Migrate before exposure.** A lazy fallback would make the formula record,
    reachability graph, and live inventory disagree during upgrade.
-6. **A withheld package is indistinguishable from an absent one.** When an
+6. **Treat a withheld package as indistinguishable from an absent one.** When an
    operator seats a narrower root, a package outside its scope surfaces as the
    directory-tree design's missing-package error, the same shape an unpublished
    package produces. This is a deliberate confidentiality choice: it does not let
