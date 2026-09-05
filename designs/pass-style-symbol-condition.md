@@ -42,8 +42,8 @@ subsystem's vocabulary throughout. The load-bearing terms:
   on](#the-existing-dispatch-mechanism-this-rides-on)).
 - **`HelperTable` / `SymbolHelper` / object dispatch**: `passStyleOf`'s object
   case dispatches a frozen object carrying an own `[PASS_STYLE]` string straight
-  to `HelperTable[<that string>]` — a per-pass-style validator (a
-  `PassStyleHelper`) — bypassing the generic record/array scan. `SymbolHelper` is
+  to `HelperTable[<that string>]` (a per-pass-style validator, a
+  `PassStyleHelper`), bypassing the generic record/array scan. `SymbolHelper` is
   the (new) validator this design registers under the `'symbol'` key. The
   mechanism is detailed in [The existing dispatch mechanism this rides
   on](#the-existing-dispatch-mechanism-this-rides-on); it is glossed here because
@@ -58,7 +58,7 @@ subsystem's vocabulary throughout. The load-bearing terms:
   because the Summary uses it first.
 - **OCapN**: the Object Capability Network protocol, the cross-peer
   capability-passing wire protocol `@endo/ocapn` implements. Its alignment goal
-  — that a passable symbol be *exactly* "a name" — is a stated motivation for
+  (that a passable symbol be *exactly* "a name") is a stated motivation for
   this design (see [Motivation](#motivation)).
 - **Syrup**: OCapN's self-describing serialization format (`@endo/ocapn`'s
   `syrup/` layer). Its *selectors* (dictionary keys) are passable symbols today,
@@ -143,15 +143,22 @@ identity loss that raises no error at all.
 - **Recoverable by predicate swap.** Code that inspects a passable symbol with a
   bare `typeof === 'symbol'` guard can be made world-agnostic by validating
   through `isPassableSymbol` / `nameForPassableSymbol` instead. `@endo/ocapn`'s
-  `selector.js` is such a site.
+  `selector.js` is such a site; so are `@endo/workflow`'s `journal.js` encoder and
+  `@endo/patterns`' `matchSymbolHelper`, both enumerated in [The reader-side
+  surface](#the-reader-side-surface-nameforpassablesymbol).
 - **Not recoverable by any predicate swap.** Code that uses the *symbol-ness
   itself* structurally (as a JavaScript **property key**, or by reading
   `symbol.description`) cannot be rescued by a predicate, because a plain
   object is neither a property key nor has a `.description`. `@endo/ocapn`'s
   syrup layer does exactly this: `getSyrupSelectorName`
   (`packages/ocapn/src/syrup/js-representation.js:44`) reads `.description`, and
-  syrup dictionary keys are selectors. Such sites need a representation change,
-  not a guard change.
+  syrup dictionary keys are selectors. The property-key form of this class is not
+  OCapN-only: `packages/far/test/e.test.js:113` uses
+  `[passableSymbolForName('half')](n) {}` (a passable symbol as a computed
+  method key), a pattern no predicate swap rescues, since the variant's object
+  cannot be a method key at all (see [OCapN
+  selectors](#ocapn-selectors-endoocapn)). Such sites need a representation
+  change, not a guard change.
 - **Silent identity loss (no error raised).** The primitive representation
   interns per name: `Symbol.for('foo')` decoded twice yields the *same*
   reference, so code keying a `Map`/`WeakMap` on a decoded passable symbol and
@@ -165,10 +172,12 @@ identity loss that raises no error at all.
   uses of decoded symbols specifically, not only `typeof`/`.description` uses.
 
 This design surfaces the guard and structural classes (see [OCapN
-selectors](#ocapn-selectors-endoocapn)) but has not audited the whole tree; every
-such site is a latent break the implementation must find and address, and the
-structural and silent-identity classes raise the implementation cost above "swap
-the guards."
+selectors](#ocapn-selectors-endoocapn)) and now enumerates the whole first-party
+reader surface (see [The reader-side
+surface](#the-reader-side-surface-nameforpassablesymbol)), but has not audited
+transitive third-party consumers; every such site is a latent break the
+implementation must find and address, and the structural and silent-identity
+classes raise the implementation cost above "swap the guards."
 
 ## Motivation
 
@@ -208,9 +217,27 @@ three wire codecs alone:
   structural break (its reader `getSyrupSelectorName` reads `.description`); see
   [OCapN selectors](#ocapn-selectors-endoocapn).
 
-(Panel round 2 caught the syrup leaf missing from an earlier "three" count; this
-seven-site count is grep-verified rather than re-counted from memory, so the
-enumeration is exhaustive as of this writing.)
+(An earlier revision of this count omitted the syrup leaf; this seven-site count
+is grep-verified rather than re-counted from memory. "Exhaustive" here is a
+bounded claim: it covers non-test *production* call sites of the *producer* leaf
+`passableSymbolForName`, not the paired *reader* leaf `nameForPassableSymbol`
+(that grep is [The reader-side surface](#the-reader-side-surface-nameforpassablesymbol)
+below), and not fixtures or tests. Two producer sites outside `src/` are worth
+naming because an implementer will reach for them: `packages/marshal/tools/marshal-test-data.js`
+is an eighth `passableSymbolForName` caller (a *shipped tools fixture*, not a
+test) that constructs names at module-evaluation time including the
+double-escaped `'@@@@foo'` (lines 131, 133, 359, 361, 363, 486, 487, 489). It is
+not reached under the variant today, because the variant AVA config is registered
+only in pass-style's own `sesAvaConfigs`, but it is the obvious existing fixture
+an implementer would reuse to satisfy this design's own demand for a "full
+marshal round-trip" test (step 3 of [Test and CI
+strategy](#test-and-ci-strategy-and-the-empirical-check-the-brief-demanded)), and
+reusing it under the variant does not merely produce a wrong value: `'@@@@foo'`
+begins with `@@`, which the variant's `passableSymbolForName` **rejects**, so the
+whole module crashes at import. The implementation must either keep this fixture
+out of any variant AVA run or fork a variant-safe copy. `packages/far/test/e.test.js:113`
+is a second such site and is discussed under the structural breakage class in
+[OCapN selectors](#ocapn-selectors-endoocapn).)
 
 `passableSymbolForName`'s terminal line is `return Symbol.for(name)`.
 `Symbol.for` interns into the
@@ -245,8 +272,55 @@ JavaScript versions, encoded through the reserved-`@@` escape in `symbol.js`.
 That escape is what `symbol.js`'s comments call the "Hilbert Hotel" scheme: a
 collision-avoidance convention that reserves the `@@` prefix so a well-known
 symbol's wire name can never be confused with a registered-symbol name of the
-same spelling. For OCapN alignment we want passable symbols to be *exactly*
-"a name," nothing engine-defined and nothing that touches a global registry.
+same spelling. For OCapN alignment the design wants passable symbols to be
+*exactly* "a name," nothing engine-defined and nothing that touches a global
+registry.
+
+### The reader-side surface (`nameForPassableSymbol`)
+
+The seven-site enumeration above greps the *producer* leaf. The transitive-swap
+premise (see [What swaps as one unit](#what-swaps-as-one-unit)) is symmetric,
+though, so it must also be checked against the *reader* leaf; a
+`grep -rn nameForPassableSymbol packages/` (excluding `src/symbol{,-tagged}.js`)
+finds the following first-party reader sites, and they do **not** all swap
+cleanly:
+
+- **`packages/marshal/src/{encodeToSmallcaps,encodeToCapData,encodePassable,rankOrder}.js`
+  and `marshal-justin.js`**: the encode/compare chain. These dispatch on
+  `passStyleOf(...) === 'symbol'` (or receive an already-classified passable), so
+  under the variant the tagged object classifies as `'symbol'` and
+  `nameForPassableSymbol` returns its name: they swap transitively with no line
+  of their own changing. (`rankOrder.js:242-243` is the previously-unmentioned
+  member of this set; it is safe for the same reason.) `marshal-justin.js`'s
+  `assert.typeof(sym, 'symbol')` on the *decode* side is the one exception already
+  called out in the producer enumeration above.
+- **`packages/workflow/src/journal.js:405,411`**: a **recoverable-class break**
+  the earlier drafts missed. `encodeCanonical`'s `if (type === 'symbol')` arm is
+  a bare `typeof` dispatch (`type = typeof value`), and a tagged passable symbol
+  is `typeof === 'object'`, so it never enters that arm; it falls through to the
+  terminal `Fail\`...cannot encode a ${q(style)}\``. Every passable symbol this
+  content-addressed journal encoder accepts today becomes a hard rejection under
+  the variant. Recoverable by dispatching on `passStyleOf`/`nameForPassableSymbol`
+  instead of `typeof`; the implementation must fix it and add a variant-world
+  round-trip test for the journal encoder.
+- **`packages/patterns/src/patterns/patternMatchers.js:1067,1071`**: a second
+  **recoverable-class break**. `matchSymbolHelper.confirmMatches` calls
+  `confirmKind(specimen, 'symbol', reject)` (a `typeof`-class guard) *before*
+  reaching `nameForPassableSymbol`, so under the variant `M.symbol()` pattern
+  matching summarily rejects every tagged passable symbol. Recoverable by making
+  `confirmKind` (or this call site) validate via the passable-symbol predicate
+  rather than `typeof`; likewise needs a variant-world test.
+
+So the honest scope is: the producer grep is exhaustive for its own leaf, but the
+reader surface adds two recoverable-class break sites (`journal.js`,
+`patternMatchers.js`) beyond the `selector.js`/`marshal-justin.js` guards the
+earlier drafts named. The blanket "swaps transitively with no line of its own
+changing" claim in the [Summary](#summary) holds only for readers that dispatch
+on `passStyleOf`; readers that pre-guard on `typeof === 'symbol'` are the
+recoverable-class breaks this landing must find and fix. This subsection is that
+reader grep run explicitly, closing the "producer-only audit" gap; the design
+still has not audited transitive third-party consumers, but the first-party
+reader surface is now enumerated.
 
 ### What this landing does and does not deliver
 
@@ -409,7 +483,7 @@ reaches passable symbols through that surface* (the `typeof`-guard caveat in the
   behavior of the five shared functions is unchanged. That default `SymbolHelper`
   must guard its input shape before probing `nameForPassableSymbol`, because
   default's `nameForPassableSymbol` calls `Symbol.keyFor` unconditionally and
-  that engine call throws a `TypeError` on a non-symbol — see the implementation
+  that engine call throws a `TypeError` on a non-symbol. See the implementation
   constraint in [The `HelperTable['symbol']`
   decision](#the-helpertablesymbol-decision-register-unconditionally).
 
@@ -454,7 +528,7 @@ inspecting the returned shape, which is exactly the `typeof`-style guard this
 design elsewhere names as its breakage class, re-introduced as recommended
 discipline. Worse, under `default` that probe has a **permanent side effect**:
 `passableSymbolForName('x')` interns `'x'` into the global registry forever, so
-the sniff feeds the very table this design exists to protect.
+the sniff feeds the very table this design exists to keep from growing unbounded.
 
 Both implementation modules therefore **export the world as data**: a single
 named constant
@@ -480,13 +554,43 @@ A repo-wide grep finds no package using an `imports` map at all, so this design
 introduces the "named constant, zero-behavior world query" pattern rather than
 following a proven one; it stands on its own merits.
 
-One ergonomic seam remains: the caller *arms* the variant with the condition
-name `pass-style-symbol` (versus `default`) but *queries* it as
-`passableSymbolRepresentation === 'tagged'` (versus `'primitive'`): two
-vocabularies for one concept, forcing the caller to memorize the mapping. The
-constant could instead (or additionally) return the active condition name
-itself, so the caller names the same world it armed; the implementation should
-pick one vocabulary or export both.
+Two ergonomic hazards attend this constant, and this revision resolves both with
+a firm recommendation rather than deferring them to implementation.
+
+First, a **vocabulary seam**: the caller *arms* the variant with the condition
+name `pass-style-symbol` (versus `default`) but the drafted constant *queries* it
+as `passableSymbolRepresentation === 'tagged'` (versus `'primitive'`): two
+vocabularies for one concept, forcing the caller to memorize the mapping (and the
+constant's own name, `...Representation`, is a third framing against the prose
+term "world"). **Recommendation: collapse arming and querying onto one
+vocabulary**, so the world query names the same world the caller armed, either by
+having the constant's value spell the condition itself (`=== 'pass-style-symbol'`
+versus `'default'`) or by treating the condition name as the canonical spelling
+throughout.
+
+Second, a **bare-string-comparison hazard**: every other "is this true of the
+active world" check on this surface is a named `is*`/`assert*` predicate
+(`isPassableSymbol`, `assertPassableSymbol`), but a raw
+`passableSymbolRepresentation === 'tagged'` is a string-literal comparison each
+call site must spell correctly, with no companion predicate and no enum to import
+against, so a typo like `'Tagged'` or `'tagged '` silently mis-branches with no
+static or runtime error. **Recommendation: ship the query as a named predicate
+(and/or a frozen enum object), not only a bare string**, matching the
+boolean-predicate convention the rest of this surface follows:
+
+```js
+// re-exported through #pass-style-symbol-impl and @endo/pass-style
+export const PassableSymbolWorld = harden({ default: 'default', tagged: 'pass-style-symbol' });
+export const passableSymbolRepresentation = PassableSymbolWorld.default; // or .tagged
+export const isTaggedSymbolWorld = () =>
+  passableSymbolRepresentation === PassableSymbolWorld.tagged;
+```
+
+so a misspelled comparison fails at import or is caught by the predicate rather
+than mis-branching. The exact spelling of the value and whether to ship the
+predicate, the enum, or both is [open question 10](#open-questions); the standing
+requirements are one vocabulary for arming and querying, and a query surface that
+fails loudly on a typo.
 
 Relatedly, because the world is ambient state a call site cannot see, the
 variant module's error messages **must name the variant**: today
@@ -549,6 +653,19 @@ modules](#the-two-implementation-modules)). Both modules therefore export a
 structurally-identical validator for the tagged shape; only the five
 *behavioral* functions differ between them.
 
+This is a deliberate, accepted deviation from the "one `*Helper`, one canonical
+file" convention the rest of `@endo/pass-style` follows (`CopyRecordHelper` lives
+only in `copyRecord.js`, `TaggedHelper` only in `tagged.js`, `RemotableHelper`
+only in `remotable.js`). `SymbolHelper` uniquely ships from **two** files
+(`symbol.js` and `symbol-tagged.js`) behind the one conditional alias, a direct
+consequence of the swap mechanism: because `passStyleOf.js` must import the
+helper through `#pass-style-symbol-impl` and that alias resolves to a different
+file per condition, whichever file the condition selects has to carry a
+`SymbolHelper`. The duplication is recorded here as an intended cost of the
+condition mechanism, not an oversight; the shared type surface
+([Typecheck](#typecheck-dts-and-eslint-under-the-non-default-condition)) keeps the
+two copies from drifting.
+
 The bare-structural variant of this recommendation (option (a), validate shape
 only) is **rejected** precisely because it breaks the completeness invariant
 that `passStyleOf`/`assertPassable` are relied on to hold. Under (a), a
@@ -581,11 +698,12 @@ rather than swapping `HelperTable` (option (c)):
   primitive symbol. So a validator that naively probes
   `nameForPassableSymbol(val)` with `val` being the whole tagged object would,
   under `default`, crash with an **unguarded `TypeError` from deep inside
-  `assertValid`** — not the clean `Fail`-style validation error this comparison
-  needs to be able to say the two options "differ only in the shape of the
-  rejection." The implementation constraint, therefore — parallel to the "the
-  `@@` rejection must be enforced at all three doors" callout in [The two
-  implementation modules](#the-two-implementation-modules) — is that either
+  `assertValid`**. That is not the clean `Fail`-style validation error this
+  comparison needs; with a raw engine crash it would no longer be true that the
+  two options "differ only in the shape of the rejection." The implementation
+  constraint, therefore (parallel to the "the `@@` rejection must be enforced at
+  all three doors" callout in [The two implementation
+  modules](#the-two-implementation-modules)), is that either
   `SymbolHelper`'s validator must confirm `val` is a primitive symbol before
   probing (and reject a non-symbol cleanly), or `nameForPassableSymbol` must
   itself guard its input shape and return `undefined` for a non-symbol rather
@@ -604,7 +722,7 @@ rather than swapping `HelperTable` (option (c)):
 
 The probe is therefore part of the recommendation, not a mere option: it is the
 one thing that keeps option (a)'s "recognize a hand-built tagged object under
-`default`" property — the completeness-invariant break described just above —
+`default`" property (the completeness-invariant break described just above)
 from shipping. That is what makes option (b), not option (a), the
 recommendation.
 
@@ -643,7 +761,7 @@ representation while another keeps default interop, matching the *vat*
 granularity the threat model invokes rather than the coarser *process*
 granularity a condition imposes.
 
-The condition mechanism was chosen anyway for this landing because the swap
+The condition mechanism is chosen anyway for this landing because the swap
 must reach code that does **not** take a marshal instance as a parameter:
 `passStyleOf` is called through module-level singletons, and marshal's encoders
 import `passableSymbolForName`/`nameForPassableSymbol` as free module bindings,
@@ -692,7 +810,7 @@ Why the tagged object is chosen over it anyway:
   table mitigates this but complicates equality.) In fairness, the asymmetry
   cuts the other way too, and it must be weighed on the record rather than
   quietly: instance/vat-scoped growth *is* the granularity the threat model
-  demands — a confined vat exhausting its own allotment, not the whole process —
+  demands (a confined vat exhausting its own allotment, not the whole process),
   whereas the shipped condition mechanism is process-wide and, by this design's
   own admission ([open question 9](#open-questions)), does not reach vat
   granularity *at all* in this landing (see [What this landing does and does not
@@ -774,7 +892,7 @@ around, not glossed:
 
 ## Test and CI strategy, and the empirical check the brief demanded
 
-The brief insists we not *assume* that AVA forwards a `-C` flag to whatever
+The brief insists the design not *assume* that AVA forwards a `-C` flag to whatever
 process ultimately resolves the conditional import, but confirm it. **The
 forwarding path is already load-bearing in this very repo**, by a mechanism the
 pass-style suite depends on today:
@@ -792,7 +910,7 @@ pass-style suite depends on today:
   then conditional resolution) is a **load-bearing, already-exercised** fact,
   not an assumption.
 
-This also tells us *where* to inject `pass-style-symbol`: through an AVA
+This also pins down *where* to inject `pass-style-symbol`: through an AVA
 config's `nodeArguments`, driven by `ses-ava`'s existing multi-config
 mechanism (`sesAvaConfigs` in `package.json`, dispatched by
 `packages/ses-ava/src/command.js`, which spawns `ava --config <file>` once per
@@ -851,16 +969,27 @@ Concretely:
    - Keep the existing symbol tests asserting **default** (primitive) behavior;
      they run under the default configs and, under the variant config, the
      assertions that a passable symbol is a primitive `symbol` would **fail**,
-     so they must be gated. Gate on the **named world query** rather than
-     sniffing a minted value (Node exposes no "is condition X active" API, but
-     this design exports one: see [A named world query, not a
-     shape-sniff](#a-named-world-query-not-a-shape-sniff)). Import
-     `passableSymbolRepresentation` from `@endo/pass-style` and branch on
-     `passableSymbolRepresentation === 'primitive'` vs. `'tagged'`, with no
-     shape inspection and no `Symbol.for` side effect on the global registry.
-     Alternatively, split into `symbol.test.js` (runs default config only) and
-     `symbol-tagged.test.js` (runs variant config only) via AVA's per-config
-     `files` globs.
+     so the two worlds' assertions must be kept apart. **Recommendation: split
+     into `symbol.test.js` (runs the default config only) and
+     `symbol-tagged.test.js` (runs the variant config only) via AVA's per-config
+     `files` globs**, so the file system's structural separation (not a runtime
+     conditional) carries the world distinction. This is the same
+     simple-primitives-over-branching discipline the design applies to `src/`
+     ([A named world query, not a
+     shape-sniff](#a-named-world-query-not-a-shape-sniff) argues for a *named*
+     query specifically to replace ambient conditional branching); a single test
+     file that says "if tagged assert X, else assert Y" would reintroduce in
+     `test/` exactly the complecting the production code avoids, and reads worse
+     as "what does world W guarantee." Only where a single assertion genuinely
+     holds in both worlds up to representation (rare) is the in-file fallback
+     justified: gate it on the **named world query**, not on a sniffed minted
+     value (Node exposes no "is condition X active" API, but this design exports
+     one: see [A named world query, not a
+     shape-sniff](#a-named-world-query-not-a-shape-sniff)); import
+     `passableSymbolRepresentation` from `@endo/pass-style` and branch on it, with
+     no shape inspection and no `Symbol.for` side effect on the global registry.
+     The split-file layout is the default; the in-file branch is the exception,
+     not a coin-flip alternative.
    - Add variant-only tests asserting: `passableSymbolForName` returns the
      tagged object; it never grows the registry (see the registry-growth
      regression test below); primitive symbols are **not** passable;
@@ -899,9 +1028,9 @@ Concretely:
      ships.
 
 4. **Add a registry-growth regression test** (variant world) that makes the
-   security claim executable rather than asserted. The naive sketch — decode
+   security claim executable rather than asserted. The naive sketch (decode
    fresh names, then check `Symbol.for(sameName)` "still returns a
-   fresh-to-the-registry entry" — is **not** falsifiable, and the design must not
+   fresh-to-the-registry entry") is **not** falsifiable, and the design must not
    pretend it is: a caller cannot tell a cache-*hit* (the name was already
    registered by a buggy decode) from a cache-*miss* (registered for the first
    time by this very `Symbol.for` call) from the return value alone, since both
@@ -925,7 +1054,7 @@ Concretely:
    - **Heap-growth sampling (`--expose-gc`), corroborating.** Decode a large
      batch of distinct fresh names, drop all references to the decoded values,
      force `global.gc()`, and assert the process's retained size does not grow
-     monotonically with the batch — the tagged objects are collectable, whereas a
+     monotonically with the batch: the tagged objects are collectable, whereas a
      registry leak is not. This is empirical and noisier than the spy, so it
      corroborates rather than replaces it.
 
@@ -938,8 +1067,8 @@ Concretely:
    registered primitive). The `Symbol.for`-spy test (variant: zero calls;
    default: one call per distinct name) is the worked, falsifiable proof of the
    threat model and its fix, satisfying the brief's discipline #2 that the
-   security claim be an executable regression test — the naive `Symbol.for`
-   round-trip sketch did not.
+   security claim be an executable regression test, which the naive `Symbol.for`
+   round-trip sketch is not.
 
 5. **Add cross-variant interop tests.** The two claims [Cross-variant
    interop](#cross-variant-interop) makes are testable in-process today, with
@@ -1051,6 +1180,19 @@ guards will hit these first and mis-scope the work as guard edits, so the design
 names it explicitly. Note this file documents itself as "not used in OCapN...
 useful for testing and debugging," so it is not on the production OCapN wire
 path, but it is a real in-tree consumer that breaks.
+
+The **property-key** half of the unrecoverable class is not confined to OCapN,
+and the design names a concrete in-tree instance so the implementation's audit
+has a target rather than a generic caveat: `packages/far/test/e.test.js:113`
+writes `[passableSymbolForName('half')](n) {}` (a passable symbol used directly
+as a computed method key in an exo/`@endo/far` method-dispatch test). Under the
+variant `passableSymbolForName('half')` is a plain object, which cannot be a
+property key at all, so this construction fails outright and no predicate swap
+rescues it. It is in test code, not production, but it demonstrates that passable
+symbols reach `@endo/far` method dispatch as property keys, a place production
+exo definitions could plausibly recur the same pattern; the implementation's
+tree audit for the structural class must therefore cover `@endo/far`/exo method
+keys, not only OCapN selectors and syrup dictionaries.
 
 The concrete edits to either file are **implementation**, out of scope for this
 design; this document's job is to flag that selectors are on the path, that
@@ -1193,7 +1335,23 @@ that is a separate wire-format change, noted as an open question.
    tsconfig for type coverage. Default behavior byte-identical.
 3. Make `@endo/ocapn`'s `selector.js` world-agnostic (replace `typeof ===
    'symbol'` guards with passable-symbol predicates) and add its own variant
-   test config, so selectors travel with the condition.
+   test config, so selectors travel with the condition. That variant config
+   must **not** exercise the syrup layer until the syrup layer is fixed: syrup's
+   `.description`/property-key use is the unrecoverable class (see [OCapN
+   selectors](#ocapn-selectors-endoocapn)), so a variant AVA run that swept in
+   the syrup tests would break them the moment it ran. Two orderings satisfy
+   this, and the design requires one of them explicitly rather than leaving it to
+   chance: either (a) the ocapn variant config's `files` glob **excludes** the
+   syrup test files (e.g. omits `test/syrup/**`) so selectors travel under the
+   condition while syrup stays on the primitive scheme, or (b) the syrup
+   representation change (read the name from `[Symbol.toStringTag]`, key
+   dictionaries by string) ships **atomically in the same PR** that adds the
+   ocapn variant config, so no config ever runs against unconverted syrup code.
+   Option (a) is the lighter step and is compatible with syrup staying on the
+   primitive scheme indefinitely ([open question 4](#open-questions)); option (b)
+   is required only if a consumer wants syrup itself under the variant. Whichever
+   is chosen, no ocapn variant test config may land while its `files` glob still
+   reaches unconverted syrup tests.
 4. Only later, and separately, consider whether any consumer should make
    `pass-style-symbol` its *default* (a decision with wire-interop
    consequences, above, explicitly out of scope here), and whether the vat
@@ -1291,6 +1449,17 @@ that is a separate wire-format change, noted as an open question.
    default interop. Is process granularity acceptable for the migration lever,
    with vat granularity deferred to the value-parameter shape (open question
    8), or does the multi-vat case need vat granularity from the start?
+
+10. **World-query surface: spelling and shape.** [A named world query, not a
+    shape-sniff](#a-named-world-query-not-a-shape-sniff) recommends collapsing the
+    arm-vocabulary (`pass-style-symbol`/`default`) and the query-vocabulary
+    (`tagged`/`primitive`) onto one spelling, and shipping the query as a named
+    predicate and/or frozen enum rather than a bare string comparison, so a typo
+    fails loudly. What exact value should the world constant carry (the condition
+    name itself, or a distinct representation term), and should the package export
+    `isTaggedSymbolWorld()`, a `PassableSymbolWorld` enum, both, or only the raw
+    constant? This is a naming/affordance decision left to the implementer within
+    those two standing requirements.
 
 ## Prompt
 

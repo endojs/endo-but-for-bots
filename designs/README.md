@@ -530,8 +530,12 @@ security track. Size estimate: a modest implementation (one new module plus a
 `SymbolHelper`, an `imports` alias, three specifier edits, a world-query export,
 a second AVA config, world-aware tests, and a second tsconfig for type coverage),
 roughly a single focused implementation PR, plus a follow-up for OCapN
-`selector.js` de-primitivization and the syrup-layer representation change; it
-does not shift any milestone's critical path.
+`selector.js` de-primitivization. The syrup-layer representation change is a
+harder, separable item: the design requires that any OCapN variant test config
+either exclude the syrup tests or ship atomically with the syrup fix, so "syrup
+follow-up" must not be read as landing *after* a variant config that would
+already exercise it (see the design's Rollout step 3). It does not shift any
+milestone's critical path.
 
 ## Roadmap
 
