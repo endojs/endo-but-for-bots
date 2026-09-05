@@ -1,5 +1,6 @@
 ---
 '@endo/slots': minor
+'@endo/eventual-send': minor
 ---
 
 **BREAKING (wire protocol):** `deliver` bodies now carry one flat passable
@@ -16,6 +17,10 @@ On receipt the target's shape decides dispatch, mirroring `@endo/ocapn`:
 function Exos receive the complete argument vector via `applyFunction`; object
 Exos validate and decode the leading selector, then dispatch the corresponding
 string method via `applyMethod`. Descriptor translation and reply semantics are
-unchanged, and the Rust supervisor is unaffected because it treats the body as
-opaque bytes. The `__get__` property-access convention remains a private
-slot-machine method call (see the README).
+unchanged, and the Rust supervisor treats the body as opaque bytes.
+
+The OCapN data operations are now separate, non-overlapping lanes:
+`E.get(target).field`, `E.index(target, index)`, and
+`E.untag(target, tag)` dispatch through corresponding `HandledPromise`
+handler methods and distinct slot-machine verbs. Gets reject arrays, indexes
+reject non-arrays, and untag rejects a mismatched tag.

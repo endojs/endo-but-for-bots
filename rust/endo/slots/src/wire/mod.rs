@@ -1,9 +1,12 @@
 //! Inter-worker wire protocol.
 //!
-//! Slot-machine claims four envelope verbs on the bus:
+//! Slot-machine claims seven envelope verbs on the bus:
 //!
 //! * [`VERB_DELIVER`]  — method call on a kref.  Sync when the
 //!   envelope's `nonce` is non-zero, fire-and-forget otherwise.
+//! * [`VERB_GET`]      — field access on a record.
+//! * [`VERB_INDEX`]    — positional access on a list.
+//! * [`VERB_UNTAG`]    — tag-checked access to a tagged payload.
 //! * [`VERB_RESOLVE`]  — fulfil or reject a promise kref.
 //! * [`VERB_DROP`]     — decrement one or more pillars on a kref.
 //! * [`VERB_ABORT`]    — session teardown; slot-machine calls
@@ -29,11 +32,23 @@ pub use payload::{AbortPayload, DeliverPayload, DropDelta, DropPayload, ResolveP
 pub use translate::translate_deliver;
 
 pub const VERB_DELIVER: &str = "deliver";
+pub const VERB_GET: &str = "get";
+pub const VERB_INDEX: &str = "index";
+pub const VERB_UNTAG: &str = "untag";
 pub const VERB_RESOLVE: &str = "resolve";
 pub const VERB_DROP: &str = "drop";
 pub const VERB_ABORT: &str = "abort";
 
 /// Returns true when the envelope verb is one slot-machine claims.
 pub fn is_slot_verb(verb: &str) -> bool {
-    matches!(verb, VERB_DELIVER | VERB_RESOLVE | VERB_DROP | VERB_ABORT)
+    matches!(
+        verb,
+        VERB_DELIVER
+            | VERB_GET
+            | VERB_INDEX
+            | VERB_UNTAG
+            | VERB_RESOLVE
+            | VERB_DROP
+            | VERB_ABORT
+    )
 }

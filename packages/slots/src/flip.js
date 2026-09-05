@@ -3,6 +3,9 @@
 import { Direction } from './descriptor.js';
 import {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   VERB_DROP,
   encodeDeliverPayload,
@@ -42,7 +45,12 @@ const flipArr = arr => arr.map(flipDesc);
  * @returns {Uint8Array}
  */
 export const flipEnvelopePayload = (verb, payload) => {
-  if (verb === VERB_DELIVER) {
+  if (
+    verb === VERB_DELIVER ||
+    verb === VERB_GET ||
+    verb === VERB_INDEX ||
+    verb === VERB_UNTAG
+  ) {
     const p = decodeDeliverPayload(payload);
     return encodeDeliverPayload({
       target: flipDesc(p.target),

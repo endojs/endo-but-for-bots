@@ -8,6 +8,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far, E } from '@endo/far';
+import { makeTagged } from '@endo/pass-style';
 
 import { bootstrap } from '../src/bootstrap.js';
 import { makeLoopback } from './_loopback.js';
@@ -57,6 +58,38 @@ test('primitive return values flow back', async t => {
 
   t.is(await E(remoteRoot).add(2, 3), 5);
   t.is(await E(remoteRoot).concat('left', 'right'), 'left/right');
+});
+
+test('get, index, and untag use distinct wire operations', async t => {
+  const { a, b } = makeLoopback();
+  const records = harden({ field: 'value' });
+  const list = harden(['zero', 'one']);
+  const tagged = makeTagged('example', 'payload');
+
+  const bRoot = Far('b-root', {
+    record: () => records,
+    list: () => list,
+    tagged: () => tagged,
+  });
+  bootstrap({ clist: b.clist, client: b.client, root: bRoot });
+  const { remoteRoot } = bootstrap({
+    clist: a.clist,
+    client: a.client,
+    root: Far('a-root', {}),
+  });
+
+  t.is(await E.get(E(remoteRoot).record()).field, 'value');
+  t.is(await E.index(E(remoteRoot).list(), 1), 'one');
+  t.is(await E.untag(E(remoteRoot).tagged(), 'example'), 'payload');
+  await t.throwsAsync(E.get(E(remoteRoot).list()).length, {
+    message: /Cannot get a field from an array/,
+  });
+  await t.throwsAsync(E.index(E(remoteRoot).record(), 0), {
+    message: /Cannot index into a non-array value/,
+  });
+  await t.throwsAsync(E.untag(E(remoteRoot).tagged(), 'different'), {
+    message: /Tag mismatch/,
+  });
 });
 
 test('E(function)(value) applies the whole argument vector', async t => {

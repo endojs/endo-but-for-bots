@@ -1,4 +1,4 @@
-//! Payload structs for the four slot-machine verbs, with canonical
+//! Payload structs for the slot-machine verbs, with canonical
 //! CBOR encode/decode.  Every payload is a top-level CBOR array;
 //! fields are positional so the wire format carries no field names.
 

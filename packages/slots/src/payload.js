@@ -26,6 +26,12 @@ import { writeDescriptor, readDescriptor } from './descriptor.js';
 
 export const VERB_DELIVER = 'deliver';
 harden(VERB_DELIVER);
+export const VERB_GET = 'get';
+harden(VERB_GET);
+export const VERB_INDEX = 'index';
+harden(VERB_INDEX);
+export const VERB_UNTAG = 'untag';
+harden(VERB_UNTAG);
 export const VERB_RESOLVE = 'resolve';
 harden(VERB_RESOLVE);
 export const VERB_DROP = 'drop';
@@ -39,6 +45,9 @@ harden(VERB_ABORT);
  */
 export const isSlotVerb = verb =>
   verb === VERB_DELIVER ||
+  verb === VERB_GET ||
+  verb === VERB_INDEX ||
+  verb === VERB_UNTAG ||
   verb === VERB_RESOLVE ||
   verb === VERB_DROP ||
   verb === VERB_ABORT;

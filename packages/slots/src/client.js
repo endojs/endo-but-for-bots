@@ -10,6 +10,9 @@ import { Kind, descriptorKey } from './descriptor.js';
 import { makeSelector, getSelectorName } from './selector.js';
 import {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   VERB_DROP,
   VERB_ABORT,
@@ -155,11 +158,12 @@ export const makeSlotClient = ({
    * invocation (see the presence handlers); a function application
    * passes its arguments unchanged.  Returns a promise for the reply.
    *
+   * @param {string} verb
    * @param {unknown} target
    * @param {unknown[]} args the complete argument vector for the body
    * @returns {Promise<unknown>}
    */
-  const deliver = (target, args) => {
+  const request = (verb, target, args) => {
     const { promise: reply, resolve, reject } = makePromiseKit();
     const bytes = codec.encodeDeliver({ target, args, reply });
     const replyDesc = clist.lookupByValue(reply);
@@ -173,11 +177,14 @@ export const makeSlotClient = ({
     // can still find the matching entry.
     settlers.set(descriptorKey(replyDesc), { resolve, reject });
     if (typeof globalThis.hostTrace === 'function') {
-      globalThis.hostTrace(`slot-client.deliver argc=${args.length}`);
+      globalThis.hostTrace(`slot-client.${verb} argc=${args.length}`);
     }
-    sendEnvelope(VERB_DELIVER, bytes);
+    sendEnvelope(verb, bytes);
     return reply;
   };
+  harden(request);
+
+  const deliver = (target, args) => request(VERB_DELIVER, target, args);
   harden(deliver);
 
   /**
@@ -247,14 +254,8 @@ export const makeSlotClient = ({
         deliverSendOnly(p, [...args]);
       },
       /**
-       * Property access via `E(p).prop` is OCapN's `op:get` — the one
-       * non-delivery lane JavaScript eventual-send can express
-       * (`HandledPromise.get`).  Today it is carried as a `deliver` of
-       * the conventional `__get__` method with the property name as its
-       * only argument (so, like every method call, its selector is
-       * prepended), rather than a first-class wire op.  See the README
-       * (§ Calling convention) for the plan to emulate OCapN's separate
-       * `op:get` / `op:index` / `op:untag` lanes.
+       * Property access is carried by the dedicated `get` wire verb, so
+       * a delivery cannot intercept or impersonate it.
        *
        * @param {unknown} p
        * @param {string | symbol} prop
@@ -263,7 +264,21 @@ export const makeSlotClient = ({
         if (typeof prop !== 'string') {
           throw makeError(X`slot-machine property names must be strings`);
         }
-        return deliver(p, [makeSelector('__get__'), prop]);
+        return request(VERB_GET, p, [prop]);
+      },
+      /**
+       * @param {unknown} p
+       * @param {number} index
+       */
+      index(p, index) {
+        return request(VERB_INDEX, p, [index]);
+      },
+      /**
+       * @param {unknown} p
+       * @param {string} tag
+       */
+      untag(p, tag) {
+        return request(VERB_UNTAG, p, [tag]);
       },
     };
     // Use the executor's third argument, `resolveWithPresence`, to
@@ -372,12 +387,13 @@ export const makeSlotClient = ({
    * envelope when the result settles.
    *
    * @param {Uint8Array} bytes
+   * @param {(target: unknown, args: unknown[]) => unknown} invoke
    */
-  const onDeliver = bytes => {
+  const onOperation = (bytes, invoke) => {
     const { target, args, reply } = codec.decodeDeliver(bytes);
     let resultP;
     try {
-      resultP = invokeDeliver(target, args);
+      resultP = invoke(target, args);
     } catch (err) {
       resultP = Promise.reject(err);
     }
@@ -415,7 +431,43 @@ export const makeSlotClient = ({
       );
     }
   };
+  harden(onOperation);
+
+  const onDeliver = bytes => onOperation(bytes, invokeDeliver);
   harden(onDeliver);
+
+  const onGet = bytes =>
+    onOperation(bytes, (target, args) => {
+      if (args.length !== 1 || typeof args[0] !== 'string') {
+        throw makeError(X`slot-machine get requires one string field name`);
+      }
+      return HandledPromise.get(target, args[0]);
+    });
+  harden(onGet);
+
+  const onIndex = bytes =>
+    onOperation(bytes, (target, args) => {
+      if (
+        args.length !== 1 ||
+        !Number.isSafeInteger(args[0]) ||
+        /** @type {number} */ (args[0]) < 0
+      ) {
+        throw makeError(
+          X`slot-machine index requires one non-negative safe integer`,
+        );
+      }
+      return HandledPromise.index(target, /** @type {number} */ (args[0]));
+    });
+  harden(onIndex);
+
+  const onUntag = bytes =>
+    onOperation(bytes, (target, args) => {
+      if (args.length !== 1 || typeof args[0] !== 'string') {
+        throw makeError(X`slot-machine untag requires one string tag`);
+      }
+      return HandledPromise.untag(target, args[0]);
+    });
+  harden(onUntag);
 
   /**
    * Handle an inbound `resolve`: route to the matching local reply
@@ -526,6 +578,9 @@ export const makeSlotClient = ({
    */
   const onEnvelope = (verb, payload) => {
     if (verb === VERB_DELIVER) return onDeliver(payload);
+    if (verb === VERB_GET) return onGet(payload);
+    if (verb === VERB_INDEX) return onIndex(payload);
+    if (verb === VERB_UNTAG) return onUntag(payload);
     if (verb === VERB_RESOLVE) return onResolve(payload);
     if (verb === VERB_DROP) {
       onDrop(payload);
@@ -553,6 +608,9 @@ export const makeSlotClient = ({
     deliverSendOnly,
     drop,
     onDeliver,
+    onGet,
+    onIndex,
+    onUntag,
     onResolve,
     onDrop,
     onEnvelope,

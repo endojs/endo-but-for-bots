@@ -10,6 +10,9 @@ import { makeSlotCodec } from '../src/codec.js';
 import { makeSlotClient } from '../src/client.js';
 import {
   VERB_DELIVER,
+  VERB_GET,
+  VERB_INDEX,
+  VERB_UNTAG,
   VERB_RESOLVE,
   encodeDeliverPayload,
   decodeDeliverPayload,
@@ -94,7 +97,12 @@ const flipDesc = d => ({
 const flipArr = arr => arr.map(flipDesc);
 
 const flipEnvelope = (verb, payload) => {
-  if (verb === VERB_DELIVER) {
+  if (
+    verb === VERB_DELIVER ||
+    verb === VERB_GET ||
+    verb === VERB_INDEX ||
+    verb === VERB_UNTAG
+  ) {
     const p = decodeDeliverPayload(payload);
     return encodeDeliverPayload({
       target: flipDesc(p.target),
@@ -140,6 +148,36 @@ test('makePresence returns a HandledPromise whose E() call encodes a deliver', a
   t.is(envelopes.length, 1);
   t.is(envelopes[0].verb, VERB_DELIVER);
   t.is(client.pendingCount(), 1);
+});
+
+test('presence get, index, and untag emit distinct verbs', async t => {
+  const envelopes = [];
+  const clist = makeCList({ label: 'caller' });
+  const codec = makeSlotCodec({
+    clist,
+    makePresence: () => ({}),
+    marshalName: 'caller',
+  });
+  const client = makeSlotClient({
+    clist,
+    codec,
+    sendEnvelope: (verb, payload) => envelopes.push({ verb, payload }),
+  });
+  const presence = client.makePresence({
+    direction: Direction.Remote,
+    kind: Kind.Object,
+    position: 1,
+  });
+
+  void E.get(presence).field;
+  void E.index(presence, 0);
+  void E.untag(presence, 'example');
+  await null;
+
+  t.deepEqual(
+    envelopes.map(({ verb }) => verb),
+    [VERB_GET, VERB_INDEX, VERB_UNTAG],
+  );
 });
 
 test('pendingCount decrements when a matching resolve arrives', async t => {
