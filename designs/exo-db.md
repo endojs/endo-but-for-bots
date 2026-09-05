@@ -77,7 +77,13 @@ A remotable or promise inside a passable cell remains a capability passed by
 presence, but the enclosing row is still a plain pass-by-copy value.
 Database, table, and reader identities are capabilities.
 
-The package exports these `M.interface` guards:
+The package exports these `M.interface` guards.
+Each `name: M.callWhen(...args).returns(result)` clause declares one method's
+argument and return contract: `M.callWhen()` awaits any promise arguments before
+dispatch and enforces the argument guards, `M.record()` requires a pass-by-copy
+record, `M.remotable('TableRead')` requires a remotable presenting the named
+interface, and `M.returns()` with no argument means the method resolves to
+`undefined`.
 
 ```js
 export const DatabaseReadInterface = M.interface('DatabaseRead', {
@@ -94,6 +100,7 @@ export const DatabaseWriteInterface = M.interface('DatabaseWrite', {
 export const DatabaseAdminInterface = M.interface('DatabaseAdmin', {
   readOnly: M.callWhen().returns(M.remotable('DatabaseRead')),
   readWrite: M.callWhen().returns(M.remotable('DatabaseWrite')),
+  openTable: M.callWhen(M.string()).returns(M.remotable('TableWrite')),
   createTable: M.callWhen(M.string(), M.record()).returns(
     M.remotable('TableWrite'),
   ),
@@ -144,21 +151,27 @@ and durable reference identifiers never cross an exo boundary.
 
 The method semantics are:
 
-- `insert(row)` takes a complete row and atomically fails with `ConflictError`
-  if the primary key already exists;
+- `insert(row)` takes a complete row and atomically fails with
+  `RowExistsError` if the primary key already exists;
 - `update(row)` takes a complete row (it is a whole-row replace, never a
   partial-field merge; unlike DynamoDB's `UpdateItem`, the caller passes every
   declared column exactly as `insert` and `put` do) and atomically fails with
-  `ConflictError` if the row does not exist;
+  `RowMissingError` if the row does not exist;
 - `put(row)` takes a complete row and atomically inserts or replaces; and
 - `delete(key)` removes the row if present and returns whether a row existed.
 
 The three existence-precondition mutators disagree on purpose about how they
-signal a precondition failure: `insert` and `update` throw `ConflictError`,
-because a violated precondition means the caller's intended write cannot be
-performed at all, whereas `delete` reports absence through its boolean result
-rather than throwing, because deleting an already-absent key is deliberately
-idempotent (re-running a delete is a safe no-op, not an error).
+signal a precondition failure: `insert` and `update` throw, because a violated
+precondition means the caller's intended write cannot be performed at all,
+whereas `delete` reports absence through its boolean result rather than throwing,
+because deleting an already-absent key is deliberately idempotent (re-running a
+delete is a safe no-op, not an error).
+The two throwing mutators use *distinct* error names for their opposite
+preconditions (`insert` throws `RowExistsError` when the row must not exist,
+`update` throws `RowMissingError` when the row must exist) rather than one shared
+name a catch site would have to string-match to disambiguate, since a retried
+`insert` and a mistargeted `update` are genuinely different conditions the caller
+handles differently.
 The mutation contract is that an acknowledged mutation is durable, while two
 concurrent writes to one key take some serial order.
 The update-only mutator is spelled `update` rather than `replace` deliberately:
@@ -216,7 +229,7 @@ The three bands are deliberate:
 | JSON | Hardened JSON values: null, booleans, finite numbers within the DynamoDB `N` exponent window, strings, arrays, and string-keyed records | Canonical JSON text checked with JSON1 | Native map/list/scalar attributes | Declared JSON-path indexes, projection, and the predicate subset below |
 | Passable | Every durably passable value, including copy data, errors, promises, remotables, and references nested in copy data | Smallcaps body plus formula-identifier slots | Opaque body plus formula-identifier slot list | Whole-cell read/write only; a `Key` value may additionally serve as an encoded key |
 
-The narrow band is intentionally stricter than either engine's coercions.
+The Narrow band is intentionally stricter than either engine's coercions.
 `int64` never silently becomes REAL, `float64` rejects `NaN` and infinities, and
 booleans do not accept `0` or `1` at the exo boundary.
 This gives callers the precise cell types expected of a relational schema while
@@ -238,17 +251,24 @@ A `float64` cell therefore stores its 8 IEEE-754 bytes, under an order-preservin
 transform, as an opaque `BLOB` on SQLite and a `B` attribute on DynamoDB, both
 compared as unsigned bytes and never as a native SQLite `REAL` or DynamoDB `N`,
 so the two providers share one physical representation and one comparison rule.
-The transform canonicalizes `-0` to `+0` first (the narrow band already rejects
+The transform canonicalizes `-0` to `+0` first (the Narrow band already rejects
 `NaN` and the infinities), then flips the sign bit for non-negative values and
 flips all bits for negative values, so unsigned byte comparison matches numeric
 comparison.
+Worked pair, in the same shape as the UTF-16BE proof below: `-1.5` is IEEE-754
+bytes `BF F8 00 00 00 00 00 00` and `2.5` is `40 04 00 00 00 00 00 00`.
+The negative `-1.5` has all bits flipped to `40 07 FF FF FF FF FF FF`; the
+non-negative `2.5` has only its sign bit flipped to `C0 04 00 00 00 00 00 00`.
+Unsigned byte order now puts `-1.5` (`40 07...`) before `2.5` (`C0 04...`),
+matching `-1.5 < 2.5`, whereas comparing the raw IEEE-754 bytes would have put
+the negative value last.
 The `-0`-to-`+0` step matches `makeEncodePassable`'s own rule of normalizing
 `-0` to `0`, so two keys that are `keyEQ`-equal (Endo's key model treats `-0`
 and `+0` as the same key) always encode to identical bytes, satisfying the
 codec's "equal keys, equal bytes" invariant.
 Comparison on `float64` is thus by canonical bytes, not DynamoDB's native `N`
 ordering, but it remains exact for validation, keys, and ranges.
-This keeps `float64` inside the portable narrow band rather than making it a
+This keeps `float64` inside the portable Narrow band rather than making it a
 provider-specific loss.
 
 JSON is not treated as merely another opaque blob.
@@ -271,6 +291,11 @@ An application needing full binary64 magnitudes stores that number in a
 it in a JSON document.
 
 A `passable` cell uses the daemon's Smallcaps body-and-slots model.
+Smallcaps is Endo's marshaling encoding: it serializes a passable value into a
+JSON *body* string in which every by-presence leaf (a remotable or promise) is
+replaced by a numbered placeholder, paired with an ordered *slot* list that names
+the capability each placeholder stands for, so the copy-data structure and its
+capability references are stored separately.
 The write is accepted only if every by-presence leaf can be assigned a durable
 reference identifier by the supplied `ReferenceIdentity` (the identify/revive
 half of the reference interfaces defined in the Compact ordered key encoding);
@@ -298,14 +323,36 @@ Each field must be an Endo `Key`: promises and errors are passable cells but are
 not keys; remotables and copy data containing remotables are keys when the
 `ReferenceIdentity` can assign stable identities.
 
+The write mutators (`insert`/`put`/`update`) take a whole row, in which the key
+is implicit in the row's own declared columns, while the read/delete surface
+(`get`/`delete`/`query`) takes a reified `{ partition, sort }` record. So a
+caller never has to re-derive that reified shape by hand from the schema's
+selectors, the package exports a pure `keyOf(schema, row)` helper that projects a
+row down to its `{ partition, sort }` key using the same selector logic the
+schema compiler already owns; `delete(keyOf(schema, row))` deletes a row a caller
+just wrote without retyping its key columns. `keyOf` derives only the primary key
+and reads no backend, so it needs no capability.
+
 `query` has the following plain-value request:
 
 ```ts
 type Bound = { key: Key; inclusive?: boolean }; // inclusive defaults to true
 
+// A predicate comparand spans every value a narrow cell or a JSON scalar can
+// hold: null, booleans, full-range signed 64-bit `bigint`, full-magnitude
+// binary64 `number`, strings, and passable bytes. It is deliberately wider than
+// a JSON scalar so a predicate can name values a JSON number cannot represent
+// (`9007199254740993n`, `1e300`, subnormal `5e-324`) when it targets a narrow
+// `int64` or `float64` column. The adapter compiles such a comparand to the
+// same order-preserving byte comparison the target column itself uses, and
+// rejects a comparand outside that column's own band with `QueryError` (for
+// example a `bigint` against a `json` cell, whose numbers are bounded by the
+// DynamoDB `N` window).
+type Comparand = null | boolean | bigint | number | string | Uint8Array;
+
 type Predicate =
-  | { op: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; path: Selector; value: JsonScalar }
-  | { op: 'between'; path: Selector; low: JsonScalar; high: JsonScalar }
+  | { op: 'eq' | 'lt' | 'lte' | 'gt' | 'gte'; path: Selector; value: Comparand }
+  | { op: 'between'; path: Selector; min: Comparand; max: Comparand }
   | { op: 'beginsWith'; path: Selector; value: string | Uint8Array }
   | { op: 'exists'; path: Selector }
   | { op: 'and' | 'or'; args: readonly Predicate[] }
@@ -322,20 +369,19 @@ type Query = {
 };
 ```
 
-The sort-key bounds are named `low` and `high` (matching the `between`
-predicate's own `low`/`high` fields) and are range-oriented, not
+The sort-key bounds are named `low` and `high` and are range-oriented, not
 iteration-oriented: `low` is always the lesser bound and `high` the greater,
 regardless of `reverse`.
 `reverse` flips only the order in which rows are yielded, so `low`/`high` never
 swap roles.
 Each `Bound`'s `inclusive` defaults to `true` when omitted.
-The name parity is deliberately partial: only the field names match, not the
-shapes.
-A `Query` sort-key bound is a `Bound` and may be made exclusive, whereas a
-`between` predicate's `low`/`high` are bare `JsonScalar` values and are always
-inclusive; a caller composing a sort-key range and a value range in one call
-must hold that distinction rather than assume `between` accepts an `inclusive`
-flag.
+The value-range predicate deliberately spells its endpoints `min`/`max` rather
+than reusing the sort-key bounds' `low`/`high`, because the two ranges have
+different shapes: a `Query` sort-key `low`/`high` is a `Bound` and may be made
+exclusive, whereas a `between` predicate's `min`/`max` are bare comparands that
+are always inclusive.
+Distinct field names keep a caller composing a sort-key range and a value range
+in one call from assuming `between` accepts an `inclusive` flag.
 
 The reader yields full rows unless `project` is present, in which case it yields
 a record whose property names are the projection aliases.
@@ -360,7 +406,8 @@ There is no ordered cross-partition scan.
 
 Primary `get` and primary-index `query` are strongly consistent.
 Secondary index queries have the portable weaker contract: a completed write may
-become visible later, because DynamoDB global secondary indexes do not provide
+become visible later, because DynamoDB global secondary indexes (GSIs) do not
+provide
 strong reads.
 SQLite may observe it immediately, but callers cannot depend on that.
 
@@ -394,7 +441,6 @@ const schema = {
     byAuthor: {
       partition: ['meta', 'author'],
       sort: ['at'],
-      materialize: { at: ['at'] },
     },
   },
 };
@@ -411,6 +457,9 @@ table.insert(row);
 // point read
 table.get({ partition: 'welcome', sort: 1725500000n }); // yields row or undefined
 
+// delete the same row without retyping its key columns
+table.delete(keyOf(schema, row)); // -> { partition: 'welcome', sort: 1725500000n }
+
 // range query on the primary index, newest first, projecting two columns
 table.query({
   partition: 'welcome',
@@ -420,8 +469,9 @@ table.query({
 }); // yields a reader of { when, who } records
 ```
 
-The same `p`/`s`/materialized columns from the SQLite physical schema store
-this: `conversation` encodes into `p`, `at` into `s`, and the `byAuthor` index
+The same `p`/`s`/materialized columns defined in the `### SQLite physical schema`
+section below store this: `conversation` encodes into `p`, `at` into `s`, and the
+`byAuthor` index
 orders by its partition `meta.author`, then its sort `at`, then the base primary
 key `(conversation, at)` as the trailing tiebreak, so its ordering is total even
 when one author has several messages at the same `at`.
@@ -641,6 +691,38 @@ distinct error classes; retry policy remains with the caller.
 Query page size is an implementation choice and not visible in the reader's item
 sequence.
 
+### Physical mapping and the multi-tenant table count
+
+The one-logical-table-to-one-DynamoDB-table mapping scales along data volume (a
+single table is effectively unbounded in item count and size), but it does *not*
+scale along tenant count the way the motivating hosted deployment does.
+The motivating shape is many small `exo-database` formulas, each with a few
+logical tables, under one hosted account; that shape multiplies out toward AWS's
+default per-region table quota (2,500 tables, raisable by support request but an
+operational fact) long before it approaches any data-volume limit.
+The standard DynamoDB answer is the single-table design pattern: one shared
+physical table for the whole deployment, with the database-formula identifier and
+logical-table ordinal folded into a partition-key prefix so tenant count costs
+partition keys (unbounded) instead of tables (quota-bounded).
+
+This design nonetheless keeps the one-table-per-logical-table mapping as the
+portability floor, and treats single-table packing as an *adapter-internal*
+optimization the portable model neither requires nor forbids.
+The reasons: the portable surface already pins each logical table to one
+`(partition, sort)` access path and forbids cross-partition ordered scans, so a
+prefixed shared table is a mechanical rewrite of physical names and key bytes
+that changes no application-visible behavior; the model's own physical names
+already derive from "daemon deployment plus database formula identifier plus
+logical-table ordinal", which is exactly the tuple a single-table prefix needs;
+and committing the shared-table layout now would bake AWS-specific key-prefix
+mechanics into a design whose SQLite floor has no analogous quota.
+The `@endo/exo-db/dynamodb` adapter therefore selects table-per-logical-table or
+prefixed single-table by a deployment setting, and a deployment expecting many
+tenants uses the shared-table layout to stay under the table quota.
+Recording it here as a considered-and-scoped alternative, rather than an
+unstated assumption, is the fix for the gap that the "credible DynamoDB
+implementation path" claim otherwise rested on.
+
 ## Daemon formulas and durable references
 
 The daemon adds an abstract formula type:
@@ -666,7 +748,7 @@ without minting a second formula.
 creator holds admin; attenuated facets are distributed explicitly).
 The name is `provideDatabase`, not `makeDatabase`, precisely because `make*` on
 this surface means mint-new.
-The ordinary formula and pet-name graph therefore controls who can rediscover
+The ordinary formula-and-pet-name graph therefore controls who can rediscover
 the database capability.
 
 For SQLite, every formula owns a separate file under the daemon state directory:
@@ -703,33 +785,51 @@ DynamoDB portability target omits transaction and batch APIs, so a ledger stored
 in the (per-database) sidecar and a retention stored in the main graph could not
 be committed atomically, and the crash-safety guarantee would be lost.
 With both in `endo.sqlite`, a single transaction on both providers commits the
-retention, the ledger's `(key, formula)` rows, and a small pending-mutation
-intent together (the intent names the key in flight and bounds startup
-reconciliation, below).
+retention, the ledger's `(database formula, key, formula)` rows, and a small
+pending-mutation intent together.
+The intent is keyed on the `(database formula, row key)` pair, not the bare row
+key: because every `exo-database` formula's intents share the one main
+`endo.sqlite`, an intent keyed on the row key alone could not disambiguate two
+different database formulas writing the same key bytes, and step 5 could not tell
+which per-database sidecar to open to reconcile it.
 Updates then use this crash-safe asymmetric protocol:
 
 1. marshal the new row and compute the sets of formulas the write adds and
    removes for this key;
 2. in the main daemon database, atomically add all new formula retentions,
-   insert the corresponding `(key, formula)` rows into the reference ledger, and
-   record a pending-mutation intent naming the primary key being written
-   (retain, ledger rows, and intent commit together);
+   insert the corresponding `(database formula, key, formula)` rows into the
+   reference ledger, and record a pending-mutation intent naming the
+   `(database formula, row key)` being written (retain, ledger rows, and intent
+   commit together);
 3. commit the row alone in the per-database sidecar;
 4. in the main daemon database, atomically release removed retentions, delete
-   their `(key, formula)` ledger rows, and clear the pending-mutation intent for
-   this key; and
+   their ledger rows, and clear the pending-mutation intent for this
+   `(database formula, key)`; and
 5. on startup, before exposing the database exo, replay only the surviving
    pending-mutation intents (a crash can leave at most the mutations that were
-   in flight uncleared): for each intent, read that one key's committed row from
-   the sidecar, compute the `(key, formula)` set the row actually justifies,
-   drop any ledgered `(key, formula)` row (and its retention) the committed row
-   does not justify, then delete the intent.
+   in flight uncleared): for each intent, open the sidecar named by its database
+   formula, read that one key's committed row from it, compute the set of
+   formulas the row actually justifies, drop any ledgered row (and its retention)
+   for that `(database formula, key)` the committed row does not justify, then
+   delete the intent.
 
+Steps 3 and 5 cover a process crash, but the ordinary *synchronous* failure of a
+live write is compensated inline rather than deferred to the next restart.
+If step 3 rejects synchronously (`insert`'s `RowExistsError`, `update`'s
+`RowMissingError`, or a provider `ThrottledError`/`DatabaseUnavailableError` from
+a live call), the same mutation-queue turn immediately runs a compensating
+transaction on the main daemon database that reverses step 2 (release the
+retentions it just added, delete their ledger rows, and clear the intent) before
+the failure re-throws to the caller.
+So a routine rejected write releases its provisional retention at once rather
+than leaking it until the daemon's next restart; step 5's restart-time
+reconciliation remains the backstop for a genuine crash between steps 2 and 3,
+not for an ordinary rejected call.
 Reconciliation therefore costs O(mutations in flight at crash time), bounded by
 the mutation queue's concurrency rather than by table size, because a completed
-mutation clears its own intent in step 4 and is never revisited; a full scan of
-the sidecar exists only as an explicit offline fsck-style repair, never on the
-restart path.
+or synchronously-failed mutation clears its own intent (in step 4 or the
+compensating transaction) and is never revisited; a full scan of the sidecar
+exists only as an explicit offline fsck-style repair, never on the restart path.
 A crash can therefore leave an extra retention (an intent whose retain and
 ledger rows committed in step 2 but whose row never committed in step 3), never
 a committed row with a dangling reference.
@@ -759,7 +859,10 @@ Public failures are hardened errors with stable names:
   be assigned a durable reference identifier (a distinct failure domain from a
   malformed key, so it no longer shares `KeyError` even when the offending cell
   also serves as a key);
-- `ConflictError` for failed `insert`/`update` existence conditions;
+- `RowExistsError` for a failed `insert` (the primary key already exists) and
+  `RowMissingError` for a failed `update` (the row does not exist), two distinct
+  names so a catch site never string-matches to tell the opposite preconditions
+  apart;
 - `QueryError` for a selector or predicate outside the portable subset;
 - `LimitExceededError` for a row, key, schema, or index over a versioned limit;
 - `ThrottledError` for a retryable provider throttling or conditional-write
@@ -799,8 +902,9 @@ resource names, formula identifiers, row bodies, or reference slots.
    passable codecs, primary and secondary indexes, conditional writes, and
    bounded reader queries.
 5. Add the `exo-database` formula, per-formula file placement, attenuation, the
-   `(key, formula)` reference-retention ledger, startup reconciliation, and
-   collection cleanup.
+   `(database formula, key, formula)` reference-retention ledger, startup
+   reconciliation, the inline synchronous-failure compensation, and collection
+   cleanup.
 6. Run the same behavioral suite on Node and Endor, including sequentially
    opening one database file with each binding.
    Add a DynamoDB plan compiler test that proves every accepted schema/query has
@@ -834,6 +938,16 @@ resource names, formula identifiers, row bodies, or reference slots.
   Assert reconciliation touches only the keys named by surviving pending-mutation
   intents, not the whole sidecar, so restart cost tracks the mutations in flight
   at crash time rather than table size.
+- Test the synchronous (non-crash) failure path separately from the crash path:
+  drive a rejected `insert` (`RowExistsError`), a rejected `update`
+  (`RowMissingError`), and an injected provider `ThrottledError` at step 3, and
+  assert each releases the retentions and clears the ledger rows and intent it
+  provisionally took in step 2 immediately (with no daemon restart), so a
+  routine rejected write leaks no retention.
+- Prove that two database formulas writing the same row key bytes reconcile
+  independently: crash between steps 2 and 3 on one formula's write, restart, and
+  assert reconciliation opens that formula's sidecar (not the other's) and leaves
+  the second formula's identical-key row and retentions untouched.
 - Exercise the concurrency guarantees the model states: prove two concurrent
   writes to the same key take a serial order under the per-database mutation
   queue without corrupting retention accounting, and prove concurrent writes to
@@ -879,10 +993,10 @@ resource names, formula identifiers, row bodies, or reference slots.
    That per-database isolation is a deliberate operational choice purchased with
    the hand-rolled saga, not a side effect of the crash-safety work.
 8. **Retain before row commit; release after.** The retention and its
-   `(key, formula)` reference ledger both live in the daemon's main
-   `endo.sqlite`, so they commit atomically on both SQLite and DynamoDB (which
-   omits multi-item transactions); only the row itself lives in the per-database
-   sidecar.
+   `(database formula, key, formula)` reference ledger both live in the daemon's
+   main `endo.sqlite`, so they commit atomically on both SQLite and DynamoDB
+   (which omits multi-item transactions); only the row itself lives in the
+   per-database sidecar.
    A crash between the atomic retain-and-ledger step and the row commit leaks
    retention toward over-retention, but never creates dangling authority.
 9. **No raw provider language.** A small typed AST is auditable at the exo
@@ -903,5 +1017,5 @@ proposed separately if a concrete cross-provider contract emerges.
 > abstract passable databases in the daemon.
 
 The expanded brief additionally requires compact ordered key encoding, the
-narrow/JSON/broad-passable type bands, deliberate SQLite/DynamoDB portability,
+Narrow/JSON/Passable type bands, deliberate SQLite/DynamoDB portability,
 and one SQLite database file per assigned daemon formula identifier.

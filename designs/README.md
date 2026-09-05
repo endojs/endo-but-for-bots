@@ -526,7 +526,7 @@ unchanged.
 The 2026-09-05 update adds [exo-db](exo-db.md) (Proposed) to M11 (Rust Daemon
 `endor`), alongside the SQLite platform surface it shares with
 `daemon-endor-sqlite-iterate-streaming`, increasing Proposed by one and the
-design count by one. Its L-XL (3-4 week) estimate raises the M11 aggregate to 7
+design count by one. Its L-XL (3-4-week) estimate raises the M11 aggregate to 7
 designs / 18-26 weeks.
 
 ## Roadmap
