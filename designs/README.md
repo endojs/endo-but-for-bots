@@ -111,6 +111,18 @@ a shared golden-vector fixture; ocapn keeps its `CborWriter` /
 drops its private copy post-#124, daemon `envelope.js` is an optional
 third adopter; follow-up to kriskowal's review of
 endojs/endo-but-for-bots#124),
+[release-automation-major-bump-exports-trigger](release-automation-major-bump-exports-trigger.md)
+(added 2026-07-10; deterministic, non-blocking release-automation notice
+for the `.js` exports-key cleanup window: when a PR adds a `major`
+changeset for a package whose `exports` still holds `.js` keys with
+deep-equal extensionless siblings, a dependency-free CI script emits a
+check annotation and step summary listing the removable keys; a second
+surface on the Changesets Version Packages PR compares `package.json`
+versions so the reminder also fires at the last gate before tags;
+the check exits 0 on findings by construction, needs no write
+permissions, and self-quiets once a major actually removes the keys;
+follow-up to `exports-extensionless-migration` (forthcoming, PR #663); the
+notice is inert until that design's pass 1 lands),
 [agentry-git-eval-scenarios](agentry-git-eval-scenarios.md)
 (added 2026-07-08, revised 2026-07-09 and 2026-07-17; distilled git-rebase-session
 evidence into a trimmed three-scenario `@endo/agentry` git code-mode
@@ -439,6 +451,7 @@ LLM-agent stack).*
 | [hardener-indexed-cardinality](hardener-indexed-cardinality.md) | 2026-08-24 | 2026-08-25 | Proposed |
 | [ci-no-npm-lifecycle](ci-no-npm-lifecycle.md) | 2026-04-23 | 2026-05-18 | **Complete** |
 | [break-dev-dependency-cycles](break-dev-dependency-cycles.md) | 2026-05-11 | 2026-06-15 | **Complete** (on `llm`) |
+| [release-automation-major-bump-exports-trigger](release-automation-major-bump-exports-trigger.md) | 2026-07-10 | 2026-07-10 | Not Started |
 | [cli-http-client](cli-http-client.md) | 2026-05-09 | 2026-07-13 | Proposed (PR #144 design revision; formula packaging superseded in part by [endo-fetch](endo-fetch.md)) |
 | [endor-bus-tui](endor-bus-tui.md) | 2026-04-23 | 2026-04-23 | Not Started |
 | [endor-native-zip-xs](endor-native-zip-xs.md) | 2026-07-22 | 2026-07-22 | Proposed |
@@ -1648,6 +1661,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | ~~hex-package~~ | S-M | — | 2 | ✅ Complete (`@endo/hex` shipped; synthetic `@endo/hex-test` lands as Cut 2 of break-dev-dependency-cycles, PR #211) |
 | ~~endo-bytes~~ | S | — | 2 | ✅ Implemented (PR #142): `@endo/bytes` with `concatBytes`, `bytesEqual`, `bytesFromText`, `bytesToText`; follow-up `bytesToImmutable`/`bytesFromImmutable` and ocapn buffer-utils consolidation (PR #227) |
 | ~~break-dev-dependency-cycles~~ | M | — | 2 | ✅ Complete on `llm` (all five cut packages exist; SCC count is 0). Cut 1 PR #261, Cut 2 PR #211, Cut 3 PR #209, Cut 4 PR #210, Cut 5 PR #247. PR #235 against master is the upstream-ferry mirror, M2-orthogonal |
+| release-automation-major-bump-exports-trigger | S | 1-2 days | — | Out-of-milestone release-hygiene follow-up (added 2026-07-10): one dependency-free script (`scripts/check-major-bump-exports-notice.mjs`), a shared `classifyExportSubpaths` helper, a small no-permissions workflow, and fixture tests; inert until `exports-extensionless-migration` pass 1 lands (PR #663) |
 | ~~unhandled-rejection-display~~ | S | — | — | ✅ Complete (out-of-milestone diagnostic; PR #187 closes #171). CapTP `CTP_DISCONNECT.reason` now renders structured Error reasons rather than empty `{}` |
 | hardener-indexed-cardinality | S | 1 day | — | Out-of-milestone `master`-based optimization: conjoined cardinality-count-plus-last-key-ordering test for the purely indexed TypedArray fast path, regression matrix, and focused benchmark |
 | ocapn-network-transport-separation | M-L | 1.5 weeks | 4 | Architectural refactor (M-L bumped 1.2x) |
