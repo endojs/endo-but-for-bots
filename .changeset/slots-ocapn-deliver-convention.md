@@ -1,6 +1,7 @@
 ---
 '@endo/slots': minor
 '@endo/eventual-send': minor
+'@endo/capn-web': minor
 ---
 
 **BREAKING (wire protocol):** `deliver` bodies now carry one flat passable
@@ -24,3 +25,6 @@ The OCapN data operations are now separate, non-overlapping lanes:
 `E.untag(target, tag)` dispatch through corresponding `HandledPromise`
 handler methods and distinct slot-machine verbs. Gets reject arrays, indexes
 reject non-arrays, and untag rejects a mismatched tag.
+
+Cap'n Web remap paths encode canonical numeric property accesses as indexes and
+replay numeric path segments with `HandledPromise.index`.
