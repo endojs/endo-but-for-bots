@@ -550,6 +550,22 @@ pub fn guard_ffi<F: FnOnce()>(f: F) {
     guard_ffi_ret((), f)
 }
 
+/// Defensively clear this thread's `CAPTURING` flag at a crank boundary.
+///
+/// [`guard_ffi_ret`] restores `CAPTURING` on its normal return path, but XS's
+/// `fxAbort`->`longjmp` (a metering abort, or a recoverable out-of-memory
+/// abort) can unwind *past* the guard's `catch_unwind` frame without ever
+/// running that restore, stranding `CAPTURING` `true` on this thread. A stuck
+/// flag makes the process-wide capture hook swallow the source location of, and
+/// suppress the default stderr dump for, *every* later panic on the thread —
+/// permanently blinding the exact panic diagnostics this module exists to
+/// preserve. The run loop calls this at its pure-Rust crank boundaries
+/// (longjmp-proof points, reached only after any in-crank abort has already
+/// unwound back to Rust) to heal the leak before the next guarded callback runs.
+pub fn reset_capturing() {
+    CAPTURING.with(|c| c.set(false));
+}
+
 /// Whether this worker thread has a pending FFI-panic death.
 pub fn ffi_panicked() -> bool {
     FFI_PANIC.with(|cell| cell.borrow().is_some())
