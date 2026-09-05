@@ -902,7 +902,8 @@ note below.
 **Status:** The original six rows reached **Complete** on `llm` as of
 2026-06-15, and that exit criterion remains met. The remaining
 upstream-ferry effort (PR #235 mirroring the cuts to master) is
-tracked separately and is not a blocker for it. **Reopened 2026-07-10**
+tracked separately and is not a blocker for M2's exit criterion on
+`llm`. **Reopened 2026-07-10**
 with one additive row, `release-automation-major-bump-exports-trigger`
 (Not Started): a release-automation reminder is exactly this bucket's
 kind of substrate hygiene. It rides the in-flight
