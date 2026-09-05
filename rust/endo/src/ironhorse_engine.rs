@@ -35,7 +35,7 @@ pub mod engine {
     pub use ironhorse_vm::Machine as VmMachine;
     pub use ironhorse_vm::{
         Compartment, GcStats, Halt, Heap, Intrinsics, Meter as VMeter, MeterCheck, MeterState,
-        ModuleGraph, ModuleSource, RunOutcome, Slot,
+        ModuleGraph, ModuleSource, PanicKind, RunOutcome, Slot,
     };
 
     /// Why an evaluation could not be carried out or did not complete.
@@ -94,7 +94,101 @@ pub mod engine {
             Halt::Decode(e) => format!("bytecode decode error: {e}"),
             Halt::Throw(e) => format!("uncaught throw: {e}"),
             Halt::StackOverflow(n) => format!("stack overflow ({n} slots over the limit)"),
+            Halt::Panic(PanicKind::EngineFault { message, location }) => match location {
+                Some(location) => format!("engine fault at {location}: {message}"),
+                None => format!("engine fault: {message}"),
+            },
             other => format!("halted: {other:?}"),
+        }
+    }
+
+    /// How one engine run ended, as the `Machine`/supervisor seam sees it
+    /// (design `designs/ironhorse-panic.md` § The Formal `Panic` Category,
+    /// item 4). Slot Machine's commit decision reads only this three-way
+    /// value: `Quiesced` commits the crank, `Uncaught` and `Panicked` both
+    /// discard the embargoed effects, and only `Panicked` additionally
+    /// enters the terminate/restore/replay policy.
+    ///
+    /// **Scope note.** This classifier is landable now, but the
+    /// *delivery-path* surfacing — where the supervisor actually acts on a
+    /// `Panicked` to discard a crank — rides on the not-yet-complete
+    /// `-e ironhorse` engine-selection integration (roadmap stage 8/9) and
+    /// is deliberately not wired to a live delivery path here. The type and
+    /// its classifier are the landable interpreter-side half; the seam that
+    /// consumes them is a deferred follow-on.
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum ExecutionOutcome {
+        /// Execution ran the event loop to quiescence (the job queue
+        /// emptied). This does **not** claim Slot Machine has committed
+        /// anything, only that the engine run completed normally.
+        Quiesced,
+        /// A JS-level throw escaped every handler. Catchable in principle
+        /// (uncaught by circumstance), so categorically distinct from a
+        /// panic; carries the throw's best-effort message.
+        Uncaught(String),
+        /// The run terminated uncatchably. Carries the underlying [`Halt`]
+        /// as its reason for reporting; the supervisor branches on the
+        /// arm, never on the reason's variant shape.
+        Panicked(Halt),
+    }
+
+    impl ExecutionOutcome {
+        /// The seam's canonical constructor: classify a top-level [`Halt`]
+        /// into the three-way outcome.
+        ///
+        /// The `Panicked` arm delegates to [`Halt::is_panic`] for every
+        /// genuine *panic* variant, never re-listing panic shapes here:
+        /// adding a new panic variant updates `is_panic()` alone and this
+        /// classifier follows for free (design § The Formal `Panic`
+        /// Category, item 4).
+        ///
+        /// `ExecutionOutcome::Panicked` is deliberately a **strict
+        /// superset** of `is_panic()`, not equal to it. Two non-panic halts
+        /// also classify as `Panicked` because they likewise must
+        /// terminate-without-commit: `Halt::Unsupported` (a named, unlanded
+        /// engine gap) and the fail-closed catch-all for any control-state
+        /// or future `#[non_exhaustive]` variant that should never reach
+        /// this seam. Those two arms below are the *only* places `Panicked`
+        /// is produced without `is_panic()`; every genuine panic still flows
+        /// through that single gate, so `is_panic()` stays the one place the
+        /// panic set is defined (the superset only adds "did not run to
+        /// quiescence" cases that are not themselves panics).
+        /// Spelled as an associated function (not a free `classify_halt`)
+        /// because it is the sanctioned way to build an `ExecutionOutcome`
+        /// from a `Halt`, discoverable at the type it produces.
+        pub fn classify(halt: Halt) -> ExecutionOutcome {
+            if halt.is_panic() {
+                return ExecutionOutcome::Panicked(halt);
+            }
+            match halt {
+                Halt::Throw(message) => ExecutionOutcome::Uncaught(message),
+                Halt::Return => ExecutionOutcome::Quiesced,
+                // A named, unlanded engine gap: the run demonstrably did
+                // **not** run the event loop to quiescence, so its crank
+                // must be discarded, never committed. `Unsupported` is a
+                // routine top-level halt at this seam (this file's header
+                // and `describe_halt` both name it as one), not a
+                // can't-happen — so it gets an explicit `Panicked` arm
+                // rather than falling to the catch-all below: it must never
+                // trip the `debug_assert!`, and a test can pin that it
+                // never classifies as `Quiesced`.
+                Halt::Unsupported(op) => {
+                    ExecutionOutcome::Panicked(Halt::Unsupported(op))
+                }
+                // Everything else is an internal suspension/control state
+                // (`Yield`/`Await`/`AsyncYield`/`Resume`) caught below the
+                // top-level run, or a future `#[non_exhaustive]` variant:
+                // none should surface here. Fail **closed** — discard the
+                // crank rather than commit it — while still shouting in a
+                // debug build.
+                other => {
+                    debug_assert!(
+                        false,
+                        "unexpected top-level halt at the Machine seam: {other:?}"
+                    );
+                    ExecutionOutcome::Panicked(other)
+                }
+            }
         }
     }
 
@@ -897,6 +991,167 @@ pub mod engine {
                 }
                 other => panic!("expected a named gap, got {other:?}"),
             }
+        }
+
+        // -- ExecutionOutcome classifier (design § The Formal `Panic`
+        //    Category, item 4) ------------------------------------------
+
+        fn engine_fault() -> Halt {
+            Halt::Panic(PanicKind::EngineFault {
+                message: "arena kind check failed".to_string(),
+                location: Some("interp.rs:1:1".to_string()),
+            })
+        }
+
+        #[test]
+        fn quiescence_classifies_as_quiesced() {
+            assert_eq!(
+                ExecutionOutcome::classify(Halt::Return),
+                ExecutionOutcome::Quiesced
+            );
+        }
+
+        #[test]
+        fn throw_classifies_as_uncaught_not_panicked() {
+            match ExecutionOutcome::classify(Halt::Throw("boom".to_string())) {
+                ExecutionOutcome::Uncaught(msg) => assert_eq!(msg, "boom"),
+                other => panic!("expected Uncaught, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn unsupported_engine_gap_never_commits() {
+            // A named, unlanded engine gap did not run to quiescence, so the
+            // classifier must never tell the supervisor to commit its crank.
+            // The catch-all's `debug_assert!` compiles out in a release
+            // daemon, so `Quiesced` (= commit) would ship silently if this
+            // regressed. `Unsupported` reaches this seam routinely, so it
+            // has its own arm and must not trip the assert either.
+            let outcome = ExecutionOutcome::classify(Halt::Unsupported("STAGE8_GAP"));
+            assert_ne!(
+                outcome,
+                ExecutionOutcome::Quiesced,
+                "an engine gap must never classify as commit-the-crank",
+            );
+            assert!(
+                matches!(outcome, ExecutionOutcome::Panicked(_)),
+                "an engine gap must fail closed to Panicked (discard), got {outcome:?}",
+            );
+        }
+
+        #[test]
+        fn every_panic_source_classifies_as_panicked() {
+            for halt in [
+                Halt::StackOverflow(7),
+                Halt::MeterAbort,
+                engine_fault(),
+                Halt::Decode("truncated".to_string()),
+                Halt::StepLimit(42),
+            ] {
+                assert!(halt.is_panic(), "{halt:?} should be a panic");
+                assert!(
+                    matches!(
+                        ExecutionOutcome::classify(halt.clone()),
+                        ExecutionOutcome::Panicked(_)
+                    ),
+                    "{halt:?} should classify as Panicked",
+                );
+            }
+        }
+
+        #[test]
+        fn panicked_delegates_to_is_panic_for_every_panic() {
+            // For every genuine panic variant the classifier's `Panicked`
+            // arm fires *exactly when* `is_panic()` is true — never
+            // re-listing panic shapes. `Unsupported` is deliberately
+            // excluded here: it is not a panic (see the superset test
+            // below), so it would break a strict-agreement claim — the very
+            // contradiction the delegation invariant must not hide.
+            for halt in [
+                Halt::Return,
+                Halt::Throw("x".to_string()),
+                Halt::StackOverflow(1),
+                Halt::MeterAbort,
+                engine_fault(),
+                Halt::Decode("d".to_string()),
+                Halt::StepLimit(1),
+            ] {
+                let panicked = matches!(
+                    ExecutionOutcome::classify(halt.clone()),
+                    ExecutionOutcome::Panicked(_)
+                );
+                assert_eq!(
+                    panicked,
+                    halt.is_panic(),
+                    "classify/is_panic disagree for {halt:?}",
+                );
+            }
+        }
+
+        #[test]
+        fn panicked_is_a_strict_superset_of_is_panic() {
+            // `ExecutionOutcome::Panicked` is documented as a strict
+            // superset of `is_panic()`: `Halt::Unsupported` is NOT a panic,
+            // yet must classify as `Panicked` (discard the crank, never
+            // commit). This pins the deliberate, doc-stated exception to
+            // strict delegation so a future reader cannot mistake
+            // `is_panic()` for the sole gate on `Panicked`.
+            let gap = Halt::Unsupported("STAGE8_GAP");
+            assert!(!gap.is_panic(), "an engine gap is not a panic");
+            assert!(
+                matches!(
+                    ExecutionOutcome::classify(gap),
+                    ExecutionOutcome::Panicked(_)
+                ),
+                "an engine gap must still classify as Panicked (discard)",
+            );
+        }
+
+        #[test]
+        fn control_state_halt_fails_closed_at_the_seam() {
+            // Yield/Await/AsyncYield/Resume are caught below the top-level
+            // run and must never reach this seam. If one does, the
+            // classifier fails **closed**: a debug build trips the
+            // `debug_assert!`; a release build still returns `Panicked`
+            // (discard), never `Quiesced` (commit). Pins both halves of the
+            // catch-all's contract, which no other test exercises.
+            let classify_resume =
+                || ExecutionOutcome::classify(Halt::Resume(0));
+            if cfg!(debug_assertions) {
+                let caught = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(classify_resume),
+                );
+                assert!(
+                    caught.is_err(),
+                    "a control-state halt must trip the fail-closed \
+                     debug_assert in a debug build",
+                );
+            } else {
+                assert!(
+                    matches!(classify_resume(), ExecutionOutcome::Panicked(_)),
+                    "a control-state halt must fail closed to Panicked in \
+                     a release build",
+                );
+            }
+        }
+
+        #[test]
+        fn engine_fault_without_location_renders_without_a_site() {
+            // The `None` location arm of `describe_halt`'s `EngineFault`
+            // rendering (a panic hook that could not recover `file:line:col`)
+            // is otherwise unexercised — every other fixture carries a
+            // `Some(..)` location.
+            let halt = Halt::Panic(PanicKind::EngineFault {
+                message: "kind check failed".to_string(),
+                location: None,
+            });
+            assert_eq!(describe_halt(&halt), "engine fault: kind check failed");
+        }
+
+        #[test]
+        fn non_panic_throw_is_not_panic() {
+            assert!(!Halt::Throw("catchable".to_string()).is_panic());
+            assert!(!Halt::Return.is_panic());
         }
     }
 }

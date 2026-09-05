@@ -114,37 +114,51 @@ pub fn debug_reset() {
 }
 
 // ---- C-callable extern functions (called from xsnap-platform.c) ----
+//
+// These debug hooks are invoked by XS (C) across the same `extern "C"`
+// boundary as the `host_*` worker callbacks, so an unguarded panic here (a
+// `RefCell` double-borrow, a bad slice) would likewise abort the whole daemon
+// process. Each routes its body through the `worker_io` FFI panic guard, so a
+// caught panic poisons this one worker and returns the fail-closed sentinel
+// rather than unwinding past the C frame (design `designs/ironhorse-panic.md`
+// § Scope: "The already-live FFI abort hazard").
 
 /// Called by `fxConnect` in C.  Activates the debug connection if
 /// this thread was previously marked with `debug_enable()`.
 #[no_mangle]
 pub extern "C" fn rust_debug_connect() {
-    DEBUG_STATE.with(|cell| {
-        let mut s = cell.borrow_mut();
-        if s.enabled {
-            s.connected = true;
-        }
+    crate::worker_io::guard_ffi(|| {
+        DEBUG_STATE.with(|cell| {
+            let mut s = cell.borrow_mut();
+            if s.enabled {
+                s.connected = true;
+            }
+        });
     });
 }
 
 /// Called by `fxDisconnect` in C.  Deactivates the debug connection.
 #[no_mangle]
 pub extern "C" fn rust_debug_disconnect() {
-    DEBUG_STATE.with(|cell| {
-        cell.borrow_mut().connected = false;
+    crate::worker_io::guard_ffi(|| {
+        DEBUG_STATE.with(|cell| {
+            cell.borrow_mut().connected = false;
+        });
     });
 }
 
 /// Called by `fxIsConnected` in C.
 #[no_mangle]
 pub extern "C" fn rust_debug_is_connected() -> c_int {
-    DEBUG_STATE.with(|cell| {
-        let s = cell.borrow();
-        if s.enabled && s.connected {
-            1
-        } else {
-            0
-        }
+    crate::worker_io::guard_ffi_ret(0, || {
+        DEBUG_STATE.with(|cell| {
+            let s = cell.borrow();
+            if s.enabled && s.connected {
+                1
+            } else {
+                0
+            }
+        })
     })
 }
 
@@ -152,12 +166,14 @@ pub extern "C" fn rust_debug_is_connected() -> c_int {
 /// has data waiting for XS to consume.
 #[no_mangle]
 pub extern "C" fn rust_debug_is_readable() -> c_int {
-    DEBUG_STATE.with(|cell| {
-        if cell.borrow().inbound.is_empty() {
-            0
-        } else {
-            1
-        }
+    crate::worker_io::guard_ffi_ret(0, || {
+        DEBUG_STATE.with(|cell| {
+            if cell.borrow().inbound.is_empty() {
+                0
+            } else {
+                1
+            }
+        })
     })
 }
 
@@ -169,18 +185,20 @@ pub extern "C" fn rust_debug_recv(
     buffer: *mut c_char,
     capacity: c_int,
 ) -> c_int {
-    DEBUG_STATE.with(|cell| {
-        let mut s = cell.borrow_mut();
-        let n = std::cmp::min(s.inbound.len(), capacity as usize);
-        if n == 0 {
-            return 0;
-        }
-        let dst =
-            unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, n) };
-        for (i, byte) in s.inbound.drain(..n).enumerate() {
-            dst[i] = byte;
-        }
-        n as c_int
+    crate::worker_io::guard_ffi_ret(0, || {
+        DEBUG_STATE.with(|cell| {
+            let mut s = cell.borrow_mut();
+            let n = std::cmp::min(s.inbound.len(), capacity as usize);
+            if n == 0 {
+                return 0;
+            }
+            let dst =
+                unsafe { std::slice::from_raw_parts_mut(buffer as *mut u8, n) };
+            for (i, byte) in s.inbound.drain(..n).enumerate() {
+                dst[i] = byte;
+            }
+            n as c_int
+        })
     })
 }
 
@@ -188,12 +206,15 @@ pub extern "C" fn rust_debug_recv(
 /// into the outbound buffer for Rust to drain later.
 #[no_mangle]
 pub extern "C" fn rust_debug_send(data: *const c_char, length: c_int) {
-    if length <= 0 {
-        return;
-    }
-    let bytes =
-        unsafe { std::slice::from_raw_parts(data as *const u8, length as usize) };
-    DEBUG_STATE.with(|cell| {
-        cell.borrow_mut().outbound.extend(bytes);
+    crate::worker_io::guard_ffi(|| {
+        if length <= 0 {
+            return;
+        }
+        let bytes = unsafe {
+            std::slice::from_raw_parts(data as *const u8, length as usize)
+        };
+        DEBUG_STATE.with(|cell| {
+            cell.borrow_mut().outbound.extend(bytes);
+        });
     });
 }

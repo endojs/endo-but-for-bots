@@ -22,15 +22,17 @@ unsafe fn get_powers(the: *mut XsMachine) -> &'static HostPowers {
 /// Looks up the module source in the Rust-side module registry.
 /// Returns the source text if found, or undefined if not.
 pub unsafe extern "C" fn host_load_module_source(the: *mut XsMachine) {
-    let powers = get_powers(the);
-    let specifier = arg_str(the, 0);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let powers = get_powers(the);
+        let specifier = arg_str(the, 0);
 
-    match powers.get_module(&specifier) {
-        Some(source) => set_result_string(the, source),
-        None => {
-            // Leave xsResult as undefined (default)
+        match powers.get_module(&specifier) {
+            Some(source) => set_result_string(the, source),
+            None => {
+                // Leave xsResult as undefined (default)
+            }
         }
-    }
+    });
 }
 
 /// `resolveModule(specifier, referrer) -> string`
@@ -40,11 +42,13 @@ pub unsafe extern "C" fn host_load_module_source(the: *mut XsMachine) {
 /// - Absolute specifiers (starting with `/` or a package name) pass through.
 /// - Relative specifiers (`./` or `../`) are resolved against the referrer.
 pub unsafe extern "C" fn host_resolve_module(the: *mut XsMachine) {
-    let specifier = arg_str(the, 0);
-    let referrer = arg_str(the, 1);
+    crate::worker_io::guard_ffi(|| unsafe {
+        let specifier = arg_str(the, 0);
+        let referrer = arg_str(the, 1);
 
-    let resolved = resolve_specifier(&specifier, &referrer);
-    set_result_string(the, &resolved);
+        let resolved = resolve_specifier(&specifier, &referrer);
+        set_result_string(the, &resolved);
+    });
 }
 
 /// Simple module specifier resolution.
