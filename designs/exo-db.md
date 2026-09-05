@@ -57,14 +57,17 @@ The package must:
    in cells declared as passable;
 3. support exact native scalar columns, JSON document columns, and opaque
    passable columns as three explicit schema bands;
-4. provide point reads, conditional single-row writes, projection, native
-   predicates, and partition-scoped ordered range queries; and
+4. provide point reads, existence-conditioned single-row writes (`insert` and
+   `update` keyed on whether the row exists, not on any prior column value),
+   projection, native predicates, and partition-scoped ordered range queries;
+   and
 5. give Node and Endor the same SQLite behavior while leaving a credible
    DynamoDB implementation path.
 
 The first version does not expose SQL, joins, foreign keys, multi-row
-transactions, unbounded table scans, live queries, triggers, stored procedures,
-or arbitrary provider expressions.
+transactions, value- or version-conditioned (compare-and-swap) writes, unbounded
+table scans, live queries, triggers, stored procedures, or arbitrary provider
+expressions.
 It also does not make SQLite files portable to DynamoDB.
 These omissions are the portability boundary, not an implementation backlog.
 
@@ -109,12 +112,14 @@ export const DatabaseAdminInterface = M.interface('DatabaseAdmin', {
 
 export const TableReadInterface = M.interface('TableRead', {
   describe: M.callWhen().returns(M.record()),
+  keyOf: M.callWhen(M.record()).returns(M.record()),
   get: M.callWhen(M.record()).returns(M.or(M.record(), M.undefined())),
   query: M.callWhen(M.record()).returns(M.remotable('PassableReader')),
 });
 
 export const TableWriteInterface = M.interface('TableWrite', {
   readOnly: M.callWhen().returns(M.remotable('TableRead')),
+  keyOf: M.callWhen(M.record()).returns(M.record()),
   insert: M.callWhen(M.record()).returns(),
   put: M.callWhen(M.record()).returns(),
   update: M.callWhen(M.record()).returns(),
@@ -149,6 +154,15 @@ The creator receives the admin facet and may distribute attenuated facets.
 Raw SQLite connections, DynamoDB clients, physical names, continuation tokens,
 and durable reference identifiers never cross an exo boundary.
 
+The table-management methods carry existence preconditions symmetric to the row
+mutators, named as explicitly as the row layer names its own: `createTable(name,
+schema)` fails with `TableExistsError` if the name is already bound (it is not
+idempotent, matching `insert`, because a second `createTable` with a different
+schema would silently diverge), while `openTable` and `dropTable` fail with
+`TableMissingError` when the named table does not exist.
+`listTables` enumerates the bound names so a caller can predict those failures
+rather than probe for them.
+
 The method semantics are:
 
 - `insert(row)` takes a complete row and atomically fails with
@@ -174,6 +188,21 @@ name a catch site would have to string-match to disambiguate, since a retried
 handles differently.
 The mutation contract is that an acknowledged mutation is durable, while two
 concurrent writes to one key take some serial order.
+The conditions these mutators express are *existence* conditions only: `insert`
+requires the key absent, `update` requires it present, `put` requires nothing.
+None conditions on the *prior value* of a column, so the first version offers no
+compare-and-swap (optimistic-concurrency) write, even though both target
+providers support one natively (DynamoDB's `ConditionExpression` on any
+attribute, SQLite's `UPDATE ... WHERE`).
+The consequence is deliberate and worth stating: an application doing
+read-modify-write must tolerate lost updates under the "two concurrent writes to
+one key take some serial order" contract above, because a second writer's
+`put`/`update` overwrites a first writer's change with a value derived from a
+stale read.
+A value- or version-conditioned write is a natural later addition (it narrows to
+the intersection both providers already offer), but it needs its own
+comparand-and-failure contract (a new `ConditionFailedError`, distinct from the
+existence errors), so it is deferred to keep the first surface existence-only.
 The update-only mutator is spelled `update` rather than `replace` deliberately:
 SQLite's `REPLACE INTO` is an upsert (the role `put` fills here), so a `replace`
 method would read as `put` to anyone who knows either backend.
@@ -221,7 +250,9 @@ type TableSchema = {
 };
 ```
 
-The three bands are deliberate:
+The three bands are deliberate (the Passable row below names "Smallcaps," Endo's
+marshaling encoding, a JSON *body* string paired with an ordered *slot* list of
+capability references, defined in full later in this section):
 
 | Band | Accepted values | SQLite representation | DynamoDB representation | Native operations |
 |---|---|---|---|---|
@@ -277,7 +308,12 @@ predicate on a declared JSON path.
 SQLite compiles these operations to JSON1 expressions and expression indexes;
 DynamoDB uses document paths, projection expressions, and key/filter
 expressions.
-Shapes are checked before write and after read.
+Shapes are checked before write, and re-checked after read against a distinct
+concern: the write-time check enforces the caller's contract, while the
+read-time check does not re-enforce that contract (a row written under the
+table's closed, immutable schema always still satisfies that same schema) but
+defends against storage-level corruption or a backend written to out-of-band,
+a value that reached the store bypassing this package.
 Property order is not observable, and JSON numbers use the finite JavaScript
 number subset.
 Because a JSON document maps to native provider attributes (not the `float64`
@@ -297,8 +333,9 @@ replaced by a numbered placeholder, paired with an ordered *slot* list that name
 the capability each placeholder stands for, so the copy-data structure and its
 capability references are stored separately.
 The write is accepted only if every by-presence leaf can be assigned a durable
-reference identifier by the supplied `ReferenceIdentity` (the identify/revive
-half of the reference interfaces defined in the Compact ordered key encoding);
+reference identifier by the supplied `ReferenceIdentity` (a capability that maps
+a reference to a durable formula identifier and back, the identify/revive half
+of the reference interfaces defined below in the Compact ordered key encoding);
 an ephemeral reference that the host cannot formulate causes the write to be
 rejected with `UndurableReferenceError` before mutation.
 The body is opaque to the database.
@@ -325,13 +362,23 @@ not keys; remotables and copy data containing remotables are keys when the
 
 The write mutators (`insert`/`put`/`update`) take a whole row, in which the key
 is implicit in the row's own declared columns, while the read/delete surface
-(`get`/`delete`/`query`) takes a reified `{ partition, sort }` record. So a
-caller never has to re-derive that reified shape by hand from the schema's
-selectors, the package exports a pure `keyOf(schema, row)` helper that projects a
-row down to its `{ partition, sort }` key using the same selector logic the
-schema compiler already owns; `delete(keyOf(schema, row))` deletes a row a caller
-just wrote without retyping its key columns. `keyOf` derives only the primary key
-and reads no backend, so it needs no capability.
+(`get`/`delete`/`query`) takes a reified `{ partition, sort }` record.
+So that a caller never has to re-derive that reified shape by hand from the
+schema's selectors, the package exports a pure `keyOf(schema, row)` helper that
+projects a row down to its `{ partition, sort }` key using the same selector
+logic the schema compiler already owns.
+`keyOf(schema, row)` derives only the primary key and reads no backend, so as a
+free function it needs no capability; it is the natural tool for the
+schema-authoring scope that already holds the schema literal.
+A caller that holds only a `table` capability (a facet received from elsewhere,
+not the one that called `createTable`) does not separately hold that schema, so
+both table facets also expose a `keyOf(row)` method that applies the table's own
+schema and returns the same `{ partition, sort }` record, keeping the
+"no schema literal needed" path available exactly where a capability, not a
+schema, is what the caller has.
+Either way, `delete(keyOf(schema, row))` (or `E(table).delete(await
+E(table).keyOf(row))`) deletes a row a caller just wrote without retyping its key
+columns.
 
 `query` has the following plain-value request:
 
@@ -576,8 +623,9 @@ filesystem provision shape:
 The default specifier is condition-selected and has no browser/default
 fallback: selecting an unsupported platform is a build error.
 The Endor bundler already supplies the `xs` condition; `sqlite-endor` names the
-host contract rather than one JS engine so IronHorse can provide the same
-contract later.
+host contract rather than one JS engine so IronHorse, the in-progress Rust
+successor to the XS engine (see [Ironhorse Engine: Porting XS to
+Rust](ironhorse-engine.md)), can provide the same contract later.
 Explicit `/node` and `/endor` exports exist for adapter agreement tests, not
 application feature detection.
 
@@ -713,7 +761,7 @@ The reasons: the portable surface already pins each logical table to one
 prefixed shared table is a mechanical rewrite of physical names and key bytes
 that changes no application-visible behavior; the model's own physical names
 already derive from "daemon deployment plus database formula identifier plus
-logical-table ordinal", which is exactly the tuple a single-table prefix needs;
+logical-table ordinal," which is exactly the tuple a single-table prefix needs;
 and committing the shared-table layout now would bake AWS-specific key-prefix
 mechanics into a design whose SQLite floor has no analogous quota.
 The `@endo/exo-db/dynamodb` adapter therefore selects table-per-logical-table or
@@ -775,43 +823,74 @@ identifier on behalf of the database formula, release that retention) for the
 write path.
 The row lives in the per-database SQLite sidecar, while both the formula
 retentions *and* the reference ledger live in the daemon's main `endo.sqlite`.
-The ledger is a `(database formula, row key, retained formula)` join, one row
-per retained formula per row key, not a bare per-database or per-formula counter:
+The ledger is a `(database formula, table ordinal, row key, retained formula)`
+join, one row per retained formula per table row key, not a bare per-database or
+per-formula counter:
 reconciliation (step 5) is defined per key, so it must be able to enumerate
-exactly the set of formulas retained on behalf of one row key and compare that
-set against that key's committed row, which a scalar count cannot express.
+exactly the set of formulas retained on behalf of one table's row key and compare
+that set against that key's committed row, which a scalar count cannot express.
+The table ordinal is part of the key, not just the database formula, because one
+`exo-database` formula holds many logical tables (`createTable`/`openTable`), and
+two tables in the same database may key distinct rows by the same bytes (two
+tables both keyed by a `string` conversation id could each hold a row keyed
+`"welcome"`).
+A ledger or intent keyed on `(database formula, row key)` alone could not tell
+those two rows apart, so reconciliation could drop table B's live retention while
+reconciling table A's identical-key intent, the very dangling-reference outcome
+the protocol exists to prevent.
+The logical-table ordinal (the same schema ordinal the physical schema already
+assigns, one level down from the cross-formula disambiguation) closes that gap.
 Keeping the ledger beside the retentions matters for the DynamoDB path: the
 DynamoDB portability target omits transaction and batch APIs, so a ledger stored
 in the (per-database) sidecar and a retention stored in the main graph could not
 be committed atomically, and the crash-safety guarantee would be lost.
 With both in `endo.sqlite`, a single transaction on both providers commits the
-retention, the ledger's `(database formula, key, formula)` rows, and a small
-pending-mutation intent together.
-The intent is keyed on the `(database formula, row key)` pair, not the bare row
-key: because every `exo-database` formula's intents share the one main
-`endo.sqlite`, an intent keyed on the row key alone could not disambiguate two
-different database formulas writing the same key bytes, and step 5 could not tell
-which per-database sidecar to open to reconcile it.
+retention, the ledger's `(database formula, table ordinal, key, formula)` rows,
+and a small pending-mutation intent together.
+The intent is keyed on the `(database formula, table ordinal, row key)` triple,
+not the bare row key: because every `exo-database` formula's intents, across all
+of its tables, share the one main `endo.sqlite`, an intent keyed on the row key
+alone could not disambiguate two different database formulas, or two different
+tables within one formula, writing the same key bytes, and step 5 could not tell
+which per-database sidecar, or which table within it, to open to reconcile it.
 Updates then use this crash-safe asymmetric protocol:
 
 1. marshal the new row and compute the sets of formulas the write adds and
-   removes for this key;
+   removes for this key in this table;
 2. in the main daemon database, atomically add all new formula retentions,
-   insert the corresponding `(database formula, key, formula)` rows into the
-   reference ledger, and record a pending-mutation intent naming the
-   `(database formula, row key)` being written (retain, ledger rows, and intent
-   commit together);
+   insert the corresponding `(database formula, table ordinal, key, formula)`
+   rows into the reference ledger, and record a pending-mutation intent naming
+   the `(database formula, table ordinal, row key)` being written (retain, ledger
+   rows, and intent commit together);
 3. commit the row alone in the per-database sidecar;
 4. in the main daemon database, atomically release removed retentions, delete
    their ledger rows, and clear the pending-mutation intent for this
-   `(database formula, key)`; and
+   `(database formula, table ordinal, key)`; and
 5. on startup, before exposing the database exo, replay only the surviving
    pending-mutation intents (a crash can leave at most the mutations that were
    in flight uncleared): for each intent, open the sidecar named by its database
-   formula, read that one key's committed row from it, compute the set of
-   formulas the row actually justifies, drop any ledgered row (and its retention)
-   for that `(database formula, key)` the committed row does not justify, then
-   delete the intent.
+   formula and, within it, the table named by its ordinal, read that one key's
+   committed row, compute the set of formulas the row actually justifies, drop
+   any ledgered row (and its retention) for that `(database formula, table
+   ordinal, key)` the committed row does not justify, then delete the intent.
+
+`delete` runs the same five steps, with the "new row" language read at its empty
+limit: the add-set is empty and the remove-set is the entire set of formulas the
+existing row retained.
+Step 1 reads the current row to compute that remove-set (there is no new row to
+marshal); step 2 records the intent and, having nothing to add, retains nothing
+new; step 3 deletes the row from the sidecar instead of committing one; and step
+4 releases the whole remove-set, deletes its ledger rows, and clears the intent.
+Step 5's reconciliation already covers the two delete crash points without a
+delete-specific path, because it is defined against the *committed* row and
+treats an absent row as the empty case of "formulas the committed row justifies":
+a crash between a delete's step 2 and step 3 leaves the row still present, so
+reconciliation reads it, finds it justifies every ledgered formula, drops
+nothing, and the delete simply re-runs on the next call; a crash between step 3
+and step 4 leaves the row absent, so reconciliation reads an absent row, computes
+an empty justified set, and drops every ledger row and retention for that
+`(database formula, table ordinal, key)`, exactly the release the interrupted
+delete owed.
 
 Steps 3 and 5 cover a process crash, but the ordinary *synchronous* failure of a
 live write is compensated inline rather than deferred to the next restart.
@@ -836,11 +915,24 @@ a committed row with a dangling reference.
 Reconciliation removes that over-retention.
 Deleting the database formula first stops new calls, then closes and removes
 provider storage, then releases all ledgered references.
-All five steps of the update protocol above run under a per-database-formula
-mutation queue (a lock scoped to this one database formula, not the
-process-global formula-graph queue that also serializes formula creation and
-pet-name binds) so two row mutations of the same database cannot race retention
-accounting while writes to unrelated databases proceed concurrently.
+All five steps of the update protocol above run under a per-row-key mutation
+queue: a lock scoped to one `(database formula, table ordinal, row key)` (the
+same triple the intent and ledger are keyed on), not the process-global
+formula-graph queue that also serializes formula creation and pet-name binds, and
+not the whole database formula.
+Serializing per key is exactly what retention correctness needs and no more: the
+reconciliation invariant is defined per key (step 5), each key's ledger rows and
+retention edges are disjoint from every other key's, and a formula shared by
+several keys carries an independent retention edge per key, so releasing one key's
+edge never drops a formula another key still holds.
+Two mutations of the *same* key of the *same* table therefore cannot race
+retention accounting, while writes to different keys, to different tables of one
+database formula, or to different database formulas all proceed concurrently.
+The rejected alternative, a coarser per-database-formula lock, would have forced
+every table and key under one formula through a single serial queue, foreclosing
+the internal write concurrency the Motivation's "horizontally scaling"
+portability floor assumes, and buying no retention correctness the per-key lock
+does not already provide.
 
 Changing the configured provider requires an explicit export/import tool that
 streams schemas and rows through the public model, verifies counts and ordered
@@ -863,6 +955,11 @@ Public failures are hardened errors with stable names:
   `RowMissingError` for a failed `update` (the row does not exist), two distinct
   names so a catch site never string-matches to tell the opposite preconditions
   apart;
+- `TableExistsError` for a `createTable` whose name is already bound and
+  `TableMissingError` for an `openTable`/`dropTable` naming a table the database
+  does not hold, the table-management analogues of `RowExistsError`/
+  `RowMissingError`, so a caller reasons about table and row existence
+  preconditions with one vocabulary;
 - `QueryError` for a selector or predicate outside the portable subset;
 - `LimitExceededError` for a row, key, schema, or index over a versioned limit;
 - `ThrottledError` for a retryable provider throttling or conditional-write
@@ -902,9 +999,9 @@ resource names, formula identifiers, row bodies, or reference slots.
    passable codecs, primary and secondary indexes, conditional writes, and
    bounded reader queries.
 5. Add the `exo-database` formula, per-formula file placement, attenuation, the
-   `(database formula, key, formula)` reference-retention ledger, startup
-   reconciliation, the inline synchronous-failure compensation, and collection
-   cleanup.
+   `(database formula, table ordinal, key, formula)` reference-retention ledger,
+   startup reconciliation, the inline synchronous-failure compensation, and
+   collection cleanup.
 6. Run the same behavioral suite on Node and Endor, including sequentially
    opening one database file with each binding.
    Add a DynamoDB plan compiler test that proves every accepted schema/query has
@@ -948,10 +1045,24 @@ resource names, formula identifiers, row bodies, or reference slots.
   independently: crash between steps 2 and 3 on one formula's write, restart, and
   assert reconciliation opens that formula's sidecar (not the other's) and leaves
   the second formula's identical-key row and retentions untouched.
+- Prove the same independence one level down, across two tables of *one* formula:
+  create two tables in a single database formula whose primary keys collide on
+  the same bytes (for example two `string`-keyed tables both holding `"welcome"`),
+  crash between steps 2 and 3 on one table's write, restart, and assert
+  reconciliation keys on the `(database formula, table ordinal, row key)` triple
+  so it reconciles only the crashed table's intent and leaves the other table's
+  identical-key row and retentions untouched.
+- Test a `delete`-specific crash on both sides of the row commit: crash between a
+  delete's steps 2 and 3 (row still present) and assert reconciliation drops
+  nothing and the delete re-runs cleanly on the next call; crash between steps 3
+  and 4 (row absent) and assert reconciliation reads the absent row, computes an
+  empty justified set, and releases exactly the whole retention set the
+  interrupted delete owed for that `(database formula, table ordinal, key)`.
 - Exercise the concurrency guarantees the model states: prove two concurrent
-  writes to the same key take a serial order under the per-database mutation
-  queue without corrupting retention accounting, and prove concurrent writes to
-  two different database formulas proceed without blocking each other.
+  writes to the same key take a serial order under the per-row-key mutation queue
+  without corrupting retention accounting, and prove concurrent writes to
+  different keys, to different tables of one database formula, and to two
+  different database formulas all proceed without blocking each other.
 - Create two formulas, verify distinct state-directory files, mutate both,
   restart, delete one formula, and prove only its file and reference edges are
   removed.
@@ -993,8 +1104,9 @@ resource names, formula identifiers, row bodies, or reference slots.
    That per-database isolation is a deliberate operational choice purchased with
    the hand-rolled saga, not a side effect of the crash-safety work.
 8. **Retain before row commit; release after.** The retention and its
-   `(database formula, key, formula)` reference ledger both live in the daemon's
-   main `endo.sqlite`, so they commit atomically on both SQLite and DynamoDB
+   `(database formula, table ordinal, key, formula)` reference ledger both live in
+   the daemon's main `endo.sqlite`, so they commit atomically on both SQLite and
+   DynamoDB
    (which omits multi-item transactions); only the row itself lives in the
    per-database sidecar.
    A crash between the atomic retain-and-ledger step and the row commit leaks
