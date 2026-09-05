@@ -131,12 +131,22 @@ tokens, and durable reference identifiers never cross an exo boundary.
 
 The method semantics are:
 
-- `insert(row)` atomically fails if the primary key already exists;
-- `update(row)` atomically fails if it does not exist;
-- `put(row)` atomically inserts or replaces; and
-- `delete(key)` returns whether a row existed.
+- `insert(row)` takes a complete row and atomically fails with `ConflictError`
+  if the primary key already exists;
+- `update(row)` takes a complete row (it is a whole-row replace, never a
+  partial-field merge, so the caller passes every declared column exactly as
+  `insert` and `put` do) and atomically fails with `ConflictError` if the row
+  does not exist;
+- `put(row)` takes a complete row and atomically inserts or replaces; and
+- `delete(key)` removes the row if present and returns whether a row existed.
 
-The mutation contract is that an acknowledged mutation is durable, while two
+The three existence-precondition mutators disagree on purpose about how they
+signal a precondition failure: `insert` and `update` throw `ConflictError`,
+because a violated precondition means the caller's intended write cannot be
+performed at all, whereas `delete` reports absence through its boolean result
+rather than throwing, because deleting an already-absent key is deliberately
+idempotent (re-running a delete is a safe no-op, not an error). The mutation
+contract is that an acknowledged mutation is durable, while two
 concurrent writes to one key take some serial order. The update-only mutator is
 spelled `update` rather than `replace` deliberately: SQLite's `REPLACE INTO` is
 an upsert (the role `put` fills here), so a `replace` method would read as `put`
@@ -196,16 +206,26 @@ honest common mapping to DynamoDB.
 
 `float64` is the one narrow type that does not map to a DynamoDB `N`. DynamoDB's
 `N` is a base-10 decimal capped at 38 significant digits with an exponent range
-of roughly [-130, +125], so common binary64 values (`0.1`, `1e300`, `5e-324`)
-are not exactly representable and would round-trip lossily, and `lt`/`between`
-on a `float64` path would diverge from the SQLite side. A `float64` cell
-therefore stores its eight IEEE-754 bytes as `B` (and `REAL` on SQLite) under an
-order-preserving transform (flip the sign bit for non-negative values, flip all
-bits for negative values) so that unsigned byte comparison matches numeric
-comparison. Comparison on `float64` is thus by canonical bytes, not DynamoDB's
-native `N` ordering, but it remains exact for validation, keys, and ranges. This
-keeps `float64` inside the portable narrow band rather than making it a
-provider-specific loss.
+of roughly [-130, +125]. The failure mode is exponent-range overflow at the
+magnitude extremes, not precision loss at ordinary magnitudes: a binary64 value
+round-trips through the shortest decimal that identifies it, which never needs
+more than 17 significant digits, so `0.1` and other everyday values map to `N`
+exactly. The values with no `N` representation are the ones outside its exponent
+window (`1e300` above it, the subnormal `5e-324` below it). Storing `float64` as
+bytes also buys a fixed-width unsigned comparison identical on both providers,
+whereas `lt`/`between` on a native `N` path would diverge from the SQLite `REAL`
+side. A `float64` cell therefore stores its eight IEEE-754 bytes as `B` (and
+`REAL` on SQLite) under an order-preserving transform: canonicalize `-0` to `+0`
+first (the narrow band already rejects `NaN` and the infinities), then flip the
+sign bit for non-negative values and flip all bits for negative values, so
+unsigned byte comparison matches numeric comparison. The `-0`-to-`+0` step
+matches `makeEncodePassable`'s own rule of normalizing `-0` to `0`, so two keys
+that are `keyEQ`-equal (Endo's key model treats `-0` and `+0` as the same key)
+always encode to identical bytes, satisfying the codec's "equal keys, equal
+bytes" invariant. Comparison on `float64` is thus by canonical bytes, not
+DynamoDB's native `N` ordering, but it remains exact for validation, keys, and
+ranges. This keeps `float64` inside the portable narrow band rather than making
+it a provider-specific loss.
 
 JSON is not treated as merely another opaque blob. An index selector may walk
 through a `json` column, and a query may project or predicate on a declared
@@ -219,10 +239,10 @@ A `passable` cell uses the daemon's Smallcaps body-and-slots model. The write
 is accepted only if every by-presence leaf can be assigned a durable reference
 identifier by the supplied `ReferenceIdentity` (the identify/revive half of the
 reference interfaces defined in the Compact ordered key encoding); an ephemeral
-reference that the host cannot formulate causes the write to reject before
-mutation. The body is opaque to the database. This is how the Passable band
-covers all durably passable values without pretending that a database can
-natively index capability graphs.
+reference that the host cannot formulate causes the write to be rejected with
+`UndurableReferenceError` before mutation. The body is opaque to the database.
+This is how the Passable band covers all durably passable values without
+pretending that a database can natively index capability graphs.
 
 Patterns in schemas must themselves be pass-by-copy and must not contain
 remotables. They refine a band but cannot widen it. For example, an
@@ -598,26 +618,36 @@ daemon's main `endo.sqlite`. Keeping the ledger beside the retentions matters
 for the DynamoDB path: the DynamoDB portability target omits transaction and
 batch APIs, so a ledger stored in the (per-database) sidecar and a retention
 stored in the main graph could not be committed atomically there, and the
-crash-safety guarantee would be lost. With both in `endo.sqlite`, a
-retain-and-ledger update is a single transaction on both providers. Updates then
-use this crash-safe asymmetric protocol:
+crash-safety guarantee would be lost. With both in `endo.sqlite`, a single
+transaction on both providers commits the retention, the ledger increment, and a
+small pending-mutation intent together (the intent names the key in flight and
+bounds startup reconciliation, below). Updates then use this crash-safe
+asymmetric protocol:
 
 1. marshal the new row and compute old/new slot-count deltas;
-2. in the main daemon database, atomically add all new formula retentions and
-   increment the reference-count ledger for this database (retain and ledger
-   commit together);
+2. in the main daemon database, atomically add all new formula retentions,
+   increment the reference-count ledger for this database, and record a
+   pending-mutation intent naming the primary key being written (retain, ledger,
+   and intent commit together);
 3. commit the row alone in the per-database sidecar;
-4. in the main daemon database, atomically release removed retentions and
-   decrement the ledger; and
-5. on startup, reconcile the ledger against the committed rows in the sidecar
-   before exposing the database exo, dropping any retention the surviving rows do
-   not justify.
+4. in the main daemon database, atomically release removed retentions, decrement
+   the ledger, and clear the pending-mutation intent for this key; and
+5. on startup, before exposing the database exo, replay only the surviving
+   pending-mutation intents (a crash can leave at most the mutations that were
+   in flight uncleared): for each intent, compare the ledger against that one
+   key's committed row in the sidecar, drop any retention the row does not
+   justify, then delete the intent.
 
-A crash can therefore leave an extra retention (the ledger says a row references
-a formula that the sidecar never committed), never a committed row with a
-dangling reference. Reconciliation removes that over-retention. Deleting the
-database formula first stops new calls, then closes and removes provider
-storage, then releases all ledgered references. All five steps of the update
+Reconciliation therefore costs O(mutations in flight at crash time), bounded by
+the mutation queue's concurrency rather than by table size, because a completed
+mutation clears its own intent in step 4 and is never revisited; a full scan of
+the sidecar exists only as an explicit offline fsck-style repair, never on the
+restart path. A crash can therefore leave an extra retention (an intent whose
+retain and ledger committed in step 2 but whose row never committed in step 3),
+never a committed row with a dangling reference. Reconciliation removes that
+over-retention. Deleting the database formula first stops new calls, then closes
+and removes provider storage, then releases all ledgered references. All five
+steps of the update
 protocol above run under a per-database-formula mutation queue (a lock scoped to
 this one database formula, not the process-global formula-graph queue that also
 serializes formula creation and pet-name binds) so two row mutations of the same
@@ -635,7 +665,11 @@ Public failures are hardened errors with stable names:
 
 - `SchemaError` for an invalid or non-portable schema;
 - `RowShapeError` for a value outside its declared band or pattern;
-- `KeyError` for a non-Key, missing component, or non-durable reference;
+- `KeyError` for a non-Key key argument or a missing key component;
+- `UndurableReferenceError` for a `passable` cell whose by-presence leaf cannot
+  be assigned a durable reference identifier. This is a distinct failure domain
+  from a malformed key, so it no longer shares `KeyError` even when the offending
+  cell also serves as a key;
 - `ConflictError` for failed `insert`/`update` existence conditions;
 - `QueryError` for a selector or predicate outside the portable subset;
 - `LimitExceededError` for a row, key, schema, or index over a versioned limit;
@@ -680,8 +714,10 @@ resource names, formula identifiers, row bodies, or reference slots.
 - Property-test `keyEQ`/encoded equality, `compareRank`/byte ordering, codec
   round trips, every PassStyle allowed by `Key`, Unicode boundary pairs
   (including astral versus high-BMP), `int64` values above 2^53, `float64`
-  values spanning the full binary64 magnitude range (subnormals, `0.1`, `1e300`,
-  negative and near-zero values that DynamoDB `N` cannot represent), and
+  values spanning the full binary64 magnitude range (the exponent extremes
+  `1e300` and subnormal `5e-324` that fall outside DynamoDB `N`'s exponent
+  window, ordinary magnitudes such as `0.1` that `N` represents exactly, and the
+  signed-zero pair `-0`/`+0`, which must encode to identical bytes), and
   durable-reference identity.
 - Run one backend-contract suite against the in-memory model, Node SQLite, and
   Endor SQLite for DDL, all three cell bands, each mutation condition,
@@ -689,7 +725,14 @@ resource names, formula identifiers, row bodies, or reference slots.
 - Inspect SQLite query plans to prove primary and secondary range queries use
   their composite indexes and never sort all rows.
 - Restart the daemon after each point in the retention protocol and prove rows
-  never revive dangling references and reconciliation removes extra retains.
+  never revive dangling references and reconciliation removes extra retentions.
+  Assert reconciliation touches only the keys named by surviving pending-mutation
+  intents, not the whole sidecar, so restart cost tracks the mutations in flight
+  at crash time rather than table size.
+- Exercise the concurrency guarantees the model states: prove two concurrent
+  writes to the same key take a serial order under the per-database mutation
+  queue without corrupting retention accounting, and prove concurrent writes to
+  two different database formulas proceed without blocking each other.
 - Create two formulas, verify distinct state-directory files, mutate both,
   restart, delete one formula, and prove only its file and reference edges are
   removed.
