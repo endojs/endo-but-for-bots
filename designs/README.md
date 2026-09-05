@@ -11,8 +11,10 @@ revised 2026-09-05; an alternate reified representation for passable symbols
 (a plain hardened `{ [PASS_STYLE]: 'symbol', [Symbol.toStringTag]: name }`
 object) selected per-process by a custom `pass-style-symbol` Node resolution
 condition and never the default, closing the `Symbol.for` global-registry
-memory-exhaustion vector at the marshal decode leaf; design only, no
-implementation; carries nine open questions),
+memory-exhaustion vector at the marshal decode leaf **for a process that opts in
+wholesale** (it does not close the per-vat denial of service, which waits on the
+value-parameter shape); design only, no implementation; carries eleven open
+questions),
 [daemon-secret-manager](daemon-secret-manager.md) (added 2026-09-03 and revised
 2026-09-03; a singleton, capability-authorized manager for arbitrary secret
 bytes, with management facets under the special `@secrets` directory and
