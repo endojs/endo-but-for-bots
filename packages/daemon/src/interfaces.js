@@ -714,11 +714,15 @@ export const MountInterface = M.interface('EndoMount', {
   // glob: "everything" is `streamGrep(p, streamGlob('**'))` and "a subset" is
   // `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern, glob(g))`
   // seam. `buffer` is the clamped pre-ack window. No `maxResults`. Grep reads
-  // the supplied files' contents lazily (one file per pull), so early close
-  // leaves later supplied files unread; whether the directory *walk* is
-  // incremental is the producer's concern. Record order follows the supplied
-  // file stream, so fed `streamGlob(g)` it is glob's sorted-path order — the same
-  // multiset of matches as `grep()`.
+  // the supplied files' contents lazily, but "one file per pull" holds only for
+  // a *matching* file: grep reads ahead to the next match, so a sparse run of
+  // non-matching files is read within one pull (bounded by the per-file liveness
+  // check, not backpressure). Early close leaves later supplied files unread.
+  // Whether the directory *walk* is incremental is the producer's concern:
+  // `streamGlob` walks in walk order, so `streamGrep(p, streamGlob('**'))` is
+  // walk-incremental. Record order follows the supplied file stream, so fed
+  // `streamGlob(g)` it is glob's walk order — the same multiset of matches as
+  // `grep()` (order-independent).
   streamGrep: M.call(
     M.string(),
     M.or(M.remotable('PassableReader'), M.promise()),

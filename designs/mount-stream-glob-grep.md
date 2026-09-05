@@ -66,10 +66,11 @@ streamGrep(pattern, files, options?) -> PassableReader<{ file, line, text }>
   and — because it then pulls no further paths — the unread remainder of the
   *producer's* stream too; whether that halts the producer's directory walk
   depends on whether the producer's walk is itself incremental. For `streamGlob`
-  the engine's global UTF-16 sort (its normative contract) forces the whole
-  match set before the first element, so its walk is already complete and early
-  close saves only marshalling, not traversal — and therefore
-  `streamGrep(p, streamGlob('**'))` inherits an eager walk from that producer.
+  the engine walks in walk order (`globPaths({ sorted: false })`) and yields each
+  matched path as the walk discovers it, so its enumeration is demand-bounded and
+  early close halts the walk within one walk step — and therefore
+  `streamGrep(p, streamGlob('**'))` inherits a walk-incremental producer, a first
+  match before the whole tree is walked.
 
 Both return a fresh `PassableReader` remotable (from
 `@endo/exo-stream/reader-from-iterator.js`) synchronously, the same way
@@ -109,14 +110,16 @@ the stream breaks with an error:
 - `streamGrep`: `harden({ file: M.string(), line: M.number(), text: M.string({
   stringLengthLimit: STREAM_STRING_LENGTH_LIMIT }) })`.
 
-  Both use an explicit large `stringLengthLimit` (`STREAM_STRING_LENGTH_LIMIT =
-  10,000,000`, the daemon's existing large-payload convention) rather than
-  `M.string()`'s default `100,000`. The reader pump enforces `readPattern` with
-  `mustMatch` on *every* element, and a throw there aborts the whole stream — so
-  the default limit would make a single match line over 100,000 characters (a
-  minified bundle, single-line JSON, a lock file, a base64/SVG blob) terminally
-  break `streamGrep`, a parity break the eager `grep` (no such limit) does not
-  share.
+  Both use `STREAM_STRING_LENGTH_LIMIT = Infinity` rather than `M.string()`'s
+  default `100,000` (or any other finite ceiling). The reader pump enforces
+  `readPattern` with `mustMatch` on *every* element, so any finite limit would
+  make a single over-limit element — a match line or path over the ceiling (a
+  minified bundle, single-line JSON, a lock file, a base64/SVG blob) — throw and
+  abort the *whole* stream, dropping every later match: a parity break the eager
+  `grep` (no such limit) does not share. And a finite ceiling buys no memory
+  protection, because `grepFiles` has already read the whole file into one string
+  before the per-element check runs — so `Infinity` is the only value that
+  preserves eager-parity without a false memory guarantee.
 
 ### Producer implementation
 
@@ -138,10 +141,10 @@ the stream breaks with an error:
    (`assertLivePathBatches`) is interposed on each method's *path source* —
    asserting before surfacing each path batch — and `assertLive()` runs again
    before each yield. The two methods differ in **what their path source is**.
-   `streamGlob`'s source is `globPaths` (default `sorted: true`): a *globally
-   sorted* result that runs the entire directory walk to completion before its
-   first batch, so the liveness check cannot observe a `revoke()` *during* the
-   enumeration and earns nothing beyond the per-yield `assertLive()`.
+   `streamGlob`'s source is `globPaths({ sorted: false })`: paths in *walk order*,
+   each yielded as the walk discovers it, so the liveness check runs between walk
+   steps and a `revoke()` *during* the enumeration is observed within one walk
+   step.
    `streamGrep`'s source is the **external `files` reader** — grep no longer
    walks. It adapts that reader into path batches (`iterateReader`, one path per
    singleton batch) and interposes the same liveness check, so the check runs
@@ -158,22 +161,22 @@ the stream breaks with an error:
    dropped: the paths arrive one at a time over the stream. Because grep does not
    enumerate, there is **one walker** — in the producer — and no second walk to
    drift.
-4. Ordering and eagerness follow the *producer*. `streamGlob` uses glob's order —
-   a **global UTF-16 sort over full paths** — which forces the engine to collect
-   and sort the whole match set before its first batch, so it is **not
-   incremental in the directory walk**; its streaming win is bounded
-   marshalled-message size and the absent 10,000-path cap, not
-   time-to-first-result. `streamGrep` reads the supplied files' *contents*
-   incrementally (one file per pull), so content reads never run ahead of demand
-   and early close leaves later supplied files unread. Whether the *directory
-   walk* is incremental is now the producer's property: fed `streamGlob(g)`
-   (`sorted: true`) the walk is eager, so `streamGrep(p, streamGlob('**'))` is
-   not walk-incremental. A walk-incremental producer — an unsorted `streamGlob`
-   mode over `globPaths({ sorted: false })` (the `sorted` flag already exists) —
-   would restore first-match-before-full-walk without touching grep; changing
-   `streamGlob`'s sorted contract is a separate decision (see § Follow-up). Fed
-   `streamGlob(g)`, `streamGrep`'s flattened order is glob's sorted-path order,
-   so it collects to the same multiset as eager `grep(pattern, glob(g))`.
+4. Ordering and eagerness follow the *producer*. `streamGlob` uses **walk order**
+   (`globPaths({ sorted: false })`) — each matched path yielded as the walk
+   discovers it — so it is **incremental in the directory walk**: a first path
+   before the whole tree is walked, its enumeration demand-bounded, and its
+   streaming win is time-to-first-result on top of bounded marshalled-message size
+   and the absent 10,000-path cap. `streamGrep` reads the supplied files'
+   *contents* incrementally (one file per pull), so content reads never run ahead
+   of demand and early close leaves later supplied files unread. Whether the
+   *directory walk* is incremental is the producer's property: fed `streamGlob(g)`
+   (walk order) the walk is incremental, so `streamGrep(p, streamGlob('**'))` is
+   walk-incremental end to end — a first match before the whole tree is walked. A
+   caller needing glob-identical UTF-16 order uses eager `glob()` instead; a
+   *sorted* streaming mode was considered and not offered (see § Follow-up). Fed
+   `streamGlob(g)`, `streamGrep`'s flattened order is the producer's walk order,
+   so it collects to the same **multiset** as eager `grep(pattern, glob(g))`
+   (order-independent equality; walk order is not glob's sort).
 
 ```js
 // Shipped shape (packages/daemon/src/mount.js):
@@ -217,10 +220,11 @@ only as the stream is pulled, so no supplied file is read ahead of consumer
 demand beyond the requested pre-ack buffer — early close bounds grep's reads and,
 because it then pulls no further paths, the producer's remaining stream too
 (whether that halts the producer's *walk* depends on the producer). For
-`streamGlob` the directory *enumeration* runs to completion before the first
-element (the global sort, glob's normative contract), so its early close bounds
-marshalling, not the walk. The `streamGlob` sequence below shows that eager-walk
-shape; `streamGrep` interleaves `producer path -> file read -> match -> ack`.
+`streamGlob` the directory *enumeration* advances in walk order as the stream is
+pulled (`globPaths({ sorted: false })`), yielding each matched path as it is
+discovered, so its early close bounds the walk itself, not just marshalling. The
+`streamGlob` sequence below shows that walk-incremental shape; `streamGrep`
+interleaves `producer path -> file read -> match -> ack`.
 
 ```mermaid
 sequenceDiagram
@@ -229,12 +233,12 @@ sequenceDiagram
   C->>M: streamGlob(pattern)
   M-->>C: PassableReader
   C->>M: syn (give me one)
-  M->>M: engine enumerates + globally sorts the whole match set (eager)
+  M->>M: engine walks in walk order, yields first match as discovered
   M-->>C: ack "src/index.js"
   C->>M: syn
   M-->>C: ack "src/mount.js"
   C->>M: return() (early close)
-  M->>M: generator finally, no further reads (walk already done)
+  M->>M: generator finally, walk halts within one step (no further reads)
   M-->>C: terminal ack
 ```
 
@@ -249,8 +253,8 @@ flow control on the synchronize chain.
   element ahead of consumer demand. For `streamGrep` this bounds the file
   *content* reads to demand (grep reads one supplied file per pull) and, because
   grep pulls the `files` reader lazily too, its demand propagates back to the
-  producer; for `streamGlob` the global sort has already run the directory walk
-  to completion, so backpressure governs only marshalling, not the walk.
+  producer; for `streamGlob` the walk advances in walk order as the stream is
+  pulled, so backpressure governs the directory walk itself, not just marshalling.
   Consumers on high-latency links pass `buffer > 0` to let the producer pre-ack
   that many elements. The producer clamps the requested buffer
   (`clampStreamBuffer`, ceiling `STREAM_BUFFER_MAX = 1,024`) so a remote caller
@@ -262,10 +266,10 @@ flow control on the synchronize chain.
   generator's `finally` runs, and no further filesystem I/O happens. For
   `streamGrep` this elides the remaining supplied files' content reads and stops
   pulling the `files` reader — whose own `return()` propagates to the producer,
-  so a walk-incremental producer would also stop walking (an eager `streamGlob`
-  producer has already finished its walk). For `streamGlob` the walk is already
-  complete by the first element, so early close saves marshalling, not
-  traversal. A consumer `throw` closes the same way through `iterateReader`.
+  so a walk-incremental `streamGlob` producer stops walking too. For `streamGlob`
+  the walk advances in walk order with demand, so early close halts the walk
+  within one walk step, saving traversal as well as marshalling. A consumer
+  `throw` closes the same way through `iterateReader`.
 
 ### Revocation
 
@@ -284,10 +288,10 @@ path source is the external `files` reader (grep no longer walks), so this bound
 the *content reads* — a `revoke()` is observed within one supplied file, not
 deferred to the end of the stream; any post-revoke *walk* belongs to the producer
 and is bounded by the producer's own revocation on the `mount` it was minted
-against. For `streamGlob` the directory *enumeration* has already run to
-completion before the first path batch (the global sort; see § Backpressure and
-cancellation), so a `revoke()` landing during its walk is not observed until the
-walk finishes. A revoked-but-never-pulled stream holds only a suspended generator
+against. For `streamGlob` the directory *enumeration* advances in walk order per
+path batch (`globPaths({ sorted: false })`; see § Backpressure and
+cancellation), so a `revoke()` landing during its walk is observed within one
+walk step. A revoked-but-never-pulled stream holds only a suspended generator
 closure (no open file handles between pulls), so no separate teardown
 registration with the revocation context is needed.
 
@@ -315,7 +319,7 @@ search readers are minted once-only (`readerFromIterator({ once: true })`): a
 second `stream()` on the same reader rejects rather than starting a second walk
 over the shared iterator, which would otherwise both split the element set and
 open a second pre-ack window (so `k` concurrent streams could scale the pre-ack
-memory and post-revoke delivery as *k×buffer*). Latching to a single active
+memory and post-revoke delivery as `k*buffer`). Latching to a single active
 stream is exactly what a per-request producer wants — a per-search reader has no
 meaningful second consumer. The one remaining lever the *revoker* still lacks is
 a `buffer` ceiling on `makeMount`/`makeRevocableMount` itself (the grantee, not
@@ -355,8 +359,8 @@ Each names the arguments and options, states that the consumer iterates with
 (`streamGrep('TODO', streamGlob('**'))`), and that closing a `streamGrep`
 iterator early leaves later supplied files unread (grep reads one file per pull),
 while whether the walk stops is the producer's concern — for a `streamGlob`
-producer the global-sort walk is already complete at the first element so early
-close does not stop its walk. The eager `glob` and `grep` entries gain a
+producer the walk advances in walk order, so early close halts its walk within one
+walk step. The eager `glob` and `grep` entries gain a
 cross-reference sentence ("results are capped; for incremental or
 unbounded result sets use streamGlob / streamGrep"). The mount typedefs
 type the two methods with `PassableReader` imported from
@@ -416,17 +420,16 @@ it landed on `llm` after the mount stack merged.
 2. **No `maxResults` on stream variants.** The consumer's pull-based flow
    control is the bound. For `streamGrep`, early `return()` stops the remaining
    supplied files' content reads and pulls no further paths from the producer;
-   for `streamGlob` the eager global-sort walk has already completed by the first
-   element, so early close bounds message marshalling, not the walk. The caps
-   remain on the eager variants, whose purpose (bounded single-message results)
-   they fit.
+   for `streamGlob` the walk advances in walk order with demand, so early close
+   halts the walk within one walk step. The caps remain on the eager variants,
+   whose purpose (bounded single-message results) they fit.
 3. **Clamp the `buffer` option** rather than trusting the caller, so the
    pre-ack window is bounded. (This bounds the marshalled pre-ack
-   window, not the whole daemon-side high-water mark: for `streamGlob` the global
-   sort materializes the full path set internally before the first batch; for
-   `streamGrep` there is no such pre-materialization in grep — it holds one
-   supplied file's contents at a time — though any full-path-set commitment lives
-   in whatever producer feeds it. The readers are minted once-only, so the window
+   window, not the whole daemon-side high-water mark: `streamGlob` walks in walk
+   order and holds no full path set — it yields each path as discovered — and
+   `streamGrep` holds one supplied file's contents at a time, though any
+   full-path-set commitment lives in whatever producer feeds it. The readers are
+   minted once-only, so the window
    is bounded per reader — a grantee cannot open a second concurrent stream to
    multiply it. See § Revocation.)
 8. **Mint the search readers once-only** (`readerFromIterator({ once: true })`).
@@ -443,15 +446,17 @@ it landed on `llm` after the mount stack merged.
    `ReadableTree` view, matching the existing `glob`/`grep`/`stat`
    exclusion.
 7. **Ordering follows the producer.** `streamGlob` uses the shared engine's
-   global UTF-16 sort over full paths — glob's normative contract — so collecting
-   it reproduces eager `glob` element-for-element, and the whole match set is
-   enumerated before the first element. `streamGrep` yields records in the order
-   its supplied `files` stream delivers paths (path-then-line as each file is
-   read). Fed `streamGlob(g)`, that is glob's sorted-path order, so it collects to
-   the same multiset as eager `grep(pattern, glob(g))`. Grep no longer owns an
-   enumeration order at all: decoupling moved that choice to the producer, so a
-   walk-incremental (unsorted) producer would change `streamGrep`'s cross-file
-   order without touching grep.
+   **walk order** (`globPaths({ sorted: false })`) — each matched path yielded as
+   the walk discovers it — so collecting it yields the same **multiset** as eager
+   `glob` (order-independent equality; walk order is not glob's UTF-16 sort), a
+   first path before the whole tree is walked. A caller needing glob-identical
+   order uses eager `glob()`. `streamGrep` yields records in the order its
+   supplied `files` stream delivers paths (path-then-line as each file is read).
+   Fed `streamGlob(g)`, that is the producer's walk order, so it collects to the
+   same multiset as eager `grep(pattern, glob(g))`. Grep no longer owns an
+   enumeration order at all: decoupling moved that choice to the producer, and the
+   walk-incremental `streamGlob` producer gives `streamGrep`
+   first-match-before-full-walk without touching grep.
 
 9. **`streamGrep` takes a mandatory file stream, not an internal glob**
    ([PR #1085 review](https://github.com/endojs/endo-but-for-bots/pull/1085)).
@@ -464,8 +469,8 @@ it landed on `llm` after the mount stack merged.
    stream as a positional argument and never globs; "everything" and "a subset"
    are `streamGrep(p, streamGlob('**'))` and `streamGrep(p, streamGlob(g))`. The
    consequence for incrementality is item 4 of § Producer implementation: the
-   directory walk moves to the producer, and restoring walk-incremental grep
-   needs an unsorted producer mode (§ Follow-up), not a change to grep.
+   directory walk moves to the producer, and walk-incremental grep comes from the
+   walk-order `streamGlob` producer, not from a change to grep.
 
 ## Test Plan
 
@@ -474,14 +479,16 @@ it landed on `llm` after the mount stack merged.
 > `buildMountFixture` helper from `packages/daemon/test/_mount-fixture.js`
 > (plus a `countingPowers` wrapper for read-count assertions), rather than as
 > additions to `mount.test.js`/`_mount-test-helpers.js`. The incrementality
-> assertions track the shipped behavior below: `streamGlob`'s eager walk, and
-> `streamGrep`'s fully incremental walk-order enumeration.
+> assertions track the shipped behavior below: `streamGlob`'s walk-order
+> incremental enumeration, and `streamGrep`'s fully incremental walk-order
+> enumeration.
 
 Covered on a temporary directory tree with `makeMount`:
 
-- **Parity**: collecting `streamGlob` equals `glob` including order; collecting
-  `streamGrep(p, streamGlob(g))` equals `grep(p, glob(g))` as a **multiset**
-  (compared through a path-then-line canonical key), on the same fixture tree.
+- **Parity**: collecting `streamGlob` equals `glob` as a **multiset** (walk order
+  is not glob's UTF-16 sort); collecting `streamGrep(p, streamGlob(g))` equals
+  `grep(p, glob(g))` as a **multiset** (compared through a path-then-line
+  canonical key), on the same fixture tree.
 - **Content-read incrementality**: with an instrumented `filePowers` counting
   `readFileText`, `streamGrep` reads one supplied file per pull — after the first
   match only the files up to and including it have been read — and closing after
@@ -489,9 +496,9 @@ Covered on a temporary directory tree with `makeMount`:
   advance after close). Because the file set is now a *supplied* stream, this is
   tested by feeding grep a producer and asserting per-pull content reads, not by
   asserting a walk count (the walk is the producer's). A companion engine-level
-  test still asserts `globPaths({ sorted: false })` yields the same multiset as
-  sorted mode and reaches its first path after descending only one subtree — the
-  substrate an unsorted producer would build on.
+  test asserts `globPaths({ sorted: false })` yields the same multiset as sorted
+  mode and reaches its first path after descending only one subtree — the walk-
+  order substrate `streamGlob` now drives.
 - **Backpressure**: with `buffer: 0`, assert `streamGrep`'s file *content*
   reads do not run ahead of pulls (call counter sampled between pulls).
 - **Cancellation**: break out of `for await` on both `streamGlob` and
@@ -517,10 +524,11 @@ Covered on a temporary directory tree with `makeMount`:
   consider `ReadableTree` and `SnapshotTree`, but this design keeps those
   structural views minimal and does not add search to them.
 - The producer clamps `buffer` at 1,024 elements. This bounds the *pre-ack*
-  window (the marshalled elements pre-pulled ahead of demand), not the whole
-  daemon-side memory high-water mark: the engine's global sort materializes the
-  full path set internally before the first batch regardless of `buffer`, so the
-  clamp caps only the marshalled window, not that internal set. The specific
+  window (the marshalled elements pre-pulled ahead of demand), not necessarily the
+  whole daemon-side memory high-water mark: `streamGlob` walks in walk order and
+  materializes no full path set, so its high-water mark tracks the pre-ack window,
+  while a `streamGrep` producer's own internal commitments live in whatever feeds
+  it. The specific
   value 1,024 is an **unmeasured provisional ceiling** — large enough not to
   constrain a high-latency consumer in practice, small enough that its worst-case
   pre-materialization is a bounded element count — not a benchmarked optimum.
@@ -538,29 +546,18 @@ Covered on a temporary directory tree with `makeMount`:
   STREAM_BUFFER_MAX]`, and the revoker cannot pin a grant to `0` short of handing
   a face whose `buffer` is capped lower. Adding a per-grant ceiling would let the
   revoking party bound the post-revoke delivery window it is exposed to, not only
-  the grantee. Deferred: the once-only latch already removes the *k×buffer*
+  the grantee. Deferred: the once-only latch already removes the `k*buffer`
   multiplier, so this is a refinement of the residual single-stream window, not a
   correctness gap.
-- **Walk-incremental `streamGrep` needs an unsorted producer.** With grep
-  decoupled from enumeration, "incremental walk for grep" is no longer a property
-  of grep — it is whether the *producer* feeding `streamGrep` walks incrementally.
-  Fed the current `streamGlob` (`sorted: true`, glob's normative global sort), the
-  producer runs the whole walk before its first path, so
-  `streamGrep(p, streamGlob('**'))` reads files incrementally but does not get a
-  first match before the whole tree is walked. Restoring that would want an
-  **unsorted `streamGlob` mode** — a `streamGlob(pattern, { sorted: false })` (or
-  a distinct `streamWalk`) built on the engine's existing `globPaths({ sorted:
-  false })` flag — that yields paths in walk order as it discovers them. That is a
-  deliberate API decision (it changes `streamGlob`'s output order, glob's
-  normative contract, when opted into) and is **flagged on the PR thread for
-  maintainer sign-off** rather than taken here; the `sorted` engine flag it would
-  build on already exists. Until then, walk-incrementality is available at the
-  engine level (`globPaths({ sorted: false })`) but not through the composed
-  mount surface.
-- **Interruptible `streamGlob` enumeration.** With the default `sorted: true`,
-  `globPaths` runs the whole directory walk to completion before its first batch
-  (the global sort is glob's normative contract), so a `revoke()` during its
-  enumeration is not observed until the walk finishes. Making `streamGlob`'s
-  enumeration observe revocation would require surfacing partial, pre-sort batches
-  (or a cancellation token threaded into `walk`) without breaking glob's
-  sorted-output contract — the same unsorted-mode question as the item above.
+- **Walk-incremental, interruptible `streamGlob` / `streamGrep` — delivered.**
+  `streamGlob` now drives its walk in **walk order**
+  (`globPaths({ sorted: false })`), yielding each matched path as the walk
+  discovers it, so `streamGrep(p, streamGlob('**'))` is walk-incremental end to
+  end — a first match before the whole tree is walked — and a mid-stream
+  `revoke()` halts the enumeration within one walk step rather than after an
+  uninterruptible whole-tree walk. A *sorted* streaming mode was considered and
+  deliberately not offered: sorting `streamGlob`'s output before grep would
+  re-materialize the whole match set and obviate the pipeline, so a caller needing
+  glob-identical UTF-16 order uses eager `glob()` instead. The `sorted` engine
+  flag remains available should a sorted streaming variant ever be wanted, but
+  none is planned.

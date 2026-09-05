@@ -1374,15 +1374,15 @@ export interface EndoMount extends PathEntryIssuer {
   ): Promise<Array<import('@endo/platform/fs/search.types').GrepMatch>>;
   /**
    * Streaming glob: a `PassableReader` yielding matching mount-relative paths
-   * one element at a time, in the same UTF-16-sorted order as `glob`. Returned
+   * one element at a time, in *walk order* (as the tree is traversed). Returned
    * synchronously so `iterateReader(E(mount).streamGlob(p))` pipelines. No
-   * result cap; `buffer` is the clamped pre-ack window. Because glob's order is
-   * a global sort, the directory walk is eager — the whole confined tree is
-   * enumerated before the first element — so `streamGlob` bounds marshalled
-   * message size, not time-to-first-result, and closing the iterator early does
-   * not stop the walk (unlike `streamGrep`, whose content reads early close
-   * genuinely elides). Its streaming win is the absent result cap and the
-   * one-element-at-a-time message size. With `buffer: 0` a mid-stream `revoke()`
+   * result cap; `buffer` is the clamped pre-ack window. Unlike glob's global
+   * sort, the walk is incremental — each path is yielded as it is discovered, so
+   * `streamGlob` delivers a first result before the whole tree is walked, its
+   * in-daemon memory tracks consumer demand, and closing the iterator early
+   * stops the walk. The trade is order: elements arrive in walk order, not
+   * glob's UTF-16 sort, so a caller needing glob-identical ordering uses `glob`.
+   * With `buffer: 0` a mid-stream `revoke()`
    * rejects the next pull immediately; a non-zero `buffer` may still deliver up
    * to that many already-acknowledged elements first — and the reader is
    * once-only, so that window is bounded per reader, not multiplied across
@@ -1400,11 +1400,14 @@ export interface EndoMount extends PathEntryIssuer {
    * one so `E(mount).streamGlob(g)` can be piped straight in. Grep does not
    * glob: search everything with `streamGrep(p, streamGlob('**'))` and a subset
    * with `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern,
-   * glob(g))` seam. No `maxResults`. Content reads are incremental — grep reads
-   * one supplied file per pull, so early close leaves later supplied files
-   * unread; whether the directory *walk* is incremental is the producer's
-   * concern (`streamGlob` keeps glob's eager global sort). Record order follows
-   * the supplied file stream. With `buffer: 0` a mid-stream `revoke()` rejects
+   * glob(g))` seam. No `maxResults`. Content reads are lazy, but "one file per
+   * pull" holds only for a *matching* file: grep reads ahead to the next match,
+   * so a run of non-matching files is read within one pull (bounded by the
+   * per-file liveness check, not backpressure). Early close leaves later
+   * supplied files unread; whether the directory *walk* is incremental is the
+   * producer's concern (`streamGlob` walks in walk order, so the pipeline is
+   * walk-incremental). Record order follows the supplied file stream. With
+   * `buffer: 0` a mid-stream `revoke()` rejects
    * the next pull immediately; a non-zero `buffer` may still deliver up to that
    * many already-acknowledged elements first — and the reader is once-only, so
    * that window is bounded per reader.

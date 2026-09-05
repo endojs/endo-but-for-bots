@@ -231,9 +231,11 @@ export const makeSearch = powers => {
    * cannot be emitted in sorted order. That barrier is glob's contract, not the
    * walker's: with `sorted: false` the same walker yields matched paths in
    * *walk order* as they are discovered, so the first batch is emitted before
-   * the whole tree is walked (the substrate for a walk-order path *producer* —
-   * e.g. a future unsorted `streamGlob` — since grep, decoupled, needs no global
-   * sort of the files it is handed).
+   * the whole tree is walked. This is the substrate for a walk-order path
+   * *producer*: the streaming `streamGlob` drives the walk this way, so its
+   * output is incremental and demand-bounded, and grep — decoupled — needs no
+   * global sort of the files it is handed. The eager `glob()` keeps `sorted:
+   * true`.
    * Either way the generator is the shared core — the eager surface
    * flattens-and-caps it, the stream surface reads it — and there is exactly one
    * walk: `sorted` only chooses between draining it to sort and streaming it.
@@ -302,10 +304,10 @@ export const makeSearch = powers => {
       if (!includeDirectories && (await powers.isDirectory(childPath))) {
         return;
       }
-      const relPath = prefix.join('/');
-      if (!results.has(relPath)) {
-        results.add(relPath);
-        yield relPath;
+      const relativePath = prefix.join('/');
+      if (!results.has(relativePath)) {
+        results.add(relativePath);
+        yield relativePath;
       }
     };
 
@@ -326,10 +328,10 @@ export const makeSearch = powers => {
       if (remaining.length === 0) {
         // The walk root itself (empty prefix) is never a result.
         if (prefix.length > 0) {
-          const relPath = prefix.join('/');
-          if (!results.has(relPath)) {
-            results.add(relPath);
-            yield relPath;
+          const relativePath = prefix.join('/');
+          if (!results.has(relativePath)) {
+            results.add(relativePath);
+            yield relativePath;
           }
         }
         return;
@@ -416,8 +418,8 @@ export const makeSearch = powers => {
       // walked. `walk` already deduped and applied confinement + denial
       // filtering, so no barrier stands between discovery and emission.
       let batch = [];
-      for await (const relPath of matches) {
-        batch.push(relPath);
+      for await (const relativePath of matches) {
+        batch.push(relativePath);
         if (batch.length >= batchLimit) {
           yield harden(batch);
           batch = [];
@@ -435,8 +437,8 @@ export const makeSearch = powers => {
     // sort, not the walk order. The global sort is what forces the full walk
     // before the first batch.
     const collected = [];
-    for await (const relPath of matches) {
-      collected.push(relPath);
+    for await (const relativePath of matches) {
+      collected.push(relativePath);
     }
     collected.sort();
     for (let i = 0; i < collected.length; i += batchLimit) {
@@ -514,7 +516,7 @@ export const makeSearch = powers => {
 
     const source = pathBatches(root, { ...options, confinementRoot }, paths);
     for await (const pathBatch of source) {
-      for (const relPath of pathBatch) {
+      for (const relativePath of pathBatch) {
         if (maxResults !== undefined && count >= maxResults) {
           if (batch.length > 0) {
             yield harden(batch);
@@ -522,7 +524,7 @@ export const makeSearch = powers => {
           }
           return;
         }
-        const segments = relPath.split('/').filter(segment => segment !== '');
+        const segments = relativePath.split('/').filter(segment => segment !== '');
         if (segments.some(segment => isDeniedName(denySet, segment))) {
           continue;
         }
@@ -551,7 +553,7 @@ export const makeSearch = powers => {
           }
           const text = lines[i].replace(/\r$/, '');
           if (regex.test(text)) {
-            batch.push(harden({ file: relPath, line: i + 1, text }));
+            batch.push(harden({ file: relativePath, line: i + 1, text }));
             count += 1;
             if (batch.length >= batchLimit) {
               yield harden(batch);

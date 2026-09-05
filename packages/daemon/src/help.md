@@ -898,17 +898,18 @@ Example: glorp("src/**/*.js", "TODO") -> every TODO line under src.
 
 ## streamGlob(pattern, options?) -> PassableReader<string>
 
-Streaming glob: a reader that yields matching mount-relative paths one at a time, in the same
-UTF-16-sorted order as glob(), with the same dialect, deny filtering, and confinement.
+Streaming glob: a reader that yields matching mount-relative paths one at a time, in walk order (the
+order the tree is traversed), with the same dialect, deny filtering, and confinement as glob().
 pattern: string — A glob pattern (same dialect as glob()).
 options.buffer: number — Elements the producer may pre-acknowledge ahead of demand, for
 high-latency links (default 0, fully synchronized; clamped to 1024). Each pre-acknowledged element
 costs one round trip, so omitting buffer (the default 0) is one round trip per path.
 Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. Unlike glob(), there is no
 10,000-result cap.
-Because glob order is a global sort, the directory walk is eager: the whole match set is walked
-before the first element, so streamGlob bounds message size rather than time-to-first-result, and
-closing the iterator early does not stop the walk (unlike streamGrep's incremental content reads).
+Unlike glob's global sort, the walk is incremental: each path is yielded as it is discovered, so
+streamGlob delivers a first result before the whole tree is walked and its in-daemon memory tracks
+consumer demand — closing the iterator early stops the walk. The trade is order: elements arrive in
+walk order, not glob's UTF-16 sort, so a caller needing glob-identical ordering uses glob().
 With buffer 0 a mid-stream revoke() rejects the next pull immediately; a non-zero buffer may still
 deliver up to that many already-buffered elements first (the reader is once-only, so that window is
 per reader, not multiplied across concurrent streams).
@@ -928,11 +929,13 @@ hand-supplied file stream cannot widen authority.
 options.buffer: number — Pre-acknowledge window for high-latency links (default 0; clamped to 1024).
 Each pre-acknowledged element costs one round trip, so the default 0 is one round trip per record.
 Iterate with iterateReader from @endo/exo-stream/iterate-reader.js. There is no maxResults cap.
-Grep reads the supplied files' contents lazily — one file per pull — so closing the iterator early
-leaves later supplied files unread. Whether the directory walk is incremental is the producer's
-concern: streamGlob keeps glob's eager global sort, so streamGrep(p, streamGlob("**")) is not
-walk-incremental. Fed streamGlob(g), the record order is glob's sorted-path order — the same multiset
-of matches as grep(). With buffer 0 a mid-stream revoke() rejects the next pull immediately; a
+Grep reads the supplied files' contents lazily, but "one file per pull" holds only for a matching
+file: grep reads ahead to the next match, so a run of non-matching files is read within one pull
+(bounded by the per-file liveness check, not backpressure). Closing the iterator early leaves later
+supplied files unread. Whether the directory walk is incremental is the producer's concern:
+streamGlob walks in walk order, so streamGrep(p, streamGlob("**")) is walk-incremental. Fed
+streamGlob(g), the record order is glob's walk order — the same multiset of matches as grep(), order
+aside. With buffer 0 a mid-stream revoke() rejects the next pull immediately; a
 non-zero buffer may still deliver up to that many already-buffered elements first (the reader is
 once-only, so that window is per reader, not multiplied across concurrent streams).
 Example: for await (const m of iterateReader(E(mount).streamGrep("TODO", E(mount).streamGlob("src/**/*.js")))) { ... }

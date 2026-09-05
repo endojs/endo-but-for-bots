@@ -39,11 +39,12 @@ import { buildMountFixture } from './_mount-fixture.js';
  * shape `streamGlob` returns — and never globs internally. "Search everything"
  * and "search a glob subset" are `streamGrep(p, streamGlob('**'))` and
  * `streamGrep(p, streamGlob(g))`, mirroring the eager `grep(pattern, glob(g))`
- * seam. Because the walk moved to the producer and `streamGlob` keeps glob's
- * eager global sort, `streamGrep(p, streamGlob('**'))` is not walk-incremental
- * (the producer walks fully before its first path); grep's own incrementality is
- * in the *content reads* of the supplied files. Walk-incremental grep would need
- * an unsorted producer, a flagged follow-up.
+ * seam. The walk moved to the producer, and `streamGlob` drives it in walk order
+ * (`sorted: false`), yielding each path as it is discovered, so
+ * `streamGrep(p, streamGlob('**'))` is walk-incremental end to end (grep's first
+ * read can precede the producer walking the whole tree); grep's own content
+ * reads are lazy on top of that. `streamGlob` trades glob's UTF-16 sort for walk
+ * order — a caller needing glob-identical ordering uses eager `glob`.
  */
 
 /**
@@ -55,7 +56,7 @@ import { buildMountFixture } from './_mount-fixture.js';
  */
 const readerOfPaths = paths =>
   readerFromIterator(
-    (async function* pathsGen() {
+    (async function* pathsGenerator() {
       for (const p of paths) {
         yield p;
       }
@@ -124,12 +125,11 @@ const collect = async reader => {
 /**
  * Canonicalize grep records into a stable (path, then line) order so a
  * multiset comparison is order-independent. Fed `streamGlob(g)`, `streamGrep`'s
- * cross-file order is the producer's — glob's UTF-16 sorted-path order — so it
- * would in fact match eager `grep(pattern, glob(g))` element-for-element; the
- * multiset comparison is the robust statement (same records, one per matched
- * line per file) and stays correct if a future unsorted producer changes the
- * cross-file order. Order *within* a single file (line order) is still normative
- * and preserved directly.
+ * cross-file order is the producer's — `streamGlob`'s *walk order*, not glob's
+ * UTF-16 sort — so the robust statement is multiset equality with eager
+ * `grep(pattern, glob(g))` (same records, one per matched line per file), which
+ * holds regardless of walk order. Order *within* a single file (line order) is
+ * still normative and preserved directly.
  *
  * @param {Array<{ file: string, line: number }>} records
  * @returns {Array<{ file: string, line: number }>}
@@ -142,19 +142,21 @@ const byFileThenLine = records =>
     return a.line - b.line;
   });
 
-// --- Parity: a collected stream reproduces the eager result, order included ---
+// --- Parity: a collected stream reproduces the eager result as a multiset ---
 
-test('streamGlob collected equals glob, in the same order', async t => {
+test('streamGlob collected equals glob as a multiset (walk order, not glob sort)', async t => {
   const { root } = buildMountFixture(t);
   const mount = makeMount({ rootPath: root, readOnly: false, filePowers });
   await null;
   const eager = [...(await E(mount).glob('**'))];
   const streamed = await collect(E(mount).streamGlob('**'));
   t.true(eager.length > 5, 'the fixture yields a non-trivial glob result');
+  // `streamGlob` yields in walk order, so the sequences need not match
+  // element-for-element; the invariant is that they enumerate the same set.
   t.deepEqual(
-    streamed,
-    eager,
-    'streamGlob reproduces glob element-for-element',
+    [...streamed].sort(),
+    [...eager].sort(),
+    'streamGlob enumerates exactly the same paths as glob',
   );
 });
 
@@ -258,7 +260,8 @@ test('streamGlob on a subView is scoped to the sub-root, like glob', async t => 
   const eager = [...(await E(subView).glob('**'))];
   const streamed = await collect(E(subView).streamGlob('**'));
   t.true(streamed.every(filePath => !filePath.startsWith('..')));
-  t.deepEqual(streamed, eager);
+  // Walk order, not glob's sort: same set, compared order-independently.
+  t.deepEqual([...streamed].sort(), [...eager].sort());
 });
 
 // --- Incrementality: grep reads only as far as the consumer pulls ---
@@ -311,15 +314,14 @@ test('streamGrep is incremental: closing after one match leaves later files unre
   );
 });
 
-// --- The directory walk is the producer's, and streamGlob's is eager ---
-// With grep decoupled, "walk incrementality" is no longer a property of grep. A
-// streamGlob('**') producer keeps glob's global sort, so it walks the whole tree
-// (reading every subdirectory) before yielding its first path — content reads
-// stay incremental in grep, but the *walk* is eager. This pins the current
-// composed behavior; restoring a first-match-before-full-walk would need an
-// unsorted producer (a flagged follow-up), not a change to grep.
+// --- The directory walk is the producer's, and streamGlob's is walk-order ---
+// With grep decoupled, "walk incrementality" is the producer's property. A
+// streamGlob('**') producer walks in walk order (`sorted: false`), yielding each
+// path as it is discovered, so `streamGrep(p, streamGlob('**'))` reaches its
+// first match before the whole tree is walked — the walk is incremental, and
+// grep's content reads are lazy on top of it.
 
-test('streamGrep(p, streamGlob("**")) inherits streamGlob\'s eager walk; grep content reads stay incremental', async t => {
+test('streamGrep(p, streamGlob("**")) is walk-incremental: first match before the whole tree is walked', async t => {
   const root = makeTemporaryRoot(t, 'mount-stream-producer-walk-');
   // Many sibling subdirectories, each holding one matching file.
   const dirs = 40;
@@ -345,22 +347,24 @@ test('streamGrep(p, streamGlob("**")) inherits streamGlob\'s eager walk; grep co
     /^d\d{3}\/hit\.txt$/,
     'the first match is one of the per-directory files',
   );
-  // The producer's global sort walked every subdirectory before its first path,
-  // so the whole tree is enumerated by the first match — the walk is eager.
+  // Walk order yields the first matching file after descending only the first
+  // subtree, so the producer had NOT read every subdirectory by the first match
+  // — the walk is incremental, not eager (an eager global sort would read all
+  // `dirs` subdirectories first).
   t.true(
-    counters.readDirectory > dirs,
-    `the streamGlob producer walked the whole tree (${counters.readDirectory} directory reads) before the first match`,
+    counters.readDirectory < dirs,
+    `the streamGlob producer yielded a first match after only ${counters.readDirectory} directory reads, before walking all ${dirs} subtrees`,
   );
-  // But grep read only the one file it needed for the first match — content
-  // reads are incremental even though the producer's walk is eager.
+  // And grep read only the one file it needed for the first match — content
+  // reads are lazy.
   t.is(
     counters.readFileText,
     1,
     'only the first match file was read; grep content reads are incremental',
   );
 
-  // Early close abandons the remaining content reads (the producer's walk is
-  // already done).
+  // Early close abandons the remaining content reads and stops the producer's
+  // walk (it was still incremental, not yet finished).
   await iterator.return();
   await null;
   await null;
@@ -494,8 +498,9 @@ test('streamGlob throws synchronously at invocation on an already-revoked mount'
 
 // streamGlob had no mid-stream revoke test: the prover deleted its per-yield
 // assertLive() and all tests still passed. Pin that a revoke between pulls cuts
-// the stream (the sorted path list is already materialized, so without the
-// liveness check the stream would keep yielding paths post-revoke).
+// the stream. The walk is incremental (`sorted: false`), so the per-path-batch
+// and per-yield liveness checks are what stop the walk mid-flight — without them
+// the enumeration would keep discovering and yielding paths post-revoke.
 test('streamGlob rejects the next pull after a mid-stream revoke', async t => {
   const root = makeTemporaryRoot(t, 'mount-stream-revoke-glob-');
   for (const name of ['a.txt', 'b.txt', 'c.txt', 'd.txt']) {
@@ -584,8 +589,9 @@ test('streamGlob never yields denied names or entries escaping the mount', async
     paths.some(filePath => filePath.includes('escape-target')),
     'the escaping symlink target is never enumerated',
   );
-  // The strongest statement: identical to the eager, already-filtered glob.
-  t.deepEqual(paths, [...(await E(mount).glob('**'))]);
+  // The strongest statement: the same set as the eager, already-filtered glob
+  // (walk order vs glob's sort, so compared order-independently).
+  t.deepEqual([...paths].sort(), [...(await E(mount).glob('**'))].sort());
 });
 
 test('streamGrep never reads denied files or escaping symlinks', async t => {
@@ -762,7 +768,7 @@ test('streamGrep streams a match line past 10 MB — no residual finite ceiling'
 // starting a second walk over the shared iterator (which would split the
 // element set and open a second pre-ack window). The mount's search readers are
 // minted this way, so a grantee cannot open k concurrent streams to scale the
-// pre-ack / post-revoke window as k×buffer. [warden finding 1]
+// pre-ack / post-revoke window as k*buffer. [warden finding 1]
 
 test('readerFromIterator({ once: true }) rejects a second stream()', async t => {
   const reader = readerFromIterator(
@@ -914,7 +920,8 @@ test('streamGlob with an oversized buffer still yields the correct parity result
   const streamed = await collect(
     E(mount).streamGlob('**', { buffer: 999_999 }),
   );
-  t.deepEqual(streamed, [...(await E(mount).glob('**'))]);
+  // Same set as eager glob; walk order, so compared order-independently.
+  t.deepEqual([...streamed].sort(), [...(await E(mount).glob('**'))].sort());
 });
 
 test('the MountInterface guard rejects a non-number buffer', async t => {
@@ -1104,12 +1111,12 @@ test('streamGrep with buffer > 0 bounds post-revoke delivery to the clamped buff
 });
 
 // --- Content reads stay incremental across a deep composed pipeline ---
-// With grep decoupled, the directory walk belongs to the producer (an eager
+// With grep decoupled, the directory walk belongs to the producer (a walk-order
 // streamGlob('**') here). What grep guarantees is that it reads the supplied
 // files' *contents* one at a time: on a deep tree with two matching files, only
 // the first match's file is read before the first pull returns, and early close
-// leaves the other unread. (The producer's walk is eager; that is pinned by the
-// producer-walk test above.)
+// leaves the other unread. (The producer's walk is incremental; that is pinned
+// by the producer-walk test above.)
 
 test('streamGrep content reads stay incremental on a deep composed pipeline', async t => {
   const root = makeTemporaryRoot(t, 'mount-stream-deep-');

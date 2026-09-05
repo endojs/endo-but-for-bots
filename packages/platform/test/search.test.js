@@ -270,24 +270,24 @@ test('globPaths sorted:false is incremental: a first path before the whole walk'
 
   // Sorted mode: the first batch arrives only after the whole tree is walked.
   counters.readDirectory = 0;
-  const sortedGen = search.globPaths(root, '**', {
+  const sortedGenerator = search.globPaths(root, '**', {
     deniedSegments,
     batchSize: 1,
   });
-  await sortedGen.next();
+  await sortedGenerator.next();
   const sortedWalkAtFirst = counters.readDirectory;
-  await sortedGen.return(undefined);
+  await sortedGenerator.return(undefined);
 
   // Walk order: the first batch arrives after descending only one subtree.
   counters.readDirectory = 0;
-  const unsortedGen = search.globPaths(root, '**', {
+  const unsortedGenerator = search.globPaths(root, '**', {
     deniedSegments,
     batchSize: 1,
     sorted: false,
   });
-  await unsortedGen.next();
+  await unsortedGenerator.next();
   const unsortedWalkAtFirst = counters.readDirectory;
-  await unsortedGen.return(undefined);
+  await unsortedGenerator.return(undefined);
 
   t.true(
     sortedWalkAtFirst > dirs,
